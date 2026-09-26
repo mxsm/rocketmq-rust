@@ -55,17 +55,17 @@ Use component scopes for long-lived services and `OperationContext` for bounded 
 
 Dropping a context handle is not graceful shutdown: active work can keep its group alive. `cancel` requests cancellation; it does not wait for completion. Use the corresponding shutdown or operation wait to obtain completion evidence.
 
-Task-group admission moves through open, closing and closed states. Shutdown stops new registrations, cancels work and caches its report. A creation request racing with shutdown must respect admission results; a new child is not a way to escape the parent's deadline.
+Task-group admission moves through open, closing, closed and shutdown-completed states. Shutdown stops new registrations, cancels work and caches its report. A creation request racing with shutdown must respect admission results; a new child is not a way to escape the parent's deadline.
 
 ## Blocking work retains capacity until it exits
 
-Child contexts expose managed `storage_io`, `metadata_io` and `cpu_crypto` executors. Lanes have individual concurrency/queue policies and share the owner's global blocking admission budget. Cloning a lane does not create another pool.
+Child contexts expose managed `storage_io`, `metadata_io` and `cpu_crypto` executors. Lanes have individual concurrency/queue policies and share the owner's global blocking admission budget. Each lane admits waiters in arrival order, and a release wakes at most one waiter. Cloning a lane does not create another pool.
 
 Queue timeout bounds admission waiting. Task timeout bounds the caller's wait after admission. Absolute-deadline methods cap both phases with the same deadline. An already-running blocking closure cannot be stopped merely by dropping its future or timing out its caller.
 
 The closure retains its permit until it actually exits. Diagnostics can therefore report `TimedOutStillRunning` after the caller has returned. Releasing the permit early would admit more real work than the configured limit permits.
 
-`BlockingKind::LongRunning` is rejected by this short-work boundary. A long-lived blocking loop needs an explicitly owned thread or domain service with stop and join behavior. The isolated compatibility constructor does not automatically enroll its independent budget in the managed root lanes.
+`BlockingKind::LongRunning` is rejected by this short-work boundary. A long-lived blocking loop needs an explicitly owned thread or domain service with stop and join behavior. `BlockingExecutor::new` creates an isolated executor whose independent budget is not enrolled in the managed root lanes.
 
 ## Resource reservations and overload
 
@@ -87,7 +87,7 @@ Do not choose coalescing for events that must all be processed. Also choose the 
 
 ## Scheduled jobs and metadata I/O
 
-`ScheduledTaskGroup` owns both drivers and runs. Fixed delay waits after a run finishes; fixed-rate no-overlap skips a run while the prior one is active; allow-overlap can admit concurrent runs without a separate per-job concurrency ceiling. Current fixed-rate drivers sleep between submission attempts and measure drift; they are not an absolute-clock catch-up scheduler.
+`ScheduledTaskGroup` is the only scheduler, and it owns both drivers and runs. `schedule(config, policy, task)` takes the timing mode from the configuration: fixed delay waits after a run finishes; fixed rate fires on absolute ticks and either never overlaps or admits at most `n` concurrent runs, as the policy states. When every run slot is busy, the missed-tick policy skips the tick, keeps the latest one or allows a bounded catch-up. Drift metrics record how late each tick fired.
 
 For metadata snapshots, `MetadataIoActor` owns a bounded coordinator and uses the shared metadata blocking lane. Submission acceptance and durable completion are separate outcomes. Queued generations can coalesce, and a later durable generation can satisfy an earlier waiter for the same logical resource. A timeout does not prove that a filesystem write stopped.
 
@@ -121,15 +121,15 @@ At the deadline, unfinished tracked tasks may be aborted. Blocking closures may 
 
 ## Interpret the report precisely
 
-`ShutdownReport::is_healthy` checks failures, panics, timeouts, leaks, still-running blocking/detached work and child reports. An `aborted` count alone does not make that predicate false. Consequently, a healthy predicate is useful evidence within its contract, not proof that every task finished naturally or every external effect committed.
+`ShutdownReport::is_healthy` checks failures, panics, timeouts, leaks, still-running blocking work and child reports. An `aborted` count alone does not make that predicate false. Consequently, a healthy predicate is useful evidence within its contract, not proof that every task finished naturally or every external effect committed.
 
 Inspect component-specific reports too: a Store can report flush/lease/retirement state that a generic task report cannot infer. For operational APIs, use the bounded sanitized `RuntimeDiagnosticsViewV1` instead of exposing raw task names, arguments or configuration. The API's caller still owns authentication.
 
-Configuration contract violations and operational `RuntimeError` values are distinct error channels. Preserve that distinction when adapting startup errors rather than converting every failure to a panic.
+Configuration contract violations and operational `RuntimeError` values are distinct error channels. Preserve that distinction when adapting startup errors rather than converting every failure to a panic. Branch on `RuntimeError::kind()`, for example `Closed` or `Poisoned`, rather than on the operation label.
 
 ## Compatibility and next steps
 
-`RuntimeContext` supports migration or tests inside an existing Tokio runtime; it does not own or shut down that host runtime and uses a permissive test budget. Retained executor/thread adapters have their own boundaries. They should not be described as identical to production `RuntimeOwner` composition.
+`RuntimeContext` supports migration or tests inside an existing Tokio runtime; it does not own or shut down that host runtime and uses a permissive test budget. It should not be described as identical to production `RuntimeOwner` composition. The former executor services, schedulers and thread adapters were removed; the [runtime migration notes](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-runtime/MIGRATION.md) map them to their replacements.
 
 Read [storage design](storage.md) for another example of ownership extending beyond a caller's wait, and [developer guide](../contributing/development-guide.md) for focused runtime tests.
 

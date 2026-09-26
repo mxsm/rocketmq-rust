@@ -228,7 +228,6 @@ fn assert_clean_shutdown(owner: &str, report: &ShutdownReport) {
     assert_eq!(report.timed_out, 0, "{owner}: {}", report.to_json());
     assert_eq!(report.leaked, 0, "{owner}: {}", report.to_json());
     assert_eq!(report.blocking_still_running, 0, "{owner}: {}", report.to_json());
-    assert_eq!(report.detached_still_running, 0, "{owner}: {}", report.to_json());
     assert!(report.remaining_tasks.is_empty(), "{owner}: {}", report.to_json());
     for child in &report.children {
         assert_clean_shutdown(owner, child);

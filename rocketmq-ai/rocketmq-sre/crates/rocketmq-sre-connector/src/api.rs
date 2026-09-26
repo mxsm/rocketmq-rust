@@ -26,6 +26,7 @@ use axum::response::Response;
 use axum::routing::get;
 use axum::routing::post;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::wait_for_signal_result;
 use rocketmq_sre_contracts::CorrelationId;
@@ -162,7 +163,7 @@ pub async fn run(config: ConnectorConfig, service_context: ChildServiceContext) 
     schedule.initial_delay = interval;
     service_context
         .scheduled_tasks("rocketmq-sre-connector.schedules")
-        .schedule_fixed_delay(schedule, move || {
+        .schedule(schedule, ScheduledExecutionPolicy::default(), move || {
             let reconciler = reconciler.clone();
             async move {
                 match reconciler.reconcile().await {

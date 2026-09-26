@@ -32,14 +32,10 @@ default = []
 async_fs = ["tokio/fs"]
 
 [dependencies]
-cheetah-string.workspace = true
 chrono = { version = "0.4", features = ["serde"] }
 config.workspace = true
-cron = "0.17"
 dashmap.workspace = true
-futures = { version = "0.3", features = ["default", "thread-pool"] }
-local-ip-address = "0.6.13"
-num_cpus.workspace = true
+futures = "0.3"
 parking_lot.workspace = true
 rocketmq-error = { path = "../rocketmq-error" }
 serde.workspace = true
@@ -50,7 +46,6 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util.workspace = true
 tracing.workspace = true
-trait-variant.workspace = true
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
@@ -61,7 +56,7 @@ tokio = { workspace = true, features = ["test-util"] }
 trybuild = "1.0.116"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }
+windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem", "Win32_System_Memory", "Win32_System_Threading"] }
 
 [[test]]
 name = "service_context_scope_compile_fail"
@@ -89,4 +84,8 @@ harness = false
 
 [[bench]]
 name    = "metadata_io_bench"
+harness = false
+
+[[bench]]
+name    = "runtime_convergence_bench"
 harness = false

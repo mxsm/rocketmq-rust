@@ -116,8 +116,8 @@ must migrate to the explicit ownership and shutdown APIs below before upgrading.
 | `RocketMQRuntime::new_multi(threads, name)` | `RuntimeOwner::plan(RuntimeConfig { .. })?.build()?` | Put the worker count and thread name in `RuntimeConfig`; validate the plan before building the owner and propagate its typed results instead of relying on an infallible constructor. |
 | `get_handle()` | `RuntimeOwner::root_context().component(...)` or a child derived from `RuntimeContext` | Pass `ChildServiceContext` (or a narrower capability) to a library. Do not replace this call with a raw Tokio handle. |
 | `get_runtime()` | `RuntimeOwner::block_on(...)` at an owned synchronous entrypoint, or context-owned task operations | Keep the Tokio runtime private to its owner. Libraries receive a context and use its task group, blocking lanes, and diagnostics rather than a raw runtime reference. |
-| `schedule_at_fixed_rate(task, initial_delay, period)` (`Fn`) | `ScheduledTaskGroup::schedule_fixed_rate_no_overlap` | Set `config.initial_delay = initial_delay.unwrap_or(Duration::ZERO)`. The legacy callback was serial, so preserve that non-overlap policy explicitly; a tick is skipped while an async run is active. Choose `schedule_fixed_rate` only when overlapping runs are intentional and reentrant. |
-| `schedule_at_fixed_rate_mut(task, initial_delay, period)` (`FnMut`) | `ScheduledTaskGroup::schedule_fixed_delay` | Set `config.initial_delay = initial_delay.unwrap_or(Duration::ZERO)`. This accepts mutable callback state while keeping runs serial. If fixed-rate cadence is required, make the callback state safe for the chosen explicit no-overlap or allow-overlap policy. |
+| `schedule_at_fixed_rate(task, initial_delay, period)` (`Fn`) | `ScheduledTaskGroup::schedule` with `ScheduledTaskConfig::fixed_rate_no_overlap` and `ScheduledExecutionPolicy::default()` | Pass `initial_delay.unwrap_or(Duration::ZERO)` to `with_initial_delay`. The legacy callback was serial, so keep the non-overlap policy; a tick is skipped while a run is active. Use `ScheduledTaskConfig::fixed_rate` with `ScheduledExecutionPolicy::bounded(n, ..)` only when overlapping runs are intentional and reentrant. |
+| `schedule_at_fixed_rate_mut(task, initial_delay, period)` (`FnMut`) | `ScheduledTaskGroup::schedule` with `ScheduledTaskConfig::fixed_delay` and `ScheduledExecutionPolicy::default()` | Pass `initial_delay.unwrap_or(Duration::ZERO)` to `with_initial_delay`. The task is an `FnMut`, so it can keep mutable state while runs stay serial. |
 | `shutdown()` | `RuntimeOwner::shutdown_background(self)` | Cancels tracked RocketMQ work, returns an immediate `ShutdownReport`, and asks Tokio to finish runtime shutdown in the background. |
 | `shutdown_timeout(timeout)` at a synchronous runtime-owning boundary | `RuntimeOwner::shutdown_runtime_blocking_with_timeout(timeout)?` | Shuts down tracked work and then the owned Tokio runtime within the timeout. It returns a catalog-backed runtime failure with the `Unavailable` condition when called from Tokio. |
 | async shutdown that must retain the host Tokio runtime | `RuntimeOwner::shutdown_tasks().await` or `RuntimeContext::shutdown_tasks(timeout).await` | Shuts down only tracked RocketMQ work and returns `ShutdownReport`; it does not close the owned or host Tokio runtime. |
@@ -150,22 +150,18 @@ contracts, normal outcomes, and catalog-backed operational failures. It is an
 `approved-break`: callers must not retain the former runtime, metadata, budget,
 queue, or scheduler error enums as compatibility shims.
 
-Use `RuntimeOwner::plan(config)?.build()?` and the corresponding
-`FuturesExecutorPlan`, `TokioExecutorServicePlan`, and
-`ScheduledExecutorServicePlan` build steps for process-owned executors. Build a
+Use `RuntimeOwner::plan(config)?.build()?` for a process-owned runtime. Build a
 `MetadataIoPlan` from `MetadataIoConfig::into_plan()?` and start it with the
 owned child service context. Configuration and invariant failures return
 `RuntimeContractViolation` with the closed `RuntimeContractPolicy` identifier;
 callers cannot supply arbitrary policy text.
 
-Budget exhaustion, queue admission, scheduler start/control/execution, trigger
-validation, and scheduled-task registration are normal typed outcomes
-(`BudgetRejection`, `QueuePushOutcome`, `SchedulerStartOutcome`,
-`ScheduleRegistrationOutcome`, `ScheduleControlOutcome`,
-`ScheduleExecutionOutcome`, and `ScheduledTaskRegistrationOutcome`). Match
-those outcomes directly. Reserve `RuntimeError` for catalog-backed operational
-failure, preserving its closed operation and typed source rather than parsing a
-rendered message.
+Budget exhaustion, queue admission and scheduled-task registration are normal
+typed outcomes (`BudgetRejection`, `QueuePushOutcome` and
+`ScheduledTaskRegistrationOutcome`). Match those outcomes directly. Reserve
+`RuntimeError` for catalog-backed operational failure, preserving its closed
+operation and typed source rather than parsing a rendered message; branch on
+`RuntimeError::kind()` rather than inferring the reason from `operation()`.
 
 Dynamic budget closure is a distinct normal outcome. `BudgetRejection::reason()`
 returns `BudgetRejectionReason::Capacity(dimension)` or `Closed`, and
@@ -183,15 +179,12 @@ both the driver and any run it owns.
 ```rust,ignore
 use std::time::Duration;
 
-use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::{ScheduledExecutionPolicy, ScheduledTaskConfig};
 
 let scheduled = service.scheduled_tasks("consumer-maintenance");
-let mut config = ScheduledTaskConfig::fixed_rate_no_overlap(
-    "consumer-maintenance.refresh",
-    period,
-);
-config.initial_delay = initial_delay.unwrap_or(Duration::ZERO);
-scheduled.schedule_fixed_rate_no_overlap(config, || async {
+let config = ScheduledTaskConfig::fixed_rate_no_overlap("consumer-maintenance.refresh", period)
+    .with_initial_delay(initial_delay.unwrap_or(Duration::ZERO));
+scheduled.schedule(config, ScheduledExecutionPolicy::default(), || async {
     refresh_routes().await;
 })?;
 ```
@@ -201,12 +194,9 @@ overlap policy has been deliberately designed and documented:
 
 ```rust,ignore
 let mut generation = 0_u64;
-let mut config = ScheduledTaskConfig::fixed_delay(
-    "consumer-maintenance.persist",
-    period,
-);
-config.initial_delay = initial_delay.unwrap_or(Duration::ZERO);
-scheduled.schedule_fixed_delay(config, move || {
+let config = ScheduledTaskConfig::fixed_delay("consumer-maintenance.persist", period)
+    .with_initial_delay(initial_delay.unwrap_or(Duration::ZERO));
+scheduled.schedule(config, ScheduledExecutionPolicy::default(), move || {
     generation += 1;
     async move {
         persist_generation(generation).await;
@@ -224,6 +214,20 @@ only; the latter returns a typed error if invoked from inside Tokio.
 let report = owner.shutdown_runtime_blocking_with_timeout(timeout)?;
 report.assert_no_task_leak().map_err(|message| anyhow::anyhow!(message))?;
 ```
+
+### Runtime convergence
+
+The runtime keeps one owner model: `RuntimeOwner`, `ChildServiceContext`,
+`TaskGroup`, `ScheduledTaskGroup` and `ServiceManager`. The executor services
+and their plans, the `schedule` module (`TaskScheduler`, `TaskExecutor`,
+triggers and their outcomes), `ScheduledTaskManager`, `ActorRuntime`, the
+`compat` module, `tokio_lock`, `Shutdown`, `common::util_all`,
+`common::thread`, `common::future`, `DetachedTaskPolicy` and the legacy
+`ServiceManager` constructors were removed. This is an `approved-break`. The
+[runtime migration notes](../../../../rocketmq-runtime/MIGRATION.md#runtime-convergence)
+map each removed API to its replacement and list the changed contracts,
+including `/drainz` accepting only `POST` by default, `TaskId` recording its
+group and `RuntimeError::kind()`.
 
 ### Typed filter compilation
 

@@ -1441,7 +1441,6 @@ async fn panicked_lane_is_reclaimed_and_closes_without_leaks() {
     cancellation.cancel();
     let report = service.task_group().shutdown(Duration::from_secs(1)).await;
     assert_eq!(report.leaked, 0, "{}", report.to_json());
-    assert_eq!(report.detached_still_running, 0, "{}", report.to_json());
     assert_eq!(shutdown_report_panics(&report), 1, "{}", report.to_json());
 }
 

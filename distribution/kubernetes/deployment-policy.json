@@ -59,6 +59,8 @@
     "readiness_path": "/readyz",
     "liveness_path": "/livez",
     "pre_stop_path": "/drainz",
+    "pre_stop_method": "GET",
+    "drain_request_methods": "GET,POST",
     "shutdown_timeout_seconds": 45,
     "termination_grace_period_seconds": 60,
     "liveness_stale_seconds": 30,

@@ -14,6 +14,7 @@
 
 use std::future::Future;
 use std::num::NonZeroUsize;
+use std::pin::Pin;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -22,6 +23,7 @@ use std::time::Instant;
 
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
+use parking_lot::Mutex;
 use serde::Serialize;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -37,11 +39,11 @@ use crate::task_group::TaskKind;
 /// Identifies the schedule mode state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ScheduleMode {
-    /// Represents the fixed delay case.
+    /// Waits `period` after each run completes.
     FixedDelay,
-    /// Represents the fixed rate no overlap case.
+    /// Ticks every `period`; runs never overlap.
     FixedRateNoOverlap,
-    /// Represents the fixed rate allow overlap case.
+    /// Ticks every `period`; runs overlap up to the policy's bound.
     FixedRateAllowOverlap,
 }
 
@@ -92,12 +94,12 @@ impl ScheduledExecutionPolicy {
             missed_ticks,
         }
     }
+}
 
-    fn max_concurrency(self) -> usize {
-        match self.concurrency {
-            ScheduledTaskConcurrency::Serial => 1,
-            ScheduledTaskConcurrency::Bounded(concurrency) => concurrency.get(),
-        }
+impl Default for ScheduledExecutionPolicy {
+    /// One run at a time; a tick that arrives while it runs is skipped.
+    fn default() -> Self {
+        Self::serial(MissedTickPolicy::Skip)
     }
 }
 
@@ -122,7 +124,11 @@ pub enum ScheduledTaskRegistrationOutcome {
     AlreadyPresent,
 }
 
-/// Represents scheduled task config.
+/// Name, cadence and run limit of one schedule.
+///
+/// The mode chosen by the constructor is the only input that decides how
+/// runs are timed and whether they may overlap. The policy passed at
+/// registration must agree with it.
 #[derive(Debug, Clone)]
 pub struct ScheduledTaskConfig {
     /// The name value.
@@ -138,15 +144,10 @@ pub struct ScheduledTaskConfig {
     /// Expiry drops the run future; it cannot interrupt blocking work already
     /// started by that future.
     pub max_run_time: Option<Duration>,
-    /// Legacy compatibility field; this group does not read it.
-    ///
-    /// Shutdown is governed by the group's explicit deadline. Changing this
-    /// field does not change cancellation, drain time, or the owner budget.
-    pub shutdown_timeout: Duration,
 }
 
 impl ScheduledTaskConfig {
-    /// Creates the fixed delay value.
+    /// Creates a schedule that waits `period` after each run completes.
     pub fn fixed_delay(name: impl Into<String>, period: Duration) -> Self {
         Self {
             name: name.into(),
@@ -154,11 +155,10 @@ impl ScheduledTaskConfig {
             period,
             mode: ScheduleMode::FixedDelay,
             max_run_time: None,
-            shutdown_timeout: Duration::from_secs(30),
         }
     }
 
-    /// Creates the fixed rate no overlap value.
+    /// Creates a schedule that ticks every `period` and never overlaps runs.
     pub fn fixed_rate_no_overlap(name: impl Into<String>, period: Duration) -> Self {
         Self {
             mode: ScheduleMode::FixedRateNoOverlap,
@@ -166,11 +166,36 @@ impl ScheduledTaskConfig {
         }
     }
 
-    /// Creates the fixed rate value.
+    /// Creates a schedule that ticks every `period` and overlaps runs up to
+    /// the bound of its policy.
     pub fn fixed_rate(name: impl Into<String>, period: Duration) -> Self {
         Self {
             mode: ScheduleMode::FixedRateAllowOverlap,
             ..Self::fixed_delay(name, period)
+        }
+    }
+
+    /// Sets the delay before the first run.
+    #[must_use]
+    pub fn with_initial_delay(mut self, initial_delay: Duration) -> Self {
+        self.initial_delay = initial_delay;
+        self
+    }
+
+    /// Checks the configuration against `policy` and returns the run limit.
+    fn run_limit(&self, policy: ScheduledExecutionPolicy) -> RuntimeResult<usize> {
+        if self.period.is_zero() {
+            return Err(RuntimeError::unsupported(
+                crate::RuntimeOperation::RegisterScheduledTask,
+            ));
+        }
+        match (self.mode, policy.concurrency) {
+            (ScheduleMode::FixedDelay | ScheduleMode::FixedRateNoOverlap, ScheduledTaskConcurrency::Serial) => Ok(1),
+            (ScheduleMode::FixedRateAllowOverlap, ScheduledTaskConcurrency::Bounded(max_runs)) => Ok(max_runs.get()),
+            (ScheduleMode::FixedDelay | ScheduleMode::FixedRateNoOverlap, ScheduledTaskConcurrency::Bounded(_))
+            | (ScheduleMode::FixedRateAllowOverlap, ScheduledTaskConcurrency::Serial) => Err(
+                RuntimeError::unsupported(crate::RuntimeOperation::RegisterScheduledTask),
+            ),
         }
     }
 }
@@ -248,12 +273,94 @@ pub struct ScheduledTaskSnapshot {
     pub max_elapsed_ms: u64,
 }
 
+/// Where a schedule's driver and runs are registered.
+#[derive(Clone, Copy)]
+enum ScheduleBinding<'a> {
+    /// The fixed component owner; its cancellation ends the schedule.
+    Group,
+    /// A bounded operation under the component owner.
+    Operation(&'a OperationContext),
+}
+
+impl ScheduleBinding<'_> {
+    fn cancellation_token(self, group: &TaskGroup) -> CancellationToken {
+        match self {
+            Self::Group => group.cancellation_token(),
+            Self::Operation(operation) => operation.cancellation_token(),
+        }
+    }
+
+    fn run_spawner(self, group: &TaskGroup) -> RunSpawner {
+        RunSpawner {
+            group: group.clone(),
+            operation: match self {
+                Self::Group => None,
+                Self::Operation(operation) => Some(operation.with_task_kind(TaskKind::ScheduledRun)),
+            },
+        }
+    }
+}
+
+/// Spawns the runs of one fixed-rate schedule.
+struct RunSpawner {
+    group: TaskGroup,
+    operation: Option<OperationContext>,
+}
+
+impl RunSpawner {
+    fn spawn<F>(&self, name: String, future: F) -> RuntimeResult<TaskId>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        match &self.operation {
+            Some(operation) => self.group.spawn_operation(operation, name, future),
+            None => self.group.spawn(name, TaskKind::ScheduledRun, future),
+        }
+    }
+}
+
+/// One run of a registered task.
+type ScheduledRun = Pin<Box<dyn Future<Output = ScheduledTaskControl> + Send + 'static>>;
+
+/// A registered task after type erasure; each call starts the next run.
+///
+/// Erasing the task where it is registered compiles the drivers, the run
+/// adapter and the task-group submission they use once in this crate instead
+/// of once per registration site, and keeps a large closure or run future out
+/// of the driver's own state.
+type ScheduledTaskFn = Box<dyn FnMut() -> ScheduledRun + Send + 'static>;
+
+/// Erases a task whose runs return nothing; every run continues the schedule.
+fn erase_task<F, Fut>(mut task: F) -> ScheduledTaskFn
+where
+    F: FnMut() -> Fut + Send + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    Box::new(move || {
+        let run = task();
+        Box::pin(async move {
+            run.await;
+            ScheduledTaskControl::Continue
+        })
+    })
+}
+
+/// Erases a task whose runs decide whether the schedule continues.
+fn erase_controlled_task<F, Fut>(mut task: F) -> ScheduledTaskFn
+where
+    F: FnMut() -> Fut + Send + 'static,
+    Fut: Future<Output = ScheduledTaskControl> + Send + 'static,
+{
+    Box::new(move || Box::pin(task()))
+}
+
 impl ScheduledTaskGroup {
     /// Creates a new `ScheduledTaskGroup`.
     pub fn new(group: TaskGroup) -> Self {
         Self {
             group,
-            schedules: Arc::new(DashMap::new()),
+            // Registrations are rare, so a few shards suffice.
+            schedules: Arc::new(DashMap::with_shard_amount(4)),
         }
     }
 
@@ -262,678 +369,155 @@ impl ScheduledTaskGroup {
         &self.group
     }
 
-    /// Returns the schedule fixed delay.
+    /// Schedules `task` with the cadence of `config` and the run limits of `policy`.
+    ///
+    /// The driver and runs belong to this group and stop when it is cancelled.
+    /// A fixed-delay schedule runs `task` on its driver; a fixed-rate schedule
+    /// starts each run as its own task once a run slot is free. A duplicate
+    /// name leaves the existing registration unchanged.
     ///
     /// # Errors
     ///
-    /// Returns an operational error when the task driver cannot be spawned.
-    pub fn schedule_fixed_delay<F, Fut>(
-        &self,
-        config: ScheduledTaskConfig,
-        mut task: F,
-    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
-    where
-        F: FnMut() -> Fut + Send + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        if std::mem::size_of::<F>() > crate::stack::MAX_INLINE_SIZE {
-            let mut task = Box::new(task);
-            return if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
-                self.schedule_fixed_delay_inner(config, move || Box::pin(task()))
-            } else {
-                self.schedule_fixed_delay_inner(config, task)
-            };
-        }
-        // Select the representation before the driver and timeout adapters
-        // capture the business future in their state machines.
-        if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
-            self.schedule_fixed_delay_inner(config, move || Box::pin(task()))
-        } else {
-            self.schedule_fixed_delay_inner(config, task)
-        }
-    }
-
-    fn schedule_fixed_delay_inner<F, Fut>(
-        &self,
-        config: ScheduledTaskConfig,
-        mut task: F,
-    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
-    where
-        F: FnMut() -> Fut + Send + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        self.schedule_fixed_delay_controlled(config, move || {
-            let future = task();
-            async move {
-                future.await;
-                ScheduledTaskControl::Continue
-            }
-        })
-    }
-
-    /// Schedules fixed-delay work as part of a bounded operation.
-    ///
-    /// The driver is registered directly with this group's fixed component
-    /// owner and stops when the operation is cancelled or reaches its
-    /// deadline.
-    ///
-    /// # Errors
-    ///
-    /// Returns an operational error when the bounded task driver cannot be
-    /// spawned.
-    pub fn schedule_fixed_delay_operation<F, Fut>(
-        &self,
-        operation: &OperationContext,
-        config: ScheduledTaskConfig,
-        mut task: F,
-    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
-    where
-        F: FnMut() -> Fut + Send + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        if std::mem::size_of::<F>() > crate::stack::MAX_INLINE_SIZE {
-            let mut task = Box::new(task);
-            return if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
-                self.schedule_fixed_delay_operation_inner(operation, config, move || Box::pin(task()))
-            } else {
-                self.schedule_fixed_delay_operation_inner(operation, config, task)
-            };
-        }
-        // Select the representation before the driver and timeout adapters
-        // capture the business future in their state machines.
-        if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
-            self.schedule_fixed_delay_operation_inner(operation, config, move || Box::pin(task()))
-        } else {
-            self.schedule_fixed_delay_operation_inner(operation, config, task)
-        }
-    }
-
-    fn schedule_fixed_delay_operation_inner<F, Fut>(
-        &self,
-        operation: &OperationContext,
-        config: ScheduledTaskConfig,
-        mut task: F,
-    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
-    where
-        F: FnMut() -> Fut + Send + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        self.schedule_fixed_delay_controlled_operation(operation, config, move || {
-            let future = task();
-            async move {
-                future.await;
-                ScheduledTaskControl::Continue
-            }
-        })
-    }
-
-    /// Schedules controlled fixed-delay work as part of a bounded operation.
-    ///
-    /// # Errors
-    ///
-    /// Returns an operational error when the bounded task driver cannot be
-    /// spawned.
-    pub fn schedule_fixed_delay_controlled_operation<F, Fut>(
-        &self,
-        operation: &OperationContext,
-        config: ScheduledTaskConfig,
-        mut task: F,
-    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
-    where
-        F: FnMut() -> Fut + Send + 'static,
-        Fut: Future<Output = ScheduledTaskControl> + Send + 'static,
-    {
-        if std::mem::size_of::<F>() > crate::stack::MAX_INLINE_SIZE {
-            let mut task = Box::new(task);
-            return if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
-                self.schedule_fixed_delay_controlled_operation_inner(operation, config, move || Box::pin(task()))
-            } else {
-                self.schedule_fixed_delay_controlled_operation_inner(operation, config, task)
-            };
-        }
-        // Select the representation before the driver and timeout adapters
-        // capture the business future in their state machines.
-        if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
-            self.schedule_fixed_delay_controlled_operation_inner(operation, config, move || Box::pin(task()))
-        } else {
-            self.schedule_fixed_delay_controlled_operation_inner(operation, config, task)
-        }
-    }
-
-    fn schedule_fixed_delay_controlled_operation_inner<F, Fut>(
-        &self,
-        operation: &OperationContext,
-        mut config: ScheduledTaskConfig,
-        task: F,
-    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
-    where
-        F: FnMut() -> Fut + Send + 'static,
-        Fut: Future<Output = ScheduledTaskControl> + Send + 'static,
-    {
-        config.mode = ScheduleMode::FixedDelay;
-        let name: Arc<str> = Arc::from(config.name.as_str());
-        let name_for_cleanup = name.clone();
-        let Some(metrics) = self.register(name.clone(), config.clone(), 1) else {
-            return Ok(ScheduledTaskRegistrationOutcome::AlreadyPresent);
-        };
-        let token = operation.cancellation_token();
-        let driver = operation.with_task_kind(TaskKind::ScheduledDriver);
-        let spawn_result = self
-            .group
-            .spawn_operation(&driver, format!("scheduled-driver:{name}"), async move {
-                fixed_delay_driver(token, config, metrics, task).await;
-            });
-        if spawn_result.is_err() {
-            self.schedules.remove(&name_for_cleanup);
-        }
-        spawn_result.map(ScheduledTaskRegistrationOutcome::Scheduled)
-    }
-
-    /// Schedules fixed-rate, non-overlapping work as part of a bounded operation.
-    ///
-    /// # Errors
-    ///
-    /// Returns an operational error when the bounded task driver cannot be
-    /// spawned.
-    pub fn schedule_fixed_rate_no_overlap_operation<F, Fut>(
-        &self,
-        operation: &OperationContext,
-        config: ScheduledTaskConfig,
-        task: F,
-    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
-    where
-        F: Fn() -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        if std::mem::size_of::<F>() > crate::stack::MAX_INLINE_SIZE {
-            let task = Box::new(task);
-            return if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
-                self.schedule_fixed_rate_no_overlap_operation_inner(operation, config, move || Box::pin(task()))
-            } else {
-                self.schedule_fixed_rate_no_overlap_operation_inner(operation, config, task)
-            };
-        }
-        // Select the representation before the driver and timeout adapters
-        // capture the business future in their state machines.
-        if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
-            self.schedule_fixed_rate_no_overlap_operation_inner(operation, config, move || Box::pin(task()))
-        } else {
-            self.schedule_fixed_rate_no_overlap_operation_inner(operation, config, task)
-        }
-    }
-
-    fn schedule_fixed_rate_no_overlap_operation_inner<F, Fut>(
-        &self,
-        operation: &OperationContext,
-        mut config: ScheduledTaskConfig,
-        task: F,
-    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
-    where
-        F: Fn() -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        config.mode = ScheduleMode::FixedRateNoOverlap;
-        let name: Arc<str> = Arc::from(config.name.as_str());
-        let name_for_cleanup = name.clone();
-        let Some(metrics) = self.register(name.clone(), config.clone(), 1) else {
-            return Ok(ScheduledTaskRegistrationOutcome::AlreadyPresent);
-        };
-        let token = operation.cancellation_token();
-        let driver = operation.with_task_kind(TaskKind::ScheduledDriver);
-        let run_operation = operation.with_task_kind(TaskKind::ScheduledRun);
-        let run_group = self.group.clone();
-        let task = Arc::new(task);
-
-        let spawn_result = self
-            .group
-            .spawn_operation(&driver, format!("scheduled-driver:{name}"), async move {
-                if !sleep_or_cancel(&token, config.initial_delay).await {
-                    return;
-                }
-
-                let mut expected_tick = Instant::now();
-                loop {
-                    if token.is_cancelled() {
-                        return;
-                    }
-
-                    if let Some(mut run) = metrics.try_begin_no_overlap_run(expected_tick) {
-                        let run_name = format!("scheduled-run:{name}");
-                        let run_task = task.clone();
-                        let max_run_time = config.max_run_time;
-                        let _ = run_group.spawn_operation(&run_operation, run_name, async move {
-                            run.start();
-                            let timed_out = run_with_optional_timeout(run_task(), max_run_time).await;
-                            run.finish(timed_out);
-                        });
-                        expected_tick = next_expected_tick(expected_tick, config.period);
-                    } else {
-                        expected_tick = next_expected_tick(expected_tick, config.period);
-                    }
-
-                    if !sleep_or_cancel(&token, config.period).await {
-                        return;
-                    }
-                }
-            });
-        if spawn_result.is_err() {
-            self.schedules.remove(&name_for_cleanup);
-        }
-        spawn_result.map(ScheduledTaskRegistrationOutcome::Scheduled)
-    }
-
-    /// Returns the schedule fixed delay controlled.
-    ///
-    /// # Errors
-    ///
-    /// Returns an operational error when the task driver cannot be spawned.
-    pub fn schedule_fixed_delay_controlled<F, Fut>(
-        &self,
-        config: ScheduledTaskConfig,
-        mut task: F,
-    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
-    where
-        F: FnMut() -> Fut + Send + 'static,
-        Fut: Future<Output = ScheduledTaskControl> + Send + 'static,
-    {
-        if std::mem::size_of::<F>() > crate::stack::MAX_INLINE_SIZE {
-            let mut task = Box::new(task);
-            return if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
-                self.schedule_fixed_delay_controlled_inner(config, move || Box::pin(task()))
-            } else {
-                self.schedule_fixed_delay_controlled_inner(config, task)
-            };
-        }
-        // Select the representation before the driver and timeout adapters
-        // capture the business future in their state machines.
-        if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
-            self.schedule_fixed_delay_controlled_inner(config, move || Box::pin(task()))
-        } else {
-            self.schedule_fixed_delay_controlled_inner(config, task)
-        }
-    }
-
-    fn schedule_fixed_delay_controlled_inner<F, Fut>(
-        &self,
-        mut config: ScheduledTaskConfig,
-        task: F,
-    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
-    where
-        F: FnMut() -> Fut + Send + 'static,
-        Fut: Future<Output = ScheduledTaskControl> + Send + 'static,
-    {
-        config.mode = ScheduleMode::FixedDelay;
-        let name: Arc<str> = Arc::from(config.name.as_str());
-        let name_for_cleanup = name.clone();
-        let Some(metrics) = self.register(name.clone(), config.clone(), 1) else {
-            return Ok(ScheduledTaskRegistrationOutcome::AlreadyPresent);
-        };
-        let token = self.group.cancellation_token();
-        let spawn_result = self.group.spawn(
-            format!("scheduled-driver:{name}"),
-            TaskKind::ScheduledDriver,
-            async move {
-                fixed_delay_driver(token, config, metrics, task).await;
-            },
-        );
-        if spawn_result.is_err() {
-            self.schedules.remove(&name_for_cleanup);
-        }
-        spawn_result.map(ScheduledTaskRegistrationOutcome::Scheduled)
-    }
-
-    /// Returns the schedule fixed rate no overlap.
-    ///
-    /// # Errors
-    ///
-    /// Returns an operational error when the task driver cannot be spawned.
-    pub fn schedule_fixed_rate_no_overlap<F, Fut>(
-        &self,
-        config: ScheduledTaskConfig,
-        task: F,
-    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
-    where
-        F: Fn() -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        if std::mem::size_of::<F>() > crate::stack::MAX_INLINE_SIZE {
-            let task = Box::new(task);
-            return if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
-                self.schedule_fixed_rate_no_overlap_inner(config, move || Box::pin(task()))
-            } else {
-                self.schedule_fixed_rate_no_overlap_inner(config, task)
-            };
-        }
-        // Select the representation before the driver and timeout adapters
-        // capture the business future in their state machines.
-        if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
-            self.schedule_fixed_rate_no_overlap_inner(config, move || Box::pin(task()))
-        } else {
-            self.schedule_fixed_rate_no_overlap_inner(config, task)
-        }
-    }
-
-    fn schedule_fixed_rate_no_overlap_inner<F, Fut>(
-        &self,
-        mut config: ScheduledTaskConfig,
-        task: F,
-    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
-    where
-        F: Fn() -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        config.mode = ScheduleMode::FixedRateNoOverlap;
-        let name: Arc<str> = Arc::from(config.name.as_str());
-        let name_for_cleanup = name.clone();
-        let Some(metrics) = self.register(name.clone(), config.clone(), 1) else {
-            return Ok(ScheduledTaskRegistrationOutcome::AlreadyPresent);
-        };
-        let token = self.group.cancellation_token();
-        let run_group = self.group.clone();
-        let task = Arc::new(task);
-
-        let spawn_result = self.group.spawn(
-            format!("scheduled-driver:{name}"),
-            TaskKind::ScheduledDriver,
-            async move {
-                if !sleep_or_cancel(&token, config.initial_delay).await {
-                    return;
-                }
-
-                let mut expected_tick = Instant::now();
-                loop {
-                    if token.is_cancelled() {
-                        return;
-                    }
-
-                    if let Some(mut run) = metrics.try_begin_no_overlap_run(expected_tick) {
-                        let run_name = format!("scheduled-run:{name}");
-                        let run_task = task.clone();
-                        let max_run_time = config.max_run_time;
-                        let _ = run_group.spawn(run_name, TaskKind::ScheduledRun, async move {
-                            run.start();
-                            let timed_out = run_with_optional_timeout(run_task(), max_run_time).await;
-                            run.finish(timed_out);
-                        });
-                        expected_tick = next_expected_tick(expected_tick, config.period);
-                    } else {
-                        expected_tick = next_expected_tick(expected_tick, config.period);
-                    }
-
-                    if !sleep_or_cancel(&token, config.period).await {
-                        return;
-                    }
-                }
-            },
-        );
-        if spawn_result.is_err() {
-            self.schedules.remove(&name_for_cleanup);
-        }
-        spawn_result.map(ScheduledTaskRegistrationOutcome::Scheduled)
-    }
-
-    /// Returns the schedule fixed rate.
-    ///
-    /// # Errors
-    ///
-    /// Returns an operational error when the task driver cannot be spawned.
-    pub fn schedule_fixed_rate<F, Fut>(
-        &self,
-        config: ScheduledTaskConfig,
-        task: F,
-    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
-    where
-        F: Fn() -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        if std::mem::size_of::<F>() > crate::stack::MAX_INLINE_SIZE {
-            let task = Box::new(task);
-            return if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
-                self.schedule_fixed_rate_inner(config, move || Box::pin(task()))
-            } else {
-                self.schedule_fixed_rate_inner(config, task)
-            };
-        }
-        // Select the representation before the driver and timeout adapters
-        // capture the business future in their state machines.
-        if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
-            self.schedule_fixed_rate_inner(config, move || Box::pin(task()))
-        } else {
-            self.schedule_fixed_rate_inner(config, task)
-        }
-    }
-
-    fn schedule_fixed_rate_inner<F, Fut>(
-        &self,
-        mut config: ScheduledTaskConfig,
-        task: F,
-    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
-    where
-        F: Fn() -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        config.mode = ScheduleMode::FixedRateAllowOverlap;
-        let name: Arc<str> = Arc::from(config.name.as_str());
-        let name_for_cleanup = name.clone();
-        let Some(metrics) = self.register(name.clone(), config.clone(), 1) else {
-            return Ok(ScheduledTaskRegistrationOutcome::AlreadyPresent);
-        };
-        let token = self.group.cancellation_token();
-        let run_group = self.group.clone();
-        let task = Arc::new(task);
-
-        let spawn_result = self.group.spawn(
-            format!("scheduled-driver:{name}"),
-            TaskKind::ScheduledDriver,
-            async move {
-                if !sleep_or_cancel(&token, config.initial_delay).await {
-                    return;
-                }
-
-                let mut expected_tick = Instant::now();
-                loop {
-                    if token.is_cancelled() {
-                        return;
-                    }
-
-                    let mut run = metrics.begin_overlapping_run(expected_tick);
-                    let run_name = format!("scheduled-run:{name}");
-                    let run_task = task.clone();
-                    let max_run_time = config.max_run_time;
-                    let _ = run_group.spawn(run_name, TaskKind::ScheduledRun, async move {
-                        run.start();
-                        let timed_out = run_with_optional_timeout(run_task(), max_run_time).await;
-                        run.finish(timed_out);
-                    });
-
-                    expected_tick = next_expected_tick(expected_tick, config.period);
-                    if !sleep_or_cancel(&token, config.period).await {
-                        return;
-                    }
-                }
-            },
-        );
-        if spawn_result.is_err() {
-            self.schedules.remove(&name_for_cleanup);
-        }
-        spawn_result.map(ScheduledTaskRegistrationOutcome::Scheduled)
-    }
-
-    /// Returns the schedule fixed rate allow overlap.
-    ///
-    /// # Errors
-    ///
-    /// Returns an operational error when the task driver cannot be spawned.
-    pub fn schedule_fixed_rate_allow_overlap<F, Fut>(
-        &self,
-        config: ScheduledTaskConfig,
-        task: F,
-    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
-    where
-        F: Fn() -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        self.schedule_fixed_rate(config, task)
-    }
-
-    /// Schedules one task with explicit concurrency and missed-tick limits.
-    ///
-    /// A run slot is acquired before a run task is created. Fixed-delay
-    /// schedules remain serial; fixed-rate schedules use the supplied
-    /// concurrency and missed-tick policy.
-    ///
-    /// # Errors
-    ///
-    /// Returns an operational error when the period is zero or the driver
-    /// cannot be registered.
-    pub fn schedule_bounded<F, Fut>(
+    /// Returns an unsupported error when the period is zero or `policy`
+    /// contradicts the mode of `config`: fixed-delay and non-overlapping
+    /// schedules need a serial policy, an overlapping schedule needs a bounded
+    /// one. Returns an operational error when the driver cannot be spawned.
+    pub fn schedule<F, Fut>(
         &self,
         config: ScheduledTaskConfig,
         policy: ScheduledExecutionPolicy,
         task: F,
     ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
     where
-        F: Fn() -> Fut + Send + Sync + 'static,
+        F: FnMut() -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        if std::mem::size_of::<F>() > crate::stack::MAX_INLINE_SIZE {
-            let task = Box::new(task);
-            return if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
-                self.schedule_bounded_inner(config, policy, move || Box::pin(task()))
-            } else {
-                self.schedule_bounded_inner(config, policy, task)
-            };
-        }
-        // Select the representation before the driver and timeout adapters
-        // capture the business future in their state machines.
-        if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
-            self.schedule_bounded_inner(config, policy, move || Box::pin(task()))
-        } else {
-            self.schedule_bounded_inner(config, policy, task)
-        }
+        self.schedule_erased(ScheduleBinding::Group, config, policy, erase_task(task))
     }
 
-    fn schedule_bounded_inner<F, Fut>(
+    /// Schedules `task` like [`Self::schedule`] as part of a bounded operation.
+    ///
+    /// The driver and runs are registered with this group's fixed component
+    /// owner and stop when the operation is cancelled or reaches its deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::schedule`].
+    pub fn schedule_operation<F, Fut>(
         &self,
-        mut config: ScheduledTaskConfig,
+        operation: &OperationContext,
+        config: ScheduledTaskConfig,
         policy: ScheduledExecutionPolicy,
         task: F,
     ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
     where
-        F: Fn() -> Fut + Send + Sync + 'static,
+        F: FnMut() -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        if config.period.is_zero() {
+        self.schedule_erased(ScheduleBinding::Operation(operation), config, policy, erase_task(task))
+    }
+
+    /// Schedules fixed-delay work that can end its own schedule.
+    ///
+    /// The schedule stops after a run returns [`ScheduledTaskControl::Stop`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an unsupported error when the period is zero or `config` is not
+    /// a fixed-delay schedule, and an operational error when the driver cannot
+    /// be spawned.
+    pub fn schedule_controlled<F, Fut>(
+        &self,
+        config: ScheduledTaskConfig,
+        task: F,
+    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
+    where
+        F: FnMut() -> Fut + Send + 'static,
+        Fut: Future<Output = ScheduledTaskControl> + Send + 'static,
+    {
+        if config.mode != ScheduleMode::FixedDelay {
             return Err(RuntimeError::unsupported(
                 crate::RuntimeOperation::RegisterScheduledTask,
             ));
         }
-        let max_concurrency = if matches!(config.mode, ScheduleMode::FixedDelay | ScheduleMode::FixedRateNoOverlap) {
-            1
-        } else {
-            policy.max_concurrency()
-        };
-        config.mode = if config.mode == ScheduleMode::FixedDelay {
-            ScheduleMode::FixedDelay
-        } else if max_concurrency == 1 {
-            ScheduleMode::FixedRateNoOverlap
-        } else {
-            ScheduleMode::FixedRateAllowOverlap
-        };
+        config.run_limit(ScheduledExecutionPolicy::default())?;
+        self.register_fixed_delay(ScheduleBinding::Group, config, erase_controlled_task(task))
+    }
 
+    fn schedule_erased(
+        &self,
+        binding: ScheduleBinding<'_>,
+        config: ScheduledTaskConfig,
+        policy: ScheduledExecutionPolicy,
+        task: ScheduledTaskFn,
+    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome> {
+        let max_concurrency = config.run_limit(policy)?;
+        if config.mode == ScheduleMode::FixedDelay {
+            return self.register_fixed_delay(binding, config, task);
+        }
+        self.register_fixed_rate(binding, config, max_concurrency, policy.missed_ticks, task)
+    }
+
+    fn register_fixed_delay(
+        &self,
+        binding: ScheduleBinding<'_>,
+        config: ScheduledTaskConfig,
+        task: ScheduledTaskFn,
+    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome> {
         let name: Arc<str> = Arc::from(config.name.as_str());
-        let name_for_cleanup = name.clone();
+        let Some(metrics) = self.register(name.clone(), config.clone(), 1) else {
+            return Ok(ScheduledTaskRegistrationOutcome::AlreadyPresent);
+        };
+        let token = binding.cancellation_token(&self.group);
+        let driver = async move {
+            fixed_delay_driver(token, config, metrics, task).await;
+        };
+        self.spawn_driver(binding, name, driver)
+    }
+
+    fn register_fixed_rate(
+        &self,
+        binding: ScheduleBinding<'_>,
+        config: ScheduledTaskConfig,
+        max_concurrency: usize,
+        missed_ticks: MissedTickPolicy,
+        task: ScheduledTaskFn,
+    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome> {
+        let name: Arc<str> = Arc::from(config.name.as_str());
         let Some(metrics) = self.register(name.clone(), config.clone(), max_concurrency) else {
             return Ok(ScheduledTaskRegistrationOutcome::AlreadyPresent);
         };
-        let token = self.group.cancellation_token();
-        let run_group = self.group.clone();
-        let task = Arc::new(task);
-        let max_run_time = config.max_run_time;
-        let period = config.period;
-        let initial_delay = config.initial_delay;
+        let token = binding.cancellation_token(&self.group);
+        let runs = binding.run_spawner(&self.group);
+        // Runs only lock the closure to create their future, never while it runs.
+        let task = Arc::new(Mutex::new(task));
+        let run_name: Arc<str> = Arc::from(format!("scheduled-run:{name}"));
+        let driver = async move {
+            fixed_rate_driver(token, config, metrics, missed_ticks, runs, task, run_name).await;
+        };
+        self.spawn_driver(binding, name, driver)
+    }
 
-        let spawn_result = if config.mode == ScheduleMode::FixedDelay {
-            self.group.spawn(
-                format!("scheduled-driver:{name}"),
-                TaskKind::ScheduledDriver,
-                async move {
-                    if !sleep_or_cancel(&token, initial_delay).await {
-                        return;
-                    }
-                    loop {
-                        if token.is_cancelled() {
-                            return;
-                        }
-                        let started_at = Instant::now();
-                        let mut run = metrics.begin_serial_run(started_at);
-                        run.start();
-                        let timed_out = run_with_optional_timeout(task(), max_run_time).await;
-                        run.finish(timed_out);
-                        if !sleep_or_cancel(&token, period).await {
-                            return;
-                        }
-                    }
-                },
-            )
-        } else {
-            self.group.spawn(
-                format!("scheduled-driver:{name}"),
-                TaskKind::ScheduledDriver,
-                async move {
-                    let mut expected_tick = Instant::now() + initial_delay;
-                    loop {
-                        if token.is_cancelled() {
-                            return;
-                        }
-                        tokio::select! {
-                            biased;
-                            _ = token.cancelled() => return,
-                            _ = metrics.completion.notified() => {}
-                            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(expected_tick)) => {
-                                let now = Instant::now();
-                                let overdue = now.saturating_duration_since(expected_tick);
-                                let total_missed = 1u64.saturating_add(
-                                    u64::try_from(overdue.as_nanos() / period.as_nanos()).unwrap_or(u64::MAX),
-                                );
-                                let mut remaining = total_missed;
-                                while remaining > 0 {
-                                    let Some(run) = metrics.try_reserve_run() else { break; };
-                                    if !spawn_bounded_run(
-                                        &run_group,
-                                        run,
-                                        &task,
-                                        &name,
-                                        max_run_time,
-                                    ) {
-                                        break;
-                                    }
-                                    remaining -= 1;
-                                }
-                                metrics.queue_missed_ticks(remaining, policy.missed_ticks);
-                                let advance = period.saturating_mul(
-                                    u32::try_from(total_missed).unwrap_or(u32::MAX),
-                                );
-                                expected_tick = expected_tick.checked_add(advance).unwrap_or(now);
-                            }
-                        }
-                        while metrics.pending_runs.load(Ordering::Acquire) > 0 {
-                            let Some(run) = metrics.try_reserve_run() else {
-                                break;
-                            };
-                            if !metrics.take_pending_run() {
-                                break;
-                            }
-                            if !spawn_bounded_run(&run_group, run, &task, &name, max_run_time) {
-                                break;
-                            }
-                        }
-                    }
-                },
-            )
+    fn spawn_driver<F>(
+        &self,
+        binding: ScheduleBinding<'_>,
+        name: Arc<str>,
+        driver: F,
+    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let driver_name = format!("scheduled-driver:{name}");
+        let spawn_result = match binding {
+            ScheduleBinding::Group => self.group.spawn(driver_name, TaskKind::ScheduledDriver, driver),
+            ScheduleBinding::Operation(operation) => self.group.spawn_operation(
+                &operation.with_task_kind(TaskKind::ScheduledDriver),
+                driver_name,
+                driver,
+            ),
         };
         if spawn_result.is_err() {
-            self.schedules.remove(&name_for_cleanup);
+            self.schedules.remove(&name);
         }
         spawn_result.map(ScheduledTaskRegistrationOutcome::Scheduled)
     }
@@ -1026,6 +610,9 @@ impl ScheduledTaskMetrics {
                 .compare_exchange_weak(active, active + 1, Ordering::AcqRel, Ordering::Acquire)
             {
                 Ok(_) => {
+                    if active > 0 {
+                        self.overlaps.fetch_add(1, Ordering::Relaxed);
+                    }
                     return Some(ScheduledRunGuard::reserved(self.clone()));
                 }
                 Err(observed) => active = observed,
@@ -1077,25 +664,6 @@ impl ScheduledTaskMetrics {
 
     fn begin_serial_run(self: &Arc<Self>, expected_at: Instant) -> ScheduledRunGuard {
         self.active_runs.fetch_add(1, Ordering::AcqRel);
-        self.record_drift(expected_at);
-        ScheduledRunGuard::reserved(self.clone())
-    }
-
-    fn try_begin_no_overlap_run(self: &Arc<Self>, expected_at: Instant) -> Option<ScheduledRunGuard> {
-        if let Some(run) = self.try_reserve_run() {
-            self.record_drift(expected_at);
-            Some(run)
-        } else {
-            self.skips.fetch_add(1, Ordering::Relaxed);
-            None
-        }
-    }
-
-    fn begin_overlapping_run(self: &Arc<Self>, expected_at: Instant) -> ScheduledRunGuard {
-        let previous_runs = self.active_runs.fetch_add(1, Ordering::AcqRel);
-        if previous_runs > 0 {
-            self.overlaps.fetch_add(1, Ordering::Relaxed);
-        }
         self.record_drift(expected_at);
         ScheduledRunGuard::reserved(self.clone())
     }
@@ -1191,71 +759,102 @@ impl Drop for ScheduledRunGuard {
     }
 }
 
-fn spawn_bounded_run<F, Fut>(
-    group: &TaskGroup,
+/// Starts one reserved run; returns `false` if the owner rejected it.
+fn spawn_bounded_run(
+    runs: &RunSpawner,
     mut run: ScheduledRunGuard,
-    task: &Arc<F>,
+    task: &Arc<Mutex<ScheduledTaskFn>>,
     name: &Arc<str>,
     max_run_time: Option<Duration>,
-) -> bool
-where
-    F: Fn() -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = ()> + Send + 'static,
-{
-    let run_task = task.clone();
-    group
-        .spawn(format!("scheduled-run:{name}"), TaskKind::ScheduledRun, async move {
-            run.start();
-            let timed_out = run_with_optional_timeout(run_task(), max_run_time).await;
-            run.finish(timed_out);
-        })
-        .is_ok()
+) -> bool {
+    let task = task.clone();
+    runs.spawn(name.to_string(), async move {
+        run.start();
+        let future = {
+            let mut task = task.lock();
+            (task)()
+        };
+        // Only a controlled fixed-delay schedule can stop itself.
+        let (_, timed_out) = run_with_optional_timeout(future, max_run_time).await;
+        run.finish(timed_out);
+    })
+    .is_ok()
 }
 
-fn next_expected_tick(current: Instant, period: Duration) -> Instant {
-    current.checked_add(period).unwrap_or_else(Instant::now)
-}
-
-async fn run_with_optional_timeout<Fut>(future: Fut, max_run_time: Option<Duration>) -> bool
-where
-    Fut: Future<Output = ()> + Send,
-{
-    if let Some(timeout) = max_run_time {
-        tokio::time::timeout(timeout, future).await.is_err()
-    } else {
-        future.await;
-        false
+async fn fixed_rate_driver(
+    token: CancellationToken,
+    config: ScheduledTaskConfig,
+    metrics: Arc<ScheduledTaskMetrics>,
+    missed_ticks: MissedTickPolicy,
+    runs: RunSpawner,
+    task: Arc<Mutex<ScheduledTaskFn>>,
+    run_name: Arc<str>,
+) {
+    let period = config.period;
+    let max_run_time = config.max_run_time;
+    let mut expected_tick = Instant::now() + config.initial_delay;
+    loop {
+        if token.is_cancelled() {
+            return;
+        }
+        tokio::select! {
+            biased;
+            _ = token.cancelled() => return,
+            _ = metrics.completion.notified() => {}
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(expected_tick)) => {
+                let now = Instant::now();
+                metrics.record_drift(expected_tick);
+                let overdue = now.saturating_duration_since(expected_tick);
+                let total_missed = 1u64.saturating_add(
+                    u64::try_from(overdue.as_nanos() / period.as_nanos()).unwrap_or(u64::MAX),
+                );
+                let mut remaining = total_missed;
+                while remaining > 0 {
+                    let Some(run) = metrics.try_reserve_run() else { break; };
+                    if !spawn_bounded_run(&runs, run, &task, &run_name, max_run_time) {
+                        break;
+                    }
+                    remaining -= 1;
+                }
+                metrics.queue_missed_ticks(remaining, missed_ticks);
+                let advance = period.saturating_mul(u32::try_from(total_missed).unwrap_or(u32::MAX));
+                expected_tick = expected_tick.checked_add(advance).unwrap_or(now);
+            }
+        }
+        while metrics.pending_runs.load(Ordering::Acquire) > 0 {
+            let Some(run) = metrics.try_reserve_run() else {
+                break;
+            };
+            if !metrics.take_pending_run() {
+                break;
+            }
+            if !spawn_bounded_run(&runs, run, &task, &run_name, max_run_time) {
+                break;
+            }
+        }
     }
 }
 
-async fn run_controlled_with_optional_timeout<Fut>(
-    future: Fut,
-    max_run_time: Option<Duration>,
-) -> (ScheduledTaskControl, bool)
-where
-    Fut: Future<Output = ScheduledTaskControl> + Send,
-{
+/// Awaits `run` within `max_run_time`; returns its control and whether it timed out.
+async fn run_with_optional_timeout(run: ScheduledRun, max_run_time: Option<Duration>) -> (ScheduledTaskControl, bool) {
     if let Some(timeout) = max_run_time {
-        match tokio::time::timeout(timeout, future).await {
+        match tokio::time::timeout(timeout, run).await {
             Ok(control) => (control, false),
             Err(_) => (ScheduledTaskControl::Continue, true),
         }
     } else {
-        (future.await, false)
+        (run.await, false)
     }
 }
 
-// Both adapters share timing and settlement; their outer task registration
-// retains the distinct component or operation cancellation boundary.
-async fn fixed_delay_driver<F, Fut>(
+// Group and operation schedules share timing and settlement; their driver
+// registration keeps the distinct component or operation cancellation boundary.
+async fn fixed_delay_driver(
     token: CancellationToken,
     config: ScheduledTaskConfig,
     metrics: Arc<ScheduledTaskMetrics>,
-    mut task: F,
-) where
-    F: FnMut() -> Fut + Send + 'static,
-    Fut: Future<Output = ScheduledTaskControl> + Send + 'static,
-{
+    mut task: ScheduledTaskFn,
+) {
     if !sleep_or_cancel(&token, config.initial_delay).await {
         return;
     }
@@ -1268,7 +867,7 @@ async fn fixed_delay_driver<F, Fut>(
         let started_at = Instant::now();
         let mut run = metrics.begin_serial_run(started_at);
         run.start();
-        let (control, timed_out) = run_controlled_with_optional_timeout(task(), config.max_run_time).await;
+        let (control, timed_out) = run_with_optional_timeout(task(), config.max_run_time).await;
         run.finish(timed_out);
         if control == ScheduledTaskControl::Stop {
             return;
@@ -1313,33 +912,45 @@ mod tests {
         async { panic!("injected controlled poll panic") }
     }
 
+    fn two() -> NonZeroUsize {
+        NonZeroUsize::new(2).unwrap()
+    }
+
     #[tokio::test]
     async fn every_schedule_entry_settles_construction_and_poll_panics() {
         for construction in [false, true] {
-            for entry in 0..8 {
+            for entry in 0..6 {
                 let context = RuntimeContext::from_current("scheduled-panic");
                 let scheduled = ScheduledTaskGroup::new(context.root_group().clone());
-                let config = ScheduledTaskConfig::fixed_rate("panic", Duration::from_secs(60));
                 let operation = OperationContext::without_deadline(TaskKind::ScheduledDriver);
+                let delay = ScheduledTaskConfig::fixed_delay("panic", Duration::from_secs(60));
+                let serial = ScheduledTaskConfig::fixed_rate_no_overlap("panic", Duration::from_secs(60));
+                let overlapping = ScheduledTaskConfig::fixed_rate("panic", Duration::from_secs(60));
                 let result = match entry {
-                    0 => scheduled.schedule_bounded(
-                        config,
-                        ScheduledExecutionPolicy::serial(MissedTickPolicy::Skip),
-                        move || panicking_run(construction),
-                    ),
-                    1 => scheduled.schedule_fixed_delay(config, move || panicking_run(construction)),
-                    2 => scheduled
-                        .schedule_fixed_delay_controlled(config, move || panicking_controlled_run(construction)),
-                    3 => scheduled.schedule_fixed_rate_no_overlap(config, move || panicking_run(construction)),
-                    4 => scheduled.schedule_fixed_rate(config, move || panicking_run(construction)),
-                    5 => scheduled
-                        .schedule_fixed_delay_operation(&operation, config, move || panicking_run(construction)),
-                    6 => scheduled.schedule_fixed_delay_controlled_operation(&operation, config, move || {
-                        panicking_controlled_run(construction)
-                    }),
-                    _ => scheduled.schedule_fixed_rate_no_overlap_operation(&operation, config, move || {
+                    0 => scheduled.schedule(delay, ScheduledExecutionPolicy::default(), move || {
                         panicking_run(construction)
                     }),
+                    1 => scheduled.schedule(serial, ScheduledExecutionPolicy::default(), move || {
+                        panicking_run(construction)
+                    }),
+                    2 => scheduled.schedule(
+                        overlapping,
+                        ScheduledExecutionPolicy::bounded(two(), MissedTickPolicy::Skip),
+                        move || panicking_run(construction),
+                    ),
+                    3 => scheduled.schedule_controlled(delay, move || panicking_controlled_run(construction)),
+                    4 => scheduled.schedule_operation(
+                        &operation,
+                        delay,
+                        ScheduledExecutionPolicy::default(),
+                        move || panicking_run(construction),
+                    ),
+                    _ => scheduled.schedule_operation(
+                        &operation,
+                        serial,
+                        ScheduledExecutionPolicy::default(),
+                        move || panicking_run(construction),
+                    ),
                 };
                 result.unwrap();
                 tokio::time::timeout(Duration::from_secs(5), async {
@@ -1371,6 +982,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_policy_that_contradicts_the_mode_is_rejected() {
+        let context = RuntimeContext::from_current("scheduled-policy-contract");
+        let scheduled = ScheduledTaskGroup::new(context.root_group().clone());
+        let period = Duration::from_secs(60);
+        let bounded = ScheduledExecutionPolicy::bounded(two(), MissedTickPolicy::Skip);
+        let serial = ScheduledExecutionPolicy::default();
+
+        for (config, policy) in [
+            (ScheduledTaskConfig::fixed_delay("delay-bounded", period), bounded),
+            (
+                ScheduledTaskConfig::fixed_rate_no_overlap("no-overlap-bounded", period),
+                bounded,
+            ),
+            (ScheduledTaskConfig::fixed_rate("overlap-serial", period), serial),
+            (ScheduledTaskConfig::fixed_delay("zero-period", Duration::ZERO), serial),
+        ] {
+            let name = config.name.clone();
+            let error = scheduled.schedule(config, policy, || async {}).unwrap_err();
+            assert_eq!(
+                error.condition(),
+                rocketmq_error::CanonicalCondition::Unimplemented,
+                "{name}: {error}"
+            );
+        }
+        let error = scheduled
+            .schedule_controlled(
+                ScheduledTaskConfig::fixed_rate_no_overlap("controlled-rate", period),
+                || async { ScheduledTaskControl::Stop },
+            )
+            .unwrap_err();
+        assert_eq!(error.condition(), rocketmq_error::CanonicalCondition::Unimplemented);
+        assert!(scheduled.snapshot().is_empty());
+        assert!(context.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
+    }
+
+    #[tokio::test]
     async fn a_reserved_run_settles_if_rejected_or_aborted_before_first_poll() {
         let context = RuntimeContext::from_current("run-guard");
         let scheduled = ScheduledTaskGroup::new(context.root_group().clone());
@@ -1378,7 +1025,7 @@ mod tests {
         let metrics = scheduled
             .register(
                 name.clone(),
-                ScheduledTaskConfig::fixed_rate("guard", Duration::from_secs(1)),
+                ScheduledTaskConfig::fixed_rate_no_overlap("guard", Duration::from_secs(1)),
                 1,
             )
             .unwrap();
@@ -1399,10 +1046,11 @@ mod tests {
         assert_eq!(metrics.snapshot().failures, 1);
         assert!(context.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
         let run = metrics.try_reserve_run().unwrap();
+        let runs = ScheduleBinding::Group.run_spawner(&scheduled.group);
         assert!(!spawn_bounded_run(
-            &scheduled.group,
+            &runs,
             run,
-            &Arc::new(|| async {}),
+            &Arc::new(Mutex::new(erase_task(|| async {}))),
             &name,
             None
         ));
@@ -1418,9 +1066,10 @@ mod tests {
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         let mut started = Some(started_tx);
         scheduled
-            .schedule_fixed_delay_operation(
+            .schedule_operation(
                 &operation,
                 ScheduledTaskConfig::fixed_delay("cancel", Duration::from_secs(1)),
+                ScheduledExecutionPolicy::default(),
                 move || {
                     let started = started.take();
                     async move {
@@ -1443,42 +1092,34 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn fixed_delay_adapters_share_first_tick_completion_delay_and_controlled_stop() {
+    async fn fixed_delay_waits_for_the_first_delay_and_then_for_each_completion() {
         for operation_owned in [false, true] {
             let context = RuntimeContext::from_current("fixed-delay-contract");
             let scheduled = ScheduledTaskGroup::new(context.root_group().clone());
             let operation = OperationContext::without_deadline(TaskKind::ScheduledDriver);
-            let mut config = ScheduledTaskConfig::fixed_delay("serial", Duration::from_secs(3));
-            config.initial_delay = Duration::from_secs(2);
-            config.shutdown_timeout = Duration::ZERO;
+            let config = ScheduledTaskConfig::fixed_delay("serial", Duration::from_secs(3))
+                .with_initial_delay(Duration::from_secs(2));
             let release = Arc::new(Semaphore::new(0));
             let task_release = release.clone();
             let (starts, mut started) = tokio::sync::mpsc::unbounded_channel();
-            let (finished, first_finished) = tokio::sync::oneshot::channel();
-            let mut finished = Some(finished);
             let mut count = 0;
             let task = move || {
                 count += 1;
                 let count = count;
                 let starts = starts.clone();
                 let release = task_release.clone();
-                let finished = finished.take();
                 async move {
                     starts.send((count, tokio::time::Instant::now())).unwrap();
-                    if let Some(finished) = finished {
+                    if count == 1 {
                         release.acquire().await.unwrap().forget();
-                        finished.send(()).unwrap();
-                        ScheduledTaskControl::Continue
-                    } else {
-                        ScheduledTaskControl::Stop
                     }
                 }
             };
             let begin = tokio::time::Instant::now();
             let result = if operation_owned {
-                scheduled.schedule_fixed_delay_controlled_operation(&operation, config.clone(), task)
+                scheduled.schedule_operation(&operation, config.clone(), ScheduledExecutionPolicy::default(), task)
             } else {
-                scheduled.schedule_fixed_delay_controlled(config.clone(), task)
+                scheduled.schedule(config.clone(), ScheduledExecutionPolicy::default(), task)
             };
             assert!(matches!(
                 result.unwrap(),
@@ -1486,7 +1127,9 @@ mod tests {
             ));
             assert_eq!(
                 scheduled
-                    .schedule_fixed_delay(config, || async { panic!("duplicate ran") })
+                    .schedule(config, ScheduledExecutionPolicy::default(), || async {
+                        panic!("duplicate ran")
+                    })
                     .unwrap(),
                 ScheduledTaskRegistrationOutcome::AlreadyPresent,
             );
@@ -1496,18 +1139,56 @@ mod tests {
             tokio::time::advance(Duration::from_secs(10)).await;
             assert!(started.try_recv().is_err());
             assert_eq!(scheduled.snapshot()[0].active_runs, 1);
+            let completion = tokio::time::Instant::now();
             release.add_permits(1);
-            first_finished.await.unwrap();
-            let first_completion = tokio::time::Instant::now();
             let (count, second) = started.recv().await.unwrap();
             assert_eq!(count, 2);
-            assert_eq!(second - first_completion, Duration::from_secs(3));
+            assert_eq!(second - completion, Duration::from_secs(3));
             assert!(context.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
             let snapshot = &scheduled.snapshot()[0];
             assert_eq!(snapshot.runs, 2);
             assert_eq!(snapshot.active_runs, 0);
             assert_eq!(snapshot.failures, 0);
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_controlled_schedule_ends_after_a_stop() {
+        let context = RuntimeContext::from_current("scheduled-controlled-stop");
+        let scheduled = ScheduledTaskGroup::new(context.root_group().clone());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let task_calls = calls.clone();
+        scheduled
+            .schedule_controlled(
+                ScheduledTaskConfig::fixed_delay("self-stopping", Duration::from_secs(1)),
+                move || {
+                    let call = task_calls.fetch_add(1, Ordering::AcqRel) + 1;
+                    async move {
+                        if call == 2 {
+                            ScheduledTaskControl::Stop
+                        } else {
+                            ScheduledTaskControl::Continue
+                        }
+                    }
+                },
+            )
+            .unwrap();
+
+        for _ in 0..5 {
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+            tokio::time::advance(Duration::from_secs(1)).await;
+        }
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(calls.load(Ordering::Acquire), 2);
+        let snapshot = &scheduled.snapshot()[0];
+        assert_eq!(snapshot.runs, 2);
+        assert_eq!(snapshot.active_runs, 0);
+        assert_eq!(scheduled.group().task_count(), 0, "the driver ends after a stop");
+        assert!(context.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
     }
 
     #[tokio::test(start_paused = true)]
@@ -1520,7 +1201,7 @@ mod tests {
         let mut config = ScheduledTaskConfig::fixed_delay("timeout", Duration::from_secs(1));
         config.max_run_time = Some(Duration::from_secs(1));
         scheduled
-            .schedule_fixed_delay_controlled(config, move || {
+            .schedule_controlled(config, move || {
                 calls += 1;
                 let second = if calls == 2 { second_tx.take() } else { None };
                 async move {
@@ -1543,7 +1224,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn coalesced_bounded_schedule_never_exceeds_one_active_and_one_pending_run() {
+    async fn coalesced_serial_schedule_never_exceeds_one_active_and_one_pending_run() {
         let context = RuntimeContext::try_from_current("bounded-schedule").unwrap();
         let scheduled = ScheduledTaskGroup::new(context.root_group().clone());
         let active = Arc::new(AtomicUsize::new(0));
@@ -1556,8 +1237,8 @@ mod tests {
         let task_calls = calls.clone();
         let task_release = release.clone();
         scheduled
-            .schedule_bounded(
-                ScheduledTaskConfig::fixed_rate("bounded-coalesce", Duration::from_secs(1)),
+            .schedule(
+                ScheduledTaskConfig::fixed_rate_no_overlap("bounded-coalesce", Duration::from_secs(1)),
                 ScheduledExecutionPolicy::serial(MissedTickPolicy::CoalesceLatest),
                 move || {
                     let task_active = task_active.clone();
@@ -1607,6 +1288,54 @@ mod tests {
             tokio::task::yield_now().await;
         }
         assert_eq!(active.load(Ordering::Acquire), 0);
+        assert!(context.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn overlapping_runs_stay_within_the_policy_bound() {
+        let context = RuntimeContext::from_current("scheduled-overlap-bound");
+        let scheduled = ScheduledTaskGroup::new(context.root_group().clone());
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(Semaphore::new(0));
+
+        let task_active = active.clone();
+        let task_max_active = max_active.clone();
+        let task_release = release.clone();
+        scheduled
+            .schedule(
+                ScheduledTaskConfig::fixed_rate("overlap", Duration::from_secs(1)),
+                ScheduledExecutionPolicy::bounded(two(), MissedTickPolicy::Skip),
+                move || {
+                    let task_active = task_active.clone();
+                    let task_max_active = task_max_active.clone();
+                    let task_release = task_release.clone();
+                    async move {
+                        let current = task_active.fetch_add(1, Ordering::AcqRel) + 1;
+                        task_max_active.fetch_max(current, Ordering::AcqRel);
+                        drop(task_release.acquire().await.unwrap());
+                        task_active.fetch_sub(1, Ordering::AcqRel);
+                    }
+                },
+            )
+            .unwrap();
+
+        for _ in 0..5 {
+            tokio::time::advance(Duration::from_secs(1)).await;
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+        }
+        let snapshot = &scheduled.snapshot()[0];
+        assert_eq!(max_active.load(Ordering::Acquire), 2);
+        assert_eq!(snapshot.active_runs, 2);
+        assert_eq!(snapshot.overlaps, 1);
+        assert!(snapshot.skips >= 3, "{snapshot:?}");
+
+        release.add_permits(2);
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
         assert!(context.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
     }
 }

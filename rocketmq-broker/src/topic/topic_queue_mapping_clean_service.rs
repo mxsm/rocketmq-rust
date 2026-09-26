@@ -32,8 +32,9 @@ use rocketmq_protocol::protocol::admin::topic_offset::TopicOffset;
 use rocketmq_protocol::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
-use rocketmq_runtime::common::util_all::is_it_time_to_do;
+use rocketmq_runtime::common::time_utils::is_it_time_to_do;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -43,7 +44,7 @@ use rocketmq_transport::api::ClientMetadata;
 use tracing::info;
 use tracing::warn;
 
-use crate::broker_runtime::broker_task_group_or_current;
+use crate::broker_runtime::broker_component_task_group;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 
@@ -82,7 +83,7 @@ struct TopicQueueMappingCleanServiceInner {
     config: TopicQueueMappingCleanConfig,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
     broker_outer_api: BrokerOuterAPI,
-    service_context: Option<ChildServiceContext>,
+    service_context: ChildServiceContext,
     running: AtomicBool,
     lifecycle: Mutex<CleanServiceLifecycle>,
 }
@@ -104,7 +105,7 @@ impl TopicQueueMappingCleanService {
         config: TopicQueueMappingCleanConfig,
         topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
         broker_outer_api: BrokerOuterAPI,
-        service_context: Option<ChildServiceContext>,
+        service_context: ChildServiceContext,
     ) -> Self {
         Self {
             inner: Arc::new(TopicQueueMappingCleanServiceInner {
@@ -132,14 +133,8 @@ impl TopicQueueMappingCleanService {
             return;
         }
 
-        let Some(task_group) = broker_task_group_or_current(
-            self.inner.service_context.as_ref(),
-            "rocketmq-broker.topic-queue-mapping-clean",
-            "failed to start TopicQueueMappingCleanService outside Tokio runtime",
-        ) else {
-            self.inner.running.store(false, Ordering::Release);
-            return;
-        };
+        let task_group =
+            broker_component_task_group(&self.inner.service_context, "rocketmq-broker.topic-queue-mapping-clean");
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
         let this = Self {
             inner: Arc::clone(&self.inner),
@@ -147,7 +142,7 @@ impl TopicQueueMappingCleanService {
         let mut config = ScheduledTaskConfig::fixed_delay("broker.topic-queue-mapping-clean.scan", clean_interval);
         config.initial_delay = initial_delay;
 
-        if let Err(error) = scheduled_tasks.schedule_fixed_delay(config, move || {
+        if let Err(error) = scheduled_tasks.schedule(config, ScheduledExecutionPolicy::default(), move || {
             let this = this.clone();
             Box::pin(async move {
                 if let Err(err) = this.run_once().await {

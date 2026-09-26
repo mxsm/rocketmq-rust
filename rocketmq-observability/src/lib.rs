@@ -237,8 +237,7 @@ pub mod bench_support {
             && parent_report.is_healthy()
             && finished_accept_tasks >= 1
             && shutdown_report.leaked == 0
-            && shutdown_report.timed_out == 0
-            && shutdown_report.detached_still_running == 0;
+            && shutdown_report.timed_out == 0;
 
         PrometheusLifecycleProbe {
             task_count_before_scrape,

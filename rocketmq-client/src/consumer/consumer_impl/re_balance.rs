@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
-use rocketmq_runtime::common::util_all;
+use rocketmq_runtime::common::time_utils;
 
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::pop_request::PopRequest;
@@ -39,12 +39,13 @@ pub(crate) fn parse_consume_timestamp_millis(
             format!("Consume timestamp is not configured for mq: {}", mq)
         ));
     };
-    let timestamp = util_all::parse_date_to_millis(consume_timestamp, util_all::YYYYMMDDHHMMSS).ok_or_else(|| {
-        crate::mq_client_err!(
-            ResponseCode::SystemError as i32,
-            format!("Failed to parse consume timestamp for mq: {}", mq)
-        )
-    })?;
+    let timestamp =
+        time_utils::parse_date_to_millis(consume_timestamp, time_utils::YYYYMMDDHHMMSS).ok_or_else(|| {
+            crate::mq_client_err!(
+                ResponseCode::SystemError as i32,
+                format!("Failed to parse consume timestamp for mq: {}", mq)
+            )
+        })?;
     u64::try_from(timestamp).map_err(|_| {
         crate::mq_client_err!(
             ResponseCode::SystemError as i32,
@@ -232,7 +233,7 @@ mod tests {
 
         assert_eq!(
             timestamp,
-            util_all::parse_date_to_millis("20250102030405", util_all::YYYYMMDDHHMMSS)
+            time_utils::parse_date_to_millis("20250102030405", time_utils::YYYYMMDDHHMMSS)
                 .expect("Java consume timestamp should parse") as u64
         );
         assert!(timestamp > 1_000_000_000_000);

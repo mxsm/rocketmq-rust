@@ -63,6 +63,7 @@ use crate::ha::transfer_metrics::HaTransferMetrics;
 use crate::ha::HAError;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::message_store::local_file_message_store::HAReplicaStoreHandle;
+use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_store_local::ha::replication::ReplicationProgress;
 
 type AutoSwitchReplicationState = rocketmq_store_local::ha::replication::ReplicationStateRoot;
@@ -499,7 +500,10 @@ impl DefaultHAService {
             self.connection_context.install_auto_switch_replication(replication)?;
         }
 
-        let group_transfer_service = Arc::new(GroupTransferService::try_new(service_reference.clone())?);
+        let group_transfer_service = Arc::new(GroupTransferService::try_new(
+            service_reference.clone(),
+            crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.ha.group-transfer"),
+        )?);
         self.connection_context
             .install_group_transfer_service(&group_transfer_service)?;
         self.group_transfer_service = Some(group_transfer_service);
@@ -511,6 +515,7 @@ impl DefaultHAService {
         let state_notification_service = Arc::new(HAConnectionStateNotificationService::new(
             service_reference,
             Arc::clone(&config),
+            crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.ha.connection-state-notification"),
         ));
         self.connection_context
             .install_state_notification_service(&state_notification_service)?;
@@ -629,25 +634,18 @@ impl HAService for DefaultHAService {
             warn!("Timed out destroying HA connections");
         }
 
+        // The services bound their own wait and abort a loop still running at
+        // the deadline, so no outer timeout drops a shutdown half-way.
         if let Some(ref group_transfer_service) = self.group_transfer_service {
-            if timeout(Duration::from_secs(3), group_transfer_service.shutdown())
-                .await
-                .is_err()
-            {
-                warn!("Timed out shutting down HA group transfer service");
-            }
+            group_transfer_service
+                .shutdown_until(ShutdownDeadline::after(Duration::from_secs(3)))
+                .await;
         }
 
         if let Some(ref ha_connection_state_notification_service) = self.ha_connection_state_notification_service {
-            if timeout(
-                Duration::from_secs(3),
-                ha_connection_state_notification_service.shutdown(),
-            )
-            .await
-            .is_err()
-            {
-                warn!("Timed out shutting down HA connection state notification service");
-            }
+            ha_connection_state_notification_service
+                .shutdown_until(ShutdownDeadline::after(Duration::from_secs(3)))
+                .await;
         }
     }
 

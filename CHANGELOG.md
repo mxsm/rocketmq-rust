@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(runtime):** Correct runtime lifecycle defects: `ShutdownReport::timed_out` counts only tasks the shutdown deadline aborted and `remaining_tasks` is capped at 64 with `remaining_tasks_omitted`; health probes serve each connection as a bounded task and back off on `accept` resource errors; `/drainz` accepts only `POST` by default (the shipped charts and manifests opt in to `GET` for `preStop.httpGet` through `ROCKETMQ_HEALTH_DRAIN_METHODS`); group poisoning and closed-child answers are logged and counted; shutdown publishes `Closing`, `Closed` and `ShutdownCompleted` in order; blocking admission is FIFO per lane and wakes one waiter per release; `ServiceManager` shutdown honors the caller's and parent group's deadline instead of a fixed 90 seconds; a `TaskId` from another group is no longer reported finished; scheduled tasks are type-erased at registration, which shrinks the client's debug rlib from 4.35 GB to 0.50 GB so its test binaries link on Windows again ([#10935](https://github.com/mxsm/rocketmq-rust/issues/10935)).
 - **fix(tools):** Make `rocketmq-store-inspect read-message-log --version` report the crate version instead of a stale hardcoded value ([#10780](https://github.com/mxsm/rocketmq-rust/issues/10780)).
 - **docs(runtime):** Put item-level doc comments before attributes on `ServiceManagerLifecycleProbe` and `ServiceManager::new_arc` so rustdoc attaches the comments to the intended items ([#10901](https://github.com/mxsm/rocketmq-rust/issues/10901)).
 - **fix(model):** Return an error instead of overflowing in `StringUtils::parse_delay_level` when a delay level's millisecond value exceeds `i64::MAX`: the unit multiplier is now applied with checked multiplication while valid levels, accepted unit letters, and level numbering stay unchanged ([#10857](https://github.com/mxsm/rocketmq-rust/issues/10857)).
@@ -46,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **feat(runtime):** Add `RuntimeError::kind()` with `RuntimeErrorKind`, `TaskGroup::owns_task` and `TaskId::group_id`, `TaskName`, `TaskGroupEventCounts`, `DrainRequestMethods`, and the `runtime_convergence_bench` benchmark for contended submission, budget permits, idle memory and blocking admission ([#10935](https://github.com/mxsm/rocketmq-rust/issues/10935)).
 - **test(model):** Add attribute update and validation contract coverage ([#10452](https://github.com/mxsm/rocketmq-rust/issues/10452)).
 - **test(remoting):** Add comprehensive test coverage for `QueryMessageResponseHeader` including integration with RemotingCommand, boundary checks, and error handling
 - **feat(tools):** Add `broker` command group with `GetBrokerConfigSubCommand` for querying broker configuration by broker address or cluster, with optional `--keyPattern` regex filtering
@@ -65,6 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(runtime):** Converge the runtime on one owner model: `ScheduledTaskGroup::schedule`, `schedule_operation` and `schedule_controlled` replace nine scheduling entry points; Broker, Client and Store registrations move off `ScheduledTaskManager`; Broker and NameServer require a `ChildServiceContext`; only `RuntimeOwner` and `RuntimeContext` create root task groups; task submission dispatches outside the admission lock, registries use fewer shards, and budget reservations use atomic compare-and-swap. See `rocketmq-runtime/MIGRATION.md` ([#10935](https://github.com/mxsm/rocketmq-rust/issues/10935)).
 - **refactor(macros):** Rename the former `RequestHeaderCodecV3` derive to `RequestHeaderCodec` throughout the protocol headers, tests, and documentation. The explicit wire model and all registered header contracts remain unchanged. Former V3 consumers only rename the derive; historical V1/V2 consumers still need to migrate their attributes and review decode behavior.
 - **fix(namesrv):** Exclude shutdown deadlines from NameServer trace spans ([#10099](https://github.com/mxsm/rocketmq-rust/issues/10099)).
 - **fix(namesrv):** Default the legacy public-listener compatibility setting to enabled while preserving an
@@ -97,6 +100,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(runtime):** Remove the executor services, `TaskScheduler` and the `schedule` module, `ScheduledTaskManager`, `ActorRuntime`, `compat`, `tokio_lock`, `Shutdown`, `common::util_all`, `common::thread`, `common::future`, `DetachedTaskPolicy` and the detached report fields, and the ambient-runtime `ServiceManager` constructors ([#10935](https://github.com/mxsm/rocketmq-rust/issues/10935)).
 - **docs:** Remove the Star History chart from `README.md` ([#9337](https://github.com/mxsm/rocketmq-rust/issues/9337))
 - **test(store):** Remove obsolete phase3_integration_tests.rs integration test file ([#6649](https://github.com/mxsm/rocketmq-rust/issues/6649))
 - **refactor(broker):** Update ProducerManager to use ProducerGroupName type alias for producer group mapping ([#6638](https://github.com/mxsm/rocketmq-rust/issues/6638))

@@ -17,7 +17,6 @@ use std::time::Duration;
 use serde::Serialize;
 
 use crate::blocking::BlockingTaskSnapshot;
-use crate::task_group::DetachedTaskPolicy;
 use crate::task_group::TaskGroupId;
 use crate::task_group::TaskId;
 use crate::task_group::TaskKind;
@@ -41,18 +40,21 @@ pub struct ShutdownReport {
     pub failed: usize,
     /// The panicked value.
     pub panicked: usize,
-    /// The timed out value.
+    /// Tasks this shutdown aborted after its deadline expired, plus tasks
+    /// still registered when it finished.
     pub timed_out: usize,
-    /// The leaked value.
+    /// Tasks still registered when the shutdown finished.
     pub leaked: usize,
     /// The blocking still running value.
     pub blocking_still_running: usize,
-    /// The detached still running value.
-    pub detached_still_running: usize,
     /// The children value.
     pub children: Vec<ShutdownReport>,
-    /// The remaining tasks value.
+    /// Tasks still registered when the shutdown finished, at most
+    /// [`Self::REMAINING_TASKS_LIMIT`] of them.
     pub remaining_tasks: Vec<TaskSnapshot>,
+    /// Remaining tasks left out of `remaining_tasks` because of its limit.
+    /// They are still counted in `leaked`.
+    pub remaining_tasks_omitted: usize,
     /// The blocking tasks value.
     pub blocking_tasks: Vec<BlockingTaskSnapshot>,
     /// The annotations value.
@@ -84,9 +86,9 @@ impl ShutdownReport {
             timed_out: self.timed_out,
             leaked: self.leaked,
             blocking_still_running: self.blocking_still_running,
-            detached_still_running: self.detached_still_running,
             children: Vec::new(),
             remaining_tasks: self.remaining_tasks.clone(),
+            remaining_tasks_omitted: self.remaining_tasks_omitted,
             blocking_tasks: self.blocking_tasks.clone(),
             annotations: self.annotations.clone(),
         }
@@ -105,11 +107,25 @@ impl ShutdownReport {
             timed_out: 0,
             leaked: 0,
             blocking_still_running: 0,
-            detached_still_running: 0,
             children: Vec::new(),
             remaining_tasks: Vec::new(),
+            remaining_tasks_omitted: 0,
             blocking_tasks: Vec::new(),
             annotations: Vec::new(),
+        }
+    }
+
+    /// Maximum number of task snapshots kept in `remaining_tasks`.
+    ///
+    /// The limit bounds the size of a report for a group that leaks many
+    /// tasks; the counters stay exact.
+    pub const REMAINING_TASKS_LIMIT: usize = 64;
+
+    pub(crate) fn push_remaining_task(&mut self, task: TaskSnapshot) {
+        if self.remaining_tasks.len() < Self::REMAINING_TASKS_LIMIT {
+            self.remaining_tasks.push(task);
+        } else {
+            self.remaining_tasks_omitted += 1;
         }
     }
 
@@ -122,7 +138,6 @@ impl ShutdownReport {
                 || report.panicked != 0
                 || report.timed_out != 0
                 || report.blocking_still_running != 0
-                || report.detached_still_running != 0
             {
                 return false;
             }
@@ -182,10 +197,6 @@ pub struct TaskSnapshot {
     /// The elapsed value.
     #[serde(with = "duration_millis")]
     pub elapsed: Duration,
-    /// Whether detached.
-    pub detached: bool,
-    /// The detached policy value.
-    pub detached_policy: Option<DetachedTaskPolicy>,
 }
 
 /// Represents shutdown annotation.
@@ -228,5 +239,34 @@ mod tests {
 
         assert!(!report.is_healthy());
         assert!(report.to_json().contains("\"failed\": 1"));
+    }
+
+    #[tokio::test]
+    async fn remaining_tasks_are_capped_and_the_omission_is_counted() {
+        let context = crate::RuntimeContext::from_current("remaining-task-limit");
+        let group_id = context.root_group().id();
+        let mut report = ShutdownReport::new("many-leaks", Duration::ZERO);
+        for id in 0..10_000 {
+            report.leaked += 1;
+            report.push_remaining_task(TaskSnapshot {
+                id: TaskId::new(group_id, id),
+                name: "leaked".to_owned(),
+                group_id,
+                group_name: "many-leaks".to_owned(),
+                kind: TaskKind::Worker,
+                state: TaskState::Leaked,
+                elapsed: Duration::ZERO,
+            });
+        }
+
+        assert_eq!(report.remaining_tasks.len(), ShutdownReport::REMAINING_TASKS_LIMIT);
+        assert_eq!(
+            report.remaining_tasks_omitted,
+            10_000 - ShutdownReport::REMAINING_TASKS_LIMIT
+        );
+        assert_eq!(report.leaked, 10_000);
+        let json = report.to_json();
+        assert!(json.contains("\"remaining_tasks_omitted\": 9936"), "{json}");
+        assert!(json.len() < 64 * 1024, "report JSON is {} bytes", json.len());
     }
 }

@@ -19,6 +19,7 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 use rocketmq_runtime::OperationContext;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::TaskGroup;
@@ -116,12 +117,13 @@ impl StatisticsManager {
         let kind_meta_map = self.kind_meta_map.clone();
         let statistics_item_state_getter = self.statistics_item_state_getter.clone();
 
-        if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap_operation(
+        if let Err(error) = scheduled_tasks.schedule_operation(
             &operation,
             ScheduledTaskConfig::fixed_rate_no_overlap(
                 "common.statistics.cleanup",
                 Duration::from_millis(Self::MAX_IDLE_TIME / 3),
             ),
+            ScheduledExecutionPolicy::default(),
             move || {
                 let stats_table = stats_table.clone();
                 let kind_meta_map = kind_meta_map.clone();

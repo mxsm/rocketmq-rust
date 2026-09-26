@@ -215,7 +215,7 @@ impl RuntimeDiagnosticsService {
             let metrics = recorder.clone();
             context
                 .scheduled_tasks("sampler")
-                .schedule_bounded(
+                .schedule(
                     rocketmq_runtime::ScheduledTaskConfig::fixed_delay("runtime-diagnostics.sample", sample_interval),
                     rocketmq_runtime::ScheduledExecutionPolicy::serial(rocketmq_runtime::MissedTickPolicy::Skip),
                     move || {

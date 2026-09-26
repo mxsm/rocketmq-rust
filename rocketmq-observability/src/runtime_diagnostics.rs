@@ -657,6 +657,7 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     use rocketmq_runtime::RuntimeContext;
+    use rocketmq_runtime::ScheduledExecutionPolicy;
 
     use super::*;
 
@@ -764,10 +765,13 @@ mod tests {
         sources.set_schedules(schedules.observer(&["selected-job", "selected-job"]));
         let mut config = ScheduledTaskConfig::fixed_delay("selected-job", Duration::from_secs(3600));
         config.initial_delay = Duration::from_secs(3600);
-        schedules.schedule_fixed_delay(config, || async {}).unwrap();
         schedules
-            .schedule_fixed_delay(
+            .schedule(config, ScheduledExecutionPolicy::default(), || async {})
+            .unwrap();
+        schedules
+            .schedule(
                 ScheduledTaskConfig::fixed_delay("unselected-job", Duration::from_secs(3600)),
+                ScheduledExecutionPolicy::default(),
                 || async {},
             )
             .unwrap();

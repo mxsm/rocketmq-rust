@@ -130,7 +130,6 @@ impl PullScheduleCore {
             "rocketmq-client-classic-pull-schedule",
             refresh_interval,
             refresh_interval,
-            Duration::from_secs(5),
             move || {
                 let core = core.clone();
                 let due = due.clone();

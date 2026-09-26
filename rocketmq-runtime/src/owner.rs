@@ -26,7 +26,6 @@ use crate::resources::RuntimeResources;
 use crate::service_context::RootServiceContext;
 use crate::shutdown_deadline::ShutdownDeadline;
 use crate::shutdown_report::ShutdownReport;
-use crate::task_group::TaskGroup;
 use crate::task_group::TaskGroupLifecycleState;
 
 /// Owns one Tokio runtime and its root service context.
@@ -152,7 +151,7 @@ impl RuntimeOwner {
         let mut builder = tokio::runtime::Builder::new_multi_thread();
         builder
             .worker_threads(config.worker_threads)
-            .max_blocking_threads(config.max_blocking_threads)
+            .max_blocking_threads(config.tokio_blocking_threads())
             .thread_name(config.thread_name.clone())
             .thread_keep_alive(config.thread_keep_alive);
         if let Some(thread_stack_size) = config.thread_stack_size {
@@ -167,12 +166,10 @@ impl RuntimeOwner {
 
         let runtime = build_tokio_runtime(&mut builder)?;
         let runtime_handle = RuntimeHandle::new(runtime.handle().clone());
-        let root_group = TaskGroup::root(config.thread_name.clone(), runtime_handle.clone());
         let diagnostics = RuntimeDiagnostics::new();
         let root_context = RootServiceContext::new(
             config.thread_name.clone().into(),
             runtime_handle,
-            root_group,
             config.blocking_lane_policies.clone(),
             config.max_blocking_threads,
             diagnostics,

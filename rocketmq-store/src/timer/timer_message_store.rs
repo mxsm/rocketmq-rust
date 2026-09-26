@@ -35,7 +35,8 @@ use rocketmq_observability::metrics::store::StoreMetricsRecorder;
 use rocketmq_observability::metrics::timer::TimerMetricsRecorder;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::common::util_all::is_it_time_to_do;
+use rocketmq_runtime::common::time_utils::is_it_time_to_do;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -447,8 +448,9 @@ impl TimerMessageStore {
         let scheduler_tasks = ScheduledTaskGroup::new(scheduler_group.clone());
         let scheduler = Arc::clone(self);
         let scheduled_pipeline = Arc::clone(&pipeline);
-        if let Err(_error) = scheduler_tasks.schedule_fixed_delay(
+        if let Err(_error) = scheduler_tasks.schedule(
             ScheduledTaskConfig::fixed_delay("timer-message-scheduler", Duration::from_millis(interval_ms)),
+            ScheduledExecutionPolicy::default(),
             move || {
                 let scheduler = scheduler.clone();
                 let pipeline = Arc::clone(&scheduled_pipeline);

@@ -35,10 +35,7 @@ pub(super) fn pop_lite_processor_for_test(
     let subscription_group_lookup = inner.subscription_group_manager().config_lookup();
     let lite_event_dispatcher = inner.lite_event_dispatcher().clone();
     let service_context = inner.broker_service_context();
-    let queue_lock_manager = service_context
-        .clone()
-        .map(QueueLockManager::new_with_service_context)
-        .unwrap_or_else(QueueLockManager::new);
+    let queue_lock_manager = QueueLockManager::new_with_service_context(service_context.clone());
     let consumer_offset_manager = inner.consumer_offset_manager_handle();
     let escape_bridge = inner.escape_bridge();
 

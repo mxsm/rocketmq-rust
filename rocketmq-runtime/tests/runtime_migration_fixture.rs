@@ -21,6 +21,7 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ScheduleMode;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ShutdownReport;
 use tokio::sync::Notify;
@@ -44,7 +45,7 @@ fn migration_fixture_owns_scheduled_child_work_and_reports_shutdown() {
     assert_eq!(config.initial_delay, Duration::ZERO);
 
     scheduled
-        .schedule_fixed_rate_no_overlap(config, {
+        .schedule(config, ScheduledExecutionPolicy::default(), {
             let runs = Arc::clone(&runs);
             let completed = Arc::clone(&completed);
             move || {

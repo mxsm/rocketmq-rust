@@ -37,11 +37,8 @@ impl BrokerRuntime {
         self.composition.request_pipeline.maintenance_authorizer = maintenance_authorizer;
         if !broker_config.authentication_enabled && !broker_config.authorization_enabled {
             self.composition.request_pipeline.auth_runtime = None;
-            let Some(service_context) = self.composition.state.service_context.as_ref() else {
-                error!("Initialize auth admin service failed because ChildServiceContext is unavailable");
-                return false;
-            };
-            return match AuthAdminService::new(auth_config, service_context.component("broker.auth-admin")).await {
+            let admin_context = self.composition.state.service_context.component("broker.auth-admin");
+            return match AuthAdminService::new(auth_config, admin_context).await {
                 Ok(service) => {
                     self.composition.request_pipeline.auth_admin_service = Some(Arc::new(service));
                     true
@@ -53,13 +50,7 @@ impl BrokerRuntime {
             };
         }
 
-        let auth_context = match self.composition.state.service_context.as_ref() {
-            Some(service_context) => service_context.component("broker.auth"),
-            None => {
-                error!("Initialize auth runtime failed because ChildServiceContext is unavailable");
-                return false;
-            }
-        };
+        let auth_context = self.composition.state.service_context.component("broker.auth");
         let auth_runtime_builder = match self.composition.state.metadata_io.as_ref() {
             Some(Ok(metadata_io)) => {
                 AuthRuntimeBuilder::new(auth_config, auth_context).with_metadata_io_actor(metadata_io.clone())

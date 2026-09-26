@@ -144,7 +144,7 @@ pub(crate) struct BrokerControllerRuntime<MS: BrokerReplicationStore> {
     pop_policy: PopPolicyState,
     escape_policy: EscapeBridgePolicyState,
     metadata_io: Option<MetadataIoActor>,
-    blocking: Option<BlockingExecutor>,
+    blocking: BlockingExecutor,
     #[cfg(test)]
     store_role_action: Arc<Mutex<Option<ControllerStoreRoleAction>>>,
 }
@@ -172,7 +172,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         pop_policy: PopPolicyState,
         escape_policy: EscapeBridgePolicyState,
         metadata_io: Option<MetadataIoActor>,
-        blocking: Option<BlockingExecutor>,
+        blocking: BlockingExecutor,
     ) -> Self {
         Self {
             controller,

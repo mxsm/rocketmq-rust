@@ -152,6 +152,91 @@ fn spawn_racing_with_shutdown_is_either_joined_or_rejected() {
     });
 }
 
+#[derive(Debug, Default)]
+struct DispatchEntry {
+    registered: bool,
+    handle_installed: bool,
+    abort_requested: bool,
+}
+
+/// Registration and tracking happen under the admission gate; dispatch to the
+/// executor happens after the gate is released. A shutdown that closes the
+/// gate either rejects the task or waits for it, and an abort requested before
+/// the dispatcher installed the handle keeps the task body from running.
+#[test]
+fn dispatch_outside_the_admission_gate_is_joined_or_aborted() {
+    use loom::sync::atomic::AtomicUsize;
+
+    loom::model(|| {
+        let gate_open = Arc::new(Mutex::new(true));
+        let tracked = Arc::new(AtomicUsize::new(0));
+        let entry = Arc::new(Mutex::new(DispatchEntry::default()));
+        let body_ran = Arc::new(AtomicBool::new(false));
+
+        let submitter = {
+            let gate_open = Arc::clone(&gate_open);
+            let tracked = Arc::clone(&tracked);
+            let entry = Arc::clone(&entry);
+            let body_ran = Arc::clone(&body_ran);
+            thread::spawn(move || {
+                {
+                    let open = gate_open.lock().expect("admission gate");
+                    if !*open {
+                        return false;
+                    }
+                    entry.lock().expect("registry").registered = true;
+                    tracked.fetch_add(1, Ordering::SeqCst);
+                }
+                // Dispatch outside the gate: install the handle and honor an
+                // abort that arrived before it.
+                let aborted = {
+                    let mut entry = entry.lock().expect("registry");
+                    entry.handle_installed = true;
+                    entry.abort_requested
+                };
+                if !aborted {
+                    body_ran.store(true, Ordering::SeqCst);
+                }
+                entry.lock().expect("registry").registered = false;
+                tracked.fetch_sub(1, Ordering::SeqCst);
+                true
+            })
+        };
+
+        let shutdown = {
+            let entry = Arc::clone(&entry);
+            let tracked = Arc::clone(&tracked);
+            let body_ran = Arc::clone(&body_ran);
+            thread::spawn(move || {
+                *gate_open.lock().expect("admission gate") = false;
+                let aborted_before_dispatch = {
+                    let mut entry = entry.lock().expect("registry");
+                    let before_dispatch = entry.registered && !entry.handle_installed;
+                    if entry.registered {
+                        entry.abort_requested = true;
+                    }
+                    before_dispatch
+                };
+                while tracked.load(Ordering::SeqCst) != 0 {
+                    thread::yield_now();
+                }
+                // The report is assembled after the join: nothing remains.
+                assert!(!entry.lock().expect("registry").registered);
+                if aborted_before_dispatch {
+                    assert!(!body_ran.load(Ordering::SeqCst));
+                }
+            })
+        };
+
+        let accepted = submitter.join().expect("submitter");
+        shutdown.join().expect("shutdown");
+        assert_eq!(tracked.load(Ordering::SeqCst), 0);
+        if !accepted {
+            assert!(!body_ran.load(Ordering::SeqCst));
+        }
+    });
+}
+
 #[test]
 fn ha_reconnect_child_lease_racing_with_shutdown_is_tracked_or_rejected() {
     loom::model(|| {

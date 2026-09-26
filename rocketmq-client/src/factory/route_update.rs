@@ -21,7 +21,6 @@ use futures::stream;
 use futures::StreamExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
-use rocketmq_runtime::tokio_lock::RocketMQTokioMutex;
 use rocketmq_transport::api::ClientMetadata;
 use tracing::info;
 use tracing::warn;
@@ -57,7 +56,7 @@ pub(super) struct RouteUpdateCoordinator {
     topic_end_points_table: SharedTopicEndPointsTable,
     broker_addr_table: SharedBrokerAddrTable,
     refresh_state: Arc<TopicRouteRefreshState>,
-    commit_lock: Arc<RocketMQTokioMutex<()>>,
+    commit_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 struct RouteUpdateSnapshot {
@@ -81,7 +80,7 @@ impl RouteUpdateCoordinator {
         topic_end_points_table: SharedTopicEndPointsTable,
         broker_addr_table: SharedBrokerAddrTable,
         refresh_state: Arc<TopicRouteRefreshState>,
-        commit_lock: Arc<RocketMQTokioMutex<()>>,
+        commit_lock: Arc<tokio::sync::Mutex<()>>,
     ) -> Self {
         Self {
             producer_table,

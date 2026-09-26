@@ -29,16 +29,11 @@
 //! test and migration harness.
 //!
 //! [`prelude`] documents the recommended entry path with an example that runs
-//! as a test. The older entry points are grouped in [`compat`], which states the
-//! migration direction without deprecating anything further.
+//! as a test.
 
-/// Actor types and operations.
-mod actor;
 pub mod blocking;
 /// Common types and operations.
 pub mod common;
-/// Compatibility facade for the older runtime entry points.
-pub mod compat;
 /// Config types and operations.
 mod config;
 /// Context types and operations.
@@ -48,8 +43,6 @@ mod critical;
 mod diagnostics;
 /// Error types and operations.
 mod error;
-/// Executor service types and operations.
-mod executor_service;
 mod handle;
 mod metadata_io;
 mod metadata_target;
@@ -61,15 +54,11 @@ mod public_api;
 /// Resource budget types and operations.
 pub mod resource_budget;
 mod resources;
-/// Schedule types and operations.
-pub mod schedule;
 /// Scheduled types and operations.
 mod scheduled;
 /// Service context types and operations.
 pub mod service_context;
 mod service_lifecycle;
-/// Shutdown types and operations.
-pub mod shutdown;
 /// Shutdown deadline types and operations.
 pub mod shutdown_deadline;
 /// Shutdown report types and operations.
@@ -82,10 +71,7 @@ pub mod task;
 /// Task group types and operations.
 pub mod task_group;
 mod task_spawner;
-/// Tokio lock types and operations.
-pub mod tokio_lock;
 
-pub use actor::ActorRuntime;
 pub use blocking::BlockingExecutorSnapshot;
 pub use blocking::BlockingKind;
 pub use blocking::BlockingLane;
@@ -101,16 +87,9 @@ pub use critical::CriticalFailureSubscription;
 pub use error::RuntimeContractPolicy;
 pub use error::RuntimeContractViolation;
 pub use error::RuntimeError;
+pub use error::RuntimeErrorKind;
 pub use error::RuntimeOperation;
 pub use error::RuntimeResult;
-pub use executor_service::FuturesExecutorPlan;
-pub use executor_service::FuturesExecutorService;
-pub use executor_service::FuturesExecutorServiceBuilder;
-pub use executor_service::ScheduledExecutorService;
-pub use executor_service::ScheduledExecutorServicePlan;
-pub use executor_service::TokioExecutorService;
-pub use executor_service::TokioExecutorServicePlan;
-pub(crate) use handle::RuntimeHandle;
 pub use metadata_io::LocalMetadataFileSystem;
 pub use metadata_io::MetadataDeadline;
 pub use metadata_io::MetadataDurability;
@@ -169,24 +148,6 @@ pub use resource_budget::RateLimit;
 pub use resource_budget::ResourceBudgetTree;
 pub use resource_budget::ResourcePermit;
 pub use resource_budget::SystemMonotonicClock;
-pub use schedule::executor::ExecutorConfig;
-pub use schedule::executor::ExecutorPool;
-pub use schedule::executor::TaskExecutor;
-pub use schedule::scheduler::SchedulerConfig;
-pub use schedule::scheduler::TaskScheduler;
-pub use schedule::task::Task;
-pub use schedule::task::TaskContext;
-pub use schedule::task::TaskResult as LegacyTaskResult;
-pub use schedule::task::TaskStatus;
-pub use schedule::trigger::CronTrigger;
-pub use schedule::trigger::DelayTrigger;
-pub use schedule::trigger::DelayedIntervalTrigger;
-pub use schedule::trigger::IntervalTrigger;
-pub use schedule::trigger::Trigger;
-pub use schedule::ScheduleControlOutcome;
-pub use schedule::ScheduleExecutionOutcome;
-pub use schedule::ScheduleRegistrationOutcome;
-pub use schedule::SchedulerStartOutcome;
 pub use scheduled::MissedTickPolicy;
 pub use scheduled::ScheduleMode;
 pub use scheduled::ScheduledExecutionPolicy;
@@ -200,6 +161,7 @@ pub use scheduled::ScheduledTaskSnapshot;
 pub use service_context::ScopeId;
 pub use service_lifecycle::CriticalFailureRecovery;
 pub use service_lifecycle::DependencyReadiness;
+pub use service_lifecycle::DrainRequestMethods;
 pub use service_lifecycle::ServiceLifecycle;
 pub use service_lifecycle::ServiceLifecycleConfig;
 pub use service_lifecycle::ServiceLifecycleObserver;
@@ -207,15 +169,16 @@ pub use service_lifecycle::ServiceLifecycleState;
 pub use service_lifecycle::ServiceLifecycleTransition;
 pub use service_lifecycle::ShutdownReason;
 pub use service_lifecycle::ShutdownRequest;
-pub use shutdown::Shutdown;
 pub use shutdown_report::ShutdownAnnotation;
 pub use shutdown_report::TaskSnapshot;
 pub use signal::wait_for_signal;
 pub use signal::wait_for_signal_result;
-pub use task_group::DetachedTaskPolicy;
+pub use stack::current_thread_committed_stack_bytes;
+pub use task_group::TaskGroupEventCounts;
 pub use task_group::TaskGroupId;
 pub use task_group::TaskGroupLifecycleState;
 pub use task_group::TaskId;
 pub use task_group::TaskKind;
+pub use task_group::TaskName;
 pub use task_group::TaskResult;
 pub use task_spawner::TaskSpawner;

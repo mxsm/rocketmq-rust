@@ -38,6 +38,7 @@ use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
 use crate::handle::RuntimeHandle;
 use crate::operation::OperationContext;
+use crate::service_context::RootGroupPermit;
 use crate::shutdown_deadline::ShutdownDeadline;
 use crate::shutdown_report::ShutdownAnnotation;
 use crate::shutdown_report::ShutdownReport;
@@ -62,22 +63,39 @@ const STATE_POISONED: u8 = 4;
 // Tokio's spawn boundary leaves their by-value stack frames live during task submission.
 const MAX_INLINE_TASK_FUTURE_SIZE: usize = crate::stack::MAX_INLINE_SIZE;
 
-/// Represents task id.
+/// Identifies a task within the group that owns it.
+///
+/// The id records its owning group, so a group never mistakes another
+/// group's task for one of its own finished tasks. It serializes as the
+/// per-group sequence number; reports carry the group id separately.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
-pub struct TaskId(u64);
+#[serde(transparent)]
+pub struct TaskId {
+    sequence: u64,
+    #[serde(skip)]
+    group: TaskGroupId,
+}
 
 impl TaskId {
-    /// Borrows this value as u64.
-    pub fn as_u64(self) -> u64 {
-        self.0
+    pub(crate) fn new(group: TaskGroupId, sequence: u64) -> Self {
+        Self { sequence, group }
     }
 
-    pub(crate) fn from_raw(value: u64) -> Self {
-        Self(value)
+    /// Returns the sequence number of this task within its group.
+    pub fn as_u64(self) -> u64 {
+        self.sequence
+    }
+
+    /// Returns the id of the group that owns this task.
+    pub fn group_id(self) -> TaskGroupId {
+        self.group
     }
 }
 
-/// Represents task group id.
+/// Identifies a task group.
+///
+/// Ids are unique within the process: groups of different runtime owners or
+/// contexts never share an id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct TaskGroupId(u64);
 
@@ -86,6 +104,102 @@ impl TaskGroupId {
     pub fn as_u64(self) -> u64 {
         self.0
     }
+
+    fn next() -> Self {
+        static NEXT_TASK_GROUP_ID: AtomicU64 = AtomicU64::new(1);
+        Self(NEXT_TASK_GROUP_ID.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+/// Name of a task, shown in shutdown reports and diagnostics.
+///
+/// A `&'static str` is stored without allocating; owned and shared strings
+/// are kept as they are.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TaskName(TaskNameRepr);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum TaskNameRepr {
+    Static(&'static str),
+    Shared(Arc<str>),
+}
+
+impl TaskName {
+    /// Returns the name.
+    pub fn as_str(&self) -> &str {
+        match &self.0 {
+            TaskNameRepr::Static(name) => name,
+            TaskNameRepr::Shared(name) => name,
+        }
+    }
+}
+
+impl std::fmt::Display for TaskName {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl From<&'static str> for TaskName {
+    fn from(name: &'static str) -> Self {
+        Self(TaskNameRepr::Static(name))
+    }
+}
+
+impl From<String> for TaskName {
+    fn from(name: String) -> Self {
+        Self(TaskNameRepr::Shared(Arc::from(name)))
+    }
+}
+
+impl From<&String> for TaskName {
+    fn from(name: &String) -> Self {
+        Self(TaskNameRepr::Shared(Arc::from(name.as_str())))
+    }
+}
+
+impl From<Arc<str>> for TaskName {
+    fn from(name: Arc<str>) -> Self {
+        Self(TaskNameRepr::Shared(name))
+    }
+}
+
+impl From<&Arc<str>> for TaskName {
+    fn from(name: &Arc<str>) -> Self {
+        Self(TaskNameRepr::Shared(Arc::clone(name)))
+    }
+}
+
+impl From<Box<str>> for TaskName {
+    fn from(name: Box<str>) -> Self {
+        Self(TaskNameRepr::Shared(Arc::from(name)))
+    }
+}
+
+impl From<std::borrow::Cow<'static, str>> for TaskName {
+    fn from(name: std::borrow::Cow<'static, str>) -> Self {
+        match name {
+            std::borrow::Cow::Borrowed(name) => Self::from(name),
+            std::borrow::Cow::Owned(name) => Self::from(name),
+        }
+    }
+}
+
+/// Counts of failures that a task group tree absorbs without an error.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct TaskGroupEventCounts {
+    /// Groups poisoned by a panicking task.
+    pub poisoned_groups: u64,
+    /// Component requests answered with an already closed group, because the
+    /// owner no longer admitted children.
+    pub closed_component_requests: u64,
+}
+
+/// Event counters shared by every group of one tree.
+#[derive(Debug, Default)]
+struct TaskGroupTreeEvents {
+    poisoned_groups: AtomicU64,
+    closed_component_requests: AtomicU64,
 }
 
 /// Identifies the task kind state.
@@ -164,28 +278,34 @@ pub enum TaskResult {
     Panicked,
 }
 
-/// Identifies the detached task policy state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum DetachedTaskPolicy {
-    /// Represents the track only case.
-    TrackOnly,
-    /// Represents the abort on shutdown case.
-    AbortOnShutdown,
-}
-
-/// Identifies the task group lifecycle state state.
+/// Lifecycle state of a task group.
+///
+/// A shutdown moves a group through `Closing`, `Closed` and
+/// `ShutdownCompleted` in that order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum TaskGroupLifecycleState {
-    /// Represents the open case.
+    /// Accepts tasks and child groups.
     Open,
-    /// Represents the closing case.
+    /// Admission is closed; cancellation has not yet reached every task.
     Closing,
-    /// Represents the closed case.
+    /// Admission is closed and cancellation was broadcast; owned work is draining.
     Closed,
-    /// Represents the shutdown completed case.
+    /// Shutdown finished and its report is published.
     ShutdownCompleted,
-    /// Represents the poisoned case.
+    /// A task panicked; the group rejects new work until it is shut down.
     Poisoned,
+}
+
+impl TaskGroupLifecycleState {
+    /// Returns the failure reported to a submission rejected in this state.
+    ///
+    /// Callers use it only after observing a state other than `Open`.
+    pub(crate) fn admission_error(self, operation: crate::RuntimeOperation) -> RuntimeError {
+        match self {
+            Self::Poisoned => RuntimeError::poisoned(operation),
+            Self::Open | Self::Closing | Self::Closed | Self::ShutdownCompleted => RuntimeError::closed(operation),
+        }
+    }
 }
 
 /// Represents a task-group owner.
@@ -264,7 +384,9 @@ struct TaskGroupInner {
     // A live descendant retains the entire ownership path. The parent's
     // registry points back weakly, so dropping an idle subtree releases it.
     parent: Option<Arc<TaskGroupInner>>,
-    next_group_id: Arc<AtomicU64>,
+    events: Arc<TaskGroupTreeEvents>,
+    // Component requests this group answered with a closed group.
+    closed_component_requests: AtomicUsize,
     next_task_id: AtomicU64,
     completed: AtomicUsize,
     cancelled: AtomicUsize,
@@ -279,17 +401,17 @@ struct TaskGroupInner {
 #[derive(Debug, Clone)]
 struct TaskMeta {
     id: TaskId,
-    name: Arc<str>,
+    name: TaskName,
     group_id: TaskGroupId,
     group_name: Arc<str>,
     kind: TaskKind,
     state: TaskState,
     started_at: Instant,
-    detached: bool,
-    detached_policy: Option<DetachedTaskPolicy>,
     abort_handle: Option<AbortHandle>,
     abort_requested: bool,
     completion: Arc<TaskCompletion>,
+    /// Id of the operation that submitted the task, if any.
+    operation: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -328,17 +450,20 @@ impl TaskCompletion {
 }
 
 impl TaskGroup {
-    pub(crate) fn root(name: impl Into<Arc<str>>, runtime: RuntimeHandle) -> Self {
-        let next_group_id = Arc::new(AtomicU64::new(2));
+    /// Creates the root group of a runtime scope tree.
+    ///
+    /// Only [`RootServiceContext::new`](crate::RootServiceContext) can create
+    /// the permit, so every other group is a descendant of a root context.
+    pub(crate) fn root(name: Arc<str>, runtime: RuntimeHandle, _permit: RootGroupPermit) -> Self {
         Self {
             inner: Arc::new(TaskGroupInner::new(
-                TaskGroupId(1),
+                TaskGroupId::next(),
                 None,
-                name.into(),
+                name,
                 runtime,
                 CancellationToken::new(),
-                next_group_id,
                 None,
+                Arc::default(),
             )),
         }
     }
@@ -389,15 +514,67 @@ impl TaskGroup {
         self.inner.registry.component_count()
     }
 
-    /// Returns the contains task.
+    /// Returns whether `task_id` was issued by this group, whether or not the
+    /// task is still registered.
+    pub fn owns_task(&self, task_id: TaskId) -> bool {
+        task_id.group_id() == self.inner.id
+    }
+
+    /// Returns whether `task_id` is a registered task of this group.
+    ///
+    /// Returns `false` for an id issued by another group.
     pub fn contains_task(&self, task_id: TaskId) -> bool {
         self.inner.registry.tasks.contains_key(&task_id)
     }
 
+    /// Holds the settlement gate, so a finished task stays registered until
+    /// the guard is dropped.
+    #[cfg(test)]
+    pub(crate) fn lock_settlement_for_test(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.inner.settlement_gate.lock()
+    }
+
+    /// Returns the registered tasks of the operation with id `operation`.
+    pub(crate) fn operation_task_ids(&self, operation: u64) -> Vec<TaskId> {
+        self.inner
+            .registry
+            .tasks
+            .iter()
+            .filter(|entry| entry.operation == Some(operation))
+            .map(|entry| entry.id)
+            .collect()
+    }
+
+    /// Returns the counts of absorbed failures over this group's whole tree.
+    pub fn event_counts(&self) -> TaskGroupEventCounts {
+        let events = &self.inner.events;
+        TaskGroupEventCounts {
+            poisoned_groups: events.poisoned_groups.load(Ordering::Relaxed),
+            closed_component_requests: events.closed_component_requests.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Creates a component, or a closed group once this owner stops admitting children.
+    ///
+    /// Callers keep a usable handle either way; the first closed answer per
+    /// owner is logged and every one is counted in [`Self::event_counts`].
     pub(crate) fn component(&self, name: impl Into<Arc<str>>) -> Self {
         let name = name.into();
-        self.try_child(name.clone())
-            .unwrap_or_else(|_error| self.closed_component(name))
+        self.try_child(name.clone()).unwrap_or_else(|_error| {
+            self.inner
+                .events
+                .closed_component_requests
+                .fetch_add(1, Ordering::Relaxed);
+            if self.inner.closed_component_requests.fetch_add(1, Ordering::Relaxed) == 0 {
+                tracing::warn!(
+                    group = %self.inner.path(),
+                    component = %name,
+                    state = ?self.lifecycle_state(),
+                    "component requested after its owner stopped admitting children; returning a closed group"
+                );
+            }
+            self.closed_component(name)
+        })
     }
 
     /// Creates an independently cancellable child owned by this task group.
@@ -408,15 +585,15 @@ impl TaskGroup {
     ///
     /// # Errors
     ///
-    /// Returns an unavailable runtime failure after this owner starts
-    /// shutting down or becomes poisoned.
+    /// Returns a [`crate::RuntimeErrorKind::Closed`] failure after this owner
+    /// starts shutting down, or [`crate::RuntimeErrorKind::Poisoned`] after a
+    /// task panic poisoned it.
     pub fn try_child(&self, name: impl Into<Arc<str>>) -> RuntimeResult<Self> {
         let name = name.into();
         let _spawn_guard = self.inner.spawn_gate.lock();
-        if self.inner.lifecycle_state() != TaskGroupLifecycleState::Open {
-            return Err(RuntimeError::context_unavailable(
-                crate::RuntimeOperation::CreateTaskGroupChild,
-            ));
+        let state = self.inner.lifecycle_state();
+        if state != TaskGroupLifecycleState::Open {
+            return Err(state.admission_error(crate::RuntimeOperation::CreateTaskGroupChild));
         }
 
         let child = self.open_component(name);
@@ -427,16 +604,15 @@ impl TaskGroup {
     }
 
     fn open_component(&self, name: Arc<str>) -> Self {
-        let child_id = TaskGroupId(self.inner.next_group_id.fetch_add(1, Ordering::Relaxed));
         Self {
             inner: Arc::new(TaskGroupInner::new(
-                child_id,
+                TaskGroupId::next(),
                 Some(self.inner.id),
                 name,
                 self.inner.runtime.clone(),
                 self.inner.cancellation_token.child_token(),
-                self.inner.next_group_id.clone(),
                 Some(self.inner.clone()),
+                Arc::clone(&self.inner.events),
             )),
         }
     }
@@ -450,11 +626,11 @@ impl TaskGroup {
     }
 
     /// Spawns the supplied task.
-    pub fn spawn<F>(&self, name: impl Into<Arc<str>>, kind: TaskKind, future: F) -> RuntimeResult<TaskId>
+    pub fn spawn<F>(&self, name: impl Into<TaskName>, kind: TaskKind, future: F) -> RuntimeResult<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        self.spawn_inner(name.into(), kind, None, future)
+        self.spawn_inner(name.into(), kind, future)
     }
 
     /// Spawns a task whose panic is recorded as a critical failure.
@@ -469,7 +645,7 @@ impl TaskGroup {
     /// Returns an error when this task group is shutting down or closed.
     pub fn spawn_critical<F>(
         &self,
-        name: impl Into<Arc<str>>,
+        name: impl Into<TaskName>,
         kind: TaskKind,
         failures: CriticalFailureState,
         future: F,
@@ -483,7 +659,7 @@ impl TaskGroup {
             expects_until_cancelled: false,
         };
         let (task_id, join_handle) =
-            self.spawn_inner_with_handle(name.into(), kind, None, false, Some(registration), future)?;
+            self.spawn_inner_with_handle(name.into(), kind, false, Some(registration), None, future)?;
         drop(join_handle);
         Ok(task_id)
     }
@@ -499,7 +675,7 @@ impl TaskGroup {
     /// Returns an error when this task group is shutting down or closed.
     pub fn spawn_critical_service<F>(
         &self,
-        name: impl Into<Arc<str>>,
+        name: impl Into<TaskName>,
         failures: CriticalFailureState,
         future: F,
     ) -> RuntimeResult<TaskId>
@@ -512,7 +688,7 @@ impl TaskGroup {
             expects_until_cancelled: true,
         };
         let (task_id, join_handle) =
-            self.spawn_inner_with_handle(name.into(), TaskKind::Service, None, false, Some(registration), future)?;
+            self.spawn_inner_with_handle(name.into(), TaskKind::Service, false, Some(registration), None, future)?;
         drop(join_handle);
         Ok(task_id)
     }
@@ -523,7 +699,7 @@ impl TaskGroup {
     /// observe an appropriate cancellation signal and perform any required
     /// ordered cleanup itself. Use [`Self::spawn_cancellable_service`] when it
     /// is safe to drop the service future as soon as its owner is cancelled.
-    pub fn spawn_service<F>(&self, name: impl Into<Arc<str>>, future: F) -> RuntimeResult<TaskId>
+    pub fn spawn_service<F>(&self, name: impl Into<TaskName>, future: F) -> RuntimeResult<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -539,7 +715,7 @@ impl TaskGroup {
     /// # Errors
     ///
     /// Returns an error when this task group is shutting down or closed.
-    pub fn spawn_cancellable_service<F>(&self, name: impl Into<Arc<str>>, future: F) -> RuntimeResult<TaskId>
+    pub fn spawn_cancellable_service<F>(&self, name: impl Into<TaskName>, future: F) -> RuntimeResult<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -550,7 +726,7 @@ impl TaskGroup {
         }
     }
 
-    fn spawn_cancellable_service_inner<F>(&self, name: Arc<str>, future: F) -> RuntimeResult<TaskId>
+    fn spawn_cancellable_service_inner<F>(&self, name: TaskName, future: F) -> RuntimeResult<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -571,7 +747,7 @@ impl TaskGroup {
     pub fn spawn_operation<F>(
         &self,
         context: &OperationContext,
-        name: impl Into<Arc<str>>,
+        name: impl Into<TaskName>,
         future: F,
     ) -> RuntimeResult<TaskId>
     where
@@ -591,7 +767,7 @@ impl TaskGroup {
     pub fn spawn_draining_operation<F>(
         &self,
         context: &OperationContext,
-        name: impl Into<Arc<str>>,
+        name: impl Into<TaskName>,
         future: F,
     ) -> RuntimeResult<TaskId>
     where
@@ -603,7 +779,7 @@ impl TaskGroup {
     fn spawn_operation_with_cancellation<F>(
         &self,
         context: &OperationContext,
-        name: Arc<str>,
+        name: TaskName,
         future: F,
         owner_cancellation: Option<CancellationToken>,
     ) -> RuntimeResult<TaskId>
@@ -620,20 +796,20 @@ impl TaskGroup {
     fn spawn_operation_inner<F>(
         &self,
         context: &OperationContext,
-        name: Arc<str>,
+        name: TaskName,
         future: F,
         owner_cancellation: Option<CancellationToken>,
     ) -> RuntimeResult<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let _operation_spawn_guard = context.spawn_guard();
-        let registration = context.prepare_spawn(self.id())?;
+        let registration = {
+            let _operation_spawn_guard = context.spawn_guard();
+            context.prepare_spawn(self.id())?
+        };
         let guard = registration.guard();
         let execution = crate::operation::OperationExecution::new(future, guard, context.clone(), owner_cancellation);
-        let task_id = self.spawn(name, context.task_kind(), execution.run())?;
-        registration.register(task_id);
-        drop(_operation_spawn_guard);
+        let task_id = self.spawn_operation_task(name, context.task_kind(), context.id(), execution.run())?;
         registration.finish_registration();
         Ok(task_id)
     }
@@ -641,20 +817,20 @@ impl TaskGroup {
     /// Spawns with handle.
     pub fn spawn_with_handle<F>(
         &self,
-        name: impl Into<Arc<str>>,
+        name: impl Into<TaskName>,
         kind: TaskKind,
         future: F,
     ) -> RuntimeResult<(TaskId, tokio::task::JoinHandle<()>)>
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        self.spawn_inner_with_handle(name.into(), kind, None, true, None, future)
+        self.spawn_inner_with_handle(name.into(), kind, true, None, None, future)
     }
 
     /// Spawns service with handle.
     pub fn spawn_service_with_handle<F>(
         &self,
-        name: impl Into<Arc<str>>,
+        name: impl Into<TaskName>,
         future: F,
     ) -> RuntimeResult<(TaskId, tokio::task::JoinHandle<()>)>
     where
@@ -675,15 +851,17 @@ impl TaskGroup {
     /// Requests cancellation of an active task without waiting for destruction.
     ///
     /// Returns whether the task was still registered. Its record and resources
-    /// remain owned until the executor destroys the future.
+    /// remain owned until the executor destroys the future. An id issued by
+    /// another group is never registered here, so it returns `false`.
     pub fn abort_task(&self, task_id: TaskId) -> bool {
         self.abort_task_inner(task_id).is_some()
     }
 
     /// Requests cancellation and waits until the user future is destroyed.
     ///
-    /// Returns `false` if the task was already absent or the wait expired.
-    /// A timeout does not remove the task's record or confirm cancellation.
+    /// Returns `false` if the task was already absent, was issued by another
+    /// group, or the wait expired. A timeout does not remove the task's record
+    /// or confirm cancellation.
     pub async fn abort_task_and_wait(&self, task_id: TaskId, timeout: Duration) -> bool {
         let Some(completion) = self.abort_task_inner(task_id) else {
             return false;
@@ -702,11 +880,17 @@ impl TaskGroup {
 
     /// Asynchronously waits for a local task's future to be destroyed.
     ///
-    /// Returns `true` when the task is already absent, including after earlier
-    /// completion, and `false` when a registered task outlives the timeout.
-    /// Unlike [`Self::abort_task_and_wait`], absence is treated as success.
-    /// This does not request cancellation or prove business-level success.
+    /// Returns `true` when this group's task is already absent, including after
+    /// earlier completion, and `false` when a registered task outlives the
+    /// timeout. Unlike [`Self::abort_task_and_wait`], absence is treated as
+    /// success. An id issued by another group returns `false` immediately:
+    /// this group cannot tell whether that task finished; see
+    /// [`Self::owns_task`]. This does not request cancellation or prove
+    /// business-level success.
     pub async fn wait_task(&self, task_id: TaskId, timeout: Duration) -> bool {
+        if !self.owns_task(task_id) {
+            return false;
+        }
         let Some(completion) = self
             .inner
             .registry
@@ -803,6 +987,7 @@ impl TaskGroup {
         // the initial deadline traversal and the admission traversal.
         self.tighten_shutdown_deadline(deadline);
         self.inner.cancellation_token.cancel();
+        self.mark_closed(&descendants);
         // Poll every scope at one level. A scope observes child reports via
         // notifications rather than recursively polling their shutdown futures.
         let children = join_all(descendants.iter().map(|group| async move {
@@ -817,7 +1002,6 @@ impl TaskGroup {
     async fn shutdown_one(&self) -> ShutdownReport {
         let started_at = Instant::now();
         let children = self.inner.registry.components_snapshot();
-        self.abort_detached_abort_on_shutdown_tasks();
 
         let child_reports = async {
             join_all(
@@ -827,38 +1011,34 @@ impl TaskGroup {
             )
             .await
         };
+        // On a deadline, returns the abort count seen just before this
+        // shutdown aborted the remaining tasks.
         let tracked_shutdown = async {
             if self.inner.shutdown.run_until(self.inner.tracker.wait()).await.is_err() {
+                let aborted_before_timeout = self.inner.aborted.load(Ordering::Acquire);
                 self.abort_tracked_tasks();
                 let _ = self.inner.shutdown.run_until(self.inner.tracker.wait()).await;
-                true
+                Some(aborted_before_timeout)
             } else {
-                false
+                None
             }
         };
 
-        let (child_reports, timed_out) = tokio::join!(child_reports, tracked_shutdown);
+        let (child_reports, aborted_before_timeout) = tokio::join!(child_reports, tracked_shutdown);
 
         let mut report = ShutdownReport::new(self.inner.name.to_string(), started_at.elapsed());
         report.children = child_reports;
         self.record_task_outcomes(&mut report);
 
-        let aborted = report.aborted;
-        if aborted > 0 {
-            report.annotations.push(ShutdownAnnotation::new(format!(
-                "confirmed cancellation of {aborted} aborted tasks"
-            )));
-        }
-
-        if timed_out {
-            report.timed_out = aborted + report.leaked;
-        }
-
-        if report.detached_still_running > 0 {
-            report.annotations.push(ShutdownAnnotation::new(format!(
-                "{} detached tasks are still running",
-                report.detached_still_running
-            )));
+        if let Some(aborted_before_timeout) = aborted_before_timeout {
+            // Aborts requested earlier through `abort_task` are not timeouts.
+            let aborted_by_timeout = report.aborted.saturating_sub(aborted_before_timeout);
+            if aborted_by_timeout > 0 {
+                report.annotations.push(ShutdownAnnotation::new(format!(
+                    "confirmed cancellation of {aborted_by_timeout} aborted tasks"
+                )));
+            }
+            report.timed_out = aborted_by_timeout + report.leaked;
         }
 
         self.inner.lifecycle.store(STATE_SHUTDOWN_COMPLETED, Ordering::Release);
@@ -871,10 +1051,14 @@ impl TaskGroup {
         while let Some(group) = pending.pop() {
             {
                 let _spawn_guard = group.inner.spawn_gate.lock();
-                if group.inner.lifecycle_state() != TaskGroupLifecycleState::ShutdownCompleted {
-                    group.inner.lifecycle.store(STATE_CLOSING, Ordering::Release);
-                    group.inner.lifecycle.store(STATE_CLOSED, Ordering::Release);
-                }
+                // Admission is sealed under the spawn gate. `Closed` follows
+                // once cancellation has reached the whole tree.
+                let _ = group
+                    .inner
+                    .lifecycle
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+                        matches!(state, STATE_OPEN | STATE_POISONED).then_some(STATE_CLOSING)
+                    });
                 group.inner.tracker.close();
                 pending.extend(group.inner.registry.components_snapshot());
             }
@@ -887,10 +1071,26 @@ impl TaskGroup {
         retained
     }
 
+    /// Moves the groups closed by this shutdown from `Closing` to `Closed`.
+    ///
+    /// Called after cancellation was broadcast, so a group observed as
+    /// `Closed` has a cancelled token.
+    fn mark_closed(&self, descendants: &[TaskGroup]) {
+        for group in descendants.iter().chain(std::iter::once(self)) {
+            let _ = group.inner.lifecycle.compare_exchange(
+                STATE_CLOSING,
+                STATE_CLOSED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+        }
+    }
+
     fn shutdown_now_inner(&self) -> ShutdownReport {
         let started_at = Instant::now();
         let descendants = self.close_admission_tree();
         self.inner.cancellation_token.cancel();
+        self.mark_closed(&descendants);
         let mut reports = std::collections::HashMap::new();
         for group in &descendants {
             let children = group
@@ -925,24 +1125,17 @@ impl TaskGroup {
     fn shutdown_now_one(&self, child_reports: Vec<ShutdownReport>) -> ShutdownReport {
         let started_at = Instant::now();
 
-        self.abort_detached_abort_on_shutdown_tasks();
+        let aborted_before = self.inner.aborted.load(Ordering::Acquire);
         self.abort_tracked_tasks();
 
         let mut report = ShutdownReport::new(self.inner.name.to_string(), started_at.elapsed());
         report.children = child_reports;
         self.record_task_outcomes(&mut report);
 
-        let aborted = report.aborted;
-        if aborted > 0 {
+        let aborted_now = report.aborted.saturating_sub(aborted_before);
+        if aborted_now > 0 {
             report.annotations.push(ShutdownAnnotation::new(format!(
-                "confirmed cancellation of {aborted} aborted tasks"
-            )));
-        }
-
-        if report.detached_still_running > 0 {
-            report.annotations.push(ShutdownAnnotation::new(format!(
-                "{} detached tasks are still running",
-                report.detached_still_running
+                "confirmed cancellation of {aborted_now} aborted tasks"
             )));
         }
 
@@ -952,21 +1145,6 @@ impl TaskGroup {
 
     fn abort_tracked_tasks(&self) {
         for mut entry in self.inner.registry.tasks.iter_mut() {
-            if entry.detached {
-                continue;
-            }
-            entry.abort_requested = true;
-            if let Some(abort_handle) = &entry.abort_handle {
-                abort_handle.abort();
-            }
-        }
-    }
-
-    fn abort_detached_abort_on_shutdown_tasks(&self) {
-        for mut entry in self.inner.registry.tasks.iter_mut() {
-            if entry.detached_policy != Some(DetachedTaskPolicy::AbortOnShutdown) {
-                continue;
-            }
             entry.abort_requested = true;
             if let Some(abort_handle) = &entry.abort_handle {
                 abort_handle.abort();
@@ -982,16 +1160,17 @@ impl TaskGroup {
         report.cancelled = self.inner.cancelled.load(Ordering::Relaxed);
         report.panicked = self.inner.panicked.load(Ordering::Relaxed);
         report.aborted = self.inner.aborted.load(Ordering::Relaxed);
+        let closed_components = self.inner.closed_component_requests.load(Ordering::Relaxed);
+        if closed_components > 0 {
+            report.annotations.push(ShutdownAnnotation::new(format!(
+                "{closed_components} component requests after admission closed received closed groups"
+            )));
+        }
         let mut requested = 0;
         for entry in self.inner.registry.tasks.iter() {
             requested += usize::from(entry.abort_requested);
-            let task = entry.snapshot(TaskState::Leaked);
-            if task.detached {
-                report.detached_still_running += 1;
-            } else {
-                report.leaked += 1;
-            }
-            report.remaining_tasks.push(task);
+            report.leaked += 1;
+            report.push_remaining_task(entry.snapshot(TaskState::Leaked));
         }
         if requested > 0 {
             report.annotations.push(ShutdownAnnotation::new(format!(
@@ -1008,8 +1187,8 @@ impl TaskGroupInner {
         name: Arc<str>,
         runtime: RuntimeHandle,
         cancellation_token: CancellationToken,
-        next_group_id: Arc<AtomicU64>,
         parent: Option<Arc<TaskGroupInner>>,
+        events: Arc<TaskGroupTreeEvents>,
     ) -> Self {
         Self {
             id,
@@ -1020,7 +1199,8 @@ impl TaskGroupInner {
             tracker: TaskTracker::new(),
             registry: Arc::new(ActiveTaskRegistry::new()),
             parent,
-            next_group_id,
+            events,
+            closed_component_requests: AtomicUsize::new(0),
             next_task_id: AtomicU64::new(1),
             completed: AtomicUsize::new(0),
             cancelled: AtomicUsize::new(0),
@@ -1044,9 +1224,29 @@ impl TaskGroupInner {
     }
 
     fn mark_poisoned_if_open(&self) {
-        let _ = self
+        if self
             .lifecycle
-            .compare_exchange(STATE_OPEN, STATE_POISONED, Ordering::AcqRel, Ordering::Acquire);
+            .compare_exchange(STATE_OPEN, STATE_POISONED, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.events.poisoned_groups.fetch_add(1, Ordering::Relaxed);
+            tracing::error!(
+                group = %self.path(),
+                "task group poisoned by a panicking task; it no longer admits work"
+            );
+        }
+    }
+
+    /// Returns the names from the root to this group, separated by `/`.
+    fn path(&self) -> String {
+        let mut names = vec![self.name.as_ref()];
+        let mut parent = self.parent.as_deref();
+        while let Some(group) = parent {
+            names.push(group.name.as_ref());
+            parent = group.parent.as_deref();
+        }
+        names.reverse();
+        names.join("/")
     }
 
     fn finish_task(&self, task_id: TaskId, result: TaskResult) {
@@ -1103,8 +1303,6 @@ impl TaskMeta {
             kind: self.kind,
             state: override_state,
             elapsed: self.started_at.elapsed(),
-            detached: self.detached,
-            detached_policy: self.detached_policy,
         }
     }
 }

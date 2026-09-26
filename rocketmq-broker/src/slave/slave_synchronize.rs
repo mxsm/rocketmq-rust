@@ -161,7 +161,7 @@ pub(crate) struct SlaveSynchronizeContext<MS: BrokerReplicationStore> {
     timer_store: SlaveTimerStoreCapability<MS>,
     message_request_mode: SlaveMessageRequestModeCapability,
     metadata_io: Option<MetadataIoActor>,
-    blocking: Option<BlockingExecutor>,
+    blocking: BlockingExecutor,
 }
 
 impl<MS: BrokerReplicationStore> SlaveSynchronizeContext<MS> {
@@ -179,7 +179,7 @@ impl<MS: BrokerReplicationStore> SlaveSynchronizeContext<MS> {
         subscription_group_manager: SubscriptionGroupManager,
         timer_store: SlaveTimerStoreCapability<MS>,
         metadata_io: Option<MetadataIoActor>,
-        blocking: Option<BlockingExecutor>,
+        blocking: BlockingExecutor,
     ) -> Self {
         Self {
             policy,
@@ -214,16 +214,13 @@ impl<MS: BrokerReplicationStore> SlaveSynchronizeContext<MS> {
             crate::require_metadata_conclusion(resource, observation)?;
             return Ok(());
         }
-        if let Some(blocking) = self.blocking.as_ref() {
-            return blocking
-                .spawn_io(resource, move || {
-                    file_utils::string_to_file(content.as_str(), path.as_str())
-                })
-                .await
-                .map_err(crate::runtime_to_rocketmq_error)?
-                .map_err(crate::runtime_to_rocketmq_error);
-        }
-        file_utils::string_to_file(content.as_str(), path.as_str()).map_err(crate::runtime_to_rocketmq_error)
+        self.blocking
+            .spawn_io(resource, move || {
+                file_utils::string_to_file(content.as_str(), path.as_str())
+            })
+            .await
+            .map_err(crate::runtime_to_rocketmq_error)?
+            .map_err(crate::runtime_to_rocketmq_error)
     }
 
     async fn persist_config_manager<T>(&self, resource: &'static str, manager: Arc<T>) -> Result<()>
@@ -239,13 +236,10 @@ impl<MS: BrokerReplicationStore> SlaveSynchronizeContext<MS> {
                 )
                 .await;
         }
-        if let Some(blocking) = self.blocking.as_ref() {
-            return blocking
-                .spawn_io(resource, move || manager.persist())
-                .await
-                .map_err(|error| crate::broker_error::io(std::io::Error::other(error)))?;
-        }
-        manager.persist()
+        self.blocking
+            .spawn_io(resource, move || manager.persist())
+            .await
+            .map_err(|error| crate::broker_error::io(std::io::Error::other(error)))?
     }
 }
 

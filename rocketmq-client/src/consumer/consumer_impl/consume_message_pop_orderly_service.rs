@@ -231,7 +231,6 @@ impl ConsumeMessagePopOrderlyService {
             "rocketmq-client-pop-orderly-lock-refresh",
             initial_delay,
             period,
-            Duration::from_secs(5),
             move || {
                 let stopped = stopped.clone();
                 let default_mqpush_consumer_impl = default_mqpush_consumer_impl.clone();

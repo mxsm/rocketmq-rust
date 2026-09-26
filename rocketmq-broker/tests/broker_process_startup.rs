@@ -36,6 +36,11 @@ use tokio::sync::oneshot;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// Windows gives the process main thread 1 MiB of stack. A debug Broker used
+/// 832 KiB of it for a full start and drain in September 2026; failing at
+/// 900 KiB flags a regression while there is still headroom to find it.
+const MAIN_STACK_LIMIT: usize = 900 * 1024;
+const MAIN_STACK_REPORT_PREFIX: &str = "main_thread_stack_committed_bytes=";
 
 struct BrokerProcess {
     child: Option<Child>,
@@ -106,17 +111,30 @@ fn available_ports() -> (u16, u16, u16, u16) {
     panic!("unable to reserve Broker listener ports");
 }
 
-fn probe(addr: SocketAddr, path: &str) -> std::io::Result<String> {
+fn probe(addr: SocketAddr, method: &str, path: &str) -> std::io::Result<String> {
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(250))?;
     stream.set_read_timeout(Some(Duration::from_secs(1)))?;
     stream.set_write_timeout(Some(Duration::from_secs(1)))?;
     write!(
         stream,
-        "GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
     )?;
     let mut response = String::new();
     stream.read_to_string(&mut response)?;
     Ok(response)
+}
+
+fn main_stack_committed_bytes(output: &Output) -> usize {
+    String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(MAIN_STACK_REPORT_PREFIX))
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_else(|| {
+            panic!(
+                "Broker did not report its main-thread stack:\n{}",
+                process_output(output)
+            )
+        })
 }
 
 fn process_output(output: &Output) -> String {
@@ -204,6 +222,7 @@ storePathRootDir = "{store_root_config}"
         .env("ROCKETMQ_HOME", root.path())
         .env("ROCKETMQ_HEALTH_BIND_ADDR", health_addr.to_string())
         .env("ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS", "5")
+        .env("ROCKETMQ_REPORT_MAIN_STACK", "1")
         .env("RUST_LOG", "warn")
         .env_remove("NAMESRV_ADDR")
         .stdout(Stdio::piped())
@@ -223,7 +242,7 @@ storePathRootDir = "{store_root_config}"
             let output = broker.wait_with_output();
             panic!("Broker exited before readiness:\n{}", process_output(&output));
         }
-        if probe(health_addr, "/readyz").is_ok_and(|response| response.starts_with("HTTP/1.1 200")) {
+        if probe(health_addr, "GET", "/readyz").is_ok_and(|response| response.starts_with("HTTP/1.1 200")) {
             break;
         }
         if Instant::now() >= startup_deadline {
@@ -233,7 +252,7 @@ storePathRootDir = "{store_root_config}"
         tokio::time::sleep(POLL_INTERVAL).await;
     }
 
-    let drain_response = probe(health_addr, "/drainz").expect("request broker drain");
+    let drain_response = probe(health_addr, "POST", "/drainz").expect("request broker drain");
     assert!(drain_response.starts_with("HTTP/1.1 200"), "{drain_response}");
 
     let shutdown_deadline = Instant::now() + SHUTDOWN_TIMEOUT;
@@ -249,6 +268,13 @@ storePathRootDir = "{store_root_config}"
                 output.status.success(),
                 "Broker shutdown failed:\n{}",
                 process_output(&output)
+            );
+            let main_stack = main_stack_committed_bytes(&output);
+            println!("Broker main-thread stack peak: {} KiB", main_stack / 1024);
+            assert!(
+                main_stack < MAIN_STACK_LIMIT,
+                "Broker main thread committed {main_stack} bytes of stack; the limit is {MAIN_STACK_LIMIT} bytes of the \
+                 1 MiB Windows main stack"
             );
             break;
         }

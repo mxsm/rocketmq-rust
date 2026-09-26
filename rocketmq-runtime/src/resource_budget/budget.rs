@@ -13,6 +13,9 @@
 // limitations under the License.
 
 use std::fmt;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
@@ -550,14 +553,12 @@ impl ResourcePermit {
             return;
         }
         for reservation in &mut self.reservations {
-            let mut state = reservation
-                .node
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            state.data_count = state.data_count.saturating_sub(1);
-            state.data_bytes = state.data_bytes.saturating_sub(reservation.bytes);
-            state.restore_data_rate(reservation.node.limit);
+            let node = &reservation.node;
+            release_reserved(&node.data_count, 1);
+            release_reserved(&node.data_bytes, reservation.bytes);
+            if let Some(rate) = &node.rate {
+                BudgetNode::lock_rate(rate).restore_data(node.limit);
+            }
             reservation.class = BudgetClass::Control;
         }
         self.class = BudgetClass::Control;
@@ -649,75 +650,114 @@ impl Drop for ResourcePermit {
     }
 }
 
+/// One budget level.
+///
+/// Count and byte capacity is reserved with atomic read-modify-writes. A
+/// request that fails at a later dimension, or at a later node of its chain,
+/// rolls back what it reserved, so no counter ever exceeds its limit. A
+/// concurrent request that observes capacity during such a rollback can be
+/// rejected even though the capacity is about to return.
+///
+/// Only a node that configures a rate takes a lock, around its token buckets.
 struct BudgetNode {
     path: Arc<str>,
     limit: BudgetLimit,
     clock: Arc<dyn MonotonicClock>,
-    state: Mutex<BudgetState>,
+    current_count: AtomicUsize,
+    current_bytes: AtomicUsize,
+    data_count: AtomicUsize,
+    data_bytes: AtomicUsize,
+    counters: BudgetCounters,
+    rate: Option<Mutex<RateState>>,
+}
+
+#[derive(Default)]
+struct BudgetCounters {
+    admitted: AtomicU64,
+    released: AtomicU64,
+    rejected: AtomicU64,
+    throttled: AtomicU64,
+    dropped: AtomicU64,
+    coalesced: AtomicU64,
+    closed_slow_consumer: AtomicU64,
+}
+
+/// Adds `amount` to `counter` when the sum stays within `limit`.
+fn try_reserve_within(counter: &AtomicUsize, amount: usize, limit: usize) -> bool {
+    counter
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            current.checked_add(amount).filter(|total| *total <= limit)
+        })
+        .is_ok()
+}
+
+fn release_reserved(counter: &AtomicUsize, amount: usize) {
+    let previous = counter.fetch_sub(amount, Ordering::AcqRel);
+    debug_assert!(previous >= amount, "budget capacity released more than reserved");
 }
 
 impl BudgetNode {
     fn new(path: Arc<str>, limit: BudgetLimit, clock: Arc<dyn MonotonicClock>) -> Self {
-        let now = clock.now();
+        let rate = limit
+            .capacity
+            .rate
+            .map(|_| Mutex::new(RateState::new(limit, clock.now())));
         Self {
             path,
             limit,
             clock,
-            state: Mutex::new(BudgetState::new(limit, now)),
+            current_count: AtomicUsize::new(0),
+            current_bytes: AtomicUsize::new(0),
+            data_count: AtomicUsize::new(0),
+            data_bytes: AtomicUsize::new(0),
+            counters: BudgetCounters::default(),
+            rate,
         }
     }
 
+    fn lock_rate(rate: &Mutex<RateState>) -> MutexGuard<'_, RateState> {
+        rate.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn try_reserve(self: &Arc<Self>, bytes: usize, class: BudgetClass) -> Result<NodeReservation, BudgetDimension> {
-        let now = self.clock.now();
-        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.refill(self.limit, now);
-
-        let dimension = if state.current_count >= self.limit.capacity.count {
-            Some(BudgetDimension::Count)
-        } else if state
-            .current_bytes
-            .checked_add(bytes)
-            .is_none_or(|total| total > self.limit.capacity.bytes)
-        {
-            Some(BudgetDimension::Bytes)
-        } else if class == BudgetClass::Data
-            && state.data_count
-                >= self
-                    .limit
-                    .capacity
-                    .count
-                    .saturating_sub(self.limit.control_reserve.count)
-        {
-            Some(BudgetDimension::Count)
-        } else if class == BudgetClass::Data
-            && state.data_bytes.checked_add(bytes).is_none_or(|total| {
-                total
-                    > self
-                        .limit
-                        .capacity
-                        .bytes
-                        .saturating_sub(self.limit.control_reserve.bytes)
-            })
-        {
-            Some(BudgetDimension::Bytes)
-        } else if !state.rate_available(self.limit, class) {
-            Some(BudgetDimension::Rate)
-        } else {
-            None
-        };
-
-        if let Some(dimension) = dimension {
-            return Err(dimension);
+        let capacity = self.limit.capacity;
+        let control_reserve = self.limit.control_reserve;
+        if !try_reserve_within(&self.current_count, 1, capacity.count) {
+            return Err(BudgetDimension::Count);
         }
-
-        state.current_count += 1;
-        state.current_bytes += bytes;
+        if !try_reserve_within(&self.current_bytes, bytes, capacity.bytes) {
+            release_reserved(&self.current_count, 1);
+            return Err(BudgetDimension::Bytes);
+        }
         if class == BudgetClass::Data {
-            state.data_count += 1;
-            state.data_bytes += bytes;
+            if !try_reserve_within(
+                &self.data_count,
+                1,
+                capacity.count.saturating_sub(control_reserve.count),
+            ) {
+                self.release_capacity(bytes, BudgetClass::Control);
+                return Err(BudgetDimension::Count);
+            }
+            if !try_reserve_within(
+                &self.data_bytes,
+                bytes,
+                capacity.bytes.saturating_sub(control_reserve.bytes),
+            ) {
+                release_reserved(&self.data_count, 1);
+                self.release_capacity(bytes, BudgetClass::Control);
+                return Err(BudgetDimension::Bytes);
+            }
         }
-        state.consume_rate(self.limit, class);
-        drop(state);
+        if let Some(rate) = &self.rate {
+            let mut rate = Self::lock_rate(rate);
+            rate.refill(self.limit, self.clock.now());
+            if !rate.available(self.limit, class) {
+                drop(rate);
+                self.release_capacity(bytes, class);
+                return Err(BudgetDimension::Rate);
+            }
+            rate.consume(self.limit, class);
+        }
 
         Ok(NodeReservation {
             node: Arc::clone(self),
@@ -725,6 +765,16 @@ impl BudgetNode {
             class,
             committed: false,
         })
+    }
+
+    /// Returns reserved count and bytes; data counters too for a data reservation.
+    fn release_capacity(&self, bytes: usize, class: BudgetClass) {
+        if class == BudgetClass::Data {
+            release_reserved(&self.data_count, 1);
+            release_reserved(&self.data_bytes, bytes);
+        }
+        release_reserved(&self.current_bytes, bytes);
+        release_reserved(&self.current_count, 1);
     }
 
     fn permanent_exhaustion_dimension(&self, bytes: usize, class: BudgetClass) -> Option<BudgetDimension> {
@@ -751,41 +801,37 @@ impl BudgetNode {
     }
 
     fn record_rejection(&self, reason: BudgetRejectionReason) {
-        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.rejected_count = state.rejected_count.saturating_add(1);
+        self.counters.rejected.fetch_add(1, Ordering::Relaxed);
         if reason == BudgetRejectionReason::Capacity(BudgetDimension::Rate) {
-            state.throttled_count = state.throttled_count.saturating_add(1);
+            self.counters.throttled.fetch_add(1, Ordering::Relaxed);
         }
     }
 
     fn record_dropped(&self, count: usize) {
-        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.dropped_count = state.dropped_count.saturating_add(count as u64);
+        self.counters.dropped.fetch_add(count as u64, Ordering::Relaxed);
     }
 
     fn record_coalesced(&self, count: usize) {
-        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.coalesced_count = state.coalesced_count.saturating_add(count as u64);
+        self.counters.coalesced.fetch_add(count as u64, Ordering::Relaxed);
     }
 
     fn record_slow_consumer_closed(&self) {
-        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.closed_slow_consumer_count = state.closed_slow_consumer_count.saturating_add(1);
+        self.counters.closed_slow_consumer.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Reads each counter atomically; the fields are not one consistent cut.
     fn snapshot(&self) -> BudgetSnapshot {
-        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         BudgetSnapshot {
             path: Arc::clone(&self.path),
-            current_count: state.current_count,
-            current_bytes: state.current_bytes,
-            admitted_count: state.admitted_count,
-            released_count: state.released_count,
-            rejected_count: state.rejected_count,
-            throttled_count: state.throttled_count,
-            dropped_count: state.dropped_count,
-            coalesced_count: state.coalesced_count,
-            closed_slow_consumer_count: state.closed_slow_consumer_count,
+            current_count: self.current_count.load(Ordering::Acquire),
+            current_bytes: self.current_bytes.load(Ordering::Acquire),
+            admitted_count: self.counters.admitted.load(Ordering::Relaxed),
+            released_count: self.counters.released.load(Ordering::Relaxed),
+            rejected_count: self.counters.rejected.load(Ordering::Relaxed),
+            throttled_count: self.counters.throttled.load(Ordering::Relaxed),
+            dropped_count: self.counters.dropped.load(Ordering::Relaxed),
+            coalesced_count: self.counters.coalesced.load(Ordering::Relaxed),
+            closed_slow_consumer_count: self.counters.closed_slow_consumer.load(Ordering::Relaxed),
         }
     }
 }
@@ -799,71 +845,34 @@ struct NodeReservation {
 
 impl NodeReservation {
     fn commit(&mut self) {
-        let mut state = self
-            .node
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.admitted_count = state.admitted_count.saturating_add(1);
+        self.node.counters.admitted.fetch_add(1, Ordering::Relaxed);
         self.committed = true;
     }
 }
 
 impl Drop for NodeReservation {
     fn drop(&mut self) {
-        let mut state = self
-            .node
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.current_count = state.current_count.saturating_sub(1);
-        state.current_bytes = state.current_bytes.saturating_sub(self.bytes);
-        if self.class == BudgetClass::Data {
-            state.data_count = state.data_count.saturating_sub(1);
-            state.data_bytes = state.data_bytes.saturating_sub(self.bytes);
-        }
+        self.node.release_capacity(self.bytes, self.class);
         if self.committed {
-            state.released_count = state.released_count.saturating_add(1);
-        } else {
-            state.restore_rate(self.node.limit, self.class);
+            self.node.counters.released.fetch_add(1, Ordering::Relaxed);
+        } else if let Some(rate) = &self.node.rate {
+            // A rolled-back reservation returns the rate token it consumed.
+            BudgetNode::lock_rate(rate).restore(self.node.limit, self.class);
         }
     }
 }
 
-struct BudgetState {
-    current_count: usize,
-    current_bytes: usize,
-    data_count: usize,
-    data_bytes: usize,
+/// Token buckets of a rate-limited node.
+struct RateState {
     total_tokens: Option<TokenBucket>,
     data_tokens: Option<TokenBucket>,
-    admitted_count: u64,
-    released_count: u64,
-    rejected_count: u64,
-    throttled_count: u64,
-    dropped_count: u64,
-    coalesced_count: u64,
-    closed_slow_consumer_count: u64,
 }
 
-impl BudgetState {
+impl RateState {
     fn new(limit: BudgetLimit, now: Duration) -> Self {
-        let total_tokens = limit.capacity.rate.map(|rate| TokenBucket::new(rate, now));
-        let data_tokens = data_rate_limit(limit).map(|rate| TokenBucket::new(rate, now));
         Self {
-            current_count: 0,
-            current_bytes: 0,
-            data_count: 0,
-            data_bytes: 0,
-            total_tokens,
-            data_tokens,
-            admitted_count: 0,
-            released_count: 0,
-            rejected_count: 0,
-            throttled_count: 0,
-            dropped_count: 0,
-            coalesced_count: 0,
-            closed_slow_consumer_count: 0,
+            total_tokens: limit.capacity.rate.map(|rate| TokenBucket::new(rate, now)),
+            data_tokens: data_rate_limit(limit).map(|rate| TokenBucket::new(rate, now)),
         }
     }
 
@@ -876,7 +885,7 @@ impl BudgetState {
         }
     }
 
-    fn rate_available(&self, limit: BudgetLimit, class: BudgetClass) -> bool {
+    fn available(&self, limit: BudgetLimit, class: BudgetClass) -> bool {
         let total_available = self.total_tokens.as_ref().is_none_or(TokenBucket::has_token);
         let data_available = class == BudgetClass::Control
             || data_rate_limit(limit).is_none()
@@ -884,7 +893,7 @@ impl BudgetState {
         total_available && data_available
     }
 
-    fn consume_rate(&mut self, limit: BudgetLimit, class: BudgetClass) {
+    fn consume(&mut self, limit: BudgetLimit, class: BudgetClass) {
         if let Some(bucket) = &mut self.total_tokens {
             bucket.consume();
         }
@@ -895,18 +904,16 @@ impl BudgetState {
         }
     }
 
-    fn restore_rate(&mut self, limit: BudgetLimit, class: BudgetClass) {
+    fn restore(&mut self, limit: BudgetLimit, class: BudgetClass) {
         if let (Some(bucket), Some(rate)) = (&mut self.total_tokens, limit.capacity.rate) {
             bucket.restore(rate);
         }
         if class == BudgetClass::Data {
-            if let (Some(bucket), Some(rate)) = (&mut self.data_tokens, data_rate_limit(limit)) {
-                bucket.restore(rate);
-            }
+            self.restore_data(limit);
         }
     }
 
-    fn restore_data_rate(&mut self, limit: BudgetLimit) {
+    fn restore_data(&mut self, limit: BudgetLimit) {
         if let (Some(bucket), Some(rate)) = (&mut self.data_tokens, data_rate_limit(limit)) {
             bucket.restore(rate);
         }

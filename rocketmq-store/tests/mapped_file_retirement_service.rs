@@ -48,7 +48,8 @@ fn service_source_owns_scheduling_blocking_drain_and_await_boundaries() {
     let lifecycle = include_str!("../src/message_store/local_file_message_store/lifecycle.rs").replace("\r\n", "\n");
 
     assert!(service.contains("ScheduledTaskGroup::new"));
-    assert!(service.contains("schedule_fixed_delay"));
+    assert!(service.contains("scheduled_tasks.schedule("));
+    assert!(service.contains("ScheduledTaskConfig::fixed_delay(\"mapped-file-retirement-reaper\""));
     assert!(service.contains("spawn_io(\"mapped-file-retirement-batch\""));
     assert!(service.contains("drain_pending(first_error, \"mapped-file-retirement-drain\""));
     assert!(service.contains("spawn_io_until(task_name, deadline"));

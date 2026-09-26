@@ -25,6 +25,7 @@
 //!
 //! use rocketmq_runtime::prelude::*;
 //! use rocketmq_runtime::RuntimeConfig;
+//! use rocketmq_runtime::ScheduledExecutionPolicy;
 //! use rocketmq_runtime::ScheduledTaskConfig;
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -43,8 +44,9 @@
 //!     // 4. Register bounded periodic work instead of driving a raw loop.
 //!     component
 //!         .scheduled_tasks("broker.schedules")
-//!         .schedule_fixed_delay(
+//!         .schedule(
 //!             ScheduledTaskConfig::fixed_delay("broker.flush", Duration::from_secs(5)),
+//!             ScheduledExecutionPolicy::default(),
 //!             || async {},
 //!         )?;
 //!
@@ -72,8 +74,7 @@
 //! and is handled by a monitor on an owner outside the monitored group. Work
 //! that is not owned by this process uses
 //! [`RuntimeContext`](crate::RuntimeContext), which is the migration and test
-//! harness rather than a production entry point. The older entry points stay
-//! available through [`compat`](crate::compat).
+//! harness rather than a production entry point.
 
 pub use crate::BlockingExecutor;
 pub use crate::ChildServiceContext;

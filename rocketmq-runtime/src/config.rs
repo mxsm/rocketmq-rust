@@ -22,6 +22,11 @@ use crate::RuntimeContractPolicy;
 pub const MIN_ENTRYPOINT_BLOCKING_THREADS: usize = 3;
 /// Maximum supported global blocking capacity.
 pub const MAX_ENTRYPOINT_BLOCKING_THREADS: usize = 512;
+/// Shutdown budget used when no lifecycle deadline applies.
+///
+/// A process that runs a [`ServiceLifecycle`](crate::ServiceLifecycle) takes
+/// its shutdown deadline from the lifecycle configuration instead.
+pub(crate) const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 /// Thread, driver and shutdown policy for one owned Tokio runtime.
@@ -37,7 +42,10 @@ pub const MAX_ENTRYPOINT_BLOCKING_THREADS: usize = 512;
 pub struct RuntimeConfig {
     /// Number of asynchronous worker threads; must be positive.
     pub worker_threads: usize,
-    /// Global Tokio blocking-thread ceiling, also shared by blocking lanes.
+    /// Managed blocking capacity shared by the blocking lanes.
+    ///
+    /// The Tokio blocking pool holds [`Self::tokio_blocking_threads`] threads:
+    /// this capacity plus headroom for blocking work outside the lanes.
     pub max_blocking_threads: usize,
     /// Nonblank prefix used for runtime worker threads.
     pub thread_name: String,
@@ -45,9 +53,12 @@ pub struct RuntimeConfig {
     pub thread_stack_size: Option<usize>,
     /// Idle blocking-thread lifetime.
     pub thread_keep_alive: Duration,
-    /// Default budget for owner shutdown entrypoints.
+    /// Fallback budget for owner shutdown entrypoints called without a deadline.
     ///
-    /// Calls that accept an explicit absolute deadline use that deadline.
+    /// A process that runs a `ServiceLifecycle` passes the lifecycle's
+    /// deadline instead, so this budget applies only to owners shut down
+    /// without one. Calls that accept an explicit absolute deadline use that
+    /// deadline.
     /// This is not a per-task execution timeout and cannot stop a blocking
     /// closure already running on an operating-system thread.
     pub shutdown_timeout: Duration,
@@ -78,7 +89,7 @@ impl RuntimeConfig {
             thread_name: thread_name.into(),
             thread_stack_size: None,
             thread_keep_alive: Duration::from_secs(30),
-            shutdown_timeout: Duration::from_secs(30),
+            shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
             blocking_lane_policies,
             enable_io: true,
             enable_time: true,
@@ -101,6 +112,24 @@ impl RuntimeConfig {
         self.blocking_lane_policies.cap_concurrency(limit);
         self.validate()?;
         Ok(self)
+    }
+
+    /// Tokio blocking threads beyond the managed capacity: one eighth of it,
+    /// and at least two.
+    ///
+    /// Direct `spawn_blocking` calls, DNS resolution and `tokio::fs` share the
+    /// Tokio pool with admitted lane work. Without headroom they could take the
+    /// threads that admitted work is counting on, and that work would queue
+    /// inside Tokio where admission cannot see it.
+    pub fn blocking_thread_headroom(&self) -> usize {
+        (self.max_blocking_threads / 8).max(2)
+    }
+
+    /// Size of the Tokio blocking pool: the managed capacity plus
+    /// [`Self::blocking_thread_headroom`].
+    pub fn tokio_blocking_threads(&self) -> usize {
+        self.max_blocking_threads
+            .saturating_add(self.blocking_thread_headroom())
     }
 
     /// Creates the server default value.
@@ -194,6 +223,10 @@ mod tests {
 
         let capped = RuntimeConfig::for_parallelism("large-profile-test", usize::MAX);
         assert_eq!(capped.max_blocking_threads, MAX_ENTRYPOINT_BLOCKING_THREADS);
+        assert_eq!(
+            RuntimeConfig::for_parallelism("headroom-test", 32).tokio_blocking_threads(),
+            128 + 16
+        );
     }
 
     #[test]
@@ -202,6 +235,7 @@ mod tests {
             .with_max_blocking_threads(6)
             .expect("explicit safe limit");
         assert_eq!(config.max_blocking_threads, 6);
+        assert_eq!(config.tokio_blocking_threads(), 8);
         assert_eq!(config.blocking_lane_policies.storage_io.max_concurrency, 6);
         assert_eq!(config.blocking_lane_policies.metadata_io.max_concurrency, 6);
         assert!(config.blocking_lane_policies.cpu_crypto.max_concurrency <= 6);

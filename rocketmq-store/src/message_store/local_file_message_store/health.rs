@@ -243,7 +243,7 @@ impl CleanCommitLogService {
             .saturating_mul(60)
             .saturating_mul(60)
             .saturating_mul(1000);
-        let is_time_up = util_all::is_it_time_to_do(&self.message_store_config.delete_when);
+        let is_time_up = rocketmq_runtime::common::time_utils::is_it_time_to_do(&self.message_store_config.delete_when);
         let disk_decision = self.is_space_to_delete();
         let is_manual_delete = self.consume_manual_delete_request();
         let clean_at_once = self.cleanup_policy.clean_file_forcibly_enabled() && disk_decision.clean_immediately;

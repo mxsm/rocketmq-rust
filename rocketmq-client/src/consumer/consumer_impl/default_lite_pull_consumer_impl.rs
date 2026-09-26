@@ -51,8 +51,8 @@ use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
+use rocketmq_runtime::common::time_utils;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::common::util_all;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::FullPolicy;
@@ -2162,7 +2162,7 @@ impl DefaultLitePullConsumerImpl {
                 let timestamp = consumer_config
                     .consume_timestamp
                     .as_deref()
-                    .and_then(|value| util_all::parse_date(value, util_all::YYYYMMDDHHMMSS))
+                    .and_then(|value| time_utils::parse_date(value, time_utils::YYYYMMDDHHMMSS))
                     .ok_or_else(|| crate::mq_client_err!("consumeTimestamp is invalid"))?
                     .and_utc()
                     .timestamp_millis() as u64;

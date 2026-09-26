@@ -186,7 +186,6 @@ impl BlockingLanes {
 #[derive(Debug)]
 pub struct RootServiceContext {
     name: Arc<str>,
-    runtime: RuntimeHandle,
     task_group: TaskGroup,
     blocking_lanes: BlockingLanes,
     diagnostics: RuntimeDiagnostics,
@@ -197,25 +196,26 @@ pub struct RootServiceContext {
 #[derive(Debug)]
 struct RootContextSeal;
 
+/// Permit to create a root [`TaskGroup`].
+///
+/// The private field keeps construction inside this module, so
+/// [`RootServiceContext::new`] is the only code that can create a root group.
+pub(crate) struct RootGroupPermit(());
+
 impl RootServiceContext {
+    /// Creates a root context and the root task group it owns.
     pub(crate) fn new(
         name: Arc<str>,
         runtime: RuntimeHandle,
-        task_group: TaskGroup,
         blocking_policies: BlockingLanePolicies,
         global_blocking_capacity: usize,
         diagnostics: RuntimeDiagnostics,
         resources: RuntimeResources,
     ) -> Self {
-        let blocking_lanes = BlockingLanes::new(
-            blocking_policies,
-            global_blocking_capacity,
-            runtime.clone(),
-            &task_group,
-        );
+        let task_group = TaskGroup::root(Arc::clone(&name), runtime.clone(), RootGroupPermit(()));
+        let blocking_lanes = BlockingLanes::new(blocking_policies, global_blocking_capacity, runtime, &task_group);
         Self {
             name,
-            runtime,
             task_group,
             blocking_lanes,
             diagnostics,
@@ -275,10 +275,6 @@ impl RootServiceContext {
 
     pub(crate) fn task_group(&self) -> &TaskGroup {
         &self.task_group
-    }
-
-    pub(crate) fn runtime(&self) -> &RuntimeHandle {
-        &self.runtime
     }
 
     pub(crate) fn blocking(&self, lane: BlockingLane) -> &BlockingExecutor {
@@ -497,7 +493,7 @@ impl ChildServiceContext {
     }
 
     /// Spawns the supplied task.
-    pub fn spawn<F>(&self, name: impl Into<Arc<str>>, kind: TaskKind, future: F) -> RuntimeResult<TaskId>
+    pub fn spawn<F>(&self, name: impl Into<crate::TaskName>, kind: TaskKind, future: F) -> RuntimeResult<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -508,7 +504,7 @@ impl ChildServiceContext {
     ///
     /// Use [`Self::spawn_cancellable_service`] when owner cancellation may
     /// safely drop the service future immediately.
-    pub fn spawn_service<F>(&self, name: impl Into<Arc<str>>, future: F) -> RuntimeResult<TaskId>
+    pub fn spawn_service<F>(&self, name: impl Into<crate::TaskName>, future: F) -> RuntimeResult<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -520,7 +516,7 @@ impl ChildServiceContext {
     /// # Errors
     ///
     /// Returns an error when this service context is shutting down or closed.
-    pub fn spawn_cancellable_service<F>(&self, name: impl Into<Arc<str>>, future: F) -> RuntimeResult<TaskId>
+    pub fn spawn_cancellable_service<F>(&self, name: impl Into<crate::TaskName>, future: F) -> RuntimeResult<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -534,7 +530,7 @@ impl ChildServiceContext {
     /// Returns an error when this service context is shutting down or closed.
     pub fn spawn_critical<F>(
         &self,
-        name: impl Into<Arc<str>>,
+        name: impl Into<crate::TaskName>,
         kind: TaskKind,
         failures: CriticalFailureState,
         future: F,
@@ -552,7 +548,7 @@ impl ChildServiceContext {
     /// Returns an error when this service context is shutting down or closed.
     pub fn spawn_critical_service<F>(
         &self,
-        name: impl Into<Arc<str>>,
+        name: impl Into<crate::TaskName>,
         failures: CriticalFailureState,
         future: F,
     ) -> RuntimeResult<TaskId>

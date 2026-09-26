@@ -287,7 +287,7 @@ impl KvMutationService {
         }
         if !self.inner.accepting.load(Ordering::Acquire) {
             self.metrics.record_kv_event(NameServerKvEvent::Closed);
-            return Err(crate::runtime_error(RuntimeError::context_unavailable(
+            return Err(crate::runtime_error(RuntimeError::closed(
                 RuntimeOperation::KvMutationWorker,
             )));
         }
@@ -309,7 +309,7 @@ impl KvMutationService {
                 let metadata_error = match error {
                     mpsc::error::TrySendError::Closed(_) => {
                         self.metrics.record_kv_event(NameServerKvEvent::Closed);
-                        RuntimeError::context_unavailable(RuntimeOperation::KvMutationWorker)
+                        RuntimeError::closed(RuntimeOperation::KvMutationWorker)
                     }
                     mpsc::error::TrySendError::Full(_) => {
                         self.metrics.record_kv_event(NameServerKvEvent::QueueFull);

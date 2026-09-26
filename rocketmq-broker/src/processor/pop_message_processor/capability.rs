@@ -41,7 +41,7 @@ use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageResult;
 
 use crate::broker::broker_runtime_config_state::BrokerPermissionState;
-use crate::broker_runtime::broker_task_group_or_current;
+use crate::broker_runtime::broker_component_task_group;
 use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
@@ -515,7 +515,7 @@ pub(crate) struct PopBufferMergeContext<MS: BrokerReadWriteStore> {
     pub(crate) subscriptions: SubscriptionGroupConfigLookup,
     pub(crate) offsets: ConsumerOffsetRequestCapability<MS>,
     pub(crate) store: PopStoreCapability<MS>,
-    service_context: Option<ChildServiceContext>,
+    service_context: ChildServiceContext,
 }
 
 impl<MS: BrokerReadWriteStore> PopBufferMergeContext<MS> {
@@ -525,7 +525,7 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeContext<MS> {
         subscriptions: SubscriptionGroupConfigLookup,
         offsets: ConsumerOffsetRequestCapability<MS>,
         store: PopStoreCapability<MS>,
-        service_context: Option<ChildServiceContext>,
+        service_context: ChildServiceContext,
     ) -> Self {
         Self {
             policy,
@@ -537,12 +537,8 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeContext<MS> {
         }
     }
 
-    pub(crate) fn task_group(&self) -> Option<TaskGroup> {
-        broker_task_group_or_current(
-            self.service_context.as_ref(),
-            "rocketmq-broker.pop-buffer-merge",
-            "failed to start PopBufferMergeService outside Tokio runtime",
-        )
+    pub(crate) fn task_group(&self) -> TaskGroup {
+        broker_component_task_group(&self.service_context, "rocketmq-broker.pop-buffer-merge")
     }
 }
 
@@ -557,7 +553,7 @@ pub(crate) struct PopReviveContext<MS: BrokerReadWriteStore> {
     pub(crate) inflight: PopInflightMessageCounter,
     pub(crate) should_start_time: Arc<AtomicU64>,
     pub(crate) metrics: Option<Arc<PopMetricsManager>>,
-    service_context: Option<ChildServiceContext>,
+    service_context: ChildServiceContext,
 }
 
 #[allow(
@@ -576,7 +572,7 @@ impl<MS: BrokerReadWriteStore> PopReviveContext<MS> {
         inflight: PopInflightMessageCounter,
         should_start_time: Arc<AtomicU64>,
         metrics: Option<Arc<PopMetricsManager>>,
-        service_context: Option<ChildServiceContext>,
+        service_context: ChildServiceContext,
     ) -> Self {
         Self {
             policy,
@@ -593,12 +589,8 @@ impl<MS: BrokerReadWriteStore> PopReviveContext<MS> {
         }
     }
 
-    pub(crate) fn task_group(&self, queue_id: i32) -> Option<TaskGroup> {
-        broker_task_group_or_current(
-            self.service_context.as_ref(),
-            format!("rocketmq-broker.pop-revive.{queue_id}"),
-            "failed to start PopReviveService outside Tokio runtime",
-        )
+    pub(crate) fn task_group(&self, queue_id: i32) -> TaskGroup {
+        broker_component_task_group(&self.service_context, format!("rocketmq-broker.pop-revive.{queue_id}"))
     }
 
     pub(crate) fn update_retry_topic(&self, topic_config: TopicConfig) {

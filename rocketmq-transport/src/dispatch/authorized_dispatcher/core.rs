@@ -394,7 +394,7 @@ where
         let observation = Some(metrics.observation().clone());
         let mut observer_owner = AdmittedProcessorObserver::new(processor, observation);
         let Some(processor) = observer_owner.processor_mut() else {
-            return Err(AuthorizedDispatchError::Closing(RuntimeError::context_unavailable(
+            return Err(AuthorizedDispatchError::Closing(RuntimeError::closed(
                 rocketmq_runtime::RuntimeOperation::SessionExecutor,
             )));
         };

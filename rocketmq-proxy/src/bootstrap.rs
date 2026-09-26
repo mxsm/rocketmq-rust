@@ -877,6 +877,7 @@ mod tests {
             probe_bind_addr: None,
             shutdown_timeout: Duration::from_secs(45),
             liveness_stale_after: Duration::from_secs(30),
+            drain_request_methods: rocketmq_runtime::DrainRequestMethods::PostOnly,
         })
     }
 

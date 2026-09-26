@@ -32,6 +32,7 @@ use chrono::SecondsFormat;
 use chrono::Utc;
 use rocketmq_observability::ObservabilityStatusHandle;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::TaskSpawner;
 use rocketmq_runtime::wait_for_signal_result;
@@ -825,29 +826,32 @@ pub async fn run(
     );
     autonomy_reconcile_schedule.initial_delay = std::time::Duration::from_secs(10);
     autonomy_reconcile_schedule.max_run_time = Some(std::time::Duration::from_secs(20));
-    autonomy_reconcile_schedule.shutdown_timeout = config.shutdown_timeout();
     autonomy_reconcile_tasks
-        .schedule_fixed_rate_no_overlap(autonomy_reconcile_schedule, move || {
-            let reconciler = autonomy_reconciler.clone();
-            async move {
-                match reconciler.run_once().await {
-                    Ok(summary) if summary.repaired > 0 => {
-                        tracing::warn!(
-                            repaired = summary.repaired,
-                            candidates = summary.candidates,
-                            "repaired autonomy lifecycle pauses"
-                        );
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        tracing::warn!(
-                            error = %error,
-                            "autonomy pause reconciliation failed"
-                        );
+        .schedule(
+            autonomy_reconcile_schedule,
+            ScheduledExecutionPolicy::default(),
+            move || {
+                let reconciler = autonomy_reconciler.clone();
+                async move {
+                    match reconciler.run_once().await {
+                        Ok(summary) if summary.repaired > 0 => {
+                            tracing::warn!(
+                                repaired = summary.repaired,
+                                candidates = summary.candidates,
+                                "repaired autonomy lifecycle pauses"
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            tracing::warn!(
+                                error = %error,
+                                "autonomy pause reconciliation failed"
+                            );
+                        }
                     }
                 }
-            }
-        })
+            },
+        )
         .map_err(ControlPlaneError::configuration_source)?;
     let documents = CapabilityDocuments::embedded()?;
     let auth = AuthService::from_config(&config).await?;
@@ -864,32 +868,35 @@ pub async fn run(
         ScheduledTaskConfig::fixed_rate_no_overlap("phase4-provider-smoke", std::time::Duration::from_secs(15 * 60));
     provider_smoke_schedule.initial_delay = std::time::Duration::from_secs(30);
     provider_smoke_schedule.max_run_time = Some(std::time::Duration::from_secs(5 * 60));
-    provider_smoke_schedule.shutdown_timeout = config.shutdown_timeout();
     provider_smoke_tasks
-        .schedule_fixed_rate_no_overlap(provider_smoke_schedule, move || {
-            let worker = provider_smoke_worker.clone();
-            async move {
-                match worker.run_due_provider_smokes().await {
-                    Ok(summary) if summary.attempted > 0 => {
-                        tracing::info!(
-                            tenants = summary.tenants,
-                            attempted = summary.attempted,
-                            passed = summary.passed,
-                            quarantined = summary.quarantined,
-                            persistence_failures = summary.persistence_failures,
-                            "completed provider smoke scan"
-                        );
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        tracing::warn!(
-                            error = %error,
-                            "provider smoke scan failed"
-                        );
+        .schedule(
+            provider_smoke_schedule,
+            ScheduledExecutionPolicy::default(),
+            move || {
+                let worker = provider_smoke_worker.clone();
+                async move {
+                    match worker.run_due_provider_smokes().await {
+                        Ok(summary) if summary.attempted > 0 => {
+                            tracing::info!(
+                                tenants = summary.tenants,
+                                attempted = summary.attempted,
+                                passed = summary.passed,
+                                quarantined = summary.quarantined,
+                                persistence_failures = summary.persistence_failures,
+                                "completed provider smoke scan"
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            tracing::warn!(
+                                error = %error,
+                                "provider smoke scan failed"
+                            );
+                        }
                     }
                 }
-            }
-        })
+            },
+        )
         .map_err(ControlPlaneError::configuration_source)?;
     let workflow = WorkflowService::new(repository.clone(), WorkflowEventBus::new(1_024));
     let notification_worker = NotificationOutboxWorker::new(repository.clone())?;
@@ -899,9 +906,8 @@ pub async fn run(
         ScheduledTaskConfig::fixed_rate_no_overlap("phase2-notification-outbox", std::time::Duration::from_secs(5));
     notification_schedule.initial_delay = std::time::Duration::from_secs(2);
     notification_schedule.max_run_time = Some(std::time::Duration::from_secs(20));
-    notification_schedule.shutdown_timeout = config.shutdown_timeout();
     notification_tasks
-        .schedule_fixed_rate_no_overlap(notification_schedule, move || {
+        .schedule(notification_schedule, ScheduledExecutionPolicy::default(), move || {
             let worker = notification_worker.clone();
             async move {
                 worker.run_due().await;
@@ -913,9 +919,8 @@ pub async fn run(
         ScheduledTaskConfig::fixed_rate_no_overlap("phase3-integration-outbox", std::time::Duration::from_secs(5));
     integration_schedule.initial_delay = std::time::Duration::from_secs(3);
     integration_schedule.max_run_time = Some(std::time::Duration::from_secs(20));
-    integration_schedule.shutdown_timeout = config.shutdown_timeout();
     integration_tasks
-        .schedule_fixed_rate_no_overlap(integration_schedule, move || {
+        .schedule(integration_schedule, ScheduledExecutionPolicy::default(), move || {
             let worker = integration_worker.clone();
             async move {
                 worker.run_due().await;
@@ -930,9 +935,8 @@ pub async fn run(
     );
     todo_schedule.initial_delay = std::time::Duration::from_secs(11);
     todo_schedule.max_run_time = Some(std::time::Duration::from_secs(30));
-    todo_schedule.shutdown_timeout = config.shutdown_timeout();
     todo_tasks
-        .schedule_fixed_rate_no_overlap(todo_schedule, move || {
+        .schedule(todo_schedule, ScheduledExecutionPolicy::default(), move || {
             let repository = todo_repository.clone();
             async move {
                 if let Err(error) = crate::postmortem::materialize_due_operator_todos(&repository).await {
@@ -1000,23 +1004,26 @@ pub async fn run(
     );
     autonomy_report_schedule.initial_delay = std::time::Duration::from_secs(20);
     autonomy_report_schedule.max_run_time = Some(std::time::Duration::from_secs(10 * 60));
-    autonomy_report_schedule.shutdown_timeout = config.shutdown_timeout();
     autonomy_report_tasks
-        .schedule_fixed_rate_no_overlap(autonomy_report_schedule, move || {
-            let worker = autonomy_report_worker.clone();
-            async move {
-                let summary = worker.run_due_reports().await;
-                if summary.inserted > 0 || summary.failures > 0 {
-                    tracing::info!(
-                        tenants = summary.tenants,
-                        attempted = summary.attempted,
-                        inserted = summary.inserted,
-                        failures = summary.failures,
-                        "completed autonomy operations report scan"
-                    );
+        .schedule(
+            autonomy_report_schedule,
+            ScheduledExecutionPolicy::default(),
+            move || {
+                let worker = autonomy_report_worker.clone();
+                async move {
+                    let summary = worker.run_due_reports().await;
+                    if summary.inserted > 0 || summary.failures > 0 {
+                        tracing::info!(
+                            tenants = summary.tenants,
+                            attempted = summary.attempted,
+                            inserted = summary.inserted,
+                            failures = summary.failures,
+                            "completed autonomy operations report scan"
+                        );
+                    }
                 }
-            }
-        })
+            },
+        )
         .map_err(ControlPlaneError::configuration_source)?;
     let preventive_worker = routers.preventive_automation.clone();
     let preventive_tasks = service_context.scheduled_tasks("preventive-inspection-scheduler");
@@ -1026,9 +1033,8 @@ pub async fn run(
     );
     preventive_schedule.initial_delay = std::time::Duration::from_secs(5);
     preventive_schedule.max_run_time = Some(std::time::Duration::from_secs(10 * 60));
-    preventive_schedule.shutdown_timeout = config.shutdown_timeout();
     preventive_tasks
-        .schedule_fixed_rate_no_overlap(preventive_schedule, move || {
+        .schedule(preventive_schedule, ScheduledExecutionPolicy::default(), move || {
             let preventive = preventive_worker.clone();
             async move {
                 preventive.run_due().await;
@@ -1041,9 +1047,8 @@ pub async fn run(
         ScheduledTaskConfig::fixed_rate_no_overlap("phase2-slo-evaluator", slo_worker.worker_interval());
     slo_schedule.initial_delay = std::time::Duration::from_secs(3);
     slo_schedule.max_run_time = Some(std::time::Duration::from_secs(5 * 60));
-    slo_schedule.shutdown_timeout = config.shutdown_timeout();
     slo_tasks
-        .schedule_fixed_rate_no_overlap(slo_schedule, move || {
+        .schedule(slo_schedule, ScheduledExecutionPolicy::default(), move || {
             let slo = slo_worker.clone();
             async move {
                 slo.run_due().await;
@@ -1056,9 +1061,8 @@ pub async fn run(
         ScheduledTaskConfig::fixed_rate_no_overlap("phase2-forecast-evaluator", forecast_worker.worker_interval());
     forecast_schedule.initial_delay = std::time::Duration::from_secs(7);
     forecast_schedule.max_run_time = Some(std::time::Duration::from_secs(10 * 60));
-    forecast_schedule.shutdown_timeout = config.shutdown_timeout();
     forecast_tasks
-        .schedule_fixed_rate_no_overlap(forecast_schedule, move || {
+        .schedule(forecast_schedule, ScheduledExecutionPolicy::default(), move || {
             let forecast = forecast_worker.clone();
             async move {
                 forecast.run_due().await;
@@ -1071,9 +1075,8 @@ pub async fn run(
         ScheduledTaskConfig::fixed_rate_no_overlap("phase3-change-scheduler", std::time::Duration::from_secs(2));
     change_schedule.initial_delay = std::time::Duration::from_secs(2);
     change_schedule.max_run_time = Some(std::time::Duration::from_secs(60));
-    change_schedule.shutdown_timeout = config.shutdown_timeout();
     change_tasks
-        .schedule_fixed_rate_no_overlap(change_schedule, move || {
+        .schedule(change_schedule, ScheduledExecutionPolicy::default(), move || {
             let change_management = change_worker.clone();
             async move {
                 change_management.run_due().await;

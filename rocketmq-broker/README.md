@@ -258,6 +258,9 @@ exporter configuration.
 Set `ROCKETMQ_HEALTH_BIND_ADDR` to an address such as `127.0.0.1:5558` to enable the shared lifecycle HTTP listener.
 `/readyz` reports readiness and `/livez` reports liveness using HTTP `200` or `503`. No probe listener is started when
 the variable is absent. This listener also exposes the shutdown-triggering `/drainz` route; restrict access accordingly.
+`/drainz` accepts only `POST` by default and answers `GET` with `405`. Set
+`ROCKETMQ_HEALTH_DRAIN_METHODS=GET,POST` when a Kubernetes `preStop.httpGet` hook calls it; the repository charts
+and manifests already set it.
 
 Broker readiness checks the normal and fast listeners, storage readiness, installed processors, resolved security
 state, and registration readiness. The storage readiness field is not a guarantee that the current role/controller

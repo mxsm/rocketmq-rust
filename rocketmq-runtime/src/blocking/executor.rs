@@ -177,7 +177,7 @@ enum AdmissionFailure {
 impl AdmissionFailure {
     fn into_error(self) -> RuntimeError {
         match self {
-            Self::ScopeClosed => RuntimeError::context_unavailable(crate::RuntimeOperation::BlockingQueueAdmission),
+            Self::ScopeClosed => RuntimeError::closed(crate::RuntimeOperation::BlockingQueueAdmission),
             Self::LeaseExpired | Self::QueueDeadlineExpired => {
                 RuntimeError::timed_out(crate::RuntimeOperation::BlockingQueueAdmission)
             }
@@ -367,7 +367,8 @@ impl BlockingExecutor {
             policy: Arc::new(policy),
             lane,
             budget,
-            tasks: Arc::new(DashMap::new()),
+            // Admission bounds the table to the lane's running and queued work.
+            tasks: Arc::new(DashMap::with_shard_amount(8)),
             next_task_id: Arc::new(AtomicU64::new(1)),
             rejected: Arc::new(AtomicU64::new(0)),
             admission: BlockingAdmission::Unscoped,

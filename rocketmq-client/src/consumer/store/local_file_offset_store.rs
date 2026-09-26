@@ -373,7 +373,6 @@ impl LocalFileOffsetStore {
             "rocketmq-client-local-offset-store-periodic",
             persist_interval,
             persist_interval,
-            PERSIST_TASK_SHUTDOWN_TIMEOUT,
             move || {
                 let offset_table = scheduled_offset_table.clone();
                 let dirty_flag = scheduled_dirty_flag.clone();

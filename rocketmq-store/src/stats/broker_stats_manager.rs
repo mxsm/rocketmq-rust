@@ -17,7 +17,6 @@ use std::sync::Arc;
 use crate::config::store_runtime_config::StoreRuntimeConfig;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use parking_lot::Mutex;
 use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_observability::statistics::state_getter::StateGetter;
 use rocketmq_observability::statistics::statistics_item::StatisticsItem;
@@ -31,13 +30,15 @@ use rocketmq_observability::stats::moment_stats_item_set::MomentStatsItemSet;
 use rocketmq_observability::stats::stats_item::StatsItem;
 use rocketmq_observability::stats::stats_item_set::StatsItemSet;
 use rocketmq_observability::stats::Stats;
-use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_runtime::RuntimeResult;
+use rocketmq_runtime::ScheduledExecutionPolicy;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::ScheduledTaskRegistrationOutcome;
 use rocketmq_runtime::TaskGroup;
 use tokio::time::Duration;
 use tracing::info;
 use tracing::warn;
-type TaskId = u64;
 
 const SCHEDULED_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -51,8 +52,7 @@ pub struct BrokerStatsManager {
     producer_state_getter: Option<Arc<dyn StateGetter>>,
     consumer_state_getter: Option<Arc<dyn StateGetter>>,
     broker_config: Option<Arc<StoreRuntimeConfig>>,
-    scheduler: Option<Arc<ScheduledTaskManager>>,
-    task_ids: Arc<Mutex<Vec<TaskId>>>,
+    sampling: Option<ScheduledTaskGroup>,
     parent_task_group: TaskGroup,
 }
 
@@ -110,72 +110,79 @@ impl BrokerStatsManager {
 impl BrokerStatsManager {
     #[inline]
     pub fn start(&self) {
-        if let Some(scheduler) = &self.scheduler {
-            self.start_sampling_tasks(scheduler);
+        if let Some(sampling) = &self.sampling {
+            self.start_sampling_tasks(sampling);
             info!("BrokerStatsManager started with scheduled tasks");
         } else {
-            warn!("ScheduledTaskManager not provided, sampling tasks not started");
+            warn!("Statistics sampling is not enabled, sampling tasks not started");
         }
     }
 
     /// Start all periodic sampling tasks
-    fn start_sampling_tasks(&self, scheduler: &Arc<ScheduledTaskManager>) {
+    fn start_sampling_tasks(&self, sampling: &ScheduledTaskGroup) {
         // Task 1: Sample every 10 seconds for minute-level statistics
         let stats_table = Arc::clone(&self.stats_table);
-        let task_id = scheduler.add_fixed_rate_task(Duration::ZERO, Duration::from_secs(10), move |_cancel| {
-            let stats_table = Arc::clone(&stats_table);
-            async move {
-                Self::sample_stats_table_in_seconds(&stats_table);
-                Ok(())
-            }
-        });
-        self.track_sampling_task(task_id, "sample_stats_table_in_seconds");
+        let registration = sampling.schedule(
+            ScheduledTaskConfig::fixed_rate_no_overlap("broker.stats.sample-seconds", Duration::from_secs(10)),
+            ScheduledExecutionPolicy::default(),
+            move || {
+                let stats_table = Arc::clone(&stats_table);
+                async move {
+                    Self::sample_stats_table_in_seconds(&stats_table);
+                }
+            },
+        );
+        Self::track_sampling_task(registration, "sample_stats_table_in_seconds");
 
         // Task 2: Sample every 10 minutes for hour-level statistics
         let stats_table = Arc::clone(&self.stats_table);
-        let task_id = scheduler.add_fixed_rate_task(Duration::ZERO, Duration::from_secs(600), move |_cancel| {
-            let stats_table = Arc::clone(&stats_table);
-            async move {
-                Self::sample_stats_table_in_minutes(&stats_table);
-                Ok(())
-            }
-        });
-        self.track_sampling_task(task_id, "sample_stats_table_in_minutes");
+        let registration = sampling.schedule(
+            ScheduledTaskConfig::fixed_rate_no_overlap("broker.stats.sample-minutes", Duration::from_secs(600)),
+            ScheduledExecutionPolicy::default(),
+            move || {
+                let stats_table = Arc::clone(&stats_table);
+                async move {
+                    Self::sample_stats_table_in_minutes(&stats_table);
+                }
+            },
+        );
+        Self::track_sampling_task(registration, "sample_stats_table_in_minutes");
 
         // Task 3: Sample every hour for day-level statistics
         let stats_table = Arc::clone(&self.stats_table);
-        let task_id = scheduler.add_fixed_rate_task(Duration::ZERO, Duration::from_secs(3600), move |_cancel| {
-            let stats_table = Arc::clone(&stats_table);
-            async move {
-                Self::sample_stats_table_in_hours(&stats_table);
-                Ok(())
-            }
-        });
-        self.track_sampling_task(task_id, "sample_stats_table_in_hours");
-
-        // Task 4: Clean up expired stats every 10 minutes
-        let stats_table = Arc::clone(&self.stats_table);
-        let task_id =
-            scheduler.add_fixed_rate_task(Duration::from_secs(600), Duration::from_secs(600), move |_cancel| {
+        let registration = sampling.schedule(
+            ScheduledTaskConfig::fixed_rate_no_overlap("broker.stats.sample-hours", Duration::from_secs(3600)),
+            ScheduledExecutionPolicy::default(),
+            move || {
                 let stats_table = Arc::clone(&stats_table);
                 async move {
-                    info!("Cleaning expired statistics items");
-                    // TODO: Implement cleanup logic based on last access time
-                    Ok(())
+                    Self::sample_stats_table_in_hours(&stats_table);
                 }
-            });
-        self.track_sampling_task(task_id, "cleanup_expired_stats");
+            },
+        );
+        Self::track_sampling_task(registration, "sample_stats_table_in_hours");
+
+        // Task 4: Clean up expired stats every 10 minutes
+        let registration = sampling.schedule(
+            ScheduledTaskConfig::fixed_rate_no_overlap("broker.stats.cleanup-expired", Duration::from_secs(600))
+                .with_initial_delay(Duration::from_secs(600)),
+            ScheduledExecutionPolicy::default(),
+            || async {
+                info!("Cleaning expired statistics items");
+                // TODO: Implement cleanup logic based on last access time
+            },
+        );
+        Self::track_sampling_task(registration, "cleanup_expired_stats");
 
         info!(
             "Started {} scheduled tasks for BrokerStatsManager",
-            self.task_ids.lock().len()
+            sampling.snapshot().len()
         );
     }
 
-    fn track_sampling_task(&self, task_id: RuntimeResult<TaskId>, task_name: &str) {
-        match task_id {
-            Ok(task_id) => self.task_ids.lock().push(task_id),
-            Err(error) => warn!("Failed to start BrokerStatsManager scheduled task {task_name}: {error}"),
+    fn track_sampling_task(registration: RuntimeResult<ScheduledTaskRegistrationOutcome>, task_name: &str) {
+        if let Err(error) = registration {
+            warn!("Failed to start BrokerStatsManager scheduled task {task_name}: {error}");
         }
     }
 
@@ -199,13 +206,29 @@ impl BrokerStatsManager {
 
     #[inline]
     pub fn new(broker_config: Arc<StoreRuntimeConfig>, parent_task_group: TaskGroup) -> Self {
-        Self::new_with_scheduler(broker_config, None, parent_task_group)
+        Self::build(broker_config, None, parent_task_group)
     }
 
+    /// Creates a manager whose [`Self::start`] also runs the periodic sampling
+    /// schedules, in their own child of `parent_task_group`.
+    ///
+    /// Sampling stays off, with a warning, if `parent_task_group` no longer
+    /// accepts children.
     #[inline]
-    pub fn new_with_scheduler(
+    pub fn new_with_sampling(broker_config: Arc<StoreRuntimeConfig>, parent_task_group: TaskGroup) -> Self {
+        let sampling = match parent_task_group.try_child("broker.statistics.sampling") {
+            Ok(group) => Some(ScheduledTaskGroup::new(group)),
+            Err(error) => {
+                warn!("Statistics sampling is disabled: {error}");
+                None
+            }
+        };
+        Self::build(broker_config, sampling, parent_task_group)
+    }
+
+    fn build(
         broker_config: Arc<StoreRuntimeConfig>,
-        scheduler: Option<Arc<ScheduledTaskManager>>,
+        sampling: Option<ScheduledTaskGroup>,
         parent_task_group: TaskGroup,
     ) -> Self {
         let stats_table = Arc::new(DashMap::new());
@@ -221,8 +244,7 @@ impl BrokerStatsManager {
             producer_state_getter: None,
             consumer_state_getter: None,
             broker_config: Some(broker_config),
-            scheduler,
-            task_ids: Arc::new(Mutex::new(Vec::new())),
+            sampling,
             parent_task_group,
         };
         broker_stats_manager.init();
@@ -247,8 +269,7 @@ impl BrokerStatsManager {
             producer_state_getter: None,
             consumer_state_getter: None,
             broker_config: Some(broker_config),
-            scheduler: None,
-            task_ids: Arc::new(Mutex::new(Vec::new())),
+            sampling: None,
             parent_task_group,
         };
         broker_stats_manager.init();
@@ -971,15 +992,15 @@ impl BrokerStatsManager {
     pub async fn shutdown(&self) {
         info!("Shutting down BrokerStatsManager...");
 
-        if let Some(scheduler) = &self.scheduler {
-            let task_ids = self.task_ids.lock().drain(..).collect::<Vec<_>>();
-            let report = scheduler
-                .shutdown_tasks(task_ids, SCHEDULED_TASK_SHUTDOWN_TIMEOUT)
-                .await;
+        if let Some(sampling) = &self.sampling {
+            let report = sampling.shutdown(SCHEDULED_TASK_SHUTDOWN_TIMEOUT).await;
             if report.is_healthy() {
-                info!("BrokerStatsManager scheduled tasks stopped: {:?}", report);
+                info!("BrokerStatsManager scheduled tasks stopped");
             } else {
-                warn!("BrokerStatsManager scheduled task shutdown unhealthy: {:?}", report);
+                warn!(
+                    report = %report.to_json(),
+                    "BrokerStatsManager scheduled task shutdown unhealthy"
+                );
             }
         }
 
@@ -1478,38 +1499,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_start_with_scheduler() {
+    async fn test_start_with_sampling() {
         let broker_config = Arc::new(StoreRuntimeConfig::default());
-        let scheduler = Arc::new(ScheduledTaskManager::new_legacy_compatibility());
-        let manager = BrokerStatsManager::new_with_scheduler(
-            broker_config,
-            Some(scheduler.clone()),
-            test_task_group("broker-stats-manager-test"),
-        );
+        let manager =
+            BrokerStatsManager::new_with_sampling(broker_config, test_task_group("broker-stats-manager-test"));
 
         manager.start();
 
-        assert_eq!(manager.task_ids.lock().len(), 4);
+        let sampling = manager.sampling.as_ref().expect("sampling is enabled");
+        assert_eq!(sampling.snapshot().len(), 4);
+        manager.shutdown().await;
     }
 
     #[tokio::test]
     async fn test_shutdown_cancels_tasks() {
         let broker_config = Arc::new(StoreRuntimeConfig::default());
-        let scheduler = Arc::new(ScheduledTaskManager::new_legacy_compatibility());
-        let manager = BrokerStatsManager::new_with_scheduler(
-            broker_config,
-            Some(scheduler.clone()),
-            test_task_group("broker-stats-manager-test"),
-        );
+        let manager =
+            BrokerStatsManager::new_with_sampling(broker_config, test_task_group("broker-stats-manager-test"));
 
         manager.start();
-        let task_count_before = manager.task_ids.lock().len();
-        assert_eq!(task_count_before, 4);
+        let sampling = manager.sampling.as_ref().expect("sampling is enabled");
+        assert_eq!(sampling.group().task_count(), 4, "one driver per schedule");
 
         manager.shutdown().await;
-        let task_count_after = manager.task_ids.lock().len();
-        assert_eq!(task_count_after, 0);
-        assert_eq!(scheduler.task_count(), 0);
+        assert_eq!(sampling.group().task_count(), 0);
     }
 
     #[tokio::test]

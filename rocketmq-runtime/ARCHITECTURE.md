@@ -11,18 +11,18 @@ Application entrypoints own `RuntimeOwner`; components receive `ChildServiceCont
 | Responsibility | Implementation | Invariant |
 | --- | --- | --- |
 | Runtime composition | [owner](src/owner.rs), [service context](src/service_context.rs) | Child contexts share the owner's runtime and process resources. |
-| Task admission and submission | [submission](src/task_group/submission.rs) | Registration and handle installation use the owner admission gate. |
+| Task admission and submission | [submission](src/task_group/submission.rs) | Registration and the tracker token use the owner admission gate; dispatch to Tokio and handle installation follow outside it, honoring an abort requested in between. |
 | Final task settlement | [completion](src/task_group/completion.rs) | Future destruction precedes failure accounting and completion publication. |
 | Active task and child registration | [registry](src/task_group/registry.rs) | Child links are weak; live descendants retain their ancestors. |
 | Deadline and retained shutdown result | [coordinator](src/task_group/shutdown.rs), [group façade](src/task_group.rs) | Later calls never extend an accepted deadline or replace a published report. |
-| Blocking admission and execution | [admission](src/blocking/admission.rs), [executor](src/blocking/executor.rs) | Managed lanes share one global capacity limit; a running closure retains its permit until it exits. |
-| Resource reservations and dynamic generations | [budget](src/resource_budget/budget.rs), [dynamic keys](src/resource_budget/dynamic.rs), [queue](src/resource_budget/queue.rs) | Reservations account along the ancestor chain; closed generations reject new admission and incoming permit rebinds. |
+| Blocking admission and execution | [admission](src/blocking/admission.rs), [executor](src/blocking/executor.rs) | Managed lanes share one global capacity limit; each lane admits in arrival order and a release wakes at most one waiter; a running closure retains its permit until it exits. |
+| Resource reservations and dynamic generations | [budget](src/resource_budget/budget.rs), [dynamic keys](src/resource_budget/dynamic.rs), [queue](src/resource_budget/queue.rs) | Reservations account along the ancestor chain with atomic reserve-and-rollback, so no level exceeds its limit; closed generations reject new admission and incoming permit rebinds. |
 | Scheduled drivers and runs | [scheduled tasks](src/scheduled.rs) | Both belong to the scheduler's task group; the entrypoint determines cancellation ownership. |
 | Aggregate and bounded task scans | [task diagnostics](src/task_group/diagnostics.rs) | Local counts exclude children; bounded details disclose truncation. |
 | Diagnostic schemas and collection | [diagnostics](src/diagnostics.rs) | V1/V2 public types and wire names remain stable. |
 | Sanitized conversion | [conversion](src/diagnostics/conversion.rs) | Labels derive from typed identity, never vector position; conversion performs no business I/O. |
 | Process lifecycle transitions | [service lifecycle](src/service_lifecycle.rs) | Readiness, terminal states and the first shutdown request are state decisions. |
-| Health-probe transport and routing | [probe](src/service_lifecycle/probe.rs) | Routes call lifecycle APIs instead of modifying state atomics. |
+| Health-probe transport and routing | [probe](src/service_lifecycle/probe.rs) | Each connection is a bounded lifecycle-group task; routes call lifecycle APIs instead of modifying state atomics. |
 | Metadata admission and publication | [metadata actor](src/metadata_io.rs) | Actor state owns waiters, retained bytes and generation ordering under one coordination protocol. |
 | Metadata target identity and retirement | [target registry](src/metadata_target.rs) | Actors under one owner share target histories; a slot is reusable only after retirement checks pass. |
 | Atomic replacement and durability | [filesystem](src/metadata_io/filesystem.rs) | Platform operations do not modify actor state or diagnostic schemas. |
@@ -31,9 +31,9 @@ Keep state with its existing owner and expose capabilities through the establish
 
 ## Completion and shutdown ordering
 
-Task completion records the destruction of a registered future, not business success. Destruction precedes failure accounting and completion publication, including an abort before the first poll or a panic during destruction. `TaskGroup::wait_task` treats an absent local task as finished; `abort_task_and_wait` returns false for an absent task.
+Task completion records the destruction of a registered future, not business success. Destruction precedes failure accounting and completion publication, including an abort before the first poll or a panic during destruction. `TaskGroup::wait_task` treats an absent local task as finished; `abort_task_and_wait` returns false for an absent task. A `TaskId` records the group that issued it, so a group returns false for another group's id instead of reporting it finished or reaching its own task with the same sequence number; `TaskGroup::owns_task` tells the two cases apart.
 
-`OperationOutcome` records each accepted operation task separately from `ShutdownReport.completed`: normal return, operation cancellation, deadline, owner cancellation, panic, or abort before another outcome was selected. Its finalizer publishes only after the user future is destroyed. Rejected submissions do not increment the six outcome counters, and no per-task outcome history is retained. Draining operations ignore owner cancellation until the accepted work completes, is operation-cancelled, expires, or is explicitly aborted.
+`OperationOutcome` records each accepted operation task separately from `ShutdownReport.completed`: normal return, operation cancellation, deadline, owner cancellation, panic, or abort before another outcome was selected. Its finalizer publishes only after the user future is destroyed. Rejected submissions do not increment the six outcome counters, and no per-task outcome history is retained. Draining operations ignore owner cancellation until the accepted work completes, is operation-cancelled, expires, or is explicitly aborted. An operation keeps only an active-task count; its tasks are tagged in the owner's registry, where a wait that reaches its deadline finds and aborts them. A task stops counting as active when its future is destroyed and the owner settles it just afterwards, so a wait that sees the count reach zero also waits until the owner no longer lists the operation's tasks. Registration and completion settle the outcome with one atomic handshake, so exactly one side records it.
 
 The shutdown coordinator seals admission and retains the published result. An immediate shutdown report cannot confirm future destruction or final I/O; services with final I/O must perform it through cooperative cleanup. See the [shutdown API contracts](README.md#service-lifecycle-and-shutdown) for the guarantees of each entrypoint.
 
@@ -49,7 +49,7 @@ Closed dynamic generations reject admission and incoming permit rebinds, while o
 
 ## Scheduling boundaries
 
-Ordinary and operation-bound fixed-delay adapters share execution and final settlement; their outer cancellation owners remain distinct. Legacy rate and Cron protocols retain their timing semantics. See the [entrypoint matrix](README.md#scheduled-tasks) for scheduling policies and compatibility fields.
+Ordinary and operation-bound schedules share execution and final settlement; their outer cancellation owners remain distinct. The configuration alone decides the timing mode, and the policy must agree with it. See the [entrypoint matrix](README.md#scheduled-tasks) for scheduling policies. A task is type-erased where it is registered, so the drivers, the run adapter and their task-group submission are compiled once in this crate rather than once per registration site; each run costs one heap allocation for its future.
 
 Consumer-specific drain ordering and persistence policies are documented with the consumer; see [Broker transaction maintenance](../rocketmq-broker/README.md#transaction-maintenance).
 

@@ -41,6 +41,8 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::config::store_runtime_config::StoreRuntimeConfig;
+use crate::utils::store_util;
+use crate::utils::store_util::ensure_dir_ok;
 use crate::StoreResult;
 use arc_swap::ArcSwap;
 use bytes::Buf;
@@ -74,8 +76,6 @@ use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_runtime::common::file_utils::string_to_file;
 use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::common::util_all;
-use rocketmq_runtime::common::util_all::ensure_dir_ok;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
@@ -951,7 +951,7 @@ impl BackendOps for LocalFileMessageStore {
 
             for cl_path in paths {
                 let cl_path = cl_path.trim();
-                let physic_ratio = if util_all::is_path_exists(cl_path) {
+                let physic_ratio = if store_util::is_path_exists(cl_path) {
                     store_path_disk_used_ratio(cl_path)
                 } else {
                     -1.0

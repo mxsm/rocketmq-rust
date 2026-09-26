@@ -656,9 +656,9 @@ mod tests {
             .as_ref()
             .expect("Java LitePull default consume timestamp should be present");
 
-        assert!(rocketmq_runtime::common::util_all::parse_date(
+        assert!(rocketmq_runtime::common::time_utils::parse_date(
             timestamp,
-            rocketmq_runtime::common::util_all::YYYYMMDDHHMMSS
+            rocketmq_runtime::common::time_utils::YYYYMMDDHHMMSS
         )
         .is_some());
         let config = LitePullConsumerConfig::default();
@@ -666,9 +666,9 @@ mod tests {
             .consume_timestamp
             .as_ref()
             .expect("Java LitePull config default consume timestamp should be present");
-        assert!(rocketmq_runtime::common::util_all::parse_date(
+        assert!(rocketmq_runtime::common::time_utils::parse_date(
             config_timestamp,
-            rocketmq_runtime::common::util_all::YYYYMMDDHHMMSS
+            rocketmq_runtime::common::time_utils::YYYYMMDDHHMMSS
         )
         .is_some());
     }

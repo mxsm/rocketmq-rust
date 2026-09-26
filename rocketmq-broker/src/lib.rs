@@ -435,7 +435,6 @@ pub mod bench_support {
     use futures::future::try_join_all;
     use rocketmq_model::common::filter::expression_type::ExpressionType;
     use rocketmq_model::common::message::message_queue::MessageQueue;
-    use rocketmq_runtime::schedule::simple_scheduler::ScheduledShutdownReport;
     use rocketmq_runtime::ChildServiceContext;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::get_delay_offset_store_path;
@@ -656,10 +655,10 @@ pub mod bench_support {
         pub timed_out_components: Vec<&'static str>,
     }
 
-    impl From<ScheduledShutdownReport> for BrokerScheduledShutdownProbe {
-        fn from(report: ScheduledShutdownReport) -> Self {
+    impl From<rocketmq_runtime::ShutdownReport> for BrokerScheduledShutdownProbe {
+        fn from(report: rocketmq_runtime::ShutdownReport) -> Self {
             Self {
-                task_count: report.task_count,
+                task_count: report.completed + report.cancelled + report.aborted + report.panicked + report.leaked,
                 completed: report.completed,
                 aborted: report.aborted,
                 panicked: report.panicked,
@@ -772,19 +771,26 @@ pub mod bench_support {
         for task_index in 0..pending_task_count {
             let started = Arc::clone(&started);
             let dropped = Arc::clone(&dropped);
+            let token = runtime.scheduled_tasks().group().cancellation_token();
             runtime
-                .scheduled_task_manager()
-                .add_fixed_delay_task(Duration::ZERO, Duration::from_secs(60), move |token| {
-                    let started = Arc::clone(&started);
-                    let dropped = Arc::clone(&dropped);
-                    async move {
-                        let _marker = DropMarker(dropped);
-                        started.fetch_add(1, Ordering::AcqRel);
-                        let _ = task_index;
-                        token.cancelled().await;
-                        Ok(())
-                    }
-                })
+                .scheduled_tasks()
+                .schedule(
+                    rocketmq_runtime::ScheduledTaskConfig::fixed_delay(
+                        format!("broker.lifecycle-probe.{task_index}"),
+                        Duration::from_secs(60),
+                    ),
+                    rocketmq_runtime::ScheduledExecutionPolicy::default(),
+                    move || {
+                        let started = Arc::clone(&started);
+                        let dropped = Arc::clone(&dropped);
+                        let token = token.clone();
+                        async move {
+                            let _marker = DropMarker(dropped);
+                            started.fetch_add(1, Ordering::AcqRel);
+                            token.cancelled().await;
+                        }
+                    },
+                )
                 .expect("broker lifecycle scheduled task should start");
         }
 
@@ -796,13 +802,13 @@ pub mod bench_support {
         .await
         .expect("broker lifecycle scheduled tasks should start");
 
-        let scheduled_task_count_before_shutdown = runtime.scheduled_task_manager().task_count();
+        let scheduled_task_count_before_shutdown = runtime.scheduled_tasks().group().task_count();
         let scheduled_started_at = Instant::now();
         let scheduled_shutdown_report = runtime
             .shutdown_scheduled_tasks_with_timeout(Duration::from_secs(2))
             .await;
         let scheduled_shutdown_elapsed_us = scheduled_started_at.elapsed().as_micros();
-        let scheduled_task_count_after_shutdown = runtime.scheduled_task_manager().task_count();
+        let scheduled_task_count_after_shutdown = runtime.scheduled_tasks().group().task_count();
         let scheduled_task_drop_count = dropped.load(Ordering::Acquire);
 
         let remoting_probe_installed = runtime.install_remoting_server_report_probe();

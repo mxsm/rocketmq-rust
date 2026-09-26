@@ -25,6 +25,7 @@ use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_runtime::MetadataIoConfig;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -1034,8 +1035,9 @@ fn start_acl_file_watcher(
     let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
     let blocking = service_context.metadata_io().clone();
     scheduled_tasks
-        .schedule_fixed_rate_no_overlap(
+        .schedule(
             ScheduledTaskConfig::fixed_rate_no_overlap("auth.acl-file-watcher.reload", interval),
+            ScheduledExecutionPolicy::default(),
             move || {
                 let provider_registry = provider_registry.clone();
                 let watch_config = watch_config.clone();
