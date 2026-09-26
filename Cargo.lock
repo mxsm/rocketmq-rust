@@ -3066,12 +3066,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "opentelemetry-appender-tracing"
-version = "0.32.0"
+name = "opentelemetry"
+version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c0080f0dc1d7c786f467cd85a4e395fcab11ee852004f39a29a18ab7c25d837"
+checksum = "6cdb0b1b267eb9db3331b434ed9ddab10d50e280a9adf9d13e5233e2002b61b5"
 dependencies = [
- "opentelemetry",
+ "js-sys",
+]
+
+[[package]]
+name = "opentelemetry-appender-tracing"
+version = "0.33.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2b304e8d8f11326ba366a99ca5c7aaf7cd397b67268a332437175aeb42a40db"
+dependencies = [
+ "opentelemetry 0.33.0",
  "tracing",
  "tracing-core",
  "tracing-subscriber",
@@ -3084,7 +3093,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9966929966d17620d7c316c643ba62631826e10021409357772d5eea84f62c35"
 dependencies = [
  "http",
- "opentelemetry",
+ "opentelemetry 0.32.0",
  "opentelemetry-proto",
  "opentelemetry_sdk",
  "prost",
@@ -3101,7 +3110,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2c0359983e7f79cf33c9abd89e5d7ddf67c46c419d0148598022d70e70c01aba"
 dependencies = [
  "once_cell",
- "opentelemetry",
+ "opentelemetry 0.32.0",
  "opentelemetry_sdk",
  "prometheus",
 ]
@@ -3112,7 +3121,7 @@ version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56d658ba1faf63f7b9c492cfbe6e0ec365440a16132d3270c1065f7b33f1b638"
 dependencies = [
- "opentelemetry",
+ "opentelemetry 0.32.0",
  "opentelemetry_sdk",
  "prost",
  "tonic",
@@ -3134,7 +3143,7 @@ dependencies = [
  "futures-channel",
  "futures-executor",
  "futures-util",
- "opentelemetry",
+ "opentelemetry 0.32.0",
  "percent-encoding",
  "portable-atomic",
  "rand 0.9.5",
@@ -4520,7 +4529,7 @@ dependencies = [
  "criterion",
  "dashmap",
  "iana-time-zone",
- "opentelemetry",
+ "opentelemetry 0.32.0",
  "opentelemetry-appender-tracing",
  "opentelemetry-otlp",
  "opentelemetry-prometheus",
@@ -6193,7 +6202,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adbc64cba7137545b8044cb1fe9814f7aacf3c6b5f9b45be8bb5db538befdb26"
 dependencies = [
  "js-sys",
- "opentelemetry",
+ "opentelemetry 0.32.0",
  "tracing",
  "tracing-core",
  "tracing-subscriber",
