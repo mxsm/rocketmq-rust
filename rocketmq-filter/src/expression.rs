@@ -208,3 +208,27 @@ pub trait Expression: Send + Sync + fmt::Display {
     /// ```
     fn evaluate(&self, context: &dyn EvaluationContext) -> Result<Value, EvaluationError>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Value;
+
+    #[test]
+    fn value_truthiness_and_null_detection() {
+        for (value, truthy, is_null) in [
+            (Value::Boolean(false), false, false),
+            (Value::Boolean(true), true, false),
+            (Value::String("".into()), false, false),
+            (Value::String("false".into()), true, false),
+            (Value::Long(0), false, false),
+            (Value::Long(-1), true, false),
+            (Value::Double(0.0), false, false),
+            (Value::Double(-0.0), false, false),
+            (Value::Double(-1.5), true, false),
+            (Value::Null, false, true),
+        ] {
+            assert_eq!(value.as_bool(), truthy, "{value:?}");
+            assert_eq!(value.is_null(), is_null, "{value:?}");
+        }
+    }
+}
