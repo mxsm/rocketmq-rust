@@ -1040,8 +1040,14 @@ impl ReputMessageServiceInner {
                 if !reput_record_is_complete(bytes) {
                     break;
                 }
-                let dispatch_request = commit_log::check_message_and_return_size(
-                    bytes,
+                let offset = self.reput_from_offset.load(Ordering::Acquire);
+                let segment_remaining =
+                    usize::try_from(self.commit_log.roll_next_file(offset).saturating_sub(offset)).unwrap_or(0);
+                let dispatch_request = commit_log::check_message_and_return_size_in_segment(
+                    commit_log::CommitLogRecordWindow {
+                        bytes,
+                        segment_remaining,
+                    },
                     false,
                     false,
                     false,
@@ -1236,8 +1242,14 @@ impl ReputMessageServiceInner {
             if !reput_record_is_complete(bytes) {
                 break;
             }
-            let dispatch_request = commit_log::check_message_and_return_size(
-                bytes,
+            let offset = self.reput_from_offset.load(Ordering::Acquire);
+            let segment_remaining =
+                usize::try_from(self.commit_log.roll_next_file(offset).saturating_sub(offset)).unwrap_or(0);
+            let dispatch_request = commit_log::check_message_and_return_size_in_segment(
+                commit_log::CommitLogRecordWindow {
+                    bytes,
+                    segment_remaining,
+                },
                 false,
                 false,
                 false,
@@ -1357,6 +1369,25 @@ mod bounded_reput_read_tests {
         frame.extend_from_slice(&(16 * 1024 * 1024i32).to_be_bytes());
         frame.extend_from_slice(&commit_log::BLANK_MAGIC_CODE.to_be_bytes());
 
-        assert!(reput_record_is_complete(&Bytes::from(frame)));
+        assert!(reput_record_is_complete(&Bytes::from(frame.clone())));
+
+        for (segment_remaining, valid) in [(16 * 1024 * 1024, true), (8, false)] {
+            let mut marker = Bytes::from(frame.clone());
+            let request = commit_log::check_message_and_return_size_in_segment(
+                commit_log::CommitLogRecordWindow {
+                    bytes: &mut marker,
+                    segment_remaining,
+                },
+                false,
+                false,
+                false,
+                &Arc::new(MessageStoreConfig::default()),
+                0,
+                &BTreeMap::new(),
+            );
+            assert_eq!(request.success, valid);
+            assert_eq!(request.msg_size, if valid { 0 } else { -1 });
+            assert_eq!(marker.len(), if valid { 0 } else { 8 });
+        }
     }
 }

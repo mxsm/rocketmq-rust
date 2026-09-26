@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(tools):** Make `rocketmq-store-inspect read-message-log --version` report the crate version instead of a stale hardcoded value ([#10780](https://github.com/mxsm/rocketmq-rust/issues/10780)).
 - **docs(runtime):** Put item-level doc comments before attributes on `ServiceManagerLifecycleProbe` and `ServiceManager::new_arc` so rustdoc attaches the comments to the intended items ([#10901](https://github.com/mxsm/rocketmq-rust/issues/10901)).
 - **fix(model):** Return an error instead of overflowing in `StringUtils::parse_delay_level` when a delay level's millisecond value exceeds `i64::MAX`: the unit multiplier is now applied with checked multiplication while valid levels, accepted unit letters, and level numbering stay unchanged ([#10857](https://github.com/mxsm/rocketmq-rust/issues/10857)).
 - **fix(tools):** Replace unusable spaced long option names in `topicRoute` and `consumerStatus` with `--listFormat` and `--namesrvAddr` ([#10765](https://github.com/mxsm/rocketmq-rust/issues/10765)).

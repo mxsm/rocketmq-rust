@@ -70,3 +70,33 @@ fn verbose_release_version_is_order_independent() {
         assert!(stdout.contains("effective_features="));
     }
 }
+
+#[test]
+fn read_message_log_version_matches_release_version() {
+    let release = Command::new(env!("CARGO_BIN_EXE_rocketmq-cli-rust"))
+        .arg("--version")
+        .output()
+        .expect("run rocketmq-cli-rust --version");
+    let read_message_log = Command::new(env!("CARGO_BIN_EXE_rocketmq-cli-rust"))
+        .args(["read-message-log", "--version"])
+        .output()
+        .expect("run rocketmq-cli-rust read-message-log --version");
+
+    assert!(release.status.success());
+    assert!(read_message_log.status.success());
+    assert!(release.stderr.is_empty());
+    assert!(read_message_log.stderr.is_empty());
+
+    let release_stdout = String::from_utf8_lossy(&release.stdout);
+    let release_version = release_stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("version="))
+        .expect("release output contains a version");
+    let read_message_log_stdout = String::from_utf8_lossy(&read_message_log.stdout);
+    let read_message_log_version = read_message_log_stdout
+        .split_whitespace()
+        .last()
+        .expect("read-message-log output contains a version");
+
+    assert_eq!(read_message_log_version, release_version);
+}

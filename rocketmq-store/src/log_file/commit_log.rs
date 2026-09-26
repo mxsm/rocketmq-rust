@@ -2693,6 +2693,13 @@ impl CommitLog {
     }
 }
 
+// Reput may read only the eight-byte blank header from a bounded buffer, while
+// recovery and direct callers already hold the full declared frame.
+pub(crate) struct CommitLogRecordWindow<'a> {
+    pub bytes: &'a mut Bytes,
+    pub segment_remaining: usize,
+}
+
 pub fn check_message_and_return_size(
     bytes: &mut Bytes,
     check_crc: bool,
@@ -2702,6 +2709,34 @@ pub fn check_message_and_return_size(
     max_delay_level: i32,
     delay_level_table: &BTreeMap<i32 /* level */, i64 /* delay timeMillis */>,
 ) -> DispatchRequest {
+    let segment_remaining = bytes.len();
+    check_message_and_return_size_in_segment(
+        CommitLogRecordWindow {
+            bytes,
+            segment_remaining,
+        },
+        check_crc,
+        check_dup_info,
+        read_body,
+        message_store_config,
+        max_delay_level,
+        delay_level_table,
+    )
+}
+
+pub(crate) fn check_message_and_return_size_in_segment(
+    window: CommitLogRecordWindow<'_>,
+    check_crc: bool,
+    check_dup_info: bool,
+    read_body: bool,
+    message_store_config: &Arc<MessageStoreConfig>,
+    max_delay_level: i32,
+    delay_level_table: &BTreeMap<i32 /* level */, i64 /* delay timeMillis */>,
+) -> DispatchRequest {
+    let CommitLogRecordWindow {
+        bytes,
+        segment_remaining,
+    } = window;
     struct CommonCommitLogChecksum;
 
     impl CommitLogRecordChecksum for CommonCommitLogChecksum {
@@ -2719,7 +2754,14 @@ pub fn check_message_and_return_size(
         CommitLogRecordBodyMode::Read
     };
     let record = match inspect_commit_log_record(bytes, body_mode, &CommonCommitLogChecksum) {
-        CommitLogRecordOutcome::Blank { .. } => {
+        CommitLogRecordOutcome::Blank { declared_size } => {
+            if usize::try_from(declared_size).map_or(true, |size| size > segment_remaining) {
+                return DispatchRequest {
+                    msg_size: -1,
+                    success: false,
+                    ..Default::default()
+                };
+            }
             bytes.advance(8);
             return DispatchRequest {
                 msg_size: 0,
