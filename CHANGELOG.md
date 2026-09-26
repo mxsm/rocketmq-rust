@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(tools):** Make `rocketmq-store-inspect read-message-log --version` report the crate version instead of a stale hardcoded value ([#10780](https://github.com/mxsm/rocketmq-rust/issues/10780)).
 - **fix(tools):** Replace unusable spaced long option names in `topicRoute` and `consumerStatus` with `--listFormat` and `--namesrvAddr` ([#10765](https://github.com/mxsm/rocketmq-rust/issues/10765)).
 - **test(tui):** Cover character-key filtering and case-insensitive control shortcuts in the admin TUI ([#10775](https://github.com/mxsm/rocketmq-rust/issues/10775)).
 - **fix(broker):** Stop timestamp arithmetic from overflowing on client-supplied or future values: `reject_commit_or_rollback` and the commit-finish latency now use signed/saturating subtraction on `born_timestamp`, `PopReviveService` uses saturating subtraction for `revive_time`/`end_time`/`first_rt` elapsed checks, `get_immunity_time` saturates its `* 1000` conversion, and `PopCheckPoint::get_revive_time` saturates `pop_time + invisible_time` ([#10604](https://github.com/mxsm/rocketmq-rust/issues/10604)).
