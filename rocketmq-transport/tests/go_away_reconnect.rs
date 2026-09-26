@@ -345,7 +345,10 @@ fn expect_response(outcome: OutboundRequestOutcome) -> RemotingCommand {
 
 async fn shutdown(runtime: RuntimeContext, clients: &[Arc<TransportClient>]) {
     for client in clients {
-        client.shutdown();
+        assert!(
+            client.shutdown_with_report(Duration::from_secs(2)).await.is_healthy(),
+            "GO_AWAY client tasks must drain"
+        );
     }
     let report = runtime.shutdown_tasks(Duration::from_secs(2)).await;
     report.assert_no_task_leak().expect("GO_AWAY lifecycle tasks");

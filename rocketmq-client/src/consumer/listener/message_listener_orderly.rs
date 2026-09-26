@@ -49,13 +49,14 @@ use crate::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
 /// ```rust
 /// use rocketmq_client_rust::ConsumeOrderlyContext;
 /// use rocketmq_client_rust::ConsumeOrderlyStatus;
+/// use rocketmq_client_rust::ClientResult;
 /// use rocketmq_client_rust::MessageListenerOrderly;
 /// use rocketmq_model::common::message::message_ext::MessageExt;
 ///
 /// // Closures automatically implement MessageListenerOrderly
 /// let listener = |msgs: &[&MessageExt],
 ///                 context: &mut ConsumeOrderlyContext|
-///  -> crate::ClientResult<ConsumeOrderlyStatus> {
+///  -> ClientResult<ConsumeOrderlyStatus> {
 ///     for msg in msgs {
 ///         println!("Processing message in order: {:?}", msg.msg_id());
 ///     }
@@ -72,7 +73,7 @@ use crate::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
 ///         &self,
 ///         msgs: &[&MessageExt],
 ///         context: &mut ConsumeOrderlyContext,
-///     ) -> crate::ClientResult<ConsumeOrderlyStatus> {
+///     ) -> ClientResult<ConsumeOrderlyStatus> {
 ///         // Process messages sequentially
 ///         context.set_auto_commit(false);
 ///         Ok(ConsumeOrderlyStatus::Success)

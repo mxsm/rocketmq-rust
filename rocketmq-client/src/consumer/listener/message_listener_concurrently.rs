@@ -44,13 +44,14 @@ use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyS
 /// ```rust
 /// use rocketmq_client_rust::ConsumeConcurrentlyContext;
 /// use rocketmq_client_rust::ConsumeConcurrentlyStatus;
+/// use rocketmq_client_rust::ClientResult;
 /// use rocketmq_client_rust::MessageListenerConcurrently;
 /// use rocketmq_model::common::message::message_ext::MessageExt;
 ///
 /// // Closures automatically implement MessageListenerConcurrently
 /// let listener = |msgs: &[&MessageExt],
 ///                 _context: &ConsumeConcurrentlyContext|
-///  -> crate::ClientResult<ConsumeConcurrentlyStatus> {
+///  -> ClientResult<ConsumeConcurrentlyStatus> {
 ///     for msg in msgs {
 ///         println!("Processing message: {:?}", msg.msg_id());
 ///     }
@@ -65,7 +66,7 @@ use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyS
 ///         &self,
 ///         msgs: &[&MessageExt],
 ///         context: &ConsumeConcurrentlyContext,
-///     ) -> crate::ClientResult<ConsumeConcurrentlyStatus> {
+///     ) -> ClientResult<ConsumeConcurrentlyStatus> {
 ///         // Process messages
 ///         Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
 ///     }

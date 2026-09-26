@@ -145,10 +145,7 @@ async fn expired_before_send_has_zero_remote_side_effects() {
         .expect_err("expired request must not enter the writer");
 
     assert_eq!(error.code(), rocketmq_error::CORE_OPERATION_TIMED_OUT.code());
-    assert_eq!(
-        error.context().to_string(),
-        "operation=transport_before_send, timeout_ms=10"
-    );
+    assert_eq!(error.context().to_string(), "operation=<redacted>, timeout_ms=10");
     tokio::task::yield_now().await;
     assert_eq!(side_effects.load(Ordering::SeqCst), 0);
 
@@ -284,10 +281,7 @@ async fn queued_request_expiry_is_reported_before_send() {
         .expect_err("queued request must expire before socket write");
 
     assert_eq!(error.code(), rocketmq_error::CORE_OPERATION_TIMED_OUT.code());
-    assert_eq!(
-        error.context().to_string(),
-        "operation=transport_before_send, timeout_ms=50"
-    );
+    assert_eq!(error.context().to_string(), "operation=<redacted>, timeout_ms=50");
 
     session.task_group().cancel();
     assert!(first.await.expect("first send task").is_err());
@@ -347,7 +341,7 @@ async fn missing_response_uses_the_same_absolute_response_deadline() {
     assert_eq!(source.code(), rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code());
     assert_eq!(
         source.context().to_string(),
-        "phase=awaiting_response, timeout_ms=100, remote_addr=<redacted>"
+        "phase=<redacted>, timeout_ms=100, remote_addr=<redacted>, source_present=<redacted>"
     );
 
     let _ = release_tx.send(());
