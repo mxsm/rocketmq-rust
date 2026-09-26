@@ -81,7 +81,8 @@ async fn timed_out_counts_only_tasks_the_shutdown_deadline_aborted() {
     assert_eq!(report.aborted + report.leaked, 3, "{}", report.to_json());
 }
 
-#[tokio::test]
+// Two workers, so the woken task can run while shutdown is still marking groups.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_task_woken_by_shutdown_sees_its_group_closed() {
     let runtime = RuntimeContext::from_current("closed-after-cancellation");
     let group = runtime.service_context("closing-order").task_group().clone();
@@ -116,8 +117,7 @@ async fn lifecycle_states_are_observed_in_shutdown_order() {
         let group = group.clone();
         let stop = Arc::clone(&stop);
         std::thread::spawn(move || {
-            let mut observed = vec![group.lifecycle_state()];
-            while !stop.load(Ordering::Acquire) {
+            let observe = |observed: &mut Vec<TaskGroupLifecycleState>| {
                 let state = group.lifecycle_state();
                 if matches!(
                     state,
@@ -131,7 +131,15 @@ async fn lifecycle_states_are_observed_in_shutdown_order() {
                 if observed.last() != Some(&state) {
                     observed.push(state);
                 }
+            };
+            let mut observed = Vec::new();
+            observe(&mut observed);
+            while !stop.load(Ordering::Acquire) {
+                observe(&mut observed);
             }
+            // `stop` is set only after the shutdown returned, so this read
+            // sees its final state even if the thread slept through it.
+            observe(&mut observed);
             observed
         })
     };

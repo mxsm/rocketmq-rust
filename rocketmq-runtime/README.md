@@ -183,7 +183,9 @@ tagged in the owner's registry, so an idle operation costs a few hundred bytes.
 | `Poisoned` | A tracked task panicked while the group was open; new registration is rejected. |
 
 A shutdown moves a group through `Closing`, `Closed`, and `ShutdownCompleted`
-in that order, so a task woken by the shutdown already observes `Closed`.
+in that order. A closing group reports `Closed` as soon as its cancellation
+token is cancelled, so a task woken by the shutdown already observes `Closed`,
+even on another worker thread.
 Poisoning is fail-stop: the transition is logged once with the group path and
 counted in `TaskGroup::event_counts()`.
 

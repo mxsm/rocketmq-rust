@@ -1074,7 +1074,8 @@ impl TaskGroup {
     /// Moves the groups closed by this shutdown from `Closing` to `Closed`.
     ///
     /// Called after cancellation was broadcast, so a group observed as
-    /// `Closed` has a cancelled token.
+    /// `Closed` has a cancelled token. Readers already see `Closed` once the
+    /// token is cancelled; this stores the state they derive.
     fn mark_closed(&self, descendants: &[TaskGroup]) {
         for group in descendants.iter().chain(std::iter::once(self)) {
             let _ = group.inner.lifecycle.compare_exchange(
@@ -1216,6 +1217,11 @@ impl TaskGroupInner {
     fn lifecycle_state(&self) -> TaskGroupLifecycleState {
         match self.lifecycle.load(Ordering::Acquire) {
             STATE_OPEN => TaskGroupLifecycleState::Open,
+            // Shutdown cancels the whole tree before `mark_closed` stores
+            // `Closed`. Deriving `Closed` from the cancelled token closes that
+            // window, so a task woken by the cancellation on another worker
+            // never observes `Closing`.
+            STATE_CLOSING if self.cancellation_token.is_cancelled() => TaskGroupLifecycleState::Closed,
             STATE_CLOSING => TaskGroupLifecycleState::Closing,
             STATE_CLOSED => TaskGroupLifecycleState::Closed,
             STATE_SHUTDOWN_COMPLETED => TaskGroupLifecycleState::ShutdownCompleted,
@@ -1304,5 +1310,32 @@ impl TaskMeta {
             state: override_state,
             elapsed: self.started_at.elapsed(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::RuntimeContext;
+
+    #[tokio::test]
+    async fn a_closing_group_reports_closed_as_soon_as_its_token_is_cancelled() {
+        let context = RuntimeContext::from_current("closing-then-cancelled");
+        let group = context.service_context("owner").task_group().clone();
+        let child = group.try_child("child").unwrap();
+
+        // Replay the shutdown steps one at a time, stopping in the window
+        // between the cancellation broadcast and `mark_closed`.
+        let descendants = group.close_admission_tree();
+        assert_eq!(group.lifecycle_state(), TaskGroupLifecycleState::Closing);
+        assert_eq!(child.lifecycle_state(), TaskGroupLifecycleState::Closing);
+        group.inner.cancellation_token.cancel();
+        assert_eq!(group.lifecycle_state(), TaskGroupLifecycleState::Closed);
+        assert_eq!(child.lifecycle_state(), TaskGroupLifecycleState::Closed);
+
+        group.mark_closed(&descendants);
+        assert_eq!(group.lifecycle_state(), TaskGroupLifecycleState::Closed);
+        assert!(group.shutdown(Duration::from_secs(1)).await.is_healthy());
+        assert_eq!(group.lifecycle_state(), TaskGroupLifecycleState::ShutdownCompleted);
     }
 }

@@ -995,8 +995,10 @@ async fn scheduled_fixed_rate_allows_overlap_and_reports_overlap_metrics() {
     let scheduled = service.scheduled_tasks("scheduled");
     let config = ScheduledTaskConfig::fixed_rate("overlap-task", Duration::from_millis(10));
 
-    // Up to six runs overlap at this rate; a bound of eight never skips.
-    let policy = ScheduledExecutionPolicy::bounded(NonZeroUsize::new(8).unwrap(), MissedTickPolicy::Skip);
+    // About five runs overlap at this rate. A stalled test thread wakes to
+    // several overdue ticks at once, and ticks beyond the free slots are
+    // skipped; with this bound a skip needs a stall of about five seconds.
+    let policy = ScheduledExecutionPolicy::bounded(NonZeroUsize::new(512).unwrap(), MissedTickPolicy::Skip);
     scheduled
         .schedule(config, policy, || async {
             tokio::time::sleep(Duration::from_millis(50)).await;
