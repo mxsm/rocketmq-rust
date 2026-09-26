@@ -23,13 +23,13 @@ use crate::task_group::TaskId;
 use crate::task_group::TaskKind;
 use crate::task_group::TaskState;
 
-#[derive(Debug, Serialize)]
 /// Represents shutdown report.
+#[derive(Debug, Serialize)]
 pub struct ShutdownReport {
     /// The name value.
     pub name: String,
-    #[serde(with = "duration_millis")]
     /// The elapsed value.
+    #[serde(with = "duration_millis")]
     pub elapsed: Duration,
     /// The completed value.
     pub completed: usize,
@@ -164,8 +164,8 @@ impl ShutdownReport {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
 /// Represents task snapshot.
+#[derive(Debug, Clone, Serialize)]
 pub struct TaskSnapshot {
     /// The id identifier.
     pub id: TaskId,
@@ -179,8 +179,8 @@ pub struct TaskSnapshot {
     pub kind: TaskKind,
     /// The state value.
     pub state: TaskState,
-    #[serde(with = "duration_millis")]
     /// The elapsed value.
+    #[serde(with = "duration_millis")]
     pub elapsed: Duration,
     /// Whether detached.
     pub detached: bool,
@@ -188,8 +188,8 @@ pub struct TaskSnapshot {
     pub detached_policy: Option<DetachedTaskPolicy>,
 }
 
-#[derive(Debug, Clone, Serialize)]
 /// Represents shutdown annotation.
+#[derive(Debug, Clone, Serialize)]
 pub struct ShutdownAnnotation {
     /// The message value.
     pub message: String,
