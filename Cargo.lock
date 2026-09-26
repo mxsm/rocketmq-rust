@@ -1899,7 +1899,7 @@ dependencies = [
  "idna",
  "ipnet",
  "jni",
- "rand 0.10.2",
+ "rand 0.10.3",
  "thiserror 2.0.20",
  "tinyvec",
  "tokio",
@@ -1919,7 +1919,7 @@ dependencies = [
  "jni",
  "once_cell",
  "prefix-trie",
- "rand 0.10.2",
+ "rand 0.10.3",
  "ring",
  "thiserror 2.0.20",
  "tinyvec",
@@ -1944,7 +1944,7 @@ dependencies = [
  "ndk-context",
  "once_cell",
  "parking_lot",
- "rand 0.10.2",
+ "rand 0.10.3",
  "resolv-conf",
  "smallvec",
  "system-configuration",
@@ -2999,7 +2999,7 @@ dependencies = [
  "openraft-rt",
  "openraft-rt-tokio",
  "peel-off",
- "rand 0.10.2",
+ "rand 0.10.3",
  "serde",
  "smallvec",
  "thiserror 2.0.20",
@@ -3030,7 +3030,7 @@ dependencies = [
  "futures-util",
  "openraft-macros",
  "pin-project-lite",
- "rand 0.10.2",
+ "rand 0.10.3",
 ]
 
 [[package]]
@@ -3041,7 +3041,7 @@ checksum = "6d8c01f2a456a864282bc4eaf76f1f78ab040d80416fd30fd15b8ab88faa337a"
 dependencies = [
  "futures-util",
  "openraft-rt",
- "rand 0.10.2",
+ "rand 0.10.3",
  "tokio",
 ]
 
@@ -3777,7 +3777,7 @@ dependencies = [
  "bytes",
  "getrandom 0.4.3",
  "lru-slab",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rand_pcg",
  "ring",
  "rustc-hash",
@@ -3852,9 +3852,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.2"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7f5fa3a058cd35567ef9bfa5e75732bee0f9e4c55fa90477bef2dfcdbc4be80"
+checksum = "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
 dependencies = [
  "chacha20",
  "getrandom 0.4.3",
@@ -4292,7 +4292,7 @@ dependencies = [
  "local-ip-address",
  "num_cpus",
  "parking_lot",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rocketmq-auth",
  "rocketmq-controller",
  "rocketmq-error",
@@ -4333,7 +4333,7 @@ dependencies = [
  "num_cpus",
  "parking_lot",
  "pkcs8",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rcgen",
  "rocketmq-auth",
  "rocketmq-error",
@@ -4562,7 +4562,7 @@ dependencies = [
  "itoa",
  "lz4_flex",
  "memchr",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rocketmq-error",
  "rocketmq-macros",
  "rocketmq-model",
@@ -4750,7 +4750,7 @@ dependencies = [
  "libc",
  "memmap2",
  "parking_lot",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rayon",
  "rocketmq-error",
  "rocketmq-model",
@@ -4912,7 +4912,7 @@ dependencies = [
  "parking_lot",
  "pin-project-lite",
  "pkcs8",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rcgen",
  "reqwest",
  "rocketmq-error",
@@ -5654,7 +5654,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -6384,7 +6384,7 @@ dependencies = [
  "atomic",
  "getrandom 0.4.3",
  "js-sys",
- "rand 0.10.2",
+ "rand 0.10.3",
  "wasm-bindgen",
 ]
 
