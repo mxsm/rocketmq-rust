@@ -34,8 +34,8 @@ use crate::task_group::TaskGroup;
 use crate::task_group::TaskId;
 use crate::task_group::TaskKind;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 /// Identifies the schedule mode state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ScheduleMode {
     /// Represents the fixed delay case.
     FixedDelay,
@@ -101,8 +101,8 @@ impl ScheduledExecutionPolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 /// Identifies the scheduled task control state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ScheduledTaskControl {
     /// Represents the continue case.
     Continue,
@@ -122,8 +122,8 @@ pub enum ScheduledTaskRegistrationOutcome {
     AlreadyPresent,
 }
 
-#[derive(Debug, Clone)]
 /// Represents scheduled task config.
+#[derive(Debug, Clone)]
 pub struct ScheduledTaskConfig {
     /// The name value.
     pub name: String,
@@ -175,8 +175,8 @@ impl ScheduledTaskConfig {
     }
 }
 
-#[derive(Debug, Clone)]
 /// Represents scheduled task group.
+#[derive(Debug, Clone)]
 pub struct ScheduledTaskGroup {
     group: TaskGroup,
     schedules: Arc<DashMap<Arc<str>, Arc<ScheduledTaskMetrics>>>,
@@ -221,8 +221,8 @@ struct ScheduledTaskMetrics {
     max_elapsed_ms: AtomicU64,
 }
 
-#[derive(Debug, Clone, Serialize)]
 /// Represents scheduled task snapshot.
+#[derive(Debug, Clone, Serialize)]
 pub struct ScheduledTaskSnapshot {
     /// The name value.
     pub name: String,
