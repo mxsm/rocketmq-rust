@@ -80,7 +80,6 @@ struct StartupRuntimeOverrides {
     max_blocking_threads: Option<usize>,
 }
 
-
 const LOGO: &str = r#"
       _____            _        _   __  __  ____         _____           _     _   _                         _____
      |  __ \          | |      | | |  \/  |/ __ \       |  __ \         | |   | \ | |                       / ____|
@@ -143,10 +142,9 @@ fn try_main() -> Result<()> {
         return Ok(());
     }
 
-    let args=Args::parse();
+    let args = Args::parse();
 
-    let runtime_config = namesrv_runtime_config(&args)
-        .context("failed to resolve namesrv runtime configuration")?;
+    let runtime_config = namesrv_runtime_config(&args).context("failed to resolve namesrv runtime configuration")?;
 
     let owner = RuntimeOwner::plan(runtime_config)
         .context("invalid NameServer runtime configuration")?
@@ -185,7 +183,7 @@ fn try_main() -> Result<()> {
 }
 
 fn namesrv_runtime_config(args: &Args) -> Result<RuntimeConfig> {
-    let mut runtime_config=RuntimeConfig::namesrv_default();
+    let mut runtime_config = RuntimeConfig::namesrv_default();
 
     let Some(config_file) = args.config_file.clone() else {
         return Ok(runtime_config);
@@ -195,7 +193,7 @@ fn namesrv_runtime_config(args: &Args) -> Result<RuntimeConfig> {
         bail!("Config file does not exist or is not a file: {:?}", config_file);
     }
 
-    let overrides=Config::builder()
+    let overrides = Config::builder()
         .add_source(config::File::from(config_file.as_path()))
         .build()
         .map_err(|error| {
@@ -223,12 +221,13 @@ fn namesrv_runtime_config(args: &Args) -> Result<RuntimeConfig> {
         if let Some(max_blocking_threads) = runtime.max_blocking_threads {
             runtime_config = runtime_config
                 .with_max_blocking_threads(max_blocking_threads)
-                .map_err(|_| anyhow::anyhow!("runtime.maxBlockingThreads must be within the supported range (3..=512)"))?;
+                .map_err(|_| {
+                    anyhow::anyhow!("runtime.maxBlockingThreads must be within the supported range (3..=512)")
+                })?;
         }
     }
 
     Ok(runtime_config)
-
 }
 
 async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle, args: Args) -> Result<()> {
@@ -1602,7 +1601,7 @@ mod tests {
         let config = namesrv_runtime_config(&args).expect("runtime config should parse");
         assert_eq!(config.worker_threads, 2);
         assert_eq!(config.max_blocking_threads, 8);
-        assert_eq!(config.thread_name,"rocketmq-namesrv");
+        assert_eq!(config.thread_name, "rocketmq-namesrv");
         assert!(config.enable_io);
         assert!(config.enable_time);
     }
@@ -1616,7 +1615,7 @@ mod tests {
             r#"
             [runtime]
             workerThreads = 0
-            "#
+            "#,
         )
         .expect("write config file");
 
@@ -1633,10 +1632,7 @@ mod tests {
 
     #[test]
     fn namesrv_runtime_no_config_falls_back_to_defaults() {
-        let args = Args::try_parse_from([
-            std::ffi::OsStr::new("mqnamesrv")
-        ])
-        .expect("parse args");
+        let args = Args::try_parse_from([std::ffi::OsStr::new("mqnamesrv")]).expect("parse args");
 
         let config = namesrv_runtime_config(&args).expect("no config should use defaults");
         let defaults = RuntimeConfig::namesrv_default();
@@ -1656,7 +1652,7 @@ mod tests {
             &path,
             r#"
 
-            "#
+            "#,
         )
         .expect("write config file");
 
@@ -1685,7 +1681,7 @@ mod tests {
             &path,
             r#"
             [runti workerThreads = 4
-            "#
+            "#,
         )
         .expect("write config file");
 
