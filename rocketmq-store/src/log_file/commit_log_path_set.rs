@@ -24,6 +24,15 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
+/// Utilization gap, in parts per million, within which roots count as equally used.
+///
+/// Free space is sampled one root at a time while this process and its
+/// neighbours keep writing, so roots on one filesystem, or on similarly filled
+/// disks, never report exactly the same ratio. Ranking them by that noise would
+/// send consecutive segments to whichever root happened to sample lower;
+/// treating them as tied lets allocation rotate between them instead.
+const EQUAL_UTILIZATION_TOLERANCE_PPM: u128 = 10_000;
+
 /// Store I/O boundary used by deterministic failure tests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum StoreFaultPoint {
@@ -219,9 +228,14 @@ impl CommitLogPathSet {
         Ok(owners)
     }
 
+    /// Returns the healthy writable roots that may receive a new segment, best first.
+    ///
+    /// Roots used within [`EQUAL_UTILIZATION_TOLERANCE_PPM`] of the least-used
+    /// root come first, rotating from the root after the last selected one;
+    /// the others follow in order of utilization.
     pub(crate) fn creation_candidates(&self, point: StoreFaultPoint) -> io::Result<Vec<PathBuf>> {
         let state = self.state.lock();
-        let mut candidates = self
+        let candidates = self
             .roots
             .iter()
             .enumerate()
@@ -250,10 +264,7 @@ impl CommitLogPathSet {
         }
 
         let start = state.last_selected.map_or(0, |last| (last + 1) % self.roots.len());
-        candidates.sort_by_key(|(ratio, index, path)| {
-            (*ratio, rotation_distance(*index, start, self.roots.len()), path.clone())
-        });
-        Ok(candidates.into_iter().map(|(_, _, root)| root).collect())
+        Ok(order_candidates(candidates, start, self.roots.len()))
     }
 
     pub(crate) fn record_selected(&self, root: &Path) {
@@ -282,6 +293,24 @@ impl CommitLogPathSet {
         path.parent()
             .is_some_and(|root| self.fault_injector.should_fail(point, root))
     }
+}
+
+/// Orders `(utilization_ppm, root_index, root)` candidates for allocation.
+///
+/// Candidates within the equal-utilization tolerance of the least-used one
+/// share rank zero and are ordered by rotation from `start`; the others are
+/// ranked by utilization.
+fn order_candidates(mut candidates: Vec<(u128, usize, PathBuf)>, start: usize, root_count: usize) -> Vec<PathBuf> {
+    let least_used = candidates.iter().map(|(ratio, _, _)| *ratio).min().unwrap_or_default();
+    candidates.sort_by_key(|(ratio, index, path)| {
+        let rank = if *ratio <= least_used + EQUAL_UTILIZATION_TOLERANCE_PPM {
+            0
+        } else {
+            *ratio
+        };
+        (rank, rotation_distance(*index, start, root_count), path.clone())
+    });
+    candidates.into_iter().map(|(_, _, root)| root).collect()
 }
 
 fn rotation_distance(index: usize, start: usize, len: usize) -> usize {
@@ -322,6 +351,21 @@ mod tests {
         assert_eq!(rotation_distance(1, 1, 3), 0);
         assert_eq!(rotation_distance(2, 1, 3), 1);
         assert_eq!(rotation_distance(0, 1, 3), 2);
+    }
+
+    #[test]
+    fn near_equal_utilization_rotates_instead_of_following_sampling_noise() {
+        let first = PathBuf::from("a");
+        let second = PathBuf::from("b");
+        // Two roots on one filesystem, where `b` happened to sample lower.
+        let noisy =
+            || -> Vec<(u128, usize, PathBuf)> { vec![(500_003, 0, first.clone()), (500_000, 1, second.clone())] };
+        assert_eq!(order_candidates(noisy(), 0, 2), vec![first.clone(), second.clone()]);
+        assert_eq!(order_candidates(noisy(), 1, 2), vec![second.clone(), first.clone()]);
+
+        // A clearly less-used root still comes first whatever the rotation says.
+        let skewed = vec![(500_000, 0, first.clone()), (400_000, 1, second.clone())];
+        assert_eq!(order_candidates(skewed, 0, 2), vec![second, first]);
     }
 
     #[test]
