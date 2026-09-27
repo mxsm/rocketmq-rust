@@ -496,9 +496,13 @@ impl CommitLogAppendProcessor {
                 ha_service.get_wait_notify_object().notify_waiters();
             }
         }
+        // Release each request's admission permit before its result wakes the
+        // caller. A caller that submits its next append after receiving this
+        // result must never find its own reservation still held, or a
+        // closed-loop producer at queue capacity is rejected as saturated.
         for (completion, permit) in completions.into_iter().zip(permits) {
-            completion.complete();
             drop(permit);
+            completion.complete();
         }
     }
 
