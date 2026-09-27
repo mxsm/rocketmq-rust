@@ -126,6 +126,17 @@ cargo run -p rocketmq-namesrv --bin rocketmq-namesrv-rust -- \
   -c rocketmq-namesrv/resource/namesrv-production.toml
 ```
 
+# Startup-only Tokio runtime overrides
+
+When starting `rocketmq-namesrv-rust` with `--configFile`, you can optionally tune
+the process Tokio runtime through a `[runtime]` section:
+
+```toml
+[runtime]
+workerThreads = 2
+maxBlockingThreads = 8
+```
+
 Print the merged configuration and exit:
 
 ```bash

@@ -68,6 +68,19 @@ use rocketmq_transport::api::TransportClientConfig;
 use serde::Deserialize;
 use tracing::info;
 
+#[derive(Debug, Default, Deserialize)]
+struct StartupRuntimeFileOverrides {
+    runtime: Option<StartupRuntimeOverrides>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StartupRuntimeOverrides {
+    worker_threads: Option<usize>,
+    max_blocking_threads: Option<usize>,
+}
+
+
 const LOGO: &str = r#"
       _____            _        _   __  __  ____         _____           _     _   _                         _____
      |  __ \          | |      | | |  \/  |/ __ \       |  __ \         | |   | \ | |                       / ____|
@@ -129,15 +142,21 @@ fn try_main() -> Result<()> {
     if print_release_version_if_requested("rocketmq-namesrv-rust") {
         return Ok(());
     }
-    let owner = RuntimeOwner::plan(namesrv_runtime_config())
-        .expect("namesrv runtime profile is internally valid")
+
+    let args=Args::parse();
+
+    let runtime_config = namesrv_runtime_config(&args)
+        .context("failed to resolve namesrv runtime configuration")?;
+
+    let owner = RuntimeOwner::plan(runtime_config)
+        .context("invalid NameServer runtime configuration")?
         .build()
         .context("failed to build namesrv runtime")?;
     let service_context = owner.root_context().component("rocketmq-namesrv-runtime");
     let lifecycle =
         ServiceLifecycle::from_env("rocketmq-namesrv").context("invalid NameServer lifecycle configuration")?;
 
-    let run_result = owner.block_on(run(service_context, lifecycle.clone()));
+    let run_result = owner.block_on(run(service_context, lifecycle.clone(), args));
     if run_result.is_err() {
         lifecycle.mark_failed();
     }
@@ -165,14 +184,54 @@ fn try_main() -> Result<()> {
     }
 }
 
-fn namesrv_runtime_config() -> RuntimeConfig {
-    RuntimeConfig::namesrv_default()
+fn namesrv_runtime_config(args: &Args) -> Result<RuntimeConfig> {
+    let mut runtime_config=RuntimeConfig::namesrv_default();
+
+    let Some(config_file) = args.config_file.clone() else {
+        return Ok(runtime_config);
+    };
+
+    if !config_file.exists() || !config_file.is_file() {
+        bail!("Config file does not exist or is not a file: {:?}", config_file);
+    }
+
+    let overrides=Config::builder()
+        .add_source(config::File::from(config_file.as_path()))
+        .build()
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "failed to build NameServer runtime configuration: {}",
+                parse_config_file::render_safe_config_error(&error)
+            )
+        })?
+        .try_deserialize::<StartupRuntimeFileOverrides>()
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "failed to deserialize NameServer startup runtime configuration: {}",
+                parse_config_file::render_safe_config_error(&error)
+            )
+        })?;
+
+    if let Some(runtime) = overrides.runtime {
+        if let Some(worker_threads) = runtime.worker_threads {
+            if worker_threads == 0 {
+                bail!("runtime.workerThreads must be greater than 0");
+            }
+            runtime_config.worker_threads = worker_threads;
+        }
+
+        if let Some(max_blocking_threads) = runtime.max_blocking_threads {
+            runtime_config = runtime_config
+                .with_max_blocking_threads(max_blocking_threads)
+                .map_err(|_| anyhow::anyhow!("runtime.maxBlockingThreads must be within the supported range (3..=512)"))?;
+        }
+    }
+
+    Ok(runtime_config)
+
 }
 
-async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> Result<()> {
-    // Parse command line arguments first
-    let args = Args::parse();
-
+async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle, args: Args) -> Result<()> {
     initialize_remoting_defaults(CURRENT_VERSION as i32)
         .context("failed to initialize the immutable NameServer remoting defaults")?;
 
@@ -1517,5 +1576,129 @@ mod tests {
             .expect_err("unknown durable keys must prevent startup");
 
         assert!(error.to_string().contains("unknown durable"));
+    }
+
+    #[test]
+    fn namesrv_runtime_applies_runtime_overrides() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("namesrv.toml");
+        std::fs::write(
+            &path,
+            r#"
+            [runtime]
+            workerThreads = 2
+            maxBlockingThreads = 8
+            "#,
+        )
+        .expect("write config file");
+
+        let args = Args::try_parse_from([
+            std::ffi::OsStr::new("mqnamesrv"),
+            std::ffi::OsStr::new("--configFile"),
+            path.as_os_str(),
+        ])
+        .expect("parse args");
+
+        let config = namesrv_runtime_config(&args).expect("runtime config should parse");
+        assert_eq!(config.worker_threads, 2);
+        assert_eq!(config.max_blocking_threads, 8);
+        assert_eq!(config.thread_name,"rocketmq-namesrv");
+        assert!(config.enable_io);
+        assert!(config.enable_time);
+    }
+
+    #[test]
+    fn namesrv_runtime_config_rejects_zero_worker_threads() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("namesrv.toml");
+        std::fs::write(
+            &path,
+            r#"
+            [runtime]
+            workerThreads = 0
+            "#
+        )
+        .expect("write config file");
+
+        let args = Args::try_parse_from([
+            std::ffi::OsStr::new("mqnamesrv"),
+            std::ffi::OsStr::new("--configFile"),
+            path.as_os_str(),
+        ])
+        .expect("parse args");
+
+        let error = namesrv_runtime_config(&args).expect_err("invalid workerThreads must fail");
+        assert!(error.to_string().contains("runtime.workerThreads"));
+    }
+
+    #[test]
+    fn namesrv_runtime_no_config_falls_back_to_defaults() {
+        let args = Args::try_parse_from([
+            std::ffi::OsStr::new("mqnamesrv")
+        ])
+        .expect("parse args");
+
+        let config = namesrv_runtime_config(&args).expect("no config should use defaults");
+        let defaults = RuntimeConfig::namesrv_default();
+
+        assert_eq!(config.worker_threads, defaults.worker_threads);
+        assert_eq!(config.max_blocking_threads, defaults.max_blocking_threads);
+        assert_eq!(config.thread_name, "rocketmq-namesrv");
+        assert!(config.enable_io);
+        assert!(config.enable_time);
+    }
+
+    #[test]
+    fn namesrv_runtime_config_without_runtime_section_falls_back_to_defaults() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("namesrv.toml");
+        std::fs::write(
+            &path,
+            r#"
+
+            "#
+        )
+        .expect("write config file");
+
+        let args = Args::try_parse_from([
+            std::ffi::OsStr::new("mqnamesrv"),
+            std::ffi::OsStr::new("--configFile"),
+            path.as_os_str(),
+        ])
+        .expect("parse args");
+
+        let config = namesrv_runtime_config(&args).expect("missing [runtime] should use defaults");
+        let defaults = RuntimeConfig::namesrv_default();
+
+        assert_eq!(config.worker_threads, defaults.worker_threads);
+        assert_eq!(config.max_blocking_threads, defaults.max_blocking_threads);
+        assert_eq!(config.thread_name, "rocketmq-namesrv");
+        assert!(config.enable_io);
+        assert!(config.enable_time);
+    }
+
+    #[test]
+    fn namesrv_runtime_malformed_config_fails() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("namesrv.toml");
+        std::fs::write(
+            &path,
+            r#"
+            [runti workerThreads = 4
+            "#
+        )
+        .expect("write config file");
+
+        let args = Args::try_parse_from([
+            std::ffi::OsStr::new("mqnamesrv"),
+            std::ffi::OsStr::new("--configFile"),
+            path.as_os_str(),
+        ])
+        .expect("parse args");
+
+        let error = namesrv_runtime_config(&args).expect_err("malformed config should fail");
+        let msg = error.to_string();
+        assert!(msg.contains("failed to build NameServer runtime configuration"));
+        assert!(error.to_string().contains("configuration file parse failed"));
     }
 }

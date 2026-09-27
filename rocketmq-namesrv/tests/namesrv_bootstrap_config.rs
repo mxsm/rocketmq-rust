@@ -73,3 +73,34 @@ fn namesrv_without_listen_port_override_reports_9876() {
         "NameServer should default to port 9876\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
 }
+
+#[test]
+fn namesrv_runtime_startup_override_invalid_values_fail_without_panic() {
+    let root = tempfile::tempdir().expect("create isolated NameServer config root");
+    let config_path = root.path().join("namesrv-invalid-runtime.toml");
+    let rocketmq_home = root.path().to_string_lossy().replace('\\',"/");
+    let config_store_path = root
+        .path()
+        .join("namesrv.properties")
+        .to_string_lossy()
+        .replace('\\',"/");
+
+    std::fs::write(
+        &config_path,
+        format!(
+            "rocketmqHome = \"{rocketmq_home}\"\nconfigStorePath = \"{config_store_path}\"\n[runtime]\nmaxBlockingThreads = 2\n"
+        ),
+    )
+    .expect("write invalid config");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rocketmq-namesrv-rust"))
+        .arg("--configFile")
+        .arg(&config_path)
+        .arg("--printConfigItem")
+        .output()
+        .expect("run NameServer");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(),"startup must fail for invalid runtime settings");
+    assert!(!stderr.contains("panicked at"),"failure must be graceful, got:\n{stderr}");
+}

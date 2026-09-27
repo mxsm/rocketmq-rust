@@ -104,3 +104,17 @@ deleteTopicWithBrokerRegistration = false
 # Configuration blacklist (properties that won't be persisted)
 # Default: "configBlackList;configStorePath;kvConfigPath"
 configBlackList = "configBlackList;configStorePath;kvConfigPath"
+
+# Optional startup-only Tokio runtime overrides (applies only at process start).
+# These are NOT remotely mutable through UpdateNamesrvConfig.
+#
+# workerThreads:
+#   default = derived from available parallelism (fallback 4)
+#   valid   = > 0
+#
+# maxBlockingThreads:
+#   default = RuntimeConfig::namesrv_default() derived value
+#   valid   = 3..=512
+[runtime]
+workerThreads = 2
+maxBlockingThreads = 8
