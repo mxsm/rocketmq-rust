@@ -18,29 +18,40 @@ persistence, and shutdown diagnostics.
 
 Production entrypoints own a `RuntimeOwner`. Libraries receive a
 `ChildServiceContext` or a narrower capability such as `TaskSpawner`; they do
-not discover or construct an independent runtime. The task ownership tree
-tracks work through shutdown. The resource-budget tree accounts for explicitly
-reserved resources; it is separate from the task tree.
+not discover or construct an independent runtime. Tasks submitted through these
+capabilities belong to a task ownership tree that is tracked through shutdown.
+The resource-budget tree accounts for explicitly reserved resources separately.
 
 ```mermaid
 flowchart TD
     Entry["Application entrypoint"] --> Owner["RuntimeOwner"]
-    Owner --> Root["RootServiceContext"]
-    Root --> Service["ChildServiceContext"]
-    Service --> Group["Component TaskGroup"]
-    Group --> Tasks["Service and operation tasks"]
-    Service --> Scheduled["ScheduledTaskGroup"]
-    Scheduled --> Jobs["Tracked drivers and runs"]
-    Root --> Blocking["Shared blocking lanes and global admission budget"]
-    Service -.-> Blocking
-    Owner --> Resources["RuntimeResources / process budget"]
-    Resources --> Budgets["Component resource budgets and permits"]
-    Group --> Report["ShutdownReport"]
-    Blocking --> Report
-    Service --> Diagnostics["Diagnostics snapshot / sanitized V1 view"]
+    Owner --> Root["RootServiceContext<br/>root TaskGroup"]
+    Root --> A["ChildServiceContext A<br/>component TaskGroup A"]
+    Root --> B["ChildServiceContext B<br/>sibling TaskGroup B"]
+    A --> A1["ChildServiceContext A.1<br/>child component TaskGroup"]
+    A1 --> A2["ChildServiceContext A.1.1<br/>another child component TaskGroup"]
+    A1 --> Tasks["Service and worker tasks<br/>TaskKind labels each task"]
+    A1 --> Operations["Operation tasks<br/>same component TaskGroup"]
+    A1 --> Scheduled["ScheduledTaskGroup<br/>child TaskGroup"]
+    Scheduled --> Driver["ScheduledDriver task"]
+    Scheduled --> Runs["ScheduledRun tasks"]
+    Root -.-> Blocking["Shared blocking lanes<br/>separate task registry"]
+    A1 -.->|scoped admission| Blocking
+    Owner -.-> Resources["RuntimeResources<br/>separate resource-budget tree"]
 ```
 
-This is the production composition path. `RuntimeContext` is a migration and
+Solid arrows show the context and task-group ownership path; dotted arrows show
+shared capabilities outside the task-group tree.
+
+Each `component(...)` call creates a child `TaskGroup` and returns a
+`ChildServiceContext` that can create further child components of the same kind;
+A, A.1, and A.1.1 illustrate that recursive relationship. A group may own both
+child groups and tasks. `TaskKind` classifies tasks rather than defining another
+tree level. `OperationContext` adds cancellation and a deadline to tasks in their
+existing component group; `scheduled_tasks(...)` creates a child group for its
+tracked driver and runs. Blocking lanes share a process-wide capacity and have
+their own task registry, while component scopes govern admission. Shutdown and
+diagnostics account for the owned subtree. `RuntimeContext` is a migration and
 test harness for an existing Tokio runtime.
 
 ## Core Architecture
