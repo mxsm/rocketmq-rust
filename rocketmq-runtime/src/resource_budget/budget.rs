@@ -35,8 +35,8 @@ use super::limit::BudgetLimit;
 use super::limit::FullPolicy;
 use super::limit::RateLimit;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 /// Represents budget snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BudgetSnapshot {
     /// The path value.
     pub path: Arc<str>,
@@ -60,8 +60,8 @@ pub struct BudgetSnapshot {
     pub closed_slow_consumer_count: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 /// A normal resource-budget admission rejection.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BudgetRejection {
     path: Arc<str>,
     exhausted_path: Arc<str>,
@@ -119,8 +119,8 @@ impl BudgetRejection {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 /// The result of an attempted permit rebind.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermitRebindOutcome {
     /// The permit now owns the target budget chain.
     Rebound,
@@ -206,8 +206,8 @@ impl ResourceBudgetTree {
     }
 }
 
-#[derive(Clone)]
 /// Represents resource budget.
+#[derive(Clone)]
 pub struct ResourceBudget {
     node: Arc<BudgetNode>,
     chain: Arc<[Arc<BudgetNode>]>,
