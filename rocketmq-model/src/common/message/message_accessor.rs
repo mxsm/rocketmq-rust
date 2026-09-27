@@ -274,3 +274,40 @@ impl MessageAccessor {
         new_message
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+
+    #[test]
+    fn clone_message_preserves_fields_and_copies_properties() {
+        let mut source = Message::default();
+        source.set_topic("topic".into());
+        source.set_body(Some(Bytes::from_static(b"body")));
+        source.set_flag(7);
+        source.put_property("key".into(), "value".into());
+        source.put_property("other".into(), "retained".into());
+
+        let cloned = MessageAccessor::clone_message(&source);
+        assert_eq!(cloned.topic(), source.topic());
+        assert_eq!(cloned.get_body(), source.get_body());
+        assert_eq!(cloned.get_flag(), source.get_flag());
+        assert_eq!(cloned.get_properties(), source.get_properties());
+
+        source.put_property("key".into(), "changed".into());
+        assert_eq!(cloned.property("key"), Some("value"));
+    }
+
+    #[test]
+    fn clone_message_without_body_retains_topic_and_properties() {
+        let mut source = Message::default();
+        source.set_topic("topic".into());
+        source.put_property("key".into(), "value".into());
+
+        let cloned = MessageAccessor::clone_message(&source);
+        assert_eq!(cloned.get_body(), None);
+        assert_eq!(cloned.topic(), source.topic());
+        assert_eq!(cloned.get_properties(), source.get_properties());
+    }
+}
