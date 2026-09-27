@@ -130,3 +130,43 @@ impl From<MessageFlag> for i32 {
         flag.0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::MessageFlag;
+
+    #[test]
+    fn named_flags_compose_and_preserve_other_bits() {
+        let combined = MessageFlag::COMPRESSED | MessageFlag::MULTI_TAGS;
+        assert!(combined.is_compressed());
+        assert!(combined.is_multi_tags());
+
+        let mut flags = MessageFlag::COMPRESSED;
+        flags |= MessageFlag::MULTI_TAGS;
+        assert_eq!(flags, combined);
+
+        flags.remove(MessageFlag::COMPRESSED);
+        assert_eq!(flags, MessageFlag::MULTI_TAGS);
+        flags.insert(MessageFlag::COMPRESSED);
+        assert_eq!(flags, combined);
+
+        let mask = MessageFlag::MULTI_TAGS | MessageFlag::TRANSACTION_PREPARED;
+        assert_eq!(flags & mask, MessageFlag::MULTI_TAGS);
+        flags &= mask;
+        assert_eq!(flags, MessageFlag::MULTI_TAGS);
+    }
+
+    #[test]
+    fn unknown_bits_survive_named_flag_changes_and_conversion() {
+        let unknown = 1 << 30;
+        let mut flags = MessageFlag::from_bits(unknown);
+        flags.insert(MessageFlag::COMPRESSED);
+        assert_eq!(flags.bits(), unknown | MessageFlag::COMPRESSED.bits());
+        flags.remove(MessageFlag::COMPRESSED);
+        assert_eq!(flags.bits(), unknown);
+
+        let raw = i32::from(flags);
+        assert_eq!(raw, unknown);
+        assert_eq!(MessageFlag::from(raw), flags);
+    }
+}
