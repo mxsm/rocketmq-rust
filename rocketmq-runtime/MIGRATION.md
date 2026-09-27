@@ -157,7 +157,8 @@ scheduled.schedule(
   `ShutdownReport::REMAINING_TASKS_LIMIT` (64) tasks and counts the rest in
   `remaining_tasks_omitted`; `leaked` still includes them.
 - A shutdown moves a group through `Closing`, `Closed` and `ShutdownCompleted`.
-  A task woken by the shutdown already observes `Closed`.
+  A closing group reports `Closed` as soon as its cancellation token is
+  cancelled, so a task woken by the shutdown already observes `Closed`.
 - Poisoning a group and answering a component request with a closed child each
   log a warning and increment `TaskGroup::event_counts()`; diagnostics
   snapshots carry the same counts in `events`.
@@ -172,10 +173,12 @@ scheduled.schedule(
   waiter. The Tokio blocking pool has `RuntimeConfig::tokio_blocking_threads()`
   threads: the managed capacity plus `max(2, capacity / 8)` for direct
   `spawn_blocking`, DNS resolution and `tokio::fs`.
-- Budget reservations are atomic along the ancestor chain. Near capacity, a
-  request that races with another request's rollback can be rejected although
-  the capacity is returned immediately afterwards; callers that retry on
-  rejection are unaffected.
+- Each budget level reserves count and bytes with atomic operations, and a
+  request that a later level rejects rolls back the levels it already
+  reserved, so no level exceeds its limit. The chain as a whole is not reserved
+  atomically: near capacity, a request that races with another request's
+  rollback can be rejected although the capacity is returned immediately
+  afterwards; callers that retry on rejection are unaffected.
 - `/drainz` accepts only `POST` by default and answers `GET` with `405` and
   `Allow: POST`. Kubernetes `preStop.httpGet` hooks set
   `ROCKETMQ_HEALTH_DRAIN_METHODS=GET,POST`; the repository charts and manifests

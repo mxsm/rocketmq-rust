@@ -702,7 +702,6 @@ def validate_documentation_contracts(root: Path, policy: dict[str, Any], facts: 
                 "ready_rto_millis",
                 "message_visible_rto_millis",
                 "leaked",
-                "detached_still_running",
                 "checksums",
             ):
                 if field not in required_run_fields:

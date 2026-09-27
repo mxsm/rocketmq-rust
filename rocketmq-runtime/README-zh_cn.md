@@ -157,8 +157,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `ShutdownCompleted` | 关闭报告已缓存供重复调用使用，但报告不一定健康。 |
 | `Poisoned` | 任务组开放期间发生受跟踪任务 panic，后续登记被拒绝。 |
 
-关闭按 `Closing`、`Closed`、`ShutdownCompleted` 的顺序推进，因此被关闭唤醒的任务
-看到的已经是 `Closed`。毒化保持 fail-stop：状态转换时输出一次带任务组路径的日志，
+关闭按 `Closing`、`Closed`、`ShutdownCompleted` 的顺序推进。正在关闭的任务组一旦取消令牌
+被取消就报告 `Closed`，因此被关闭唤醒的任务即使运行在其他工作线程上，看到的也已经是
+`Closed`。毒化保持 fail-stop：状态转换时输出一次带任务组路径的日志，
 并计入 `TaskGroup::event_counts()`。
 
 任务元数据在提交锁内登记，提交锁将登记与关闭状态转换串行化；释放提交锁之后才把任务
