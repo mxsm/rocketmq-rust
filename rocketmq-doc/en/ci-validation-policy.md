@@ -94,7 +94,6 @@ Full-workspace all-feature integration still runs on main and scheduled/manual r
 | `v1-functional-acceptance.yml` | Retain manual candidate handoff/qualification. |
 | `auto_approve_pull_requests.yml` | Remove nine-minute initial sleep and fifteen-minute polling; recheck on root CI completion or PR readiness events; honor required check names/apps and skipped contexts; approve only the checked commit. |
 | `auto_merge.yml` | Ignore unrelated label churn and cancel superseded attempts; keep merge label, approval count, and merge policy. |
-| `auto_request_review.yml` | Keep reviewer routing and cancel superseded runs. |
 | `auto-comment-pr.yml` | Remove unnecessary checkout from metadata-only automation. |
 | `remove-label-on-approve.yml` | Remove unnecessary checkout from metadata-only automation. |
 | `sync-issue-labels.yml` | Remove unnecessary checkout from metadata-only automation. |
