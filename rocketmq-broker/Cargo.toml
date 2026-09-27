@@ -112,8 +112,11 @@ futures = "0.3.32"
 [dev-dependencies]
 rocketmq-transport = { workspace = true, features = ["test-support"] }
 criterion            = { version = "0.8", features = ["html_reports"] }
-rocketmq-controller  = { workspace = true }
-rocketmq-namesrv     = { workspace = true }
+# Path-only on purpose: cargo drops path-only dev-dependencies when packaging.
+# A versioned entry must already be on crates.io, and cargo does not order
+# workspace publishing by dev-dependencies.
+rocketmq-controller  = { path = "../rocketmq-controller" }
+rocketmq-namesrv     = { path = "../rocketmq-namesrv" }
 tempfile             = "3.27.0"
 
 [[example]]
