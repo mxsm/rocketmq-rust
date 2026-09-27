@@ -88,10 +88,7 @@ Full-workspace all-feature integration still runs on main and scheduled/manual r
 | Retired M10 performance workflow | Removed frozen hardware/command inventories, fingerprints, and threshold gates; use maintained Cargo benchmarks when needed. |
 | `architecture-slo-evidence.yml` | Retain path-scoped static contracts; six-hour dynamic work was already scheduled/manual only. |
 | `kubernetes-fault-matrix.yml` | Retain path-scoped static checks; dynamic fault runs were already scheduled/manual only. |
-| `release-candidate.yml` | Retain explicit candidate preparation/build/qualification; not a routine PR gate. |
-| `core-service-image-publish.yml` | Retain manual local-candidate checks and remote-publication boundary. |
 | `service-image-publish.yml` | Retain release/manual publication, signatures, scanning, and immutable artifact checks. |
-| `v1-functional-acceptance.yml` | Retain manual candidate handoff/qualification. |
 | `auto_approve_pull_requests.yml` | Remove nine-minute initial sleep and fifteen-minute polling; recheck on root CI completion or PR readiness events; honor required check names/apps and skipped contexts; approve only the checked commit. |
 | `auto_merge.yml` | Ignore unrelated label churn and cancel superseded attempts; keep merge label, approval count, and merge policy. |
 | `auto-comment-pr.yml` | Remove unnecessary checkout from metadata-only automation. |
@@ -131,9 +128,9 @@ and job-dependency checks; all 22 changed workflows passed actionlint. The actua
 were exercised with a Cargo stub for default/all-feature selection, without compiling applications.
 The documentation guard and `git diff --check` passed.
 
-The pre-change full-repository actionlint baseline already reports the unlisted custom runner label
-`rocketmq-release-candidate` in `release-candidate.yml` and `v1-functional-acceptance.yml`.
-These unchanged workflows are outside this patch's successful changed-workflow lint check.
+The 1.0 release-candidate workflows (`release-candidate.yml`, `v1-functional-acceptance.yml`,
+and `core-service-image-publish.yml`) and the scheduled Core Release Short Checks job were
+retired later, together with their release-candidate scripts and tests.
 
 The existing container contract test reports `mcp_stdio entrypoint must use the shared lifecycle
 SIGINT/SIGTERM waiter`. Substituting the HEAD workflow into the same audit returns the identical
