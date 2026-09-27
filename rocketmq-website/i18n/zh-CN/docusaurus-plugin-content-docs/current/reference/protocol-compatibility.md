@@ -54,9 +54,9 @@ SQL 过滤同时依赖客户端选择器与 Broker 属性过滤支持。LitePull
 
 ## 已记录的核心范围与明确排除项
 
-[1.0 能力清单](https://github.com/mxsm/rocketmq-rust/blob/main/scripts/v1-capability-manifest.json)将 Apache RocketMQ `5.5.0` 记录为 Java 对照基线。每项能力有独立的 profile、兼容模式、实现状态、证据状态及测试引用。该声明不代表与所有 Java 版本或部署全面等价。
+1.0 核心范围以 Apache RocketMQ `5.5.0` 为 Java 对照基线。该基线不代表与所有 Java 版本或部署全面等价；每项能力仍有各自的 profile 与前提条件。
 
-清单明确排除 OpenMessaging、BrokerContainer 运行时/管理操作、DLedger CommitLog 及 Java Controller 内部协议。特别是，Controller 等价性通过纯 Rust 功能结果描述，而非 Java DLedger、JRaft、AutoSwitch 线协议或混合法定多数派兼容性。Broker 会拒绝 DLedger 配置，不会静默改选其他 HA 实现。
+1.0 核心范围明确排除 OpenMessaging、BrokerContainer 运行时/管理操作、DLedger CommitLog 及 Java Controller 内部协议。特别是，Controller 等价性通过纯 Rust 功能结果描述，而非 Java DLedger、JRaft、AutoSwitch 线协议或混合法定多数派兼容性。Broker 会拒绝 DLedger 配置，不会静默改选其他 HA 实现。
 
 [核心发行范围](https://github.com/mxsm/rocketmq-rust/blob/main/scripts/core-release-scope.json)对包分类并列出核心服务。它将 Dashboard、MCP、SRE 产品排除在核心发行范围之外；这些产品仍然存在，并需要独立文档与验证。标记为延期且没有证据的长期安全/并发及容量验证项，不能因为存在短期组件测试就被描述为已通过。
 

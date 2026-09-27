@@ -6,7 +6,7 @@ title: "Migrate from Java RocketMQ"
 
 Choose the migration boundary before changing a deployment. Replacing an application client, introducing a Rust Broker cluster, and moving stored data are different operations. This guide provides a procedure for an existing RocketMQ workload; it does not claim a universal in-place conversion of Java processes or data directories.
 
-The current capability manifest uses Java RocketMQ 5.5.0 as a comparison baseline and lists explicit exclusions. Read [protocol compatibility](../reference/protocol-compatibility.md) alongside your actual versions and workload. A baseline declaration is not evidence that every Java SDK version, Controller configuration or advanced message mode is interchangeable.
+The 1.0 core scope uses Java RocketMQ 5.5.0 as a comparison baseline and lists explicit exclusions. Read [protocol compatibility](../reference/protocol-compatibility.md) alongside your actual versions and workload. A baseline declaration is not evidence that every Java SDK version, Controller configuration or advanced message mode is interchangeable.
 
 ## Select the migration path
 
@@ -99,4 +99,4 @@ Preserve source configuration, recoverable data and the previous application art
 
 After switching, keep the normal operation records: exact versions, selected features/modes, configuration differences, tested scenarios, observed limitations and the owner of unresolved migration work. This makes a later incident diagnosable without claiming compatibility beyond the evidence.
 
-Sources: [capability scope](https://github.com/mxsm/rocketmq-rust/blob/main/scripts/v1-capability-manifest.json), [Broker entry point](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-broker/src/bin/broker_bootstrap_server.rs), [client public API](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/public_api.rs), [HA contracts](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-store-api/src/ha_contract.rs).
+Sources: [Broker entry point](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-broker/src/bin/broker_bootstrap_server.rs), [client public API](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/public_api.rs), [HA contracts](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-store-api/src/ha_contract.rs).

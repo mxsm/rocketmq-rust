@@ -31,32 +31,6 @@ env:
 
 
 jobs:
-  core-release-short-checks:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    name: Core Release Short Checks
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-
-      - name: Use repository Rust 1.95 toolchain
-        run: rustup show active-toolchain
-
-      - name: Validate core release routes
-        run: python -m unittest scripts.tests.test_core_release_check_routes
-
-      - name: Run core release short checks
-        run: bash scripts/run-core-release-checks.sh --phase 0 --run-id github-actions --attempt 1
-
-      - name: Run required semantic core release guards
-        run: python scripts/core_release_static_guard.py
-
   request-header-codec-contract:
     needs: check
     if: needs.check.outputs.header == 'true'

@@ -11,7 +11,7 @@ title: "测试策略与工程入口"
 | 单元与定向回归 | 局部状态转换、映射或校验是否正确？ | 所属包内联测试与 `tests/` 目标 | 不能证明完整集群路径 |
 | 确定性属性/状态测试 | 有界生成用例是否保持协议、存储或状态机不变量？ | `scripts/property-state-suite-registry.json` 与 `scripts/run_property_state_suites.py` | 用例覆盖有界，不是对所有输入的证明 |
 | 组件与生命周期 | 协作组件是否正确取消、排空并释放资源？ | Client 集成目标；Runtime 生命周期与编译失败测试 | 进程内对端不能重现所有网络/存储故障 |
-| 集群功能测试 | 已配置的客户端和服务能否完成预期消息路径？ | `scripts/run_client_broker_functional_tests.ps1` 与 `.github/workflows/v1-functional-acceptance.yml` | 记录实际拓扑、feature 选择及断言 |
+| 集群功能测试 | 已配置的客户端和服务能否完成预期消息路径？ | `scripts/run_client_broker_functional_tests.ps1` | 记录实际拓扑、feature 选择及断言 |
 | Java 互操作 | 所选客户端/服务端和 HA 组合是否保持指定语义？ | `scripts/interop/v1-interop-matrix.json` 与 `scripts/interop/run_v1_interop.py` | 矩阵指定 Java 5.5.0，并明确排除 Java Controller、Java AutoSwitchHA 与 DLedger CommitLog |
 | 存储与部署故障 | 崩溃、重启、副本丢失或发布中断后哪些状态仍然有效？ | `scripts/interop/v1-storage-fault-matrix.json`；`.github/workflows/kubernetes-fault-matrix.yml` | 需要隔离且可丢弃的状态及场景所需实际环境 |
 | Fuzz | 畸形或异常输入能否破坏解析/恢复不变量？ | 独立 `fuzz/` 工程与 `.github/workflows/fuzz-ci.yml` | 有限执行不能证明不存在缺陷 |

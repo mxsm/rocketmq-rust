@@ -54,9 +54,9 @@ For SQL filtering, both the client selector and Broker property-filter support m
 
 ## Recorded core scope and explicit exclusions
 
-The [1.0 capability manifest](https://github.com/mxsm/rocketmq-rust/blob/main/scripts/v1-capability-manifest.json) records Apache RocketMQ `5.5.0` as its Java comparison baseline. Each capability has its own profile, compatibility mode, implementation status, evidence status, and referenced tests. That declaration is not a blanket assertion of parity with every Java version or deployment.
+The 1.0 core scope uses Apache RocketMQ `5.5.0` as its Java comparison baseline. That baseline is not a blanket assertion of parity with every Java version or deployment; each capability keeps its own profile and conditions.
 
-The manifest explicitly excludes OpenMessaging, BrokerContainer runtime/admin operations, DLedger CommitLog, and Java Controller internal protocols. In particular, Controller parity is described through pure Rust functional outcomes, not Java DLedger, JRaft, AutoSwitch wire, or mixed quorum compatibility. Broker rejects DLedger configuration instead of quietly selecting a different HA implementation.
+The 1.0 core scope explicitly excludes OpenMessaging, BrokerContainer runtime/admin operations, DLedger CommitLog, and Java Controller internal protocols. In particular, Controller parity is described through pure Rust functional outcomes, not Java DLedger, JRaft, AutoSwitch wire, or mixed quorum compatibility. Broker rejects DLedger configuration instead of quietly selecting a different HA implementation.
 
 The [core release scope](https://github.com/mxsm/rocketmq-rust/blob/main/scripts/core-release-scope.json) classifies packages and identifies core services. It excludes the Dashboard, MCP and SRE products from that core release scope; those products still exist and need their own documentation and validation. Long-running security/concurrency and capacity qualification entries marked deferred with no evidence must not be represented as passed because short component tests exist.
 

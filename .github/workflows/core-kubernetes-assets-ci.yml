@@ -23,8 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Validate four-service local candidate boundary
+      - name: Validate four-service container and chart boundary
         run: |
-          python -m unittest scripts.tests.test_core_container_image_guard scripts.tests.test_package_core_helm
+          python -m unittest scripts.tests.test_core_container_image_guard
           python scripts/core_container_image_guard.py --policy docker/core-container-policy.json --chart distribution/helm/rocketmq-rust-core
-          python scripts/no_remote_publication_guard.py --phase 5 --static-only

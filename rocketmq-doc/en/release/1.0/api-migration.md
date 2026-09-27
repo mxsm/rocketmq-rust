@@ -366,9 +366,7 @@ return a complete immutable policy for the request lifetime.
 ## Feature-profile compatibility
 
 Validate the affected default, no-default, selected-feature, and combined-feature
-behavior using the owning crate's tests. The maintained `m09_compatibility_matrix.py`
-runner remains available for full release compatibility exercises across Protocol,
-Transport, Store, Admin, and Proxy; it is not a required snapshot refresh.
+behavior using the owning crate's tests.
 
 Notable 1.0 defaults include:
 

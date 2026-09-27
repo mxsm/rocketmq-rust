@@ -24,9 +24,8 @@ separate wrappers to enumerate tests, collect prototype reports, or compare hist
 | Refresh the generated validation index | `python scripts/architecture_documentation_guard.py --write` |
 | Inspect request-header compatibility fixtures | [Protocol fixtures](../rocketmq-protocol/tests/fixtures/request_header_codec/README.md) |
 | Generate Admin operation fixtures | [Golden fixture generator](generate_admin_operation_goldens.py) |
-| Build release candidates | [Release preparation](run-release-preparation.ps1) |
 
-Scripts used by workflows, release tooling, compatibility fixtures, or documented manual operations
+Scripts used by workflows, compatibility fixtures, or documented manual operations
 belong here. Keep one-time migration edits and ad hoc report converters out of the maintained toolset.
 Before removing a script, check imports, callers, workflow routes, fixture generators, and documentation;
 the absence of a CI invocation alone does not make a manual tool obsolete.
@@ -49,15 +48,22 @@ and benchmark targets when investigating behavior or performance.
 The completed M04-M09 migration suites have been retired, including source-text,
 fixed-layout, line-count, and exact-ledger assertions. Their `milestone_contract`
 runner tier is no longer available. Use the owning crate's behavior tests and the
-maintained dependency/API checks when those boundaries change. Release-script and
-dynamic-fixture regression suites remain available through the current CI routes.
+maintained dependency/API checks when those boundaries change. Dynamic-fixture
+regression suites remain available through the current CI routes.
 
 The completed Store capability and canonical-export source checks, Trait identity
 inventory, Rust lint debt inventory, and central debt count gate are also retired,
 including their dedicated tests and unused baselines. Keep regression tests for
-maintained CI routing, release tooling, generators, runtime/error checks, and
-compatibility behavior. Removing an obsolete gate includes its workflow calls,
-runner inventory entry, and documentation commands.
+maintained CI routing, generators, runtime/error checks, and compatibility behavior.
+Removing an obsolete gate includes its workflow calls, runner inventory entry, and
+documentation commands.
+
+The 1.0 release-candidate system is retired as well: the v1 capability, functional
+acceptance, candidate lifecycle, and phase-aware core release checks; the candidate,
+handoff, archive, SBOM, OCI layout, Helm, and crate staging tools under `distribution/`;
+and the `release-candidate`, `v1-functional-acceptance`, and `core-service-image-publish`
+workflows. Registry packages are prepared with Cargo directly. `core-release-scope.json`
+remains because the `--scope core-release` checks below read it.
 
 ## Necessary checks and architecture tools
 
@@ -79,6 +85,6 @@ Rust hygiene keeps safety failures and reports other observations without a base
 Runtime auditing now uses one cross-platform report generator; no fingerprints,
 per-file migration dispositions, or baseline-enforcement options remain.
 
-Keep operational tools for release packaging, fixture generation, container checks,
-interoperability, and live fault/soak testing. Select those tools for the corresponding
+Keep operational tools for fixture generation, container checks, interoperability,
+and live fault/soak testing. Select those tools for the corresponding
 task; they are not an additional routine development checklist.
