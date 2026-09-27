@@ -97,7 +97,11 @@ tonic-prost-build   = "0.14.6"
 
 [dev-dependencies]
 criterion          = { version = "0.8", features = ["async_tokio"] }
-rocketmq-client-rust = { workspace = true }
+# Path-only on purpose: cargo drops path-only dev-dependencies when packaging.
+# A versioned entry must already be on crates.io, and cargo does not order
+# workspace publishing by dev-dependencies. `default-features = false` matches
+# the `[workspace.dependencies]` entry.
+rocketmq-client-rust = { path = "../rocketmq-client", default-features = false }
 rocketmq-transport = { workspace = true, features = ["test-support"] }
 tempfile           = "3.27"
 tracing-subscriber = { workspace = true }

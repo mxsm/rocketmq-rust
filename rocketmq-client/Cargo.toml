@@ -77,7 +77,10 @@ hickory-resolver = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
-rocketmq-namesrv   = { workspace = true }
+# Path-only on purpose: cargo drops path-only dev-dependencies when packaging.
+# A versioned entry must already be on crates.io, and cargo does not order
+# workspace publishing by dev-dependencies.
+rocketmq-namesrv   = { path = "../rocketmq-namesrv" }
 rocketmq-transport = { workspace = true, features = ["socks", "test-support", "tls"] }
 criterion = { version = "0.8.2", features = ["async_tokio"] }
 pkcs8.workspace = true
