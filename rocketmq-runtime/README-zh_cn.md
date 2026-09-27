@@ -14,28 +14,36 @@
 ## 运行时模型
 
 生产应用入口拥有 `RuntimeOwner`。库接收 `ChildServiceContext` 或更窄的能力对象，
-例如 `TaskSpawner`，不自行查找或构建独立运行时。任务所有权树负责跟踪任务直到关闭；
-资源预算树负责核算显式申请的资源，两者是不同的树。
+例如 `TaskSpawner`，不自行查找或构建独立运行时。通过这些能力提交的任务属于
+任务所有权树，并在关闭期间受到跟踪。资源预算树单独核算显式申请的资源。
 
 ```mermaid
 flowchart TD
-    Entry["Application entrypoint"] --> Owner["RuntimeOwner"]
-    Owner --> Root["RootServiceContext"]
-    Root --> Service["ChildServiceContext"]
-    Service --> Group["Component TaskGroup"]
-    Group --> Tasks["Service and operation tasks"]
-    Service --> Scheduled["ScheduledTaskGroup"]
-    Scheduled --> Jobs["Tracked drivers and runs"]
-    Root --> Blocking["Shared blocking lanes and global admission budget"]
-    Service -.-> Blocking
-    Owner --> Resources["RuntimeResources / process budget"]
-    Resources --> Budgets["Component resource budgets and permits"]
-    Group --> Report["ShutdownReport"]
-    Blocking --> Report
-    Service --> Diagnostics["Diagnostics snapshot / sanitized V1 view"]
+    Entry["应用入口"] --> Owner["RuntimeOwner"]
+    Owner --> Root["RootServiceContext<br/>根 TaskGroup"]
+    Root --> A["ChildServiceContext A<br/>组件 TaskGroup A"]
+    Root --> B["ChildServiceContext B<br/>兄弟组件 TaskGroup B"]
+    A --> A1["ChildServiceContext A.1<br/>子组件 TaskGroup"]
+    A1 --> A2["ChildServiceContext A.1.1<br/>更深一层的子组件 TaskGroup"]
+    A1 --> Tasks["服务与工作任务<br/>TaskKind 为任务分类"]
+    A1 --> Operations["操作任务<br/>仍属同一组件 TaskGroup"]
+    A1 --> Scheduled["ScheduledTaskGroup<br/>子 TaskGroup"]
+    Scheduled --> Driver["ScheduledDriver 任务"]
+    Scheduled --> Runs["ScheduledRun 任务"]
+    Root -.-> Blocking["共享阻塞通道<br/>独立任务注册表"]
+    A1 -.->|按组件作用域准入| Blocking
+    Owner -.-> Resources["RuntimeResources<br/>独立的资源预算树"]
 ```
 
-图中展示生产环境的组装路径。`RuntimeContext` 是借用现有 Tokio 运行时的迁移与测试工具。
+实线表示上下文及任务组的所有权路径；虚线表示任务组树之外的共享能力。
+
+每次调用 `component(...)` 都会创建子 `TaskGroup`，并返回可继续创建同类子组件的
+`ChildServiceContext`；A、A.1 和 A.1.1 展示了这种递归关系。一个组既可以拥有子组，
+也可以直接拥有任务。`TaskKind` 只对任务分类，不构成新的树层级。
+`OperationContext` 为原组件组中的任务增加取消信号和截止时间；
+`scheduled_tasks(...)` 为受跟踪的驱动任务及执行任务创建子组。阻塞通道共享进程级
+容量，并有独立的任务注册表；组件作用域控制准入。关闭与诊断会统计所属子树。
+`RuntimeContext` 是借用现有 Tokio 运行时的迁移与测试工具。
 
 ## 核心架构
 
