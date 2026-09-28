@@ -149,8 +149,8 @@ impl From<BlockingExecutorSnapshot> for BlockingExecutorAggregate {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
 /// Represents blocking executor snapshot.
+#[derive(Debug, Clone, Serialize)]
 pub struct BlockingExecutorSnapshot {
     /// The name value.
     pub name: String,
@@ -189,8 +189,8 @@ pub struct BlockingExecutorSnapshot {
     pub tasks: Vec<BlockingTaskSnapshot>,
 }
 
-#[derive(Debug, Clone, Serialize)]
 /// Represents blocking task snapshot.
+#[derive(Debug, Clone, Serialize)]
 pub struct BlockingTaskSnapshot {
     /// The id identifier.
     pub id: BlockingTaskId,
