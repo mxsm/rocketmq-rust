@@ -144,6 +144,33 @@ cargo run -p rocketmq-namesrv --bin rocketmq-namesrv-rust -- \
 配置模型支持 Java 风格的 camelCase key；存在 serde alias 的字段也可使用
 Rust 风格字段名。
 
+### 仅启动时生效的 Tokio 运行时配置
+
+通过 `--configFile` 指定的文件可以包含可选的 `[runtime]` 配置节：
+
+```toml
+[runtime]
+workerThreads = 2
+maxBlockingThreads = 8
+```
+
+| 配置项 | 默认值 | 合法值 |
+| --- | --- | --- |
+| `workerThreads`（`worker_threads`） | 可用 CPU 并行度，获取失败时使用 4 | 正整数 |
+| `maxBlockingThreads`（`max_blocking_threads`） | 可用 CPU 并行度乘以 4，并限制在 3..=512 范围内；获取失败时使用 16 | 3 到 512 之间的整数，含两端 |
+
+未指定配置文件、未包含此配置节或省略某个配置项时，对应配置项保留默认值。
+仅覆盖 `workerThreads` 不会重新计算默认的阻塞线程上限。`[runtime]` 中存在未知配置项、
+同一字段同时使用 camelCase 名称和 snake_case 别名、TOML 格式错误或线程数无效时，
+启动会在构建运行时之前失败。
+
+这些配置控制进程运行时，独立于 `clientRequestThreadPoolNums` 等 NameServer 请求线程池配置。
+阻塞线程上限约束受管阻塞通道，Tokio 阻塞线程池仍保留运行时所需的额外线程余量。
+线程名称保持为 `rocketmq-namesrv`，I/O 驱动和时间驱动均保持启用。
+这些运行时配置仅在进程启动时生效，不能通过 `UpdateNamesrvConfig` 修改。
+
+### NameServer 配置项
+
 | Key | 默认值 | 作用 |
 | --- | ------ | ---- |
 | `rocketmqHome` | `ROCKETMQ_HOME` / `ROCKETMQ_HOME_PROPERTY` | Runtime 使用的 RocketMQ home 目录。 |
