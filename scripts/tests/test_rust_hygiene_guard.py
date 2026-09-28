@@ -300,7 +300,7 @@ fn fail() { boom!(); crash!(); nope!(); }
                 "fn orphan() { panic!(); unsafe {} }\n", encoding="utf-8"
             )
 
-            safety, debt = self.guard.scan_tree(root)
+            safety, debt = self.guard.scan_tree(crate / "..")
 
         self.assertEqual(1, len(safety))
         self.assertEqual(
