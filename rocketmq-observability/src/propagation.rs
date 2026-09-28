@@ -145,7 +145,7 @@ where
 
 #[cfg(feature = "otel-traces")]
 /// Extracts trace context when the explicit handle permits propagation.
-pub fn extract_context_with_handle<T>(handle: &crate::TelemetryHandle, properties: &T) -> opentelemetry::Context
+pub(crate) fn extract_context_with_handle<T>(handle: &crate::TelemetryHandle, properties: &T) -> opentelemetry::Context
 where
     T: MessagePropertiesLike + ?Sized,
 {
@@ -155,6 +155,31 @@ where
     }
     extract_context(properties)
 }
+
+#[cfg(feature = "otel-traces")]
+#[doc(hidden)]
+/// Runs [`extract_context_with_handle`] for benchmarks without exposing the context type.
+pub fn bench_extract_trace_context<T>(handle: &crate::TelemetryHandle, properties: &T) -> impl Sized
+where
+    T: MessagePropertiesLike + ?Sized,
+{
+    extract_context_with_handle(handle, properties)
+}
+
+#[cfg(feature = "otel-traces")]
+/// Error returned when a propagated remote parent cannot be assigned to a span.
+#[derive(Debug)]
+pub struct SpanParentError(tracing_opentelemetry::SetParentError);
+
+#[cfg(feature = "otel-traces")]
+impl std::fmt::Display for SpanParentError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+#[cfg(feature = "otel-traces")]
+impl std::error::Error for SpanParentError {}
 
 #[cfg(feature = "otel-traces")]
 /// Extracts trace context using the installed process-level propagation codec.
@@ -175,7 +200,7 @@ pub fn set_span_parent_from_properties_with_handle<T>(
     handle: &crate::TelemetryHandle,
     span: &tracing::Span,
     properties: &T,
-) -> Result<(), tracing_opentelemetry::SetParentError>
+) -> Result<(), SpanParentError>
 where
     T: MessagePropertiesLike + ?Sized,
 {
@@ -187,7 +212,7 @@ where
     use tracing_opentelemetry::OpenTelemetrySpanExt;
 
     let parent_context = extract_context(properties);
-    span.set_parent(parent_context)
+    span.set_parent(parent_context).map_err(SpanParentError)
 }
 
 #[cfg(feature = "otel-traces")]
@@ -197,7 +222,7 @@ where
 pub fn record_span_parent_assignment_error(
     handle: &crate::TelemetryHandle,
     operation: &'static str,
-    error: tracing_opentelemetry::SetParentError,
+    error: SpanParentError,
 ) {
     if !handle.trace_policy().enabled {
         return;
@@ -205,7 +230,7 @@ pub fn record_span_parent_assignment_error(
 
     use tracing_opentelemetry::SetParentError;
 
-    match error {
+    match error.0 {
         SetParentError::SpanDisabled => {
             tracing::debug!(
                 target: "rocketmq_observability",

@@ -571,7 +571,8 @@ impl TieredStoreOtelMetrics {
                 for behind in values.dispatch_behind {
                     observer.observe(
                         behind.count.max(0),
-                        &dispatch_attributes(&label_policy, &behind.topic, behind.queue_id, &behind.file_type),
+                        dispatch_attributes(&label_policy, &behind.topic, behind.queue_id, &behind.file_type)
+                            .as_key_values(),
                     );
                 }
             })
@@ -600,53 +601,54 @@ impl TieredStoreOtelMetrics {
     }
 
     #[inline]
-    pub fn record_messages_dispatch(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.messages_dispatch_total.add(count, attributes);
+    pub fn record_messages_dispatch(&self, count: u64, attributes: &crate::MetricAttributes) {
+        self.messages_dispatch_total.add(count, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_messages_out(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.messages_out_total.add(count, attributes);
+    pub fn record_messages_out(&self, count: u64, attributes: &crate::MetricAttributes) {
+        self.messages_out_total.add(count, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_get_message_fallback(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.get_message_fallback_total.add(count, attributes);
+    pub fn record_get_message_fallback(&self, count: u64, attributes: &crate::MetricAttributes) {
+        self.get_message_fallback_total.add(count, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_provider_upload_bytes(&self, bytes: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.provider_upload_bytes.add(bytes, attributes);
+    pub fn record_provider_upload_bytes(&self, bytes: u64, attributes: &crate::MetricAttributes) {
+        self.provider_upload_bytes.add(bytes, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_provider_download_bytes(&self, bytes: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.provider_download_bytes.add(bytes, attributes);
+    pub fn record_provider_download_bytes(&self, bytes: u64, attributes: &crate::MetricAttributes) {
+        self.provider_download_bytes.add(bytes, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_provider_rpc_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.provider_rpc_latency.record(latency_ms, attributes);
+    pub fn record_provider_rpc_latency(&self, latency_ms: u64, attributes: &crate::MetricAttributes) {
+        self.provider_rpc_latency.record(latency_ms, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_api_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.api_latency.record(latency_ms, attributes);
+    pub fn record_api_latency(&self, latency_ms: u64, attributes: &crate::MetricAttributes) {
+        self.api_latency.record(latency_ms, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_dispatch_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.dispatch_latency.record(latency_ms, attributes);
+    pub fn record_dispatch_latency(&self, latency_ms: u64, attributes: &crate::MetricAttributes) {
+        self.dispatch_latency.record(latency_ms, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_read_ahead_cache_access(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.read_ahead_cache_access_total.add(count, attributes);
+    pub fn record_read_ahead_cache_access(&self, count: u64, attributes: &crate::MetricAttributes) {
+        self.read_ahead_cache_access_total
+            .add(count, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_read_ahead_cache_hit(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.read_ahead_cache_hit_total.add(count, attributes);
+    pub fn record_read_ahead_cache_hit(&self, count: u64, attributes: &crate::MetricAttributes) {
+        self.read_ahead_cache_hit_total.add(count, attributes.as_key_values());
     }
 }
 
@@ -656,12 +658,12 @@ fn dispatch_attributes(
     topic: &str,
     queue_id: i32,
     file_type: &str,
-) -> [opentelemetry::KeyValue; 3] {
-    [
+) -> crate::MetricAttributes {
+    crate::MetricAttributes::from_array([
         bounded_label(label_policy, crate::semantic::labels::TOPIC, topic),
         opentelemetry::KeyValue::new(crate::semantic::labels::QUEUE_ID, i64::from(queue_id)),
         opentelemetry::KeyValue::new(crate::semantic::labels::FILE_TYPE, file_type_class(file_type)),
-    ]
+    ])
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -669,11 +671,11 @@ fn message_out_attributes(
     label_policy: &crate::MetricLabelPolicy,
     topic: &str,
     group: &str,
-) -> [opentelemetry::KeyValue; 2] {
-    [
+) -> crate::MetricAttributes {
+    crate::MetricAttributes::from_array([
         bounded_label(label_policy, crate::semantic::labels::TOPIC, topic),
         bounded_label(label_policy, crate::semantic::labels::GROUP, group),
-    ]
+    ])
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -688,12 +690,12 @@ fn bounded_label(policy: &crate::MetricLabelPolicy, key: &'static str, value: &s
 }
 
 #[cfg(feature = "otel-metrics")]
-fn provider_attributes(operation: &str, success: bool, path: &str) -> [opentelemetry::KeyValue; 3] {
-    [
+fn provider_attributes(operation: &str, success: bool, path: &str) -> crate::MetricAttributes {
+    crate::MetricAttributes::from_array([
         opentelemetry::KeyValue::new(crate::semantic::labels::OPERATION, provider_operation_class(operation)),
         opentelemetry::KeyValue::new(crate::semantic::labels::SUCCESS, success),
         opentelemetry::KeyValue::new(crate::semantic::labels::FILE_TYPE, provider_path_class(path)),
-    ]
+    ])
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -713,16 +715,16 @@ fn provider_path_class(path: &str) -> &'static str {
 }
 
 #[cfg(feature = "otel-metrics")]
-fn api_attributes(operation: &str, success: bool) -> [opentelemetry::KeyValue; 2] {
-    [
+fn api_attributes(operation: &str, success: bool) -> crate::MetricAttributes {
+    crate::MetricAttributes::from_array([
         opentelemetry::KeyValue::new(crate::semantic::labels::OPERATION, api_operation_class(operation)),
         opentelemetry::KeyValue::new(crate::semantic::labels::SUCCESS, success),
-    ]
+    ])
 }
 
 #[cfg(feature = "otel-metrics")]
-fn cache_attributes(success: bool) -> [opentelemetry::KeyValue; 1] {
-    [opentelemetry::KeyValue::new(crate::semantic::labels::SUCCESS, success)]
+fn cache_attributes(success: bool) -> crate::MetricAttributes {
+    crate::MetricAttributes::from_array([opentelemetry::KeyValue::new(crate::semantic::labels::SUCCESS, success)])
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -823,23 +825,27 @@ mod tests {
         let policy = crate::MetricLabelPolicy::new(1, true, true);
 
         assert_eq!(
-            dispatch_attributes(&policy, "TopicA", 0, "commitlog")[0]
+            dispatch_attributes(&policy, "TopicA", 0, "commitlog").as_key_values()[0]
                 .value
                 .to_string(),
             "TopicA"
         );
         assert_eq!(
-            dispatch_attributes(&policy, "TopicB", 0, "commitlog")[0]
+            dispatch_attributes(&policy, "TopicB", 0, "commitlog").as_key_values()[0]
                 .value
                 .to_string(),
             crate::METRIC_LABEL_SENTINEL
         );
         assert_eq!(
-            message_out_attributes(&policy, "TopicA", "GroupA")[1].value.to_string(),
+            message_out_attributes(&policy, "TopicA", "GroupA").as_key_values()[1]
+                .value
+                .to_string(),
             "GroupA"
         );
         assert_eq!(
-            message_out_attributes(&policy, "TopicA", "GroupB")[1].value.to_string(),
+            message_out_attributes(&policy, "TopicA", "GroupB").as_key_values()[1]
+                .value
+                .to_string(),
             crate::METRIC_LABEL_SENTINEL
         );
     }

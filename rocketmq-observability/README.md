@@ -139,13 +139,15 @@ A local log exporter still needs its corresponding `otel-*` feature.
 
 Role recorders cover broker, client, transport, NameServer, Controller, proxy, store, tiered
 store, runtime, dashboard and SRE components. Label policies bound topic/group cardinality.
-Use recorder instances derived from the injected handle; metric SDK constructors that take
-a meter are available where the relevant feature and API expose them.
+Use recorder instances derived from the injected handle. Recording methods that accept
+attributes take `MetricAttributes`, a crate-owned set that can be built once and reused for
+repeated measurements. OpenTelemetry SDK types such as meters, instruments and key-value pairs
+stay inside this crate and are not part of its public API.
 
-With `otel-traces`, root exports such as `inject_current_context_with_handle`,
-`extract_context_with_handle` and `set_span_parent_from_properties_with_handle` propagate
-context using message property maps and the handle's trace policy. The shared
-`TRACEPARENT` and `TRACESTATE` constants identify the wire property names.
+With `otel-traces`, root exports such as `inject_current_context_with_handle` and
+`set_span_parent_from_properties_with_handle` propagate context using message property maps
+and the handle's trace policy; a failed parent assignment is reported as `SpanParentError`.
+The shared `TRACEPARENT` and `TRACESTATE` constants identify the wire property names.
 
 `rocketmq-client-rust/observability` enables client traces;
 `observability-metrics` enables client metrics. Client metrics over OTLP also require

@@ -515,53 +515,55 @@ impl NameServerMetrics {
     }
 
     #[inline]
-    pub fn record_route_request_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_route_request_total(&self, count: u64, attributes: &crate::MetricAttributes) {
         if self.is_active() {
             if let Some(instruments) = &self.instruments {
-                instruments.route_request_total.add(count, attributes);
+                instruments.route_request_total.add(count, attributes.as_key_values());
             }
         }
     }
 
     #[inline]
-    pub fn record_route_request_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_route_request_latency(&self, latency_ms: u64, attributes: &crate::MetricAttributes) {
         if self.is_active() {
             if let Some(instruments) = &self.instruments {
-                instruments.route_request_latency.record(latency_ms, attributes);
+                instruments
+                    .route_request_latency
+                    .record(latency_ms, attributes.as_key_values());
             }
         }
     }
 
     #[inline]
-    pub fn record_broker_registrations(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_broker_registrations(&self, count: u64, attributes: &crate::MetricAttributes) {
         if self.is_active() {
             if let Some(instruments) = &self.instruments {
-                instruments.broker_registrations.add(count, attributes);
+                instruments.broker_registrations.add(count, attributes.as_key_values());
             }
         }
     }
 
     #[inline]
-    pub fn record_active_brokers(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_active_brokers(&self, count: u64, attributes: &crate::MetricAttributes) {
         if self.is_active() {
             if let Some(instruments) = &self.instruments {
-                instruments.active_brokers.record(count, attributes);
+                instruments.active_brokers.record(count, attributes.as_key_values());
             }
         }
     }
 
     pub fn record_route_request(&self, elapsed: Duration) {
-        self.record_route_request_total(1, &[]);
-        self.record_route_request_latency(duration_millis_u64(elapsed), &[]);
+        self.record_route_request_total(1, &crate::MetricAttributes::new());
+        self.record_route_request_latency(duration_millis_u64(elapsed), &crate::MetricAttributes::new());
     }
 
     pub fn record_broker_registration(&self, active_brokers: usize) {
-        self.record_broker_registrations(1, &[]);
-        self.record_active_brokers(active_brokers as u64, &[]);
+        self.record_broker_registrations(1, &crate::MetricAttributes::new());
+        self.record_active_brokers(active_brokers as u64, &crate::MetricAttributes::new());
     }
 
     pub fn record_active_broker_count(&self, active_brokers: usize) {
-        self.record_active_brokers(active_brokers as u64, &[]);
+        self.record_active_brokers(active_brokers as u64, &crate::MetricAttributes::new());
     }
 
     pub fn record_route_error(&self, failure: NameServerRouteFailureLabel) {
@@ -569,10 +571,10 @@ impl NameServerMetrics {
             if let Some(instruments) = &self.instruments {
                 instruments.record_route_errors_total(
                     1,
-                    &[opentelemetry::KeyValue::new(
+                    &crate::MetricAttributes::from_array([opentelemetry::KeyValue::new(
                         crate::semantic::labels::RESULT,
                         failure.as_str(),
-                    )],
+                    )]),
                 );
             }
         }
@@ -581,7 +583,7 @@ impl NameServerMetrics {
     pub fn record_route_freshness(&self, freshness_ms: u64) {
         if self.is_active() {
             if let Some(instruments) = &self.instruments {
-                instruments.record_route_freshness(freshness_ms, &[]);
+                instruments.record_route_freshness(freshness_ms, &crate::MetricAttributes::new());
             }
         }
     }
@@ -1175,13 +1177,13 @@ impl NameServerMetricInstruments {
     }
 
     #[inline]
-    pub fn record_route_errors_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.route_errors_total.add(count, attributes);
+    pub fn record_route_errors_total(&self, count: u64, attributes: &crate::MetricAttributes) {
+        self.route_errors_total.add(count, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_route_freshness(&self, freshness_ms: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.route_freshness.record(freshness_ms, attributes);
+    pub fn record_route_freshness(&self, freshness_ms: u64, attributes: &crate::MetricAttributes) {
+        self.route_freshness.record(freshness_ms, attributes.as_key_values());
     }
 }
 
@@ -1197,7 +1199,7 @@ mod tests {
         let provider = SdkMeterProvider::builder().build();
         let meter = provider.meter("namesrv-metrics-test");
         let metrics = NameServerMetrics::new(&meter);
-        let attrs = [opentelemetry::KeyValue::new("namesrv_id", "namesrv-a")];
+        let attrs = crate::MetricAttributes::new().with("namesrv_id", "namesrv-a");
 
         metrics.record_route_request_total(1, &attrs);
         metrics.record_route_request_latency(3, &attrs);

@@ -134,6 +134,28 @@ const DIRECT_OTEL_PATTERNS: &[&str] = &[
 
 const DIRECT_OTEL_LEGACY_ALLOWLIST: &[&str] = &[];
 
+/// Path segments that name OpenTelemetry items: the SDK crates and the crate-private module that
+/// re-exports instrument types to the metric managers.
+const OPENTELEMETRY_PATH_SEGMENTS: &[&str] = &[
+    "opentelemetry",
+    "opentelemetry_appender_tracing",
+    "opentelemetry_otlp",
+    "opentelemetry_prometheus",
+    "opentelemetry_sdk",
+    "opentelemetry_semantic_conventions",
+    "owner_instruments",
+    "tracing_opentelemetry",
+];
+
+/// Crate-private modules whose nominally public items are never re-exported, so naming
+/// OpenTelemetry types there does not reach the crate API.
+const OPENTELEMETRY_INTERNAL_FILES: &[&str] = &[
+    "rocketmq-observability/src/exporter/otlp.rs",
+    "rocketmq-observability/src/exporter/stdout.rs",
+    "rocketmq-observability/src/metrics/owner_instruments.rs",
+    "rocketmq-observability/src/resource.rs",
+];
+
 const METRIC_CONSTANT_CANONICAL_FILES: &[&str] = &[
     "rocketmq-observability/src/metrics/broker_constants.rs",
     "rocketmq-observability/src/metrics/catalog.rs",
@@ -1033,6 +1055,88 @@ fn explicit_telemetry_capability_does_not_export_raw_sdk_or_unguarded_trace_path
 }
 
 #[test]
+fn public_observability_apis_do_not_expose_opentelemetry_types() {
+    let workspace_root = workspace_root();
+    let internal_files = path_set(OPENTELEMETRY_INTERNAL_FILES);
+    let mut observability_files = Vec::new();
+    collect_rs_files(
+        &workspace_root.join("rocketmq-observability/src"),
+        &mut observability_files,
+    );
+    let mut violations = BTreeSet::new();
+    for file in observability_files {
+        let relative_path = relative_slash_path(&workspace_root, &file);
+        if internal_files.contains(&relative_path) {
+            continue;
+        }
+        let source =
+            fs::read_to_string(&file).unwrap_or_else(|error| panic!("failed to read {}: {error}", file.display()));
+        for item in public_items_naming_opentelemetry_types(&source) {
+            violations.insert(format!("{relative_path}: {item}"));
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "public observability APIs must use crate-owned types such as MetricAttributes instead of OpenTelemetry \
+         types:\n{}",
+        format_paths(&violations)
+    );
+}
+
+#[test]
+fn opentelemetry_exposure_detector_reports_public_items_only() {
+    let source = r#"
+        use crate::metrics::owner_instruments::Counter;
+        use opentelemetry::trace::TraceContextExt as _;
+        use opentelemetry::{metrics::Meter as SdkMeter, KeyValue};
+        pub(crate) type Layer<S> = tracing_opentelemetry::OpenTelemetryLayer<S, Tracer>;
+
+        pub struct Recorder {
+            pub counter: Counter<u64>,
+            histogram: Histogram<u64>,
+            pub name: String,
+        }
+
+        pub struct ParentError(tracing_opentelemetry::SetParentError);
+        pub struct Attributes(pub Vec<opentelemetry::KeyValue>);
+        pub enum Instrument { Real(Counter<u64>), Noop }
+        struct Exporter;
+
+        impl Recorder {
+            pub fn record(&self, value: u64, attributes: &[KeyValue]) {}
+            pub(crate) fn record_prepared(&self, value: u64, attributes: &[KeyValue]) {}
+            pub fn record_owned(&self, value: u64, attributes: &MetricAttributes) { let _ = KeyValue::new("k", "v"); }
+            pub const fn meter(&self) -> SdkMeter { self.meter }
+        }
+
+        impl From<KeyValue> for Recorder {}
+        impl PushMetricExporter for Exporter {}
+        pub fn layer<S>() -> Option<Layer<S>> { None }
+        pub fn bench_context(properties: &Properties) -> impl Sized { opentelemetry::Context::new() }
+        pub trait AttributesSupplier { fn get(&self) -> Vec<KeyValue> { Vec::new() } }
+        pub trait OwnedSupplier { fn get(&self) -> MetricAttributes { MetricAttributes::from(KeyValue::new("k", "v")) } }
+        pub const DEFAULT_ATTRIBUTE: &str = opentelemetry_semantic_conventions::attribute::SERVICE_NAME;
+        pub use opentelemetry_sdk::Resource;
+        pub use crate::attributes::MetricAttributes;
+    "#;
+
+    assert_eq!(
+        public_items_naming_opentelemetry_types(source),
+        [
+            "field counter",
+            "field Vec",
+            "enum Instrument",
+            "fn record",
+            "fn meter",
+            "impl for Recorder",
+            "fn layer",
+            "trait AttributesSupplier",
+            "use opentelemetry_sdk",
+        ]
+    );
+}
+
+#[test]
 fn metric_name_constants_are_declared_only_in_canonical_or_legacy_files() {
     let workspace_root = workspace_root();
     let mut allowed_files = path_set(METRIC_CONSTANT_CANONICAL_FILES);
@@ -1613,6 +1717,228 @@ fn token_identifier(token: Option<&RustBoundaryToken>) -> Option<&str> {
         Some(RustBoundaryToken::Identifier(identifier)) => Some(identifier),
         _ => None,
     }
+}
+
+/// Returns `kind name` for each public item whose signature names an OpenTelemetry type.
+///
+/// A name refers to OpenTelemetry when it is an OpenTelemetry path segment, a name imported
+/// through one, or a same-file type alias of one. The scan covers public functions, aliases,
+/// re-exports, constants, statics, fields, enum variants, trait items, and trait impls for public
+/// types; function bodies are ignored.
+fn public_items_naming_opentelemetry_types(source: &str) -> Vec<String> {
+    let tokens = lex_rust_boundary_tokens(source);
+    let mut opentelemetry_names: BTreeSet<&str> = OPENTELEMETRY_PATH_SEGMENTS.iter().copied().collect();
+    opentelemetry_names.extend(opentelemetry_use_names(&tokens));
+    // Only module-level aliases count; associated types inside impl and trait bodies are skipped.
+    let mut aliases = Vec::new();
+    let mut depth = 0_usize;
+    for (index, token) in tokens.iter().enumerate() {
+        match token {
+            RustBoundaryToken::LeftBrace => depth += 1,
+            RustBoundaryToken::RightBrace => depth = depth.saturating_sub(1),
+            RustBoundaryToken::Identifier(keyword) if depth == 0 && keyword == "type" => {
+                if let Some(name) = token_identifier(tokens.get(index + 1)) {
+                    if names_any(item_signature(&tokens, index), &opentelemetry_names) {
+                        aliases.push(name);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    opentelemetry_names.extend(aliases);
+    let public_types: BTreeSet<&str> = (0..tokens.len())
+        .filter(|index| {
+            token_identifier(tokens.get(*index)) == Some("pub")
+                && matches!(
+                    token_identifier(tokens.get(index + 1)),
+                    Some("enum" | "struct" | "trait" | "type" | "union")
+                )
+        })
+        .filter_map(|index| token_identifier(tokens.get(index + 2)))
+        .collect();
+
+    let mut items = Vec::new();
+    for index in 0..tokens.len() {
+        match token_identifier(tokens.get(index)) {
+            Some("pub") if !matches!(tokens.get(index + 1), Some(RustBoundaryToken::LeftParenthesis)) => {
+                let mut cursor = index + 1;
+                while matches!(
+                    token_identifier(tokens.get(cursor)),
+                    Some("async" | "extern" | "unsafe")
+                ) || matches!(tokens.get(cursor), Some(RustBoundaryToken::StringLiteral(_)))
+                    || (token_identifier(tokens.get(cursor)) == Some("const")
+                        && matches!(
+                            token_identifier(tokens.get(cursor + 1)),
+                            Some("async" | "extern" | "fn" | "unsafe")
+                        ))
+                {
+                    cursor += 1;
+                }
+                let Some(kind) = token_identifier(tokens.get(cursor)) else {
+                    continue;
+                };
+                let name = token_identifier(tokens.get(cursor + 1)).unwrap_or_default();
+                let exposed = match kind {
+                    "crate" | "impl" | "macro" | "mod" | "struct" | "union" => false,
+                    "const" | "static" => names_any(
+                        tokens_until(&tokens, cursor, |token| {
+                            matches!(token, RustBoundaryToken::Equals | RustBoundaryToken::Semicolon)
+                        }),
+                        &opentelemetry_names,
+                    ),
+                    "enum" => names_any(braced_item(&tokens, cursor), &opentelemetry_names),
+                    "fn" | "type" | "use" => names_any(item_signature(&tokens, cursor), &opentelemetry_names),
+                    "trait" => trait_item_signatures(&tokens, cursor)
+                        .into_iter()
+                        .any(|signature| names_any(signature, &opentelemetry_names)),
+                    field => {
+                        if names_any(field_signature(&tokens, cursor), &opentelemetry_names) {
+                            items.push(format!("field {field}"));
+                        }
+                        continue;
+                    }
+                };
+                if exposed {
+                    items.push(format!("{kind} {name}"));
+                }
+            }
+            Some("impl") => {
+                let header = item_signature(&tokens, index);
+                let Some(for_index) = header
+                    .iter()
+                    .position(|token| token_identifier(Some(token)) == Some("for"))
+                else {
+                    continue;
+                };
+                // The self type is the last segment of the first path after `for`.
+                let self_type = (for_index + 1..header.len())
+                    .filter(|position| !matches!(header.get(position + 1), Some(RustBoundaryToken::DoubleColon)))
+                    .find_map(|position| token_identifier(header.get(position)));
+                if let Some(self_type) = self_type.filter(|self_type| public_types.contains(self_type)) {
+                    if names_any(header, &opentelemetry_names) {
+                        items.push(format!("impl for {self_type}"));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    items
+}
+
+/// Returns the names bound by `use` declarations whose path passes through an OpenTelemetry segment.
+fn opentelemetry_use_names(tokens: &[RustBoundaryToken]) -> BTreeSet<&str> {
+    let mut names = BTreeSet::new();
+    for (index, token) in tokens.iter().enumerate() {
+        if token_identifier(Some(token)) != Some("use") {
+            continue;
+        }
+        let declaration = tokens_until(tokens, index + 1, |token| matches!(token, RustBoundaryToken::Semicolon));
+        if !declaration.iter().any(|token| {
+            token_identifier(Some(token)).is_some_and(|segment| OPENTELEMETRY_PATH_SEGMENTS.contains(&segment))
+        }) {
+            continue;
+        }
+        for (offset, token) in declaration.iter().enumerate() {
+            let next = declaration.get(offset + 1);
+            match token_identifier(Some(token)) {
+                Some("_" | "as" | "self") | None => {}
+                Some(_)
+                    if matches!(next, Some(RustBoundaryToken::DoubleColon)) || token_identifier(next) == Some("as") => {
+                }
+                Some(name) => {
+                    names.insert(name);
+                }
+            }
+        }
+    }
+    names
+}
+
+fn names_any(tokens: &[RustBoundaryToken], names: &BTreeSet<&str>) -> bool {
+    tokens
+        .iter()
+        .any(|token| token_identifier(Some(token)).is_some_and(|identifier| names.contains(identifier)))
+}
+
+fn tokens_until(
+    tokens: &[RustBoundaryToken],
+    start: usize,
+    is_end: impl Fn(&RustBoundaryToken) -> bool,
+) -> &[RustBoundaryToken] {
+    let start = start.min(tokens.len());
+    let end = tokens[start..]
+        .iter()
+        .position(is_end)
+        .map_or(tokens.len(), |offset| start + offset);
+    &tokens[start..end]
+}
+
+/// Returns an item header up to its body or terminating semicolon; a `use` tree is kept whole.
+fn item_signature(tokens: &[RustBoundaryToken], start: usize) -> &[RustBoundaryToken] {
+    let keeps_braces = token_identifier(tokens.get(start)) == Some("use");
+    tokens_until(tokens, start, |token| match token {
+        RustBoundaryToken::Semicolon => true,
+        RustBoundaryToken::LeftBrace => !keeps_braces,
+        _ => false,
+    })
+}
+
+/// Returns an item through its matching closing brace, or up to its semicolon when it has no body.
+fn braced_item(tokens: &[RustBoundaryToken], start: usize) -> &[RustBoundaryToken] {
+    let mut depth = 0_usize;
+    for (offset, token) in tokens[start..].iter().enumerate() {
+        match token {
+            RustBoundaryToken::LeftBrace => depth += 1,
+            RustBoundaryToken::RightBrace if depth <= 1 => return &tokens[start..=start + offset],
+            RustBoundaryToken::RightBrace => depth -= 1,
+            RustBoundaryToken::Semicolon if depth == 0 => return &tokens[start..start + offset],
+            _ => {}
+        }
+    }
+    &tokens[start..]
+}
+
+/// Returns a trait header followed by the signatures of its items, excluding default bodies.
+fn trait_item_signatures(tokens: &[RustBoundaryToken], start: usize) -> Vec<&[RustBoundaryToken]> {
+    let item = braced_item(tokens, start);
+    let mut signatures = vec![item_signature(item, 0)];
+    let mut depth = 0_usize;
+    for (index, token) in item.iter().enumerate() {
+        match token {
+            RustBoundaryToken::LeftBrace => depth += 1,
+            RustBoundaryToken::RightBrace => depth = depth.saturating_sub(1),
+            RustBoundaryToken::Identifier(keyword)
+                if depth == 1 && matches!(keyword.as_str(), "const" | "fn" | "type") =>
+            {
+                signatures.push(item_signature(item, index));
+            }
+            _ => {}
+        }
+    }
+    signatures
+}
+
+/// Returns a public field declaration up to the next field or the end of its struct.
+fn field_signature(tokens: &[RustBoundaryToken], start: usize) -> &[RustBoundaryToken] {
+    let mut depth = 0_usize;
+    for (offset, token) in tokens[start..].iter().enumerate() {
+        match token {
+            RustBoundaryToken::LeftParenthesis => depth += 1,
+            RustBoundaryToken::RightParenthesis if depth > 0 => depth -= 1,
+            RustBoundaryToken::RightParenthesis
+            | RustBoundaryToken::Comma
+            | RustBoundaryToken::RightBrace
+            | RustBoundaryToken::Semicolon
+                if depth == 0 =>
+            {
+                return &tokens[start..start + offset];
+            }
+            _ => {}
+        }
+    }
+    &tokens[start..]
 }
 
 fn cargo_feature_names(manifest: &str) -> BTreeSet<&str> {
