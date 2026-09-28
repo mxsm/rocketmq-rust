@@ -19,8 +19,8 @@ use serde::Serialize;
 use crate::error::RuntimeContractViolation;
 use crate::RuntimeContractPolicy;
 
-#[derive(Debug, Clone)]
 /// Represents blocking pool policy.
+#[derive(Debug, Clone)]
 pub struct BlockingPoolPolicy {
     /// The name value.
     pub name: String,
@@ -105,8 +105,8 @@ impl BlockingLane {
     }
 }
 
-#[derive(Debug, Clone)]
 /// Represents blocking lane policies.
+#[derive(Debug, Clone)]
 pub struct BlockingLanePolicies {
     /// The storage io value.
     pub storage_io: BlockingPoolPolicy,
@@ -222,8 +222,8 @@ impl Default for BlockingLanePolicies {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 /// Identifies the blocking kind state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum BlockingKind {
     /// Represents the short io case.
     ShortIo,
@@ -233,8 +233,8 @@ pub enum BlockingKind {
     LongRunning,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 /// Represents blocking task id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct BlockingTaskId(pub(crate) u64);
 
 impl BlockingTaskId {
@@ -244,8 +244,8 @@ impl BlockingTaskId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 /// Identifies the blocking task state state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum BlockingTaskState {
     /// Represents the queued case.
     Queued,
