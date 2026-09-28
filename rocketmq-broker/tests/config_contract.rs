@@ -408,6 +408,36 @@ fn every_validated_section_rejects_an_invalid_candidate() {
 }
 
 #[test]
+fn metadata_io_byte_bound_is_validated_and_reaches_the_resources_section() {
+    let zero = BrokerConfig {
+        metadata_io_max_pending_bytes: 0,
+        ..BrokerConfig::default()
+    };
+    assert_invalid_section(
+        ValidatedBrokerConfig::try_from_parts(zero, MessageStoreConfig::default()),
+        ConfigSection::Resources,
+    );
+
+    const BOUND: u64 = 256 * 1024 * 1024;
+    let broker = BrokerConfig {
+        metadata_io_max_pending_bytes: BOUND,
+        process_memory_limit_bytes: 512 * 1024 * 1024,
+        ..BrokerConfig::default()
+    };
+    let validated = ValidatedBrokerConfig::try_from_parts(broker, MessageStoreConfig::default())
+        .expect("a positive metadata I/O byte bound should validate");
+    assert_eq!(
+        validated.sections().resources().metadata_io_max_pending_bytes() as u64,
+        BOUND
+    );
+    assert_eq!(
+        BrokerConfig::default().metadata_io_max_pending_bytes,
+        64 * 1024 * 1024,
+        "the default matches the runtime metadata actor default"
+    );
+}
+
+#[test]
 fn resource_budget_is_derived_from_the_validated_process_hard_limit() {
     const HARD_LIMIT: u64 = 512 * 1024 * 1024;
     let broker = BrokerConfig {

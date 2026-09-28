@@ -37,8 +37,14 @@ pub type RuntimeResult<T> = Result<T, RuntimeError>;
 ///
 /// Runtime failures carry this value instead of caller-provided text so that
 /// diagnostics remain aggregatable and cannot disclose request, path, or
-/// configuration values.
+/// configuration values. The named variants are operations this crate
+/// performs. A crate built on the runtime labels its own operations with
+/// [`Self::External`] instead of adding variants here.
+///
+/// New runtime operations may be added in a minor release, so a `match`
+/// outside this crate needs a wildcard arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum RuntimeOperation {
     /// Builds an owned Tokio runtime.
     BuildTokioRuntime,
@@ -54,18 +60,6 @@ pub enum RuntimeOperation {
     ReadFile,
     /// Reads a file before creating a backup.
     ReadFileBackup,
-    /// Checks a file path.
-    CheckFile,
-    /// Copies a file backup.
-    CopyFileBackup,
-    /// Creates a file parent directory.
-    CreateFileParent,
-    /// Creates a file.
-    CreateFile,
-    /// Writes a file.
-    WriteFile,
-    /// Flushes a file.
-    FlushFile,
     /// Persists metadata through a compatibility filesystem path.
     PersistMetadata,
     /// Creates a metadata parent directory.
@@ -144,32 +138,8 @@ pub enum RuntimeOperation {
     SpawnOperation,
     /// Validates an operation owner.
     OperationOwner,
-    /// Uses a transport listener.
-    TransportListener,
-    /// Uses a transport session executor.
-    SessionExecutor,
     /// Performs metadata I/O through an adapter.
     MetadataIo,
-    /// Uses the auth metadata I/O lane.
-    AuthMetadataIoLane,
-    /// Runs high-availability runtime work.
-    HaRuntime,
-    /// Initializes a broker.
-    InitializeBroker,
-    /// Starts a broker.
-    StartBroker,
-    /// Shuts down a broker.
-    ShutdownBroker,
-    /// Uses a KV mutation worker.
-    KvMutationWorker,
-    /// Admits a KV mutation.
-    AdmitKvMutation,
-    /// Admits KV mutation bytes.
-    AdmitKvMutationBytes,
-    /// Persists KV metadata in a test fault path.
-    KvPersistenceFault,
-    /// Represents a test-only runtime failure injection.
-    TestFailure,
     /// Reads service lifecycle environment configuration.
     ServiceLifecycleEnvironment,
     /// Parses a service lifecycle probe address.
@@ -182,17 +152,24 @@ pub enum RuntimeOperation {
     ServiceLifecycleDrainMethods,
     /// Validates metadata resource targeting.
     MetadataResourceTarget,
-    /// Uses a tiered-store runtime adapter.
-    TieredStoreRuntime,
-    /// Uses a tiered-store cleanup task group.
-    CleanupTaskGroup,
-    /// Uses a tiered-store dispatcher task group.
-    DispatcherTaskGroup,
-    /// Persists runtime metadata in a test.
-    PersistRuntimeMetadata,
+    /// An operation owned by a crate that builds on the runtime.
+    External(ExternalOperation),
 }
 
 impl RuntimeOperation {
+    /// Labels an operation owned outside this crate.
+    ///
+    /// Define the result as a constant so an invalid label fails compilation;
+    /// see [`ExternalOperation::new`] for the accepted form.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `label` violates the [`ExternalOperation::new`] contract.
+    #[must_use]
+    pub const fn external(label: &'static str) -> Self {
+        Self::External(ExternalOperation::new(label))
+    }
+
     const fn diagnostic_label(self) -> &'static str {
         match self {
             Self::BuildTokioRuntime => "build-tokio-runtime",
@@ -202,12 +179,6 @@ impl RuntimeOperation {
             Self::ResolveManagedMemoryBudget => "resolve-managed-memory-budget",
             Self::ReadFile => "read-file",
             Self::ReadFileBackup => "read-file-backup",
-            Self::CheckFile => "check-file",
-            Self::CopyFileBackup => "copy-file-backup",
-            Self::CreateFileParent => "create-file-parent",
-            Self::CreateFile => "create-file",
-            Self::WriteFile => "write-file",
-            Self::FlushFile => "flush-file",
             Self::PersistMetadata => "metadata-persistence",
             Self::MetadataCreateParent => "metadata-create-parent",
             Self::MetadataCreateTemporary => "metadata-create-temporary",
@@ -247,29 +218,14 @@ impl RuntimeOperation {
             Self::RegisterScheduledTask => "register-scheduled-task",
             Self::SpawnOperation => "spawn-operation",
             Self::OperationOwner => "operation-owner",
-            Self::TransportListener => "transport-listener",
-            Self::SessionExecutor => "session-executor",
             Self::MetadataIo => "metadata-io",
-            Self::AuthMetadataIoLane => "auth-metadata-io-lane",
-            Self::HaRuntime => "ha-runtime",
-            Self::InitializeBroker => "initialize-broker",
-            Self::StartBroker => "start-broker",
-            Self::ShutdownBroker => "shutdown-broker",
-            Self::KvMutationWorker => "kv-mutation-worker",
-            Self::AdmitKvMutation => "admit-kv-mutation",
-            Self::AdmitKvMutationBytes => "admit-kv-mutation-bytes",
-            Self::KvPersistenceFault => "injected-kv-persistence-failure",
-            Self::TestFailure => "test-runtime-failure",
             Self::ServiceLifecycleEnvironment => "service-lifecycle-environment",
             Self::ServiceLifecycleProbeAddress => "service-lifecycle-probe-address",
             Self::ServiceLifecycleDuration => "service-lifecycle-duration",
             Self::ServiceLifecycleDurationRange => "service-lifecycle-duration-range",
             Self::ServiceLifecycleDrainMethods => "service-lifecycle-drain-methods",
             Self::MetadataResourceTarget => "metadata-resource-target",
-            Self::TieredStoreRuntime => "tieredstore-runtime",
-            Self::CleanupTaskGroup => "cleanup-task-group",
-            Self::DispatcherTaskGroup => "dispatcher-task-group",
-            Self::PersistRuntimeMetadata => "persist-runtime-metadata",
+            Self::External(operation) => operation.label(),
         }
     }
 }
@@ -280,8 +236,71 @@ impl fmt::Display for RuntimeOperation {
     }
 }
 
+/// A static, low-cardinality label for an operation owned outside this crate.
+///
+/// A crate built on the runtime reports failures of its own operations with
+/// [`RuntimeOperation::External`], so this crate does not need a variant for
+/// every consumer. A label is a string literal in lowercase kebab case: it stays
+/// aggregatable and cannot carry request, path, or configuration text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ExternalOperation(&'static str);
+
+impl ExternalOperation {
+    /// The longest accepted label, in bytes.
+    pub const MAX_LABEL_BYTES: usize = 64;
+
+    /// Creates a label for an operation owned outside this crate.
+    ///
+    /// Define the result as a constant so an invalid label fails compilation
+    /// instead of panicking at run time.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `label` is empty, longer than [`Self::MAX_LABEL_BYTES`],
+    /// starts or ends with a hyphen, or contains anything other than lowercase
+    /// ASCII letters, digits, and hyphens. Labels are programmer-owned static
+    /// identifiers, not runtime input.
+    #[must_use]
+    pub const fn new(label: &'static str) -> Self {
+        assert!(
+            is_valid_external_label(label),
+            "external operation labels are 1-64 bytes of lowercase ASCII letters, digits, and inner hyphens"
+        );
+        Self(label)
+    }
+
+    /// Returns the label reported in diagnostics.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        self.0
+    }
+}
+
+const fn is_valid_external_label(label: &str) -> bool {
+    let bytes = label.as_bytes();
+    if bytes.is_empty() || bytes.len() > ExternalOperation::MAX_LABEL_BYTES {
+        return false;
+    }
+    if bytes[0] == b'-' || bytes[bytes.len() - 1] == b'-' {
+        return false;
+    }
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if !(byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-') {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
 /// A closed identifier for a deterministic runtime contract rule.
+///
+/// New rules may be added in a minor release, so a `match` outside this crate
+/// needs a wildcard arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RuntimeContractPolicy {
     /// The configured maximum blocking threads is outside its supported range.
     MaxBlockingThreadsWithinSupportedRange,
@@ -834,15 +853,18 @@ mod tests {
 
     use super::*;
 
+    const PERSIST_TEST_METADATA: RuntimeOperation = RuntimeOperation::external("persist-runtime-metadata");
+    const TEST_FAILURE: RuntimeOperation = RuntimeOperation::external("test-runtime-failure");
+
     #[test]
     fn operational_runtime_error_preserves_source_and_catalog_metadata_without_rendering_it() {
         const SENTINEL: &str = "runtime-source-secret";
-        let error = RuntimeError::io(RuntimeOperation::PersistRuntimeMetadata, io::Error::other(SENTINEL));
+        let error = RuntimeError::io(PERSIST_TEST_METADATA, io::Error::other(SENTINEL));
 
         assert_eq!(error.code(), rocketmq_error::RUNTIME_IO_FAILED.code());
         assert_eq!(error.condition(), CanonicalCondition::Internal);
         assert_eq!(error.recovery_hint(), RecoveryHint::OperatorAction);
-        assert_eq!(error.operation(), RuntimeOperation::PersistRuntimeMetadata);
+        assert_eq!(error.operation(), PERSIST_TEST_METADATA);
         assert_eq!(error.component(), "runtime");
         assert!(error
             .source()
@@ -868,7 +890,7 @@ mod tests {
     #[test]
     fn runtime_clone_shares_source_location_and_backtrace() {
         let caller_line = line!() + 1;
-        let error = RuntimeError::internal(RuntimeOperation::PersistRuntimeMetadata, io::Error::other("typed leaf"));
+        let error = RuntimeError::internal(PERSIST_TEST_METADATA, io::Error::other("typed leaf"));
         let cloned = error.clone();
 
         assert!(Arc::ptr_eq(&error.error, &cloned.error));
@@ -892,22 +914,64 @@ mod tests {
 
     #[test]
     fn operation_debug_output_is_closed_for_sentinel_control_and_unbounded_text() {
-        let error = RuntimeError::internal_failure(RuntimeOperation::TestFailure);
+        let error = RuntimeError::internal_failure(TEST_FAILURE);
         let debug = format!("{error:?}");
         let control = "\u{0000}\u{001b}[31m";
         let unbounded = "unbounded-operation-".repeat(4096);
 
-        assert!(debug.contains("TestFailure"));
+        assert!(debug.contains("test-runtime-failure"));
         assert!(!debug.contains("runtime-source-secret"));
         assert!(!debug.contains("operation_diagnostic"));
         assert!(!debug.contains(control));
         assert!(!debug.contains(&unbounded));
 
         let constructor: fn(RuntimeOperation) -> RuntimeError = RuntimeError::internal_failure;
+        assert_eq!(constructor(TEST_FAILURE).operation(), TEST_FAILURE);
+    }
+
+    #[test]
+    fn an_external_operation_reports_its_own_label() {
+        const INITIALIZE_COMPONENT: RuntimeOperation = RuntimeOperation::external("initialize-component-2");
+
+        assert_eq!(INITIALIZE_COMPONENT.to_string(), "initialize-component-2");
         assert_eq!(
-            constructor(RuntimeOperation::TestFailure).operation(),
-            RuntimeOperation::TestFailure
+            INITIALIZE_COMPONENT,
+            RuntimeOperation::External(ExternalOperation::new("initialize-component-2"))
         );
+        assert_ne!(INITIALIZE_COMPONENT, RuntimeOperation::external("start-component"));
+        let error = RuntimeError::closed(INITIALIZE_COMPONENT);
+        assert_eq!(error.operation(), INITIALIZE_COMPONENT);
+        assert_eq!(error.kind(), RuntimeErrorKind::Closed);
+    }
+
+    #[test]
+    fn external_operation_labels_accept_only_bounded_kebab_case() {
+        let longest = "a".repeat(ExternalOperation::MAX_LABEL_BYTES);
+        assert!(is_valid_external_label(&longest));
+        assert!(is_valid_external_label("admit-kv-mutation-bytes"));
+        assert!(is_valid_external_label("ha-runtime"));
+
+        let too_long = "a".repeat(ExternalOperation::MAX_LABEL_BYTES + 1);
+        for invalid in [
+            "",
+            too_long.as_str(),
+            "-leading",
+            "trailing-",
+            "Upper-case",
+            "under_score",
+            "white space",
+            "control\u{001b}",
+            "path/segment",
+            "non-ascii-é",
+        ] {
+            assert!(!is_valid_external_label(invalid), "{invalid:?} must be rejected");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "external operation labels")]
+    fn a_runtime_constructed_invalid_label_is_rejected() {
+        let _ = ExternalOperation::new("Invalid Label");
     }
 
     #[test]
@@ -949,10 +1013,7 @@ mod tests {
                 RuntimeError::unsupported(RuntimeOperation::RegisterScheduledTask),
                 RuntimeErrorKind::Unsupported,
             ),
-            (
-                RuntimeError::internal_failure(RuntimeOperation::TestFailure),
-                RuntimeErrorKind::Internal,
-            ),
+            (RuntimeError::internal_failure(TEST_FAILURE), RuntimeErrorKind::Internal),
         ];
         for (error, kind) in cases {
             assert_eq!(error.kind(), kind, "{error:?}");

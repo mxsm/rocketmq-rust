@@ -28,6 +28,7 @@ use tokio::sync::Semaphore;
 use super::admission::GlobalBlockingBudget;
 use super::admission::GlobalBlockingPermit;
 use super::diagnostics::BlockingTaskMeta;
+use super::diagnostics::BlockingTaskTable;
 use super::BlockingExecutorSnapshot;
 use super::BlockingKind;
 use super::BlockingLane;
@@ -59,7 +60,7 @@ pub struct BlockingExecutor {
     lane: BlockingLane,
     budget: GlobalBlockingBudget,
     queue_permits: Arc<Semaphore>,
-    tasks: Arc<DashMap<BlockingTaskId, BlockingTaskMeta>>,
+    tasks: Arc<BlockingTaskTable>,
     next_task_id: Arc<AtomicU64>,
     rejected: Arc<AtomicU64>,
     admission: BlockingAdmission,
@@ -328,21 +329,31 @@ impl Drop for BlockingCompletionGuard {
 }
 
 impl BlockingExecutor {
-    /// Creates an isolated compatibility executor.
+    /// Creates an isolated executor for tests and adapters.
     ///
-    /// Runtime composition roots use one shared budget through
-    /// `new_managed`; this constructor preserves the existing public test and
-    /// adapter surface by assigning the executor its own exact capacity.
+    /// Production components use the managed lanes of a
+    /// [`ChildServiceContext`](crate::ChildServiceContext), which share one
+    /// global budget. This executor instead has its own exact capacity and task
+    /// table, outside the managed lanes and their diagnostics. `owner_group`
+    /// supplies its runtime and admission scope, and the executor is registered
+    /// with that group's tree: a closure still running when the tree's owner
+    /// assembles a shutdown report is counted in `blocking_still_running`, so
+    /// the report is not healthy while that work can still have side effects.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract violation when `policy` is invalid.
     pub fn new(policy: BlockingPoolPolicy, owner_group: TaskGroup) -> Result<Self, RuntimeContractViolation> {
         policy.validate()?;
         let capacity = policy.max_concurrency;
-        Ok(Self::new_with_budget(
+        let executor = Self::new_with_budget(
             policy,
             BlockingLane::StorageIo,
             GlobalBlockingBudget::isolated(capacity),
             owner_group.runtime().clone(),
-        )
-        .scoped_to(owner_group))
+        );
+        owner_group.register_isolated_blocking(&executor.tasks);
+        Ok(executor.scoped_to(owner_group))
     }
 
     pub(crate) fn new_managed(

@@ -20,6 +20,13 @@ use super::*;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_store::BrokerReadStore;
+use std::num::NonZeroUsize;
+
+/// Broker metadata resources are independent files. Writing up to four at once
+/// keeps one slow write, such as a large consumer offset table, from holding
+/// back topic and subscription changes; the metadata lane still caps it.
+const BROKER_METADATA_CONCURRENT_WRITES: NonZeroUsize =
+    NonZeroUsize::new(4).expect("the broker metadata write concurrency is positive");
 
 #[cfg(feature = "otel-metrics")]
 pub(super) fn broker_metrics_sampling_config(
@@ -1154,10 +1161,14 @@ impl BrokerRuntime {
             service_context.component("broker.scheduled").task_group().clone(),
         );
         let metadata_io = Some(
-            MetadataIoConfig::default()
-                .into_plan()
-                .expect("default metadata I/O config is valid")
-                .start(&service_context.component("broker.metadata-io")),
+            MetadataIoConfig {
+                max_pending_bytes: validated_config.sections().resources().metadata_io_max_pending_bytes(),
+                ..MetadataIoConfig::default()
+            }
+            .into_plan()
+            .expect("validated Broker resources keep the metadata I/O bounds positive")
+            .with_max_concurrent_writes(BROKER_METADATA_CONCURRENT_WRITES)
+            .start(&service_context.component("broker.metadata-io")),
         );
         let broker_outer_api = BrokerOuterAPI::new_with_remoting_command_factory(
             Arc::new(TransportClientConfig::default()),

@@ -32,6 +32,9 @@ use tokio::task::AbortHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
+use crate::blocking::BlockingTaskSnapshot;
+use crate::blocking::BlockingTaskTable;
+use crate::blocking::IsolatedBlockingTables;
 use crate::critical::CriticalFailureState;
 use crate::critical::CriticalRegistration;
 use crate::error::RuntimeError;
@@ -195,11 +198,13 @@ pub struct TaskGroupEventCounts {
     pub closed_component_requests: u64,
 }
 
-/// Event counters shared by every group of one tree.
+/// State shared by every group of one tree: absorbed-failure counters and the
+/// isolated blocking executors whose work the tree owner reports.
 #[derive(Debug, Default)]
-struct TaskGroupTreeEvents {
+struct TaskGroupTreeState {
     poisoned_groups: AtomicU64,
     closed_component_requests: AtomicU64,
+    isolated_blocking: IsolatedBlockingTables,
 }
 
 /// Identifies the task kind state.
@@ -384,7 +389,7 @@ struct TaskGroupInner {
     // A live descendant retains the entire ownership path. The parent's
     // registry points back weakly, so dropping an idle subtree releases it.
     parent: Option<Arc<TaskGroupInner>>,
-    events: Arc<TaskGroupTreeEvents>,
+    tree: Arc<TaskGroupTreeState>,
     // Component requests this group answered with a closed group.
     closed_component_requests: AtomicUsize,
     next_task_id: AtomicU64,
@@ -547,11 +552,23 @@ impl TaskGroup {
 
     /// Returns the counts of absorbed failures over this group's whole tree.
     pub fn event_counts(&self) -> TaskGroupEventCounts {
-        let events = &self.inner.events;
+        let tree = &self.inner.tree;
         TaskGroupEventCounts {
-            poisoned_groups: events.poisoned_groups.load(Ordering::Relaxed),
-            closed_component_requests: events.closed_component_requests.load(Ordering::Relaxed),
+            poisoned_groups: tree.poisoned_groups.load(Ordering::Relaxed),
+            closed_component_requests: tree.closed_component_requests.load(Ordering::Relaxed),
         }
+    }
+
+    /// Keeps an isolated executor's task table visible to the owner of this
+    /// group's tree.
+    pub(crate) fn register_isolated_blocking(&self, table: &Arc<BlockingTaskTable>) {
+        self.inner.tree.isolated_blocking.register(table);
+    }
+
+    /// Returns the still-running count and task snapshots of the isolated
+    /// executors bound to this group's tree.
+    pub(crate) fn isolated_blocking_report(&self) -> (usize, Vec<BlockingTaskSnapshot>) {
+        self.inner.tree.isolated_blocking.report()
     }
 
     /// Creates a component, or a closed group once this owner stops admitting children.
@@ -562,7 +579,7 @@ impl TaskGroup {
         let name = name.into();
         self.try_child(name.clone()).unwrap_or_else(|_error| {
             self.inner
-                .events
+                .tree
                 .closed_component_requests
                 .fetch_add(1, Ordering::Relaxed);
             if self.inner.closed_component_requests.fetch_add(1, Ordering::Relaxed) == 0 {
@@ -612,7 +629,7 @@ impl TaskGroup {
                 self.inner.runtime.clone(),
                 self.inner.cancellation_token.child_token(),
                 Some(self.inner.clone()),
-                Arc::clone(&self.inner.events),
+                Arc::clone(&self.inner.tree),
             )),
         }
     }
@@ -1189,7 +1206,7 @@ impl TaskGroupInner {
         runtime: RuntimeHandle,
         cancellation_token: CancellationToken,
         parent: Option<Arc<TaskGroupInner>>,
-        events: Arc<TaskGroupTreeEvents>,
+        tree: Arc<TaskGroupTreeState>,
     ) -> Self {
         Self {
             id,
@@ -1200,7 +1217,7 @@ impl TaskGroupInner {
             tracker: TaskTracker::new(),
             registry: Arc::new(ActiveTaskRegistry::new()),
             parent,
-            events,
+            tree,
             closed_component_requests: AtomicUsize::new(0),
             next_task_id: AtomicU64::new(1),
             completed: AtomicUsize::new(0),
@@ -1235,7 +1252,7 @@ impl TaskGroupInner {
             .compare_exchange(STATE_OPEN, STATE_POISONED, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
-            self.events.poisoned_groups.fetch_add(1, Ordering::Relaxed);
+            self.tree.poisoned_groups.fetch_add(1, Ordering::Relaxed);
             tracing::error!(
                 group = %self.path(),
                 "task group poisoned by a panicking task; it no longer admits work"

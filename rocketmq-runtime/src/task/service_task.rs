@@ -291,7 +291,10 @@ pub trait ServiceTask: Sync + Send {
 /// Shutdown waits no longer than the earliest of the deadline passed to
 /// [`Self::shutdown_until`] and the deadline installed on the parent task
 /// group by an owner that is shutting down. When neither exists, it uses the
-/// runtime's default shutdown budget.
+/// runtime's default shutdown budget. An interrupting shutdown is the one
+/// exception: it gives the aborted loop at least one second to confirm its
+/// destruction, so with less than a second left it can return up to one
+/// second after that deadline.
 pub struct ServiceManager<T: ServiceTask + 'static> {
     service: Arc<T>,
     signals: Arc<ServiceSignals>,
@@ -480,6 +483,10 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
 
     /// Stops the service no later than `deadline`, aborting the loop at once
     /// when `interrupt` is set.
+    ///
+    /// An interrupted loop is given at least one second to confirm the abort,
+    /// so when less than a second of `deadline` remains the call can return up
+    /// to one second after it.
     ///
     /// # Errors
     ///

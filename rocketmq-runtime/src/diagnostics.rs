@@ -405,7 +405,8 @@ pub struct RuntimeDiagnosticsViewOptionsV2 {
     pub max_metadata_resources: usize,
     /// Maximum number of task details emitted when a detail list is requested.
     pub max_detail_entries: usize,
-    /// Maximum number of tasks examined when a detail list is requested.
+    /// Maximum number of tasks examined, and of descendant task groups
+    /// visited, when a detail list is requested.
     pub detail_scan_budget: usize,
 }
 
@@ -1110,6 +1111,43 @@ mod tests {
             .details
             .iter()
             .all(|detail| detail.scope == RuntimeDiagnosticsScope::Local));
+    }
+
+    #[tokio::test]
+    async fn v2_detail_scan_budget_also_bounds_the_groups_it_visits() {
+        let context = RuntimeContext::from_current("runtime-v2-group-budget");
+        // Empty groups add no tasks, so only the group bound can stop the scan.
+        let groups = (0..8)
+            .map(|index| context.service_context(crate::ScopeId::try_new(format!("empty-{index}")).unwrap()))
+            .collect::<Vec<_>>();
+        let diagnostics = RuntimeDiagnostics::new();
+        let view_with_budget = |detail_scan_budget| {
+            diagnostics.view_v2_with_options(
+                RuntimeComponent::Other,
+                context.root_group(),
+                Vec::new(),
+                RuntimeDiagnosticsInputs::default(),
+                RuntimeDiagnosticsViewOptionsV2 {
+                    max_detail_entries: 8,
+                    detail_scan_budget,
+                    ..RuntimeDiagnosticsViewOptionsV2::default()
+                },
+            )
+        };
+
+        let bounded = view_with_budget(3);
+        assert_eq!(bounded.details_scanned, 0);
+        assert!(bounded.details.is_empty());
+        assert!(bounded.truncated, "the scan stopped before every group was visited");
+        assert_eq!(
+            bounded.tasks.task_group_count, 9,
+            "the aggregate section still covers every group"
+        );
+
+        let complete = view_with_budget(8);
+        assert_eq!(complete.details_scanned, 0);
+        assert!(!complete.truncated, "a budget covering every group completes the scan");
+        drop(groups);
     }
 
     #[tokio::test]

@@ -31,6 +31,7 @@ mod filesystem;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fmt;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
@@ -39,6 +40,8 @@ use std::sync::Arc;
 use std::sync::Weak;
 use std::time::Duration;
 
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -50,6 +53,11 @@ use crate::metadata_target::MetadataTargetRegistration;
 use crate::metadata_target::MetadataTargetRegistrationOutcome;
 use crate::metadata_target::MetadataTargetRegistry;
 use crate::metadata_target::MetadataTargetRetirementOutcome;
+use crate::resource_budget::BudgetCapacity;
+use crate::resource_budget::BudgetLimit;
+use crate::resource_budget::FullPolicy;
+use crate::resource_budget::ResourceBudget;
+use crate::resource_budget::ResourcePermit;
 use crate::shutdown_deadline::ShutdownDeadline;
 use crate::BlockingExecutor;
 use crate::BlockingPoolPolicy;
@@ -329,6 +337,7 @@ pub struct MetadataIoConfig {
 #[derive(Debug, Clone)]
 pub struct MetadataIoPlan {
     config: MetadataIoConfig,
+    max_concurrent_writes: NonZeroUsize,
 }
 
 impl MetadataIoConfig {
@@ -369,11 +378,29 @@ impl MetadataIoConfig {
     /// blocking duration is invalid.
     pub fn into_plan(self) -> Result<MetadataIoPlan, RuntimeContractViolation> {
         self.validate()?;
-        Ok(MetadataIoPlan { config: self })
+        Ok(MetadataIoPlan {
+            config: self,
+            max_concurrent_writes: NonZeroUsize::MIN,
+        })
     }
 }
 
 impl MetadataIoPlan {
+    /// Lets the actor write up to `writes` different resources at the same time.
+    ///
+    /// The default is one: resources are written one after another, so one
+    /// slow write delays every other resource of the actor. A larger value lets
+    /// independent resources proceed while a write is slow. Generations of one
+    /// resource are still written one at a time and in order, and its queued
+    /// generations still coalesce. The actor never runs more writes than the
+    /// shared metadata lane admits at once; [`MetadataIoActor::effective_profile`]
+    /// reports the value in force.
+    #[must_use]
+    pub fn with_max_concurrent_writes(mut self, writes: NonZeroUsize) -> Self {
+        self.max_concurrent_writes = writes;
+        self
+    }
+
     /// Starts the validated actor with the production filesystem.
     ///
     /// # Errors
@@ -381,7 +408,7 @@ impl MetadataIoPlan {
     /// Returns an operational lifecycle error when the owned coordinator
     /// cannot start.
     pub fn start(self, service_context: &ChildServiceContext) -> RuntimeResult<MetadataIoActor> {
-        MetadataIoActor::start_validated(service_context, self.config, Arc::new(LocalMetadataFileSystem))
+        MetadataIoActor::start_validated(service_context, self, Arc::new(LocalMetadataFileSystem))
     }
 
     /// Starts the validated actor with an injected filesystem implementation.
@@ -395,7 +422,7 @@ impl MetadataIoPlan {
         service_context: &ChildServiceContext,
         file_system: Arc<dyn MetadataFileSystem>,
     ) -> RuntimeResult<MetadataIoActor> {
-        MetadataIoActor::start_validated(service_context, self.config, file_system)
+        MetadataIoActor::start_validated(service_context, self, file_system)
     }
 }
 
@@ -459,6 +486,9 @@ pub struct MetadataIoActorLimitsProfile {
     pub max_pending_bytes: usize,
     /// The waiter ceiling derived from `max_pending_operations`.
     pub max_waiters: usize,
+    /// The number of different resources written at the same time: the
+    /// planned value, capped by the concurrency of the shared metadata lane.
+    pub max_concurrent_writes: usize,
 }
 
 /// A read-only view of the metadata I/O limits actually in force.
@@ -487,7 +517,17 @@ fn max_metadata_waiters(max_pending_operations: usize) -> usize {
     max_pending_operations.saturating_mul(4).max(1)
 }
 
-fn effective_profile(config: &MetadataIoConfig, blocking_policy: &BlockingPoolPolicy) -> MetadataIoEffectiveProfile {
+/// Caps the planned write concurrency by the lane, so the actor never queues
+/// its own writes behind lane capacity it cannot use.
+fn effective_concurrent_writes(planned: NonZeroUsize, blocking_policy: &BlockingPoolPolicy) -> usize {
+    planned.get().min(blocking_policy.max_concurrency).max(1)
+}
+
+fn effective_profile(
+    config: &MetadataIoConfig,
+    blocking_policy: &BlockingPoolPolicy,
+    max_concurrent_writes: usize,
+) -> MetadataIoEffectiveProfile {
     let legacy_blocking_field =
         |field: &'static str, configured: Duration, effective: Duration| MetadataIoLegacyBlockingField {
             field,
@@ -508,6 +548,7 @@ fn effective_profile(config: &MetadataIoConfig, blocking_policy: &BlockingPoolPo
             max_pending_operations: config.max_pending_operations,
             max_pending_bytes: config.max_pending_bytes,
             max_waiters: max_metadata_waiters(config.max_pending_operations),
+            max_concurrent_writes,
         },
         legacy_blocking_fields: [
             legacy_blocking_field(
@@ -887,6 +928,9 @@ impl MetadataIoObserver {
 struct ActorInner {
     config: MetadataIoConfig,
     blocking_policy: BlockingPoolPolicy,
+    max_concurrent_writes: usize,
+    /// Charges every retained snapshot to the owner's process budget.
+    retained_bytes: ResourceBudget,
     targets: MetadataTargetRegistry,
     waiter_count: Arc<AtomicUsize>,
     state: Mutex<ActorState>,
@@ -918,12 +962,18 @@ struct ResourceState {
 struct QueuedMetadataWrite {
     request: MetadataWriteRequest,
     registration: MetadataTargetRegistration,
+    /// The snapshot's process-budget charge. Replacing a queued generation
+    /// releases it with the replaced snapshot.
+    charge: ResourcePermit,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct WorkMeta {
     generation: MetadataGeneration,
     bytes: usize,
+    /// Released in `finish_request` together with `pending_bytes`, never when a
+    /// caller stops observing the write.
+    _charge: ResourcePermit,
 }
 
 #[derive(Debug)]
@@ -974,18 +1024,26 @@ impl ActorInner {
 impl MetadataIoActor {
     fn start_validated(
         service_context: &ChildServiceContext,
-        config: MetadataIoConfig,
+        plan: MetadataIoPlan,
         file_system: Arc<dyn MetadataFileSystem>,
     ) -> RuntimeResult<Self> {
+        let MetadataIoPlan {
+            config,
+            max_concurrent_writes,
+        } = plan;
         let task_group = service_context.component("metadata-io").task_group().clone();
         let blocking = service_context.metadata_io().clone();
         let blocking_policy = blocking.policy().clone();
         warn_legacy_blocking_fields(&config, &blocking_policy);
+        let max_concurrent_writes = effective_concurrent_writes(max_concurrent_writes, &blocking_policy);
+        let retained_bytes = retained_bytes_budget(&service_context.process_budget())?;
         let targets = service_context.resources().metadata_targets();
         let (sender, receiver) = mpsc::channel(config.max_pending_operations);
         let inner = Arc::new(ActorInner {
             config,
             blocking_policy,
+            max_concurrent_writes,
+            retained_bytes,
             targets,
             waiter_count: Arc::new(AtomicUsize::new(0)),
             state: Mutex::new(ActorState {
@@ -1115,6 +1173,14 @@ impl MetadataIoActor {
         if next_bytes > self.inner.config.max_pending_bytes {
             return Err(RuntimeError::capacity(crate::RuntimeOperation::AdmitMetadataBytes));
         }
+        // The process budget bounds what every component retains together.
+        // A replaced queued snapshot releases its charge only after this one
+        // is taken, so a replacement close to the process limit can be refused.
+        let charge = self
+            .inner
+            .retained_bytes
+            .try_acquire_data(request.len())
+            .map_err(|_rejection| RuntimeError::capacity(crate::RuntimeOperation::AdmitMetadataBytes))?;
 
         let queue_permit = if needs_queue_token {
             Some(
@@ -1135,6 +1201,7 @@ impl MetadataIoActor {
         resource_state.queued = Some(QueuedMetadataWrite {
             request,
             registration: target_registration,
+            charge,
         });
         resource_state.waiters.push(GenerationWaiter {
             generation,
@@ -1434,8 +1501,32 @@ impl MetadataIoActor {
     /// values that drive execution rather than the values a caller requested.
     #[must_use]
     pub fn effective_profile(&self) -> MetadataIoEffectiveProfile {
-        effective_profile(&self.inner.config, &self.inner.blocking_policy)
+        effective_profile(
+            &self.inner.config,
+            &self.inner.blocking_policy,
+            self.inner.max_concurrent_writes,
+        )
     }
+}
+
+/// Derives the ledger node that charges retained snapshots to the process
+/// budget.
+///
+/// The node copies its parent's limits instead of adding its own:
+/// `max_pending_bytes` stays the actor's admission bound, while the process
+/// budget bounds what every budgeted component retains together, including the
+/// other metadata actors of the same owner.
+fn retained_bytes_budget(process_budget: &ResourceBudget) -> RuntimeResult<ResourceBudget> {
+    let parent = process_budget.limit();
+    let limit = BudgetLimit {
+        capacity: parent.capacity,
+        control_reserve: BudgetCapacity::default(),
+        max_age: parent.max_age,
+        full_policy: FullPolicy::Reject,
+    };
+    process_budget.child("metadata-io", limit).map_err(|violation| {
+        RuntimeError::configuration_failure(crate::RuntimeOperation::AdmitMetadataBytes, violation)
+    })
 }
 
 fn ensure_target_registration(
@@ -1515,24 +1606,25 @@ async fn run_actor(
     cancellation: CancellationToken,
 ) {
     let mut cancellation_observed = false;
+    let mut channel_closed = false;
+    // A resource with work is in exactly one place: the channel, `ready`, or
+    // `writes`. Writes of one resource therefore never overlap, and each keeps
+    // its generation order however many resources are written at once.
     let mut ready: VecDeque<Arc<str>> = VecDeque::new();
+    let mut writes = FuturesUnordered::new();
     loop {
         if !cancellation_observed && cancellation.is_cancelled() {
             cancellation_observed = true;
             stop_admission(&inner);
         }
-        if should_finish(&inner) {
-            break;
+        while writes.len() < inner.max_concurrent_writes {
+            let Some(resource) = ready.pop_front() else {
+                break;
+            };
+            writes.push(write_resource(&inner, &blocking, &file_system, resource));
         }
-        if let Some(resource) = ready.pop_front() {
-            let has_more = process_resource(&inner, &blocking, &file_system, resource.clone()).await;
-            while let Ok(resource) = receiver.try_recv() {
-                ready.push_back(resource);
-            }
-            if has_more {
-                ready.push_back(resource);
-            }
-            continue;
+        if writes.is_empty() && should_finish(&inner) {
+            break;
         }
         tokio::select! {
             biased;
@@ -1540,20 +1632,22 @@ async fn run_actor(
                 cancellation_observed = true;
                 stop_admission(&inner);
             }
+            Some((resource, has_more)) = writes.next(), if !writes.is_empty() => {
+                // Resources that arrived during the write go first, so a
+                // resource that keeps receiving generations cannot starve them.
+                while let Ok(pending) = receiver.try_recv() {
+                    ready.push_back(pending);
+                }
+                if has_more {
+                    ready.push_back(resource);
+                }
+            }
             _ = inner.shutdown.notified() => {}
-            resource = receiver.recv() => {
+            resource = receiver.recv(), if !channel_closed => {
                 match resource {
-                    Some(resource) => {
-                        let has_more =
-                            process_resource(&inner, &blocking, &file_system, resource.clone()).await;
-                        while let Ok(pending) = receiver.try_recv() {
-                            ready.push_back(pending);
-                        }
-                        if has_more {
-                            ready.push_back(resource);
-                        }
-                    }
+                    Some(resource) => ready.push_back(resource),
                     None => {
+                        channel_closed = true;
                         stop_admission(&inner);
                     }
                 }
@@ -1563,16 +1657,27 @@ async fn run_actor(
     finish_worker(&inner);
 }
 
+/// Writes the next generation of `resource` and reports whether another one
+/// was queued meanwhile.
+async fn write_resource(
+    inner: &Arc<ActorInner>,
+    blocking: &BlockingExecutor,
+    file_system: &Arc<dyn MetadataFileSystem>,
+    resource: Arc<str>,
+) -> (Arc<str>, bool) {
+    let has_more = process_resource(inner, blocking, file_system, resource.clone()).await;
+    (resource, has_more)
+}
+
 async fn process_resource(
     inner: &Arc<ActorInner>,
     blocking: &BlockingExecutor,
     file_system: &Arc<dyn MetadataFileSystem>,
     resource: Arc<str>,
 ) -> bool {
-    let Some(queued) = take_next_request(inner, &resource) else {
+    let Some((request, registration)) = take_next_request(inner, &resource) else {
         return false;
     };
-    let QueuedMetadataWrite { request, registration } = queued;
     let MetadataWriteRequest {
         target,
         bytes,
@@ -1619,15 +1724,23 @@ async fn process_resource(
     finish_request(inner, &resource, generation, result)
 }
 
-fn take_next_request(inner: &ActorInner, resource: &Arc<str>) -> Option<QueuedMetadataWrite> {
+fn take_next_request(
+    inner: &ActorInner,
+    resource: &Arc<str>,
+) -> Option<(MetadataWriteRequest, MetadataTargetRegistration)> {
     let mut state = inner.state.lock();
     let resource_state = state.resources.get_mut(resource)?;
-    let request = resource_state.queued.take()?;
+    let QueuedMetadataWrite {
+        request,
+        registration,
+        charge,
+    } = resource_state.queued.take()?;
     resource_state.in_flight = Some(WorkMeta {
-        generation: request.request.generation,
-        bytes: request.request.len(),
+        generation: request.generation,
+        bytes: request.len(),
+        _charge: charge,
     });
-    Some(request)
+    Some((request, registration))
 }
 
 fn finish_request(
@@ -1649,6 +1762,9 @@ fn finish_request(
         debug_assert_eq!(in_flight.generation, generation);
         state.pending_operations = state.pending_operations.saturating_sub(1);
         state.pending_bytes = state.pending_bytes.saturating_sub(in_flight.bytes);
+        // Release the process-budget charge under the same lock that releases
+        // the local byte count, so the two never disagree.
+        drop(in_flight);
 
         let outcome = commit_outcome(generation, result);
         if matches!(outcome, MetadataIoCommitOutcome::Durable(_)) {

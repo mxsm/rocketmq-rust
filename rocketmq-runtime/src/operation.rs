@@ -31,6 +31,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
+use crate::shutdown_deadline::ShutdownDeadline;
 use crate::shutdown_deadline::ABORT_CONFIRMATION_TIMEOUT;
 use crate::task_group::TaskGroup;
 use crate::task_group::TaskGroupId;
@@ -237,8 +238,10 @@ impl OperationContext {
     ///
     /// Returns `true` when every task completed before the shared timeout.
     /// Tasks still running at the deadline are aborted and awaited for a
-    /// bounded confirmation window beyond it, so their running futures are
-    /// dropped before this returns.
+    /// confirmation window of at most one second beyond it, so their running
+    /// futures are dropped before this returns. The call can therefore return
+    /// up to one second after `timeout`; use [`Self::cancel_and_wait_until`] to
+    /// stay within an existing shutdown deadline.
     ///
     /// # Errors
     ///
@@ -249,22 +252,64 @@ impl OperationContext {
         self.wait(owner, timeout).await
     }
 
+    /// Cancels this operation and waits for its tasks, never past `deadline`.
+    ///
+    /// Behaves like [`Self::wait_until`] after requesting cancellation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `owner` differs from the component owner used to
+    /// spawn the operation.
+    pub async fn cancel_and_wait_until(&self, owner: &TaskGroup, deadline: ShutdownDeadline) -> RuntimeResult<bool> {
+        self.cancel();
+        self.wait_until(owner, deadline).await
+    }
+
     /// Waits until no operation task is active and `owner` has settled every
     /// one, without requesting cancellation. Tasks still running at the
-    /// deadline are aborted and awaited for a bounded confirmation window.
+    /// deadline are aborted and awaited for a confirmation window of at most
+    /// one second, so the call can return up to one second after `timeout`.
     ///
     /// Tasks accepted during the wait are waited for too; close admission
     /// first when new tasks may still be submitted. Returns `true` when every
     /// task finished before the deadline; `owner` then no longer lists any of
-    /// them.
+    /// them. Use [`Self::wait_until`] to stay within an existing deadline.
     ///
     /// # Errors
     ///
     /// Returns an error when `owner` differs from the component owner used to
     /// spawn the operation.
     pub async fn wait(&self, owner: &TaskGroup, timeout: Duration) -> RuntimeResult<bool> {
+        self.wait_for_tasks(owner, Instant::now() + timeout, ABORT_CONFIRMATION_TIMEOUT)
+            .await
+    }
+
+    /// Waits for this operation's tasks like [`Self::wait`], but never past
+    /// `deadline`.
+    ///
+    /// Tasks still running at the deadline are asked to abort and the call
+    /// returns `false` at once, without confirming that their futures were
+    /// dropped. They stay registered with `owner` until they are, so the
+    /// owner's shutdown report accounts for any that remain. This matches
+    /// [`TaskGroup::shutdown_until`], which also never extends its deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `owner` differs from the component owner used to
+    /// spawn the operation.
+    pub async fn wait_until(&self, owner: &TaskGroup, deadline: ShutdownDeadline) -> RuntimeResult<bool> {
+        self.wait_for_tasks(owner, deadline.instant(), Duration::ZERO).await
+    }
+
+    /// Waits until `deadline`, then aborts what remains and waits up to
+    /// `abort_confirmation` for those futures to be dropped.
+    async fn wait_for_tasks(
+        &self,
+        owner: &TaskGroup,
+        deadline: Instant,
+        abort_confirmation: Duration,
+    ) -> RuntimeResult<bool> {
         self.ensure_owner(owner.id())?;
-        let deadline = Instant::now() + timeout;
         loop {
             // Registered before the check, so a wakeup in between is not lost.
             let idle = self.inner.idle.notified();
@@ -289,11 +334,13 @@ impl OperationContext {
             }
         }
 
+        // A zero confirmation window only requests the aborts: waiting on an
+        // expired deadline would have nothing left to wait with.
         let remaining = owner.operation_task_ids(self.inner.id);
         join_all(
             remaining
                 .into_iter()
-                .map(|task_id| owner.abort_task_and_wait(task_id, ABORT_CONFIRMATION_TIMEOUT)),
+                .map(|task_id| owner.abort_task_and_wait(task_id, abort_confirmation)),
         )
         .await;
         Ok(false)
@@ -782,6 +829,87 @@ mod tests {
         );
         assert_eq!(operation.active_task_count(), 0);
 
+        let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wait_until_returns_at_its_deadline_without_confirming_the_abort() {
+        // Dropping the aborted future blocks until released, so a wait that
+        // returns before the release cannot have confirmed the abort.
+        struct BlockingDrop(Option<std::sync::mpsc::Receiver<()>>);
+
+        impl Drop for BlockingDrop {
+            fn drop(&mut self) {
+                if let Some(release) = self.0.take() {
+                    let _ = release.recv();
+                }
+            }
+        }
+
+        let runtime = RuntimeContext::from_current("operation-wait-until-test");
+        let owner = runtime.service_context("operations");
+        let operation = OperationContext::without_deadline(TaskKind::Worker);
+        let started = Arc::new(AtomicBool::new(false));
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+
+        owner
+            .task_group()
+            .spawn_operation(&operation, "slow-to-drop-operation", {
+                let started = Arc::clone(&started);
+                async move {
+                    let _guard = BlockingDrop(Some(release_rx));
+                    started.store(true, Ordering::Release);
+                    std::future::pending::<()>().await
+                }
+            })
+            .expect("operation task should spawn");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !started.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("operation task should start");
+
+        let deadline = ShutdownDeadline::after(Duration::from_millis(20));
+        assert!(!operation
+            .wait_until(owner.task_group(), deadline)
+            .await
+            .expect("operation should use its bound owner"));
+        assert_eq!(
+            operation.active_task_count(),
+            1,
+            "wait_until must not wait for the aborted future to be dropped"
+        );
+
+        release_tx.send(()).unwrap();
+        assert!(
+            operation
+                .wait(owner.task_group(), Duration::from_secs(5))
+                .await
+                .expect("operation should use its bound owner"),
+            "the aborted task settles once its future is dropped"
+        );
+        let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test]
+    async fn cancel_and_wait_until_joins_a_cooperative_operation() {
+        let runtime = RuntimeContext::from_current("operation-cancel-until-test");
+        let owner = runtime.service_context("operations");
+        let operation = OperationContext::without_deadline(TaskKind::Worker);
+        owner
+            .task_group()
+            .spawn_operation(&operation, "pending-operation", std::future::pending())
+            .expect("operation task should spawn");
+
+        assert!(operation
+            .cancel_and_wait_until(owner.task_group(), ShutdownDeadline::after(Duration::from_secs(5)))
+            .await
+            .expect("operation should use its bound owner"));
+        assert_eq!(operation.active_task_count(), 0);
         let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
     }

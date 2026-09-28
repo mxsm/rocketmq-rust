@@ -14,13 +14,17 @@
 
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::BlockingLane;
 use rocketmq_runtime::BlockingPoolPolicy;
 use rocketmq_runtime::ProcessMemoryLimit;
 use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::RuntimeOwner;
 
 fn owner() -> RuntimeOwner {
@@ -79,6 +83,83 @@ fn isolated_executor_uses_the_supplied_group_even_when_constructed_outside_tokio
     assert_eq!(actual, owner_id);
     assert_eq!(executor.snapshot().global_running, 0);
     assert!(owner.shutdown_runtime_blocking().unwrap().is_healthy());
+}
+
+#[test]
+fn the_owner_report_counts_a_closure_still_running_on_an_isolated_executor() {
+    let owner = owner();
+    let service = owner.root_context().component("isolated-report");
+    let policy = BlockingPoolPolicy {
+        task_timeout: Duration::from_millis(50),
+        ..BlockingPoolPolicy::default()
+    };
+    let executor = BlockingExecutor::new(policy, service.task_group().clone()).unwrap();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let waited = owner.block_on(executor.spawn_io("held-isolated", move || {
+        started_tx.send(()).unwrap();
+        let _ = release_rx.recv();
+    }));
+    started_rx.recv().unwrap();
+    assert!(
+        waited.is_err(),
+        "the caller stops waiting while the closure keeps running"
+    );
+
+    let report = owner.block_on(owner.shutdown_tasks());
+    assert_eq!(report.blocking_still_running, 1);
+    assert!(!report.is_healthy());
+    assert!(report.blocking_tasks.iter().any(|task| task.name == "held-isolated"));
+
+    // Dropping every executor handle does not hide the running closure.
+    drop(executor);
+    let report = owner.block_on(owner.shutdown_tasks());
+    assert_eq!(report.blocking_still_running, 1);
+
+    release_tx.send(()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while owner.block_on(owner.shutdown_tasks()).blocking_still_running != 0 {
+        assert!(Instant::now() < deadline, "the released closure should exit");
+        std::thread::yield_now();
+    }
+    assert!(owner.shutdown_runtime_blocking().unwrap().is_healthy());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_runtime_context_report_counts_its_isolated_executors() {
+    let context = RuntimeContext::try_from_current("isolated-context-report").unwrap();
+    let executor = BlockingExecutor::new(
+        BlockingPoolPolicy {
+            task_timeout: Duration::from_millis(50),
+            ..BlockingPoolPolicy::default()
+        },
+        context.service_context("isolated").task_group().clone(),
+    )
+    .unwrap();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let waited = executor
+        .spawn_io("held-context", move || {
+            let _ = started_tx.send(());
+            let _ = release_rx.recv();
+        })
+        .await;
+    started_rx.await.unwrap();
+    assert!(waited.is_err());
+
+    let report = context.shutdown_tasks(Duration::from_secs(1)).await;
+    assert_eq!(report.blocking_still_running, 1);
+    assert!(!report.is_healthy());
+    assert_eq!(
+        report
+            .annotations
+            .iter()
+            .filter(|annotation| annotation.message.contains("blocking_still_running"))
+            .count(),
+        1,
+        "running blocking work is annotated once"
+    );
+    release_tx.send(()).unwrap();
 }
 
 #[test]

@@ -39,3 +39,5 @@ pub use policy::BlockingTaskState;
 
 pub(crate) use admission::GlobalBlockingBudget;
 pub(crate) use diagnostics::BlockingExecutorAggregate;
+pub(crate) use diagnostics::BlockingTaskTable;
+pub(crate) use diagnostics::IsolatedBlockingTables;

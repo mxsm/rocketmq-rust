@@ -115,6 +115,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 - `ScheduledTaskRegistrationOutcome::AlreadyPresent`、`BudgetRejection` 和元数据目标冲突
   等正常结果有各自的类型。
 
+`RuntimeOperation` 标识失败的操作。其具名变体是本 crate 自身执行的操作；基于运行时构建的
+crate 使用常量形式的 `RuntimeOperation::external("initialize-broker")` 标注自身失败，
+而不是在此添加变体。`RuntimeOperation` 与 `RuntimeContractPolicy` 均为 non-exhaustive，
+crate 之外的 `match` 需要通配分支。
+
 `RuntimeContractViolation` 不会自动转换为 `RuntimeError`。
 示例使用能够接收两者的应用层错误类型；应用也可以定义明确的启动错误枚举。
 
@@ -149,8 +154,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 有界请求或可重启工作使用 `OperationContext`，无需为每次操作创建组件组。
 `close_admission()` 停止接收新的操作任务；`wait()` 等待直到没有活动的操作任务且所有者已结算它们；
 `cancel_and_wait()` 还会请求取消。等待时必须传入操作最初绑定的组件所有者，
-未完成工作会在等待截止时间到达后被中止。操作只统计活动任务数，任务本身在所有者的
-注册表中按操作打标，因此空闲操作只占几百字节。
+未完成工作会在等待截止时间到达后被中止。`wait(timeout)` 与 `cancel_and_wait(timeout)`
+随后最多再用一秒确认被中止的 Future 已被丢弃，因此可能在 `timeout` 之后最多一秒才返回。
+`wait_until(deadline)` 与 `cancel_and_wait_until(deadline)` 绝不超过传入的
+`ShutdownDeadline`：它们发出中止请求后立即返回，仍在丢弃中的任务由所有者的关闭报告统计。
+操作只统计活动任务数，任务本身在所有者的注册表中按操作打标，因此空闲操作只占几百字节。
 
 `TaskGroup::cancel()` 只广播取消信号。
 使用 `shutdown(...)` 或 `shutdown_until(...)` 关闭任务接收并等待关闭报告。
@@ -245,7 +253,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 `BlockingKind::LongRunning` 会被拒绝。长期阻塞循环需要专用操作系统线程或领域服务作为
 所有者，并提供停止和等待退出协议。`BlockingExecutor::new(policy, owner_group)`
-创建隔离的执行器：它拥有独立预算，传入的任务组不会将其纳入受管根通道。
+为测试和适配场景创建隔离的执行器：它拥有独立于受管根通道及其诊断的预算和任务表。
+执行器会登记到该任务组所在的树，因此它仍在运行的闭包会计入该树所有者关闭报告中的
+`blocking_still_running`。
 
 ## 资源预算与队列
 
@@ -289,6 +299,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 通过 `max_pending_operations` 和 `max_pending_bytes` 配置 actor 的准入限制；
 通过 `RuntimeConfig::blocking_lane_policies.metadata_io` 配置受管通道。
 actor 的兼容 `blocking_*` 配置不会替换共享通道策略。
+
+actor 默认一次只写一个资源，因此一次缓慢写入会延迟其他资源。
+`MetadataIoPlan::with_max_concurrent_writes(n)` 允许在某次写入缓慢时继续写入其他独立资源，
+上限不超过元数据通道的并发度；同一资源的各代次仍逐个、按顺序写入。
+`effective_profile()` 报告实际生效的值。每个排队中或执行中的快照还会计入所有者的进程预算，
+直到写入完成为止，观察者超时后也不例外，因此同一所有者的多个 actor 共享该预算。
+进程预算无法容纳的快照与超过 `max_pending_bytes` 的快照一样被拒绝。
 
 `submit` 和 `submit_next` 接收不可变快照，但不等待持久化完成。
 调用方需要匹配 `MetadataIoAdmissionOutcome`：`Accepted` 提供回执；当同一资源已有
@@ -347,7 +364,13 @@ chart 已经这样配置；其他取值属于配置错误。每个连接由生�
 
 任务组关闭时先停止登记并广播取消，再并发执行子组关闭和本组任务等待。
 截止时间到达后中止尚未完成的受跟踪任务。报告在任务组级别缓存，
-运行时所有者另外合并其阻塞通道快照。
+运行时所有者另外合并受管通道以及登记到其任务树的隔离执行器中的阻塞工作。
+
+接受 `ShutdownDeadline` 的 API 绝不超过该截止时间等待：`TaskGroup::shutdown_until`、
+`OperationContext::wait_until` 和 `BlockingExecutor::spawn_until` 会报告未确认的工作。
+有两个按相对时间等待的 API 会在截止时间之后最多再用一秒确认中止：
+`OperationContext::wait` / `cancel_and_wait`，以及剩余时间不足一秒时的中断式
+`ServiceManager` 关闭。编排嵌套关闭步骤时应据此预留时间，或使用 `_until` 形式。
 
 | API | 范围与保证 |
 | --- | --- |
@@ -367,7 +390,8 @@ chart 已经这样配置；其他取值属于配置错误。每个连接由生�
 
 `ServiceManager` 在 `new_with_task_group` 传入的任务组下以服务任务运行 `ServiceTask`
 循环。其状态（`ServiceTaskState`）是单个原子值；`shutdown_until(deadline)` 最晚在请求的
-截止时间与父任务组已安装截止时间中较早者返回。
+截止时间与父任务组已安装截止时间中较早者返回。中断式关闭会在该截止时间之后最多再给被中止
+的循环一秒，用于确认其已被销毁。
 
 ## 诊断
 
@@ -387,7 +411,7 @@ chart 已经这样配置；其他取值属于配置错误。每个连接由生�
 调用方不拥有的小节报告为缺失而不是空值，计划任务、保留元数据和关闭结果都以有界聚合呈现。
 `RuntimeDiagnosticsViewOptionsV2` 还承载按需任务详情列表的扫描与输出预算，
 因此被截断的列表会报告实际扫描了多少任务，而不是把局部总和当作整棵运行时。
-V1 的字段和含义保持不变。
+扫描预算同时限制检查的任务数和访问的后代任务组数。V1 的字段和含义保持不变。
 
 ## 兼容边界与工作区接入
 
@@ -413,8 +437,8 @@ ClientRuntime 必须注入应用拥有的子作用域，不会创建回退运行
 ## 特性与验证
 
 crate 的 edition 和最低 Rust 版本继承自[工作区清单](../Cargo.toml)。
-默认 crate 特性为空；`async_fs` 启用 `common::file_utils` 中的 Tokio 文件系统辅助 API。
-核心所有权、阻塞、预算和元数据 API 不需要该特性。
+该 crate 没有可选特性。`common::file_utils` 中的文件系统辅助 API 会阻塞；
+异步代码应通过阻塞通道运行它们，或通过 `MetadataIoActor` 持久化。
 
 任务生命周期变更可以从包级检查开始：
 
@@ -434,7 +458,7 @@ cargo test -p rocketmq-runtime --test runtime_model
 | 公开作用域限制 | `cargo test -p rocketmq-runtime --test service_context_scope_compile_fail` |
 | 关闭或预算的并发交错 | 使用 `cargo test -p rocketmq-runtime --test <target>` 运行 `task_group_shutdown_loom` 或 `resource_budget_loom` |
 | 迁移或大型 Future 提交 | 使用相同测试命令运行 `runtime_migration_fixture` 或 `task_submission_stack` |
-| 可选文件系统辅助 API | `cargo test -p rocketmq-runtime --features async_fs common::file_utils` |
+| 文件系统辅助 API | `cargo test -p rocketmq-runtime --lib common::file_utils` |
 
 需要时，针对受影响目标和特性运行
 `cargo clippy -p rocketmq-runtime --no-deps -- -D warnings`。

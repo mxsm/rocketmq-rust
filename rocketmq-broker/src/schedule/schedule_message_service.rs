@@ -760,7 +760,7 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
             if let Some(run) = lifecycle.run.as_ref() {
                 let joined = run
                     .operation
-                    .cancel_and_wait(&run.task_group, deadline.remaining())
+                    .cancel_and_wait_until(&run.task_group, deadline)
                     .await
                     .map_err(schedule_message_service_shutdown_failed)?;
                 if !joined {

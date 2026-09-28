@@ -131,17 +131,13 @@ impl RuntimeContext {
 
     pub async fn shutdown_tasks_until(&self, deadline: ShutdownDeadline) -> ShutdownReport {
         let mut report = self.root.task_group().shutdown_until(deadline).await;
-        for snapshot in self.root.blocking_snapshots() {
-            report.merge_blocking(snapshot);
-        }
+        self.root.merge_blocking_into(&mut report);
         report
     }
 
     pub fn shutdown_tasks_now(&self) -> ShutdownReport {
         let mut report = self.root.task_group().shutdown_now();
-        for snapshot in self.root.blocking_snapshots() {
-            report.merge_blocking(snapshot);
-        }
+        self.root.merge_blocking_into(&mut report);
         report
     }
 }

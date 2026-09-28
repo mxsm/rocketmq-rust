@@ -58,6 +58,9 @@ use super::KVConfigSerializeWrapper;
 
 const KV_RESOURCE: &str = "namesrv.kv-config";
 pub(crate) const DEFAULT_KV_MUTATION_MAX_PENDING_BYTES: usize = 16 * 1024 * 1024;
+const ADMIT_KV_MUTATION: RuntimeOperation = RuntimeOperation::external("admit-kv-mutation");
+const ADMIT_KV_MUTATION_BYTES: RuntimeOperation = RuntimeOperation::external("admit-kv-mutation-bytes");
+const KV_MUTATION_WORKER: RuntimeOperation = RuntimeOperation::external("kv-mutation-worker");
 
 #[derive(Clone, Debug)]
 pub(crate) enum KvMutation {
@@ -155,17 +158,13 @@ pub(crate) struct KvMutationReceipt {
 impl KvMutationReceipt {
     pub(crate) async fn wait_until(self, deadline: MetadataDeadline) -> NameServerResult<KvCommitReceipt> {
         if deadline.is_expired() {
-            return Err(crate::runtime_error(RuntimeError::timed_out(
-                RuntimeOperation::AdmitKvMutation,
-            )));
+            return Err(crate::runtime_error(RuntimeError::timed_out(ADMIT_KV_MUTATION)));
         }
         match tokio::time::timeout_at(deadline.instant(), self.completion).await {
             Ok(Ok(Ok(receipt))) => Ok(receipt),
             Ok(Ok(Err(error))) => Err(error.into_error()),
             Ok(Err(_)) => Err(KvCommitError::WorkerStopped.into_error()),
-            Err(_) => Err(crate::runtime_error(RuntimeError::timed_out(
-                RuntimeOperation::AdmitKvMutation,
-            ))),
+            Err(_) => Err(crate::runtime_error(RuntimeError::timed_out(ADMIT_KV_MUTATION))),
         }
     }
 
@@ -281,15 +280,11 @@ impl KvMutationService {
         deadline: MetadataDeadline,
     ) -> NameServerResult<KvMutationReceipt> {
         if deadline.is_expired() {
-            return Err(crate::runtime_error(RuntimeError::timed_out(
-                RuntimeOperation::AdmitKvMutation,
-            )));
+            return Err(crate::runtime_error(RuntimeError::timed_out(ADMIT_KV_MUTATION)));
         }
         if !self.inner.accepting.load(Ordering::Acquire) {
             self.metrics.record_kv_event(NameServerKvEvent::Closed);
-            return Err(crate::runtime_error(RuntimeError::closed(
-                RuntimeOperation::KvMutationWorker,
-            )));
+            return Err(crate::runtime_error(RuntimeError::closed(KV_MUTATION_WORKER)));
         }
         if self.inner.reconciliation_required.load(Ordering::Acquire) {
             return Err(crate::namesrv_error::storage_write(std::io::Error::other(
@@ -309,11 +304,11 @@ impl KvMutationService {
                 let metadata_error = match error {
                     mpsc::error::TrySendError::Closed(_) => {
                         self.metrics.record_kv_event(NameServerKvEvent::Closed);
-                        RuntimeError::closed(RuntimeOperation::KvMutationWorker)
+                        RuntimeError::closed(KV_MUTATION_WORKER)
                     }
                     mpsc::error::TrySendError::Full(_) => {
                         self.metrics.record_kv_event(NameServerKvEvent::QueueFull);
-                        RuntimeError::capacity(RuntimeOperation::AdmitKvMutation)
+                        RuntimeError::capacity(ADMIT_KV_MUTATION)
                     }
                 };
                 return Err(crate::runtime_error(metadata_error));
@@ -385,11 +380,9 @@ fn reserve_pending_bytes(inner: &MutationServiceInner, requested: usize) -> Name
     loop {
         let next = retained
             .checked_add(requested)
-            .ok_or_else(|| crate::runtime_error(RuntimeError::capacity(RuntimeOperation::AdmitKvMutationBytes)))?;
+            .ok_or_else(|| crate::runtime_error(RuntimeError::capacity(ADMIT_KV_MUTATION_BYTES)))?;
         if next > inner.max_pending_bytes {
-            return Err(crate::runtime_error(RuntimeError::capacity(
-                RuntimeOperation::AdmitKvMutationBytes,
-            )));
+            return Err(crate::runtime_error(RuntimeError::capacity(ADMIT_KV_MUTATION_BYTES)));
         }
         match inner
             .pending_bytes
@@ -718,6 +711,8 @@ mod tests {
 
     use super::*;
 
+    const KV_PERSISTENCE_FAULT: RuntimeOperation = RuntimeOperation::external("injected-kv-persistence-failure");
+
     #[derive(Debug, Default)]
     struct RecordingFileSystem {
         fail: AtomicBool,
@@ -736,7 +731,7 @@ mod tests {
                         operation.runtime_operation(),
                         std::io::Error::other("injected KV persistence failure"),
                     )),
-                    None => Err(RuntimeError::internal_failure(RuntimeOperation::KvPersistenceFault)),
+                    None => Err(RuntimeError::internal_failure(KV_PERSISTENCE_FAULT)),
                 };
             }
             *self.last_bytes.lock() = bytes.to_vec();

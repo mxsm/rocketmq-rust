@@ -169,12 +169,26 @@ impl ShutdownReport {
 
     /// Executes merge blocking.
     pub fn merge_blocking(&mut self, snapshot: crate::blocking::BlockingExecutorSnapshot) {
-        self.blocking_still_running += snapshot.blocking_still_running;
-        self.blocking_tasks.extend(snapshot.tasks);
-        if self.blocking_still_running > 0 {
-            self.annotations.push(ShutdownAnnotation::new(
-                "spawn_blocking tasks may continue after timeout; see blocking_still_running",
-            ));
+        self.merge_blocking_tasks(snapshot.blocking_still_running, snapshot.tasks);
+    }
+
+    /// Adds blocking work observed through an executor's task table.
+    ///
+    /// The still-running annotation is added once, however many executors
+    /// contribute running work.
+    pub(crate) fn merge_blocking_tasks(&mut self, blocking_still_running: usize, tasks: Vec<BlockingTaskSnapshot>) {
+        const BLOCKING_STILL_RUNNING: &str =
+            "spawn_blocking tasks may continue after timeout; see blocking_still_running";
+
+        self.blocking_still_running += blocking_still_running;
+        self.blocking_tasks.extend(tasks);
+        if self.blocking_still_running > 0
+            && !self
+                .annotations
+                .iter()
+                .any(|annotation| annotation.message == BLOCKING_STILL_RUNNING)
+        {
+            self.annotations.push(ShutdownAnnotation::new(BLOCKING_STILL_RUNNING));
         }
     }
 }

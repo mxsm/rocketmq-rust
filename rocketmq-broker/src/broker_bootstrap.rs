@@ -21,6 +21,7 @@ use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFacto
 use rocketmq_runtime::wait_for_signal;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeError;
+use rocketmq_runtime::RuntimeOperation;
 use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ShutdownReason;
@@ -33,6 +34,10 @@ use crate::lifecycle::BrokerStartupError;
 use crate::lifecycle::Configured;
 use crate::lifecycle::Initialized;
 use crate::lifecycle::Running;
+
+const INITIALIZE_BROKER: RuntimeOperation = RuntimeOperation::external("initialize-broker");
+const START_BROKER: RuntimeOperation = RuntimeOperation::external("start-broker");
+const SHUTDOWN_BROKER: RuntimeOperation = RuntimeOperation::external("shutdown-broker");
 
 pub struct BrokerBootstrap<State = Configured> {
     broker_runtime: BrokerRuntime,
@@ -89,13 +94,13 @@ impl BrokerBootstrap<Configured> {
             lifecycle.mark_failed();
             lifecycle.request_shutdown(ShutdownReason::Internal);
             record_broker_lifecycle("failed", "failure", "initialization");
-            RuntimeError::internal(rocketmq_runtime::RuntimeOperation::InitializeBroker, error)
+            RuntimeError::internal(INITIALIZE_BROKER, error)
         })?;
         let mut running = initialized.start().await.map_err(|error| {
             lifecycle.mark_failed();
             lifecycle.request_shutdown(ShutdownReason::Internal);
             record_broker_lifecycle("failed", "failure", "startup");
-            RuntimeError::internal(rocketmq_runtime::RuntimeOperation::StartBroker, error)
+            RuntimeError::internal(START_BROKER, error)
         })?;
         lifecycle.mark_ready()?;
         record_broker_lifecycle("ready", "success", "startup");
@@ -126,9 +131,7 @@ impl BrokerBootstrap<Configured> {
             );
             lifecycle.mark_failed();
             record_broker_lifecycle("failed", "failure", "shutdown_timeout");
-            return Err(RuntimeError::timed_out(
-                rocketmq_runtime::RuntimeOperation::ShutdownBroker,
-            ));
+            return Err(RuntimeError::timed_out(SHUTDOWN_BROKER));
         }
         lifecycle.mark_stopped();
         record_broker_lifecycle("stopped", "success", "shutdown_complete");
