@@ -24,8 +24,8 @@ pub trait MonotonicClock: Send + Sync + 'static {
     fn now(&self) -> Duration;
 }
 
-#[derive(Debug)]
 /// Represents system monotonic clock.
+#[derive(Debug)]
 pub struct SystemMonotonicClock {
     origin: Instant,
 }
