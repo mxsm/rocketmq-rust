@@ -16,8 +16,8 @@ use std::time::Duration;
 
 use crate::RuntimeContractViolation;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Identifies the full policy state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FullPolicy {
     /// Represents the reject case.
     Reject,
@@ -31,8 +31,8 @@ pub enum FullPolicy {
     CloseSlowConsumer,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Identifies the budget class state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BudgetClass {
     /// Represents the data case.
     Data,
@@ -40,8 +40,8 @@ pub enum BudgetClass {
     Control,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Identifies the budget dimension state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BudgetDimension {
     /// Represents the count case.
     Count,
@@ -51,8 +51,8 @@ pub enum BudgetDimension {
     Rate,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Represents rate limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RateLimit {
     /// The permits per second value.
     pub permits_per_second: u64,
@@ -71,8 +71,8 @@ impl RateLimit {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Represents budget capacity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BudgetCapacity {
     /// The count value.
     pub count: usize,
@@ -107,8 +107,8 @@ impl Default for BudgetCapacity {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Represents budget limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BudgetLimit {
     /// The capacity value.
     pub capacity: BudgetCapacity,
