@@ -3008,9 +3008,9 @@ dependencies = [
 
 [[package]]
 name = "openraft-macros"
-version = "0.10.0-alpha.34"
+version = "0.10.0-alpha.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5c57259539e016f70d05ea7e264573cc5ddabd651a127a13374e47b165b7664"
+checksum = "67ed78eec74c990817f319d27931dba4523eaa687170b4faa16ee0a412267e82"
 dependencies = [
  "chrono",
  "proc-macro2",
