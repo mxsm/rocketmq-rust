@@ -28,7 +28,6 @@ pub const MAX_ENTRYPOINT_BLOCKING_THREADS: usize = 512;
 /// its shutdown deadline from the lifecycle configuration instead.
 pub(crate) const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[derive(Debug, Clone)]
 /// Thread, driver and shutdown policy for one owned Tokio runtime.
 ///
 /// [`Default`] uses the available CPU parallelism, falling back to four
@@ -39,6 +38,7 @@ pub(crate) const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 /// Validation performs no I/O or thread creation. Disabling a driver is a
 /// caller capability choice: networking needs I/O, while timers, scheduling
 /// and deadline-based waits need the time driver.
+#[derive(Debug, Clone)]
 pub struct RuntimeConfig {
     /// Number of asynchronous worker threads; must be positive.
     pub worker_threads: usize,
