@@ -600,6 +600,41 @@ pub struct RuntimeDiagnosticsViewV2 {
     pub truncated: bool,
 }
 
+/// A bounded detail sample that does not scan aggregate subtree statistics.
+///
+/// This separate API leaves the V1/V2 serialized views and their construction
+/// surfaces unchanged. Labels omit caller-provided names and identifiers.
+#[derive(Debug, Clone, Serialize)]
+pub struct RuntimeTaskDetails {
+    /// Sanitized details that fit the output budget.
+    pub details: Vec<RuntimeTaskDetailV2>,
+    /// Number of task entries examined.
+    pub tasks_scanned: usize,
+    /// Number of descendant registrations examined, including expired entries.
+    pub group_entries_scanned: usize,
+    /// Whether a task, group, or output budget truncated the sample.
+    pub truncated: bool,
+}
+
+impl From<crate::task_group::TaskDetailScan> for RuntimeTaskDetails {
+    fn from(scan: crate::task_group::TaskDetailScan) -> Self {
+        Self {
+            details: scan
+                .details
+                .into_iter()
+                .map(|detail| RuntimeTaskDetailV2 {
+                    kind: runtime_task_kind(detail.kind),
+                    scope: runtime_detail_scope(detail.scope),
+                    elapsed_millis: duration_millis(detail.elapsed),
+                })
+                .collect(),
+            tasks_scanned: scan.scanned,
+            group_entries_scanned: scan.group_entries_scanned,
+            truncated: scan.truncated,
+        }
+    }
+}
+
 impl RuntimeDiagnosticsViewV2 {
     /// Stable schema identifier emitted by [`RuntimeDiagnostics::view_v2`].
     pub const SCHEMA_VERSION: &'static str = "rocketmq.runtime-diagnostics.v2";

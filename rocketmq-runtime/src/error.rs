@@ -130,6 +130,8 @@ pub enum RuntimeOperation {
     BlockingTask,
     /// Uses an unsupported blocking executor kind.
     BlockingExecutorKind,
+    /// Waiting for an isolated blocking executor to release its work.
+    ShutdownBlockingExecutor,
     /// Clears completed scheduled registrations.
     ClearCompletedSchedules,
     /// Registers a scheduled task.
@@ -214,6 +216,7 @@ impl RuntimeOperation {
             Self::BlockingTaskDeadline => "blocking-task-deadline",
             Self::BlockingTask => "blocking-task",
             Self::BlockingExecutorKind => "blocking-executor-kind",
+            Self::ShutdownBlockingExecutor => "shutdown-blocking-executor",
             Self::ClearCompletedSchedules => "clear-completed-schedules",
             Self::RegisterScheduledTask => "register-scheduled-task",
             Self::SpawnOperation => "spawn-operation",

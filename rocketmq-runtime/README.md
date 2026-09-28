@@ -186,11 +186,19 @@ operation's original component owner and abort unfinished work at their
 deadline. `wait(timeout)` and `cancel_and_wait(timeout)` then allow up to one
 second to confirm that the aborted futures were dropped, so they can return up
 to one second after `timeout`. `wait_until(deadline)` and
-`cancel_and_wait_until(deadline)` never pass their `ShutdownDeadline`: they
-request the aborts and return, and the owner's shutdown report accounts for any
+`cancel_and_wait_until(deadline)` add no wait allowance beyond `ShutdownDeadline`:
+they request aborts and return, and the owner's shutdown report accounts for any
 task still being dropped. An operation only counts its active tasks: the tasks
 themselves are tagged in the owner's registry, so an idle operation costs a few
 hundred bytes.
+
+Use `wait_with_policy(owner, OperationWaitPolicy::new(graceful, confirmation))`
+to close admission and distinguish `Completed`, `AbortConfirmed`, and
+`Unconfirmed { remaining_tasks }`. Both deadlines are absolute; confirmation
+also caps the grace period. Call `cancel()` first to request cooperative
+cancellation. Legacy boolean `false` does not confirm destruction. Runtime
+starvation or blocking destructors can delay timer polling; these APIs do not
+promise a hard wall-clock bound.
 
 `TaskGroup::cancel()` only broadcasts cancellation. Use `shutdown(...)` or
 `shutdown_until(...)` to close task admission and wait for shutdown evidence.
@@ -313,6 +321,14 @@ managed root lanes and their diagnostics. It is registered with the group's
 tree, so a closure it is still running counts in the `blocking_still_running`
 of that tree owner's shutdown report.
 
+Prefer the explicit `new_isolated` constructor; `new` delegates to it for
+compatibility. Call `stop_admission()` and `shutdown_until(deadline)` to close
+and await just that executor and its clones. Queued submissions wake with a
+closed error. The report distinguishes completed shutdown from still-owned
+submissions or closures; an incomplete wait can be retried. It does not close
+the supplied group or sibling executors. Managed lanes reject these methods:
+their service context owns shutdown.
+
 ## Resource Budgets And Queues
 
 `RuntimeOwner` owns `RuntimeResources`; child contexts share its process
@@ -342,6 +358,12 @@ capacity is about to return. A `ResourcePermit` retains count and byte
 reservations until dropped. `BudgetClass::Control` can use configured control reserves;
 data work cannot consume that reserved capacity. Same-tree permit rebinding
 keeps common-ancestor accounting while moving ownership between components.
+
+`ResourcePermit::try_resize(bytes)` changes only the byte reservation. Growth
+reserves the delta at each ancestor and rolls back on rejection without taking
+another count or rate token. Shrinking remains allowed after dynamic closure;
+release the removed payload before shrinking its charge. Growth observes the
+current budget's dynamic admission gates, including after a rebind.
 
 `BudgetedQueue` supports `Reject`, `WaitUntilDeadline`, `CoalesceLatest`,
 `DropStale`, and `CloseSlowConsumer`. Select a policy matching whether work
@@ -376,6 +398,15 @@ queued or in-flight snapshot is also charged to the owner's process budget
 until its write completes, including after its observer times out, so the
 actors of one owner share that budget. A snapshot the process budget cannot
 take is refused like one above `max_pending_bytes`.
+
+The actual blocking closure owns its snapshot and permit together, including
+after cancellation destroys the actor or coordinator. The actor's local
+pending counters settle afterwards and may briefly lag the shared ledger.
+Coalescing reserves only a positive size delta; failed growth retains the old
+request and charge, and equal-size replacement works at the process limit.
+Shrinking drops the old payload before releasing excess bytes. Caller-owned
+allocations before admission, and caller-retained snapshot clones, are outside
+this actor-owned accounting.
 
 `submit` and `submit_next` accept immutable snapshots without waiting for
 durability. Match `MetadataIoAdmissionOutcome`: `Accepted` provides a receipt;
@@ -512,6 +543,15 @@ partially scanned list reports how many tasks it examined instead of presenting
 a partial sum as the whole runtime. The scan budget bounds both the tasks
 examined and the descendant groups visited. V1 keeps its fields and meanings.
 
+For a detail-only request use `TaskGroup::diagnostics_task_details(scan, output)`.
+It skips the full-tree aggregates and returns `RuntimeTaskDetails`, including
+`tasks_scanned`, `group_entries_scanned`, and `truncated`. Ordered registries
+bound enumeration and temporary storage even after churn leaves sparse task
+tables or in a tree of empty groups. Names and payloads are omitted. Maintaining
+the sanitized task index adds registration/settlement work; the convergence
+benchmark measures that tradeoff. V1/V2 aggregate collection still visits every
+active task and group, regardless of the detail budget.
+
 ## Compatibility And Workspace Integration
 
 `RocketMQRuntime` has been removed, including its root and `compat` exports.
@@ -627,6 +667,7 @@ Run a benchmark with `cargo bench -p rocketmq-runtime --bench <name>`.
 | `blocking_executor_bench` | Submission through completion of 8/32 jobs with four lane slots and 1 ms simulated blocking work. Runtime creation and shutdown excluded; timeout evidence retains the blocked closure until release. |
 | `metadata_io_bench` | First real filesystem write held at a gate; queued submissions through release and settled receipts timed. Coalesced writes and hot/cold ordering asserted; first gate arrival, setup, and shutdown excluded. |
 | `runtime_convergence_bench` | Draining-operation submission from 1/4/8 threads into one shared group or one group per thread; permit acquire/release under a shared root; allocations of an idle group, operation, and child context; start order of contended blocking work. Every call is timed for percentiles; the JSON is named by `ROCKETMQ_BENCH_LABEL`. |
+| `runtime_boundaries_bench` | Mixed blocking lanes, actor budget saturation and RSS, injected slow-target isolation, bounded detail allocations versus full aggregates, and shutdown settlement. Run with `cargo bench -p rocketmq-runtime --bench runtime_boundaries_bench`; JSON is written under `target/runtime-measurements` (or `CARGO_TARGET_DIR`). Injected delays do not measure disk performance; use `metadata_io_bench` for real filesystem writes. |
 
 Criterion reports batch-derived estimates and confidence intervals, not an
 individual request P99. Reject scenarios intentionally reject one extra item

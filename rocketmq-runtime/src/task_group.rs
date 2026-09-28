@@ -371,6 +371,8 @@ pub(crate) struct TaskDetail {
 pub(crate) struct TaskDetailScan {
     /// How many tasks were examined before the scan budget was reached.
     pub(crate) scanned: usize,
+    /// Descendant registrations examined, including expired weak entries.
+    pub(crate) group_entries_scanned: usize,
     /// The details that fit inside the output budget.
     pub(crate) details: Vec<TaskDetail>,
     /// Whether either budget stopped the scan short of every task.
@@ -880,6 +882,10 @@ impl TaskGroup {
     /// group, or the wait expired. A timeout does not remove the task's record
     /// or confirm cancellation.
     pub async fn abort_task_and_wait(&self, task_id: TaskId, timeout: Duration) -> bool {
+        self.abort_task_until(task_id, ShutdownDeadline::after(timeout)).await
+    }
+
+    pub(crate) async fn abort_task_until(&self, task_id: TaskId, deadline: ShutdownDeadline) -> bool {
         let Some(completion) = self.abort_task_inner(task_id) else {
             return false;
         };
@@ -888,11 +894,13 @@ impl TaskGroup {
             return true;
         }
 
-        if timeout.is_zero() {
+        if deadline.is_expired() {
             return false;
         }
 
-        tokio::time::timeout(timeout, completion.wait()).await.is_ok()
+        tokio::time::timeout_at(deadline.instant().into(), completion.wait())
+            .await
+            .is_ok()
     }
 
     /// Asynchronously waits for a local task's future to be destroyed.
@@ -905,6 +913,10 @@ impl TaskGroup {
     /// [`Self::owns_task`]. This does not request cancellation or prove
     /// business-level success.
     pub async fn wait_task(&self, task_id: TaskId, timeout: Duration) -> bool {
+        self.wait_task_until(task_id, ShutdownDeadline::after(timeout)).await
+    }
+
+    pub(crate) async fn wait_task_until(&self, task_id: TaskId, deadline: ShutdownDeadline) -> bool {
         if !self.owns_task(task_id) {
             return false;
         }
@@ -922,11 +934,13 @@ impl TaskGroup {
             return true;
         }
 
-        if timeout.is_zero() {
+        if deadline.is_expired() {
             return false;
         }
 
-        tokio::time::timeout(timeout, completion.wait()).await.is_ok()
+        tokio::time::timeout_at(deadline.instant().into(), completion.wait())
+            .await
+            .is_ok()
     }
 
     /// Closes and asynchronously drains this subtree within a relative budget.
@@ -1295,6 +1309,7 @@ impl TaskGroupInner {
         }
         // A missing record is also treated as finished by wait_task. Publish
         // the counters before removing it, after user resources were dropped.
+        self.registry.remove_task_detail(task_id);
         entry.remove();
     }
 }

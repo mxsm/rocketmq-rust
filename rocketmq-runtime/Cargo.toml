@@ -88,3 +88,7 @@ harness = false
 [[bench]]
 name    = "runtime_convergence_bench"
 harness = false
+
+[[bench]]
+name    = "runtime_boundaries_bench"
+harness = false

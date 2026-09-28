@@ -156,9 +156,15 @@ crate 之外的 `match` 需要通配分支。
 `cancel_and_wait()` 还会请求取消。等待时必须传入操作最初绑定的组件所有者，
 未完成工作会在等待截止时间到达后被中止。`wait(timeout)` 与 `cancel_and_wait(timeout)`
 随后最多再用一秒确认被中止的 Future 已被丢弃，因此可能在 `timeout` 之后最多一秒才返回。
-`wait_until(deadline)` 与 `cancel_and_wait_until(deadline)` 绝不超过传入的
-`ShutdownDeadline`：它们发出中止请求后立即返回，仍在丢弃中的任务由所有者的关闭报告统计。
+`wait_until(deadline)` 与 `cancel_and_wait_until(deadline)` 不在传入的
+`ShutdownDeadline` 之后增加等待额度：它们发出中止请求后返回，仍在丢弃中的任务由所有者的关闭报告统计。
 操作只统计活动任务数，任务本身在所有者的注册表中按操作打标，因此空闲操作只占几百字节。
+
+使用 `wait_with_policy(owner, OperationWaitPolicy::new(graceful, confirmation))`
+关闭准入并区分 `Completed`、`AbortConfirmed` 和 `Unconfirmed { remaining_tasks }`。
+两个参数均为绝对截止时间，确认截止时间同时限制宽限阶段。需要协作取消时先调用 `cancel()`。
+旧接口的布尔值 `false` 不能确认析构完成。运行时饥饿或阻塞析构会延迟定时器轮询，
+这些 API 不承诺严格的墙钟返回上限。
 
 `TaskGroup::cancel()` 只广播取消信号。
 使用 `shutdown(...)` 或 `shutdown_until(...)` 关闭任务接收并等待关闭报告。
@@ -257,6 +263,11 @@ crate 之外的 `match` 需要通配分支。
 执行器会登记到该任务组所在的树，因此它仍在运行的闭包会计入该树所有者关闭报告中的
 `blocking_still_running`。
 
+优先使用明确的 `new_isolated` 构造器；`new` 作为兼容包装调用它。
+通过 `stop_admission()` 和 `shutdown_until(deadline)` 关闭并等待该执行器及其克隆。
+排队提交会收到关闭错误；报告区分已完成关闭与仍被持有的提交或闭包，未完成时可以再次等待。
+这不会关闭传入的任务组或同组其他执行器。受管通道拒绝这两个方法，其关闭由服务上下文负责。
+
 ## 资源预算与队列
 
 `RuntimeOwner` 拥有 `RuntimeResources`，子上下文共享其进程预算。
@@ -278,6 +289,10 @@ crate 之外的 `match` 需要通配分支。
 `ResourcePermit` 保留数量与字节配额，直到被丢弃。
 `BudgetClass::Control` 可以使用配置的控制类预留容量，数据类工作不能占用该预留容量。
 同一树中的配额重绑定在组件间转移所有权时保留公共祖先的核算。
+
+`ResourcePermit::try_resize(bytes)` 只调整字节配额。增长时逐层预留差额，拒绝时回滚，
+不额外消耗数量或速率令牌。动态预算关闭后仍可缩小配额；应先释放被移除的数据，再缩小计费。
+增长检查当前预算的动态准入门，包括重绑定后的新预算。
 
 `BudgetedQueue` 支持 `Reject`、`WaitUntilDeadline`、`CoalesceLatest`、
 `DropStale` 和 `CloseSlowConsumer`。应根据工作能否等待、替换或丢弃选择策略。
@@ -306,6 +321,12 @@ actor 默认一次只写一个资源，因此一次缓慢写入会延迟其他�
 `effective_profile()` 报告实际生效的值。每个排队中或执行中的快照还会计入所有者的进程预算，
 直到写入完成为止，观察者超时后也不例外，因此同一所有者的多个 actor 共享该预算。
 进程预算无法容纳的快照与超过 `max_pending_bytes` 的快照一样被拒绝。
+
+实际阻塞闭包同时拥有快照及其配额，取消导致 actor 或协调任务销毁后仍然有效。
+actor 的局部 pending 计数随后结算，因此可能短暂落后于共享账本。
+合并仅预留增长差额；增长失败保留旧请求及配额，进程额度已满时仍支持等大小替换。
+缩小时先释放旧数据，再归还差额。准入前调用方分配的数据和调用方保留的快照克隆不属于此处
+actor 所有权范围内的核算。
 
 `submit` 和 `submit_next` 接收不可变快照，但不等待持久化完成。
 调用方需要匹配 `MetadataIoAdmissionOutcome`：`Accepted` 提供回执；当同一资源已有
@@ -413,6 +434,12 @@ chart 已经这样配置；其他取值属于配置错误。每个连接由生�
 因此被截断的列表会报告实际扫描了多少任务，而不是把局部总和当作整棵运行时。
 扫描预算同时限制检查的任务数和访问的后代任务组数。V1 的字段和含义保持不变。
 
+只需明细时使用 `TaskGroup::diagnostics_task_details(scan, output)`，跳过全树聚合。
+返回的 `RuntimeTaskDetails` 包含 `tasks_scanned`、`group_entries_scanned` 和 `truncated`。
+有序索引限制枚举和临时存储，即使任务频繁创建销毁后哈希表稀疏，或树中存在大量空组，也遵守预算。
+明细不含名称或业务数据。维护脱敏任务索引增加注册与结算开销，可通过 convergence 基准测量。
+V1/V2 的聚合仍遍历全部活动任务和组，不受明细预算限制。
+
 ## 兼容边界与工作区接入
 
 `RocketMQRuntime` 及其根模块和 `compat` 模块导出已移除。构造方式应迁移到
@@ -514,6 +541,7 @@ sudo systemd-run --wait --pipe --collect \
 | `budgeted_queue_bench` | 复用队列，测量填充/拒绝/排空、等待/释放或容量已满时的替换。队列和 Tokio 运行时构造不计时；等待场景包含生产者的生成与等待结束。 |
 | `blocking_executor_bench` | 四个通道槽位、1 ms 模拟阻塞工作，测量 8/32 个任务从提交到完成。运行时创建与关闭不计时；超时场景保留真实阻塞闭包，直到释放。 |
 | `metadata_io_bench` | 将首次真实文件系统写入停在关卡，测量排队提交到释放和回执完成。断言合并写入与冷热顺序；首次到达关卡、设置和关闭不计时。 |
+| `runtime_boundaries_bench` | 混合阻塞通道、actor 预算满额与 RSS、注入慢目标隔离、有界明细分配量与全树聚合对比，以及关闭结算。通过 `cargo bench -p rocketmq-runtime --bench runtime_boundaries_bench` 运行，JSON 写入 `target/runtime-measurements`（或 `CARGO_TARGET_DIR`）。注入延迟不代表磁盘性能，真实写入使用 `metadata_io_bench`。 |
 | `runtime_convergence_bench` | 1/4/8 个线程向同一共享任务组或每线程一个任务组提交 draining operation；共享根下的许可申请与释放；空闲任务组、操作与子上下文的分配次数和字节数；争用下阻塞工作的启动顺序。每次调用都计时以得到分位数，JSON 文件名取自 `ROCKETMQ_BENCH_LABEL`。 |
 
 Criterion 提供按批次得出的估计值和置信区间，不是单次请求的 P99。

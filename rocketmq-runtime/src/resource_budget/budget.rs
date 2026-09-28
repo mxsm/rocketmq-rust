@@ -168,7 +168,13 @@ impl ResourceBudgetTree {
     ) -> Result<Self, crate::RuntimeContractViolation> {
         let name = validated_name(name.into())?;
         limit.validate(&name)?;
-        let node = Arc::new(BudgetNode::new(Arc::from(name.as_str()), limit, clock));
+        let admission_gates: Arc<[Arc<AdmissionGate>]> = Arc::from([]);
+        let node = Arc::new(BudgetNode::new(
+            Arc::from(name.as_str()),
+            limit,
+            clock,
+            admission_gates.clone(),
+        ));
         let capacity_notify = Arc::new(Notify::new());
         Ok(Self {
             root: ResourceBudget {
@@ -176,7 +182,7 @@ impl ResourceBudgetTree {
                 chain: Arc::from([node]),
                 capacity_notify,
                 keys: DynamicKeyRegistry::new(),
-                admission_gates: Arc::from([]),
+                admission_gates,
             },
         })
     }
@@ -264,10 +270,24 @@ impl ResourceBudget {
     /// Returns a contract violation when the child name is blank or malformed,
     /// its limit is invalid, or its limit exceeds its parent.
     pub fn child(&self, name: impl Into<String>, limit: BudgetLimit) -> Result<Self, crate::RuntimeContractViolation> {
+        self.child_with_gates(name, limit, self.admission_gates.clone())
+    }
+
+    fn child_with_gates(
+        &self,
+        name: impl Into<String>,
+        limit: BudgetLimit,
+        admission_gates: Arc<[Arc<AdmissionGate>]>,
+    ) -> Result<Self, crate::RuntimeContractViolation> {
         let name = validated_name(name.into())?;
         let path: Arc<str> = Arc::from(format!("{}/{}", self.node.path, name));
         limit.validate_child(self.node.limit, &path)?;
-        let node = Arc::new(BudgetNode::new(path, limit, Arc::clone(&self.node.clock)));
+        let node = Arc::new(BudgetNode::new(
+            path,
+            limit,
+            Arc::clone(&self.node.clock),
+            admission_gates.clone(),
+        ));
         let mut chain = Vec::with_capacity(self.chain.len() + 1);
         chain.extend(self.chain.iter().cloned());
         chain.push(Arc::clone(&node));
@@ -276,7 +296,7 @@ impl ResourceBudget {
             chain: Arc::from(chain),
             capacity_notify: Arc::clone(&self.capacity_notify),
             keys: self.keys.clone(),
-            admission_gates: self.admission_gates.clone(),
+            admission_gates,
         })
     }
 
@@ -301,17 +321,16 @@ impl ResourceBudget {
     ) -> Result<DynamicBudgetKey, DynamicKeyRegistrationFailure> {
         let _admission = self.admit().map_err(|_| DynamicKeyRegistrationFailure::Closed)?;
         let name = validated_name(name.into()).map_err(DynamicKeyRegistrationFailure::Invalid)?;
-        let mut child = self
-            .child(name.as_str(), limit)
-            .map_err(DynamicKeyRegistrationFailure::Invalid)?;
-        let name: Arc<str> = Arc::clone(&child.node.path);
-        let mut gates = child.admission_gates.to_vec();
+        let path: Arc<str> = Arc::from(format!("{}/{}", self.node.path, name));
+        let mut gates = self.admission_gates.to_vec();
         gates.push(Arc::new(AdmissionGate {
-            path: name.clone(),
+            path: path.clone(),
             closed: Mutex::new(false),
         }));
-        child.admission_gates = Arc::from(gates);
-        self.keys.register(child, name)
+        let child = self
+            .child_with_gates(name, limit, Arc::from(gates))
+            .map_err(DynamicKeyRegistrationFailure::Invalid)?;
+        self.keys.register(child, path)
     }
 
     /// Returns whether a dynamic ancestor has permanently closed admission.
@@ -532,6 +551,78 @@ impl fmt::Debug for ResourcePermit {
 }
 
 impl ResourcePermit {
+    /// Changes the byte reservation without acquiring another count or rate token.
+    ///
+    /// Growth reserves only the difference at each ancestor. A rejection rolls
+    /// back every added byte and leaves this permit unchanged. Shrinking is
+    /// allowed after budget closure; callers release the removed payload before
+    /// shrinking its charge. This method does not block on available capacity.
+    ///
+    /// # Errors
+    ///
+    /// Returns a rejection if growth exceeds any ancestor's byte limit or a
+    /// dynamic ancestor has closed admission.
+    pub fn try_resize(&mut self, bytes: usize) -> Result<(), BudgetRejection> {
+        if bytes <= self.bytes {
+            self.shrink_to(bytes);
+            return Ok(());
+        }
+        // Every live permit owns at least its root reservation.
+        let leaf = Arc::clone(&self.reservations.last().expect("permits own a root reservation").node);
+        let mut guards = SmallVec::<[MutexGuard<'_, bool>; 2]>::new();
+        for gate in leaf.admission_gates.iter() {
+            let guard = gate.closed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if *guard {
+                leaf.record_rejection(BudgetRejectionReason::Closed);
+                return Err(BudgetRejection {
+                    path: leaf.path.clone(),
+                    exhausted_path: gate.path.clone(),
+                    reason: BudgetRejectionReason::Closed,
+                    policy: leaf.limit.full_policy,
+                });
+            }
+            guards.push(guard);
+        }
+        let additional = bytes - self.bytes;
+        for (index, reservation) in self.reservations.iter().enumerate() {
+            if !reservation.node.try_reserve_bytes(additional, self.class) {
+                for reserved in &self.reservations[..index] {
+                    reserved.node.release_bytes(additional, self.class);
+                }
+                let reason = BudgetRejectionReason::Capacity(BudgetDimension::Bytes);
+                reservation.node.record_rejection(reason);
+                if !Arc::ptr_eq(&reservation.node, &leaf) {
+                    leaf.record_rejection(reason);
+                }
+                self.capacity_notify.notify_waiters();
+                return Err(BudgetRejection {
+                    path: leaf.path.clone(),
+                    exhausted_path: reservation.node.path.clone(),
+                    reason,
+                    policy: leaf.limit.full_policy,
+                });
+            }
+        }
+        for reservation in &mut self.reservations {
+            reservation.bytes = bytes;
+        }
+        self.bytes = bytes;
+        Ok(())
+    }
+
+    pub(crate) fn shrink_to(&mut self, bytes: usize) {
+        let released = self.bytes.saturating_sub(bytes);
+        if released == 0 {
+            return;
+        }
+        for reservation in &mut self.reservations {
+            reservation.node.release_bytes(released, self.class);
+            reservation.bytes = bytes;
+        }
+        self.bytes = bytes;
+        self.capacity_notify.notify_waiters();
+    }
+
     #[must_use]
     /// Returns the bytes.
     pub const fn bytes(&self) -> usize {
@@ -669,6 +760,9 @@ struct BudgetNode {
     data_bytes: AtomicUsize,
     counters: BudgetCounters,
     rate: Option<Mutex<RateState>>,
+    // Resize uses the leaf node's gates, including after rebind. Keep this
+    // shared state out of every ResourcePermit and its downstream containers.
+    admission_gates: Arc<[Arc<AdmissionGate>]>,
 }
 
 #[derive(Default)]
@@ -697,7 +791,39 @@ fn release_reserved(counter: &AtomicUsize, amount: usize) {
 }
 
 impl BudgetNode {
-    fn new(path: Arc<str>, limit: BudgetLimit, clock: Arc<dyn MonotonicClock>) -> Self {
+    fn try_reserve_bytes(&self, bytes: usize, class: BudgetClass) -> bool {
+        if !try_reserve_within(&self.current_bytes, bytes, self.limit.capacity.bytes) {
+            return false;
+        }
+        if class == BudgetClass::Data
+            && !try_reserve_within(
+                &self.data_bytes,
+                bytes,
+                self.limit
+                    .capacity
+                    .bytes
+                    .saturating_sub(self.limit.control_reserve.bytes),
+            )
+        {
+            release_reserved(&self.current_bytes, bytes);
+            return false;
+        }
+        true
+    }
+
+    fn release_bytes(&self, bytes: usize, class: BudgetClass) {
+        if class == BudgetClass::Data {
+            release_reserved(&self.data_bytes, bytes);
+        }
+        release_reserved(&self.current_bytes, bytes);
+    }
+
+    fn new(
+        path: Arc<str>,
+        limit: BudgetLimit,
+        clock: Arc<dyn MonotonicClock>,
+        admission_gates: Arc<[Arc<AdmissionGate>]>,
+    ) -> Self {
         let rate = limit
             .capacity
             .rate
@@ -712,6 +838,7 @@ impl BudgetNode {
             data_bytes: AtomicUsize::new(0),
             counters: BudgetCounters::default(),
             rate,
+            admission_gates,
         }
     }
 

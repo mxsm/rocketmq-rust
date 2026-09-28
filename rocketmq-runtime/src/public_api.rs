@@ -16,6 +16,7 @@
 
 pub use crate::blocking::BlockingDrainLease;
 pub use crate::blocking::BlockingExecutor;
+pub use crate::blocking::BlockingExecutorShutdownReport;
 pub use crate::diagnostics::RuntimeBlockingKindSummaryV1;
 pub use crate::diagnostics::RuntimeBlockingKindV1;
 pub use crate::diagnostics::RuntimeBlockingLaneSummaryV1;
@@ -35,12 +36,15 @@ pub use crate::diagnostics::RuntimeMetadataSectionV2;
 pub use crate::diagnostics::RuntimeScheduleSectionV2;
 pub use crate::diagnostics::RuntimeShutdownSectionV2;
 pub use crate::diagnostics::RuntimeTaskDetailV2;
+pub use crate::diagnostics::RuntimeTaskDetails;
 pub use crate::diagnostics::RuntimeTaskKindSummaryV1;
 pub use crate::diagnostics::RuntimeTaskKindV1;
 pub use crate::diagnostics::RuntimeTaskSectionV2;
 pub use crate::operation::OperationContext;
 pub use crate::operation::OperationOutcome;
 pub use crate::operation::OperationOutcomeObserver;
+pub use crate::operation::OperationWaitOutcome;
+pub use crate::operation::OperationWaitPolicy;
 pub use crate::owner::RuntimeOwner;
 pub use crate::owner::RuntimeOwnerPlan;
 pub use crate::resource_budget::ResourceBudget;

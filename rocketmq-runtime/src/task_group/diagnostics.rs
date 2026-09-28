@@ -14,12 +14,20 @@
 
 //! Aggregate task scans and bounded detail collection.
 
-use super::{
-    TaskDetail, TaskDetailScan, TaskDetailScope, TaskGroup, TaskGroupDiagnostics, TaskKind, TaskKindDiagnostics,
-};
+use super::{TaskDetailScan, TaskDetailScope, TaskGroup, TaskGroupDiagnostics, TaskKind, TaskKindDiagnostics};
 use std::time::Duration;
 
 impl TaskGroup {
+    /// Samples sanitized task details without computing subtree aggregates.
+    ///
+    /// At most `scan_budget` tasks and `scan_budget` descendant registrations
+    /// are examined; at most `output_budget` details are returned. Enumeration
+    /// and temporary group storage obey the same budget, including empty or
+    /// expired groups. Concurrent changes are not a globally atomic snapshot.
+    pub fn diagnostics_task_details(&self, scan_budget: usize, output_budget: usize) -> crate::RuntimeTaskDetails {
+        self.bounded_task_details(scan_budget, output_budget).into()
+    }
+
     /// Aggregates every task of this group and its descendants.
     ///
     /// The work is proportional to the active tasks and groups of the subtree.
@@ -48,19 +56,22 @@ impl TaskGroup {
         if !self.collect_local_task_details(scan_budget, output_budget, TaskDetailScope::Local, &mut scan) {
             return scan;
         }
-        let mut descendants_visited = 0_usize;
-        let mut pending = self.inner.registry.components_snapshot();
+        let mut remaining_groups = scan_budget;
+        let (mut pending, truncated) = self.inner.registry.bounded_components_snapshot(&mut remaining_groups);
+        scan.truncated |= truncated;
         while let Some(group) = pending.pop() {
-            if scan.scanned >= scan_budget || descendants_visited >= scan_budget {
+            if scan.scanned >= scan_budget {
                 scan.truncated = true;
-                return scan;
+                break;
             }
-            descendants_visited += 1;
             if !group.collect_local_task_details(scan_budget, output_budget, TaskDetailScope::Subtree, &mut scan) {
-                return scan;
+                break;
             }
-            pending.extend(group.inner.registry.components_snapshot());
+            let (children, truncated) = group.inner.registry.bounded_components_snapshot(&mut remaining_groups);
+            scan.truncated |= truncated;
+            pending.extend(children);
         }
+        scan.group_entries_scanned = scan_budget - remaining_groups;
         scan
     }
 
@@ -73,23 +84,9 @@ impl TaskGroup {
         scope: TaskDetailScope,
         scan: &mut TaskDetailScan,
     ) -> bool {
-        for task in self.inner.registry.tasks.iter() {
-            if scan.scanned >= scan_budget {
-                scan.truncated = true;
-                return false;
-            }
-            scan.scanned = scan.scanned.saturating_add(1);
-            if scan.details.len() < output_budget {
-                scan.details.push(TaskDetail {
-                    kind: task.kind,
-                    scope,
-                    elapsed: task.started_at.elapsed(),
-                });
-            } else {
-                scan.truncated = true;
-            }
-        }
-        true
+        self.inner
+            .registry
+            .collect_task_details(scan_budget, output_budget, scope, scan)
     }
 
     fn accumulate_local_diagnostics(

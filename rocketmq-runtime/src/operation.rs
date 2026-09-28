@@ -103,6 +103,40 @@ pub struct OperationContext {
     task_kind: TaskKind,
 }
 
+/// Absolute deadlines for graceful completion and subsequent abort confirmation.
+#[derive(Debug, Clone, Copy)]
+pub struct OperationWaitPolicy {
+    graceful: ShutdownDeadline,
+    confirmation: ShutdownDeadline,
+}
+
+impl OperationWaitPolicy {
+    /// Creates a policy whose graceful phase cannot extend past confirmation.
+    ///
+    /// Passing the same deadline requests aborts at expiry without extending
+    /// the wait. An earlier confirmation deadline also tightens the grace phase.
+    pub fn new(graceful: ShutdownDeadline, confirmation: ShutdownDeadline) -> Self {
+        Self {
+            graceful: graceful.earliest(confirmation),
+            confirmation,
+        }
+    }
+}
+
+/// Whether an operation's task destruction was confirmed when waiting stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationWaitOutcome {
+    /// All tasks settled during the graceful phase.
+    Completed,
+    /// All tasks settled after aborts were requested.
+    AbortConfirmed,
+    /// The confirmation deadline expired with tasks still registered.
+    Unconfirmed {
+        /// Tasks whose final destruction and owner bookkeeping remain unconfirmed.
+        remaining_tasks: usize,
+    },
+}
+
 #[derive(Debug)]
 struct OperationContextInner {
     /// Process-unique id; the owner's task registry tags operation tasks with it.
@@ -123,6 +157,43 @@ struct OperationContextInner {
 }
 
 impl OperationContext {
+    /// Closes operation admission and asynchronously waits using explicit deadlines.
+    ///
+    /// Tasks unfinished at the graceful deadline are asked to abort. The second
+    /// deadline bounds confirmation of future destruction and owner settlement.
+    /// An unconfirmed outcome leaves those tasks visible to the owner's report.
+    /// Deadlines bound cooperative waiting; blocked executor threads can delay
+    /// polling and this method does not promise a hard wall-clock return time.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error without closing admission if `owner` is not this
+    /// operation's bound component owner.
+    pub async fn wait_with_policy(
+        &self,
+        owner: &TaskGroup,
+        policy: OperationWaitPolicy,
+    ) -> RuntimeResult<OperationWaitOutcome> {
+        self.ensure_owner(owner.id())?;
+        self.close_admission();
+        if self.wait_until_settled(owner, policy.graceful.instant()).await? {
+            return Ok(OperationWaitOutcome::Completed);
+        }
+        let remaining = owner.operation_task_ids(self.inner.id);
+        join_all(
+            remaining
+                .into_iter()
+                .map(|task_id| owner.abort_task_until(task_id, policy.confirmation)),
+        )
+        .await;
+        let remaining_tasks = owner.operation_task_ids(self.inner.id).len();
+        Ok(if remaining_tasks == 0 {
+            OperationWaitOutcome::AbortConfirmed
+        } else {
+            OperationWaitOutcome::Unconfirmed { remaining_tasks }
+        })
+    }
+
     /// Creates an operation with an absolute deadline.
     pub fn new(deadline: Instant, task_kind: TaskKind) -> Self {
         Self::from_parts(Some(deadline), task_kind)
@@ -238,10 +309,11 @@ impl OperationContext {
     ///
     /// Returns `true` when every task completed before the shared timeout.
     /// Tasks still running at the deadline are aborted and awaited for a
-    /// confirmation window of at most one second beyond it, so their running
-    /// futures are dropped before this returns. The call can therefore return
-    /// up to one second after `timeout`; use [`Self::cancel_and_wait_until`] to
-    /// stay within an existing shutdown deadline.
+    /// confirmation window of at most one second beyond it. `false` does not
+    /// distinguish a confirmed abort from work whose destruction is still
+    /// unconfirmed. Use [`Self::wait_with_policy`] after [`Self::cancel`] for
+    /// explicit deadlines and completion evidence. Timers require the runtime
+    /// to make progress; they are not a hard wall-clock return guarantee.
     ///
     /// # Errors
     ///
@@ -252,7 +324,7 @@ impl OperationContext {
         self.wait(owner, timeout).await
     }
 
-    /// Cancels this operation and waits for its tasks, never past `deadline`.
+    /// Cancels this operation and bounds its asynchronous wait by `deadline`.
     ///
     /// Behaves like [`Self::wait_until`] after requesting cancellation.
     ///
@@ -273,7 +345,9 @@ impl OperationContext {
     /// Tasks accepted during the wait are waited for too; close admission
     /// first when new tasks may still be submitted. Returns `true` when every
     /// task finished before the deadline; `owner` then no longer lists any of
-    /// them. Use [`Self::wait_until`] to stay within an existing deadline.
+    /// them. `false` does not confirm destruction. Use [`Self::wait_until`] to
+    /// avoid an extra confirmation allowance, or [`Self::wait_with_policy`]
+    /// to distinguish confirmed aborts from unconfirmed work.
     ///
     /// # Errors
     ///
@@ -284,14 +358,14 @@ impl OperationContext {
             .await
     }
 
-    /// Waits for this operation's tasks like [`Self::wait`], but never past
-    /// `deadline`.
+    /// Waits for this operation's tasks with no allowance beyond `deadline`.
     ///
     /// Tasks still running at the deadline are asked to abort and the call
     /// returns `false` at once, without confirming that their futures were
     /// dropped. They stay registered with `owner` until they are, so the
     /// owner's shutdown report accounts for any that remain. This matches
-    /// [`TaskGroup::shutdown_until`], which also never extends its deadline.
+    /// [`TaskGroup::shutdown_until`], which also does not extend its deadline.
+    /// Runtime starvation or synchronous destructors can delay timer polling.
     ///
     /// # Errors
     ///
@@ -309,6 +383,22 @@ impl OperationContext {
         deadline: Instant,
         abort_confirmation: Duration,
     ) -> RuntimeResult<bool> {
+        if self.wait_until_settled(owner, deadline).await? {
+            return Ok(true);
+        }
+        // A zero confirmation window only requests the aborts. Legacy callers
+        // retain their boolean outcome and relative confirmation allowance.
+        let remaining = owner.operation_task_ids(self.inner.id);
+        join_all(
+            remaining
+                .into_iter()
+                .map(|task_id| owner.abort_task_and_wait(task_id, abort_confirmation)),
+        )
+        .await;
+        Ok(false)
+    }
+
+    async fn wait_until_settled(&self, owner: &TaskGroup, deadline: Instant) -> RuntimeResult<bool> {
         self.ensure_owner(owner.id())?;
         loop {
             // Registered before the check, so a wakeup in between is not lost.
@@ -322,8 +412,13 @@ impl OperationContext {
                 if unsettled.is_empty() {
                     return Ok(true);
                 }
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                let settled = join_all(unsettled.into_iter().map(|task_id| owner.wait_task(task_id, remaining))).await;
+                let deadline = ShutdownDeadline::at(deadline);
+                let settled = join_all(
+                    unsettled
+                        .into_iter()
+                        .map(|task_id| owner.wait_task_until(task_id, deadline)),
+                )
+                .await;
                 if settled.into_iter().all(|settled| settled) {
                     continue;
                 }
@@ -334,15 +429,6 @@ impl OperationContext {
             }
         }
 
-        // A zero confirmation window only requests the aborts: waiting on an
-        // expired deadline would have nothing left to wait with.
-        let remaining = owner.operation_task_ids(self.inner.id);
-        join_all(
-            remaining
-                .into_iter()
-                .map(|task_id| owner.abort_task_and_wait(task_id, abort_confirmation)),
-        )
-        .await;
         Ok(false)
     }
 
