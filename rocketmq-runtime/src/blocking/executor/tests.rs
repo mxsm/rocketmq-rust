@@ -267,6 +267,7 @@ async fn expired_drain_deadline_prevents_user_closure_from_starting() {
         completion: BlockingCompletionGuard {
             tasks: Arc::clone(&executor.tasks),
             task_id,
+            _isolated_registration: None,
         },
         execution_deadline: Some(ShutdownDeadline::after(Duration::ZERO)),
     };

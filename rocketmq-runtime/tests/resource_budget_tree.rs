@@ -59,6 +59,81 @@ fn limit(count: usize, bytes: usize, policy: FullPolicy) -> BudgetLimit {
     BudgetLimit::new(count, bytes, policy)
 }
 
+#[test]
+fn resizing_a_permit_reserves_only_bytes_and_rolls_back_a_child_rejection() {
+    let root = ResourceBudgetTree::new(
+        "resize",
+        limit(1, 100, FullPolicy::Reject).with_rate(RateLimit::new(1, 1)),
+    )
+    .unwrap()
+    .root();
+    let child = root
+        .child(
+            "child",
+            limit(1, 60, FullPolicy::Reject).with_rate(RateLimit::new(1, 1)),
+        )
+        .unwrap();
+    let mut permit = child.try_acquire_data(40).unwrap();
+    permit.try_resize(60).unwrap();
+    assert_eq!(root.snapshot().current_count, 1);
+    assert_eq!(root.snapshot().admitted_count, 1);
+    assert_eq!(root.snapshot().current_bytes, 60);
+    let rejection = permit.try_resize(70).unwrap_err();
+    assert_eq!(rejection.exhausted_path(), child.path());
+    assert_eq!(permit.bytes(), 60);
+    assert_eq!(root.snapshot().current_bytes, 60);
+    assert_eq!(child.snapshot().current_bytes, 60);
+    permit.try_resize(0).unwrap();
+    assert_eq!(root.snapshot().current_bytes, 0);
+    assert_eq!(root.snapshot().current_count, 1);
+    drop(permit);
+    assert_eq!(root.snapshot().current_count, 0);
+    assert_eq!(root.snapshot().released_count, 1);
+}
+
+#[test]
+fn resizing_preserves_control_reserves_and_supports_growth_after_rebind() {
+    let root = ResourceBudgetTree::new(
+        "resize",
+        limit(4, 100, FullPolicy::Reject).with_control_reserve(BudgetCapacity::new(1, 20)),
+    )
+    .unwrap()
+    .root();
+    let key = root
+        .register_dynamic_child("old", limit(2, 80, FullPolicy::Reject))
+        .unwrap();
+    let mut permit = key.budget().try_acquire_data(40).unwrap();
+    key.close();
+    assert!(permit.try_resize(50).unwrap_err().is_closed());
+    permit.try_resize(20).unwrap();
+    assert_eq!(permit.try_rebind(&root).unwrap(), PermitRebindOutcome::Rebound);
+    permit.try_resize(80).unwrap();
+    assert!(permit.try_resize(81).is_err());
+    assert_eq!(root.snapshot().current_bytes, 80);
+    let control = root.try_acquire_control(20).unwrap();
+    assert_eq!(root.snapshot().current_bytes, 100);
+    drop((permit, control));
+    assert_eq!(root.snapshot().current_bytes, 0);
+}
+
+#[test]
+fn resizing_a_rebound_permit_observes_the_new_dynamic_gate() {
+    let root = ResourceBudgetTree::new("resize", limit(4, 100, FullPolicy::Reject))
+        .unwrap()
+        .root();
+    let key = root
+        .register_dynamic_child("new", limit(2, 80, FullPolicy::Reject))
+        .unwrap();
+    let mut permit = root.try_acquire_data(20).unwrap();
+    assert_eq!(permit.try_rebind(&key.budget()).unwrap(), PermitRebindOutcome::Rebound);
+    key.close();
+    assert!(permit.try_resize(21).unwrap_err().is_closed());
+    permit.try_resize(10).unwrap();
+    assert_eq!(root.snapshot().current_bytes, 10);
+    drop(permit);
+    assert_eq!(root.snapshot().current_bytes, 0);
+}
+
 fn accepted<T>(outcome: QueuePushOutcome<T>) -> QueuePushOutcome<T> {
     assert!(
         !matches!(&outcome, QueuePushOutcome::Rejected { .. }),

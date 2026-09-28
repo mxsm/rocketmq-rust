@@ -1610,6 +1610,99 @@ fn concurrent_plan(max_pending_bytes: usize, writes: usize) -> MetadataIoPlan {
         .with_max_concurrent_writes(NonZeroUsize::new(writes).unwrap())
 }
 
+#[test]
+fn queued_snapshots_replace_at_the_process_limit_and_roll_back_failed_growth() {
+    let owner = RuntimeOwner::plan(RuntimeConfig::for_parallelism("metadata-replace", 2))
+        .unwrap()
+        .with_memory_limit(ProcessMemoryLimit::configured(100).unwrap())
+        .build()
+        .unwrap();
+    let service = owner.root_context().component("metadata");
+    let filesystem = Arc::new(HeldWriteFileSystem::holding(|_| true));
+    let actor = config(8, 1024)
+        .into_plan()
+        .unwrap()
+        .start_with_file_system(&service, filesystem.clone())
+        .unwrap();
+    let _release = ReleaseGateOnDrop(filesystem.gate.clone());
+    owner.block_on(async {
+        let deadline = MetadataDeadline::after(Duration::from_secs(10));
+        let first = accepted(actor.submit(request("routes", 1, &[1; 40]), deadline).unwrap());
+        filesystem.wait_for_active_writes(1).await;
+        let second = accepted(actor.submit(request("routes", 2, &[2; 60]), deadline).unwrap());
+        let third = accepted(actor.submit(request("routes", 3, &[3; 60]), deadline).unwrap());
+        assert_eq!(service.process_budget().snapshot().current_bytes, 100);
+        let fourth = accepted(actor.submit(request("routes", 4, &[4; 20]), deadline).unwrap());
+        assert_eq!(service.process_budget().snapshot().current_bytes, 60);
+        assert_eq!(
+            actor
+                .submit(request("routes", 5, &[5; 80]), deadline)
+                .unwrap_err()
+                .kind(),
+            RuntimeErrorKind::CapacityExhausted
+        );
+        assert_eq!(service.process_budget().snapshot().current_bytes, 60);
+        assert_eq!(
+            actor.snapshot().resources[0].queued_generation,
+            Some(MetadataGeneration::new(4))
+        );
+        let sixth = accepted(actor.submit(request("routes", 6, &[6; 60]), deadline).unwrap());
+        assert_eq!(service.process_budget().snapshot().current_bytes, 100);
+        assert_eq!(service.process_budget().snapshot().current_count, 2);
+        filesystem.gate.release();
+        assert_eq!(first.wait_until(deadline).await.unwrap(), MetadataGeneration::new(1));
+        for receipt in [second, third, fourth, sixth] {
+            assert_eq!(receipt.wait_until(deadline).await.unwrap(), MetadataGeneration::new(6));
+        }
+        assert!(!actor.shutdown_until(deadline).await.timed_out);
+        assert_eq!(service.process_budget().snapshot().current_bytes, 0);
+        assert_eq!(filesystem.writes_to("routes.json"), vec![vec![1; 40], vec![6; 60]]);
+    });
+    assert!(owner.shutdown_runtime_blocking().unwrap().is_healthy());
+}
+
+#[tokio::test]
+async fn a_running_snapshot_keeps_its_charge_after_the_actor_and_coordinator_are_dropped() {
+    let context = RuntimeContext::try_from_current("metadata-closure-charge").unwrap();
+    let service = context.service_context("metadata");
+    let filesystem = Arc::new(HeldWriteFileSystem::holding(|_| true));
+    let actor = config(8, 1024)
+        .into_plan()
+        .unwrap()
+        .start_with_file_system(&service, filesystem.clone())
+        .unwrap();
+    let _release = ReleaseGateOnDrop(filesystem.gate.clone());
+    let observer = actor.observer();
+    let receipt = accepted(
+        actor
+            .submit(
+                request("routes", 1, &[1; 64]),
+                MetadataDeadline::after(Duration::from_secs(10)),
+            )
+            .unwrap(),
+    );
+    filesystem.wait_for_active_writes(1).await;
+    let _ = context.shutdown_tasks(Duration::ZERO).await;
+    drop((actor, receipt));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while observer.snapshot().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(service.process_budget().snapshot().current_bytes, 64);
+    filesystem.gate.release();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while service.process_budget().snapshot().current_bytes != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(service.process_budget().snapshot().current_count, 0);
+}
+
 #[tokio::test]
 async fn concurrent_writes_let_other_resources_pass_a_slow_write() {
     let file_system = Arc::new(HeldWriteFileSystem::holding(|target| target == Path::new("slow.json")));

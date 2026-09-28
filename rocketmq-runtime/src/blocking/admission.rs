@@ -165,6 +165,12 @@ impl GlobalBlockingBudget {
         if total_running >= self.inner.capacity || state.running[lane_index] >= self.inner.lane_ceilings[lane_index] {
             return false;
         }
+        // A lane using its own reservation is not borrowing. Protecting other
+        // reservations here would make two underserved lanes leave one free
+        // slot idle while each waits for the other's reservation.
+        if state.running[lane_index] < self.inner.lane_reservations[lane_index] {
+            return true;
+        }
         let protected_for_waiters = (0..state.waiters.len())
             .filter(|index| *index != lane_index && !state.waiters[*index].is_empty())
             .map(|index| self.inner.lane_reservations[index].saturating_sub(state.running[index]))
@@ -292,6 +298,54 @@ mod tests {
 
     fn budget(capacity: usize) -> GlobalBlockingBudget {
         GlobalBlockingBudget::new(capacity, [capacity; 3], [1; 3])
+    }
+
+    #[tokio::test]
+    async fn underserved_lanes_use_each_released_slot_without_mutual_reservation_stall() {
+        let budget = budget(3);
+        let first = budget.acquire(BlockingLane::StorageIo, deadline()).await.unwrap();
+        let second = budget.acquire(BlockingLane::StorageIo, deadline()).await.unwrap();
+        let third = budget.acquire(BlockingLane::StorageIo, deadline()).await.unwrap();
+        let mut metadata = Box::pin(budget.acquire(BlockingLane::MetadataIo, deadline()));
+        let mut cpu = Box::pin(budget.acquire(BlockingLane::CpuCrypto, deadline()));
+        let mut borrower = Box::pin(budget.acquire(BlockingLane::StorageIo, deadline()));
+        assert!(futures::poll!(metadata.as_mut()).is_pending());
+        assert!(futures::poll!(cpu.as_mut()).is_pending());
+        assert!(futures::poll!(borrower.as_mut()).is_pending());
+
+        drop(first);
+        let metadata_permit = metadata.await.unwrap();
+        assert_eq!(budget.lock().running, [2, 1, 0]);
+        assert!(futures::poll!(cpu.as_mut()).is_pending());
+        assert!(futures::poll!(borrower.as_mut()).is_pending());
+        drop(second);
+        let cpu_permit = cpu.await.unwrap();
+        assert_eq!(budget.lock().running, [1, 1, 1]);
+        drop(third);
+        let borrowed = borrower.await.unwrap();
+        assert_eq!(budget.lock().running, [1, 1, 1]);
+        drop((metadata_permit, cpu_permit, borrowed));
+        assert_eq!(budget.snapshot(BlockingLane::StorageIo).global_running, 0);
+    }
+
+    #[tokio::test]
+    async fn dropping_a_granted_reservation_hands_it_to_the_other_waiting_lane() {
+        let budget = budget(3);
+        let mut held = Vec::new();
+        for _ in 0..3 {
+            held.push(budget.acquire(BlockingLane::StorageIo, deadline()).await.unwrap());
+        }
+        let mut metadata = Box::pin(budget.acquire(BlockingLane::MetadataIo, deadline()));
+        let mut cpu = Box::pin(budget.acquire(BlockingLane::CpuCrypto, deadline()));
+        assert!(futures::poll!(metadata.as_mut()).is_pending());
+        assert!(futures::poll!(cpu.as_mut()).is_pending());
+        drop(held.pop());
+        assert_eq!(budget.lock().running, [2, 1, 0]);
+        drop(metadata);
+        let cpu_permit = cpu.await.unwrap();
+        assert_eq!(budget.lock().running, [2, 0, 1]);
+        drop((held, cpu_permit));
+        assert_eq!(budget.snapshot(BlockingLane::CpuCrypto).global_running, 0);
     }
 
     #[tokio::test]

@@ -30,6 +30,7 @@ pub use diagnostics::BlockingExecutorSnapshot;
 pub use diagnostics::BlockingTaskSnapshot;
 pub use executor::BlockingDrainLease;
 pub use executor::BlockingExecutor;
+pub use executor::BlockingExecutorShutdownReport;
 pub use policy::BlockingKind;
 pub use policy::BlockingLane;
 pub use policy::BlockingLanePolicies;

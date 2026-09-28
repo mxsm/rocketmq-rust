@@ -971,8 +971,12 @@ struct QueuedMetadataWrite {
 struct WorkMeta {
     generation: MetadataGeneration,
     bytes: usize,
-    /// Released in `finish_request` together with `pending_bytes`, never when a
-    /// caller stops observing the write.
+}
+
+// Field order drops the actual payload before returning its byte reservation,
+// including when Tokio discards a closure before it starts.
+struct ChargedSnapshot {
+    bytes: Arc<[u8]>,
     _charge: ResourcePermit,
 }
 
@@ -1173,15 +1177,6 @@ impl MetadataIoActor {
         if next_bytes > self.inner.config.max_pending_bytes {
             return Err(RuntimeError::capacity(crate::RuntimeOperation::AdmitMetadataBytes));
         }
-        // The process budget bounds what every component retains together.
-        // A replaced queued snapshot releases its charge only after this one
-        // is taken, so a replacement close to the process limit can be refused.
-        let charge = self
-            .inner
-            .retained_bytes
-            .try_acquire_data(request.len())
-            .map_err(|_rejection| RuntimeError::capacity(crate::RuntimeOperation::AdmitMetadataBytes))?;
-
         let queue_permit = if needs_queue_token {
             Some(
                 self.sender
@@ -1192,22 +1187,43 @@ impl MetadataIoActor {
             None
         };
 
-        state.pending_operations = next_operations;
-        state.pending_bytes = next_bytes;
         let resource_state = state.resources.entry(resource.clone()).or_default();
+        if let Some(queued) = &mut resource_state.queued {
+            let new_bytes = request.len();
+            // Only the growth is reserved, and a rejection leaves the old
+            // generation intact. Shrink only after dropping the old payload.
+            queued
+                .charge
+                .try_resize(new_bytes.max(queued.charge.bytes()))
+                .map_err(|_rejection| RuntimeError::capacity(crate::RuntimeOperation::AdmitMetadataBytes))?;
+            queued.request = request;
+            queued.charge.shrink_to(new_bytes);
+            queued.registration = target_registration.clone();
+        } else {
+            let charge = self
+                .inner
+                .retained_bytes
+                .try_acquire_data(request.len())
+                .map_err(|_rejection| RuntimeError::capacity(crate::RuntimeOperation::AdmitMetadataBytes))?;
+            resource_state.queued = Some(QueuedMetadataWrite {
+                request,
+                registration: target_registration.clone(),
+                charge,
+            });
+        }
         let identity = target_registration.identity();
-        resource_state.target = Some(request.target.clone());
+        resource_state.target = resource_state
+            .queued
+            .as_ref()
+            .map(|queued| queued.request.target.clone());
         resource_state.target_registration = Some(target_registration.clone());
-        resource_state.queued = Some(QueuedMetadataWrite {
-            request,
-            registration: target_registration,
-            charge,
-        });
         resource_state.waiters.push(GenerationWaiter {
             generation,
             sender: waiter_sender,
             _permit: waiter_permit,
         });
+        state.pending_operations = next_operations;
+        state.pending_bytes = next_bytes;
         drop(state);
         if let Some(permit) = queue_permit {
             permit.send(resource.clone());
@@ -1675,7 +1691,12 @@ async fn process_resource(
     file_system: &Arc<dyn MetadataFileSystem>,
     resource: Arc<str>,
 ) -> bool {
-    let Some((request, registration)) = take_next_request(inner, &resource) else {
+    let Some(QueuedMetadataWrite {
+        request,
+        registration,
+        charge,
+    }) = take_next_request(inner, &resource)
+    else {
         return false;
     };
     let MetadataWriteRequest {
@@ -1692,9 +1713,13 @@ async fn process_resource(
     let lane_deadline = lane_deadline.map(|deadline| ShutdownDeadline::at(deadline.instant().into_std()));
     let worker_file_system = file_system.clone();
     let completion_registration = registration.clone();
+    let snapshot = ChargedSnapshot { bytes, _charge: charge };
     let result = match blocking
         .submit_io_until(format!("metadata-io:{resource}"), lane_deadline, move || {
-            let result = worker_file_system.persist_atomic(&target, &bytes);
+            // Capture the whole owner, not individual fields: the byte charge
+            // survives coordinator cancellation and leaves with the payload.
+            let snapshot = snapshot;
+            let result = worker_file_system.persist_atomic(&target, &snapshot.bytes);
             match &result {
                 Ok(()) => {
                     let _ = completion_registration.record_durable(generation);
@@ -1724,23 +1749,15 @@ async fn process_resource(
     finish_request(inner, &resource, generation, result)
 }
 
-fn take_next_request(
-    inner: &ActorInner,
-    resource: &Arc<str>,
-) -> Option<(MetadataWriteRequest, MetadataTargetRegistration)> {
+fn take_next_request(inner: &ActorInner, resource: &Arc<str>) -> Option<QueuedMetadataWrite> {
     let mut state = inner.state.lock();
     let resource_state = state.resources.get_mut(resource)?;
-    let QueuedMetadataWrite {
-        request,
-        registration,
-        charge,
-    } = resource_state.queued.take()?;
+    let queued = resource_state.queued.take()?;
     resource_state.in_flight = Some(WorkMeta {
-        generation: request.generation,
-        bytes: request.len(),
-        _charge: charge,
+        generation: queued.request.generation,
+        bytes: queued.request.len(),
     });
-    Some((request, registration))
+    Some(queued)
 }
 
 fn finish_request(
@@ -1762,9 +1779,8 @@ fn finish_request(
         debug_assert_eq!(in_flight.generation, generation);
         state.pending_operations = state.pending_operations.saturating_sub(1);
         state.pending_bytes = state.pending_bytes.saturating_sub(in_flight.bytes);
-        // Release the process-budget charge under the same lock that releases
-        // the local byte count, so the two never disagree.
-        drop(in_flight);
+        // The closure has already released its payload charge. Local pending
+        // counters settle here; they may briefly lag the shared byte ledger.
 
         let outcome = commit_outcome(generation, result);
         if matches!(outcome, MetadataIoCommitOutcome::Durable(_)) {

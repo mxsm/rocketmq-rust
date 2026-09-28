@@ -998,19 +998,20 @@ mod tests {
         panic!("the KV persistence state never reached the expected value");
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn observation_timeout_after_a_durable_commit_still_requires_reconciliation() {
         let table = Arc::new(ConfigTable::new());
         let file_system = Arc::new(GatedFileSystem::default());
         let _release_on_failure = ReleaseGateOnDrop(file_system.clone());
         let (_context, actor, service, _root) =
             start_service_with("kv-observation-timeout", file_system.clone(), Arc::clone(&table), 8, 8);
-        // The batch deadline is short and the write is parked, so the worker
-        // always stops observing before the replacement can complete. It is
-        // either already expired when the worker checks or expires while the
-        // closure is parked; both paths reach the same conclusion.
-        let deadline = MetadataDeadline::after(Duration::from_millis(1));
+        // Admit the real write before expiring its observer. A short wall-clock
+        // deadline can reject admission under load, which never requires
+        // reconciliation and therefore exercises a different contract.
+        let deadline = MetadataDeadline::after(Duration::from_secs(30));
         let receipt = service.submit(put("ns", "key", "new"), deadline).unwrap();
+        wait_until(|| file_system.writes.load(Ordering::Relaxed) == 1).await;
+        tokio::time::advance(Duration::from_secs(31)).await;
 
         wait_until(|| service.snapshot().reconciliation_required).await;
         assert!(

@@ -118,7 +118,7 @@ impl TaskGroup {
             if state != TaskGroupLifecycleState::Open {
                 return Err(state.admission_error(crate::RuntimeOperation::SpawnTaskGroupTask));
             }
-            self.inner.registry.tasks.insert(task_id, meta);
+            self.inner.registry.insert_task(meta);
             self.inner.tracker.track_future(wrapped)
         };
 

@@ -5,6 +5,43 @@ Consumers must migrate with this batch; the budget accessor change is a source
 compatibility break and must not be published as a compatible patch to an API
 that returns a mandatory capacity dimension.
 
+## Explicit resource and completion boundaries
+
+The APIs in this section are additive. Existing constructor capacity, boolean
+wait results, default metadata write concurrency, and V1/V2 diagnostic schemas
+remain compatible.
+
+- `BlockingExecutor::new_isolated` makes independent capacity explicit; `new`
+  delegates to it. `stop_admission` and `shutdown_until` affect only that executor
+  and its clones. Inspect `BlockingExecutorShutdownReport::completed` and
+  `pending_operations`; a timeout cannot interrupt an executing closure.
+  Managed lane handles reject these methods and use their service lifecycle.
+- `ResourcePermit::try_resize` adjusts bytes without a second count/rate charge.
+  Growth is transactional across ancestors and respects dynamic closure;
+  shrinking requires the caller to release removed payload first. Metadata
+  coalescing uses this to replace a queued snapshot at capacity. Its real
+  blocking closure retains the shared charge after actor cancellation.
+- `OperationContext::wait_with_policy(owner, OperationWaitPolicy::new(graceful,
+  confirmation))` closes operation admission and reports `Completed`,
+  `AbortConfirmed`, or `Unconfirmed { remaining_tasks }`. Both inputs are absolute
+  deadlines; an earlier confirmation deadline also tightens the grace period.
+  Call `cancel()` first when cooperative cancellation is required. Existing
+  `wait`/`cancel_and_wait` still allow an additional one-second confirmation
+  window; their `false` result does not establish destruction. The `_until`
+  forms request abort at the deadline without an extra confirmation allowance.
+  None of these timers can preempt synchronous code that stalls a runtime thread.
+- `TaskGroup::diagnostics_task_details` samples sanitized details without a
+  full-tree aggregate. Its scan budget covers task enumeration, descendant
+  registrations (including stale weak entries), and temporary group storage.
+  It reports task/group scan counts and truncation through a new result type;
+  existing V1/V2 aggregate collection remains proportional to the whole subtree.
+
+The existing removal of `async_fs` and the atomic-file replacements below remain
+in force. A metadata observer timing out does not prove failure or rollback:
+the operation may later commit. Preserve receipts or target reconciliation as
+required by the application; ordinary file-write completion is not a substitute
+for the metadata durability contract.
+
 ## Closed dynamic budgets
 
 `BudgetRejection::dimension()` now returns `Option<BudgetDimension>`.
