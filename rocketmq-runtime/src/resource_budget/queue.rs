@@ -33,8 +33,8 @@ use super::limit::BudgetClass;
 use super::limit::BudgetDimension;
 use super::limit::FullPolicy;
 
-#[derive(Debug)]
 /// Identifies the queue push outcome state.
+#[derive(Debug)]
 pub enum QueuePushOutcome<T> {
     /// Represents the enqueued case.
     Enqueued,
@@ -120,8 +120,8 @@ impl<T> BudgetedItem<T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 /// Represents queue snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueueSnapshot {
     /// The path value.
     pub path: Arc<str>,
