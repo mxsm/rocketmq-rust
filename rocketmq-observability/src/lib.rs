@@ -38,6 +38,7 @@ pub mod trace;
 
 pub use attributes::base_attributes;
 pub use attributes::Attribute;
+pub use attributes::MetricAttributes;
 pub use config::ConsoleLogConfig;
 pub use config::FileLogConfig;
 pub use config::LogFormat;
@@ -125,13 +126,16 @@ pub use metrics::labels::METRIC_LABEL_SENTINEL;
 #[cfg(feature = "otel-traces")]
 pub use propagation::add_current_span_event_with_status;
 #[cfg(feature = "otel-traces")]
-pub use propagation::extract_context_with_handle;
+#[doc(hidden)]
+pub use propagation::bench_extract_trace_context;
 #[cfg(feature = "otel-traces")]
 pub use propagation::inject_current_context_with_handle;
 #[cfg(feature = "otel-traces")]
 pub use propagation::record_span_parent_assignment_error;
 #[cfg(feature = "otel-traces")]
 pub use propagation::set_span_parent_from_properties_with_handle;
+#[cfg(feature = "otel-traces")]
+pub use propagation::SpanParentError;
 pub use propagation::TRACEPARENT;
 pub use propagation::TRACESTATE;
 pub use resolver::normalize_and_validate;

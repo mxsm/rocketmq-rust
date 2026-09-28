@@ -51,13 +51,13 @@ impl ControllerMetrics {
     pub fn record_active_brokers(&self, _count: u64) {}
 
     #[inline]
-    pub fn record_quorum_health(&self, _healthy: u64, _attributes: &[()]) {}
+    pub fn record_quorum_health(&self, _healthy: u64, _attributes: &crate::MetricAttributes) {}
 
     #[inline]
-    pub fn record_heartbeat_age(&self, _age_ms: u64, _attributes: &[()]) {}
+    pub fn record_heartbeat_age(&self, _age_ms: u64, _attributes: &crate::MetricAttributes) {}
 
     #[inline]
-    pub fn record_stale_brokers(&self, _count: u64, _attributes: &[()]) {}
+    pub fn record_stale_brokers(&self, _count: u64, _attributes: &crate::MetricAttributes) {}
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -142,51 +142,53 @@ impl ControllerMetrics {
     }
 
     #[inline]
-    pub fn record_election_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_election_total(&self, count: u64, attributes: &crate::MetricAttributes) {
         if let Some(instruments) = &self.instruments {
-            instruments.election_total.add(count, attributes);
+            instruments.election_total.add(count, attributes.as_key_values());
         }
     }
 
     #[inline]
-    pub fn record_election_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_election_latency(&self, latency_ms: u64, attributes: &crate::MetricAttributes) {
         if let Some(instruments) = &self.instruments {
-            instruments.election_latency.record(latency_ms, attributes);
+            instruments
+                .election_latency
+                .record(latency_ms, attributes.as_key_values());
         }
     }
 
     #[inline]
-    pub fn record_leader_changes_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_leader_changes_total(&self, count: u64, attributes: &crate::MetricAttributes) {
         if let Some(instruments) = &self.instruments {
-            instruments.leader_changes_total.add(count, attributes);
+            instruments.leader_changes_total.add(count, attributes.as_key_values());
         }
     }
 
     #[inline]
-    pub fn record_active_brokers(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_active_brokers(&self, count: u64, attributes: &crate::MetricAttributes) {
         if let Some(instruments) = &self.instruments {
-            instruments.active_brokers.record(count, attributes);
+            instruments.active_brokers.record(count, attributes.as_key_values());
         }
     }
 
     #[inline]
-    pub fn record_quorum_health(&self, healthy: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_quorum_health(&self, healthy: u64, attributes: &crate::MetricAttributes) {
         if let Some(instruments) = &self.instruments {
-            instruments.quorum_health.record(healthy, attributes);
+            instruments.quorum_health.record(healthy, attributes.as_key_values());
         }
     }
 
     #[inline]
-    pub fn record_heartbeat_age(&self, age_ms: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_heartbeat_age(&self, age_ms: u64, attributes: &crate::MetricAttributes) {
         if let Some(instruments) = &self.instruments {
-            instruments.heartbeat_age.record(age_ms, attributes);
+            instruments.heartbeat_age.record(age_ms, attributes.as_key_values());
         }
     }
 
     #[inline]
-    pub fn record_stale_brokers(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_stale_brokers(&self, count: u64, attributes: &crate::MetricAttributes) {
         if let Some(instruments) = &self.instruments {
-            instruments.stale_brokers.record(count, attributes);
+            instruments.stale_brokers.record(count, attributes.as_key_values());
         }
     }
 }
@@ -203,7 +205,7 @@ mod tests {
         let provider = SdkMeterProvider::builder().build();
         let meter = provider.meter("controller-metrics-test");
         let metrics = ControllerMetrics::new(&meter);
-        let attrs = [opentelemetry::KeyValue::new("controller_id", "controller-a")];
+        let attrs = crate::MetricAttributes::new().with("controller_id", "controller-a");
 
         metrics.record_election_total(1, &attrs);
         metrics.record_election_latency(15, &attrs);
@@ -218,13 +220,13 @@ mod tests {
     fn noop_controller_metrics_accept_records() {
         let metrics = ControllerMetrics::noop();
 
-        metrics.record_election_total(1, &[]);
-        metrics.record_election_latency(15, &[]);
-        metrics.record_leader_changes_total(1, &[]);
-        metrics.record_active_brokers(3, &[]);
-        metrics.record_quorum_health(1, &[]);
-        metrics.record_heartbeat_age(50, &[]);
-        metrics.record_stale_brokers(0, &[]);
+        metrics.record_election_total(1, &crate::MetricAttributes::new());
+        metrics.record_election_latency(15, &crate::MetricAttributes::new());
+        metrics.record_leader_changes_total(1, &crate::MetricAttributes::new());
+        metrics.record_active_brokers(3, &crate::MetricAttributes::new());
+        metrics.record_quorum_health(1, &crate::MetricAttributes::new());
+        metrics.record_heartbeat_age(50, &crate::MetricAttributes::new());
+        metrics.record_stale_brokers(0, &crate::MetricAttributes::new());
     }
 
     #[test]

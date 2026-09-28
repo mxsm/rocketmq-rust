@@ -125,11 +125,13 @@ Prometheus 必须使用接收作用域的初始化 API，以及 `shutdown_with_s
 
 角色记录器覆盖 Broker、客户端、传输、NameServer、Controller、Proxy、存储、分层存储、
 运行时、Dashboard 和 SRE 组件。标签策略限制主题/消费组的基数。
-使用注入句柄派生的记录器；对于提供相应 API 的模块，也可在启用特性后使用接收 meter 的 SDK 构造器。
+使用注入句柄派生的记录器。接收属性的记录方法使用本 crate 自有的属性集 `MetricAttributes`，
+可一次构建并在重复测量中复用。meter、指标工具和键值对等 OpenTelemetry SDK 类型只在本 crate 内部使用，
+不属于公开 API。
 
-启用 `otel-traces` 后，根路径导出的 `inject_current_context_with_handle`、
-`extract_context_with_handle` 和 `set_span_parent_from_properties_with_handle`
-通过消息属性映射和句柄中的追踪策略传播上下文。
+启用 `otel-traces` 后，根路径导出的 `inject_current_context_with_handle` 和
+`set_span_parent_from_properties_with_handle` 通过消息属性映射和句柄中的追踪策略传播上下文；
+设置父 Span 失败时返回 `SpanParentError`。
 共享常量 `TRACEPARENT` 和 `TRACESTATE` 定义线上属性名称。
 
 `rocketmq-client-rust/observability` 启用客户端追踪，

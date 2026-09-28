@@ -45,8 +45,6 @@ use tracing::warn;
 use crate::metrics::auth::AuthMetricsSnapshot;
 use crate::metrics::broker::BrokerMetrics;
 use crate::metrics::broker_constants::BrokerMetricsConstant;
-use crate::metrics::noop_instruments::NopLongCounter;
-use crate::metrics::noop_instruments::NopLongHistogram;
 use crate::metrics::owner_instruments::Counter;
 use crate::metrics::owner_instruments::Histogram;
 use crate::metrics::owner_instruments::KeyValue;
@@ -73,15 +71,15 @@ const PROTOCOL_TYPE_REMOTING: &str = "remoting";
 /// Trait for providing base attributes (cluster, node info, etc.)
 pub trait AttributesBuilderSupplier: Send + Sync {
     /// Returns the base attributes that should be added to all metrics
-    fn get(&self) -> Vec<KeyValue>;
+    fn get(&self) -> crate::MetricAttributes;
 }
 
 /// Default no-op supplier that returns empty attributes
 pub struct NoopAttributesSupplier;
 
 impl AttributesBuilderSupplier for NoopAttributesSupplier {
-    fn get(&self) -> Vec<KeyValue> {
-        Vec::new()
+    fn get(&self) -> crate::MetricAttributes {
+        crate::MetricAttributes::new()
     }
 }
 
@@ -154,51 +152,15 @@ impl ConsumerLagAttributes {
 }
 
 impl AttributesBuilderSupplier for BrokerAttributesSupplier {
-    fn get(&self) -> Vec<KeyValue> {
-        vec![
+    fn get(&self) -> crate::MetricAttributes {
+        crate::MetricAttributes::from_array([
             KeyValue::new(BrokerMetricsConstant::LABEL_CLUSTER_NAME, self.cluster.clone()),
             KeyValue::new(
                 BrokerMetricsConstant::LABEL_NODE_TYPE,
                 BrokerMetricsConstant::NODE_TYPE_BROKER,
             ),
             KeyValue::new(BrokerMetricsConstant::LABEL_NODE_ID, self.node_id.clone()),
-        ]
-    }
-}
-
-// ============================================================================
-// Metrics Wrappers
-// ============================================================================
-
-/// Wrapper for Counter that can be either real or no-op
-pub enum CounterWrapper {
-    Real(Counter<u64>),
-    Nop(NopLongCounter),
-}
-
-impl CounterWrapper {
-    #[inline]
-    pub fn add(&self, value: u64, attributes: &[KeyValue]) {
-        match self {
-            Self::Real(counter) => counter.add(value, attributes),
-            Self::Nop(_) => {}
-        }
-    }
-}
-
-/// Wrapper for Histogram that can be either real or no-op
-pub enum HistogramWrapper {
-    Real(Histogram<u64>),
-    Nop(NopLongHistogram),
-}
-
-impl HistogramWrapper {
-    #[inline]
-    pub fn record(&self, value: u64, attributes: &[KeyValue]) {
-        match self {
-            Self::Real(histogram) => histogram.record(value, attributes),
-            Self::Nop(_) => {}
-        }
+        ])
     }
 }
 
@@ -572,7 +534,7 @@ impl BrokerMetricsManager {
                     for (processor_name, count) in processor_watermark_fn() {
                         let mut attrs = attrs1.get();
                         attrs.push(KeyValue::new(BrokerMetricsConstant::LABEL_PROCESSOR, processor_name));
-                        observer.observe(count, &attrs);
+                        observer.observe(count, attrs.as_key_values());
                     }
                 })
                 .build();
@@ -588,7 +550,7 @@ impl BrokerMetricsManager {
                     return;
                 }
                 let attrs = attrs2.get();
-                observer.observe(broker_permission_fn(), &attrs);
+                observer.observe(broker_permission_fn(), attrs.as_key_values());
             })
             .build();
 
@@ -602,7 +564,7 @@ impl BrokerMetricsManager {
                     return;
                 }
                 let attrs = attrs3.get();
-                observer.observe(topic_num_fn(), &attrs);
+                observer.observe(topic_num_fn(), attrs.as_key_values());
             })
             .build();
 
@@ -616,7 +578,7 @@ impl BrokerMetricsManager {
                     return;
                 }
                 let attrs = attrs4.get();
-                observer.observe(consumer_group_num_fn(), &attrs);
+                observer.observe(consumer_group_num_fn(), attrs.as_key_values());
             })
             .build();
 
@@ -640,7 +602,7 @@ impl BrokerMetricsManager {
                         ),
                         remoting_protocol_type_label(),
                     ]);
-                    observer.observe(count, &attrs);
+                    observer.observe(count, attrs.as_key_values());
                 }
             })
             .build();
@@ -685,7 +647,7 @@ impl BrokerMetricsManager {
                             is_system_group(&attr.group).to_string(),
                         ),
                     ]);
-                    observer.observe(count, &attrs);
+                    observer.observe(count, attrs.as_key_values());
                 }
             })
             .build();
@@ -693,7 +655,7 @@ impl BrokerMetricsManager {
 
     /// Get base attributes from the supplier
     #[inline]
-    fn base_attributes(&self) -> Vec<KeyValue> {
+    fn base_attributes(&self) -> crate::MetricAttributes {
         self.attributes_supplier.get()
     }
 
@@ -765,7 +727,7 @@ impl BrokerMetricsManager {
                 for sample in snapshot.samples() {
                     let mut attrs = attributes_supplier.get();
                     attrs.push(KeyValue::new(BrokerMetricsConstant::LABEL_AUTH_METRIC, sample.name));
-                    observer.observe(sample.value, &attrs);
+                    observer.observe(sample.value, attrs.as_key_values());
                 }
             })
             .build();
@@ -802,7 +764,7 @@ impl BrokerMetricsManager {
                     #[cfg(not(feature = "otel-metrics"))]
                     let topic_label = KeyValue::new(BrokerMetricsConstant::LABEL_TOPIC, sample.topic);
                     attrs.push(topic_label);
-                    observer.observe(sample.count, &attrs);
+                    observer.observe(sample.count, attrs.as_key_values());
                 }
             })
             .build();
@@ -857,7 +819,7 @@ impl BrokerMetricsManager {
                             is_system(&observation.topic, &observation.consumer_group).to_string(),
                         ),
                     ]);
-                    observer.observe(observation.lag_messages.max(0), &attrs);
+                    observer.observe(observation.lag_messages.max(0), attrs.as_key_values());
                 }
             })
             .build();
@@ -1046,7 +1008,7 @@ impl BrokerMetricsManager {
             return;
         }
         let attrs = self.base_attributes();
-        self.topic_create_execute_time.record(time_ms, &attrs);
+        self.topic_create_execute_time.record(time_ms, attrs.as_key_values());
     }
 
     /// Record consumer group create execution time
@@ -1055,7 +1017,8 @@ impl BrokerMetricsManager {
             return;
         }
         let attrs = self.base_attributes();
-        self.consumer_group_create_execute_time.record(time_ms, &attrs);
+        self.consumer_group_create_execute_time
+            .record(time_ms, attrs.as_key_values());
     }
 
     // ========================================================================
@@ -1074,7 +1037,7 @@ impl BrokerMetricsManager {
             self.consumer_group_label(consumer_group),
             KeyValue::new(BrokerMetricsConstant::LABEL_IS_SYSTEM, is_system.to_string()),
         ]);
-        self.send_to_dlq_messages.add(num, &attrs);
+        self.send_to_dlq_messages.add(num, attrs.as_key_values());
     }
 
     // ========================================================================
@@ -1088,7 +1051,7 @@ impl BrokerMetricsManager {
         }
         let mut attrs = self.base_attributes();
         attrs.push(self.topic_label(topic));
-        self.commit_messages_total.add(num, &attrs);
+        self.commit_messages_total.add(num, attrs.as_key_values());
     }
 
     /// Record rollback message count
@@ -1098,7 +1061,7 @@ impl BrokerMetricsManager {
         }
         let mut attrs = self.base_attributes();
         attrs.push(self.topic_label(topic));
-        self.rollback_messages_total.add(num, &attrs);
+        self.rollback_messages_total.add(num, attrs.as_key_values());
     }
 
     /// Record transaction finish latency
@@ -1108,7 +1071,8 @@ impl BrokerMetricsManager {
         }
         let mut attrs = self.base_attributes();
         attrs.push(self.topic_label(topic));
-        self.transaction_finish_latency.record(latency_ms, &attrs);
+        self.transaction_finish_latency
+            .record(latency_ms, attrs.as_key_values());
     }
 }
 
@@ -1293,20 +1257,6 @@ mod tests {
     }
 
     #[test]
-    fn test_counter_wrapper_nop() {
-        let wrapper = CounterWrapper::Nop(NopLongCounter::new());
-        // Should not panic
-        wrapper.add(100, &[]);
-    }
-
-    #[test]
-    fn test_histogram_wrapper_nop() {
-        let wrapper = HistogramWrapper::Nop(NopLongHistogram::new());
-        // Should not panic
-        wrapper.record(100, &[]);
-    }
-
-    #[test]
     fn connection_version_label_uses_java_version_description() {
         let version = RocketMqVersion::V5_0_0.ordinal() as i32;
 
@@ -1324,7 +1274,7 @@ mod tests {
     #[test]
     fn test_noop_attributes_supplier() {
         let supplier = NoopAttributesSupplier;
-        assert!(supplier.get().is_empty());
+        assert!(supplier.get().as_key_values().is_empty());
     }
 
     #[test]
@@ -1514,12 +1464,15 @@ mod tests {
         let first_attributes = first.base_attributes();
         let second_attributes = second.base_attributes();
         assert!(first_attributes
+            .as_key_values()
             .iter()
             .any(|attribute| attribute.value.to_string() == "cluster-one"));
         assert!(second_attributes
+            .as_key_values()
             .iter()
             .any(|attribute| attribute.value.to_string() == "cluster-two"));
         assert!(!second_attributes
+            .as_key_values()
             .iter()
             .any(|attribute| attribute.value.to_string() == "cluster-one"));
     }

@@ -150,8 +150,8 @@ fn namesrv_and_proxy_recorders_keep_instance_counts_and_labels_isolated() {
 
     let first_namesrv = NameServerMetrics::new(&first_meter);
     let second_namesrv = NameServerMetrics::new(&second_meter);
-    first_namesrv.record_route_request_total(2, &[opentelemetry::KeyValue::new("instance", "namesrv-first")]);
-    second_namesrv.record_route_request_total(7, &[opentelemetry::KeyValue::new("instance", "namesrv-second")]);
+    first_namesrv.record_route_request_total(2, &crate::MetricAttributes::new().with("instance", "namesrv-first"));
+    second_namesrv.record_route_request_total(7, &crate::MetricAttributes::new().with("instance", "namesrv-second"));
 
     let first_proxy = ProxyMetrics::new_with_proxy_up(
         &first_meter,
@@ -267,8 +267,8 @@ fn store_and_tiered_recorders_keep_provider_and_dispatch_counts_isolated() {
     let second_provider = test_provider(second_exporter.clone());
     let first_meter = first_provider.meter("rocketmq-store-instance-isolation");
     let second_meter = second_provider.meter("rocketmq-store-instance-isolation");
-    let first_attributes = [opentelemetry::KeyValue::new("instance", "store-first")];
-    let second_attributes = [opentelemetry::KeyValue::new("instance", "store-second")];
+    let first_attributes = crate::MetricAttributes::new().with("instance", "store-first");
+    let second_attributes = crate::MetricAttributes::new().with("instance", "store-second");
 
     let first_store = StoreMetrics::new(&first_meter);
     let second_store = StoreMetrics::new(&second_meter);

@@ -56,10 +56,10 @@ impl BrokerMetrics {
     pub fn record_messages_out(&self, _count: u64, _bytes: u64) {}
 
     #[inline]
-    pub fn record_metrics_label_dropped_total(&self, _count: u64, _attributes: &[()]) {}
+    pub fn record_metrics_label_dropped_total(&self, _count: u64, _attributes: &crate::MetricAttributes) {}
 
     #[inline]
-    pub fn record_broker_up(&self, _value: u64, _attributes: &[()]) {}
+    pub fn record_broker_up(&self, _value: u64, _attributes: &crate::MetricAttributes) {}
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -157,57 +157,57 @@ impl BrokerMetrics {
     }
 
     #[inline]
-    pub fn record_messages_in_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_messages_in_total(&self, count: u64, attributes: &crate::MetricAttributes) {
         if self.is_active() {
-            self.messages_in_total.add(count, attributes);
+            self.messages_in_total.add(count, attributes.as_key_values());
         }
     }
 
     #[inline]
-    pub fn record_messages_out_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_messages_out_total(&self, count: u64, attributes: &crate::MetricAttributes) {
         if self.is_active() {
-            self.messages_out_total.add(count, attributes);
+            self.messages_out_total.add(count, attributes.as_key_values());
         }
     }
 
     #[inline]
-    pub fn record_throughput_in_total(&self, bytes: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_throughput_in_total(&self, bytes: u64, attributes: &crate::MetricAttributes) {
         if self.is_active() {
-            self.throughput_in_total.add(bytes, attributes);
+            self.throughput_in_total.add(bytes, attributes.as_key_values());
         }
     }
 
     #[inline]
-    pub fn record_throughput_out_total(&self, bytes: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_throughput_out_total(&self, bytes: u64, attributes: &crate::MetricAttributes) {
         if self.is_active() {
-            self.throughput_out_total.add(bytes, attributes);
+            self.throughput_out_total.add(bytes, attributes.as_key_values());
         }
     }
 
     #[inline]
-    pub fn record_message_size(&self, size: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_message_size(&self, size: u64, attributes: &crate::MetricAttributes) {
         if self.is_active() {
-            self.message_size.record(size, attributes);
+            self.message_size.record(size, attributes.as_key_values());
         }
     }
 
     #[inline]
-    pub fn record_send_message_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_send_message_latency(&self, latency_ms: u64, attributes: &crate::MetricAttributes) {
         if self.is_active() {
-            self.send_message_latency.record(latency_ms, attributes);
+            self.send_message_latency.record(latency_ms, attributes.as_key_values());
         }
     }
 
     #[inline]
-    pub fn record_metrics_label_dropped_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_metrics_label_dropped_total(&self, count: u64, attributes: &crate::MetricAttributes) {
         if self.is_active() {
-            self.metrics_label_dropped_total.add(count, attributes);
+            self.metrics_label_dropped_total.add(count, attributes.as_key_values());
         }
     }
 
     #[inline]
-    pub fn record_broker_up(&self, value: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.broker_up.record(value, attributes);
+    pub fn record_broker_up(&self, value: u64, attributes: &crate::MetricAttributes) {
+        self.broker_up.record(value, attributes.as_key_values());
     }
 }
 
@@ -223,7 +223,7 @@ mod tests {
         let provider = SdkMeterProvider::builder().build();
         let meter = provider.meter("broker-metrics-test");
         let metrics = BrokerMetrics::new(&meter);
-        let attrs = [opentelemetry::KeyValue::new("topic", "test-topic")];
+        let attrs = crate::MetricAttributes::new().with("topic", "test-topic");
 
         metrics.record_messages_in_total(1, &attrs);
         metrics.record_messages_out_total(1, &attrs);

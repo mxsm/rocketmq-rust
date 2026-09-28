@@ -53,15 +53,15 @@ use crate::TelemetryRecorder;
 /// This allows customizing the common attributes added to all metrics
 pub trait AttributesBuilderSupplier: Send + Sync {
     /// Returns the base attributes that should be added to all metrics
-    fn get(&self) -> Vec<KeyValue>;
+    fn get(&self) -> crate::MetricAttributes;
 }
 
 /// Default no-op supplier that returns empty attributes
 pub struct NoopAttributesSupplier;
 
 impl AttributesBuilderSupplier for NoopAttributesSupplier {
-    fn get(&self) -> Vec<KeyValue> {
-        Vec::new()
+    fn get(&self) -> crate::MetricAttributes {
+        crate::MetricAttributes::new()
     }
 }
 
@@ -81,15 +81,15 @@ impl BrokerAttributesSupplier {
 }
 
 impl AttributesBuilderSupplier for BrokerAttributesSupplier {
-    fn get(&self) -> Vec<KeyValue> {
-        vec![
+    fn get(&self) -> crate::MetricAttributes {
+        crate::MetricAttributes::from_array([
             KeyValue::new(BrokerMetricsConstant::LABEL_CLUSTER_NAME, self.cluster_name.clone()),
             KeyValue::new(BrokerMetricsConstant::LABEL_NODE_ID, self.broker_id.to_string()),
             KeyValue::new(
                 BrokerMetricsConstant::LABEL_NODE_TYPE,
                 BrokerMetricsConstant::NODE_TYPE_BROKER,
             ),
-        ]
+        ])
     }
 }
 
@@ -247,9 +247,8 @@ impl PopMetricsManager {
                 if !telemetry_allows_recording(telemetry1.as_ref()) {
                     return;
                 }
-                let mut attrs = attrs_supplier1.get();
-                attrs.extend_from_slice(&[]);
-                observer.observe(offset_size_fn(), &attrs);
+                let attrs = attrs_supplier1.get();
+                observer.observe(offset_size_fn(), attrs.as_key_values());
             })
             .build();
 
@@ -263,7 +262,7 @@ impl PopMetricsManager {
                     return;
                 }
                 let attrs = attrs_supplier2.get();
-                observer.observe(ck_size_fn(), &attrs);
+                observer.observe(ck_size_fn(), attrs.as_key_values());
             })
             .build();
 
@@ -282,7 +281,7 @@ impl PopMetricsManager {
                 for (queue_id, lag, _latency) in revive_services_fn_clone() {
                     let mut attrs = attrs_supplier3.get();
                     attrs.push(KeyValue::new(PopMetricsConstant::LABEL_QUEUE_ID, queue_id.to_string()));
-                    observer.observe(lag, &attrs);
+                    observer.observe(lag, attrs.as_key_values());
                 }
             })
             .build();
@@ -300,7 +299,7 @@ impl PopMetricsManager {
                 for (queue_id, _lag, latency) in revive_services_fn() {
                     let mut attrs = attrs_supplier4.get();
                     attrs.push(KeyValue::new(PopMetricsConstant::LABEL_QUEUE_ID, queue_id.to_string()));
-                    observer.observe(latency, &attrs);
+                    observer.observe(latency, attrs.as_key_values());
                 }
             })
             .build();
@@ -352,7 +351,7 @@ impl PopMetricsManager {
 
     /// Get base attributes from supplier
     #[inline]
-    fn base_attributes(&self) -> Vec<KeyValue> {
+    fn base_attributes(&self) -> crate::MetricAttributes {
         self.attributes_supplier.get()
     }
 
@@ -400,7 +399,7 @@ impl PopMetricsManager {
             KeyValue::new(PopMetricsConstant::LABEL_PUT_STATUS, status),
         ]);
 
-        self.pop_revive_put_total.add(num, &attrs);
+        self.pop_revive_put_total.add(num, attrs.as_key_values());
     }
 
     // ========================================================================
@@ -441,7 +440,7 @@ impl PopMetricsManager {
             KeyValue::new(PopMetricsConstant::LABEL_REVIVE_MESSAGE_TYPE, message_type.as_str()),
         ]);
 
-        self.pop_revive_get_total.add(num, &attrs);
+        self.pop_revive_get_total.add(num, attrs.as_key_values());
     }
 
     // ========================================================================
@@ -462,7 +461,7 @@ impl PopMetricsManager {
             KeyValue::new(PopMetricsConstant::LABEL_PUT_STATUS, status),
         ]);
 
-        self.pop_revive_retry_message_total.add(1, &attrs);
+        self.pop_revive_retry_message_total.add(1, attrs.as_key_values());
     }
 
     // ========================================================================
@@ -477,7 +476,7 @@ impl PopMetricsManager {
             return;
         }
         let attrs = self.base_attributes();
-        self.pop_buffer_scan_time_consume.record(time_ms, &attrs);
+        self.pop_buffer_scan_time_consume.record(time_ms, attrs.as_key_values());
     }
 }
 
@@ -563,10 +562,11 @@ mod tests {
         let supplier = BrokerAttributesSupplier::new("test-cluster".to_string(), "broker-0".to_string(), 0);
 
         let attrs = supplier.get();
-        assert_eq!(attrs.len(), 3);
+        assert_eq!(attrs.as_key_values().len(), 3);
 
         // Verify cluster attribute
         assert!(attrs
+            .as_key_values()
             .iter()
             .any(|kv| kv.key.as_str() == BrokerMetricsConstant::LABEL_CLUSTER_NAME));
     }

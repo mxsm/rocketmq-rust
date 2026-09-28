@@ -141,11 +141,11 @@ fn record_message_properties_with_config<T>(
 }
 
 #[cfg(feature = "otel-traces")]
-pub type OpenTelemetryTracingLayer =
+pub(crate) type OpenTelemetryTracingLayer =
     tracing_opentelemetry::OpenTelemetryLayer<tracing_subscriber::Registry, opentelemetry_sdk::trace::SdkTracer>;
 
 #[cfg(feature = "otel-traces")]
-pub fn build_tracing_layer(
+pub(crate) fn build_tracing_layer(
     config: &crate::config::ObservabilityConfig,
     tracer_provider: &opentelemetry_sdk::trace::SdkTracerProvider,
 ) -> OpenTelemetryTracingLayer {
@@ -160,8 +160,8 @@ pub fn build_tracing_layer(
         .with_context_activation(true)
 }
 
-#[cfg(feature = "otel-traces")]
-pub fn try_init_tracing_subscriber(
+#[cfg(all(feature = "otel-traces", not(feature = "otel-logs")))]
+pub(crate) fn try_init_tracing_subscriber(
     config: &crate::config::ObservabilityConfig,
     tracer_provider: &opentelemetry_sdk::trace::SdkTracerProvider,
 ) -> bool {

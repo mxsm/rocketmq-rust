@@ -138,7 +138,7 @@ impl StoreMetricsRecorder {
     pub fn record_append_latency(&self, latency_ms: u64) {
         #[cfg(feature = "otel-metrics")]
         if let Some(metrics) = self.active_metrics() {
-            metrics.record_append_latency(latency_ms, &[]);
+            metrics.record_append_latency(latency_ms, &crate::MetricAttributes::new());
         }
         #[cfg(not(feature = "otel-metrics"))]
         let _ = latency_ms;
@@ -148,7 +148,7 @@ impl StoreMetricsRecorder {
     pub fn record_flush_latency(&self, latency_ms: u64) {
         #[cfg(feature = "otel-metrics")]
         if let Some(metrics) = self.active_metrics() {
-            metrics.record_flush_latency(latency_ms, &[]);
+            metrics.record_flush_latency(latency_ms, &crate::MetricAttributes::new());
         }
         #[cfg(not(feature = "otel-metrics"))]
         let _ = latency_ms;
@@ -158,7 +158,7 @@ impl StoreMetricsRecorder {
     pub fn record_dispatch_latency(&self, latency_ms: u64) {
         #[cfg(feature = "otel-metrics")]
         if let Some(metrics) = self.active_metrics() {
-            metrics.record_dispatch_latency(latency_ms, &[]);
+            metrics.record_dispatch_latency(latency_ms, &crate::MetricAttributes::new());
         }
         #[cfg(not(feature = "otel-metrics"))]
         let _ = latency_ms;
@@ -168,7 +168,7 @@ impl StoreMetricsRecorder {
     pub fn record_disk_usage(&self, bytes: u64) {
         #[cfg(feature = "otel-metrics")]
         if let Some(metrics) = self.active_metrics() {
-            metrics.record_disk_usage(bytes, &[]);
+            metrics.record_disk_usage(bytes, &crate::MetricAttributes::new());
         }
         #[cfg(not(feature = "otel-metrics"))]
         let _ = bytes;
@@ -204,7 +204,7 @@ impl StoreMetricsRecorder {
     pub fn record_transfer_batch(&self, count: u64) {
         #[cfg(feature = "otel-metrics")]
         if let Some(metrics) = self.active_metrics() {
-            metrics.record_transfer_batch_total(count, &[]);
+            metrics.record_transfer_batch_total(count, &crate::MetricAttributes::new());
         }
         #[cfg(not(feature = "otel-metrics"))]
         let _ = count;
@@ -214,7 +214,7 @@ impl StoreMetricsRecorder {
     pub fn record_transfer_bytes(&self, bytes: u64) {
         #[cfg(feature = "otel-metrics")]
         if let Some(metrics) = self.active_metrics() {
-            metrics.record_transfer_bytes_total(bytes, &[]);
+            metrics.record_transfer_bytes_total(bytes, &crate::MetricAttributes::new());
         }
         #[cfg(not(feature = "otel-metrics"))]
         let _ = bytes;
@@ -244,7 +244,7 @@ impl StoreMetricsRecorder {
     pub fn record_transfer_partial_write(&self, count: u64) {
         #[cfg(feature = "otel-metrics")]
         if let Some(metrics) = self.active_metrics() {
-            metrics.record_transfer_partial_write_total(count, &[]);
+            metrics.record_transfer_partial_write_total(count, &crate::MetricAttributes::new());
         }
         #[cfg(not(feature = "otel-metrics"))]
         let _ = count;
@@ -254,7 +254,7 @@ impl StoreMetricsRecorder {
     pub fn record_linux_sendfile_bytes(&self, bytes: u64) {
         #[cfg(feature = "otel-metrics")]
         if let Some(metrics) = self.active_metrics() {
-            metrics.record_linux_sendfile_bytes_total(bytes, &[]);
+            metrics.record_linux_sendfile_bytes_total(bytes, &crate::MetricAttributes::new());
         }
         #[cfg(not(feature = "otel-metrics"))]
         let _ = bytes;
@@ -264,7 +264,7 @@ impl StoreMetricsRecorder {
     pub fn record_ha_replication_lag_bytes(&self, bytes: u64) {
         #[cfg(feature = "otel-metrics")]
         if let Some(metrics) = self.active_metrics() {
-            metrics.record_ha_replication_lag_bytes(bytes, &[]);
+            metrics.record_ha_replication_lag_bytes(bytes, &crate::MetricAttributes::new());
         }
         #[cfg(not(feature = "otel-metrics"))]
         let _ = bytes;
@@ -274,7 +274,7 @@ impl StoreMetricsRecorder {
     pub fn record_ha_ack_latency_millis(&self, latency_ms: u64) {
         #[cfg(feature = "otel-metrics")]
         if let Some(metrics) = self.active_metrics() {
-            metrics.record_ha_ack_latency_millis(latency_ms, &[]);
+            metrics.record_ha_ack_latency_millis(latency_ms, &crate::MetricAttributes::new());
         }
         #[cfg(not(feature = "otel-metrics"))]
         let _ = latency_ms;
@@ -284,7 +284,7 @@ impl StoreMetricsRecorder {
     pub fn record_linux_mlock_bytes(&self, bytes: u64) {
         #[cfg(feature = "otel-metrics")]
         if let Some(metrics) = self.active_metrics() {
-            metrics.record_linux_mlock_bytes(bytes, &[]);
+            metrics.record_linux_mlock_bytes(bytes, &crate::MetricAttributes::new());
         }
         #[cfg(not(feature = "otel-metrics"))]
         let _ = bytes;
@@ -354,7 +354,7 @@ impl StoreMetricsRecorder {
     pub fn record_linux_page_cache_warmup_millis(&self, latency_ms: u64) {
         #[cfg(feature = "otel-metrics")]
         if let Some(metrics) = self.active_metrics() {
-            metrics.record_linux_page_cache_warmup_millis(latency_ms, &[]);
+            metrics.record_linux_page_cache_warmup_millis(latency_ms, &crate::MetricAttributes::new());
         }
         #[cfg(not(feature = "otel-metrics"))]
         let _ = latency_ms;
@@ -383,7 +383,7 @@ impl StoreMetricsRecorder {
     pub fn record_commitlog_segment_lease_active(&self, count: u64) {
         #[cfg(feature = "otel-metrics")]
         if let Some(metrics) = self.active_metrics() {
-            metrics.record_commitlog_segment_lease_active(count, &[]);
+            metrics.record_commitlog_segment_lease_active(count, &crate::MetricAttributes::new());
         }
         #[cfg(not(feature = "otel-metrics"))]
         let _ = count;
@@ -715,120 +715,125 @@ impl StoreMetrics {
     }
 
     #[inline]
-    pub fn record_append_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.append_latency.record(latency_ms, attributes);
+    pub fn record_append_latency(&self, latency_ms: u64, attributes: &crate::MetricAttributes) {
+        self.append_latency.record(latency_ms, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_flush_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.flush_latency.record(latency_ms, attributes);
+    pub fn record_flush_latency(&self, latency_ms: u64, attributes: &crate::MetricAttributes) {
+        self.flush_latency.record(latency_ms, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_dispatch_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.dispatch_latency.record(latency_ms, attributes);
+    pub fn record_dispatch_latency(&self, latency_ms: u64, attributes: &crate::MetricAttributes) {
+        self.dispatch_latency.record(latency_ms, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_disk_usage(&self, bytes: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.disk_usage.record(bytes, attributes);
+    pub fn record_disk_usage(&self, bytes: u64, attributes: &crate::MetricAttributes) {
+        self.disk_usage.record(bytes, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_delay_message_latency(&self, latency_seconds: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.delay_message_latency.record(latency_seconds, attributes);
+    pub fn record_delay_message_latency(&self, latency_seconds: u64, attributes: &crate::MetricAttributes) {
+        self.delay_message_latency
+            .record(latency_seconds, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_transfer_batch_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.transfer_batch_total.add(count, attributes);
+    pub fn record_transfer_batch_total(&self, count: u64, attributes: &crate::MetricAttributes) {
+        self.transfer_batch_total.add(count, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_transfer_bytes_total(&self, bytes: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.transfer_bytes_total.add(bytes, attributes);
+    pub fn record_transfer_bytes_total(&self, bytes: u64, attributes: &crate::MetricAttributes) {
+        self.transfer_bytes_total.add(bytes, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_transfer_engine_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.transfer_engine_total.add(count, attributes);
+    pub fn record_transfer_engine_total(&self, count: u64, attributes: &crate::MetricAttributes) {
+        self.transfer_engine_total.add(count, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_transfer_fallback_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.transfer_fallback_total.add(count, attributes);
+    pub fn record_transfer_fallback_total(&self, count: u64, attributes: &crate::MetricAttributes) {
+        self.transfer_fallback_total.add(count, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_transfer_partial_write_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.transfer_partial_write_total.add(count, attributes);
+    pub fn record_transfer_partial_write_total(&self, count: u64, attributes: &crate::MetricAttributes) {
+        self.transfer_partial_write_total.add(count, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_linux_sendfile_bytes_total(&self, bytes: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.linux_sendfile_bytes_total.add(bytes, attributes);
+    pub fn record_linux_sendfile_bytes_total(&self, bytes: u64, attributes: &crate::MetricAttributes) {
+        self.linux_sendfile_bytes_total.add(bytes, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_ha_replication_lag_bytes(&self, bytes: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_ha_replication_lag_bytes(&self, bytes: u64, attributes: &crate::MetricAttributes) {
         if let Some(ha_replication_lag_bytes) = &self.ha_replication_lag_bytes {
-            ha_replication_lag_bytes.record(bytes, attributes);
+            ha_replication_lag_bytes.record(bytes, attributes.as_key_values());
         }
     }
 
     #[inline]
-    pub fn record_ha_ack_latency_millis(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.ha_ack_latency_millis.record(latency_ms, attributes);
+    pub fn record_ha_ack_latency_millis(&self, latency_ms: u64, attributes: &crate::MetricAttributes) {
+        self.ha_ack_latency_millis
+            .record(latency_ms, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_linux_mlock_bytes(&self, bytes: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.linux_mlock_bytes.record(bytes, attributes);
+    pub fn record_linux_mlock_bytes(&self, bytes: u64, attributes: &crate::MetricAttributes) {
+        self.linux_mlock_bytes.record(bytes, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_linux_mlock_attempt_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.linux_mlock_attempt_total.add(count, attributes);
+    pub fn record_linux_mlock_attempt_total(&self, count: u64, attributes: &crate::MetricAttributes) {
+        self.linux_mlock_attempt_total.add(count, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_linux_mlock_success_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.linux_mlock_success_total.add(count, attributes);
+    pub fn record_linux_mlock_success_total(&self, count: u64, attributes: &crate::MetricAttributes) {
+        self.linux_mlock_success_total.add(count, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_linux_mlock_failure_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.linux_mlock_failure_total.add(count, attributes);
+    pub fn record_linux_mlock_failure_total(&self, count: u64, attributes: &crate::MetricAttributes) {
+        self.linux_mlock_failure_total.add(count, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_linux_mlock_skipped_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.linux_mlock_skipped_total.add(count, attributes);
+    pub fn record_linux_mlock_skipped_total(&self, count: u64, attributes: &crate::MetricAttributes) {
+        self.linux_mlock_skipped_total.add(count, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_linux_locked_bytes(&self, bytes: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.linux_locked_bytes.record(bytes, attributes);
+    pub fn record_linux_locked_bytes(&self, bytes: u64, attributes: &crate::MetricAttributes) {
+        self.linux_locked_bytes.record(bytes, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_linux_munlock_failure_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.linux_munlock_failure_total.add(count, attributes);
+    pub fn record_linux_munlock_failure_total(&self, count: u64, attributes: &crate::MetricAttributes) {
+        self.linux_munlock_failure_total.add(count, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_linux_page_cache_warmup_millis(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.linux_page_cache_warmup_millis.record(latency_ms, attributes);
+    pub fn record_linux_page_cache_warmup_millis(&self, latency_ms: u64, attributes: &crate::MetricAttributes) {
+        self.linux_page_cache_warmup_millis
+            .record(latency_ms, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_linux_storage_degradation_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.linux_storage_degradation_total.add(count, attributes);
+    pub fn record_linux_storage_degradation_total(&self, count: u64, attributes: &crate::MetricAttributes) {
+        self.linux_storage_degradation_total
+            .add(count, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_commitlog_segment_lease_active(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.commitlog_segment_lease_active.record(count, attributes);
+    pub fn record_commitlog_segment_lease_active(&self, count: u64, attributes: &crate::MetricAttributes) {
+        self.commitlog_segment_lease_active
+            .record(count, attributes.as_key_values());
     }
 }
 
@@ -890,10 +895,7 @@ fn store_attributes() -> [opentelemetry::KeyValue; 2] {
 }
 
 #[cfg(feature = "otel-metrics")]
-fn delay_message_latency_attributes(
-    label_policy: &crate::MetricLabelPolicy,
-    topic: &str,
-) -> Vec<opentelemetry::KeyValue> {
+fn delay_message_latency_attributes(label_policy: &crate::MetricLabelPolicy, topic: &str) -> crate::MetricAttributes {
     let mut attrs = Vec::from(store_attributes());
     let (topic, dropped) = label_policy.normalize_metric_label_with_outcome(crate::semantic::labels::TOPIC, topic);
     attrs.push(if dropped {
@@ -901,49 +903,45 @@ fn delay_message_latency_attributes(
     } else {
         opentelemetry::KeyValue::new(crate::semantic::labels::TOPIC, topic.into_owned())
     });
-    attrs
+    crate::MetricAttributes::from_key_values(attrs)
 }
 
 #[cfg(feature = "otel-metrics")]
-fn transfer_engine_attributes(engine: &'static str) -> [opentelemetry::KeyValue; 1] {
-    [opentelemetry::KeyValue::new(crate::semantic::labels::ENGINE, engine)]
+fn transfer_engine_attributes(engine: &'static str) -> crate::MetricAttributes {
+    crate::MetricAttributes::from_array([opentelemetry::KeyValue::new(crate::semantic::labels::ENGINE, engine)])
 }
 
 #[cfg(feature = "otel-metrics")]
-fn transfer_fallback_attributes(
-    from: &'static str,
-    to: &'static str,
-    reason: &'static str,
-) -> [opentelemetry::KeyValue; 3] {
-    [
+fn transfer_fallback_attributes(from: &'static str, to: &'static str, reason: &'static str) -> crate::MetricAttributes {
+    crate::MetricAttributes::from_array([
         opentelemetry::KeyValue::new(crate::semantic::labels::FROM, from),
         opentelemetry::KeyValue::new(crate::semantic::labels::TO, to),
         opentelemetry::KeyValue::new(crate::semantic::labels::REASON, reason),
-    ]
+    ])
 }
 
 #[cfg(feature = "otel-metrics")]
-fn memory_lock_category_attributes(category: &'static str) -> [opentelemetry::KeyValue; 1] {
-    [opentelemetry::KeyValue::new(
+fn memory_lock_category_attributes(category: &'static str) -> crate::MetricAttributes {
+    crate::MetricAttributes::from_array([opentelemetry::KeyValue::new(
         crate::semantic::labels::CATEGORY,
         category,
-    )]
+    )])
 }
 
 #[cfg(feature = "otel-metrics")]
-fn memory_lock_errno_attributes(category: &'static str, errno: i32) -> [opentelemetry::KeyValue; 2] {
-    [
+fn memory_lock_errno_attributes(category: &'static str, errno: i32) -> crate::MetricAttributes {
+    crate::MetricAttributes::from_array([
         opentelemetry::KeyValue::new(crate::semantic::labels::CATEGORY, category),
         opentelemetry::KeyValue::new(crate::semantic::labels::ERRNO, errno as i64),
-    ]
+    ])
 }
 
 #[cfg(feature = "otel-metrics")]
-fn memory_lock_skip_attributes(category: &'static str, reason: &'static str) -> [opentelemetry::KeyValue; 2] {
-    [
+fn memory_lock_skip_attributes(category: &'static str, reason: &'static str) -> crate::MetricAttributes {
+    crate::MetricAttributes::from_array([
         opentelemetry::KeyValue::new(crate::semantic::labels::CATEGORY, category),
         opentelemetry::KeyValue::new(crate::semantic::labels::REASON, reason),
-    ]
+    ])
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -951,12 +949,12 @@ fn linux_storage_degradation_attributes(
     operation: &'static str,
     reason: &'static str,
     errno: i32,
-) -> [opentelemetry::KeyValue; 3] {
-    [
+) -> crate::MetricAttributes {
+    crate::MetricAttributes::from_array([
         opentelemetry::KeyValue::new(crate::semantic::labels::OPERATION, operation),
         opentelemetry::KeyValue::new(crate::semantic::labels::REASON, reason),
         opentelemetry::KeyValue::new(crate::semantic::labels::ERRNO, errno as i64),
-    ]
+    ])
 }
 
 #[cfg(all(test, feature = "otel-metrics"))]
@@ -971,7 +969,7 @@ mod tests {
         let provider = SdkMeterProvider::builder().build();
         let meter = provider.meter("store-metrics-test");
         let metrics = StoreMetrics::new(&meter);
-        let attrs = [opentelemetry::KeyValue::new("store", "commitlog")];
+        let attrs = crate::MetricAttributes::new().with("store", "commitlog");
 
         assert!(metrics.ha_replication_lag_bytes.is_some());
         metrics.record_append_latency(5, &attrs);
@@ -979,17 +977,17 @@ mod tests {
         metrics.record_dispatch_latency(9, &attrs);
         metrics.record_disk_usage(1024, &attrs);
         metrics.record_delay_message_latency(30, &attrs);
-        metrics.record_transfer_batch_total(1, &[]);
-        metrics.record_transfer_bytes_total(1024, &[]);
+        metrics.record_transfer_batch_total(1, &crate::MetricAttributes::new());
+        metrics.record_transfer_bytes_total(1024, &crate::MetricAttributes::new());
         metrics.record_transfer_engine_total(1, &transfer_engine_attributes("sendfile"));
         metrics.record_transfer_fallback_total(1, &transfer_fallback_attributes("io_uring", "vectored", "unsupported"));
-        metrics.record_transfer_partial_write_total(2, &[]);
-        metrics.record_linux_sendfile_bytes_total(512, &[]);
-        metrics.record_ha_replication_lag_bytes(4096, &[]);
-        metrics.record_ha_ack_latency_millis(12, &[]);
-        metrics.record_linux_mlock_bytes(8192, &[]);
-        metrics.record_linux_page_cache_warmup_millis(20, &[]);
-        metrics.record_commitlog_segment_lease_active(3, &[]);
+        metrics.record_transfer_partial_write_total(2, &crate::MetricAttributes::new());
+        metrics.record_linux_sendfile_bytes_total(512, &crate::MetricAttributes::new());
+        metrics.record_ha_replication_lag_bytes(4096, &crate::MetricAttributes::new());
+        metrics.record_ha_ack_latency_millis(12, &crate::MetricAttributes::new());
+        metrics.record_linux_mlock_bytes(8192, &crate::MetricAttributes::new());
+        metrics.record_linux_page_cache_warmup_millis(20, &crate::MetricAttributes::new());
+        metrics.record_commitlog_segment_lease_active(3, &crate::MetricAttributes::new());
         metrics.record_linux_mlock_attempt_total(1, &memory_lock_category_attributes("transient_store_pool"));
         metrics.record_linux_mlock_success_total(1, &memory_lock_category_attributes("transient_store_pool"));
         metrics.record_linux_mlock_failure_total(1, &memory_lock_errno_attributes("commitlog_active_file", 12));
@@ -1016,7 +1014,7 @@ mod tests {
             message_reserve_time_millis: 30,
         });
 
-        metrics.record_delay_message_latency(1, &[]);
+        metrics.record_delay_message_latency(1, &crate::MetricAttributes::new());
     }
 
     #[test]
@@ -1027,7 +1025,7 @@ mod tests {
             StoreMetrics::new_with_observables_and_replication_lag(&meter, StoreObservableValues::default, || Some(64));
 
         assert!(metrics.ha_replication_lag_bytes.is_none());
-        metrics.record_ha_replication_lag_bytes(32, &[]);
+        metrics.record_ha_replication_lag_bytes(32, &crate::MetricAttributes::new());
     }
 
     #[test]
@@ -1036,10 +1034,11 @@ mod tests {
         let attrs = delay_message_latency_attributes(&policy, "topic-a");
 
         assert!(attrs
+            .as_key_values()
             .iter()
             .any(|kv| kv.key.as_str() == crate::semantic::labels::TOPIC && kv.value.to_string() == "topic-a"));
         let overflow = delay_message_latency_attributes(&policy, "topic-b");
-        assert!(overflow.iter().any(|kv| {
+        assert!(overflow.as_key_values().iter().any(|kv| {
             kv.key.as_str() == crate::semantic::labels::TOPIC && kv.value.to_string() == crate::METRIC_LABEL_SENTINEL
         }));
     }

@@ -79,8 +79,8 @@ fn bench_broker_metrics_record(c: &mut Criterion) {
 
     #[cfg(feature = "otel-metrics")]
     {
-        use opentelemetry::KeyValue;
         use rocketmq_observability::metrics::broker::BrokerMetrics;
+        use rocketmq_observability::MetricAttributes;
 
         let mut config = rocketmq_observability::ObservabilityConfig {
             enabled: true,
@@ -92,11 +92,10 @@ fn bench_broker_metrics_record(c: &mut Criterion) {
             rocketmq_observability::init_observability(&config).expect("benchmark metrics runtime should initialize");
         let metrics =
             BrokerMetrics::from_handle(&runtime.handle()).expect("benchmark broker metrics should be available");
-        let attributes = [
-            KeyValue::new("cluster", "DefaultCluster"),
-            KeyValue::new("node_type", "broker"),
-            KeyValue::new("topic", "BenchTopic"),
-        ];
+        let attributes = MetricAttributes::new()
+            .with("cluster", "DefaultCluster")
+            .with("node_type", "broker")
+            .with("topic", "BenchTopic");
 
         group.bench_function("messages_in_total", |b| {
             b.iter(|| metrics.record_messages_in_total(black_box(1), black_box(&attributes)))
@@ -152,7 +151,7 @@ fn bench_trace_property_carrier(c: &mut Criterion) {
 
     #[cfg(feature = "otel-traces")]
     {
-        use rocketmq_observability::extract_context_with_handle;
+        use rocketmq_observability::bench_extract_trace_context;
         use rocketmq_observability::inject_current_context_with_handle;
 
         let runtime = trace_runtime(false, false);
@@ -175,7 +174,7 @@ fn bench_trace_property_carrier(c: &mut Criterion) {
             &properties,
             |b, properties| {
                 b.iter(|| {
-                    black_box(extract_context_with_handle(
+                    black_box(bench_extract_trace_context(
                         black_box(&telemetry),
                         black_box(properties),
                     ))

@@ -16,12 +16,12 @@
 pub struct LogsBridge;
 
 #[cfg(feature = "otel-logs")]
-pub type OpenTelemetryLogsLayer = opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge<
+pub(crate) type OpenTelemetryLogsLayer = opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge<
     opentelemetry_sdk::logs::SdkLoggerProvider,
     opentelemetry_sdk::logs::SdkLogger,
 >;
 
 #[cfg(feature = "otel-logs")]
-pub fn build_logs_layer(provider: &opentelemetry_sdk::logs::SdkLoggerProvider) -> OpenTelemetryLogsLayer {
+pub(crate) fn build_logs_layer(provider: &opentelemetry_sdk::logs::SdkLoggerProvider) -> OpenTelemetryLogsLayer {
     opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(provider)
 }
