@@ -6,19 +6,19 @@ The repository defines a community distribution, a core package scope and deploy
 
 ## Follow the declared scope
 
-The root workspace contains 28 members. `scripts/core-release-scope.json` classifies 27 core packages: 24 registry-publish packages and three binary-only packages. The Dashboard common member is not part of that core package inventory. Registry classification and executable service count are separate concepts. Dashboard, MCP and SRE are independent products; their own source and deployment documentation apply.
+The root workspace contains 28 members, and all of them are published to crates.io. `scripts/core-release-scope.json` classifies 27 core packages, all of them registry-publish. The Dashboard common member is not part of that core package inventory, but it is published with the workspace. Registry classification and executable service count are separate concepts. Dashboard, MCP and SRE are independent products; their own source and deployment documentation apply.
 
 The identity is `RocketMQ Rust Community Distribution` with `unofficial-community` identity and `official_apache_release: false`. Use that identity consistently in release notes and downloads. Apache 2.0 licensing does not make an artifact an official Apache project release.
 
 ## Package registry crates with Cargo
 
-The repository has no separate candidate-preparation, archive or crate staging tooling; registry packages are prepared with Cargo directly. To check that the registry-publish packages can be packaged, run from the repository root:
+The repository has no separate candidate-preparation, archive or crate staging tooling; registry packages are prepared with Cargo directly. To check that every workspace member can be packaged, run from the repository root:
 
 ```bash
-cargo package --workspace --locked --no-verify --exclude rocketmq-admin-cli --exclude rocketmq-admin-tui --exclude rocketmq-store-inspect --exclude rocketmq-dashboard-common
+cargo package --workspace --locked --no-verify
 ```
 
-The excluded packages are the three binary-only packages and the Dashboard common member. A packaging result checks each package boundary; it is not a successful `cargo publish`. Test-only sibling dev-dependencies are declared path-only, so Cargo drops them from the published manifests and publication order depends only on normal and build dependencies.
+This includes the Admin CLI, Admin TUI, store inspection tool and Dashboard common, which are published with the other members. A packaging result checks each package boundary; it is not a successful `cargo publish`. Test-only sibling dev-dependencies are declared path-only, so Cargo drops them from the published manifests and publication order depends only on normal and build dependencies.
 
 ## Maintain release and website documentation together
 
