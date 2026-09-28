@@ -38,6 +38,7 @@ use rocketmq_error::CliErrorView;
 use rocketmq_error::CliVerbosity;
 use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
+use rocketmq_error::CORE_CONFIGURATION_INVALID;
 use rocketmq_error::CORE_SERVICE_FAILED;
 use rocketmq_model::common::mix_all::string_to_properties;
 use rocketmq_model::utils::env_utils::EnvUtils;
@@ -74,10 +75,54 @@ struct StartupRuntimeFileOverrides {
 }
 
 #[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StartupRuntimeOverrides {
+    #[serde(alias = "worker_threads")]
     worker_threads: Option<usize>,
+    #[serde(alias = "max_blocking_threads")]
     max_blocking_threads: Option<usize>,
+}
+
+#[derive(Debug)]
+enum StartupRuntimeConfigError {
+    FileUnavailable,
+    Load(config::ConfigError),
+    Fields(config::ConfigError),
+    WorkerThreads,
+    MaxBlockingThreads,
+}
+
+impl std::fmt::Display for StartupRuntimeConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Only fixed constraints and the bounded config renderer cross the CLI boundary.
+        // Raw parser errors can contain file contents, paths, and credentials.
+        match self {
+            Self::FileUnavailable => f.write_str("NameServer config file does not exist or is not a file"),
+            Self::Load(error) => write!(
+                f,
+                "failed to load NameServer runtime configuration: {}",
+                parse_config_file::render_safe_config_error(error)
+            ),
+            Self::Fields(error) => write!(
+                f,
+                "invalid [runtime] section (workerThreads > 0; maxBlockingThreads 3..=512): {}",
+                parse_config_file::render_safe_config_error(error)
+            ),
+            Self::WorkerThreads => f.write_str("runtime.workerThreads must be greater than 0"),
+            Self::MaxBlockingThreads => {
+                f.write_str("runtime.maxBlockingThreads must be within the supported range (3..=512)")
+            }
+        }
+    }
+}
+
+impl std::error::Error for StartupRuntimeConfigError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Load(error) | Self::Fields(error) => Some(error),
+            Self::FileUnavailable | Self::WorkerThreads | Self::MaxBlockingThreads => None,
+        }
+    }
 }
 
 const LOGO: &str = r#"
@@ -124,15 +169,33 @@ fn print_release_version_if_requested(component: &str) -> bool {
 
 fn main() {
     if let Err(source) = try_main() {
-        let error = Error::new(&CORE_SERVICE_FAILED)
-            .with_boxed_source(source.into_boxed_dyn_error())
-            .with_context(
+        let diagnostic = source
+            .downcast_ref::<StartupRuntimeConfigError>()
+            .map(ToString::to_string);
+        let (descriptor, context) = if diagnostic.is_some() {
+            (
+                &CORE_CONFIGURATION_INVALID,
+                ErrorContext::new()
+                    .with_text(fields::KEY, "runtime")
+                    .with_secret_presence(fields::REASON_PRESENT),
+            )
+        } else {
+            (
+                &CORE_SERVICE_FAILED,
                 ErrorContext::new()
                     .with_text(fields::OPERATION_DIAGNOSTIC, "run-nameserver-service")
                     .with_secret_presence(fields::SOURCE_PRESENT),
-            );
+            )
+        };
+        let error = Error::new(descriptor)
+            .with_boxed_source(source.into_boxed_dyn_error())
+            .with_context(context);
         let output = CliErrorView::from_error(&error).output(CliVerbosity::Default);
-        eprintln!("{}", output.stderr());
+        if let Some(diagnostic) = diagnostic {
+            eprintln!("{}: {diagnostic}", output.stderr());
+        } else {
+            eprintln!("{}", output.stderr());
+        }
         std::process::exit(output.exit_code().as_i32());
     }
 }
@@ -182,38 +245,28 @@ fn try_main() -> Result<()> {
     }
 }
 
-fn namesrv_runtime_config(args: &Args) -> Result<RuntimeConfig> {
+fn namesrv_runtime_config(args: &Args) -> std::result::Result<RuntimeConfig, StartupRuntimeConfigError> {
     let mut runtime_config = RuntimeConfig::namesrv_default();
 
-    let Some(config_file) = args.config_file.clone() else {
+    let Some(config_file) = args.config_file.as_ref() else {
         return Ok(runtime_config);
     };
 
     if !config_file.exists() || !config_file.is_file() {
-        bail!("Config file does not exist or is not a file: {:?}", config_file);
+        return Err(StartupRuntimeConfigError::FileUnavailable);
     }
 
     let overrides = Config::builder()
         .add_source(config::File::from(config_file.as_path()))
         .build()
-        .map_err(|error| {
-            anyhow::anyhow!(
-                "failed to build NameServer runtime configuration: {}",
-                parse_config_file::render_safe_config_error(&error)
-            )
-        })?
+        .map_err(StartupRuntimeConfigError::Load)?
         .try_deserialize::<StartupRuntimeFileOverrides>()
-        .map_err(|error| {
-            anyhow::anyhow!(
-                "failed to deserialize NameServer startup runtime configuration: {}",
-                parse_config_file::render_safe_config_error(&error)
-            )
-        })?;
+        .map_err(StartupRuntimeConfigError::Fields)?;
 
     if let Some(runtime) = overrides.runtime {
         if let Some(worker_threads) = runtime.worker_threads {
             if worker_threads == 0 {
-                bail!("runtime.workerThreads must be greater than 0");
+                return Err(StartupRuntimeConfigError::WorkerThreads);
             }
             runtime_config.worker_threads = worker_threads;
         }
@@ -221,9 +274,7 @@ fn namesrv_runtime_config(args: &Args) -> Result<RuntimeConfig> {
         if let Some(max_blocking_threads) = runtime.max_blocking_threads {
             runtime_config = runtime_config
                 .with_max_blocking_threads(max_blocking_threads)
-                .map_err(|_| {
-                    anyhow::anyhow!("runtime.maxBlockingThreads must be within the supported range (3..=512)")
-                })?;
+                .map_err(|_| StartupRuntimeConfigError::MaxBlockingThreads)?;
         }
     }
 
@@ -1577,124 +1628,111 @@ mod tests {
         assert!(error.to_string().contains("unknown durable"));
     }
 
-    #[test]
-    fn namesrv_runtime_applies_runtime_overrides() {
+    fn runtime_config_from_toml(contents: &str) -> std::result::Result<RuntimeConfig, StartupRuntimeConfigError> {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("namesrv.toml");
-        std::fs::write(
-            &path,
-            r#"
-            [runtime]
-            workerThreads = 2
-            maxBlockingThreads = 8
-            "#,
-        )
-        .expect("write config file");
-
+        std::fs::write(&path, contents).expect("write config file");
         let args = Args::try_parse_from([
             std::ffi::OsStr::new("mqnamesrv"),
             std::ffi::OsStr::new("--configFile"),
             path.as_os_str(),
         ])
         .expect("parse args");
-
-        let config = namesrv_runtime_config(&args).expect("runtime config should parse");
-        assert_eq!(config.worker_threads, 2);
-        assert_eq!(config.max_blocking_threads, 8);
-        assert_eq!(config.thread_name, "rocketmq-namesrv");
-        assert!(config.enable_io);
-        assert!(config.enable_time);
+        namesrv_runtime_config(&args)
     }
 
     #[test]
-    fn namesrv_runtime_config_rejects_zero_worker_threads() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("namesrv.toml");
-        std::fs::write(
-            &path,
-            r#"
-            [runtime]
-            workerThreads = 0
-            "#,
-        )
-        .expect("write config file");
-
-        let args = Args::try_parse_from([
-            std::ffi::OsStr::new("mqnamesrv"),
-            std::ffi::OsStr::new("--configFile"),
-            path.as_os_str(),
-        ])
-        .expect("parse args");
-
-        let error = namesrv_runtime_config(&args).expect_err("invalid workerThreads must fail");
-        assert!(error.to_string().contains("runtime.workerThreads"));
+    fn namesrv_runtime_config_applies_overrides_to_runtime_planning() {
+        for keys in [
+            "workerThreads = 2\nmaxBlockingThreads = 8",
+            "worker_threads = 2\nmax_blocking_threads = 8",
+        ] {
+            let config = runtime_config_from_toml(&format!("[runtime]\n{keys}")).expect("runtime config");
+            let owner = RuntimeOwner::plan(config)
+                .expect("valid plan")
+                .build()
+                .expect("runtime owner");
+            assert_eq!(owner.config().worker_threads, 2);
+            assert_eq!(owner.config().max_blocking_threads, 8);
+            assert_eq!(owner.config().thread_name, "rocketmq-namesrv");
+            assert!(owner.config().enable_io);
+            assert!(owner.config().enable_time);
+            assert_eq!(
+                owner.block_on(async { tokio::runtime::Handle::current().metrics().num_workers() }),
+                2
+            );
+            assert!(owner.shutdown_runtime_blocking().expect("shutdown").is_healthy());
+        }
     }
 
     #[test]
-    fn namesrv_runtime_no_config_falls_back_to_defaults() {
-        let args = Args::try_parse_from([std::ffi::OsStr::new("mqnamesrv")]).expect("parse args");
+    fn namesrv_runtime_config_omitted_keys_retain_independent_defaults() {
+        let defaults = RuntimeConfig::namesrv_default();
+        for (contents, workers, blocking) in [
+            (
+                "productEnvName = 'test'",
+                defaults.worker_threads,
+                defaults.max_blocking_threads,
+            ),
+            ("[runtime]", defaults.worker_threads, defaults.max_blocking_threads),
+            ("[runtime]\nworkerThreads = 2", 2, defaults.max_blocking_threads),
+            ("[runtime]\nmaxBlockingThreads = 3", defaults.worker_threads, 3),
+            ("[runtime]\nmaxBlockingThreads = 512", defaults.worker_threads, 512),
+            (
+                include_str!("../../resource/namesrv-example.toml"),
+                defaults.worker_threads,
+                defaults.max_blocking_threads,
+            ),
+        ] {
+            let config = runtime_config_from_toml(contents).expect("runtime config");
+            assert_eq!(config.worker_threads, workers);
+            assert_eq!(config.max_blocking_threads, blocking);
+            RuntimeOwner::plan(config).expect("overrides must preserve valid blocking lane capacities");
+        }
+    }
 
+    #[test]
+    fn namesrv_runtime_config_no_file_falls_back_to_defaults() {
+        let args = Args::try_parse_from(["mqnamesrv"]).expect("parse args");
         let config = namesrv_runtime_config(&args).expect("no config should use defaults");
         let defaults = RuntimeConfig::namesrv_default();
-
         assert_eq!(config.worker_threads, defaults.worker_threads);
         assert_eq!(config.max_blocking_threads, defaults.max_blocking_threads);
-        assert_eq!(config.thread_name, "rocketmq-namesrv");
-        assert!(config.enable_io);
-        assert!(config.enable_time);
     }
 
     #[test]
-    fn namesrv_runtime_config_without_runtime_section_falls_back_to_defaults() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("namesrv.toml");
-        std::fs::write(
-            &path,
-            r#"
-
-            "#,
-        )
-        .expect("write config file");
-
-        let args = Args::try_parse_from([
-            std::ffi::OsStr::new("mqnamesrv"),
-            std::ffi::OsStr::new("--configFile"),
-            path.as_os_str(),
-        ])
-        .expect("parse args");
-
-        let config = namesrv_runtime_config(&args).expect("missing [runtime] should use defaults");
-        let defaults = RuntimeConfig::namesrv_default();
-
-        assert_eq!(config.worker_threads, defaults.worker_threads);
-        assert_eq!(config.max_blocking_threads, defaults.max_blocking_threads);
-        assert_eq!(config.thread_name, "rocketmq-namesrv");
-        assert!(config.enable_io);
-        assert!(config.enable_time);
+    fn namesrv_runtime_config_rejects_invalid_counts() {
+        assert!(matches!(
+            runtime_config_from_toml("[runtime]\nworkerThreads = 0"),
+            Err(StartupRuntimeConfigError::WorkerThreads)
+        ));
+        for invalid in [0, 2, 513] {
+            assert!(matches!(
+                runtime_config_from_toml(&format!("[runtime]\nmaxBlockingThreads = {invalid}")),
+                Err(StartupRuntimeConfigError::MaxBlockingThreads)
+            ));
+        }
     }
 
     #[test]
-    fn namesrv_runtime_malformed_config_fails() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("namesrv.toml");
-        std::fs::write(
-            &path,
-            r#"
-            [runti workerThreads = 4
-            "#,
-        )
-        .expect("write config file");
+    fn namesrv_runtime_config_rejects_unknown_and_duplicate_fields() {
+        for fields in [
+            "workerThread = 2",
+            "maxBlockingThread = 8",
+            "workerThreads = 2\nworker_threads = 3",
+            "maxBlockingThreads = 8\nmax_blocking_threads = 9",
+        ] {
+            assert!(matches!(
+                runtime_config_from_toml(&format!("[runtime]\n{fields}")),
+                Err(StartupRuntimeConfigError::Fields(_))
+            ));
+        }
+    }
 
-        let args = Args::try_parse_from([
-            std::ffi::OsStr::new("mqnamesrv"),
-            std::ffi::OsStr::new("--configFile"),
-            path.as_os_str(),
-        ])
-        .expect("parse args");
-
-        let error = namesrv_runtime_config(&args).expect_err("malformed config should fail");
-        let msg = error.to_string();
-        assert!(msg.contains("failed to build NameServer runtime configuration"));
+    #[test]
+    fn namesrv_runtime_config_malformed_toml_keeps_safe_diagnostic() {
+        let error = runtime_config_from_toml("[runtime\nworkerThreads = 4").expect_err("malformed config must fail");
+        assert!(matches!(error, StartupRuntimeConfigError::Load(_)));
         assert!(error.to_string().contains("configuration file parse failed"));
     }
 }

@@ -113,8 +113,12 @@ configBlackList = "configBlackList;configStorePath;kvConfigPath"
 #   valid   = > 0
 #
 # maxBlockingThreads:
-#   default = RuntimeConfig::namesrv_default() derived value
+#   default = available parallelism * 4, clamped to 3..=512 (fallback 16)
 #   valid   = 3..=512
-[runtime]
-workerThreads = 2
-maxBlockingThreads = 8
+# Omitted keys retain their own CPU-derived defaults independently.
+# snake_case aliases: worker_threads, max_blocking_threads.
+# Unknown keys inside [runtime] are rejected at startup.
+# Uncomment all three lines to opt in to non-default runtime thread counts.
+#[runtime]
+#workerThreads = 2
+#maxBlockingThreads = 8
