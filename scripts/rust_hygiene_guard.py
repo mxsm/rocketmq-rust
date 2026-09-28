@@ -563,6 +563,7 @@ def scan_tree(
     *,
     scope: str = "all",
 ) -> tuple[list[SafetyFinding], list[dict[str, object]]]:
+    root = root.resolve()
     safety_findings: list[SafetyFinding] = []
     debt: list[dict[str, object]] = []
     scope_document = (
