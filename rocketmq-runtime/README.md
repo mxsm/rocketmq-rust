@@ -133,6 +133,12 @@ The error channels are intentional:
 - Normal outcomes such as `ScheduledTaskRegistrationOutcome::AlreadyPresent`,
   `BudgetRejection`, and metadata target conflicts have their own types.
 
+`RuntimeOperation` names what failed. Its named variants are operations this
+crate performs; a crate built on the runtime labels its own failures with a
+constant such as `RuntimeOperation::external("initialize-broker")` instead of
+adding variants here. `RuntimeOperation` and `RuntimeContractPolicy` are
+non-exhaustive, so a `match` outside this crate needs a wildcard arm.
+
 There is no automatic conversion from `RuntimeContractViolation` to
 `RuntimeError`. The example's application-level error type accepts both;
 applications can instead define an explicit startup error enum.
@@ -177,8 +183,14 @@ operation tasks; `wait()` waits until no operation task is active and the
 owner has settled them;
 `cancel_and_wait()` also requests cancellation. The waits require the
 operation's original component owner and abort unfinished work at their
-deadline. An operation only counts its active tasks: the tasks themselves are
-tagged in the owner's registry, so an idle operation costs a few hundred bytes.
+deadline. `wait(timeout)` and `cancel_and_wait(timeout)` then allow up to one
+second to confirm that the aborted futures were dropped, so they can return up
+to one second after `timeout`. `wait_until(deadline)` and
+`cancel_and_wait_until(deadline)` never pass their `ShutdownDeadline`: they
+request the aborts and return, and the owner's shutdown report accounts for any
+task still being dropped. An operation only counts its active tasks: the tasks
+themselves are tagged in the owner's registry, so an idle operation costs a few
+hundred bytes.
 
 `TaskGroup::cancel()` only broadcasts cancellation. Use `shutdown(...)` or
 `shutdown_until(...)` to close task admission and wait for shutdown evidence.
@@ -295,9 +307,11 @@ completion. See the [executor implementation](src/blocking/executor.rs).
 
 `BlockingKind::LongRunning` is rejected. Long-running blocking loops need a
 dedicated OS-thread or domain-service owner with a stop and join protocol.
-`BlockingExecutor::new(policy, owner_group)` creates an isolated executor: it
-has an independent budget, and the group argument does not enroll it in the
-managed root lanes.
+`BlockingExecutor::new(policy, owner_group)` creates an isolated executor for
+tests and adapters: it has an independent budget and task table outside the
+managed root lanes and their diagnostics. It is registered with the group's
+tree, so a closure it is still running counts in the `blocking_still_running`
+of that tree owner's shutdown report.
 
 ## Resource Budgets And Queues
 
@@ -352,6 +366,16 @@ blocking lane. Configure actor admission with `max_pending_operations` and
 `max_pending_bytes`; configure the managed lane through
 `RuntimeConfig::blocking_lane_policies.metadata_io`. The actor's compatibility
 `blocking_*` settings do not replace that shared lane policy.
+
+By default an actor writes one resource at a time, so a slow write delays its
+other resources. `MetadataIoPlan::with_max_concurrent_writes(n)` lets
+independent resources proceed while one write is slow, up to the metadata
+lane's concurrency; generations of one resource are still written one at a
+time and in order. `effective_profile()` reports the value in force. Every
+queued or in-flight snapshot is also charged to the owner's process budget
+until its write completes, including after its observer times out, so the
+actors of one owner share that budget. A snapshot the process budget cannot
+take is refused like one above `max_pending_bytes`.
 
 `submit` and `submit_next` accept immutable snapshots without waiting for
 durability. Match `MetadataIoAdmissionOutcome`: `Accepted` provides a receipt;
@@ -425,7 +449,16 @@ The shutdown timeouts relate as follows:
 Task-group shutdown closes registration and broadcasts cancellation, then
 starts child shutdowns concurrently with waiting for the group's own tasks.
 Unfinished tracked tasks are aborted when the deadline expires. Reports are
-cached at group level; the owner additionally merges its blocking-lane snapshots.
+cached at group level; the owner additionally merges the blocking work of its
+managed lanes and of the isolated executors bound to its tree.
+
+An API that takes a `ShutdownDeadline` never waits past it:
+`TaskGroup::shutdown_until`, `OperationContext::wait_until`, and
+`BlockingExecutor::spawn_until` report unconfirmed work instead. Two relative
+APIs confirm aborts for at most one second past their deadline:
+`OperationContext::wait` / `cancel_and_wait`, and an interrupting
+`ServiceManager` shutdown with less than a second left. Budget nested shutdown
+steps accordingly, or use the `_until` forms.
 
 | API | Scope and guarantee |
 | --- | --- |
@@ -449,7 +482,9 @@ terminate closures that outlive a deadline.
 A `ServiceManager` runs a `ServiceTask` loop as a service task of the group
 passed to `new_with_task_group`. Its state (`ServiceTaskState`) is one atomic
 value, and `shutdown_until(deadline)` waits no later than the earliest of the
-requested deadline and the deadline installed on the parent group.
+requested deadline and the deadline installed on the parent group. An
+interrupting shutdown gives the aborted loop up to one second past that
+deadline to confirm its destruction.
 
 ## Diagnostics
 
@@ -474,7 +509,8 @@ absent rather than empty, and scheduled work, retained metadata, and shutdown
 results are reported as bounded aggregates. `RuntimeDiagnosticsViewOptionsV2`
 also carries the scan and output budgets for an on-demand task detail list, so a
 partially scanned list reports how many tasks it examined instead of presenting
-a partial sum as the whole runtime. V1 keeps its fields and meanings.
+a partial sum as the whole runtime. The scan budget bounds both the tasks
+examined and the descendant groups visited. V1 keeps its fields and meanings.
 
 ## Compatibility And Workspace Integration
 
@@ -505,9 +541,9 @@ Standalone applications follow their local host-runtime and validation guides.
 ## Features And Validation
 
 The crate inherits its edition and minimum Rust version from the
-[workspace manifest](../Cargo.toml). Default crate features are empty;
-`async_fs` enables the Tokio filesystem helpers in `common::file_utils`.
-The core ownership, blocking, budget, and metadata APIs do not require it.
+[workspace manifest](../Cargo.toml). It has no optional features. The
+filesystem helpers in `common::file_utils` block; asynchronous code runs them
+through a blocking lane or persists through `MetadataIoActor`.
 
 For task-lifecycle changes, start with package-scoped checks:
 
@@ -528,7 +564,7 @@ every suite for every edit:
 | Public scope restrictions | `cargo test -p rocketmq-runtime --test service_context_scope_compile_fail` |
 | Shutdown or budget interleavings | `task_group_shutdown_loom` or `resource_budget_loom` via `cargo test -p rocketmq-runtime --test <target>` |
 | Migration or large-future submission | `runtime_migration_fixture` or `task_submission_stack` via the same test command |
-| Optional filesystem helpers | `cargo test -p rocketmq-runtime --features async_fs common::file_utils` |
+| Filesystem helpers | `cargo test -p rocketmq-runtime --lib common::file_utils` |
 
 When useful, run `cargo clippy -p rocketmq-runtime --no-deps -- -D warnings`
 with the affected targets/features. Validate directly affected consumers when

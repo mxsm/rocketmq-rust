@@ -304,17 +304,13 @@ impl RuntimeOwner {
     /// budget without consuming or destroying the owned Tokio runtime.
     pub async fn shutdown_tasks_until(&self, deadline: ShutdownDeadline) -> ShutdownReport {
         let mut report = self.root_context.task_group().shutdown_until(deadline).await;
-        for snapshot in self.root_context.blocking_snapshots() {
-            report.merge_blocking(snapshot);
-        }
+        self.root_context.merge_blocking_into(&mut report);
         report
     }
 
     fn shutdown_tasks_now(&self) -> ShutdownReport {
         let mut report = self.root_context.task_group().shutdown_now();
-        for snapshot in self.root_context.blocking_snapshots() {
-            report.merge_blocking(snapshot);
-        }
+        self.root_context.merge_blocking_into(&mut report);
         report
     }
 }

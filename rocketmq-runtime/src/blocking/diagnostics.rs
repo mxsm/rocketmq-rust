@@ -13,15 +13,63 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::sync::Weak;
 use std::time::Duration;
 use std::time::Instant;
 
+use dashmap::DashMap;
+use parking_lot::Mutex;
 use serde::Serialize;
 
 use super::BlockingKind;
 use super::BlockingLane;
 use super::BlockingTaskId;
 use super::BlockingTaskState;
+
+/// The task table of one blocking executor.
+pub(crate) type BlockingTaskTable = DashMap<BlockingTaskId, BlockingTaskMeta>;
+
+/// Task tables of the isolated executors bound to one task-group tree.
+///
+/// An isolated executor has its own budget and task table outside the managed
+/// lanes. Registering the table keeps its work visible to the shutdown report
+/// of the owner that holds the tree. Every running closure holds its table, so
+/// a closure that outlives all of its executor handles is still reported.
+#[derive(Debug, Default)]
+pub(crate) struct IsolatedBlockingTables {
+    tables: Mutex<Vec<Weak<BlockingTaskTable>>>,
+}
+
+impl IsolatedBlockingTables {
+    pub(crate) fn register(&self, table: &Arc<BlockingTaskTable>) {
+        let mut tables = self.tables.lock();
+        // A released table can no longer hold work. Pruning on registration
+        // bounds the list by the live tables plus those released since then.
+        tables.retain(|table| table.strong_count() > 0);
+        tables.push(Arc::downgrade(table));
+    }
+
+    /// Returns the number of closures still running and a snapshot of every
+    /// queued or running task across the live tables.
+    pub(crate) fn report(&self) -> (usize, Vec<BlockingTaskSnapshot>) {
+        let tables = self.tables.lock().iter().filter_map(Weak::upgrade).collect::<Vec<_>>();
+        let mut still_running = 0;
+        let mut tasks = Vec::new();
+        for table in tables {
+            for entry in table.iter() {
+                let task = entry.value();
+                if matches!(
+                    task.state,
+                    BlockingTaskState::Running | BlockingTaskState::TimedOutStillRunning
+                ) {
+                    still_running += 1;
+                }
+                tasks.push(task.snapshot());
+            }
+        }
+        (still_running, tasks)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct BlockingTaskMeta {

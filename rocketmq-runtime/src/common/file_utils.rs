@@ -21,14 +21,9 @@ use crate::RuntimeError;
 use crate::RuntimeOperation;
 use crate::RuntimeResult;
 use parking_lot::Mutex;
-#[cfg(feature = "async_fs")]
-use tokio::io::AsyncWriteExt;
 use tracing::warn;
 
 static LOCK: Mutex<()> = Mutex::new(());
-
-#[cfg(feature = "async_fs")]
-static ASYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Reads a file into a UTF-8 string.
 pub fn file_to_string(file_name: impl AsRef<Path>) -> RuntimeResult<String> {
@@ -42,7 +37,21 @@ pub fn file_to_string(file_name: impl AsRef<Path>) -> RuntimeResult<String> {
         Err(e) => Err(RuntimeError::io(RuntimeOperation::ReadFile, e)),
     }
 }
-/// Writes a string to a file.
+/// Replaces a file with UTF-8 content, keeping the previous bytes in a sibling
+/// `.bak` file.
+///
+/// Both files are written through the atomic metadata replacement protocol:
+/// a synchronized temporary file, an atomic rename, and a parent-directory
+/// synchronization where the platform supports it. Calls through this helper
+/// are serialized within the process. The call blocks, so asynchronous code
+/// runs it through a blocking lane such as
+/// [`ChildServiceContext::metadata_io`](crate::ChildServiceContext::metadata_io),
+/// or persists through a [`MetadataIoActor`](crate::MetadataIoActor).
+///
+/// # Errors
+///
+/// Returns an I/O-classified failure when the previous content cannot be read,
+/// or a metadata persistence failure when either replacement fails.
 pub fn string_to_file(str_content: &str, file_name: impl AsRef<Path>) -> RuntimeResult<()> {
     let _lock = LOCK.lock();
 
@@ -69,94 +78,8 @@ pub fn metadata_io_error(error: impl std::error::Error + Send + Sync + 'static) 
     RuntimeError::internal(RuntimeOperation::PersistMetadata, error)
 }
 
-#[cfg(feature = "async_fs")]
-/// Reads the complete file as a UTF-8 string without blocking the async executor.
-///
-/// Unlike [`file_to_string`], a missing file is reported as an error rather than
-/// being converted to an empty string.
-///
-/// # Errors
-///
-/// Returns an I/O-classified [`RuntimeError`] when the path does not exist, cannot be read, or
-/// does not contain valid UTF-8.
-pub async fn file_to_string_async(file_name: impl AsRef<Path>) -> RuntimeResult<String> {
-    let path = file_name.as_ref();
-    if !tokio::fs::try_exists(path).await? {
-        warn!("file not exist: {}", path.display());
-        return Err(RuntimeError::io(
-            RuntimeOperation::ReadFile,
-            io::Error::new(io::ErrorKind::NotFound, format!("File not found: {}", path.display())),
-        ));
-    }
-    tokio::fs::read_to_string(path)
-        .await
-        .map_err(|error| RuntimeError::io(RuntimeOperation::ReadFile, error))
-}
-
-#[cfg(feature = "async_fs")]
-/// Replaces a file with UTF-8 content while preserving the previous bytes in a
-/// sibling `.bak` file.
-///
-/// Concurrent calls through this helper are serialized within the process. The
-/// parent directory is created when necessary.
-///
-/// # Errors
-///
-/// Returns an I/O-classified [`RuntimeError`] when existence checks, backup creation,
-/// directory creation, writing, or flushing fail.
-pub async fn string_to_file_async(str_content: &str, file_name: impl AsRef<Path>) -> RuntimeResult<()> {
-    let _lock = ASYNC_LOCK.lock().await;
-
-    let file_path = file_name.as_ref();
-    let mut bak_file = file_path.as_os_str().to_os_string();
-    bak_file.push(".bak");
-
-    // Create a backup if the file exists
-    if tokio::fs::try_exists(file_path)
-        .await
-        .map_err(|error| RuntimeError::io(RuntimeOperation::CheckFile, error))?
-    {
-        tokio::fs::copy(file_path, &bak_file)
-            .await
-            .map_err(|error| RuntimeError::io(RuntimeOperation::CopyFileBackup, error))?;
-    }
-
-    // Write new content to the file
-    string_to_file_not_safe_async(str_content, file_path).await?;
-    Ok(())
-}
-
-#[cfg(feature = "async_fs")]
-async fn string_to_file_not_safe_async(str_content: &str, file_name: impl AsRef<Path>) -> RuntimeResult<()> {
-    let path = file_name.as_ref();
-
-    // Create parent directories if they don't exist
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|error| RuntimeError::io(RuntimeOperation::CreateFileParent, error))?;
-    }
-
-    let file = tokio::fs::File::create(file_name)
-        .await
-        .map_err(|error| RuntimeError::io(RuntimeOperation::CreateFile, error))?;
-    let mut writer = tokio::io::BufWriter::new(file);
-    writer
-        .write_all(str_content.as_bytes())
-        .await
-        .map_err(|error| RuntimeError::io(RuntimeOperation::WriteFile, error))?;
-    writer
-        .flush()
-        .await
-        .map_err(|error| RuntimeError::io(RuntimeOperation::FlushFile, error))?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "async_fs")]
-    use std::error::Error;
-
     use super::*;
 
     #[test]
@@ -192,39 +115,18 @@ mod tests {
         assert_eq!(std::fs::read_to_string(file_path).unwrap(), content);
     }
 
-    #[cfg(feature = "async_fs")]
-    #[tokio::test]
-    async fn test_file_to_string_async() {
-        // Create a temporary file for testing
-        let temp_file = tempfile::NamedTempFile::new().unwrap();
-        let file_path = temp_file.path().to_str().unwrap();
+    #[test]
+    fn replacing_a_file_keeps_the_previous_content_as_a_backup() {
+        let directory = tempfile::tempdir().unwrap();
+        let file_path = directory.path().join("config.json");
+        let backup_path = directory.path().join("config.json.bak");
 
-        // Write some content to the file
-        let content = "Hello, Async World!";
-        tokio::fs::write(file_path, content).await.unwrap();
+        string_to_file("first", &file_path).unwrap();
+        assert!(!backup_path.exists(), "a new file has no previous content to keep");
 
-        // Call the file_to_string_async function
-        let result = file_to_string_async(file_path).await;
-
-        // Check if the result is Ok and contains the expected content
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), content);
-    }
-
-    #[cfg(feature = "async_fs")]
-    #[tokio::test]
-    async fn test_string_to_file_async() {
-        // Create a temporary file for testing
-        let temp_file = tempfile::NamedTempFile::new().unwrap();
-        let file_path = temp_file.path().to_str().unwrap();
-
-        // Call the string_to_file_async function
-        let content = "Hello, Async World!";
-        let result = string_to_file_async(content, file_path).await;
-
-        // Check if the result is Ok and the file was created with the expected content
-        assert!(result.is_ok());
-        assert_eq!(tokio::fs::read_to_string(file_path).await.unwrap(), content);
+        string_to_file("second", &file_path).unwrap();
+        assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "second");
+        assert_eq!(std::fs::read_to_string(&backup_path).unwrap(), "first");
     }
 
     #[test]
@@ -232,19 +134,5 @@ mod tests {
         let result = file_to_string("/nonexistent/path/file.txt");
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "");
-    }
-
-    #[cfg(feature = "async_fs")]
-    #[tokio::test]
-    async fn test_file_to_string_async_not_found() {
-        let result = file_to_string_async("/nonexistent/path/file.txt").await;
-        assert!(result.is_err());
-        let error = result.expect_err("missing file should fail");
-        assert_eq!(error.code(), rocketmq_error::RUNTIME_IO_FAILED.code());
-        let source = error.source().expect("I/O source should be retained");
-        let source = source
-            .downcast_ref::<io::Error>()
-            .expect("I/O source should remain typed");
-        assert_eq!(source.kind(), io::ErrorKind::NotFound);
     }
 }

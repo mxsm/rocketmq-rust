@@ -165,11 +165,14 @@ mod failure_mapping_tests {
 
     use rocketmq_error::ViewValueRef;
     use rocketmq_runtime::RuntimeError;
+    use rocketmq_runtime::RuntimeOperation;
     use rocketmq_store_api::StoreComponent;
     use rocketmq_store_api::StoreError;
     use rocketmq_store_api::StoreOperation;
 
     use super::HAError;
+
+    const HA_RUNTIME: RuntimeOperation = RuntimeOperation::external("ha-runtime");
 
     #[test]
     fn connection_start_failure_maps_once_with_typed_source() {
@@ -208,10 +211,7 @@ mod failure_mapping_tests {
 
     #[test]
     fn runtime_failure_maps_once_with_its_typed_cause() {
-        let error: StoreError = HAError::Runtime(RuntimeError::context_unavailable(
-            rocketmq_runtime::RuntimeOperation::HaRuntime,
-        ))
-        .into();
+        let error: StoreError = HAError::Runtime(RuntimeError::context_unavailable(HA_RUNTIME)).into();
 
         assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);
         assert_eq!(error.operation(), StoreOperation::Replicate);
@@ -292,9 +292,7 @@ mod failure_mapping_tests {
             HAError::Io(std::io::Error::other(SENTINEL)),
             HAError::StartIo(std::io::Error::other(SENTINEL)),
             HAError::Store(nested_store),
-            HAError::Runtime(RuntimeError::configuration(
-                rocketmq_runtime::RuntimeOperation::HaRuntime,
-            )),
+            HAError::Runtime(RuntimeError::configuration(HA_RUNTIME)),
             HAError::operation(SENTINEL, std::io::Error::other(SENTINEL)),
             HAError::budget(std::io::Error::other(SENTINEL)),
             HAError::invalid_state(SENTINEL),

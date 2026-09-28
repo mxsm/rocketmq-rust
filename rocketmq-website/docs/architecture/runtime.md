@@ -65,7 +65,7 @@ Queue timeout bounds admission waiting. Task timeout bounds the caller's wait af
 
 The closure retains its permit until it actually exits. Diagnostics can therefore report `TimedOutStillRunning` after the caller has returned. Releasing the permit early would admit more real work than the configured limit permits.
 
-`BlockingKind::LongRunning` is rejected by this short-work boundary. A long-lived blocking loop needs an explicitly owned thread or domain service with stop and join behavior. `BlockingExecutor::new` creates an isolated executor whose independent budget is not enrolled in the managed root lanes.
+`BlockingKind::LongRunning` is rejected by this short-work boundary. A long-lived blocking loop needs an explicitly owned thread or domain service with stop and join behavior. `BlockingExecutor::new` creates an isolated executor for tests and adapters: its independent budget is not enrolled in the managed root lanes, but a closure it is still running counts in the shutdown report of its task tree's owner.
 
 ## Resource reservations and overload
 
@@ -89,7 +89,7 @@ Do not choose coalescing for events that must all be processed. Also choose the 
 
 `ScheduledTaskGroup` is the only scheduler, and it owns both drivers and runs. `schedule(config, policy, task)` takes the timing mode from the configuration: fixed delay waits after a run finishes; fixed rate fires on absolute ticks and either never overlaps or admits at most `n` concurrent runs, as the policy states. When every run slot is busy, the missed-tick policy skips the tick, keeps the latest one or allows a bounded catch-up. Drift metrics record how late each tick fired.
 
-For metadata snapshots, `MetadataIoActor` owns a bounded coordinator and uses the shared metadata blocking lane. Submission acceptance and durable completion are separate outcomes. Queued generations can coalesce, and a later durable generation can satisfy an earlier waiter for the same logical resource. A timeout does not prove that a filesystem write stopped.
+For metadata snapshots, `MetadataIoActor` owns a bounded coordinator and uses the shared metadata blocking lane. Submission acceptance and durable completion are separate outcomes. Queued generations can coalesce, and a later durable generation can satisfy an earlier waiter for the same logical resource. A timeout does not prove that a filesystem write stopped. Retained snapshots are charged to the owner's process budget until their writes complete, and an actor can be planned to write different resources concurrently while one resource is still written in order.
 
 These mechanisms reduce repeated infrastructure while preserving explicit differences between “queued,” “running” and “durable.”
 

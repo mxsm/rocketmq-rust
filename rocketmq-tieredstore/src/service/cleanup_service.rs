@@ -183,7 +183,9 @@ mod tests {
     fn cleanup_startup_failed_uses_service_error_kind() {
         let error = cleanup_startup_failed(
             "schedule test",
-            rocketmq_runtime::RuntimeError::internal_failure(rocketmq_runtime::RuntimeOperation::CleanupTaskGroup),
+            rocketmq_runtime::RuntimeError::internal_failure(rocketmq_runtime::RuntimeOperation::external(
+                "cleanup-task-group",
+            )),
         );
 
         assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);

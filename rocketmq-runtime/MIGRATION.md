@@ -189,3 +189,40 @@ scheduled.schedule(
 - Broker and NameServer components take a mandatory `ChildServiceContext`
   instead of an optional one, so a missing owner is a compile error rather
   than a shutdown failure, and their shutdown always produces a report.
+
+## Public surface before 1.0
+
+### Removed APIs
+
+| Removed | Replacement |
+| --- | --- |
+| `RuntimeOperation` variants owned by other crates: `TransportListener`, `SessionExecutor`, `AuthMetadataIoLane`, `HaRuntime`, `InitializeBroker`, `StartBroker`, `ShutdownBroker`, `KvMutationWorker`, `AdmitKvMutation`, `AdmitKvMutationBytes`, `KvPersistenceFault`, `TieredStoreRuntime`, `CleanupTaskGroup` and `DispatcherTaskGroup`, and the test-only `TestFailure` and `PersistRuntimeMetadata` | A constant in the owning crate, such as `const INITIALIZE_BROKER: RuntimeOperation = RuntimeOperation::external("initialize-broker");`. The workspace consumers keep their previous labels. |
+| `RuntimeOperation::CheckFile`, `CopyFileBackup`, `CreateFileParent`, `CreateFile`, `WriteFile` and `FlushFile` | Nothing; only the removed asynchronous file helpers used them. |
+| The `async_fs` feature, `common::file_utils::string_to_file_async` and `file_to_string_async` | `string_to_file` and `file_to_string` run through a blocking lane such as `ChildServiceContext::metadata_io`, or a `MetadataIoActor`. The asynchronous writer truncated the target in place without synchronizing it, while `string_to_file` replaces it atomically. `file_to_string` returns an empty string for a missing file, where the asynchronous reader returned an error. |
+
+### Changed contracts
+
+- `RuntimeOperation` and `RuntimeContractPolicy` are `#[non_exhaustive]`; a
+  `match` outside the crate needs a wildcard arm. `RuntimeOperation::External`
+  carries an `ExternalOperation` label of lowercase ASCII letters, digits and
+  inner hyphens, at most 64 bytes. Define labels as constants so an invalid
+  label fails compilation instead of panicking.
+- The shutdown report of a `RuntimeOwner` or `RuntimeContext` counts closures
+  still running on isolated executors created by `BlockingExecutor::new` for a
+  group of its tree. A report that was healthy while such a closure outlived
+  its caller is now unhealthy until the closure exits. The still-running
+  annotation is added once per report.
+- `MetadataIoActor` charges each queued or in-flight snapshot to the owner's
+  process budget until its write completes, including after its observer
+  times out. A snapshot the process budget cannot take is refused with the
+  `AdmitMetadataBytes` capacity error, like one above `max_pending_bytes`.
+- `MetadataIoPlan::with_max_concurrent_writes` lets writes of different
+  resources overlap, capped by the metadata lane's concurrency; the default
+  stays one. `MetadataIoActorLimitsProfile` gains `max_concurrent_writes`, so a
+  struct literal of it must set the field.
+- `OperationContext::wait_until` and `cancel_and_wait_until` take a
+  `ShutdownDeadline` and never wait past it. `wait` and `cancel_and_wait` keep
+  their relative timeout and at most one second of abort confirmation after it.
+- A V2 detail scan counts the descendant groups it visits against
+  `detail_scan_budget` as well as the tasks it examines, and reports
+  `truncated` when either bound stops it.

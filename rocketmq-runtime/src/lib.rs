@@ -84,6 +84,7 @@ pub use critical::CriticalFailure;
 pub use critical::CriticalFailureKind;
 pub use critical::CriticalFailureState;
 pub use critical::CriticalFailureSubscription;
+pub use error::ExternalOperation;
 pub use error::RuntimeContractPolicy;
 pub use error::RuntimeContractViolation;
 pub use error::RuntimeError;

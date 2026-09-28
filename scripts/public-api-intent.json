@@ -2845,6 +2845,15 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use error::ExternalOperation",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use error::ExternalOperation",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "validated static operation labels for failures owned by crates built on the runtime",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use error::RuntimeContractPolicy",
           "identity": "rocketmq-runtime/src/lib.rs:pub use error::RuntimeContractPolicy",
           "owner": "runtime",
@@ -4122,7 +4131,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 164
+      "maximum_exports": 165
     },
     "rocketmq-store": {
       "entries": [

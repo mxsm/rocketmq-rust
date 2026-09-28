@@ -204,6 +204,10 @@ mod defaults {
         0
     }
 
+    pub const fn metadata_io_max_pending_bytes() -> u64 {
+        64 * 1024 * 1024
+    }
+
     pub fn lite_event_full_dispatch_delay_time() -> u64 {
         10_000
     }
@@ -980,6 +984,17 @@ pub struct BrokerConfig {
     #[serde(default = "defaults::process_memory_limit_bytes")]
     pub process_memory_limit_bytes: u64,
 
+    /// Snapshot bytes the Broker metadata actor may retain before it refuses
+    /// new metadata writes.
+    ///
+    /// Queued and in-flight snapshots of every metadata resource, such as
+    /// topics, subscription groups, and consumer offsets, count together and
+    /// are also charged to the runtime process budget. A resource can hold one
+    /// in-flight and one queued snapshot, so allow at least twice the largest
+    /// snapshot. Must be positive.
+    #[serde(default = "defaults::metadata_io_max_pending_bytes")]
+    pub metadata_io_max_pending_bytes: u64,
+
     #[serde(default = "defaults::lite_event_full_dispatch_delay_time")]
     pub lite_event_full_dispatch_delay_time: u64,
 
@@ -1469,6 +1484,7 @@ impl Default for BrokerConfig {
             enable_lite_pop_log: defaults::enable_lite_pop_log(),
             max_client_event_count: defaults::max_client_event_count(),
             process_memory_limit_bytes: defaults::process_memory_limit_bytes(),
+            metadata_io_max_pending_bytes: defaults::metadata_io_max_pending_bytes(),
             lite_event_full_dispatch_delay_time: defaults::lite_event_full_dispatch_delay_time(),
             lite_event_full_dispatch_delay_time_for_wildcard_group:
                 defaults::lite_event_full_dispatch_delay_time_for_wildcard_group(),
@@ -1905,6 +1921,10 @@ impl BrokerConfig {
         properties.insert(
             "processMemoryLimitBytes".into(),
             self.process_memory_limit_bytes.to_string().into(),
+        );
+        properties.insert(
+            "metadataIoMaxPendingBytes".into(),
+            self.metadata_io_max_pending_bytes.to_string().into(),
         );
         properties.insert(
             "liteEventFullDispatchDelayTime".into(),
@@ -2386,6 +2406,10 @@ mod tests {
         assert_eq!(
             properties.get("maxClientEventCount").map(|value| value.as_str()),
             Some("100")
+        );
+        assert_eq!(
+            properties.get("metadataIoMaxPendingBytes").map(|value| value.as_str()),
+            Some("67108864")
         );
         assert_eq!(
             properties

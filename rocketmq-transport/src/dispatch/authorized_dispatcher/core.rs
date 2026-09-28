@@ -20,6 +20,7 @@ use std::time::Instant;
 use rocketmq_error::SharedError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeError;
+use rocketmq_runtime::RuntimeOperation;
 use rocketmq_security_api::Action;
 use rocketmq_security_api::AuthorizationDecision;
 use rocketmq_security_api::Resource;
@@ -56,6 +57,8 @@ use crate::dispatch::ResponseSink;
 use crate::dispatch::WriteProgress;
 use crate::hook_registry::HookRegistry;
 use crate::runtime::processor::RequestProcessor;
+
+const SESSION_EXECUTOR: RuntimeOperation = RuntimeOperation::external("session-executor");
 use crate::runtime::RPCHook;
 use crate::server::SessionHandle;
 use crate::session_executor::SessionDispatchAttempt;
@@ -394,9 +397,7 @@ where
         let observation = Some(metrics.observation().clone());
         let mut observer_owner = AdmittedProcessorObserver::new(processor, observation);
         let Some(processor) = observer_owner.processor_mut() else {
-            return Err(AuthorizedDispatchError::Closing(RuntimeError::closed(
-                rocketmq_runtime::RuntimeOperation::SessionExecutor,
-            )));
+            return Err(AuthorizedDispatchError::Closing(RuntimeError::closed(SESSION_EXECUTOR)));
         };
         let result = async {
             let sink = ResponseSink::network(session.clone(), class, builder.control().clone());

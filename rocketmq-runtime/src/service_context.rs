@@ -28,6 +28,7 @@ use crate::handle::RuntimeHandle;
 use crate::resource_budget::ResourceBudget;
 use crate::resources::RuntimeResources;
 use crate::scheduled::ScheduledTaskGroup;
+use crate::shutdown_report::ShutdownReport;
 use crate::task_group::TaskGroup;
 use crate::task_group::TaskId;
 use crate::task_group::TaskKind;
@@ -285,8 +286,14 @@ impl RootServiceContext {
         &self.diagnostics
     }
 
-    pub(crate) fn blocking_snapshots(&self) -> Vec<crate::blocking::BlockingExecutorSnapshot> {
-        self.blocking_lanes.snapshots()
+    /// Adds the blocking work of the managed lanes and of the isolated
+    /// executors bound to this tree to `report`.
+    pub(crate) fn merge_blocking_into(&self, report: &mut ShutdownReport) {
+        for snapshot in self.blocking_lanes.snapshots() {
+            report.merge_blocking(snapshot);
+        }
+        let (still_running, tasks) = self.task_group.isolated_blocking_report();
+        report.merge_blocking_tasks(still_running, tasks);
     }
 }
 

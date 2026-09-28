@@ -114,7 +114,7 @@ mod tests {
         let error = crate::error::runtime_error(
             StoreOperation::Shutdown,
             rocketmq_runtime::RuntimeError::internal(
-                rocketmq_runtime::RuntimeOperation::TieredStoreRuntime,
+                rocketmq_runtime::RuntimeOperation::external("tieredstore-runtime"),
                 std::io::Error::other(sentinel),
             ),
         );

@@ -89,6 +89,8 @@ use crate::writer_runtime::WriterLanes;
 use crate::writer_runtime::WriterQueueConfig;
 
 const SESSION_RETIREMENT_TIMEOUT: Duration = Duration::from_secs(5);
+const TRANSPORT_LISTENER: rocketmq_runtime::RuntimeOperation =
+    rocketmq_runtime::RuntimeOperation::external("transport-listener");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SessionWriterCompletionHealth {
@@ -2052,7 +2054,7 @@ impl SessionTransportServer {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
-            .ok_or_else(|| RuntimeError::context_unavailable(rocketmq_runtime::RuntimeOperation::TransportListener))?;
+            .ok_or_else(|| RuntimeError::context_unavailable(TRANSPORT_LISTENER))?;
         let server = self.clone();
         let cancellation = self.service_context.task_group().cancellation_token();
         self.service_context.spawn_service("transport.accept", async move {
