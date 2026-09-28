@@ -13,7 +13,7 @@ RocketMQ-Rust contains more products than one core release. Use the root Cargo m
 | Root Cargo workspace | `Cargo.toml`, 28 members | Cargo can select these packages from the repository root. |
 | Core release package set | `scripts/core-release-scope.json`, 27 packages | Packages classified for the core release process. This does not prove registry publication. |
 | Core services | NameServer, Broker, Controller, Proxy | Service products named by the core release scope. They still have different build features, configuration and launch commands. |
-| Dashboard common | A root workspace member, explicitly excluded from core release | Shared dashboard models/services can be built with the root workspace without making the desktop/Web products part of that release. |
+| Dashboard common | A root workspace member outside the core package list, published to crates.io with the workspace | Shared dashboard models/services can be built and published with the root workspace without making the desktop/Web products part of the core release. |
 | Independent Cargo products | Examples, GPUI, Tauri backend, Web backend, MCP, MCP Control, SRE and specialized fixtures/fuzzing | Use each local manifest and guide; a root build does not cover them. |
 | Node projects | Website, Dashboard frontends, SRE UI and TypeScript SDK | Each has its own package manifest and commands. |
 
@@ -23,12 +23,12 @@ The scope lists repository exclusions for Dashboard, MCP and SRE. MCP Control is
 
 | Classification | Meaning in the release model | Current examples |
 | --- | --- | --- |
-| `registry-publish` | Selected for registry package planning | Client, model, protocol, transport, runtime, security, storage, service libraries and Admin Core |
-| `binary-only` | Distributed as a binary product rather than a registry library in this classification | `rocketmq-admin-cli`, `rocketmq-admin-tui`, `rocketmq-store-inspect` |
+| `registry-publish` | Selected for registry package planning | Client, model, protocol, transport, runtime, security, storage, service libraries, Admin Core, and the Admin CLI, Admin TUI and store inspection tools |
+| `binary-only` | Distributed as a binary product rather than a registry library in this classification | No current core entry uses it |
 | `internal-only` | Allowed schema classification for internal packages | No current core entry uses it |
 | `non-publish` | Allowed schema classification for packages outside publication | No current core entry uses it |
 
-The current core list has 24 `registry-publish` and three `binary-only` entries. A service package may include a library and a binary; its classification does not remove its executable. Conversely, a package version in Cargo.toml does not tell you whether a downloadable archive or registry version exists.
+All 27 entries in the current core list are `registry-publish`. A service package may include a library and a binary; its classification does not remove its executable. Conversely, a package version in Cargo.toml does not tell you whether a downloadable archive or registry version exists.
 
 ## Distribution identity
 

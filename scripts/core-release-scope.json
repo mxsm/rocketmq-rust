@@ -20,7 +20,7 @@
     {
       "name": "rocketmq-admin-cli",
       "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli",
-      "classification": "binary-only"
+      "classification": "registry-publish"
     },
     {
       "name": "rocketmq-admin-core",
@@ -30,7 +30,7 @@
     {
       "name": "rocketmq-admin-tui",
       "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui",
-      "classification": "binary-only"
+      "classification": "registry-publish"
     },
     {
       "name": "rocketmq-auth",
@@ -130,7 +130,7 @@
     {
       "name": "rocketmq-store-inspect",
       "path": "rocketmq-tools/rocketmq-store-inspect",
-      "classification": "binary-only"
+      "classification": "registry-publish"
     },
     {
       "name": "rocketmq-store-local",

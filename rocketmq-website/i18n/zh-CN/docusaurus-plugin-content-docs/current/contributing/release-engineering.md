@@ -6,19 +6,19 @@ title: "发行工程"
 
 ## 遵循声明的范围
 
-根工作区包含 28 个成员。`scripts/core-release-scope.json` 分类了 27 个核心包：24 个注册表发布包和三个仅二进制包。Dashboard common 成员不属于这份核心包清单。注册表分类与服务可执行文件数量是不同概念。Dashboard、MCP 和 SRE 是独立产品，应使用各自的源码和部署文档。
+根工作区包含 28 个成员，全部发布到 crates.io。`scripts/core-release-scope.json` 分类了 27 个核心包，全部为注册表发布包。Dashboard common 成员不属于这份核心包清单，但会随工作区一起发布。注册表分类与服务可执行文件数量是不同概念。Dashboard、MCP 和 SRE 是独立产品，应使用各自的源码和部署文档。
 
 发行身份为 `RocketMQ Rust Community Distribution`，身份类别是 `unofficial-community`，且 `official_apache_release: false`。发行说明和下载内容应一致使用该身份。采用 Apache 2.0 许可证，不代表产物是 Apache 项目的官方发行版。
 
 ## 使用 Cargo 打包注册表 crate
 
-仓库不再单独维护候选准备、压缩包或 crate 暂存工具；注册表包直接使用 Cargo 准备。如需检查注册表发布包能否打包，在仓库根目录运行：
+仓库不再单独维护候选准备、压缩包或 crate 暂存工具；注册表包直接使用 Cargo 准备。如需检查所有工作区成员能否打包，在仓库根目录运行：
 
 ```bash
-cargo package --workspace --locked --no-verify --exclude rocketmq-admin-cli --exclude rocketmq-admin-tui --exclude rocketmq-store-inspect --exclude rocketmq-dashboard-common
+cargo package --workspace --locked --no-verify
 ```
 
-被排除的是三个仅二进制包和 Dashboard common 成员。打包结果检查的是各个包的边界，不是成功执行 `cargo publish`。仅供测试使用的同级 dev-dependency 只声明 path，因此 Cargo 会从发布的 manifest 中去掉它们，发布顺序只取决于普通依赖和构建依赖。
+其中包括与其他成员一起发布的 Admin CLI、Admin TUI、存储检查工具和 Dashboard common。打包结果检查的是各个包的边界，不是成功执行 `cargo publish`。仅供测试使用的同级 dev-dependency 只声明 path，因此 Cargo 会从发布的 manifest 中去掉它们，发布顺序只取决于普通依赖和构建依赖。
 
 ## 同步维护发行与网站文档
 
