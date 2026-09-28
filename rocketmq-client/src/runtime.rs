@@ -784,8 +784,13 @@ mod tests {
         assert!(handle.wait_finished(Duration::from_secs(1)));
         assert_eq!(completed.load(Ordering::Acquire), 1);
         assert!(handle.is_finished());
+        assert!(
+            service_context
+                .task_group()
+                .wait_task(handle.task_id(), Duration::from_secs(1))
+                .await
+        );
         assert_eq!(handle.task_count(), 0);
-        let _ = handle.task_id();
         let report = service_context.task_group().shutdown(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{report:?}");
     }
