@@ -1376,7 +1376,7 @@ mod tests {
             let service_config = Arc::clone(&config);
             let service_build_started = Arc::clone(&build_started);
 
-            context
+            let task_id = context
                 .spawn_service("topic-build", async move {
                     let _ = run_tracked_topic_admin_service(
                         &service_sessions,
@@ -1403,7 +1403,14 @@ mod tests {
             .await
             .expect("production topic shutdown must reach its bounded task-group drain");
 
-            assert_eq!(report.aborted, 1, "{report:?}");
+            // The deadline snapshot may precede Tokio destroying the aborted future.
+            assert_eq!(report.timed_out, 1, "{report:?}");
+            assert_eq!(report.aborted + report.leaked, 1, "{report:?}");
+            assert!(
+                context.task_group().wait_task(task_id, Duration::from_secs(1)).await,
+                "the aborted guard builder must finish releasing its resources"
+            );
+            assert_eq!(context.task_group().task_count(), 0);
             assert!(!sessions.has_current());
         });
 
