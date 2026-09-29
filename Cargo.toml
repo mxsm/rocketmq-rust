@@ -173,13 +173,15 @@ dashmap  = "6.2.1"
 strum    = { version = "0.28.0", features = ["derive"] }
 smallvec = "1.13"
 
-opentelemetry                      = { version = "0.32", features = ["metrics"] }
-opentelemetry_sdk                  = { version = "0.32", features = ["metrics", "rt-tokio"] }
-opentelemetry-otlp                 = { version = "0.32", default-features = false }
-opentelemetry-prometheus           = { version = "0.32", default-features = false }
-opentelemetry-appender-tracing     = { version = "0.32", default-features = false }
-opentelemetry-semantic-conventions = { version = "0.32" }
-tracing-opentelemetry              = { version = "0.33", default-features = false }
+# Keep the OpenTelemetry API, SDK, and exporters on the same minor version.
+# tracing-opentelemetry 0.34 requires OpenTelemetry 0.33 types.
+opentelemetry                      = { version = "0.33", features = ["metrics"] }
+opentelemetry_sdk                  = { version = "0.33", features = ["metrics", "rt-tokio"] }
+opentelemetry-otlp                 = { version = "0.33", default-features = false }
+opentelemetry-prometheus           = { version = "0.33", default-features = false }
+opentelemetry-appender-tracing     = { version = "0.33", default-features = false }
+opentelemetry-semantic-conventions = { version = "0.33" }
+tracing-opentelemetry              = { version = "0.34", default-features = false }
 prometheus                         = { version = "0.14", default-features = false }
 rocksdb                            = { version = "0.25", default-features = false, features = ["multi-threaded-cf", "lz4", "zstd"] }
 
