@@ -80,16 +80,21 @@ candidate; operators must not deploy the fixture values directly.
 
 ## Dynamic fault evidence
 
-The static policy check validates only the fault contract and committed fixture
-shape. Release evidence requires the `Kubernetes architecture fault matrix`
-workflow to run from `workflow_dispatch` or its weekly schedule with
-digest-pinned baseline, candidate, and collector images. The isolated evidence
-job generates run-scoped synthetic runtime and driver credentials, authenticates
-and preloads every image digest, executes the Kind or K3d fault driver, preserves
-the per-scenario reports, and uploads an artifact whose name contains the tested
-commit SHA. Generated evidence credentials are never production credentials and
-are never uploaded. A skipped dynamic job or a fixture-only report is not release
-evidence.
+The Kubernetes assets CI validates deployment files without creating a cluster.
+Automated fault and six-hour SLO workflows are retired; local runners and evidence
+guards remain available. The static policy check validates only the fault contract
+and committed fixture shape and does not produce release evidence.
+
+For live qualification, provision a disposable Docker environment and run
+`scripts/kind-architecture-refactor-e2e.ps1 -Mode Run` with digest-pinned baseline,
+candidate, and collector images. Verify published candidate images with
+`scripts/verify_service_image_publication.py` before deriving their image map, and
+generate synthetic runtime and driver credentials with
+`scripts/new-m11-evidence-secrets.ps1`. Authenticate any required registry pulls
+before starting the runner. Preserve the per-scenario reports with the tested
+commit identity, then remove generated credentials and registry sessions.
+Generated credentials must never be production credentials or shared as evidence.
+A fixture-only report is not release evidence.
 
 The committed policy currently requires 16 ordered scenarios: rolling upgrade,
 node eviction, NameServer minority partition and majority unavailability,

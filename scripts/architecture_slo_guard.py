@@ -353,9 +353,7 @@ def validate_release_assets(
     runner = guard.read("scripts/run-architecture-slo-evidence.ps1")
     cluster_runner = guard.read("scripts/run-architecture-slo-cluster.ps1")
     secret_generator = guard.read("scripts/new-m11-evidence-secrets.ps1")
-    workflow = guard.read(".github/workflows/architecture-slo-evidence.yml")
     publication_verifier = guard.read("scripts/verify_service_image_publication.py")
-    tests = guard.read("scripts/tests/test_architecture_slo_guard.py")
     for marker in (
         '[ValidateSet("Validate", "Run")]',
         "minimum_soak_seconds",
@@ -366,57 +364,6 @@ def validate_release_assets(
         "Get-CanonicalTextSha256",
     ):
         guard.require(marker in runner, f"SLO runner contract marker missing: {marker}")
-    guard.require(
-        "workflow_dispatch:" in workflow,
-        "SLO workflow must require explicit dispatch",
-    )
-    guard.require(
-        "run-architecture-slo-cluster.ps1" in workflow,
-        "SLO workflow must execute the cluster-connected runner",
-    )
-    guard.require(
-        "permissions:\n  contents: read\n  packages: read" in workflow,
-        "SLO workflow must retain least-privilege contents/package reads",
-    )
-    guard.require(
-        "runs-on: [self-hosted, linux, x64, rocketmq-architecture-evidence]" in workflow,
-        "six-hour SLO must run on the dedicated self-hosted evidence runner",
-    )
-    guard.require(
-        "if: (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && "
-        "github.ref == 'refs/heads/main'" in workflow,
-        "untrusted refs must never reach the dynamic evidence runner",
-    )
-    guard.require("docker login ghcr.io" in workflow, "SLO workflow must authenticate immutable GHCR pulls")
-    guard.require(
-        "CANDIDATE_COMMIT=$(git rev-parse HEAD)" in workflow
-        and "-CandidateCommit '${{ steps.bind-candidate.outputs.candidate_commit }}'" in workflow
-        and "m11-12-r24-${{ env.EVIDENCE_BACKEND }}-${{ steps.bind-candidate.outputs.candidate_commit }}" in workflow,
-        "SLO workflow must bind execution and artifact identity to the checked-out candidate commit",
-    )
-    guard.require(
-        "candidate_publication_json:" in workflow
-        and "ARCHITECTURE_CANDIDATE_PUBLICATION_JSON" in workflow
-        and "candidate_images_json" not in workflow
-        and "ARCHITECTURE_CANDIDATE_IMAGES_JSON" not in workflow,
-        "SLO workflow must accept a signed candidate publication, not a self-reported image map",
-    )
-    guard.require(
-        "sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6" in workflow
-        and "cosign-release: v3.1.2" in workflow,
-        "SLO workflow must install pinned Cosign v3.1.2",
-    )
-    publication_command = "python scripts/verify_service_image_publication.py"
-    candidate_map_argument = "-CandidateImageMap target/slo-inputs/candidate-images.json"
-    guard.require(
-        publication_command in workflow
-        and '--publication target/slo-inputs/publication.json' in workflow
-        and '--candidate "$CANDIDATE_COMMIT"' in workflow
-        and "--output-image-map target/slo-inputs/candidate-images.json" in workflow
-        and candidate_map_argument in workflow
-        and workflow.index(publication_command) < workflow.index(candidate_map_argument),
-        "SLO workflow must validate the signed candidate publication before deriving its image map",
-    )
     for marker in (
         'SOURCE = "workflow://mxsm/rocketmq-rust/service-image-publish"',
         'CATEGORY = "five_image_supply_chain"',
@@ -457,20 +404,6 @@ def validate_release_assets(
         "$FaultRun.candidate_commit -eq $CandidateCommit" in runner,
         "SLO runner must reject fault evidence from a different candidate commit",
     )
-    guard.require(
-        "new-m11-evidence-secrets.ps1" in workflow,
-        "SLO workflow must generate isolated run-scoped evidence credentials",
-    )
-    guard.require(
-        "M11_RUNTIME_SECRET_MANIFEST_B64" not in workflow
-        and "M11_ROTATED_RUNTIME_SECRET_MANIFEST_B64" not in workflow,
-        "SLO workflow must not depend on repository-stored test secret manifests",
-    )
-    guard.require(
-        "Remove-Item -LiteralPath $inputDirectory -Recurse -Force" in workflow
-        and "docker logout ghcr.io" in workflow,
-        "SLO workflow must remove run-scoped credentials and registry sessions",
-    )
     for marker in (
         "PrometheusImage must be pinned by digest",
         "rocketmq-slo-prometheus",
@@ -485,10 +418,6 @@ def validate_release_assets(
     guard.require(
         "[Security.Cryptography.RandomNumberGenerator]::Create" in secret_generator,
         "SLO evidence credentials must use a cryptographic run-scoped generator",
-    )
-    guard.require(
-        "test_architecture_slo_guard" in workflow and "deliberate" in tests,
-        "SLO deliberate-violation tests are not wired",
     )
 
 

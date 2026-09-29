@@ -81,13 +81,13 @@ Full-workspace all-feature integration still runs on main and scheduled/manual r
 | `website-check.yml` | Own the single website PR build, including deployment workflow changes. |
 | `deploy.yml` | Build/deploy only on main push or manual dispatch; preserve serialized deployment. |
 | `container-foundation-ci.yml` | Keep static contract/tests on PRs; foundation/five-image builds and supply-chain evidence after merge/manual; isolate concurrency per PR/ref. |
-| `core-kubernetes-assets-ci.yml` | Keep path-scoped core candidate boundary checks; cancel superseded runs. |
-| `kubernetes-assets-ci.yml` | Keep path-scoped Helm/Kustomize contract validation; cancel superseded runs. |
+| Retired `core-kubernetes-assets-ci.yml` | Consolidated four-service container and chart boundary checks into `kubernetes-assets-ci.yml`. |
+| `kubernetes-assets-ci.yml` | Run path-scoped core container/chart, Helm/Kustomize schema, and lifecycle checks; omit fault evidence checks and cancel superseded runs. |
 | `architecture-documentation.yml` | Keep weekly/manual documentation checks; remove the cross-registry governance gate. |
 | `architecture-nightly-evidence.yml` | Retain scheduled/manual Loom, property, Miri, and standalone coverage; remove registry-governance and registry-SHA jobs. |
 | Retired M10 performance workflow | Removed frozen hardware/command inventories, fingerprints, and threshold gates; use maintained Cargo benchmarks when needed. |
-| `architecture-slo-evidence.yml` | Retain path-scoped static contracts; six-hour dynamic work was already scheduled/manual only. |
-| `kubernetes-fault-matrix.yml` | Retain path-scoped static checks; dynamic fault runs were already scheduled/manual only. |
+| Retired `architecture-slo-evidence.yml` | Removed automated six-hour SLO evidence; local runners, policies, and evidence tests remain available. |
+| Retired `kubernetes-fault-matrix.yml` | Removed automated fault-cluster execution; local runners and evidence tests remain available. |
 | `service-image-publish.yml` | Retain release/manual publication, signatures, scanning, and immutable artifact checks. |
 | `auto_approve_pull_requests.yml` | Remove nine-minute initial sleep and fifteen-minute polling; recheck on root CI completion or PR readiness events; honor required check names/apps and skipped contexts; approve only the checked commit. |
 | `auto_merge.yml` | Ignore unrelated label churn and cancel superseded attempts; keep merge label, approval count, and merge policy. |
