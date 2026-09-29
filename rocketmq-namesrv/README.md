@@ -155,6 +155,34 @@ different purpose:
 The configuration model accepts Java-style camelCase keys and Rust-style
 field names where serde aliases are defined.
 
+### Startup-only Tokio runtime overrides
+
+The file selected with `--configFile` may contain an optional `[runtime]` section:
+
+```toml
+[runtime]
+workerThreads = 2
+maxBlockingThreads = 8
+```
+
+| Key | Default | Valid values |
+| --- | --- | --- |
+| `workerThreads` (`worker_threads`) | Available CPU parallelism, falling back to 4 | Positive integer |
+| `maxBlockingThreads` (`max_blocking_threads`) | Available CPU parallelism multiplied by 4 and clamped to 3..=512, falling back to 16 | Integer from 3 through 512 |
+
+Without a config file, without this section, or with an omitted key, the corresponding
+default is retained. Overriding only `workerThreads` does not recompute the default
+blocking limit. Unknown keys in `[runtime]` and duplicate camelCase/snake_case aliases
+fail at startup, as do malformed TOML and invalid thread counts, before runtime construction.
+
+These settings control the process runtime, independently of NameServer request pools
+such as `clientRequestThreadPoolNums`. The blocking limit controls the managed lanes;
+the Tokio blocking pool retains its additional runtime headroom. The thread name remains
+`rocketmq-namesrv`, and both I/O and time drivers remain enabled. Runtime overrides are
+startup-only and are not accepted by `UpdateNamesrvConfig`.
+
+### NameServer settings
+
 | Key | Default | Purpose |
 | --- | ------- | ------- |
 | `rocketmqHome` | `ROCKETMQ_HOME` / `ROCKETMQ_HOME_PROPERTY` | RocketMQ home directory used by the runtime. |

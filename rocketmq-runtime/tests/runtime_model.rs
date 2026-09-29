@@ -76,7 +76,7 @@ fn owned_runtime_entrypoints_use_runtime_owner() {
         ),
         (
             "rocketmq-namesrv/src/bin/namesrv_bootstrap_server.rs",
-            "RuntimeOwner::plan(namesrv_runtime_config())",
+            "RuntimeOwner::plan(runtime_config)",
             "namesrv runtime shutdown report is unhealthy",
         ),
         (
@@ -152,7 +152,7 @@ fn namesrv_entrypoint_uses_runtime_owner_and_service_context() {
         .unwrap_or_else(|error| panic!("failed to read {entrypoint}: {error}"));
 
     assert!(
-        source.contains("RuntimeOwner::plan(namesrv_runtime_config())"),
+        source.contains("RuntimeOwner::plan(runtime_config)"),
         "{entrypoint} must use RuntimeOwner as the owned runtime boundary"
     );
     assert!(
