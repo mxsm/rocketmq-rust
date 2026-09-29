@@ -3826,6 +3826,15 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use crate::blocking::BlockingExecutorShutdownReport",
+          "identity": "rocketmq-runtime/src/public_api.rs:pub use crate::blocking::BlockingExecutorShutdownReport",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/public_api.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use crate::diagnostics::RuntimeBlockingKindSummaryV1",
           "identity": "rocketmq-runtime/src/public_api.rs:pub use crate::diagnostics::RuntimeBlockingKindSummaryV1",
           "owner": "runtime",
@@ -3997,6 +4006,15 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use crate::diagnostics::RuntimeTaskDetails",
+          "identity": "rocketmq-runtime/src/public_api.rs:pub use crate::diagnostics::RuntimeTaskDetails",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/public_api.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use crate::diagnostics::RuntimeTaskKindSummaryV1",
           "identity": "rocketmq-runtime/src/public_api.rs:pub use crate::diagnostics::RuntimeTaskKindSummaryV1",
           "owner": "runtime",
@@ -4047,6 +4065,24 @@
           "owner": "runtime",
           "path": "rocketmq-runtime/src/public_api.rs",
           "rationale": "bounded observation of terminal operation outcomes without retaining request data",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::operation::OperationWaitOutcome",
+          "identity": "rocketmq-runtime/src/public_api.rs:pub use crate::operation::OperationWaitOutcome",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/public_api.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::operation::OperationWaitPolicy",
+          "identity": "rocketmq-runtime/src/public_api.rs:pub use crate::operation::OperationWaitPolicy",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/public_api.rs",
+          "rationale": "deliberate root entry point",
           "removal_condition": "retain while the stable entry point remains supported"
         },
         {
@@ -4131,7 +4167,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 165
+      "maximum_exports": 169
     },
     "rocketmq-store": {
       "entries": [
