@@ -77,7 +77,7 @@ Full-workspace all-feature integration still runs on main and scheduled/manual r
 | `dashboard-web-ci.yml` | Remove separate build already covered by tests/Clippy; four-engine storage Compose integration runs on main/manual. |
 | `dashboard-tauri-ci.yml` | Keep frontend and Rust tests; move four-platform application packaging to main/manual. |
 | `fuzz-ci.yml` | Keep harness compilation on PRs; four runtime fuzz jobs execute on nightly/weekly/manual runs. |
-| `security-audit.yml` | Keep eight lockfile audits and daily advisory checks; trigger on manifests/lockfiles rather than ordinary broker/protocol/storage source edits. |
+| Retired `security-audit.yml` | Removed the eight-lockfile audit workflow, including PR, main-push, daily, and manual triggers. |
 | `website-check.yml` | Own the single website PR build, including deployment workflow changes. |
 | `deploy.yml` | Build/deploy only on main push or manual dispatch; preserve serialized deployment. |
 | `container-foundation-ci.yml` | Keep static contract/tests on PRs; foundation/five-image builds and supply-chain evidence after merge/manual; isolate concurrency per PR/ref. |
