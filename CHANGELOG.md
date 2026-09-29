@@ -105,6 +105,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **ci:** Remove the dedicated eight-lockfile Cargo security audit workflow and its PR, main-push, daily, and manual triggers ([#11008](https://github.com/mxsm/rocketmq-rust/issues/11008)).
 - **refactor(runtime):** Remove the executor services, `TaskScheduler` and the `schedule` module, `ScheduledTaskManager`, `ActorRuntime`, `compat`, `tokio_lock`, `Shutdown`, `common::util_all`, `common::thread`, `common::future`, `DetachedTaskPolicy` and the detached report fields, and the ambient-runtime `ServiceManager` constructors ([#10935](https://github.com/mxsm/rocketmq-rust/issues/10935)).
 - **docs:** Remove the Star History chart from `README.md` ([#9337](https://github.com/mxsm/rocketmq-rust/issues/9337))
 - **test(store):** Remove obsolete phase3_integration_tests.rs integration test file ([#6649](https://github.com/mxsm/rocketmq-rust/issues/6649))
