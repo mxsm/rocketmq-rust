@@ -51,6 +51,17 @@ For current protocol types, derive `serde::Serialize` and import
 `rocketmq_protocol::protocol::RemotingSerializable`. Users of the historical
 local trait must implement it directly.
 
+### No-op producer backpressure locks
+
+Remove calls to these four no-op `DefaultMQProducer` methods:
+
+- `acquire_back_pressure_for_async_send_num_lock`
+- `release_back_pressure_for_async_send_num_lock`
+- `acquire_back_pressure_for_async_send_size_lock`
+- `release_back_pressure_for_async_send_size_lock`
+
+They provided no locking; applications must synchronize their own shared state.
+
 ### Auth security-contract ownership and policy models
 
 Runtime-neutral security contracts are owned by `rocketmq-security-api`. Import
