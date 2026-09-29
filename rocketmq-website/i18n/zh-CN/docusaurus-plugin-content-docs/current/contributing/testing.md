@@ -13,9 +13,9 @@ title: "测试策略与工程入口"
 | 组件与生命周期 | 协作组件是否正确取消、排空并释放资源？ | Client 集成目标；Runtime 生命周期与编译失败测试 | 进程内对端不能重现所有网络/存储故障 |
 | 集群功能测试 | 已配置的客户端和服务能否完成预期消息路径？ | `scripts/run_client_broker_functional_tests.ps1` | 记录实际拓扑、feature 选择及断言 |
 | Java 互操作 | 所选客户端/服务端和 HA 组合是否保持指定语义？ | `scripts/interop/v1-interop-matrix.json` 与 `scripts/interop/run_v1_interop.py` | 矩阵指定 Java 5.5.0，并明确排除 Java Controller、Java AutoSwitchHA 与 DLedger CommitLog |
-| 存储与部署故障 | 崩溃、重启、副本丢失或发布中断后哪些状态仍然有效？ | `scripts/interop/v1-storage-fault-matrix.json`；`.github/workflows/kubernetes-fault-matrix.yml` | 需要隔离且可丢弃的状态及场景所需实际环境 |
+| 存储与部署故障 | 崩溃、重启、副本丢失或发布中断后哪些状态仍然有效？ | `scripts/interop/v1-storage-fault-matrix.json`；`scripts/kind-architecture-refactor-e2e.ps1` | 需自行在隔离且可丢弃的环境中运行；已停用自动 Kubernetes 故障工作流 |
 | Fuzz | 畸形或异常输入能否破坏解析/恢复不变量？ | 独立 `fuzz/` 工程与 `.github/workflows/fuzz-ci.yml` | 有限执行不能证明不存在缺陷 |
-| 性能与长稳 | 指定负载下的吞吐量、延迟、资源占用和持续行为如何？ | 包级基准；架构 SLO 工作流；[容量指南](../operations/capacity-performance.md) | 在等价负载下比较，同时报告失败与成功操作 |
+| 性能与长稳 | 指定负载下的吞吐量、延迟、资源占用和持续行为如何？ | 包级基准；`scripts/run-architecture-slo-cluster.ps1`；[容量指南](../operations/capacity-performance.md) | 需自行准备环境并运行长稳测试；在等价负载下比较，同时报告失败与成功操作 |
 | 产品与网站 | 独立应用或渲染文档在自身工程中是否正常？ | Dashboard/MCP/SRE 工作流；`rocketmq-website/` | 根 Cargo 验证不覆盖这些独立前端/应用 |
 
 存储故障清单包含 LocalFile、多路径、RocksDB、压缩、POP、定时器、分层存储、Controller 和升级场景。完成 LocalFile 测试不能证明其他后端或恢复行为。结果解释参见[协议兼容性](../reference/protocol-compatibility.md)和[备份恢复](../operations/backup-recovery.md)。

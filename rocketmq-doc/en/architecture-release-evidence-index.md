@@ -235,8 +235,6 @@ and inject `ChildServiceContext`/`TaskGroup` capabilities.
 |---|---|---|
 | fuzz | `.github/workflows/fuzz-ci.yml` | `architecture-fuzz-<target>-<commit>` |
 | miri-loom-coverage | `.github/workflows/architecture-nightly-evidence.yml` | `architecture-nightly-<kind>-<commit>` |
-| fault | `.github/workflows/kubernetes-fault-matrix.yml` | `m11-11-<backend>-<commit>` |
-| six-hour-soak | `.github/workflows/architecture-slo-evidence.yml` | `m11-12-r24-<backend>-<commit>` |
 
 Coverage uses a root-workspace auto baseline with a 1% allowed regression and a 70% patch
 target. Each standalone application publishes a separate LCOV artifact; the fuzz standalone
@@ -248,10 +246,11 @@ Run maintained Cargo benchmark targets when performance behavior changes. Histor
 fingerprints, frozen command inventories, and fixed comparison thresholds are retired. Fault and
 soak artifacts use their dedicated qualification policies; failures retain replay inputs and
 diagnostics without committing runtime output.
-The SLO and fault workflows now accept `candidate_publication_json` (or the scheduled
-`ARCHITECTURE_CANDIDATE_PUBLICATION_JSON`) instead of the former self-reported image-map
-input. Callers must pass the signed five-image publication manifest; the workflows verify it and
-derive the candidate image map only after all five service identities and digests match.
+The automated SLO and Kubernetes fault workflows are retired. Their local runners and
+evidence guards remain available for explicitly provisioned qualification environments.
+For published service images, use `scripts/verify_service_image_publication.py` to verify
+the signed five-image publication before deriving the candidate image map. The retained
+Kubernetes assets workflow performs static checks and does not produce live fault or soak evidence.
 
 ## Unified production qualification bundle
 

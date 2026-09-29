@@ -101,20 +101,6 @@ class DynamicEvidenceInputTests(unittest.TestCase):
             for value in (*baseline_driver.values(), *rotated_driver.values()):
                 self.assertNotIn(value, completed.stdout)
 
-    def test_workflows_keep_untrusted_events_off_the_long_runner(self) -> None:
-        slo = (ROOT / ".github" / "workflows" / "architecture-slo-evidence.yml").read_text(encoding="utf-8")
-        fault = (ROOT / ".github" / "workflows" / "kubernetes-fault-matrix.yml").read_text(encoding="utf-8")
-
-        self.assertIn("runs-on: [self-hosted, linux, x64, rocketmq-architecture-evidence]", slo)
-        self.assertIn("github.ref == 'refs/heads/main'", slo)
-        self.assertIn("packages: read", slo)
-        self.assertIn("packages: read", fault)
-        self.assertNotIn("M11_RUNTIME_SECRET_MANIFEST_B64", slo + fault)
-        self.assertNotIn("M11_ROTATED_RUNTIME_SECRET_MANIFEST_B64", slo + fault)
-        self.assertIn("new-m11-evidence-secrets.ps1", slo)
-        self.assertIn("new-m11-evidence-secrets.ps1", fault)
-        self.assertIn("run-architecture-slo-cluster.ps1", slo)
-
     def test_cluster_wrapper_has_digest_prometheus_and_sustained_probe(self) -> None:
         wrapper = (ROOT / "scripts" / "run-architecture-slo-cluster.ps1").read_text(encoding="utf-8")
         self.assertIn("PrometheusImage must be pinned by digest", wrapper)

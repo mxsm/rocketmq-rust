@@ -63,11 +63,6 @@ class FaultMatrixGuardTests(unittest.TestCase):
             REPO_ROOT / FIXTURE,
             self.root / FIXTURE,
         )
-        (self.root / ".github" / "workflows").mkdir(parents=True)
-        shutil.copy2(
-            REPO_ROOT / ".github" / "workflows" / "kubernetes-fault-matrix.yml",
-            self.root / ".github" / "workflows" / "kubernetes-fault-matrix.yml",
-        )
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -367,12 +362,6 @@ class FaultMatrixGuardTests(unittest.TestCase):
         self.assertIn("hot reload", result.stderr)
 
     def test_dynamic_input_and_registry_regressions_are_rejected(self) -> None:
-        workflow = self.root / ".github" / "workflows" / "kubernetes-fault-matrix.yml"
-        source = workflow.read_text(encoding="utf-8")
-        workflow.write_text(source.replace("  packages: read\n", "", 1), encoding="utf-8")
-        result = self.run_guard("--policy-only", expect_success=False)
-        self.assertIn("contents/package reads", result.stderr)
-
         runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
         runner_source = runner.read_text(encoding="utf-8")
         runner.write_text(
@@ -392,35 +381,6 @@ class FaultMatrixGuardTests(unittest.TestCase):
         )
         result = self.run_guard("--policy-only", expect_success=False)
         self.assertIn("image-archive", result.stderr)
-
-    def test_workflow_artifact_uses_resolved_candidate_commit(self) -> None:
-        workflow = self.root / ".github" / "workflows" / "kubernetes-fault-matrix.yml"
-        source = workflow.read_text(encoding="utf-8")
-        workflow.write_text(
-            source.replace(
-                "m11-11-${{ env.EVIDENCE_BACKEND }}-${{ steps.bind-candidate.outputs.candidate_commit }}",
-                "m11-11-${{ env.EVIDENCE_BACKEND }}-${{ github.sha }}",
-                1,
-            ),
-            encoding="utf-8",
-        )
-        result = self.run_guard("--policy-only", expect_success=False)
-        self.assertIn("checked-out candidate commit", result.stderr)
-
-    def test_signed_publication_workflow_regressions_are_rejected(self) -> None:
-        workflow = self.root / ".github" / "workflows" / "kubernetes-fault-matrix.yml"
-        source = workflow.read_text(encoding="utf-8")
-        mutations = (
-            ("candidate_publication_json:", "candidate_images_json:", "signed candidate publication"),
-            ('--candidate "$CANDIDATE_COMMIT"', '--candidate "f"', "before deriving its image map"),
-            ("cosign-release: v3.1.2", "cosign-release: latest", "pinned Cosign v3.1.2"),
-        )
-        for old, new, finding in mutations:
-            with self.subTest(old=old):
-                self.assertIn(old, source)
-                workflow.write_text(source.replace(old, new, 1), encoding="utf-8")
-                result = self.run_guard("--policy-only", expect_success=False)
-                self.assertIn(finding, result.stderr)
 
     def test_attestation_verifier_regressions_are_rejected(self) -> None:
         verifier = self.root / "scripts" / "verify_service_image_publication.py"

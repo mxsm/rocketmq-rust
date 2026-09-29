@@ -6,28 +6,32 @@ on:
       - ".github/workflows/kubernetes-assets-ci.yml"
       - "distribution/helm/**"
       - "distribution/kubernetes/**"
+      - "distribution/container/core-service.Dockerfile"
+      - "distribution/core_helm_contract.py"
       - "docker/container-policy.json"
+      - "docker/core-container-policy.json"
+      - "scripts/core_container_image_guard.py"
+      - "scripts/tests/test_core_container_image_guard.py"
       - "scripts/kubernetes-assets-contract.ps1"
       - "scripts/kubernetes_assets_guard.py"
       - "scripts/tests/test_m11_kubernetes_assets.py"
       - "scripts/tests/test_m11_service_lifecycle.py"
-      - "scripts/fault_matrix_guard.py"
-      - "scripts/kind-architecture-refactor-e2e.ps1"
-      - "scripts/tests/test_m11_fault_matrix.py"
   push:
     branches: [main]
     paths:
       - ".github/workflows/kubernetes-assets-ci.yml"
       - "distribution/helm/**"
       - "distribution/kubernetes/**"
+      - "distribution/container/core-service.Dockerfile"
+      - "distribution/core_helm_contract.py"
       - "docker/container-policy.json"
+      - "docker/core-container-policy.json"
+      - "scripts/core_container_image_guard.py"
+      - "scripts/tests/test_core_container_image_guard.py"
       - "scripts/kubernetes-assets-contract.ps1"
       - "scripts/kubernetes_assets_guard.py"
       - "scripts/tests/test_m11_kubernetes_assets.py"
       - "scripts/tests/test_m11_service_lifecycle.py"
-      - "scripts/fault_matrix_guard.py"
-      - "scripts/kind-architecture-refactor-e2e.ps1"
-      - "scripts/tests/test_m11_fault_matrix.py"
   workflow_dispatch:
 
 permissions:
@@ -52,12 +56,17 @@ jobs:
           python scripts/kubernetes_assets_guard.py
           python -m unittest scripts.tests.test_m11_kubernetes_assets -v
           python -m unittest scripts.tests.test_m11_service_lifecycle -v
-          python scripts/fault_matrix_guard.py --policy-only
-          python -m unittest scripts.tests.test_m11_fault_matrix -v
 
       - name: Validate canonical and overlay renders
         shell: pwsh
         run: ./scripts/kubernetes-assets-contract.ps1
+
+      - name: Validate four-service container and chart boundary
+        shell: bash
+        run: |
+          export PATH="$GITHUB_WORKSPACE/target/kubernetes-tools:$PATH"
+          python -m unittest scripts.tests.test_core_container_image_guard -v
+          python scripts/core_container_image_guard.py --policy docker/core-container-policy.json --chart distribution/helm/rocketmq-rust-core
 
       - name: Upload rendered validation evidence
         if: always()

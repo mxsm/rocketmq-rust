@@ -160,9 +160,7 @@
   },
   "critical_workflows": [
     ".github/workflows/fuzz-ci.yml",
-    ".github/workflows/architecture-nightly-evidence.yml",
-    ".github/workflows/architecture-slo-evidence.yml",
-    ".github/workflows/kubernetes-fault-matrix.yml"
+    ".github/workflows/architecture-nightly-evidence.yml"
   ],
   "evidence_artifacts": [
     {
@@ -174,16 +172,6 @@
       "kind": "miri-loom-coverage",
       "workflow": ".github/workflows/architecture-nightly-evidence.yml",
       "artifact": "architecture-nightly-<kind>-<commit>"
-    },
-    {
-      "kind": "fault",
-      "workflow": ".github/workflows/kubernetes-fault-matrix.yml",
-      "artifact": "m11-11-<backend>-<commit>"
-    },
-    {
-      "kind": "six-hour-soak",
-      "workflow": ".github/workflows/architecture-slo-evidence.yml",
-      "artifact": "m11-12-r24-<backend>-<commit>"
     }
   ],
   "evidence_governance": {
@@ -230,11 +218,11 @@
       {"path":"scripts/tests/test_runtime_audit.py","owner":"runtime","tier":"pr_static","trigger_paths":["scripts/runtime_audit.py","scripts/runtime-audit.ps1","scripts/runtime-audit.sh"],"command":"python -m unittest scripts.tests.test_runtime_audit -v","estimated_seconds":10,"platform":"any","fixture_policy":"temporary-only"},
       {"path":"scripts/tests/test_run_property_state_suites.py","owner":"architecture","tier":"pr_static","trigger_paths":["scripts/run_property_state_suites.py","scripts/property-state-suite-registry.json"],"command":"python -m unittest scripts.tests.test_run_property_state_suites -v","estimated_seconds":10,"platform":"any","fixture_policy":"temporary-only"},
       {"path": "scripts/tests/test_rust_hygiene_guard.py", "owner": "architecture", "tier": "pr_static", "trigger_paths": ["scripts/**", "**/*.rs"], "command": "python -m unittest scripts.tests.test_rust_hygiene_guard -v", "estimated_seconds": 60, "platform": "any", "fixture_policy": "temporary-only"},
-      {"path": "scripts/tests/test_service_image_publication_verifier.py", "owner": "release-engineering", "tier": "pr_static", "trigger_paths": ["scripts/verify_service_image_publication.py", ".github/workflows/service-image-publish.yml", ".github/workflows/architecture-slo-evidence.yml", ".github/workflows/kubernetes-fault-matrix.yml"], "command": "python -m unittest scripts.tests.test_service_image_publication_verifier -v", "estimated_seconds": 10, "platform": "any", "fixture_policy": "temporary-only"},
+      {"path": "scripts/tests/test_service_image_publication_verifier.py", "owner": "release-engineering", "tier": "pr_static", "trigger_paths": ["scripts/verify_service_image_publication.py", ".github/workflows/service-image-publish.yml"], "command": "python -m unittest scripts.tests.test_service_image_publication_verifier -v", "estimated_seconds": 10, "platform": "any", "fixture_policy": "temporary-only"},
       {"path": "scripts/tests/test_standalone_workspace_trigger_guard.py", "owner": "architecture", "tier": "pr_static", "trigger_paths": ["scripts/**", "**/Cargo.toml", ".github/workflows/**"], "command": "python -m unittest scripts.tests.test_standalone_workspace_trigger_guard -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "temporary-only"},
       {"path": "scripts/tests/test_telemetry_semantic_guard.py", "owner": "observability", "tier": "pr_static", "trigger_paths": ["scripts/**", "rocketmq-observability/**"], "command": "python -m unittest scripts.tests.test_telemetry_semantic_guard -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "temporary-only"},
       {"path": "scripts/tests/test_admin_operation_guard.py", "owner": "admin", "tier": "pr_static", "trigger_paths": ["scripts/**", "rocketmq-tools/rocketmq-admin/**"], "command": "python -m unittest scripts.tests.test_admin_operation_guard -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "repository-fixtures"},
-      {"path": "scripts/tests/test_core_container_image_guard.py", "owner": "release-engineering", "tier": "dynamic_fixture", "trigger_paths": ["scripts/**", "distribution/**", ".github/workflows/core-kubernetes-assets-ci.yml"], "command": "python -m unittest scripts.tests.test_core_container_image_guard -v", "estimated_seconds": 120, "platform": "any", "fixture_policy": "repository-fixtures"},
+      {"path": "scripts/tests/test_core_container_image_guard.py", "owner": "release-engineering", "tier": "dynamic_fixture", "trigger_paths": ["scripts/**", "distribution/**", ".github/workflows/kubernetes-assets-ci.yml"], "command": "python -m unittest scripts.tests.test_core_container_image_guard -v", "estimated_seconds": 120, "platform": "any", "fixture_policy": "repository-fixtures"},
       {"path": "scripts/tests/test_core_helm_rollout.py", "owner": "release-engineering", "tier": "pr_static", "trigger_paths": ["scripts/**", "distribution/helm/rocketmq-rust-core/**"], "command": "python -m unittest scripts.tests.test_core_helm_rollout -v", "estimated_seconds": 10, "platform": "any", "fixture_policy": "repository-fixtures"},
       {"path": "scripts/tests/test_core_helm_runtime.py", "owner": "release-engineering", "tier": "dynamic_fixture", "trigger_paths": ["scripts/**", "distribution/helm/rocketmq-rust-core/**"], "command": "python -m unittest scripts.tests.test_core_helm_runtime -v", "estimated_seconds": 60, "platform": "any", "fixture_policy": "repository-fixtures"},
       {"path": "scripts/tests/test_core_release_scope.py", "owner": "release-engineering", "tier": "pr_static", "trigger_paths": ["scripts/**", "Cargo.toml", "**/Cargo.toml"], "command": "python -m unittest scripts.tests.test_core_release_scope -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "repository-fixtures"},

@@ -237,10 +237,8 @@ def validate_sources(guard: Guard) -> None:
     runner = guard.read("scripts/kind-architecture-refactor-e2e.ps1")
     live_faults = guard.read("scripts/kubernetes/live_faults.ps1")
     secret_generator = guard.read("scripts/new-m11-evidence-secrets.ps1")
-    workflow = guard.read(".github/workflows/kubernetes-fault-matrix.yml")
     publication_verifier = guard.read("scripts/verify_service_image_publication.py")
     dockerfile = guard.read("docker/Dockerfile.base")
-    tests = guard.read("scripts/tests/test_m11_fault_matrix.py")
     readme = guard.read("distribution/kubernetes/README.md")
     for marker in (
         '[ValidateSet("Validate", "Run")]',
@@ -393,43 +391,6 @@ def validate_sources(guard: Guard) -> None:
     guard.require("FROM builder-base AS fault-driver-builder" in dockerfile, "fault-driver builder target missing")
     guard.require("FROM runtime-base AS fault-driver" in dockerfile, "fault-driver runtime target missing")
     guard.require('io.rocketmq.image.role="fault-driver-test-only"' in dockerfile, "fault driver test-only label missing")
-    guard.require("fault_matrix_guard.py" in workflow, "fault workflow must execute evidence guard")
-    guard.require("kind-architecture-refactor-e2e.ps1" in workflow, "fault workflow must execute the real runner")
-    guard.require("workflow_dispatch:" in workflow, "fault workflow must support explicit dynamic dispatch")
-    guard.require(
-        "permissions:\n  contents: read\n  packages: read" in workflow,
-        "fault workflow must retain least-privilege contents/package reads",
-    )
-    guard.require("docker login ghcr.io" in workflow, "fault workflow must authenticate immutable GHCR pulls")
-    guard.require(
-        "CANDIDATE_COMMIT=$(git rev-parse HEAD)" in workflow
-        and "-CandidateCommit '${{ steps.bind-candidate.outputs.candidate_commit }}'" in workflow
-        and "m11-11-${{ env.EVIDENCE_BACKEND }}-${{ steps.bind-candidate.outputs.candidate_commit }}" in workflow,
-        "fault workflow must bind execution and artifact identity to the checked-out candidate commit",
-    )
-    guard.require(
-        "candidate_publication_json:" in workflow
-        and "ARCHITECTURE_CANDIDATE_PUBLICATION_JSON" in workflow
-        and "candidate_images_json" not in workflow
-        and "ARCHITECTURE_CANDIDATE_IMAGES_JSON" not in workflow,
-        "fault workflow must accept a signed candidate publication, not a self-reported image map",
-    )
-    guard.require(
-        "sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6" in workflow
-        and "cosign-release: v3.1.2" in workflow,
-        "fault workflow must install pinned Cosign v3.1.2",
-    )
-    publication_command = "python scripts/verify_service_image_publication.py"
-    candidate_map_argument = "-CandidateImageMap target/fault-inputs/candidate-images.json"
-    guard.require(
-        publication_command in workflow
-        and '--publication target/fault-inputs/publication.json' in workflow
-        and '--candidate "$CANDIDATE_COMMIT"' in workflow
-        and "--output-image-map target/fault-inputs/candidate-images.json" in workflow
-        and candidate_map_argument in workflow
-        and workflow.index(publication_command) < workflow.index(candidate_map_argument),
-        "fault workflow must validate the signed candidate publication before deriving its image map",
-    )
     for marker in (
         'SOURCE = "workflow://mxsm/rocketmq-rust/service-image-publish"',
         'CATEGORY = "five_image_supply_chain"',
@@ -466,20 +427,6 @@ def validate_sources(guard: Guard) -> None:
         verification_index >= 0 and output_index > verification_index,
         "candidate image map must be written only after signed publication verification",
     )
-    guard.require(
-        "new-m11-evidence-secrets.ps1" in workflow,
-        "fault workflow must generate isolated run-scoped evidence credentials",
-    )
-    guard.require(
-        "M11_RUNTIME_SECRET_MANIFEST_B64" not in workflow
-        and "M11_ROTATED_RUNTIME_SECRET_MANIFEST_B64" not in workflow,
-        "fault workflow must not depend on repository-stored test secret manifests",
-    )
-    guard.require(
-        "Remove-Item -LiteralPath $inputDirectory -Recurse -Force" in workflow
-        and "docker logout ghcr.io" in workflow,
-        "fault workflow must remove run-scoped credentials and registry sessions",
-    )
     for marker in (
         "[Security.Cryptography.RandomNumberGenerator]::Create",
         "M11_EPHEMERAL_SECRET_MANIFESTS_OK",
@@ -487,7 +434,6 @@ def validate_sources(guard: Guard) -> None:
         "rocketmq-fault-driver-rotated",
     ):
         guard.require(marker in secret_generator, f"evidence secret generator marker missing: {marker}")
-    guard.require("test_m11_fault_matrix" in workflow and "deliberate" in tests, "deliberate-violation tests missing")
     guard.require("dynamic" in readme.lower() and "fault" in readme.lower(), "Kubernetes README must document dynamic fault evidence")
 
 

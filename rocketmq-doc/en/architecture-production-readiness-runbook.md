@@ -215,12 +215,19 @@ It records a `93.5 / 100` code/system assessment and is not production certifica
 the six-hour soak, target-hardware comparison, complete disaster recovery, Docker
 images, and real external adapters remain deferred V1 evidence.
 
-The six-hour sampler runs only on the dedicated
-`self-hosted,linux,x64,rocketmq-architecture-evidence` runner. Scheduled or manually
-selected integration runs own the broader architecture contract suites. The dynamic
-workflow generates cryptographically
-random, run-scoped test credentials, authenticates and preloads immutable image
-digests, and never uploads those credential manifests.
+Automated six-hour SLO and Kubernetes fault workflows are retired. Their local
+runners and evidence guards remain available for an explicitly provisioned,
+disposable environment with enough capacity for the complete run. Scheduled or
+manually selected root integration runs still own the broader contract test suites;
+these tests do not execute a live fault cluster or six-hour soak.
+
+Before a live run, verify published images with
+`scripts/verify_service_image_publication.py`, generate cryptographically random
+test credentials with `scripts/new-m11-evidence-secrets.ps1`, and authenticate any
+required registry pulls. Run `scripts/kind-architecture-refactor-e2e.ps1 -Mode Run`
+with `-KeepCluster` to retain the fault cluster. The caller owns candidate promotion,
+cluster deletion, credential cleanup, and registry logout; never upload credential
+manifests with the evidence.
 
 The retained fault cluster is promoted to the candidate digests before the soak.
 `run-architecture-slo-cluster.ps1` then deploys a digest-pinned private Prometheus
