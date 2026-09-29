@@ -44,6 +44,13 @@ break does not change the registered request-header wire contracts.
 Repository-owner approval for the original V1/V2 retirement is recorded in
 [#10790](https://github.com/mxsm/rocketmq-rust/issues/10790).
 
+### Obsolete `RemotingSerializable` derive
+
+Proposed removal: `rocketmq_macros::RemotingSerializable`.
+For current protocol types, derive `serde::Serialize` and import
+`rocketmq_protocol::protocol::RemotingSerializable`. Users of the historical
+local trait must implement it directly.
+
 ### Auth security-contract ownership and policy models
 
 Runtime-neutral security contracts are owned by `rocketmq-security-api`. Import

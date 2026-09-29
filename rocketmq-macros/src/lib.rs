@@ -14,10 +14,8 @@
 
 use proc_macro::TokenStream;
 
-use crate::remoting_serializable::remoting_serializable_inner;
 use crate::request_header_codec::request_header_codec_inner;
 
-mod remoting_serializable;
 mod request_header_codec;
 
 /// Request-header derive. Generates typed map codecs, schema
@@ -25,11 +23,6 @@ mod request_header_codec;
 #[proc_macro_derive(RequestHeaderCodec, attributes(header, required))]
 pub fn request_header_codec(input: TokenStream) -> TokenStream {
     request_header_codec_inner(input)
-}
-
-#[proc_macro_derive(RemotingSerializable)]
-pub fn remoting_serializable(input: TokenStream) -> TokenStream {
-    remoting_serializable_inner(input)
 }
 
 fn snake_to_camel_case(input: &str) -> String {
