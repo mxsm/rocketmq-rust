@@ -20,10 +20,9 @@ jobs:
         with:
           github-token: '${{ secrets.BOT_TOKEN_1 }}'
           script: |
-            // Extract linked issue numbers from the PR description
             const { owner, repo } = context.repo;
             const issueNumbers = context.payload.pull_request.body
-              ?.match(/(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)?(?:\s*)?#(\d+)/gi)
+              ?.match(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+#(\d+)\b/gi)
               ?.map(match => parseInt(match.match(/\d+/)[0])) || [];
             console.log(`========owner '${owner}' repo '${repo}'.`);
             if (issueNumbers.length === 0) {
