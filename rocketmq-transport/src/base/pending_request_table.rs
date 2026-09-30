@@ -426,7 +426,7 @@ impl PendingRequestTable {
         };
         if matches!(&result, PendingRegistrationOutcome::Registered(_)) && !owner.accepting.load(Ordering::Acquire) {
             if let Some(pending) = self.take_token(token) {
-                pending.completion.complete(PendingRequestCompletion::SessionClosed);
+                pending.complete(PendingRequestCompletion::SessionClosed);
             }
             return PendingRegistrationOutcome::SessionClosed;
         }
@@ -453,9 +453,7 @@ impl PendingRequestTable {
         }) else {
             return PendingResponseOutcome::Late;
         };
-        pending
-            .completion
-            .complete(PendingRequestCompletion::Response(response));
+        pending.complete(PendingRequestCompletion::Response(response));
         PendingResponseOutcome::Completed
     }
 
@@ -500,7 +498,7 @@ impl PendingRequestTable {
             let Some(pending) = self.take_token(token) else {
                 continue;
             };
-            pending.completion.complete(cause());
+            pending.complete(cause());
             completed += 1;
         }
         completed
@@ -563,7 +561,7 @@ impl PendingRequestTable {
                 continue;
             };
             pending.owner.retire();
-            pending.completion.complete(cause());
+            pending.complete(cause());
             completed += 1;
         }
         completed
@@ -600,7 +598,7 @@ impl PendingRequestTable {
         let Some(pending) = self.take_token(token) else {
             return false;
         };
-        pending.completion.complete(result);
+        pending.complete(result);
         true
     }
 
@@ -666,9 +664,7 @@ impl PendingRequestGuard {
         let error = Arc::clone(&source);
         if let Some(pending) = self.table.take_token(token) {
             pending.owner.retire();
-            pending
-                .completion
-                .complete(PendingRequestCompletion::OperationalFailure(source));
+            pending.complete(PendingRequestCompletion::OperationalFailure(source));
         }
         error
     }
@@ -683,6 +679,11 @@ impl Drop for PendingRequestGuard {
 }
 
 impl PendingRequest {
+    fn complete(self, result: PendingRequestCompletion) {
+        drop(self._permit);
+        self.completion.complete(result);
+    }
+
     fn age(&self, now: Instant) -> Duration {
         now.saturating_duration_since(self.created_at)
     }

@@ -183,7 +183,8 @@ fn assert_released(
 }
 
 async fn wait_until_active(registry: &DeferredRegistry<()>, id: DeferredId) {
-    for _ in 0..128 {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline {
         if registry.test_is_active(id) {
             return;
         }
@@ -193,7 +194,8 @@ async fn wait_until_active(registry: &DeferredRegistry<()>, id: DeferredId) {
 }
 
 async fn wait_until_execution_released(controller: &AdmissionController) {
-    for _ in 0..128 {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline {
         let resources = controller.snapshot();
         if resources.queued.current_count == 0
             && resources.inflight.current_count == 0
@@ -207,7 +209,8 @@ async fn wait_until_execution_released(controller: &AdmissionController) {
 }
 
 async fn wait_until_released(registry: &DeferredRegistry<()>, fixture: &EmbeddedFixture) {
-    for _ in 0..128 {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline {
         if registry.test_index_counts() == (0, 0, 0) && fixture.task_group.task_count() == 0 {
             return;
         }

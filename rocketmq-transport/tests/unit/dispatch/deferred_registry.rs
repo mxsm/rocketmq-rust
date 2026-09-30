@@ -1615,12 +1615,13 @@ fn panicking_registry_owned_drop_still_seals_shutdown_without_holding_the_lock()
             harness.parts::<PanickingShutdownLease>(harness.identity(218)),
         ))
         .expect("panicking shutdown registration");
-    registration.commit().expect("panicking shutdown commit");
+    let ticket = registry.inner.install_claim_ticket(registration.deferred_id(), 1, 1);
 
     let panic = std::panic::catch_unwind(AssertUnwindSafe(|| registry.shutdown()));
     assert!(panic.is_err());
     assert_eq!(observed.load(Ordering::SeqCst), 1);
     assert!(panicked.load(Ordering::SeqCst));
+    assert_eq!(ticket.resolution(), TicketResolution::RemovedParentCancelled);
     assert_eq!(registry.shutdown(), DeferredRegistryShutdownOutcome::AlreadyClosed);
     assert_eq!(registry.inner.index_counts(), (0, 0, 0));
     assert_eq!(harness.admission.snapshot().waiting_count(), 0);

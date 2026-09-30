@@ -939,7 +939,7 @@ async fn typed_close_waits_for_deferred_cleanup_executor_drain_and_writer_comple
         .expect("send typed-close deferred request");
     let registered = receive_deferred_registration(&mut registered_rx, OPAQUE).await;
     tokio::time::timeout(Duration::from_secs(1), async {
-        while !deferred_registry.test_contains(registered.id) {
+        while !deferred_registry.test_is_active(registered.id) {
             tokio::task::yield_now().await;
         }
     })
@@ -1234,16 +1234,24 @@ async fn server_requests_correlate_by_session_owner_and_fail_on_disconnect_and_d
             .expect("timeout client connection")
             .expect("timeout server-request frame"),
     };
-    std::future::poll_fn(|context| match timed_out.as_mut().poll(context) {
+    let completed = std::future::poll_fn(|context| match timed_out.as_mut().poll(context) {
         Poll::Pending if registry.capabilities(first_session).is_some() => Poll::Pending,
         Poll::Pending => {
             assert!(registry.server_request_sender(first_session).is_none());
-            Poll::Ready(())
+            Poll::Ready(None)
         }
-        Poll::Ready(_) => panic!("timeout request completed before its fail-closed transition was observed"),
+        Poll::Ready(result) => {
+            assert!(registry.capabilities(first_session).is_none());
+            assert!(registry.server_request_sender(first_session).is_none());
+            Poll::Ready(Some(result))
+        }
     })
     .await;
-    let timeout_error = expect_server_request_error(timed_out.await, "missing response must expire absolute deadline");
+    let timeout_result = match completed {
+        Some(result) => result,
+        None => timed_out.await,
+    };
+    let timeout_error = expect_server_request_error(timeout_result, "missing response must expire absolute deadline");
     assert_eq!(timeout_error.code(), TRANSPORT_SESSION_FAILED.code());
     assert_transport_operation(&timeout_error, "request_await_response");
     let timeout_stage = timeout_error

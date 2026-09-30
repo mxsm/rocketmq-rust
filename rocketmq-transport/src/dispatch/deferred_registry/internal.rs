@@ -918,6 +918,16 @@ where
     markers: Vec<(Arc<ClaimMarker<R>>, CleanupCause)>,
 }
 
+struct DetachedTicketNotifications(Vec<(Arc<ClaimTicket>, TicketResolution)>);
+
+impl Drop for DetachedTicketNotifications {
+    fn drop(&mut self) {
+        for (ticket, resolution) in self.0.drain(..) {
+            ticket.publish(resolution);
+        }
+    }
+}
+
 impl<R> Default for DetachedBatch<R>
 where
     R: Send + 'static,
@@ -961,8 +971,9 @@ where
 
     pub(super) fn finish(mut self) -> DeferredRegistryShutdownStats {
         let mut stats = DeferredRegistryShutdownStats::default();
-        for (ticket, resolution) in self.tickets.drain(..) {
-            ticket.publish(resolution);
+        // Publish after cleanup, even if a retained payload panics on drop.
+        let notifications = DetachedTicketNotifications(std::mem::take(&mut self.tickets));
+        for _ in &notifications.0 {
             stats.record_ticket();
         }
         for (entry, entry_cause) in &mut self.entries {
@@ -980,6 +991,7 @@ where
         }
         drop(self.markers);
         drop(self.entries);
+        drop(notifications);
         stats
     }
 }

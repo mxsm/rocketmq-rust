@@ -383,6 +383,11 @@ enum ScopeKey {
 /// RAII ownership of global and scoped admission capacity.
 pub struct AdmissionPermit {
     _permit: ResourcePermit,
+    // Field order returns capacity before publishing Released.
+    release: AdmissionRelease,
+}
+
+struct AdmissionRelease {
     observer: Option<tokio::sync::mpsc::Sender<AdmissionEvent>>,
     resource: AdmissionResource,
     bytes: usize,
@@ -418,24 +423,24 @@ impl PartialFramePermit {
                 let _ = observer.try_send(AdmissionEvent {
                     resource,
                     outcome: AdmissionEventOutcome::Rejected,
-                    bytes: self.permit.bytes,
+                    bytes: self.permit.release.bytes,
                 });
             }
             return Err((Box::new(self), error));
         }
-        if let Some(observer) = &self.permit.observer {
+        if let Some(observer) = &self.permit.release.observer {
             let _ = observer.try_send(AdmissionEvent {
-                resource: self.permit.resource,
+                resource: self.permit.release.resource,
                 outcome: AdmissionEventOutcome::Released,
-                bytes: self.permit.bytes,
+                bytes: self.permit.release.bytes,
             });
             let _ = observer.try_send(AdmissionEvent {
                 resource,
                 outcome: AdmissionEventOutcome::Acquired,
-                bytes: self.permit.bytes,
+                bytes: self.permit.release.bytes,
             });
         }
-        self.permit.resource = resource;
+        self.permit.release.resource = resource;
         Ok(self.permit)
     }
 }
@@ -495,9 +500,11 @@ impl AdmissionScopeHandle {
         self.observe(resource, AdmissionEventOutcome::Acquired, bytes);
         Ok(AdmissionPermit {
             _permit: permit,
-            observer: self.observer.clone(),
-            resource,
-            bytes,
+            release: AdmissionRelease {
+                observer: self.observer.clone(),
+                resource,
+                bytes,
+            },
         })
     }
 
@@ -518,9 +525,11 @@ impl AdmissionScopeHandle {
         self.observe(resource, AdmissionEventOutcome::Acquired, bytes);
         Ok(AdmissionPermit {
             _permit: permit,
-            observer: self.observer.clone(),
-            resource,
-            bytes,
+            release: AdmissionRelease {
+                observer: self.observer.clone(),
+                resource,
+                bytes,
+            },
         })
     }
 
@@ -539,13 +548,13 @@ impl fmt::Debug for AdmissionPermit {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("AdmissionPermit")
-            .field("resource", &self.resource)
-            .field("bytes", &self.bytes)
+            .field("resource", &self.release.resource)
+            .field("bytes", &self.release.bytes)
             .finish_non_exhaustive()
     }
 }
 
-impl Drop for AdmissionPermit {
+impl Drop for AdmissionRelease {
     fn drop(&mut self) {
         if let Some(observer) = &self.observer {
             let _ = observer.try_send(AdmissionEvent {
@@ -708,9 +717,11 @@ impl AdmissionController {
         }
         AdmissionOutcome::Acquired(AdmissionPermit {
             _permit: permit,
-            observer: self.observer.clone(),
-            resource,
-            bytes,
+            release: AdmissionRelease {
+                observer: self.observer.clone(),
+                resource,
+                bytes,
+            },
         })
     }
 
