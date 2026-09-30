@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import os
 import re
 import shutil
@@ -83,10 +84,12 @@ class AgentsRoutingTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
 
-    def assert_routing(self, expected_code: int, expected_message: str) -> None:
+    def assert_routing(
+        self, expected_code: int, expected_message: str, *, powershell_root: str | None = None,
+    ) -> None:
         for name, command in self.shells:
             with self.subTest(shell=name):
-                argument = (["-RepoRoot", str(self.repository)] if name == "PowerShell"
+                argument = (["-RepoRoot", powershell_root or str(self.repository)] if name == "PowerShell"
                             else [self.repository.as_posix()])
                 result = subprocess.run(
                     command + argument, capture_output=True, text=True,
@@ -106,6 +109,33 @@ class AgentsRoutingTests(unittest.TestCase):
         with root_guide.open("a", encoding="utf-8") as guide:
             guide.write("standalone demo/\nfrontend demo/\n")
         self.assert_routing(0, "AGENTS_ROUTING_CHECK_OK standalone_cargo=1 node_projects=1")
+
+    @unittest.skipUnless(os.name == "nt", "Windows path aliases require Windows")
+    def test_windows_short_and_provider_qualified_roots_keep_routes_relative(self) -> None:
+        if not any(name == "PowerShell" for name, _ in self.shells):
+            self.skipTest("PowerShell is required for Windows path alias tests")
+        self.write("frontend demo/package.json", "{}\n")
+        self.write("frontend demo/AGENTS.md", "# Frontend guide\n")
+        with (self.repository / "AGENTS.md").open("a", encoding="utf-8") as guide:
+            guide.write("frontend demo/\n")
+
+        get_short_path = ctypes.WinDLL("kernel32", use_last_error=True).GetShortPathNameW
+        get_short_path.argtypes = (ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32)
+        get_short_path.restype = ctypes.c_uint32
+        native_root = str(self.repository.resolve())
+        required = get_short_path(native_root, None, 0)
+        self.assertGreater(required, 0, "temporary repository must resolve to a Windows path")
+        buffer = ctypes.create_unicode_buffer(required)
+        written = get_short_path(native_root, buffer, required)
+        self.assertGreater(written, 0)
+        self.assertLess(written, required)
+
+        for root in (buffer.value, f"Microsoft.PowerShell.Core\\FileSystem::{native_root}"):
+            with self.subTest(root=root):
+                self.assert_routing(
+                    0, "AGENTS_ROUTING_CHECK_OK standalone_cargo=0 node_projects=1",
+                    powershell_root=root,
+                )
 
     def test_new_standalone_project_requires_local_instructions(self) -> None:
         self.write("new-standalone/Cargo.toml", "[workspace]\nmembers = []\n")

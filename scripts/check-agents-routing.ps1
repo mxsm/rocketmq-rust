@@ -20,7 +20,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$script:RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
+# Resolve-Path preserves short-name and provider-qualified spellings, while
+# file enumeration returns native long paths. Compare the same path form.
+$script:RepoRoot = (Get-Item -LiteralPath $RepoRoot).FullName
 $script:Failures = New-Object System.Collections.Generic.List[string]
 $script:SkipDirectoryNames = @(".git", ".idea", "target", "node_modules", "build", "dist")
 
@@ -33,7 +35,7 @@ function Add-Failure {
 function Convert-ToRepoRelativePath {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $resolved = (Resolve-Path -LiteralPath $Path).Path
+    $resolved = (Get-Item -LiteralPath $Path).FullName
     $rootPrefix = $script:RepoRoot.TrimEnd([char[]]@("\", "/"))
     if ($resolved.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
         return $resolved.Substring($rootPrefix.Length).TrimStart([char[]]@("\", "/")) -replace "\\", "/"

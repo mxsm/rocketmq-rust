@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(ci):** Normalize Windows short-name and provider-qualified roots before AGENTS routing comparisons, preventing false missing-route failures in the scheduled architecture checks ([#11028](https://github.com/mxsm/rocketmq-rust/issues/11028)).
 - **test(sre):** Pin the FinOps PostgreSQL integration test clock and verify UTC daily budget resets, avoiding failures when costs recorded ten minutes earlier fall into the previous day ([#11022](https://github.com/mxsm/rocketmq-rust/issues/11022)).
 - **test(dashboard):** Accept unconfirmed task abortion in the topic guard construction timeout report and explicitly wait for task destruction before checking that no tasks or topic sessions remain ([#11019](https://github.com/mxsm/rocketmq-rust/issues/11019)).
 - **fix(controller):** Replace fixed loopback ports in the Raft controller integration tests with OS-selected addresses and use a bounded leader-state wait, avoiding failures when the former test ports are occupied ([#11012](https://github.com/mxsm/rocketmq-rust/issues/11012)).
