@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **test(sre):** Pin the FinOps PostgreSQL integration test clock and verify UTC daily budget resets, avoiding failures when costs recorded ten minutes earlier fall into the previous day ([#11022](https://github.com/mxsm/rocketmq-rust/issues/11022)).
 - **test(dashboard):** Accept unconfirmed task abortion in the topic guard construction timeout report and explicitly wait for task destruction before checking that no tasks or topic sessions remain ([#11019](https://github.com/mxsm/rocketmq-rust/issues/11019)).
 - **fix(controller):** Replace fixed loopback ports in the Raft controller integration tests with OS-selected addresses and use a bounded leader-state wait, avoiding failures when the former test ports are occupied ([#11012](https://github.com/mxsm/rocketmq-rust/issues/11012)).
 - **fix(deps):** Align the OpenTelemetry API, SDK, and exporters on 0.33.0 with tracing-opentelemetry 0.34.0 to resolve tracing and context type conflicts. Update rand to 0.10.3 and openraft-macros to 0.10.0-alpha.35, synchronize affected standalone lockfiles, and retain the OpenRaft core and runtime pins at 0.10.0-alpha.21 ([#11006](https://github.com/mxsm/rocketmq-rust/issues/11006)).
