@@ -73,7 +73,7 @@ impl ProbeProcessor {
 }
 
 impl RequestProcessor for ProbeProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.seen.lock().push((
             request.original_identity().original_code(),
@@ -84,7 +84,7 @@ impl RequestProcessor for ProbeProcessor {
         request.command_mut().add_ext_field("broker-probe", "mutated");
         let response = RemotingCommand::create_response_command_with_code(ResponseCode::Success)
             .set_opaque(request.original_identity().original_opaque());
-        Ok(HandlerOutcome::Reply(
+        Ok(ResponseAction::Reply(
             RemotingResponse::command(response).expect("probe remoting response"),
         ))
     }
@@ -112,7 +112,7 @@ struct PreMutatingRouter {
 }
 
 impl RequestProcessor for PreMutatingRouter {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         request.command_mut().set_code_mut(MUTATED_CODE);
         request.command_mut().set_opaque_mut(77_777);
         RequestProcessor::process(&mut self.inner, request).await
@@ -138,7 +138,7 @@ struct OrderingProbeRouter {
 }
 
 impl RequestProcessor for OrderingProbeRouter {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         RequestProcessor::process(&mut self.inner, request).await
     }
 

@@ -30,7 +30,7 @@ use crate::long_polling::notification_deferred::service::NotificationDeferredReg
 use crate::long_polling::notification_deferred::service::NotificationRegisterFault;
 use crate::long_polling::notification_deferred::service::PreparedNotificationRegistration;
 
-fn success_reply(polling_full: bool) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+fn success_reply(polling_full: bool) -> crate::broker_error::BrokerResult<ResponseAction> {
     let header = NotificationResponseHeader {
         has_msg: false,
         polling_full,
@@ -38,7 +38,7 @@ fn success_reply(polling_full: bool) -> crate::broker_error::BrokerResult<Handle
     RemotingResponse::command(
         application_remoting_command_factory().create_success_response_command_with_header(header),
     )
-    .map(HandlerOutcome::Reply)
+    .map(ResponseAction::Reply)
     .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
 }
 
@@ -83,7 +83,7 @@ struct ProvenanceProcessor {
 }
 
 impl RequestProcessor for ProvenanceProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         if let Some(prepared) = self.state.lock().prepared.take() {
             let rejection = match self.service.register(prepared, request) {
                 Ok(NotificationDeferredRegisterOutcome::Rejected(rejection)) => rejection,
@@ -119,7 +119,7 @@ struct EmbeddedOriginProcessor {
 }
 
 impl RequestProcessor for EmbeddedOriginProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let error = match self
             .service
             .prepare(request, None, None, NotificationRetainedEstimate::default())
@@ -150,7 +150,7 @@ struct CapacityProcessor {
 }
 
 impl RequestProcessor for CapacityProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let polling_full = match self
             .service
             .prepare(request, None, None, NotificationRetainedEstimate::default())
@@ -183,7 +183,7 @@ struct PostTakeFaultProcessor {
 }
 
 impl RequestProcessor for PostTakeFaultProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let prepared = match self
             .service
             .prepare(request, None, None, NotificationRetainedEstimate::default())
@@ -213,7 +213,7 @@ impl RequestProcessor for PostTakeFaultProcessor {
 }
 
 impl RequestProcessor for OneWayProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let rejection = match self
             .service
             .prepare(request, None, None, NotificationRetainedEstimate::default())

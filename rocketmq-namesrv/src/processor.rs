@@ -40,11 +40,11 @@ use rocketmq_security_api::DetailedDecision;
 use rocketmq_security_api::IngressDecision;
 use rocketmq_security_api::LayerRequirement;
 use rocketmq_transport::api::error_response;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::ResponseObservation;
 use rocketmq_transport::api::ResponseWriteOutcome;
 
@@ -77,7 +77,7 @@ pub enum NameServerRequestProcessorWrapper {
 }
 
 impl RequestProcessor for NameServerRequestProcessorWrapper {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::NameServerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::NameServerResult<ResponseAction> {
         let response = match self {
             NameServerRequestProcessorWrapper::ClientRequestProcessor(processor) => {
                 processor.handle_request(request.command_mut()).await
@@ -390,7 +390,7 @@ impl NameServerRequestProcessor {
 }
 
 impl RequestProcessor for NameServerRequestProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::NameServerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::NameServerResult<ResponseAction> {
         let auth_context = RemotingAuthContext::from_request(request)
             .map_err(|error| crate::namesrv_error::from_error(error.into()))?;
         let original_code = request.original_identity().original_code();
@@ -438,13 +438,13 @@ async fn processor_response(
     }
 }
 
-pub(crate) fn response_outcome(response: Option<RemotingCommand>) -> crate::NameServerResult<HandlerOutcome> {
+pub(crate) fn response_outcome(response: Option<RemotingCommand>) -> crate::NameServerResult<ResponseAction> {
     let Some(response) = response else {
         return Err(crate::namesrv_error::invariant("namesrv.processor.response_missing"));
     };
     let response = RemotingResponse::from_command(response)
         .map_err(|error| crate::namesrv_error::response_source("namesrv.remoting_response", error))?;
-    Ok(HandlerOutcome::Reply(response))
+    Ok(ResponseAction::Reply(response))
 }
 
 fn record_admission_metric(

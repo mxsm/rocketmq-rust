@@ -41,11 +41,11 @@ use crate::admission::ResourceLimit;
 use crate::contract::TransportContractViolation;
 use crate::dispatch::AuthenticationState;
 use crate::dispatch::DeferredResponderOutcome;
-use crate::dispatch::HandlerOutcome;
 use crate::dispatch::ProtocolNoResponseReason;
 use crate::dispatch::RemotingRequest;
 use crate::dispatch::RequestMeta;
 use crate::dispatch::RequestOrigin;
+use crate::dispatch::ResponseAction;
 use crate::dispatch::ResponseBody;
 use crate::dispatch::ResponseCompletionOutcome;
 use crate::dispatch::ResponseDisposition;
@@ -142,7 +142,7 @@ impl Clone for TestProcessor {
 }
 
 impl RequestProcessor for TestProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         self.state.processes.fetch_add(1, Ordering::SeqCst);
         *self.state.request_body_pointer.lock().expect("request pointer lock") =
             request.command().body().map(|body| body.as_ptr() as usize);
@@ -170,7 +170,7 @@ impl RequestProcessor for TestProcessor {
             Behavior::Reply | Behavior::Reject | Behavior::Wait => {
                 request.command_mut().set_code_ref(999_001);
                 request.command_mut().set_opaque_mut(-900);
-                Ok(HandlerOutcome::Reply(
+                Ok(ResponseAction::Reply(
                     RemotingResponse::bytes(
                         RemotingCommand::create_response_command_with_code(71).set_opaque(-777),
                         self.response.clone(),
@@ -179,7 +179,7 @@ impl RequestProcessor for TestProcessor {
                 ))
             }
             Behavior::Error => Err(crate::error_helpers::argument_invalid()),
-            Behavior::NoReply => Ok(HandlerOutcome::NoReply(
+            Behavior::NoReply => Ok(ResponseAction::NoReply(
                 request
                     .protocol_no_response(ProtocolNoResponseReason::CallbackHandled)
                     .map_err(|_| crate::error_helpers::argument_invalid())?,
@@ -189,7 +189,7 @@ impl RequestProcessor for TestProcessor {
                     request.take_deferred_responder(),
                     DeferredResponderOutcome::Unavailable
                 ));
-                Ok(HandlerOutcome::Reply(
+                Ok(ResponseAction::Reply(
                     RemotingResponse::bytes(
                         RemotingCommand::create_response_command_with_code(71).set_opaque(-777),
                         self.response.clone(),
@@ -197,21 +197,21 @@ impl RequestProcessor for TestProcessor {
                     .expect("remoting response"),
                 ))
             }
-            Behavior::UnclaimedDeferred | Behavior::ForgedDeferred => Ok(HandlerOutcome::Deferred(
+            Behavior::UnclaimedDeferred | Behavior::ForgedDeferred => Ok(ResponseAction::Deferred(
                 crate::dispatch::DeferredRegistration::for_test(request.original_identity().request_id()),
             )),
-            Behavior::OneWayNoReply => Ok(HandlerOutcome::NoReply(crate::dispatch::ProtocolNoResponse::for_test(
+            Behavior::OneWayNoReply => Ok(ResponseAction::NoReply(crate::dispatch::ProtocolNoResponse::for_test(
                 request.original_identity().request_id(),
                 request.original_identity().original_code(),
                 ProtocolNoResponseReason::CallbackHandled,
             ))),
-            Behavior::CrossRequestDeferred => Ok(HandlerOutcome::Deferred(
+            Behavior::CrossRequestDeferred => Ok(ResponseAction::Deferred(
                 crate::dispatch::DeferredRegistration::for_test(
                     crate::dispatch::RequestId::real(9_999_991, 1).expect("foreign request id"),
                 ),
             )),
             Behavior::CrossRequestNoReply => {
-                Ok(HandlerOutcome::NoReply(crate::dispatch::ProtocolNoResponse::for_test(
+                Ok(ResponseAction::NoReply(crate::dispatch::ProtocolNoResponse::for_test(
                     crate::dispatch::RequestId::real(9_999_992, 1).expect("foreign request id"),
                     request.original_identity().original_code(),
                     ProtocolNoResponseReason::CallbackHandled,

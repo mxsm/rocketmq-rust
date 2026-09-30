@@ -19,11 +19,11 @@ use rocketmq_protocol::protocol::header::notification_request_header::Notificati
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_transport::api::error_response as remoting_error_response;
 use rocketmq_transport::api::DeferredResponderOutcome;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 
 use super::core::NotificationCoreOutcome;
 use super::response::compose_notification_response;
@@ -41,7 +41,7 @@ impl<MS> RequestProcessor for NotificationProcessor<MS>
 where
     MS: BrokerReadWriteStore + Send + Sync + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.process_shared(request).await
     }
 }
@@ -53,7 +53,7 @@ where
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         if RequestCode::from(request.original_identity().original_code()) != RequestCode::Notification {
             return command_outcome(remoting_error_response(
                 PublicErrorView::descriptor_only(&rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED),
@@ -125,7 +125,7 @@ where
                     };
                 match service.register(prepared, request) {
                     Ok(NotificationDeferredRegisterOutcome::Registered(registration)) => {
-                        Ok(HandlerOutcome::Deferred(*registration))
+                        Ok(ResponseAction::Deferred(*registration))
                     }
                     Ok(NotificationDeferredRegisterOutcome::Rejected(rejection)) => {
                         self.register_rejection_outcome(*rejection)
@@ -144,7 +144,7 @@ where
     fn prepare_rejection_outcome(
         &self,
         rejection: NotificationDeferredPrepareRejection,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         match rejection {
             NotificationDeferredPrepareRejection::Deadline(_) | NotificationDeferredPrepareRejection::OneWay => {
                 command_outcome(compose_notification_response(
@@ -177,7 +177,7 @@ where
     fn prepare_failure_outcome(
         &self,
         failure: NotificationDeferredPrepareFailure,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         match failure {
             NotificationDeferredPrepareFailure::Header(_) => self.invalid_reply(0),
             NotificationDeferredPrepareFailure::WallTimeOverflow | NotificationDeferredPrepareFailure::Deadline(_) => {
@@ -198,7 +198,7 @@ where
     fn register_rejection_outcome(
         &self,
         rejection: NotificationDeferredRegisterRejection,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         match rejection {
             NotificationDeferredRegisterRejection::ServiceClosedBeforeTake
             | NotificationDeferredRegisterRejection::ServiceClosedAfterTake => self.reply_with_code(
@@ -240,7 +240,7 @@ where
     fn register_failure_outcome(
         &self,
         failure: NotificationDeferredRegisterFailure,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         match failure {
             NotificationDeferredRegisterFailure::IdentityExhausted => self.internal_reply(0),
             NotificationDeferredRegisterFailure::RegistryContract(violation) => Err(crate::broker_error::internal(
@@ -265,7 +265,7 @@ where
         &self,
         code: ResponseCode,
         remark: &'static str,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         command_outcome(
             self.context
                 .command_factory
@@ -273,7 +273,7 @@ where
         )
     }
 
-    fn invalid_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    fn invalid_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<ResponseAction> {
         command_outcome(remoting_error_response(
             PublicErrorView::descriptor_only(&rocketmq_error::CORE_ARGUMENT_INVALID),
             RemotingErrorTarget::Reply {
@@ -283,7 +283,7 @@ where
         ))
     }
 
-    fn internal_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    fn internal_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<ResponseAction> {
         command_outcome(remoting_error_response(
             PublicErrorView::descriptor_only(&rocketmq_error::CORE_INTERNAL_FAILURE),
             RemotingErrorTarget::Reply {
@@ -315,8 +315,8 @@ fn normalize_born_time(command: &mut rocketmq_protocol::protocol::remoting_comma
 
 fn command_outcome(
     command: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
-) -> crate::broker_error::BrokerResult<HandlerOutcome> {
-    BrokerResponseParts::command(command)?.into_handler_outcome()
+) -> crate::broker_error::BrokerResult<ResponseAction> {
+    BrokerResponseParts::command(command)?.into_response_action()
 }
 
 #[cfg(test)]
@@ -336,9 +336,9 @@ mod tests {
     use rocketmq_transport::api::DeferredAdmission;
     use rocketmq_transport::api::DeferredExpiryMargins;
     use rocketmq_transport::api::DeferredWaitLimits;
-    use rocketmq_transport::api::HandlerOutcome;
     use rocketmq_transport::api::RemotingRequest;
     use rocketmq_transport::api::RequestProcessor;
+    use rocketmq_transport::api::ResponseAction;
 
     use super::super::tests::notification_processor_for_test;
     use super::super::NotificationProcessor;
@@ -359,7 +359,7 @@ mod tests {
         async fn process(
             &mut self,
             request: &mut RemotingRequest,
-        ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+        ) -> crate::broker_error::BrokerResult<ResponseAction> {
             self.inner.process_shared(request).await
         }
     }

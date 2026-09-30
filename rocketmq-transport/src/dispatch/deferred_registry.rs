@@ -450,7 +450,7 @@ where
     /// Registers an already-built resume request provisionally.
     ///
     /// The returned sealed guard must be returned through
-    /// [`super::HandlerOutcome::Deferred`] before the dispatcher commits it.
+    /// [`super::ResponseAction::Deferred`] before the dispatcher commits it.
     /// Lifecycle checkpoints resolve simultaneous stops in parent-cancellation,
     /// session-close, then deadline order. A stop published after the final
     /// registry publication checkpoint is handled by deferred-session cleanup.
@@ -817,7 +817,7 @@ where
 /// Sealed proof that one provisional registration matches a handler request.
 ///
 /// The registry remains generic, but this affine proof is deliberately
-/// non-generic so [`super::HandlerOutcome`] stays a closed public enum.
+/// non-generic so [`super::ResponseAction`] stays a closed public enum.
 ///
 /// ```compile_fail
 /// use rocketmq_transport::api::{DeferredId, DeferredRegistration, RequestId};

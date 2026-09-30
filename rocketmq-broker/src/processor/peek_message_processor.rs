@@ -36,11 +36,11 @@ use rocketmq_store::BrokerStatsManager;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
 use rocketmq_transport::api::error_response as remoting_error_response;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use tracing::error;
 use tracing::warn;
 
@@ -202,7 +202,7 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
 }
 
 impl<MS: BrokerReadWriteStore + 'static> RequestProcessor for PeekMessageProcessor<MS> {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.process_shared(request).await
     }
 }
@@ -211,7 +211,7 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let original_opaque = request.original_identity().original_opaque();
         let command_factory = self.context.command_factory;
         let request_source = request_origin_label(request.origin());
@@ -690,7 +690,7 @@ mod tests {
     where
         P: RequestProcessor + Send,
     {
-        async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome> {
+        async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction> {
             self.processor.lock().await.process(request).await
         }
     }

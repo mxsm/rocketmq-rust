@@ -1128,9 +1128,9 @@ mod inbound_tests {
     use rocketmq_runtime::RuntimeContext;
 
     use super::*;
-    use crate::dispatch::HandlerOutcome;
     use crate::dispatch::RemotingRequest;
     use crate::dispatch::RemotingResponse;
+    use crate::dispatch::ResponseAction;
 
     #[derive(Clone)]
     struct EchoProcessor;
@@ -1139,11 +1139,11 @@ mod inbound_tests {
         async fn process(
             &mut self,
             request: &mut RemotingRequest,
-        ) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+        ) -> Result<ResponseAction, rocketmq_error::SharedError> {
             let response = RemotingCommand::create_response_command_with_code(request.command().code() + 1);
             let response = RemotingResponse::bytes(response, Bytes::from_static(b"client-inbound"))
                 .map_err(|_| crate::error_helpers::protocol_response_failed("client_inbound_test.remoting_response"))?;
-            Ok(HandlerOutcome::Reply(response))
+            Ok(ResponseAction::Reply(response))
         }
     }
 

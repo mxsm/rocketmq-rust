@@ -665,8 +665,8 @@ mod tests {
     use rocketmq_store::DefaultMappedFile;
     use rocketmq_store::MappedFile;
     use rocketmq_store::SelectMappedBufferResult;
-    use rocketmq_transport::api::HandlerOutcome;
     use rocketmq_transport::api::RemotingResponse;
+    use rocketmq_transport::api::ResponseAction;
     use rocketmq_transport::api::ResponseBodyKind;
 
     fn response_head() -> RemotingCommand {
@@ -677,7 +677,7 @@ mod tests {
         let PullMessageResult::Reply(parts) = result.expect("valid Pull result") else {
             panic!("expected an immediate Pull reply");
         };
-        let HandlerOutcome::Reply(response) = parts.into_handler_outcome().expect("valid Pull remoting response")
+        let ResponseAction::Reply(response) = parts.into_response_action().expect("valid Pull remoting response")
         else {
             panic!("immediate Pull parts must map to a Reply outcome");
         };
@@ -691,7 +691,7 @@ mod tests {
         let PullMessageResult::Reply(parts) = immediate else {
             panic!("immediate Pull result must remain a reply");
         };
-        let HandlerOutcome::Reply(response) = parts.into_handler_outcome().expect("valid empty Pull response") else {
+        let ResponseAction::Reply(response) = parts.into_response_action().expect("valid empty Pull response") else {
             panic!("immediate Pull parts must map to a Reply outcome");
         };
         assert_eq!(response.body_kind(), ResponseBodyKind::Empty);

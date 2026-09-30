@@ -46,14 +46,14 @@ struct OpaqueRegistrationProcessor {
 }
 
 impl RequestProcessor for OpaqueRegistrationProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let opaque = request.command().opaque();
         let prepared = prepared_or_test_error(self.service.prepare(request, PopLiteRetainedEstimate::default()))?;
         let registration = registration_or_test_error(self.service.register(prepared, request))?;
         self.registrations
             .send((opaque, registration.deferred_id()))
             .map_err(|_| crate::broker_error::invalid_argument("opaque registration observer closed"))?;
-        Ok(HandlerOutcome::Deferred(registration))
+        Ok(ResponseAction::Deferred(registration))
     }
 
     fn request_ordering(&self, _ingress: rocketmq_transport::api::IngressRequestView<'_>) -> RequestOrdering {
@@ -309,7 +309,7 @@ struct CommitWindowProcessor {
 }
 
 impl RequestProcessor for CommitWindowProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let prepared = prepared_or_test_error(self.service.prepare(request, PopLiteRetainedEstimate::default()))?;
         let registration = registration_or_test_error(self.service.register(prepared, request))?;
         self.registrations
@@ -320,7 +320,7 @@ impl RequestProcessor for CommitWindowProcessor {
             .await
             .map_err(|_| crate::broker_error::invalid_argument("commit-window release closed"))?
             .forget();
-        Ok(HandlerOutcome::Deferred(registration))
+        Ok(ResponseAction::Deferred(registration))
     }
 }
 
@@ -358,7 +358,7 @@ async fn pop_lite_deferred_registration_commit_window_blocks_claim_until_activat
     tokio::task::yield_now().await;
     assert!(
         !claim_task.is_finished(),
-        "claim waits for HandlerOutcome::Deferred commit"
+        "claim waits for ResponseAction::Deferred commit"
     );
 
     release.add_permits(1);

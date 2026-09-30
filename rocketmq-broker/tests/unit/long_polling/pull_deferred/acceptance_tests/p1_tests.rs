@@ -51,7 +51,7 @@ struct ProvenanceProcessor {
 }
 
 impl RequestProcessor for ProvenanceProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let prior = self.state.lock().prepared.take();
         if let Some(prior) = prior {
             let rejection = match self.service.register(prior, request) {
@@ -165,7 +165,7 @@ struct PreTakeProbeProcessor {
 }
 
 impl RequestProcessor for PreTakeProbeProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let header = request
             .command()
             .decode_command_custom_header::<PullMessageRequestHeader>()?;
@@ -186,7 +186,7 @@ impl RequestProcessor for PreTakeProbeProcessor {
             }
             Ok(PullDeferredPrepareOutcome::Rejected(rejection)) => {
                 self.observed.lock().push(rejection.kind());
-                Ok(HandlerOutcome::Reply(rejection.into_fallback()))
+                Ok(ResponseAction::Reply(rejection.into_fallback()))
             }
             Err(error) => Err(crate::broker_error::invalid_argument(error.to_string())),
         }

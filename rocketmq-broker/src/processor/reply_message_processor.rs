@@ -43,12 +43,12 @@ use rocketmq_store::StatsType;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreError;
 use rocketmq_transport::api::error_response as remoting_error_response;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestControlView;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::ServerRequestCommand;
 use rocketmq_transport::api::ServerRequestOutcome;
 use rocketmq_transport::api::ServerRequestSender;
@@ -294,7 +294,7 @@ where
     MS: BrokerWriteStore + BrokerMasterAddressStore + 'static,
     TS: TransactionalMessageService + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.process_shared(request).await
     }
 }
@@ -319,7 +319,7 @@ where
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let original = request.original_identity();
         let inbound_peer = reply_request_peer(request.origin())?;
         let result = self
@@ -344,7 +344,7 @@ where
                         opaque: original.original_opaque(),
                     },
                 ))?
-                .into_handler_outcome()
+                .into_response_action()
             }
             Err(error) => Err(error),
         }
@@ -379,7 +379,7 @@ where
         original_code: i32,
         original_opaque: i32,
         request: &mut RemotingCommand,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let request_code = RequestCode::from(original_code);
         info!("ReplyMessageProcessor received request code: {:?}", request_code);
         match request_code {
@@ -394,7 +394,7 @@ where
                     opaque: original_opaque,
                 },
             ))?
-            .into_handler_outcome(),
+            .into_response_action(),
         }
     }
 
@@ -404,7 +404,7 @@ where
         control: RequestControlView,
         original_opaque: i32,
         request: &mut RemotingCommand,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let policy = self.inner.context.policy.snapshot();
         let mut request_header = parse_request_header(request)?;
         let request_properties = MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
@@ -519,10 +519,10 @@ where
         &self,
         mut response: RemotingCommand,
         mut send_message_context: SendMessageContext,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.inner
             .execute_send_message_hook_after(Some(&mut response), &mut send_message_context);
-        BrokerResponseParts::from_command(response)?.into_handler_outcome()
+        BrokerResponseParts::from_command(response)?.into_response_action()
     }
 
     // Build MessageExtBrokerInner to improve readability
@@ -834,7 +834,7 @@ mod tests {
         fn call_shared<'a>(
             leaf: &'a Arc<super::ReplyMessageProcessor<StorePorts, TransactionService>>,
             request: &'a mut super::RemotingRequest,
-        ) -> impl Future<Output = crate::broker_error::BrokerResult<super::HandlerOutcome>> + 'a {
+        ) -> impl Future<Output = crate::broker_error::BrokerResult<super::ResponseAction>> + 'a {
             leaf.process_shared(request)
         }
 

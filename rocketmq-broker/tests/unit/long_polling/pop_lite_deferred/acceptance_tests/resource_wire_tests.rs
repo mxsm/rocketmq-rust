@@ -55,7 +55,7 @@ fn capacity_failure(rejection: PopLiteDeferredPrepareRejection) -> CapacityFailu
     }
 }
 
-fn polling_full_reply(request: &RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+fn polling_full_reply(request: &RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
     let request_header = request
         .command()
         .decode_command_custom_header::<PopLiteMessageRequestHeader>()?;
@@ -69,14 +69,14 @@ fn polling_full_reply(request: &RemotingRequest) -> crate::broker_error::BrokerR
         },
         PopLiteResponseKind::PollingFull,
     )
-    .map(HandlerOutcome::Reply)
+    .map(ResponseAction::Reply)
 }
 
-fn held_reply() -> crate::broker_error::BrokerResult<HandlerOutcome> {
+fn held_reply() -> crate::broker_error::BrokerResult<ResponseAction> {
     RemotingResponse::command(RemotingCommand::create_response_command_with_code(
         ResponseCode::Success,
     ))
-    .map(HandlerOutcome::Reply)
+    .map(ResponseAction::Reply)
     .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
 }
 
@@ -88,7 +88,7 @@ struct CapacityWireProcessor {
 }
 
 impl RequestProcessor for CapacityWireProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         match self.service.prepare(request, PopLiteRetainedEstimate::default()) {
             Ok(PopLiteDeferredPrepareOutcome::Prepared(prepared)) => {
                 self.held.lock().push(*prepared);

@@ -117,7 +117,7 @@ impl TerminalDeferredProcessor {
 }
 
 impl RequestProcessor for TerminalDeferredProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         let responder = terminal_responder(request.take_deferred_responder());
         let retained = DeferredRegistry::<()>::try_retained_size(DeferredRetainedSizeParts::new(0))
             .map_err(|_| crate::error_helpers::argument_invalid())?;
@@ -131,7 +131,7 @@ impl RequestProcessor for TerminalDeferredProcessor {
         }
         *self.registered.lock().expect("registered id lock") = Some(registration.deferred_id());
         self.registered_notify.notify_waiters();
-        Ok(HandlerOutcome::Deferred(registration))
+        Ok(ResponseAction::Deferred(registration))
     }
 }
 

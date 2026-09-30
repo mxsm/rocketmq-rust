@@ -39,9 +39,9 @@ use rocketmq_store::FlushDiskType;
 use rocketmq_store::MessageFilter;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageStatus;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 
 use crate::broker_runtime::BrokerMessageStore;
 use crate::broker_runtime::BrokerRuntime;
@@ -65,7 +65,7 @@ const MATCH_TAG: &str = "match";
 struct PullLeaf(Arc<PullMessageProcessor<BrokerMessageStore>>);
 
 impl RequestProcessor for PullLeaf {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.0.process_shared(request).await
     }
 }
@@ -77,7 +77,7 @@ struct PopLeaf {
 }
 
 impl RequestProcessor for PopLeaf {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let prepared = match self.service.prepare(
             request,
             None,
@@ -97,7 +97,7 @@ impl RequestProcessor for PopLeaf {
             }
             Err(error) => panic!("POP frozen-filter registration failed: {:?}", error.kind()),
         };
-        Ok(HandlerOutcome::Deferred(registration))
+        Ok(ResponseAction::Deferred(registration))
     }
 }
 
@@ -121,7 +121,7 @@ impl MessageFilter for FrozenPopTagFilter {
 struct NotificationLeaf(Arc<NotificationProcessor<BrokerMessageStore>>);
 
 impl RequestProcessor for NotificationLeaf {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.0.process_shared(request).await
     }
 }

@@ -45,12 +45,12 @@ use rocketmq_transport::api::DeferredExpiryMargins;
 use rocketmq_transport::api::DeferredId;
 use rocketmq_transport::api::DeferredWaitLimits;
 use rocketmq_transport::api::DeferredWakeReason;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestOrdering;
 use rocketmq_transport::api::RequestOrderingKey;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::ServerConfig;
 use rocketmq_transport::api::TransportServer;
 use rocketmq_transport::test_support::Connection;
@@ -319,7 +319,7 @@ struct PullDeferredTestProcessor {
 }
 
 impl RequestProcessor for PullDeferredTestProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         if request.command().code() == SENTINEL_CODE {
             self.barrier.commit_observed.notify_one();
             return success_reply();
@@ -397,7 +397,7 @@ impl RequestProcessor for PullDeferredTestProcessor {
             self.barrier.before_outcome.notify_one();
             self.barrier.release_outcome.notified().await;
         }
-        Ok(HandlerOutcome::Deferred(registration))
+        Ok(ResponseAction::Deferred(registration))
     }
 
     fn request_ordering(&self, _ingress: rocketmq_transport::api::IngressRequestView<'_>) -> RequestOrdering {
@@ -405,11 +405,11 @@ impl RequestProcessor for PullDeferredTestProcessor {
     }
 }
 
-fn success_reply() -> crate::broker_error::BrokerResult<HandlerOutcome> {
+fn success_reply() -> crate::broker_error::BrokerResult<ResponseAction> {
     RemotingResponse::command(RemotingCommand::create_response_command_with_code(
         ResponseCode::Success,
     ))
-    .map(HandlerOutcome::Reply)
+    .map(ResponseAction::Reply)
     .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
 }
 

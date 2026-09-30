@@ -47,7 +47,7 @@ struct PerRequestFilterProcessor {
 }
 
 impl RequestProcessor for PerRequestFilterProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let header = request
             .command()
             .decode_command_custom_header::<NotificationRequestHeader>()?;
@@ -64,7 +64,7 @@ impl RequestProcessor for PerRequestFilterProcessor {
         ))?;
         let registration = registration_or_test_error(self.service.register(prepared, request))?;
         let _ = self.registrations.send(());
-        Ok(HandlerOutcome::Deferred(registration))
+        Ok(ResponseAction::Deferred(registration))
     }
 
     fn request_ordering(&self, _ingress: rocketmq_transport::api::IngressRequestView<'_>) -> RequestOrdering {

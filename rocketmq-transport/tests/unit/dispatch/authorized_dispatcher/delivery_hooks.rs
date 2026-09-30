@@ -46,8 +46,8 @@ struct FileReplyProcessor {
 }
 
 impl RequestProcessor for FileReplyProcessor {
-    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
-        Ok(HandlerOutcome::Reply(
+    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
+        Ok(ResponseAction::Reply(
             self.state
                 .plan
                 .lock()

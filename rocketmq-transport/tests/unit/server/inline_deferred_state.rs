@@ -33,12 +33,12 @@ use super::DeferredRequest;
 use super::DeferredRetainedSizeParts;
 use super::DeferredWaitLimits;
 use super::DeferredWakeReason;
-use super::HandlerOutcome;
 use super::ProtocolNoResponseReason;
 use super::RejectRequestDecision;
 use super::RemotingRequest;
 use super::RemotingResponse;
 use super::RequestProcessor;
+use super::ResponseAction;
 use super::TransportServer;
 use crate::dispatch::DeferredAdmissionAcquireOutcome;
 use crate::dispatch::DeferredRegistryOutcome;
@@ -59,10 +59,10 @@ struct ConstructionProbeProcessor {
 }
 
 impl RequestProcessor for ConstructionProbeProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         match request.command().code() {
             ERROR_CODE => Err(crate::error_helpers::argument_invalid()),
-            NO_REPLY_CODE => Ok(HandlerOutcome::NoReply(
+            NO_REPLY_CODE => Ok(ResponseAction::NoReply(
                 request
                     .protocol_no_response(ProtocolNoResponseReason::CallbackHandled)
                     .map_err(|_| crate::error_helpers::argument_invalid())?,
@@ -107,13 +107,13 @@ impl RequestProcessor for ConstructionProbeProcessor {
                 self.registrations
                     .send(registration.deferred_id())
                     .map_err(|_| crate::error_helpers::argument_invalid())?;
-                Ok(HandlerOutcome::Deferred(registration))
+                Ok(ResponseAction::Deferred(registration))
             }
             REPLY_CODE => RemotingResponse::bytes(
                 RemotingCommand::create_response_command_with_code(ResponseCode::Success),
                 Bytes::from_static(b"inline-without-deferred-state"),
             )
-            .map(HandlerOutcome::Reply)
+            .map(ResponseAction::Reply)
             .map_err(|_| crate::error_helpers::argument_invalid()),
             _ => Err(crate::error_helpers::argument_invalid()),
         }

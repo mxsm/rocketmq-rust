@@ -196,7 +196,7 @@ async fn take_failures_are_exact_and_only_a_success_allocates_deferred_state() {
     let _ = completed
         .resolve(
             ordinary,
-            crate::dispatch::HandlerOutcome::Reply(remoting_response(ordinary.original_opaque())),
+            crate::dispatch::ResponseAction::Reply(remoting_response(ordinary.original_opaque())),
         )
         .expect("inline reply completes the slot");
     assert!(matches!(

@@ -43,11 +43,11 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::ProtocolNoResponseReason;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::SessionView;
 use rocketmq_transport::api::TransportContractViolation;
 use tracing::debug;
@@ -82,7 +82,7 @@ impl RequestProcessor for ClientRemotingProcessor {
     async fn process(
         &mut self,
         request: &mut RemotingRequest,
-    ) -> std::result::Result<HandlerOutcome, rocketmq_error::SharedError> {
+    ) -> std::result::Result<ResponseAction, rocketmq_error::SharedError> {
         let remote_address = match request.session() {
             SessionView::Network { remote_addr, .. } => *remote_addr,
             SessionView::Embedded { .. } => SocketAddr::from(([127, 0, 0, 1], 0)),
@@ -93,11 +93,11 @@ impl RequestProcessor for ClientRemotingProcessor {
         let response = self.process_command(remote_address, request.command_mut()).await?;
 
         if let Some(response) = response {
-            return Ok(HandlerOutcome::Reply(Self::remoting_response(response)?));
+            return Ok(ResponseAction::Reply(Self::remoting_response(response)?));
         }
         if request.original_identity().is_one_way() {
             let response = self.remoting_command_factory.create_success_response_command();
-            return Ok(HandlerOutcome::Reply(Self::remoting_response(response)?));
+            return Ok(ResponseAction::Reply(Self::remoting_response(response)?));
         }
         let reason = match request_code {
             RequestCode::CheckTransactionState | RequestCode::ResetConsumerClientOffset => {
@@ -117,7 +117,7 @@ impl RequestProcessor for ClientRemotingProcessor {
         let no_response = request
             .protocol_no_response(reason)
             .map_err(protocol_no_response_contract_error)?;
-        Ok(HandlerOutcome::NoReply(no_response))
+        Ok(ResponseAction::NoReply(no_response))
     }
 }
 

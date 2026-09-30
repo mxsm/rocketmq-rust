@@ -17,9 +17,9 @@ use std::future::Future;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreError;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestControlView;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::TransportContractViolation;
 
 #[derive(Clone)]
@@ -72,12 +72,12 @@ pub(crate) enum StoreHookCompletion {
 }
 
 pub(crate) struct StructuredStoreReply {
-    outcome: HandlerOutcome,
+    outcome: ResponseAction,
     hook_completion: StoreHookCompletion,
 }
 
 impl StructuredStoreReply {
-    pub(crate) fn into_parts(self) -> (HandlerOutcome, StoreHookCompletion) {
+    pub(crate) fn into_parts(self) -> (ResponseAction, StoreHookCompletion) {
         (self.outcome, self.hook_completion)
     }
 }
@@ -101,7 +101,7 @@ where
         .map_err(|StoreAwaitStopped| StructuredStoreReplyError::Cancelled)?;
     let (response, hook_completion) = build_response(result);
     let outcome = RemotingResponse::command(response)
-        .map(HandlerOutcome::Reply)
+        .map(ResponseAction::Reply)
         .map_err(StructuredStoreReplyError::from)?;
     Ok(StructuredStoreReply {
         outcome,

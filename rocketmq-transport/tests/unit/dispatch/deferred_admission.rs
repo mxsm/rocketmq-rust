@@ -625,7 +625,7 @@ fn dispatcher_is_fail_closed_until_explicit_configuration_and_then_shares_owner(
         async fn process(
             &mut self,
             _request: &mut crate::dispatch::RemotingRequest,
-        ) -> Result<crate::dispatch::HandlerOutcome, rocketmq_error::SharedError> {
+        ) -> Result<crate::dispatch::ResponseAction, rocketmq_error::SharedError> {
             Err(crate::error_helpers::argument_invalid())
         }
     }

@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::dispatch::HandlerOutcome;
 use crate::dispatch::RemotingRequest;
 use crate::dispatch::RemotingResponse;
+use crate::dispatch::ResponseAction;
 use crate::runtime::processor::RequestProcessor;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
@@ -23,11 +23,11 @@ pub struct DefaultRequestProcessor;
 
 impl RequestProcessor for DefaultRequestProcessor {
     #[inline]
-    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         let response = RemotingCommand::create_response_command_with_code(request.command().code());
         let response = RemotingResponse::command(response).map_err(|_| {
             crate::error_helpers::protocol_response_failed("default_request_processor.remoting_response")
         })?;
-        Ok(HandlerOutcome::Reply(response))
+        Ok(ResponseAction::Reply(response))
     }
 }

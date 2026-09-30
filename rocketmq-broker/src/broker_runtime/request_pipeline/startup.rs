@@ -313,10 +313,10 @@ mod tests {
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
     use rocketmq_transport::api::EmbeddedDispatchOutcome;
-    use rocketmq_transport::api::HandlerOutcome;
     use rocketmq_transport::api::RemotingRequest;
     use rocketmq_transport::api::RemotingResponse;
     use rocketmq_transport::api::RequestProcessor;
+    use rocketmq_transport::api::ResponseAction;
 
     use super::prepared_transport_security;
     use crate::processor::dispatcher::BrokerRequestProcessor;
@@ -332,9 +332,9 @@ mod tests {
         async fn process(
             &mut self,
             _request: &mut RemotingRequest,
-        ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+        ) -> crate::broker_error::BrokerResult<ResponseAction> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            Ok(HandlerOutcome::Reply(RemotingResponse::empty_response(
+            Ok(ResponseAction::Reply(RemotingResponse::empty_response(
                 ResponseCode::Success as i32,
             )))
         }

@@ -49,9 +49,9 @@ pub(super) use crate::dispatch::DeferredParts;
 pub(super) use crate::dispatch::DeferredRegistry;
 pub(super) use crate::dispatch::DeferredRequest;
 pub(super) use crate::dispatch::DeferredRetainedSizeParts;
-pub(super) use crate::dispatch::HandlerOutcome;
 pub(super) use crate::dispatch::ProtocolNoResponseReason;
 pub(super) use crate::dispatch::RemotingRequest;
+pub(super) use crate::dispatch::ResponseAction;
 pub(super) use crate::dispatch::ResponseBodyKind;
 pub(super) use crate::dispatch::ResponseDisposition;
 pub(super) use crate::request_ordering::RequestOrdering;
@@ -120,7 +120,7 @@ impl Clone for TestProcessor {
 }
 
 impl RequestProcessor for TestProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         self.state.processes.fetch_add(1, Ordering::SeqCst);
         self.state.events.lock().expect("event lock").push("process");
         *self.state.request_body_pointer.lock().expect("body pointer lock") =
@@ -130,7 +130,7 @@ impl RequestProcessor for TestProcessor {
             self.state.resume.notified().await;
         }
         match self.behavior {
-            Behavior::Reply | Behavior::WaitReply | Behavior::Reject => Ok(HandlerOutcome::Reply(
+            Behavior::Reply | Behavior::WaitReply | Behavior::Reject => Ok(ResponseAction::Reply(
                 RemotingResponse::bytes(
                     RemotingCommand::create_response_command_with_code(71).set_opaque(-777),
                     Bytes::from_static(b"response body"),
@@ -138,7 +138,7 @@ impl RequestProcessor for TestProcessor {
                 .expect("test remoting response"),
             )),
             Behavior::Error => Err(crate::error_helpers::argument_invalid()),
-            Behavior::NoReply => Ok(HandlerOutcome::NoReply(
+            Behavior::NoReply => Ok(ResponseAction::NoReply(
                 request
                     .protocol_no_response(ProtocolNoResponseReason::CallbackHandled)
                     .map_err(|_| crate::error_helpers::argument_invalid())?,
@@ -147,18 +147,18 @@ impl RequestProcessor for TestProcessor {
                 request
                     .mark_deferred_response_taken()
                     .expect("test request reserves deferred capability");
-                Ok(HandlerOutcome::Deferred(
+                Ok(ResponseAction::Deferred(
                     crate::dispatch::DeferredRegistration::for_test(request.original_identity().request_id()),
                 ))
             }
-            Behavior::UnclaimedDeferred => Ok(HandlerOutcome::Deferred(
+            Behavior::UnclaimedDeferred => Ok(ResponseAction::Deferred(
                 crate::dispatch::DeferredRegistration::for_test(request.original_identity().request_id()),
             )),
             Behavior::ReplyAfterDeferred => {
                 request
                     .mark_deferred_response_taken()
                     .expect("test request reserves deferred capability");
-                Ok(HandlerOutcome::Reply(
+                Ok(ResponseAction::Reply(
                     RemotingResponse::command(RemotingCommand::create_response_command_with_code(75))
                         .expect("reply after deferred plan"),
                 ))

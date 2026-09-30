@@ -35,17 +35,17 @@ mod oneway;
 /// There is deliberately no direct-write bypass variant.
 ///
 /// ```
-/// use rocketmq_transport::api::HandlerOutcome;
+/// use rocketmq_transport::api::ResponseAction;
 ///
-/// fn inspect(outcome: HandlerOutcome) {
+/// fn inspect(outcome: ResponseAction) {
 ///     match outcome {
-///         HandlerOutcome::Reply(response) => {
+///         ResponseAction::Reply(response) => {
 ///             let _ = response.response_code();
 ///         }
-///         HandlerOutcome::Deferred(registration) => {
+///         ResponseAction::Deferred(registration) => {
 ///             let _ = registration.request_id();
 ///         }
-///         HandlerOutcome::NoReply(marker) => {
+///         ResponseAction::NoReply(marker) => {
 ///             let _ = marker.reason();
 ///         }
 ///     }
@@ -53,23 +53,23 @@ mod oneway;
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::HandlerOutcome;
+/// use rocketmq_transport::api::ResponseAction;
 ///
-/// fn outcomes_are_affine(outcome: &HandlerOutcome) {
-///     let _: HandlerOutcome = outcome.clone();
+/// fn outcomes_are_affine(outcome: &ResponseAction) {
+///     let _: ResponseAction = outcome.clone();
 /// }
 /// ```
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::HandlerOutcome;
+/// use rocketmq_transport::api::ResponseAction;
 ///
-/// fn no_direct_write_bypass_exists() -> HandlerOutcome {
-///     HandlerOutcome::AlreadyWritten
+/// fn no_direct_write_bypass_exists() -> ResponseAction {
+///     ResponseAction::AlreadyWritten
 /// }
 /// ```
 #[must_use]
 #[derive(Debug)]
-pub enum HandlerOutcome {
+pub enum ResponseAction {
     /// Return one owned remoting response through canonical response binding and delivery.
     Reply(RemotingResponse),
     /// Complete the inline contract with a sealed deferred-registry proof.
@@ -274,31 +274,31 @@ impl InlineResponseSlot {
     pub(crate) fn resolve(
         &mut self,
         original: OriginalRequestIdentity,
-        outcome: HandlerOutcome,
-    ) -> Result<HandlerOutcome, TransportContractViolation> {
+        outcome: ResponseAction,
+    ) -> Result<ResponseAction, TransportContractViolation> {
         let state = std::mem::replace(&mut self.state, InlineResponseState::Completed);
         drop(self.deferred_seed.take());
         match state {
             InlineResponseState::Open | InlineResponseState::OpenWithDeferred => match outcome {
-                outcome @ HandlerOutcome::Reply(_) => Ok(outcome),
-                HandlerOutcome::Deferred(_) => Err(TransportContractViolation::DeferredResponderNotTaken),
-                HandlerOutcome::NoReply(marker) => {
+                outcome @ ResponseAction::Reply(_) => Ok(outcome),
+                ResponseAction::Deferred(_) => Err(TransportContractViolation::DeferredResponderNotTaken),
+                ResponseAction::NoReply(marker) => {
                     validate_marker(&marker, original)?;
-                    Ok(HandlerOutcome::NoReply(marker))
+                    Ok(ResponseAction::NoReply(marker))
                 }
             },
             InlineResponseState::DeferredTaken => match outcome {
-                HandlerOutcome::Reply(_) => Err(TransportContractViolation::ReplyAfterDeferredTaken),
-                HandlerOutcome::Deferred(registration) => {
+                ResponseAction::Reply(_) => Err(TransportContractViolation::ReplyAfterDeferredTaken),
+                ResponseAction::Deferred(registration) => {
                     if registration.request_id() != original.request_id() {
                         return Err(TransportContractViolation::DeferredRegistrationRequestMismatch {
                             expected: original.request_id(),
                             actual: registration.request_id(),
                         });
                     }
-                    Ok(HandlerOutcome::Deferred(registration))
+                    Ok(ResponseAction::Deferred(registration))
                 }
-                HandlerOutcome::NoReply(_) => Err(TransportContractViolation::NoReplyAfterDeferredTaken),
+                ResponseAction::NoReply(_) => Err(TransportContractViolation::NoReplyAfterDeferredTaken),
             },
             InlineResponseState::Completed => Err(TransportContractViolation::HandlerOutcomeAlreadyCompleted),
         }
@@ -416,8 +416,8 @@ mod tests {
         );
         let registration = DeferredRegistration::for_test(original.request_id());
         assert!(matches!(
-            capable.resolve(original, HandlerOutcome::Deferred(registration)),
-            Ok(HandlerOutcome::Deferred(_))
+            capable.resolve(original, ResponseAction::Deferred(registration)),
+            Ok(ResponseAction::Deferred(_))
         ));
         assert_eq!(
             capable.mark_deferred_taken(original),
@@ -442,8 +442,8 @@ mod tests {
         };
         let allocation = before.as_ptr();
         let mut slot = InlineResponseSlot::disabled();
-        let HandlerOutcome::Reply(response) = slot
-            .resolve(original, HandlerOutcome::Reply(response))
+        let ResponseAction::Reply(response) = slot
+            .resolve(original, ResponseAction::Reply(response))
             .expect("open reply should resolve")
         else {
             panic!("reply should remain a reply");
@@ -462,8 +462,8 @@ mod tests {
         let allocation = before.regions().as_ptr();
         assert_eq!(accesses.load(Ordering::SeqCst), 1);
         let mut slot = InlineResponseSlot::disabled();
-        let HandlerOutcome::Reply(response) = slot
-            .resolve(original, HandlerOutcome::Reply(response))
+        let ResponseAction::Reply(response) = slot
+            .resolve(original, ResponseAction::Reply(response))
             .expect("file reply should resolve")
         else {
             panic!("reply should remain a reply");
@@ -487,13 +487,13 @@ mod tests {
             ProtocolNoResponse::from_original(first, ProtocolNoResponseReason::CallbackHandled).expect("legal marker");
         let mut cross_request = InlineResponseSlot::disabled();
         assert!(matches!(
-            cross_request.resolve(second, HandlerOutcome::NoReply(marker)),
+            cross_request.resolve(second, ResponseAction::NoReply(marker)),
             Err(TransportContractViolation::NoResponseIdentityMismatch)
         ));
         assert!(matches!(
             cross_request.resolve(
                 second,
-                HandlerOutcome::Reply(RemotingResponse::command(response_head(9)).expect("reply"))
+                ResponseAction::Reply(RemotingResponse::command(response_head(9)).expect("reply"))
             ),
             Err(TransportContractViolation::HandlerOutcomeAlreadyCompleted)
         ));
@@ -505,7 +505,7 @@ mod tests {
         };
         let mut policy = InlineResponseSlot::disabled();
         assert!(matches!(
-            policy.resolve(first, HandlerOutcome::NoReply(invalid)),
+            policy.resolve(first, ResponseAction::NoReply(invalid)),
             Err(TransportContractViolation::NoResponsePolicyMismatch { .. })
         ));
 
@@ -513,8 +513,8 @@ mod tests {
             ProtocolNoResponse::from_original(first, ProtocolNoResponseReason::CallbackHandled).expect("legal marker");
         let mut accepted = InlineResponseSlot::disabled();
         assert!(matches!(
-            accepted.resolve(first, HandlerOutcome::NoReply(legal)),
-            Ok(HandlerOutcome::NoReply(_))
+            accepted.resolve(first, ResponseAction::NoReply(legal)),
+            Ok(ResponseAction::NoReply(_))
         ));
     }
 
@@ -544,7 +544,7 @@ mod tests {
             let marker = ProtocolNoResponse::from_original(source, reason).expect("legal marker");
             let mut slot = InlineResponseSlot::disabled();
             assert!(matches!(
-                slot.resolve(other_owner, HandlerOutcome::NoReply(marker)),
+                slot.resolve(other_owner, ResponseAction::NoReply(marker)),
                 Err(TransportContractViolation::NoResponseIdentityMismatch)
             ));
         }
@@ -556,7 +556,7 @@ mod tests {
             ProtocolNoResponse::from_original(first, ProtocolNoResponseReason::CallbackHandled).expect("legal marker");
         let mut same_owner = InlineResponseSlot::disabled();
         assert!(matches!(
-            same_owner.resolve(second, HandlerOutcome::NoReply(marker)),
+            same_owner.resolve(second, ResponseAction::NoReply(marker)),
             Err(TransportContractViolation::NoResponseIdentityMismatch)
         ));
 
@@ -567,7 +567,7 @@ mod tests {
         };
         let mut raw_code = InlineResponseSlot::disabled();
         assert!(matches!(
-            raw_code.resolve(first, HandlerOutcome::NoReply(wrong_code)),
+            raw_code.resolve(first, ResponseAction::NoReply(wrong_code)),
             Err(TransportContractViolation::NoResponseIdentityMismatch)
         ));
 
@@ -582,7 +582,7 @@ mod tests {
         };
         let mut one_way_slot = InlineResponseSlot::disabled();
         assert!(matches!(
-            one_way_slot.resolve(one_way, HandlerOutcome::NoReply(forged)),
+            one_way_slot.resolve(one_way, ResponseAction::NoReply(forged)),
             Err(TransportContractViolation::NoResponsePolicyMismatch { .. })
         ));
     }
@@ -595,7 +595,7 @@ mod tests {
         let registration = DeferredRegistration::with_drop_probe(first.request_id(), Arc::clone(&drops));
         let mut untaken = InlineResponseSlot::deferred_capable();
         assert!(matches!(
-            untaken.resolve(first, HandlerOutcome::Deferred(registration)),
+            untaken.resolve(first, ResponseAction::Deferred(registration)),
             Err(TransportContractViolation::DeferredResponderNotTaken)
         ));
         assert_eq!(drops.load(Ordering::SeqCst), 1);
@@ -604,7 +604,7 @@ mod tests {
         let mut mismatch = InlineResponseSlot::deferred_capable();
         mismatch.mark_deferred_taken(second).expect("take deferred responder");
         assert!(matches!(
-            mismatch.resolve(second, HandlerOutcome::Deferred(registration)),
+            mismatch.resolve(second, ResponseAction::Deferred(registration)),
             Err(TransportContractViolation::DeferredRegistrationRequestMismatch { .. })
         ));
         assert_eq!(drops.load(Ordering::SeqCst), 2);
@@ -616,7 +616,7 @@ mod tests {
         let mut same_owner = InlineResponseSlot::deferred_capable();
         same_owner.mark_deferred_taken(second).expect("take deferred responder");
         assert!(matches!(
-            same_owner.resolve(second, HandlerOutcome::Deferred(registration)),
+            same_owner.resolve(second, ResponseAction::Deferred(registration)),
             Err(TransportContractViolation::DeferredRegistrationRequestMismatch { .. })
         ));
         assert_eq!(drops.load(Ordering::SeqCst), 3);
@@ -630,7 +630,7 @@ mod tests {
         let mut slot = InlineResponseSlot::deferred_capable();
         slot.mark_deferred_taken(original).expect("take deferred responder");
         assert!(matches!(
-            slot.resolve(original, HandlerOutcome::Reply(response)),
+            slot.resolve(original, ResponseAction::Reply(response)),
             Err(TransportContractViolation::ReplyAfterDeferredTaken)
         ));
         assert_eq!(accesses.load(Ordering::SeqCst), 1);
@@ -638,7 +638,7 @@ mod tests {
         assert!(matches!(
             slot.resolve(
                 original,
-                HandlerOutcome::NoReply(
+                ResponseAction::NoReply(
                     ProtocolNoResponse::from_original(original, ProtocolNoResponseReason::CallbackHandled)
                         .expect("legal marker")
                 )
@@ -651,7 +651,7 @@ mod tests {
         assert!(matches!(
             no_reply.resolve(
                 original,
-                HandlerOutcome::NoReply(
+                ResponseAction::NoReply(
                     ProtocolNoResponse::from_original(original, ProtocolNoResponseReason::CallbackHandled)
                         .expect("legal marker")
                 )

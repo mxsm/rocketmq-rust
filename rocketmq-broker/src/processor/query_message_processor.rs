@@ -35,10 +35,10 @@ use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreOperation;
 use rocketmq_transport::api::error_response as remoting_error_response;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use tracing::info;
 use tracing::warn;
 
@@ -150,8 +150,8 @@ impl QueryResponseParts {
         Ok(parts)
     }
 
-    fn into_handler_outcome(self) -> crate::broker_error::BrokerResult<HandlerOutcome> {
-        self.into_broker_response_parts()?.into_handler_outcome()
+    fn into_response_action(self) -> crate::broker_error::BrokerResult<ResponseAction> {
+        self.into_broker_response_parts()?.into_response_action()
     }
 }
 
@@ -159,7 +159,7 @@ impl<S> RequestProcessor for QueryMessageProcessor<S>
 where
     S: QueryMessageStore + Clone + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.process_shared(request).await
     }
 }
@@ -171,7 +171,7 @@ where
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let original = request.original_identity();
         match self
             .process_command(
@@ -193,7 +193,7 @@ where
                         opaque: original.original_opaque(),
                     },
                 ))?
-                .into_handler_outcome()
+                .into_response_action()
             }
             Err(error) => Err(error),
         }
@@ -241,7 +241,7 @@ where
         request: &mut RemotingCommand,
         original_code: i32,
         original_opaque: i32,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let request_code = RequestCode::from(original_code);
         info!("QueryMessageProcessor received request code: {:?}", request_code);
         let parts = match request_code {
@@ -261,7 +261,7 @@ where
                 ))
             }
         };
-        parts.into_handler_outcome()
+        parts.into_response_action()
     }
 
     async fn query_message_parts(
@@ -591,7 +591,7 @@ mod tests {
         fn call_shared<'a>(
             leaf: &'a Arc<QueryMessageProcessor<TestQueryStore>>,
             request: &'a mut RemotingRequest,
-        ) -> impl Future<Output = crate::broker_error::BrokerResult<HandlerOutcome>> + 'a {
+        ) -> impl Future<Output = crate::broker_error::BrokerResult<ResponseAction>> + 'a {
             leaf.process_shared(request)
         }
 
@@ -731,7 +731,7 @@ mod tests {
             .process_command(&mut request, RequestCode::QueryMessage as i32, 0)
             .await
             .expect("query remoting response");
-        let HandlerOutcome::Reply(response) = outcome else {
+        let ResponseAction::Reply(response) = outcome else {
             panic!("query success must return an inline reply");
         };
 
@@ -837,7 +837,7 @@ mod tests {
             .process_command(&mut request, RequestCode::ViewMessageById as i32, 0)
             .await
             .expect("view remoting response");
-        let HandlerOutcome::Reply(response) = outcome else {
+        let ResponseAction::Reply(response) = outcome else {
             panic!("view success must return an inline reply");
         };
 
@@ -856,7 +856,7 @@ mod tests {
             .process_command(&mut request, RequestCode::QueryMessage as i32, 0)
             .await
             .expect("not-found remoting response");
-        let HandlerOutcome::Reply(response) = outcome else {
+        let ResponseAction::Reply(response) = outcome else {
             panic!("query not found must return an inline reply");
         };
 

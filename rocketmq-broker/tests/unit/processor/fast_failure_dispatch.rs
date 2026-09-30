@@ -32,13 +32,13 @@ use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
 use rocketmq_transport::api::EmbeddedDispatchOutcome;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RejectRequestDecision;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestControlView;
 use rocketmq_transport::api::RequestDeadline;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::ResponseObservation;
 use rocketmq_transport::api::ServerConfig;
 use rocketmq_transport::api::TransportSecurity;
@@ -187,13 +187,13 @@ struct ControlCaptureProcessor {
 }
 
 impl RequestProcessor for ControlCaptureProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         if let Some(sender) = self.sender.lock().take() {
             let _ = sender.send(request.control().clone());
         }
         let response = RemotingCommand::create_response_command_with_code(ResponseCode::Success)
             .set_opaque(request.original_identity().original_opaque());
-        Ok(HandlerOutcome::Reply(
+        Ok(ResponseAction::Reply(
             RemotingResponse::command(response).expect("control capture remoting response"),
         ))
     }
@@ -309,7 +309,7 @@ struct PendingFastFailureProcessor {
 }
 
 impl RequestProcessor for PendingFastFailureProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let admission = match try_admit(
             &self.service,
             FastFailureQueueKind::Send,
@@ -317,7 +317,7 @@ impl RequestProcessor for PendingFastFailureProcessor {
         ) {
             Ok(admission) => admission,
             Err(rejection) => {
-                return Ok(HandlerOutcome::Reply(
+                return Ok(ResponseAction::Reply(
                     rejection.into_remoting_response().expect("pending rejection plan"),
                 ));
             }
@@ -325,7 +325,7 @@ impl RequestProcessor for PendingFastFailureProcessor {
         let _run = match admission.await_run(FastFailureControl::from(request.control())).await {
             Ok(run) => run,
             Err(FastFailureAwaitError::Rejected(rejection)) => {
-                return Ok(HandlerOutcome::Reply(
+                return Ok(ResponseAction::Reply(
                     rejection.into_remoting_response().expect("queued rejection plan"),
                 ));
             }
@@ -399,7 +399,7 @@ struct CanonicalFastFailureProcessor {
 }
 
 impl RequestProcessor for CanonicalFastFailureProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.admissions.fetch_add(1, Ordering::SeqCst);
         let metadata = FastFailureRequestMetadata::from_command(request.command());
         let plan = match try_admit(&self.service, FastFailureQueueKind::Send, metadata) {
@@ -430,7 +430,7 @@ impl RequestProcessor for CanonicalFastFailureProcessor {
                 }
             },
         };
-        Ok(HandlerOutcome::Reply(plan))
+        Ok(ResponseAction::Reply(plan))
     }
 
     fn reject_request(&self, _code: i32) -> RejectRequestDecision {

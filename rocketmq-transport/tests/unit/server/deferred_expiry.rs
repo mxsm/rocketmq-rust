@@ -37,10 +37,10 @@ use super::DeferredResumeRetainedSize;
 use super::DeferredRetainedSizeParts;
 use super::DeferredWaitLimits;
 use super::DeferredWakeReason;
-use super::HandlerOutcome;
 use super::RemotingRequest;
 use super::RemotingResponse;
 use super::RequestProcessor;
+use super::ResponseAction;
 use super::TransportServer;
 use crate::dispatch::DeferredAdmissionAcquireOutcome;
 use crate::dispatch::DeferredClaimOutcome;
@@ -91,13 +91,13 @@ struct TcpDeferredExpiryProcessor {
 }
 
 impl RequestProcessor for TcpDeferredExpiryProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         if request.command().code() == 12 {
             self.state.committed.notify_one();
             return RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                 ResponseCode::Success,
             ))
-            .map(HandlerOutcome::Reply)
+            .map(ResponseAction::Reply)
             .map_err(|_| crate::error_helpers::argument_invalid());
         }
         self.state.processes.fetch_add(1, Ordering::SeqCst);
@@ -170,7 +170,7 @@ impl RequestProcessor for TcpDeferredExpiryProcessor {
                 scheduled_at,
             })
             .map_err(|_| crate::error_helpers::argument_invalid())?;
-        Ok(HandlerOutcome::Deferred(registration))
+        Ok(ResponseAction::Deferred(registration))
     }
 
     fn request_ordering(
