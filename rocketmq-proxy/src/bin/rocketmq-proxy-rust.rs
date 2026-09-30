@@ -209,6 +209,8 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
             ),
         ))
         .map_err(proxy_runtime_error("bind Proxy lifecycle observer"))?;
+    // Reserve the final flush lease before ProxyRuntime closes the service scope.
+    let telemetry_flush_lease = rocketmq_observability::reserve_telemetry_flush_lease(&service_context, None);
     if let Err(error) = lifecycle.start(&service_context).await {
         lifecycle.mark_failed();
         let request = lifecycle.request_shutdown(ShutdownReason::Internal);
@@ -216,6 +218,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         return complete_proxy_process_shutdown(
             Err(primary_error),
             telemetry_guard,
+            telemetry_flush_lease,
             &service_context,
             request.deadline,
             &diagnostics_sources,
@@ -274,6 +277,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     let shutdown_result = complete_proxy_process_shutdown(
         primary_result,
         telemetry_guard,
+        telemetry_flush_lease,
         &service_context,
         shutdown_request.deadline,
         &diagnostics_sources,
@@ -288,11 +292,11 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
 async fn complete_proxy_process_shutdown(
     primary_result: ProxyResult<()>,
     telemetry_guard: rocketmq_observability::TelemetryRuntimeGuard,
+    flush_lease: Option<rocketmq_runtime::BlockingDrainLease>,
     service_context: &ChildServiceContext,
     deadline: ShutdownDeadline,
     diagnostics_sources: &rocketmq_observability::RuntimeDiagnosticsSources,
 ) -> ProxyResult<()> {
-    let flush_lease = rocketmq_observability::reserve_telemetry_flush_lease(service_context, Some(deadline));
     let primary_result = finish_proxy_process_shutdown(
         primary_result,
         service_context.task_group(),
