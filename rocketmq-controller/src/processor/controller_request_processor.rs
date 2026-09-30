@@ -50,10 +50,10 @@ use rocketmq_protocol::protocol::header::controller::get_replica_info_request_he
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::RemotingDeserializable;
-use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::SessionView;
 use tracing::warn;
 
