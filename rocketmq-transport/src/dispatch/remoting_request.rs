@@ -22,7 +22,6 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use super::request_control::LazyExtensions;
 use super::AuthenticationState;
 use super::DeferredResponderOutcome;
-use super::HandlerOutcome;
 use super::InlineResponseSlot;
 use super::OriginalRequestIdentity;
 use super::ProtocolNoResponse;
@@ -30,6 +29,7 @@ use super::ProtocolNoResponseReason;
 use super::RequestControlView;
 use super::RequestMeta;
 use super::RequestOrigin;
+use super::ResponseAction;
 use crate::contract::TransportContractViolation;
 use crate::session_view::SessionView;
 
@@ -155,15 +155,15 @@ impl RemotingRequest {
     ///
     /// ```
     /// use rocketmq_transport::api::{
-    ///     HandlerOutcome, ProtocolNoResponseReason, RemotingRequest,
+    ///     ResponseAction, ProtocolNoResponseReason, RemotingRequest,
     ///     TransportContractViolation,
     /// };
     ///
     /// fn callback_outcome(
     ///     request: &RemotingRequest,
-    /// ) -> Result<HandlerOutcome, TransportContractViolation> {
+    /// ) -> Result<ResponseAction, TransportContractViolation> {
     ///     let marker = request.protocol_no_response(ProtocolNoResponseReason::CallbackHandled)?;
-    ///     Ok(HandlerOutcome::NoReply(marker))
+    ///     Ok(ResponseAction::NoReply(marker))
     /// }
     /// ```
     pub fn protocol_no_response(
@@ -240,10 +240,10 @@ impl RemotingRequest {
         self.inline_response.mark_deferred_taken(self.original)
     }
 
-    pub(crate) fn resolve_handler_outcome(
+    pub(crate) fn resolve_response_action(
         &mut self,
-        outcome: HandlerOutcome,
-    ) -> Result<HandlerOutcome, TransportContractViolation> {
+        outcome: ResponseAction,
+    ) -> Result<ResponseAction, TransportContractViolation> {
         self.inline_response.resolve(self.original, outcome)
     }
 

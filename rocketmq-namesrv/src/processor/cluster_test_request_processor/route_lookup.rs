@@ -478,8 +478,8 @@ mod tests {
     use rocketmq_runtime::ChildServiceContext;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_runtime::ShutdownReport;
-    use rocketmq_transport::api::HandlerOutcome;
     use rocketmq_transport::api::RemotingRequest;
+    use rocketmq_transport::api::ResponseAction;
 
     use rocketmq_transport::api::RemotingResponse;
     use rocketmq_transport::api::RequestProcessor;
@@ -577,7 +577,7 @@ mod tests {
     }
 
     impl RequestProcessor for RouteProcessor {
-        async fn process(&mut self, request: &mut RemotingRequest) -> NameServerResult<HandlerOutcome> {
+        async fn process(&mut self, request: &mut RemotingRequest) -> NameServerResult<ResponseAction> {
             assert_eq!(request.command().code(), RequestCode::GetRouteinfoByTopic as i32);
             let header = request
                 .command()
@@ -594,7 +594,7 @@ mod tests {
     struct MissingRouteProcessor;
 
     impl RequestProcessor for MissingRouteProcessor {
-        async fn process(&mut self, _request: &mut RemotingRequest) -> NameServerResult<HandlerOutcome> {
+        async fn process(&mut self, _request: &mut RemotingRequest) -> NameServerResult<ResponseAction> {
             response_outcome(RemotingCommand::create_response_command_with_code(
                 ResponseCode::TopicNotExist,
             ))
@@ -608,7 +608,7 @@ mod tests {
     }
 
     impl RequestProcessor for BlockingRouteProcessor {
-        async fn process(&mut self, _request: &mut RemotingRequest) -> NameServerResult<HandlerOutcome> {
+        async fn process(&mut self, _request: &mut RemotingRequest) -> NameServerResult<ResponseAction> {
             self.entered.notify_one();
             self.release.notified().await;
             response_outcome(RemotingCommand::create_response_command_with_code(
@@ -617,11 +617,11 @@ mod tests {
         }
     }
 
-    fn response_outcome(response: RemotingCommand) -> NameServerResult<HandlerOutcome> {
+    fn response_outcome(response: RemotingCommand) -> NameServerResult<ResponseAction> {
         let response = RemotingResponse::from_command(response).map_err(|error| {
             crate::namesrv_error::response_source("namesrv.route_lookup_test.remoting_response", error)
         })?;
-        Ok(HandlerOutcome::Reply(response))
+        Ok(ResponseAction::Reply(response))
     }
 
     struct RunningRouteServer {

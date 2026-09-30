@@ -19,7 +19,7 @@ use rocketmq_protocol::protocol::header::pop_message_response_header::PopMessage
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::SelectMappedBufferResult;
-use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::ResponseBodyKind;
 
 use super::attach_pop_response_header;
@@ -70,9 +70,9 @@ fn heap_success_builds_one_bytes_reply_without_a_channel() {
     let head = attach_pop_response_header(RemotingCommand::create_success_response_command(), response_header());
     let outcome = pop_heap_response_parts(head, Some(body.clone()))
         .expect("heap response parts")
-        .into_handler_outcome()
+        .into_response_action()
         .expect("heap remoting response");
-    let HandlerOutcome::Reply(response) = outcome else {
+    let ResponseAction::Reply(response) = outcome else {
         panic!("immediate POP success must be represented by a reply response");
     };
 
@@ -103,9 +103,9 @@ fn non_heap_success_moves_ordered_body_only_segments_into_a_reply() {
     let head = attach_pop_response_header(RemotingCommand::create_success_response_command(), response_header());
     let outcome = pop_segmented_response_parts(head, body_segments)
         .expect("segmented response parts")
-        .into_handler_outcome()
+        .into_response_action()
         .expect("segmented remoting response");
-    let HandlerOutcome::Reply(response) = outcome else {
+    let ResponseAction::Reply(response) = outcome else {
         panic!("immediate non-heap POP success must be represented by a reply response");
     };
 

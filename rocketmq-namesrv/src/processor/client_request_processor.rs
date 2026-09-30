@@ -31,10 +31,10 @@ use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils;
 use rocketmq_transport::api::error_response;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use tracing::debug;
 use tracing::warn;
 
@@ -66,7 +66,7 @@ pub struct ClientRequestProcessor {
 
 impl RequestProcessor for ClientRequestProcessor {
     #[inline]
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::NameServerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::NameServerResult<ResponseAction> {
         let response = self.handle_request(request.command_mut()).await?;
         crate::processor::response_outcome(response)
     }

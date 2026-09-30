@@ -137,18 +137,18 @@ struct CommitFailureProcessor {
 }
 
 impl RequestProcessor for CommitFailureProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         request
             .mark_deferred_response_taken()
             .map_err(|_| crate::error_helpers::argument_invalid())?;
-        Ok(HandlerOutcome::Deferred(
+        Ok(ResponseAction::Deferred(
             DeferredRegistration::with_commit_error_for_test(request.original_identity().request_id(), self.kind),
         ))
     }
 }
 
 impl RequestProcessor for RollbackRegistrationProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         if self.take_current {
             drop(expect_deferred_responder(
                 request.take_deferred_responder(),
@@ -161,7 +161,7 @@ impl RequestProcessor for RollbackRegistrationProcessor {
             .expect("real registration lock")
             .take()
             .ok_or_else(|| crate::error_helpers::argument_invalid())?;
-        Ok(HandlerOutcome::Deferred(registration))
+        Ok(ResponseAction::Deferred(registration))
     }
 }
 
@@ -217,7 +217,7 @@ fn real_registration_fixture(name: &'static str, owner: u64) -> (RealRegistratio
 }
 
 impl RequestProcessor for RegistryDeferredProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         let responder = expect_deferred_responder(request.take_deferred_responder(), "registry responder extraction");
         let retained = DeferredRegistry::<String>::try_retained_size(DeferredRetainedSizeParts::new(0))
             .map_err(|_| crate::error_helpers::argument_invalid())?;
@@ -233,7 +233,7 @@ impl RequestProcessor for RegistryDeferredProcessor {
             registration.set_commit_checkpoint(move || checkpoint());
         }
         *self.registered_id.lock().expect("registered deferred id lock") = Some(registration.deferred_id());
-        Ok(HandlerOutcome::Deferred(registration))
+        Ok(ResponseAction::Deferred(registration))
     }
 
     fn observe_response(&self, observation: ResponseObservation) {
@@ -245,7 +245,7 @@ impl RequestProcessor for RegistryDeferredProcessor {
 }
 
 impl RequestProcessor for PublicDeferredProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         let request_id = request.original_identity().request_id();
         let original_opaque = request.original_identity().original_opaque();
         let session_id = request.session().id();
@@ -275,7 +275,7 @@ impl RequestProcessor for PublicDeferredProcessor {
         };
         assert_eq!(receipt.request_id(), request_id);
         self.completed.store(true, Ordering::SeqCst);
-        Ok(HandlerOutcome::Deferred(
+        Ok(ResponseAction::Deferred(
             crate::dispatch::DeferredRegistration::for_test(request_id),
         ))
     }

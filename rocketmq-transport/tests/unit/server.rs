@@ -51,10 +51,10 @@ use crate::dispatch::DeferredResumeRetainedSize;
 use crate::dispatch::DeferredRetainedSizeParts;
 use crate::dispatch::DeferredWaitLimits;
 use crate::dispatch::DeferredWakeReason;
-use crate::dispatch::HandlerOutcome;
 use crate::dispatch::ProtocolNoResponseReason;
 use crate::dispatch::RemotingRequest;
 use crate::dispatch::RemotingResponse;
+use crate::dispatch::ResponseAction;
 use crate::error::TransportError;
 use crate::runtime::processor::RejectRequestDecision;
 use crate::runtime::RPCHook;
@@ -124,7 +124,7 @@ impl Clone for TcpProcessor {
 }
 
 impl RequestProcessor for TcpProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         self.state.processes.fetch_add(1, Ordering::SeqCst);
         self.state
             .request_sequences
@@ -142,13 +142,13 @@ impl RequestProcessor for TcpProcessor {
         }
         *self.state.session.lock().expect("session capture lock") = Some(request.session().id());
         if request.command().code() == 39 {
-            return Ok(HandlerOutcome::NoReply(
+            return Ok(ResponseAction::NoReply(
                 request
                     .protocol_no_response(ProtocolNoResponseReason::CallbackHandled)
                     .map_err(|error| crate::error_helpers::internal_failure("create protocol no-response", error))?,
             ));
         }
-        Ok(HandlerOutcome::Reply(
+        Ok(ResponseAction::Reply(
             RemotingResponse::bytes(
                 RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_opaque(-9),
                 Bytes::from_static(b"tcp-response"),
@@ -194,8 +194,8 @@ impl Drop for DropTrackedProcessor {
 }
 
 impl RequestProcessor for DropTrackedProcessor {
-    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
-        Ok(HandlerOutcome::Reply(
+    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
+        Ok(ResponseAction::Reply(
             RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                 ResponseCode::Success,
             ))
@@ -211,17 +211,17 @@ struct DrainingProcessor {
 }
 
 impl RequestProcessor for DrainingProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         if request.command().code() == 39 {
             self.started.notify_one();
             self.release.notified().await;
-            return Ok(HandlerOutcome::NoReply(
+            return Ok(ResponseAction::NoReply(
                 request
                     .protocol_no_response(ProtocolNoResponseReason::CallbackHandled)
                     .map_err(|error| crate::error_helpers::internal_failure("create protocol no-response", error))?,
             ));
         }
-        Ok(HandlerOutcome::Reply(
+        Ok(ResponseAction::Reply(
             RemotingResponse::bytes(
                 RemotingCommand::create_response_command_with_code(ResponseCode::Success),
                 Bytes::from_static(b"drained-before-retire"),
@@ -333,9 +333,9 @@ struct NetworkDeferredRegistration {
 }
 
 impl RequestProcessor for NetworkDeferredCleanupProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         if request.command().code() == 706 {
-            return Ok(HandlerOutcome::Reply(
+            return Ok(ResponseAction::Reply(
                 RemotingResponse::bytes(
                     RemotingCommand::create_response_command_with_code(ResponseCode::Success),
                     Bytes::from_static(b"other-session-live"),
@@ -409,7 +409,7 @@ impl RequestProcessor for NetworkDeferredCleanupProcessor {
         if opaque == self.precommit_opaque {
             self.release_precommit.notified().await;
         }
-        Ok(HandlerOutcome::Deferred(registration))
+        Ok(ResponseAction::Deferred(registration))
     }
 }
 

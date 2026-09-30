@@ -26,13 +26,13 @@ struct DeadlineProcessor {
 }
 
 impl RequestProcessor for DeadlineProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let prepared = prepared_or_test_error(self.service.prepare(request, PopLiteRetainedEstimate::default()))?;
         self.deadlines
             .send(prepared.deadline())
             .map_err(|_| crate::broker_error::invalid_argument("PopLite deadline observer closed"))?;
         let registration = registration_or_test_error(self.service.register(prepared, request))?;
-        Ok(HandlerOutcome::Deferred(registration))
+        Ok(ResponseAction::Deferred(registration))
     }
 }
 

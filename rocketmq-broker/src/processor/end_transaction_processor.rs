@@ -40,10 +40,10 @@ use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_transport::api::error_response;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -173,7 +173,7 @@ where
     TM: TransactionalMessageService + 'static,
     MS: BrokerWriteStore + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.process_shared(request).await
     }
 }
@@ -186,7 +186,7 @@ where
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let opaque = request.original_identity().original_opaque();
         let command_factory = self.context.command_factory;
         let result = match self.process_command(request.command_mut()).await {

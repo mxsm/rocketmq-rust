@@ -49,10 +49,10 @@ use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::BrokerAdminStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_transport::api::error_response;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use tracing::warn;
 
 use crate::failover::escape_bridge::EscapeBridge;
@@ -306,7 +306,7 @@ impl<MS: BrokerAdminStore> LiteManagerProcessor<MS> {
 }
 
 impl<MS: BrokerAdminStore + 'static> RequestProcessor for LiteManagerProcessor<MS> {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.process_shared(request).await
     }
 }
@@ -315,7 +315,7 @@ impl<MS: BrokerAdminStore> LiteManagerProcessor<MS> {
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let original_opaque = request.original_identity().original_opaque();
         let command_factory = self.context.command_factory;
         let result = self.process_command(request.command_mut()).await;
@@ -971,9 +971,9 @@ mod tests {
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
     use rocketmq_transport::api::EmbeddedDispatchOutcome;
-    use rocketmq_transport::api::HandlerOutcome;
     use rocketmq_transport::api::RemotingRequest;
     use rocketmq_transport::api::RequestProcessor;
+    use rocketmq_transport::api::ResponseAction;
     use rocketmq_transport::api::TransportSecurity;
     use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
@@ -1004,7 +1004,7 @@ mod tests {
         async fn process(
             &mut self,
             request: &mut RemotingRequest,
-        ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+        ) -> crate::broker_error::BrokerResult<ResponseAction> {
             self.inner.lock().await.process(request).await
         }
     }

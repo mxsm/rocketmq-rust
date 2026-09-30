@@ -22,9 +22,9 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 
 use super::remoting_request::RemotingRequestBuilder;
-use super::HandlerOutcome;
 use super::RemotingRequest;
 use super::RemotingResponse;
+use super::ResponseAction;
 use super::ResponseSink;
 use crate::base::pending_request_table::PendingRequestCompletion;
 use crate::base::pending_request_table::PendingRequestOwner;
@@ -113,7 +113,7 @@ where
 
 /// Internal terminal result before immutable binding and delivery.
 pub(crate) enum InternalProcessorOutcome {
-    Handled(HandlerOutcome),
+    Handled(ResponseAction),
 }
 
 pub(crate) struct InternalProcessorCandidate {
@@ -414,14 +414,14 @@ where
         Ok(match self.processor.reject_request(request_code) {
             RejectRequestDecision::Proceed => None,
             RejectRequestDecision::Reject(response) => Some(InternalProcessorCandidate::success(
-                InternalProcessorOutcome::Handled(HandlerOutcome::Reply(response)),
+                InternalProcessorOutcome::Handled(ResponseAction::Reply(response)),
             )),
         })
     }
 
     fn deadline_candidate(&self, response: RemotingResponse) -> InternalProcessorCandidate {
         InternalProcessorCandidate::failure(
-            InternalProcessorOutcome::Handled(HandlerOutcome::Reply(response)),
+            InternalProcessorOutcome::Handled(ResponseAction::Reply(response)),
             InternalFailureOrigin::Deadline,
         )
     }
@@ -481,7 +481,7 @@ where
                         crate::error_response::RemotingErrorTarget::Fresh(&application_remoting_command_factory()),
                     );
                     InternalProcessorCandidate::failure(
-                        InternalProcessorOutcome::Handled(HandlerOutcome::Reply(RemotingResponse::command(command)?)),
+                        InternalProcessorOutcome::Handled(ResponseAction::Reply(RemotingResponse::command(command)?)),
                         InternalFailureOrigin::BeforeHook,
                     )
                 }
@@ -497,7 +497,7 @@ where
     ) -> Result<InternalProcessorOutcome, DispatchProcessorError> {
         let InternalProcessorOutcome::Handled(outcome) = outcome;
         Ok(InternalProcessorOutcome::Handled(
-            request.resolve_handler_outcome(outcome)?,
+            request.resolve_response_action(outcome)?,
         ))
     }
 }
@@ -509,7 +509,7 @@ fn apply_after_hook(
     remote_address: SocketAddr,
 ) -> Result<InternalProcessorCandidate, DispatchProcessorError> {
     let InternalProcessorCandidate { outcome, failure } = candidate;
-    let InternalProcessorOutcome::Handled(HandlerOutcome::Reply(mut response)) = outcome else {
+    let InternalProcessorOutcome::Handled(ResponseAction::Reply(mut response)) = outcome else {
         return Ok(InternalProcessorCandidate { outcome, failure });
     };
     let result = request.with_body_free_hook_request(|request_head| {
@@ -519,7 +519,7 @@ fn apply_after_hook(
     });
     match result {
         Ok(()) => Ok(InternalProcessorCandidate {
-            outcome: InternalProcessorOutcome::Handled(HandlerOutcome::Reply(response)),
+            outcome: InternalProcessorOutcome::Handled(ResponseAction::Reply(response)),
             failure,
         }),
         Err(error) => {
@@ -535,7 +535,7 @@ fn apply_after_hook(
                 crate::error_response::RemotingErrorTarget::Fresh(&application_remoting_command_factory()),
             );
             Ok(InternalProcessorCandidate::failure(
-                InternalProcessorOutcome::Handled(HandlerOutcome::Reply(RemotingResponse::command(command)?)),
+                InternalProcessorOutcome::Handled(ResponseAction::Reply(RemotingResponse::command(command)?)),
                 failure,
             ))
         }

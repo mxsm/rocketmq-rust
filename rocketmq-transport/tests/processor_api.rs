@@ -58,7 +58,6 @@ use rocketmq_transport::api::EmbeddedResponse;
 use rocketmq_transport::api::EmbeddedResponseBody;
 use rocketmq_transport::api::FileRegion;
 use rocketmq_transport::api::FileRegionSequence;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::IngressRequestView;
 use rocketmq_transport::api::LocalRequestProcessor;
 use rocketmq_transport::api::OriginalRequestIdentity;
@@ -78,6 +77,7 @@ use rocketmq_transport::api::RequestOrdering;
 use rocketmq_transport::api::RequestOrderingKey;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::ResponseBodyKind;
 use rocketmq_transport::api::ResponseCompletionOutcome;
 use rocketmq_transport::api::ResponseDisposition;
@@ -210,14 +210,14 @@ fn assert_remoting_response_contract(plan: Option<RemotingResponse>) {
     assert_error_contract::<TransportContractViolation>();
 }
 
-fn consume_handler_outcome_exhaustively(outcome: HandlerOutcome) -> Option<RequestId> {
+fn consume_handler_outcome_exhaustively(outcome: ResponseAction) -> Option<RequestId> {
     match outcome {
-        HandlerOutcome::Reply(plan) => {
+        ResponseAction::Reply(plan) => {
             let _: i32 = plan.response_code();
             None
         }
-        HandlerOutcome::Deferred(registration) => Some(registration.request_id()),
-        HandlerOutcome::NoReply(marker) => {
+        ResponseAction::Deferred(registration) => Some(registration.request_id()),
+        ResponseAction::NoReply(marker) => {
             let _: i32 = marker.original_code();
             let _: ProtocolNoResponseReason = marker.reason();
             Some(marker.request_id())
@@ -373,7 +373,7 @@ fn assert_claim_resume_contract<R>(
 struct LocalOnlyProcessor;
 
 impl LocalRequestProcessor for LocalOnlyProcessor {
-    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         let local = Rc::new(());
         std::future::ready(()).await;
         drop(local);
@@ -385,7 +385,7 @@ impl LocalRequestProcessor for LocalOnlyProcessor {
 struct SendProcessor;
 
 impl RequestProcessor for SendProcessor {
-    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         Err(argument_invalid())
     }
 }
@@ -536,12 +536,12 @@ fn api_exposes_the_affine_embedded_outcome_and_redacted_error_facades() {
 
 #[test]
 fn api_exposes_exactly_three_exhaustive_affine_handler_outcomes() {
-    assert_debug_contract::<HandlerOutcome>();
+    assert_debug_contract::<ResponseAction>();
     assert_debug_contract::<DeferredRegistration>();
     assert_debug_contract::<ProtocolNoResponse>();
     let plan = RemotingResponse::command(RemotingCommand::create_response_command_with_code(0))
         .expect("public reply plan should construct");
-    assert_eq!(consume_handler_outcome_exhaustively(HandlerOutcome::Reply(plan)), None);
+    assert_eq!(consume_handler_outcome_exhaustively(ResponseAction::Reply(plan)), None);
     assert_handler_outcome_contract(None, None);
 
     let _ = ProtocolNoResponseReason::CallbackHandled;

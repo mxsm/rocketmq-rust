@@ -34,8 +34,8 @@ impl Clone for PlanProcessor {
 }
 
 impl RequestProcessor for PlanProcessor {
-    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
-        Ok(HandlerOutcome::Reply(
+    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
+        Ok(ResponseAction::Reply(
             self.plan
                 .lock()
                 .expect("plan lock")

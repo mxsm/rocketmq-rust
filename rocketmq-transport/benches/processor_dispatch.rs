@@ -28,10 +28,10 @@ use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
 use rocketmq_transport::api::EmbeddedDispatchOutcome;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::TransportSecurity;
 
 #[path = "support/criterion_profile.rs"]
@@ -43,8 +43,8 @@ use criterion_profile::apply_remoting_command_baseline_profile;
 struct InlineReplyProcessor;
 
 impl RequestProcessor for InlineReplyProcessor {
-    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
-        Ok(HandlerOutcome::Reply(RemotingResponse::empty_response(0)))
+    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
+        Ok(ResponseAction::Reply(RemotingResponse::empty_response(0)))
     }
 }
 

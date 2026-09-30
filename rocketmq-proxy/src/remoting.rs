@@ -110,12 +110,12 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::EmbeddedDispatchOutcome;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RejectRequestDecision;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::ServerConfig;
 use rocketmq_transport::api::ServerPushCommand;
 use rocketmq_transport::api::ServerPushOutcome;
@@ -304,7 +304,7 @@ where
     async fn process(
         &mut self,
         request: &mut RemotingRequest,
-    ) -> std::result::Result<HandlerOutcome, rocketmq_error::SharedError> {
+    ) -> std::result::Result<ResponseAction, rocketmq_error::SharedError> {
         let original_code = request.original_identity().original_code();
         let mut auth_command = request.command().clone();
         auth_command.set_code_ref(original_code);
@@ -475,9 +475,9 @@ fn protocol_no_response_contract_error(error: TransportContractViolation) -> Err
     }
 }
 
-fn remoting_response(response: RemotingCommand) -> std::result::Result<HandlerOutcome, rocketmq_error::SharedError> {
+fn remoting_response(response: RemotingCommand) -> std::result::Result<ResponseAction, rocketmq_error::SharedError> {
     RemotingResponse::from_command(response)
-        .map(HandlerOutcome::Reply)
+        .map(ResponseAction::Reply)
         .map_err(|error| {
             Arc::new(owner_error_with_source(
                 &CORE_INTERNAL_FAILURE,
@@ -980,7 +980,7 @@ where
         &self,
         context: &ProxyContext,
         request: &mut RemotingRequest,
-    ) -> std::result::Result<HandlerOutcome, rocketmq_error::SharedError> {
+    ) -> std::result::Result<ResponseAction, rocketmq_error::SharedError> {
         let route =
             rocketmq_proxy_core::remoting::classify_remoting_request(request.original_identity().original_code());
         if matches!(route, RemotingIngressRoute::UnregisterClient) {
@@ -1011,13 +1011,13 @@ where
             backend_command.set_code_ref(request.original_identity().original_code());
             backend_command.set_opaque_mut(request.original_identity().original_opaque());
             return match backend.process(backend_command).await {
-                Ok(EmbeddedDispatchOutcome::Reply(plan)) => Ok(HandlerOutcome::Reply(plan)),
-                Ok(EmbeddedDispatchOutcome::OneWay { .. }) => Ok(HandlerOutcome::Reply(
+                Ok(EmbeddedDispatchOutcome::Reply(plan)) => Ok(ResponseAction::Reply(plan)),
+                Ok(EmbeddedDispatchOutcome::OneWay { .. }) => Ok(ResponseAction::Reply(
                     RemotingResponse::empty_response(ResponseCode::Success as i32),
                 )),
                 Ok(EmbeddedDispatchOutcome::NoReply { reason, .. }) => request
                     .protocol_no_response(reason)
-                    .map(HandlerOutcome::NoReply)
+                    .map(ResponseAction::NoReply)
                     .map_err(|error| Arc::new(protocol_no_response_contract_error(error))),
                 Ok(EmbeddedDispatchOutcome::Deferred { .. }) => Err(Arc::new(canonical::internal(
                     "dispatch_remoting_backend",
@@ -2735,11 +2735,11 @@ mod tests {
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
     use rocketmq_transport::api::EmbeddedDispatchOutcome;
-    use rocketmq_transport::api::HandlerOutcome;
     use rocketmq_transport::api::RejectRequestDecision;
     use rocketmq_transport::api::RemotingRequest;
     use rocketmq_transport::api::RemotingResponse;
     use rocketmq_transport::api::RequestProcessor;
+    use rocketmq_transport::api::ResponseAction;
     use rocketmq_transport::api::TransportContractViolation;
     use rocketmq_transport::api::TransportSecurity;
     use rocketmq_transport::test_support::EmbeddedRequestHarness;
@@ -3401,7 +3401,7 @@ mod tests {
         async fn process(
             &mut self,
             request: &mut RemotingRequest,
-        ) -> std::result::Result<HandlerOutcome, rocketmq_error::SharedError> {
+        ) -> std::result::Result<ResponseAction, rocketmq_error::SharedError> {
             request.command_mut().set_code_ref(RequestCode::BeginProxyDrain);
             request.command_mut().set_opaque_mut(-9_852);
             self.inner.process(request).await

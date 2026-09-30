@@ -21,7 +21,6 @@ use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting
 
 use crate::contract::TransportContractViolation;
 use crate::dispatch::DeferredRegistration;
-use crate::dispatch::HandlerOutcome;
 use crate::dispatch::IngressRequestView;
 use crate::dispatch::InternalFailureOrigin;
 use crate::dispatch::InternalProcessorCandidate;
@@ -30,6 +29,7 @@ use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::ProtocolNoResponse;
 use crate::dispatch::RemotingRequest;
 use crate::dispatch::RemotingResponse;
+use crate::dispatch::ResponseAction;
 use crate::dispatch::ResponseBodyKind;
 use crate::dispatch::ResponseCompletionOutcome;
 use crate::dispatch::ResponseOperationalFailure;
@@ -61,7 +61,7 @@ where
         match self.processor.reject_request(request_code) {
             RejectRequestDecision::Proceed => None,
             RejectRequestDecision::Reject(response) => Some(InternalProcessorCandidate::success(
-                InternalProcessorOutcome::Handled(HandlerOutcome::Reply(response)),
+                InternalProcessorOutcome::Handled(ResponseAction::Reply(response)),
             )),
         }
     }
@@ -87,12 +87,12 @@ where
                     crate::error_response::RemotingErrorTarget::Fresh(&application_remoting_command_factory()),
                 );
                 Ok(InternalProcessorCandidate::failure(
-                    InternalProcessorOutcome::Handled(HandlerOutcome::Reply(RemotingResponse::command(command)?)),
+                    InternalProcessorOutcome::Handled(ResponseAction::Reply(RemotingResponse::command(command)?)),
                     InternalFailureOrigin::ProcessorError,
                 ))
             }
             Err(_) => Ok(InternalProcessorCandidate::failure(
-                InternalProcessorOutcome::Handled(HandlerOutcome::Reply(RemotingResponse::command(
+                InternalProcessorOutcome::Handled(ResponseAction::Reply(RemotingResponse::command(
                     super::super::authorized_dispatcher::deadline_response(
                         request.original_identity().original_opaque(),
                     ),
@@ -110,25 +110,25 @@ where
         let InternalProcessorOutcome::Handled(outcome) = outcome;
         if request.original_identity().is_one_way() {
             return match outcome {
-                HandlerOutcome::Reply(response) => {
-                    let resolved = request.resolve_handler_outcome(HandlerOutcome::Reply(response))?;
+                ResponseAction::Reply(response) => {
+                    let resolved = request.resolve_response_action(ResponseAction::Reply(response))?;
                     drop(resolved);
                     Ok(EmbeddedResolvedOutcome::OneWay)
                 }
-                HandlerOutcome::Deferred(registration) => {
+                ResponseAction::Deferred(registration) => {
                     request.consume_oneway_deferred(registration)?;
                     Err(TransportContractViolation::OneWayDeferredHandlerOutcome)
                 }
-                HandlerOutcome::NoReply(marker) => {
+                ResponseAction::NoReply(marker) => {
                     request.consume_oneway_no_reply(marker)?;
                     Err(TransportContractViolation::OneWayNoReplyHandlerOutcome)
                 }
             };
         }
-        match request.resolve_handler_outcome(outcome)? {
-            HandlerOutcome::Reply(response) => Ok(EmbeddedResolvedOutcome::Reply(response)),
-            HandlerOutcome::Deferred(registration) => Ok(EmbeddedResolvedOutcome::Deferred(registration)),
-            HandlerOutcome::NoReply(marker) => Ok(EmbeddedResolvedOutcome::NoReply(marker)),
+        match request.resolve_response_action(outcome)? {
+            ResponseAction::Reply(response) => Ok(EmbeddedResolvedOutcome::Reply(response)),
+            ResponseAction::Deferred(registration) => Ok(EmbeddedResolvedOutcome::Deferred(registration)),
+            ResponseAction::NoReply(marker) => Ok(EmbeddedResolvedOutcome::NoReply(marker)),
         }
     }
 

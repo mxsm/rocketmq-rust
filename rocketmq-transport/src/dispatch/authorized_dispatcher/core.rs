@@ -490,7 +490,7 @@ where
     ) -> Result<(), AuthorizedDispatchError> {
         let InternalProcessorCandidate { outcome, failure } = candidate;
         match outcome {
-            InternalProcessorOutcome::Handled(crate::dispatch::HandlerOutcome::Reply(response)) => {
+            InternalProcessorOutcome::Handled(crate::dispatch::ResponseAction::Reply(response)) => {
                 let response_code = response.response_code();
                 if failure.is_some() {
                     metrics.complete_process_request_failed(response_code);
@@ -507,7 +507,7 @@ where
                 }
                 deliver_and_observe(sink, original, response, failure.is_some(), metrics).await
             }
-            InternalProcessorOutcome::Handled(crate::dispatch::HandlerOutcome::Deferred(registration)) => {
+            InternalProcessorOutcome::Handled(crate::dispatch::ResponseAction::Deferred(registration)) => {
                 if original.is_one_way() {
                     drop(registration);
                     return Err(AuthorizedDispatchError::OneWayOutcome { outcome: "deferred" });
@@ -528,7 +528,7 @@ where
                     },
                 }
             }
-            InternalProcessorOutcome::Handled(crate::dispatch::HandlerOutcome::NoReply(marker)) => {
+            InternalProcessorOutcome::Handled(crate::dispatch::ResponseAction::NoReply(marker)) => {
                 if original.is_one_way() {
                     drop(marker);
                     return Err(AuthorizedDispatchError::OneWayOutcome { outcome: "no_reply" });

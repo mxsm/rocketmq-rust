@@ -23,7 +23,7 @@ struct AfterTakeCloseProcessor {
 }
 
 impl RequestProcessor for AfterTakeCloseProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let prepared = prepared_or_test_error(self.service.prepare(request, PopLiteRetainedEstimate::default()))?;
         let rejection = match self.service.register(prepared, request) {
             Ok(PopLiteDeferredRegisterOutcome::Rejected(rejection)) => rejection,
@@ -92,7 +92,7 @@ struct OneWayProbeProcessor {
 }
 
 impl RequestProcessor for OneWayProbeProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let rejection = match self.service.prepare(request, PopLiteRetainedEstimate::default()) {
             Ok(PopLiteDeferredPrepareOutcome::Rejected(rejection)) => rejection,
             Ok(PopLiteDeferredPrepareOutcome::Prepared(_)) | Err(_) => {
@@ -105,7 +105,7 @@ impl RequestProcessor for OneWayProbeProcessor {
         RemotingResponse::command(RemotingCommand::create_response_command_with_code(
             ResponseCode::Success,
         ))
-        .map(HandlerOutcome::Reply)
+        .map(ResponseAction::Reply)
         .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
     }
 }
@@ -163,7 +163,7 @@ async fn pop_lite_deferred_shutdown_drains_registered_waiter_without_processor_o
         rocketmq_transport::api::DeferredRegistryShutdownOutcome::Completed(_)
     ));
     // The registration observer runs before the dispatcher commits
-    // `HandlerOutcome::Deferred`. Registry shutdown drains registry-owned
+    // `ResponseAction::Deferred`. Registry shutdown drains registry-owned
     // entries synchronously, while a concurrently finishing handler may still
     // own the provisional builder. Await the test-owned server task group so
     // that either commit or rollback has reached its canonical terminal before

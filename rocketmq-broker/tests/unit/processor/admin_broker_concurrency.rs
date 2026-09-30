@@ -44,12 +44,12 @@ use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
 use rocketmq_transport::api::EmbeddedDispatchOutcome;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::IngressRequestView;
 use rocketmq_transport::api::RejectRequestDecision;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrdering;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::ResponseObservation;
 use rocketmq_transport::api::TransportSecurity;
 use rocketmq_transport::test_support::EmbeddedRequestHarness;
@@ -80,7 +80,7 @@ struct ObservedAdminProcessor {
 }
 
 impl RequestProcessor for ObservedAdminProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         if let Some(code) = self.mutate_command_code {
             request.command_mut().set_code_mut(code);
         }
@@ -93,8 +93,8 @@ impl RequestProcessor for ObservedAdminProcessor {
             .map(ToString::to_string);
         let outcome = RequestProcessor::process(&mut self.inner, request).await?;
         let response_code = match &outcome {
-            HandlerOutcome::Reply(plan) => Some(plan.response_code()),
-            HandlerOutcome::Deferred(_) | HandlerOutcome::NoReply(_) => None,
+            ResponseAction::Reply(plan) => Some(plan.response_code()),
+            ResponseAction::Deferred(_) | ResponseAction::NoReply(_) => None,
         };
         self.operations.lock().push(ObservedAdminOperation {
             original_code: original.original_code(),

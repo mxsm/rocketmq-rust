@@ -58,11 +58,11 @@ use rocketmq_store_api::ReleaseCheckpointRestoreRejection;
 use rocketmq_store_api::ReleaseCheckpointStore;
 use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::EmbeddedCaller;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 
 use crate::config::broker_config::BrokerConfig;
 use crate::processor::response_assembly::immediate_outcome_from_command_result;
@@ -315,13 +315,13 @@ fn maintenance_permission_denied() -> SharedError {
 }
 
 impl RequestProcessor for MaintenanceRequestProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction> {
         self.process_shared(request).await
     }
 }
 
 impl MaintenanceRequestProcessor {
-    pub(crate) async fn process_shared(&self, request: &mut RemotingRequest) -> Result<HandlerOutcome> {
+    pub(crate) async fn process_shared(&self, request: &mut RemotingRequest) -> Result<ResponseAction> {
         let original_opaque = request.original_identity().original_opaque();
         let original_code = request.original_identity().original_code();
         let result = match self.authorize_request(request, original_code).await {

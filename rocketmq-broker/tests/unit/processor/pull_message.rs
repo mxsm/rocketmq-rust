@@ -43,9 +43,9 @@ use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::DeferredAdmission;
 use rocketmq_transport::api::DeferredExpiryMargins;
 use rocketmq_transport::api::DeferredWaitLimits;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::ServerConfig;
 use rocketmq_transport::api::SessionId;
 use rocketmq_transport::api::SessionRegistry;
@@ -89,7 +89,7 @@ impl ArcHeldPullProcessor {
 }
 
 impl RequestProcessor for ArcHeldPullProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let session_id = request.session().id();
         self.sessions.lock().push(session_id);
         if let Some(registration) = &self.broadcast_registration {
@@ -126,7 +126,7 @@ impl TraitPullProcessor {
 }
 
 impl RequestProcessor for TraitPullProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let mut processor = self.inner.lock().await;
         Box::pin(RequestProcessor::process(&mut *processor, request)).await
     }

@@ -34,7 +34,7 @@ This diagram shows responsibility boundaries, not an assertion that every check 
 
 `RequestDeadline` bounds request waiting and work admitted through its path. Backpressure limits active work; retained-byte limits cover memory held by queued or deferred responses where configured. These limits solve different problems from connection count and per-second rate limits.
 
-`HandlerOutcome` distinguishes immediate, deferred, and explicit no-response handling. Deferred work must retain the response and resource ownership it needs until completion, cancellation, or expiry. Treating every missing immediate response as a processor failure would break long polling and one-way semantics.
+`ResponseAction` distinguishes immediate, deferred, and explicit no-response handling. Deferred work must retain the response and resource ownership it needs until completion, cancellation, or expiry. Treating every missing immediate response as a processor failure would break long polling and one-way semantics.
 
 ## Interpreting outcomes
 

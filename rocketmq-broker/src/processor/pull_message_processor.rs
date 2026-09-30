@@ -49,11 +49,11 @@ use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
 use rocketmq_store::MAX_PULL_MSG_SIZE;
 use rocketmq_transport::api::error_response as remoting_error_response;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::RpcClient;
 use rocketmq_transport::api::RpcClientUtils;
 use rocketmq_transport::api::RpcRequest;
@@ -128,7 +128,7 @@ impl<MS> RequestProcessor for PullMessageProcessor<MS>
 where
     MS: BrokerReadStore + Send + Sync + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.process_shared(request).await
     }
 }
@@ -141,7 +141,7 @@ where
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let request_code = RequestCode::from(request.original_identity().original_code());
         info!(?request_code, "PullMessageProcessor received a request");
         match request_code {
@@ -157,7 +157,7 @@ where
                         opaque: request.original_identity().original_opaque(),
                     },
                 ))?
-                .into_handler_outcome()
+                .into_response_action()
             }
         }
     }
@@ -804,7 +804,7 @@ where
         &self,
         request_code: RequestCode,
         request: &mut RemotingRequest,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let effective_peer = trusted_pull_peer(request)?;
         let session_id = request.session().id();
         let request_header = request
@@ -825,7 +825,7 @@ where
             )
             .await?;
         match result {
-            PullMessageResult::Reply(parts) => parts.into_handler_outcome(),
+            PullMessageResult::Reply(parts) => parts.into_response_action(),
             PullMessageResult::Suspend(suspension) => {
                 let suspension = *suspension;
                 let Some(service) = self.pull_deferred_service.get() else {
@@ -835,7 +835,7 @@ where
                             "the deferred Pull service is not installed",
                         ),
                     )?
-                    .into_handler_outcome();
+                    .into_response_action();
                 };
                 let criteria = PullMatchCriteria::new(
                     suspension.request_header.topic.clone(),
@@ -854,17 +854,17 @@ where
                 ) {
                     Ok(crate::long_polling::pull_deferred::PullDeferredPrepareOutcome::Prepared(prepared)) => prepared,
                     Ok(crate::long_polling::pull_deferred::PullDeferredPrepareOutcome::Rejected(rejection)) => {
-                        return Ok(HandlerOutcome::Reply(rejection.into_fallback()))
+                        return Ok(ResponseAction::Reply(rejection.into_fallback()))
                     }
-                    Err(error) => return Ok(HandlerOutcome::Reply(error.into_fallback())),
+                    Err(error) => return Ok(ResponseAction::Reply(error.into_fallback())),
                 };
                 match service.register(prepared, request) {
                     Ok(crate::long_polling::pull_deferred::PullDeferredRegisterOutcome::Registered(registration)) => {
-                        Ok(HandlerOutcome::Deferred(*registration))
+                        Ok(ResponseAction::Deferred(*registration))
                     }
                     Ok(crate::long_polling::pull_deferred::PullDeferredRegisterOutcome::Rejected(rejection)) => {
                         match (*rejection).into_pre_take_fallback() {
-                            Ok(fallback) => Ok(HandlerOutcome::Reply(fallback)),
+                            Ok(fallback) => Ok(ResponseAction::Reply(fallback)),
                             Err(rejection) => self.register_deferred_pull_rejection_outcome(
                                 request.original_identity().original_opaque(),
                                 rejection,
@@ -883,13 +883,13 @@ where
         &self,
         opaque: i32,
         rejection: crate::long_polling::pull_deferred::PullDeferredRegisterRejection,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         use crate::long_polling::pull_deferred::PullDeferredRegisterRejection;
 
         match rejection {
             PullDeferredRegisterRejection::PreTake { prepared, .. } => {
                 let fallback = (*prepared).into_candidate().into_fallback();
-                Ok(HandlerOutcome::Reply(fallback))
+                Ok(ResponseAction::Reply(fallback))
             }
             PullDeferredRegisterRejection::Expiry { outcome: _, parts } => {
                 drop(parts);
@@ -900,7 +900,7 @@ where
                         opaque,
                     },
                 ))?
-                .into_handler_outcome()
+                .into_response_action()
             }
             PullDeferredRegisterRejection::RegistryRejected => BrokerResponseParts::command(remoting_error_response(
                 PublicErrorView::descriptor_only(&rocketmq_error::CORE_INTERNAL_FAILURE),
@@ -909,7 +909,7 @@ where
                     opaque,
                 },
             ))?
-            .into_handler_outcome(),
+            .into_response_action(),
         }
     }
 
@@ -917,7 +917,7 @@ where
         &self,
         opaque: i32,
         error: crate::long_polling::pull_deferred::PullDeferredRegisterError,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         use crate::long_polling::pull_deferred::PullDeferredRegisterError;
 
         match error {
@@ -929,7 +929,7 @@ where
                         opaque,
                     },
                 ))?
-                .into_handler_outcome()
+                .into_response_action()
             }
             PullDeferredRegisterError::RegistryContract(violation) => Err(crate::broker_error::internal(
                 "register deferred Pull request",

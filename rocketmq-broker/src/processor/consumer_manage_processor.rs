@@ -33,11 +33,11 @@ use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQ
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::BrokerStorePort;
 use rocketmq_transport::api::error_response;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::RpcClient;
 use rocketmq_transport::api::RpcClientImpl;
 use rocketmq_transport::api::RpcRequest;
@@ -80,7 +80,7 @@ impl<MS> RequestProcessor for ConsumerManageProcessor<MS>
 where
     MS: BrokerStorePort + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.process_shared(request).await
     }
 }
@@ -89,7 +89,7 @@ impl<MS: BrokerStorePort> ConsumerManageProcessor<MS> {
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let original_opaque = request.original_identity().original_opaque();
         let request_source = trusted_request_source(request)?;
         let result = self.process_command(request_source, request.command_mut()).await;
