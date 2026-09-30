@@ -46,8 +46,11 @@ async fn public_oneway_waiter_lets_the_admitted_deadline_candidate_complete_and_
     assert_eq!(state.processes.load(Ordering::SeqCst), 1);
     assert!(state.observations.lock().expect("observation lock").is_empty());
     assert_eq!(dispatcher.core.reported_failure_categories(), ["deadline"]);
-    assert_eq!(fixture.task_group.task_count(), 0);
+    // Drain the real-time RuntimeOwner before checking its task records.
+    tokio::time::resume();
+    let task_group = fixture.task_group.clone();
     fixture.shutdown().await;
+    assert_eq!(task_group.task_count(), 0);
 }
 
 #[tokio::test]

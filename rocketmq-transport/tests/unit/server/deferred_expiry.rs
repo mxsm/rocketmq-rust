@@ -328,6 +328,7 @@ async fn real_tcp_protocol_timeout_sweeps_and_resumes_exactly_once() {
     assert_eq!(admission.snapshot().retained_bytes(), 0);
     assert_eq!(registry.test_index_counts(), (0, 0, 0));
     assert_eq!(registry.test_claim_marker_count(), 0);
+    await_inflight_release(&mut harness.admission_events).await;
     let snapshot = admission_controller.snapshot();
     assert_eq!(snapshot.queued.current_count, 0);
     assert_eq!(snapshot.queued.current_bytes, 0);
