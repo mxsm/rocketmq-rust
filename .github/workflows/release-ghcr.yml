@@ -67,9 +67,11 @@ jobs:
           [[ "$GITHUB_REF" == refs/heads/main ]] || { echo "Run from main" >&2; exit 1; }
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "A stable vX.Y.Z tag is required" >&2; exit 1; }
           [[ -n "$DOCKERHUB_USERNAME" && -n "$DOCKERHUB_TOKEN" ]] || { echo "Docker Hub credentials are required for source verification" >&2; exit 1; }
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
-          echo "commit=$(git rev-parse "refs/tags/${TAG}^{commit}")" >> "$GITHUB_OUTPUT"
-          echo "namespace=${DOCKERHUB_NAMESPACE:-$DOCKERHUB_USERNAME}" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=${TAG#v}"
+            echo "commit=$(git rev-parse "refs/tags/${TAG}^{commit}")"
+            echo "namespace=${DOCKERHUB_NAMESPACE:-$DOCKERHUB_USERNAME}"
+          } >> "$GITHUB_OUTPUT"
       - name: Test publication boundaries
         run: python -m unittest discover -s scripts/tests -p 'test_publish_ghcr_images.py'
       - name: Install pinned registry copy tool
