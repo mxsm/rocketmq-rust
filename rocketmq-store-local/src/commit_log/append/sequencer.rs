@@ -97,9 +97,9 @@ impl<T> AppendSequencerSender<T> {
     /// Returns whether the request was accepted or rejected with ownership preserved.
     pub fn try_submit(&self, request: T, retained_bytes: usize) -> AppendAdmissionOutcome<T> {
         match self.queue.try_push_data(request, retained_bytes) {
-            QueueEnqueueStatus::Enqueued | QueueEnqueueStatus::Coalesced { .. } | QueueEnqueueStatus::DroppedStale { .. } => {
-                AppendAdmissionOutcome::Accepted
-            }
+            QueueEnqueueStatus::Enqueued
+            | QueueEnqueueStatus::Coalesced { .. }
+            | QueueEnqueueStatus::DroppedStale { .. } => AppendAdmissionOutcome::Accepted,
             QueueEnqueueStatus::Rejected {
                 item: request,
                 rejection,

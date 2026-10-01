@@ -595,10 +595,12 @@ impl<T> BudgetedQueue<T> {
         discarded: &mut Vec<T>,
     ) -> QueueEnqueueStatus<T> {
         match self.inner.budget.limit().full_policy {
-            FullPolicy::Reject | FullPolicy::WaitUntilDeadline | FullPolicy::DropStale => QueueEnqueueStatus::Rejected {
-                item,
-                rejection: QueuePushRejection::BudgetExhausted(rejection),
-            },
+            FullPolicy::Reject | FullPolicy::WaitUntilDeadline | FullPolicy::DropStale => {
+                QueueEnqueueStatus::Rejected {
+                    item,
+                    rejection: QueuePushRejection::BudgetExhausted(rejection),
+                }
+            }
             FullPolicy::CoalesceLatest => {
                 if rejection.dimension() == Some(BudgetDimension::Rate)
                     || rejection.exhausted_path() != self.inner.budget.path()

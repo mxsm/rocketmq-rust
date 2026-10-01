@@ -589,7 +589,9 @@ impl LocalFileOffsetStore {
     ) {
         let retained_bytes = command.retained_bytes();
         match self.persist_commands.try_push_data(command, retained_bytes) {
-            QueueEnqueueStatus::Enqueued | QueueEnqueueStatus::Coalesced { .. } | QueueEnqueueStatus::DroppedStale { .. } => {
+            QueueEnqueueStatus::Enqueued
+            | QueueEnqueueStatus::Coalesced { .. }
+            | QueueEnqueueStatus::DroppedStale { .. } => {
                 Self::await_persist_result(receiver, operation).await
             }
             QueueEnqueueStatus::Rejected { item, rejection } => {

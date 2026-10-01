@@ -230,7 +230,9 @@ impl ClusterExecutionLanes {
             }
         };
         match push_result {
-            QueueEnqueueStatus::Enqueued | QueueEnqueueStatus::Coalesced { .. } | QueueEnqueueStatus::DroppedStale { .. } => {
+            QueueEnqueueStatus::Enqueued
+            | QueueEnqueueStatus::Coalesced { .. }
+            | QueueEnqueueStatus::DroppedStale { .. } => {
                 self.counters.admitted.fetch_add(1, Ordering::Relaxed);
                 if created {
                     Ok(Some(ClusterLaneRegistration {

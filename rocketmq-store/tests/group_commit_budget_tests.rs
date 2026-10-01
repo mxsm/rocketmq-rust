@@ -39,7 +39,9 @@ fn admitted<T>(outcome: QueueEnqueueStatus<T>) {
 fn rejection<T>(outcome: QueueEnqueueStatus<T>) -> QueuePushRejection {
     match outcome {
         QueueEnqueueStatus::Rejected { rejection, .. } => rejection,
-        QueueEnqueueStatus::Enqueued | QueueEnqueueStatus::Coalesced { .. } | QueueEnqueueStatus::DroppedStale { .. } => {
+        QueueEnqueueStatus::Enqueued
+        | QueueEnqueueStatus::Coalesced { .. }
+        | QueueEnqueueStatus::DroppedStale { .. } => {
             panic!("group commit request should be rejected")
         }
     }
