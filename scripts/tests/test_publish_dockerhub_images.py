@@ -213,6 +213,18 @@ class DockerHubReleaseTests(unittest.TestCase):
                     self.assertEqual(9, sleep.call_count)
                     self.assertFalse(prefix.with_suffix(".attestation.jsonl").exists())
 
+    def test_scanning_uses_registry_endpoint_without_changing_local_or_ghcr_sources(self):
+        references = [(f"{REPOSITORY}@{DIGEST}", True,
+                       f"registry-1.docker.io/example/rocketmq-rust-namesrv@{DIGEST}"),
+                      ("rocketmq-release/namesrv:1.0.0", False, "rocketmq-release/namesrv:1.0.0"),
+                      (f"ghcr.io/example/namesrv@{DIGEST}", True, f"ghcr.io/example/namesrv@{DIGEST}")]
+        for reference, remote, expected in references:
+            with self.subTest(reference=reference), patch.object(release, "run") as run:
+                release.qualify(reference, self.root / "scan", remote=remote)
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertEqual(f"{'registry' if remote else 'docker'}:{expected}", commands[0][1])
+            self.assertEqual(expected, commands[1][-1])
+
     def test_resigning_waits_for_the_fresh_sbom_after_an_older_valid_attestation(self):
         expected = {"bomFormat": "CycloneDX", "serialNumber": "new-scan"}
         sbom = self.root / "sbom.json"

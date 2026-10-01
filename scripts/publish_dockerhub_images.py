@@ -42,6 +42,15 @@ class ReleaseError(ValueError):
     """Publication cannot proceed without changing an existing release or bypassing a check."""
 
 
+def registry_reference(reference: str) -> str:
+    # The historical index endpoint can rate-limit authenticated readers as anonymous.
+    # Keep public image names stable while directing registry clients to Docker's v2 host.
+    for prefix in ("docker.io/", "index.docker.io/"):
+        if reference.startswith(prefix):
+            return "registry-1.docker.io/" + reference.removeprefix(prefix)
+    return reference
+
+
 def run(command: list[str], *, capture: bool = False) -> str:
     result = subprocess.run(command, cwd=ROOT, check=True, text=True,
                             stdout=subprocess.PIPE if capture else None)
@@ -175,6 +184,8 @@ def build(image: dict, local: str, version: str, commit: str, platform: str) -> 
 
 
 def qualify(reference: str, prefix: Path, *, remote: bool) -> Path:
+    if remote:
+        reference = registry_reference(reference)
     sbom = prefix.with_suffix(".cdx.json")
     run(["syft", f"{'registry' if remote else 'docker'}:{reference}",
          "--output", f"cyclonedx-json={sbom}"])
@@ -186,6 +197,7 @@ def qualify(reference: str, prefix: Path, *, remote: bool) -> Path:
 
 
 def sign(reference: str, sbom: Path, commit: str, name: str, prefix: Path) -> None:
+    reference = registry_reference(reference)
     annotations = ["--annotations", f"source_commit={commit}", "--annotations", f"component={name}"]
     upload_cosign_evidence(["cosign", "sign", "--yes", "--bundle",
                            str(prefix.with_suffix(".signature-bundle.json")), *annotations, reference])

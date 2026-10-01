@@ -104,9 +104,10 @@ class GhcrReleaseTests(unittest.TestCase):
         (self.root / "namesrv.trivy.json").write_text('{"Results":[]}')
         result = self.execute()
         self.assertEqual(self.copies(), [
-            ["crane", "copy", f"{SOURCE}@{DIGEST}", "ghcr.io/mxsm/rocketmq-rust/namesrv:1.0.0"],
-            ["crane", "copy", f"docker.io/example/rocketmq-rust-broker@{DIGEST}", "ghcr.io/mxsm/rocketmq-rust/broker:1.0.0"]])
+            ["crane", "copy", f"registry-1.docker.io/example/rocketmq-rust-namesrv@{DIGEST}", "ghcr.io/mxsm/rocketmq-rust/namesrv:1.0.0"],
+            ["crane", "copy", f"registry-1.docker.io/example/rocketmq-rust-broker@{DIGEST}", "ghcr.io/mxsm/rocketmq-rust/broker:1.0.0"]])
         self.assertEqual(len(result["images"]), 2)
+        self.assertEqual(result["images"][0]["source"], f"{SOURCE}@{DIGEST}")
         self.assertEqual(len(result["artifacts"]["namesrv.trivy.json"]), 64)
         self.assertTrue(all(image["tags"] == ["1.0.0"] for image in result["images"]))
 
@@ -161,8 +162,9 @@ class GhcrReleaseTests(unittest.TestCase):
 
     def test_sbom_accepts_both_statement_versions_and_canonical_docker_name(self):
         for version in ("v0.1", "v1"):
-            release.verify_sbom_subject(attestation(SOURCE.replace("docker.io", "index.docker.io"),
-                statement_type=f"https://in-toto.io/Statement/{version}"), SOURCE, DIGEST)
+            for host in ("index.docker.io", "registry-1.docker.io"):
+                release.verify_sbom_subject(attestation(SOURCE.replace("docker.io", host),
+                    statement_type=f"https://in-toto.io/Statement/{version}"), SOURCE, DIGEST)
 
     def test_sbom_rejects_unknown_type_wrong_repository_or_wrong_digest(self):
         for envelope in (attestation(statement_type="https://in-toto.io/Statement/v2"),

@@ -311,15 +311,17 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s' "$DOCKERHUB_TOKEN" | cosign login index.docker.io --username "$DOCKERHUB_USERNAME" --password-stdin
+          printf '%s' "$DOCKERHUB_TOKEN" | cosign login registry-1.docker.io --username "$DOCKERHUB_USERNAME" --password-stdin
           python - <<'PY'
           import base64, json, os
           from pathlib import Path
           config = json.loads((Path(os.environ['DOCKER_CONFIG']) / 'config.json').read_text())
-          entry = config.get('auths', {}).get('https://index.docker.io/v1/', {})
-          actual = base64.b64decode(entry.get('auth', ''), validate=True).decode()
           expected = os.environ['DOCKERHUB_USERNAME'] + ':' + os.environ['DOCKERHUB_TOKEN']
-          if actual != expected or config.get('credsStore') or config.get('credHelpers'):
-              raise SystemExit('Release registry credential preflight failed')
+          for registry in ('https://index.docker.io/v1/', 'registry-1.docker.io'):
+              entry = config.get('auths', {}).get(registry, {})
+              actual = base64.b64decode(entry.get('auth', ''), validate=True).decode()
+              if actual != expected or config.get('credsStore') or config.get('credHelpers'):
+                  raise SystemExit('Release registry credential preflight failed')
           print('Docker Hub release credential preflight passed')
           PY
       - name: Build, scan, sign, and publish the selected group
