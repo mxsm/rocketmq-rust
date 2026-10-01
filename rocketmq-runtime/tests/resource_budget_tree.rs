@@ -28,7 +28,7 @@ use rocketmq_runtime::DynamicKeyAdmissionRejection;
 use rocketmq_runtime::DynamicKeyRegistrationFailure;
 use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::MonotonicClock;
-use rocketmq_runtime::PermitRebindOutcome;
+use rocketmq_runtime::PermitBudgetTransferStatus;
 use rocketmq_runtime::QueuePushOutcome;
 use rocketmq_runtime::QueuePushRejection;
 use rocketmq_runtime::RateLimit;
@@ -106,7 +106,7 @@ fn resizing_preserves_control_reserves_and_supports_growth_after_rebind() {
     key.close();
     assert!(permit.try_resize(50).unwrap_err().is_closed());
     permit.try_resize(20).unwrap();
-    assert_eq!(permit.try_rebind(&root).unwrap(), PermitRebindOutcome::Rebound);
+    assert_eq!(permit.try_rebind(&root).unwrap(), PermitBudgetTransferStatus::Rebound);
     permit.try_resize(80).unwrap();
     assert!(permit.try_resize(81).is_err());
     assert_eq!(root.snapshot().current_bytes, 80);
@@ -125,7 +125,10 @@ fn resizing_a_rebound_permit_observes_the_new_dynamic_gate() {
         .register_dynamic_child("new", limit(2, 80, FullPolicy::Reject))
         .unwrap();
     let mut permit = root.try_acquire_data(20).unwrap();
-    assert_eq!(permit.try_rebind(&key.budget()).unwrap(), PermitRebindOutcome::Rebound);
+    assert_eq!(
+        permit.try_rebind(&key.budget()).unwrap(),
+        PermitBudgetTransferStatus::Rebound
+    );
     key.close();
     assert!(permit.try_resize(21).unwrap_err().is_closed());
     permit.try_resize(10).unwrap();
@@ -240,7 +243,7 @@ fn rebind_between_siblings_preserves_common_ancestor_accounting() {
 
     assert_eq!(
         permit.try_rebind(&target).expect("same-tree rebind"),
-        PermitRebindOutcome::Rebound
+        PermitBudgetTransferStatus::Rebound
     );
 
     assert_eq!(tree.root().snapshot().current_count, 1);
@@ -295,7 +298,7 @@ fn failed_rebind_keeps_the_source_permit_valid() {
         .expect("same-tree rebind must return an outcome");
     assert!(matches!(
         outcome,
-        PermitRebindOutcome::Rejected(ref error) if error.dimension() == Some(BudgetDimension::Count)
+        PermitBudgetTransferStatus::Rejected(ref error) if error.dimension() == Some(BudgetDimension::Count)
     ));
     assert_eq!(source.snapshot().current_count, 1);
     assert_eq!(source.snapshot().current_bytes, 8);
@@ -987,7 +990,7 @@ async fn retired_generation_closes_escaped_budgets_descendants_and_rebinds() {
         }
     }
     for result in [same.try_rebind(&old).unwrap(), sibling.try_rebind(&right).unwrap()] {
-        assert!(matches!(result, PermitRebindOutcome::Rejected(error) if error.is_closed()));
+        assert!(matches!(result, PermitBudgetTransferStatus::Rejected(error) if error.is_closed()));
     }
     assert_eq!(root.snapshot().current_count, 2);
     assert_eq!(old.snapshot().current_bytes, 16);
@@ -1003,7 +1006,7 @@ async fn retired_generation_closes_escaped_budgets_descendants_and_rebinds() {
         .is_closed());
     assert!(!key.retire_until(tokio::time::Instant::now()).await.released);
     // Migration out preserves the root reservation while draining the old key.
-    assert_eq!(same.try_rebind(&root).unwrap(), PermitRebindOutcome::Rebound);
+    assert_eq!(same.try_rebind(&root).unwrap(), PermitBudgetTransferStatus::Rebound);
     drop(sibling);
     assert!(key.retire_until(tokio::time::Instant::now()).await.released);
     let next = root
