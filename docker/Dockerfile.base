@@ -341,4 +341,9 @@ EXPOSE 5557 8088 8089
 ENTRYPOINT ["/usr/local/bin/rocketmq-mcp"]
 CMD ["--config", "/etc/rocketmq/mcp.toml", "--transport", "stdio"]
 
+# Docker Hub exposes the authenticated network transport. Keep the stdio target for
+# local clients and the existing foundation publication contract.
+FROM mcp AS mcp-http
+CMD ["--config", "/etc/rocketmq/mcp.toml", "--transport", "streamable-http"]
+
 FROM runtime-base-smoke AS container-contract-default

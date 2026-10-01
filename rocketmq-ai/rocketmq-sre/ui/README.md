@@ -24,9 +24,23 @@ npm run check:api
 ## 认证配置
 
 生产构建默认使用 OIDC，并在缺少 `VITE_SRE_OIDC_AUTHORITY` 或
-`VITE_SRE_OIDC_CLIENT_ID` 时 fail closed。通用 UI 镜像将这些公开的
-OIDC 客户端参数作为 Docker build argument 接收，因为 Vite 会在构建时
-写入浏览器 bundle。
+`VITE_SRE_OIDC_CLIENT_ID` 时 fail closed。通用 UI 镜像在容器启动时将
+公开的 OIDC 环境变量写入 `/runtime-config.js`，页面先加载配置再初始化认证。
+同一个镜像可以在不同部署环境中使用，发布 Action 无需配置 OIDC GitHub Variables。
+
+容器运行时支持以下公开配置：
+
+| 环境变量 | 用途 |
+| --- | --- |
+| `VITE_SRE_OIDC_AUTHORITY` | 必填，认证服务的 Issuer URL |
+| `VITE_SRE_OIDC_CLIENT_ID` | 必填，已注册的浏览器应用 Client ID |
+| `VITE_SRE_OIDC_REDIRECT_URI` | 可选，默认 `<当前页面 origin>/auth/callback` |
+| `VITE_SRE_OIDC_POST_LOGOUT_REDIRECT_URI` | 可选，默认当前页面 origin |
+| `VITE_SRE_OIDC_SCOPE` | 可选，默认 `openid profile rocketmq:read rocketmq:diagnose rocketmq:model-governance` |
+
+运行时配置优先于原有的 OIDC build arguments；构建参数仍兼容现有的自定义镜像。
+重新创建容器即可应用新的环境变量，配置响应禁止缓存。
+运行时配置仅包含上述字段，不接受认证模式、开发身份或 token。
 
 Compose 与 Kind 开发 profile 会显式构建
 `VITE_SRE_AUTH_MODE=development` 的 UI，并注入固定的 Phase 00

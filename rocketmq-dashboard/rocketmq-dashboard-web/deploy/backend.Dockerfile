@@ -2,7 +2,8 @@
 # Licensed under the Apache License, Version 2.0.
 
 ARG BUILDER_IMAGE=rust:1.95.0-bookworm
-ARG RUNTIME_IMAGE=debian:bookworm-slim
+# Debian 13 contains the patched Perl and zlib packages required by release scans.
+ARG RUNTIME_IMAGE=docker.io/library/debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
 
 FROM ${BUILDER_IMAGE} AS builder
 
@@ -41,7 +42,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 FROM ${RUNTIME_IMAGE}
 
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends ca-certificates libssl3 wget \
+    && apt-get install --yes --no-install-recommends ca-certificates libssl3t64 wget \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10001 rocketmq-dashboard \
     && useradd --system --uid 10001 --gid 10001 --create-home rocketmq-dashboard \
