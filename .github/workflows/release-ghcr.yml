@@ -104,6 +104,14 @@ jobs:
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
         with:
           cosign-release: v3.1.2
+      - name: Authenticate Cosign source verification
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$DOCKERHUB_TOKEN" | cosign login index.docker.io --username "$DOCKERHUB_USERNAME" --password-stdin
       - name: Qualify and mirror the shared release catalog
         shell: bash
         env:

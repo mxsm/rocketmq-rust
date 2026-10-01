@@ -312,6 +312,21 @@ class DockerHubReleaseTests(unittest.TestCase):
                 run.assert_called_once()
                 sleep.assert_not_called()
 
+    def test_registry_evidence_reads_retry_throttling_without_weakening_verification(self):
+        command = ["cosign", "verify-attestation", "--certificate-identity-regexp", release.IDENTITY,
+                   "--certificate-oidc-issuer", release.ISSUER, "--type", "cyclonedx",
+                   f"{REPOSITORY}@{DIGEST}"]
+        for error in ("unexpected status code 429 Too Many Requests", "unexpected status code 503",
+                      "GET registry/manifests/sha256-example.att: TOOMANYREQUESTS: pull rate limit"):
+            with self.subTest(error=error), patch.object(release.subprocess, "run", side_effect=[
+                    subprocess.CompletedProcess(command, 1, "", f"Error: {error}\n"),
+                    subprocess.CompletedProcess(command, 0, "verified", ""),
+                 ]) as run, patch.object(release.time, "sleep") as sleep, \
+                 patch("sys.stderr", new_callable=io.StringIO):
+                self.assertEqual("verified", release.verify_registry_evidence(command))
+            self.assertEqual([command, command], [call.args[0] for call in run.call_args_list])
+            sleep.assert_called_once_with(5)
+
     def test_registry_evidence_retry_exhaustion_remains_a_failure(self):
         command = ["cosign", "verify", f"{REPOSITORY}@{DIGEST}"]
         with patch.object(release.subprocess, "run", return_value=

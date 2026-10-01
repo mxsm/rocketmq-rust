@@ -96,6 +96,9 @@ def verify_registry_evidence(command: list[str], *, validate: Callable[[str], No
                 "no valid bundles exist in registry",
                 "no matching attestations: no valid bundles exist in registry",
             } or message.startswith("none of the attestations matched the predicate type: ")
+            unavailable = unavailable or bool(re.search(
+                r"unexpected status code (?:429|5[0-9]{2})\b|\bTOOMANYREQUESTS:", message,
+            ))
             if not unavailable or attempt == 9:
                 raise subprocess.CalledProcessError(
                     result.returncode, command, output=result.stdout, stderr=result.stderr,
