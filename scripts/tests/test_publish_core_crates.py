@@ -48,6 +48,60 @@ class CoreCrateReleaseTests(unittest.TestCase):
         self.output = self.root / "release.json"
         self.packages = ["rocketmq-model", "rocketmq-common"]
 
+    def workspace_selection(self):
+        (self.root / "Cargo.toml").write_text(
+            '[workspace.package]\nversion = "1.0.0"\n', encoding="utf-8"
+        )
+        scope = {"core_packages": [{"name": "rocketmq-model", "classification": "registry-publish"}]}
+        metadata = {
+            "workspace_members": ["model", "dashboard"],
+            "packages": [
+                {"id": "model", "name": "rocketmq-model", "version": "1.0.0", "publish": None},
+                {"id": "dashboard", "name": "rocketmq-dashboard-common", "version": "1.0.0", "publish": None},
+                {"id": "standalone", "name": "rocketmq-mcp", "version": "1.0.0", "publish": None},
+            ],
+        }
+        return scope, metadata
+
+    def test_selection_includes_dashboard_common_and_excludes_non_workspace_packages(self):
+        scope, metadata = self.workspace_selection()
+        with patch.object(release.core_release_scope, "load_scope", return_value=scope), \
+             patch.object(release.core_release_scope, "collect_metadata", return_value=metadata):
+            version, packages = release.release_packages(self.root, "v1.0.0")
+        self.assertEqual(version, "1.0.0")
+        self.assertEqual(packages, ["rocketmq-model", "rocketmq-dashboard-common"])
+        self.assertNotIn("rocketmq-dashboard-common", [entry["name"] for entry in scope["core_packages"]])
+
+    def test_invalid_dashboard_workspace_package_stops_selection(self):
+        for mutation in ("missing", "wrong-version", "non-publishable", "outside-workspace"):
+            with self.subTest(mutation=mutation):
+                scope, metadata = self.workspace_selection()
+                if mutation == "missing":
+                    metadata["packages"].pop(1)
+                elif mutation == "wrong-version":
+                    metadata["packages"][1]["version"] = "0.9.0"
+                elif mutation == "non-publishable":
+                    metadata["packages"][1]["publish"] = []
+                else:
+                    metadata["workspace_members"].remove("dashboard")
+                with patch.object(release.core_release_scope, "load_scope", return_value=scope), \
+                     patch.object(release.core_release_scope, "collect_metadata", return_value=metadata):
+                    with self.assertRaisesRegex(release.ReleaseError, "invalid publishable workspace package"):
+                        release.release_packages(self.root, "v1.0.0")
+
+    def test_resume_publishes_only_missing_dashboard_common(self):
+        scope, metadata = self.workspace_selection()
+        with patch.dict(release.os.environ, {"CARGO_REGISTRY_TOKEN": "test-token"}), \
+             patch.object(release.subprocess, "check_output", return_value=COMMIT), \
+             patch.object(release.core_release_scope, "load_scope", return_value=scope), \
+             patch.object(release.core_release_scope, "collect_metadata", return_value=metadata), \
+             patch.object(release, "version_exists", side_effect=[True, False]), \
+             patch.object(release, "cargo_publish") as cargo:
+            result = release.execute(self.root, "v1.0.0", "publish", COMMIT, self.output)
+        cargo.assert_called_once_with(self.root, ["rocketmq-dashboard-common"], dry_run=False)
+        self.assertEqual(result["existing"], ["rocketmq-model"])
+        self.assertEqual(result["published"], ["rocketmq-dashboard-common"])
+
     def test_verify_never_queries_registry_or_uploads(self):
         with patch.object(release, "release_packages", return_value=("1.0.0", self.packages)), \
              patch.object(release, "version_exists") as registry, \

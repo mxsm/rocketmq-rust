@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Verify or publish the declared core crates, resuming partial releases safely."""
+"""Verify or publish core crates and Dashboard common, resuming partial releases safely."""
 
 from __future__ import annotations
 
@@ -34,8 +34,10 @@ import urllib.request
 import core_release_scope
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(os.environ.get("RELEASE_SOURCE_ROOT", Path(__file__).resolve().parents[1])).resolve()
 USER_AGENT = "rocketmq-rust-release (https://github.com/mxsm/rocketmq-rust)"
+# Dashboard common is publishable while remaining outside the core architecture boundary.
+ADDITIONAL_WORKSPACE_PACKAGES = ("rocketmq-dashboard-common",)
 
 
 class ReleaseError(ValueError):
@@ -62,6 +64,12 @@ def release_packages(root: Path, tag: str) -> tuple[str, list[str]]:
         selected.append(entry["name"])
     if not selected:
         raise ReleaseError("core release scope contains no registry packages")
+    for name in ADDITIONAL_WORKSPACE_PACKAGES:
+        package = packages.get(name)
+        if package is None or package["version"] != version or package["publish"] == []:
+            raise ReleaseError(f"invalid publishable workspace package: {name}")
+        if name not in selected:
+            selected.append(name)
     return version, selected
 
 
@@ -128,7 +136,9 @@ def execute(root: Path, tag: str, mode: str, commit: str | None, output: Path) -
         if not os.environ.get("CARGO_REGISTRY_TOKEN"):
             raise ReleaseError("CARGO_REGISTRY_TOKEN is required for publication")
     version, packages = release_packages(root, tag)
-    result = {"version": version, "source_commit": commit, "packages": packages, "mode": mode}
+    result = {"version": version, "source_commit": commit,
+              "tooling_commit": os.environ.get("RELEASE_TOOLING_COMMIT"),
+              "packages": packages, "mode": mode}
     if mode == "verify":
         cargo_publish(root, packages, dry_run=True)
         result["verified"] = packages
@@ -145,7 +155,7 @@ def execute(root: Path, tag: str, mode: str, commit: str | None, output: Path) -
             result["published"] = pending
         elif mode == "publish":
             result["published"] = []
-            print(f"All {len(packages)} core crates already published from this source")
+            print(f"All {len(packages)} selected workspace crates already published from this source")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return result
