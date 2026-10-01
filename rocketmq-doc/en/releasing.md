@@ -15,6 +15,11 @@ commit tag. Existing version or commit tags with a different digest stop
 publication; neither tag is overwritten. `staging-...` tags are temporary build
 references and do not indicate a completed release.
 
+GHCR attestation verification accepts in-toto Statement v0.1 (emitted by the
+pinned Cosign 3.1.2 custom-predicate signer) and v1. Both require cryptographic
+verification, one exact repository/digest subject, and the complete typed
+canonical predicate. Unknown statement versions are rejected.
+
 ## Configure GitHub Actions
 
 Set the following repository **Secrets**:

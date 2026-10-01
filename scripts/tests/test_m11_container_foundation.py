@@ -383,6 +383,33 @@ class ContainerFoundationTests(unittest.TestCase):
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertEqual(matching, json.loads(matched_path.read_text(encoding="utf-8")))
 
+            for statement_type in (
+                "https://in-toto.io/Statement/v0.1",
+                "https://in-toto.io/Statement/v1",
+            ):
+                with self.subTest(statement_type=statement_type):
+                    supported = {**matching, "_type": statement_type}
+                    verification.write_text(envelope(supported) + "\n", encoding="utf-8")
+                    matched_path.unlink()
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            "-",
+                            str(verification),
+                            str(predicate_path),
+                            digest,
+                            predicate_type,
+                            repository,
+                            str(matched_path),
+                        ],
+                        input=matcher,
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertEqual(supported, json.loads(matched_path.read_text(encoding="utf-8")))
+
             predicate_path.write_text(json.dumps({**predicate, "service": "namesrv"}), encoding="utf-8")
             rejected_path = root / "rejected.json"
             rejected = subprocess.run(
@@ -408,7 +435,7 @@ class ContainerFoundationTests(unittest.TestCase):
             for label, statement, payload_type in (
                 (
                     "wrong-statement-type",
-                    {**matching, "_type": "https://in-toto.io/Statement/v0.1"},
+                    {**matching, "_type": "https://in-toto.io/Statement/v2"},
                     "application/vnd.in-toto+json",
                 ),
                 (

@@ -396,7 +396,10 @@ jobs:
                   and subjects[0]["digest"].get("sha256") == expected_sha256
               )
               if (
-                  statement.get("_type") == "https://in-toto.io/Statement/v1"
+                  statement.get("_type") in (
+                      "https://in-toto.io/Statement/v0.1",
+                      "https://in-toto.io/Statement/v1",
+                  )
                   and statement.get("predicateType") == predicate_type
                   and subject_matches
                   and json_exact_equal(statement.get("predicate"), expected_predicate)
