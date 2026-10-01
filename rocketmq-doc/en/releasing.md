@@ -105,11 +105,14 @@ generates CycloneDX SBOMs; Trivy blocks every CRITICAL finding, including those
 without a fix. New images are pushed to per-run staging tags, scanned again by
 registry digest, signed with Cosign, and accompanied by verified SBOM
 attestations. Only then is the stable version tag promoted while
-preserving the digest. Newly uploaded signatures and attestations may take time
-to become discoverable. Temporary discovery failures are retried up to nine times
-with bounded backoff (at most 375 seconds of waiting per verification).
-Authorization, certificate, issuer, and cryptographic failures stop immediately;
-tags are promoted only after successful verification.
+preserving the digest. Cosign verifies the exact uploaded Sigstore bundles locally
+against the image digest, release workflow certificate identity, issuer, source and
+component annotations, and complete scanned SBOM. This avoids waiting for registry
+indexing or downloading every historical signature again. Authorization, certificate,
+issuer, and cryptographic failures stop immediately; tags are promoted only after
+successful verification. Registry uploads retry throttling and server failures with
+bounded backoff. Registry clients use the authenticated `registry-1.docker.io` host;
+the public image names remain unchanged.
 The publisher deletes its temporary tag after promotion and on handled publication
 failures. An `always()` workflow step also removes only the current run's staging
 tags, including failed or cancelled runs when the runner remains available.
@@ -132,8 +135,12 @@ Before copying any selected image, the mirror verifies the immutable tag/source
 and OCI labels, the Docker Hub keyless signature with its release workflow
 identity and source/component annotations, and the signed CycloneDX SBOM's exact
 repository/digest subject. It accepts in-toto Statement v0.1 and v1 and rejects
-unknown versions. All selected images receive fresh SBOMs and Trivy scans with
-zero CRITICAL findings required before the first copy.
+unknown versions. The automatic mirror downloads evidence produced by successful
+Docker Hub jobs in the same Actions run. It re-verifies both signed bundles and
+reuses that run's fresh SBOM and zero-CRITICAL Trivy report after checking the exact
+image subject. Missing, incomplete, conflicting or invalid evidence blocks every
+copy. Independent GHCR dispatches verify registry evidence and generate fresh SBOMs
+and Trivy scans, with zero CRITICAL findings required before the first copy.
 
 The complete publication record binds the image digests and hashes of the SBOMs,
 scans, and source proofs. Cosign signs this record as a blob; evidence is uploaded

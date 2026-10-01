@@ -64,6 +64,75 @@ class GhcrReleaseTests(unittest.TestCase):
     def copies(self):
         return [call.args[0] for call in self.commands.call_args_list if call.args[0][:2] == ["crane", "copy"]]
 
+    def write_evidence(self):
+        directory = self.root / "source-proofs"
+        directory.mkdir()
+        publication = {"version": "1.0.0", "source_commit": COMMIT, "complete": True, "dry_run": False,
+                       "images": [{"component": image["name"],
+                                   "repository": f"docker.io/example/{image['repository']}",
+                                   "digest": DIGEST, "tags": ["1.0.0"], "published": True, "checks": "passed"}
+                                  for image in self.images]}
+        (directory / "publication.json").write_text(json.dumps(publication))
+        for image in self.images:
+            name = image["name"]
+            (directory / f"{name}.cdx.json").write_text('{"bomFormat":"CycloneDX","components":[]}')
+            (directory / f"{name}.trivy.json").write_text(json.dumps({
+                "SchemaVersion": 2, "ArtifactType": "container_image", "Results": [],
+                "ArtifactName": f"docker.io/example/{image['repository']}@{DIGEST}"}))
+        return directory, publication
+
+    def test_same_run_evidence_reuses_scans_and_verifies_bundles_before_copy(self):
+        directory, _ = self.write_evidence()
+        self.inspect.side_effect = [state(), state("broker"), state(), state("broker")]
+        result = release.execute("all", "1.0.0", COMMIT, "example", "mxsm", True, self.root,
+                                 source_evidence=directory)
+        self.scan.assert_not_called()
+        self.assertEqual(2, self.verify.call_count)
+        self.assertEqual(directory / "namesrv", self.verify.call_args_list[0].kwargs["evidence_prefix"])
+        self.assertEqual(2, len(self.copies()))
+        self.assertTrue(result["complete"])
+        self.assertIn("namesrv.trivy.json", result["artifacts"])
+
+    def test_missing_incomplete_wrong_release_or_conflicting_evidence_blocks_copy(self):
+        directory, publication = self.write_evidence()
+        invalid = [dict(publication, complete=False), dict(publication, source_commit="c" * 40),
+                   dict(publication, dry_run=True), dict(publication, images=[])]
+        conflicting = json.loads(json.dumps(publication))
+        conflicting["images"][0]["digest"] = "sha256:" + "c" * 64
+        invalid.append(conflicting)
+        for value in invalid:
+            self.inspect.side_effect = [state(), state("broker")]
+            (directory / "publication.json").write_text(json.dumps(value))
+            with self.subTest(value=value):
+                with self.assertRaises(release.ReleaseError):
+                    release.execute("all", "1.0.0", COMMIT, "example", "mxsm", True, self.root,
+                                    source_evidence=directory)
+        self.verify.assert_not_called()
+        self.assertEqual([], self.copies())
+
+    def test_reused_scan_rejects_critical_wrong_digest_and_malformed_scan(self):
+        directory, _ = self.write_evidence()
+        valid = json.loads((directory / "namesrv.trivy.json").read_text())
+        invalid = [dict(valid, ArtifactName=f"{SOURCE}@sha256:" + "c" * 64), {},
+                   dict(valid, Results=[{"Vulnerabilities": [{"Severity": "CRITICAL"}]}])]
+        for findings in invalid:
+            (directory / "namesrv.trivy.json").write_text(json.dumps(findings))
+            self.inspect.side_effect = [state(), state("broker")]
+            with self.subTest(findings=findings), self.assertRaises(release.ReleaseError):
+                release.execute("all", "1.0.0", COMMIT, "example", "mxsm", True, self.root,
+                                source_evidence=directory)
+        self.assertEqual([], self.copies())
+
+    def test_reused_evidence_signature_failure_blocks_scan_reuse_and_all_copies(self):
+        directory, _ = self.write_evidence()
+        self.inspect.side_effect = [state(), state("broker")]
+        self.verify.side_effect = subprocess.CalledProcessError(1, "cosign")
+        with self.assertRaises(subprocess.CalledProcessError):
+            release.execute("all", "1.0.0", COMMIT, "example", "mxsm", True, self.root,
+                            source_evidence=directory)
+        self.assertFalse((self.root / "namesrv.trivy.json").exists())
+        self.assertEqual([], self.copies())
+
     def test_dry_run_qualifies_sources_without_any_destination_write_or_signing(self):
         self.inspect.side_effect = [state(), state("broker")]
         result = self.execute(False)

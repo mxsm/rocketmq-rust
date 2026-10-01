@@ -27,8 +27,12 @@ on:
       image_group:
         type: string
         default: all
+      reuse_publication_artifacts:
+        type: boolean
+        default: false
 
 permissions:
+  actions: read
   contents: write
   packages: write
   id-token: write
@@ -132,6 +136,15 @@ jobs:
                   raise SystemExit('Release registry credential preflight failed')
           print('Docker Hub release credential preflight passed')
           PY
+      - name: Download this run's qualified Docker Hub evidence
+        if: ${{ inputs.reuse_publication_artifacts }}
+        shell: bash
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --pattern "release-images-*-$VERSION" --dir target/release/source-proofs
       - name: Qualify and mirror the shared release catalog
         shell: bash
         env:
@@ -140,10 +153,12 @@ jobs:
           NAMESPACE: ${{ steps.source.outputs.namespace }}
           GROUP: ${{ inputs.image_group }}
           DRY_RUN: ${{ inputs.dry_run }}
+          REUSE_PUBLICATION_ARTIFACTS: ${{ inputs.reuse_publication_artifacts || false }}
         run: |
           set -euo pipefail
           args=()
           if [[ "$DRY_RUN" == false ]]; then args+=(--publish); fi
+          if [[ "$REUSE_PUBLICATION_ARTIFACTS" == true ]]; then args+=(--source-evidence target/release/source-proofs); fi
           python scripts/publish_ghcr_images.py --group "$GROUP" --version "$VERSION" \
             --source-commit "$SOURCE_COMMIT" --namespace "$NAMESPACE" --output target/release/ghcr "${args[@]}"
           echo "GHCR group \`$GROUP\` passed; dry-run: \`$DRY_RUN\`. Digests match Docker Hub." >> "$GITHUB_STEP_SUMMARY"

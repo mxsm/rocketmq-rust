@@ -63,6 +63,21 @@ class DockerHubReleaseTests(unittest.TestCase):
     def write_policy(self):
         (self.root / "docker/release-images.json").write_text(json.dumps(self.policy))
 
+    def write_bundles(self, predicate, *, digest=DIGEST, repository=REPOSITORY,
+                      commit=COMMIT, name="namesrv"):
+        prefix = self.root / "sign"
+        signature = {"_type": "https://in-toto.io/Statement/v1",
+                     "predicateType": "https://sigstore.dev/cosign/sign/v1", "predicate": {},
+                     "subject": [{"digest": {"sha256": digest.removeprefix("sha256:")},
+                                  "annotations": {"source_commit": commit, "component": name}}]}
+        sbom = {"_type": "https://in-toto.io/Statement/v0.1", "predicateType": "https://cyclonedx.org/bom",
+                "subject": [{"name": repository, "digest": {"sha256": digest.removeprefix("sha256:")}}],
+                "predicate": predicate}
+        for kind, statement in (("signature", signature), ("attestation", sbom)):
+            envelope = {"payload": base64.b64encode(json.dumps(statement).encode()).decode(), "signatures": []}
+            prefix.with_suffix(f".{kind}-bundle.json").write_text(json.dumps({"dsseEnvelope": envelope}))
+        return prefix
+
     def test_dry_run_never_inspects_pushes_signs_or_promotes(self):
         with patch.object(release, "ROOT", self.root), \
              patch.object(release, "run", return_value=COMMIT) as commands, \
@@ -192,25 +207,17 @@ class DockerHubReleaseTests(unittest.TestCase):
         expected = {"bomFormat": "CycloneDX"}
         for predicate, actual_digest, matches in [(expected, DIGEST, True),
                 (expected, "sha256:" + "c" * 64, False), ({"bomFormat": "different"}, DIGEST, False)]:
-            payload = attestation(predicate, actual_digest)
-            verified = subprocess.CompletedProcess([], 0, payload, "")
-            prefix = self.root / "sign"
+            prefix = self.write_bundles(predicate, digest=actual_digest)
+            prefix.with_suffix(".attestation.jsonl").unlink(missing_ok=True)
             with self.subTest(predicate=predicate, digest=actual_digest), \
                  patch.object(release, "upload_cosign_evidence"), \
-                 patch.object(release.subprocess, "run", side_effect=[
-                     subprocess.CompletedProcess([], 0, "{}", ""), *[verified] * 10,
-                 ]) as commands, patch.object(release.time, "sleep") as sleep, \
-                 patch("sys.stderr", new_callable=io.StringIO):
+                 patch.object(release, "run"):
                 if matches:
                     release.sign(f"{REPOSITORY}@{DIGEST}", sbom, COMMIT, "namesrv", prefix)
-                    self.assertEqual(payload, prefix.with_suffix(".attestation.jsonl").read_text())
-                    sleep.assert_not_called()
+                    self.assertTrue(prefix.with_suffix(".attestation.jsonl").exists())
                 else:
-                    prefix.with_suffix(".attestation.jsonl").unlink(missing_ok=True)
                     with self.assertRaises(release.ReleaseError):
                         release.sign(f"{REPOSITORY}@{DIGEST}", sbom, COMMIT, "namesrv", prefix)
-                    self.assertEqual(11, commands.call_count)
-                    self.assertEqual(9, sleep.call_count)
                     self.assertFalse(prefix.with_suffix(".attestation.jsonl").exists())
 
     def test_scanning_uses_registry_endpoint_without_changing_local_or_ghcr_sources(self):
@@ -225,33 +232,47 @@ class DockerHubReleaseTests(unittest.TestCase):
             self.assertEqual(f"{'registry' if remote else 'docker'}:{expected}", commands[0][1])
             self.assertEqual(expected, commands[1][-1])
 
-    def test_resigning_waits_for_the_fresh_sbom_after_an_older_valid_attestation(self):
+    def test_sign_verifies_current_bundles_without_discovering_historical_registry_evidence(self):
         expected = {"bomFormat": "CycloneDX", "serialNumber": "new-scan"}
         sbom = self.root / "sbom.json"
         sbom.write_text(json.dumps(expected))
-        old = attestation({"bomFormat": "CycloneDX", "serialNumber": "old-scan"})
-        fresh = attestation(expected)
-        with patch.object(release, "upload_cosign_evidence"), patch.object(release.subprocess, "run", side_effect=[
-                subprocess.CompletedProcess([], 0, "{}", ""),
-                subprocess.CompletedProcess([], 0, old, ""),
-                subprocess.CompletedProcess([], 0, old + "\n" + fresh, ""),
-             ]) as commands, patch.object(release.time, "sleep") as sleep, \
-             patch("sys.stderr", new_callable=io.StringIO):
-            release.sign(f"{REPOSITORY}@{DIGEST}", sbom, COMMIT, "namesrv", self.root / "sign")
-        self.assertEqual(commands.call_args_list[1], commands.call_args_list[2])
-        sleep.assert_called_once_with(5)
-        self.assertEqual(old + "\n" + fresh, (self.root / "sign.attestation.jsonl").read_text())
+        prefix = self.write_bundles(expected, repository=release.registry_reference(REPOSITORY))
+        with patch.object(release, "upload_cosign_evidence"), patch.object(release, "run") as commands, \
+             patch.object(release, "verify_registry_evidence") as discovery:
+            release.sign(f"{REPOSITORY}@{DIGEST}", sbom, COMMIT, "namesrv", prefix)
+        discovery.assert_not_called()
+        self.assertEqual(2, commands.call_count)
+        for call in commands.call_args_list:
+            command = call.args[0]
+            self.assertEqual(["cosign", "verify-blob-attestation"], command[:2])
+            self.assertIn("--check-claims=true", command)
+            self.assertEqual(DIGEST.removeprefix("sha256:"), command[command.index("--digest") + 1])
+            self.assertEqual("sha256", command[command.index("--digestAlg") + 1])
+        view = json.loads(prefix.with_suffix(".signature.json").read_text())
+        self.assertEqual(COMMIT, view[0]["optional"]["source_commit"])
 
     def test_malformed_verified_attestation_fails_without_retry(self):
         sbom = self.root / "sbom.json"
         sbom.write_text('{"bomFormat":"CycloneDX"}')
-        with patch.object(release, "upload_cosign_evidence"), patch.object(release.subprocess, "run", side_effect=[
-                subprocess.CompletedProcess([], 0, "{}", ""),
-                subprocess.CompletedProcess([], 0, "malformed-json", ""),
-             ]), patch.object(release.time, "sleep") as sleep:
+        prefix = self.write_bundles({"bomFormat": "CycloneDX"})
+        prefix.with_suffix(".attestation-bundle.json").write_text("malformed-json")
+        with patch.object(release, "upload_cosign_evidence"), patch.object(release, "run"), \
+             patch.object(release.time, "sleep") as sleep:
             with self.assertRaises(json.JSONDecodeError):
-                release.sign(f"{REPOSITORY}@{DIGEST}", sbom, COMMIT, "namesrv", self.root / "sign")
+                release.sign(f"{REPOSITORY}@{DIGEST}", sbom, COMMIT, "namesrv", prefix)
         sleep.assert_not_called()
+
+    def test_bundle_source_annotations_repository_and_cryptographic_failures_block_evidence(self):
+        sbom = self.root / "sbom.json"
+        sbom.write_text('{"bomFormat":"CycloneDX"}')
+        for values in ({"commit": "c" * 40}, {"name": "broker"}, {"repository": "docker.io/attacker/namesrv"}):
+            prefix = self.write_bundles({"bomFormat": "CycloneDX"}, **values)
+            with self.subTest(values=values), patch.object(release, "run"):
+                with self.assertRaises(release.ReleaseError):
+                    release.verify_release_bundles(f"{REPOSITORY}@{DIGEST}", sbom, COMMIT, "namesrv", prefix)
+        with patch.object(release, "run", side_effect=subprocess.CalledProcessError(1, "cosign")):
+            with self.assertRaises(subprocess.CalledProcessError):
+                release.verify_release_bundles(f"{REPOSITORY}@{DIGEST}", sbom, COMMIT, "namesrv", self.root / "missing")
 
     def test_evidence_upload_retries_registry_throttling_and_server_errors(self):
         command = ["cosign", "attest", "--type", "cyclonedx", f"{REPOSITORY}@{DIGEST}"]
