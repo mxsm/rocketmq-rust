@@ -247,6 +247,17 @@ map each removed API to its replacement and list the changed contracts,
 including `/drainz` accepting only `POST` by default, `TaskId` recording its
 group and `RuntimeError::kind()`.
 
+### Permit transfer status
+
+`PermitRebindOutcome` is now `PermitBudgetTransferStatus`, because the type
+reports a permit moving its reservations from a source budget to a target
+budget in the same tree. This is an `approved-break`: external callers must
+replace the old name in imports and type references, for example
+`rocketmq_runtime::PermitBudgetTransferStatus` or
+`rocketmq_runtime::resource_budget::PermitBudgetTransferStatus`. No alias or
+wrapper under the old name is provided. `ResourcePermit::try_rebind`, its
+variants (`Rebound`, `Unchanged`, `Rejected`) and their payloads are unchanged.
+
 ### Typed filter compilation
 
 New filter callers use `Filter::try_compile`, which returns `FilterCompileError`
