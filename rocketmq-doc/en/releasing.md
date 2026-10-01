@@ -106,6 +106,11 @@ Rerun the **same tag** after a failure:
 
 - Existing crate versions are skipped only when their published archive records
   the same clean source commit. Registry errors and yanked versions stop publication.
+- A terminal crates.io HTTP 429 publication error is retried up to five times,
+  respecting its advertised UTC cooldown (60 seconds when no date is supplied).
+  Every retry rechecks existing archives and publishes only missing versions.
+  Other failures stop immediately. Cooldowns longer than ten minutes require a
+  later manual rerun; the release tag and source commit remain unchanged.
 - Existing image version/commit tags must match the release source and each other.
   Their digest is reused, rescanned, and signed again; conflicting tags stop the
   group instead of being overwritten.
