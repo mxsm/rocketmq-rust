@@ -30,7 +30,7 @@ import tomllib
 from urllib.parse import quote
 
 from publish_dockerhub_images import (IDENTITY, ISSUER, ReleaseError, check_identity,
-                                      qualify, run, verify_registry_evidence)
+                                      qualify, registry_reference, run, verify_registry_evidence)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +39,7 @@ IMAGE_TYPES = {"application/vnd.oci.image.manifest.v1+json",
 
 
 def inspect(reference: str, *, missing_ok: bool = False) -> dict | None:
+    reference = registry_reference(reference)
     result = subprocess.run(["crane", "digest", reference], text=True, capture_output=True, check=False)
     if result.returncode:
         # A transport, authorization, or rate-limit failure is never an absent image.
@@ -74,7 +75,8 @@ def destination_state(owner: str, name: str, version: str) -> dict | None:
 
 def verify_sbom_subject(attestations: str, repository: str, digest: str) -> None:
     # Cosign canonicalizes docker.io to index.docker.io in the statement subject.
-    names = {repository, repository.replace("docker.io/", "index.docker.io/", 1)}
+    names = {repository, repository.replace("docker.io/", "index.docker.io/", 1),
+             registry_reference(repository)}
     for line in attestations.splitlines():
         if not line.strip():
             continue
@@ -94,7 +96,7 @@ def verify_sbom_subject(attestations: str, repository: str, digest: str) -> None
 
 
 def verify_source(repository: str, digest: str, commit: str, name: str, prefix: Path) -> None:
-    reference = f"{repository}@{digest}"
+    reference = registry_reference(f"{repository}@{digest}")
     verification = ["--certificate-identity-regexp", IDENTITY, "--certificate-oidc-issuer", ISSUER]
     signature = verify_registry_evidence([
         "cosign", "verify", *verification, "--annotations", f"source_commit={commit}",
@@ -184,7 +186,7 @@ def execute(group: str, version: str, commit: str, namespace: str, owner: str,
         reference = f"{destination}:{version}"
         if publish:
             if not present:
-                run(["crane", "copy", f"{source}@{digest}", reference])
+                run(["crane", "copy", registry_reference(f"{source}@{digest}"), reference])
             final = inspect(reference)
             check_identity(final, version, commit, name)
             if final["digest"] != digest:
