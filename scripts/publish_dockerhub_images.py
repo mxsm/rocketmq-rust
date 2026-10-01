@@ -25,10 +25,11 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 import tomllib
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(os.environ.get("RELEASE_SOURCE_ROOT", Path(__file__).resolve().parents[1])).resolve()
 SOURCE = "https://github.com/mxsm/rocketmq-rust"
 IDENTITY = r"^https://github\.com/mxsm/rocketmq-rust/\.github/workflows/release\.yml@refs/heads/main$"
 ISSUER = "https://token.actions.githubusercontent.com"
@@ -42,6 +43,34 @@ def run(command: list[str], *, capture: bool = False) -> str:
     result = subprocess.run(command, cwd=ROOT, check=True, text=True,
                             stdout=subprocess.PIPE if capture else None)
     return result.stdout if capture else ""
+
+
+def verify_registry_evidence(command: list[str]) -> str:
+    """Wait for newly uploaded evidence to become discoverable; verification stays mandatory."""
+    for attempt in range(10):
+        result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True)
+        if result.stderr:
+            print(result.stderr, end="", file=sys.stderr, flush=True)
+        if result.returncode == 0:
+            return result.stdout
+        lines = result.stderr.strip().splitlines()
+        message = lines[-1] if lines else ""
+        message = message.removeprefix("error during command execution: ").removeprefix("Error: ")
+        unavailable = message in {
+            "no signatures found",
+            "no attestations found",
+            "no valid bundles exist in registry",
+            "no matching attestations: no valid bundles exist in registry",
+        } or message.startswith("none of the attestations matched the predicate type: ")
+        if not unavailable or attempt == 9:
+            raise subprocess.CalledProcessError(
+                result.returncode, command, output=result.stdout, stderr=result.stderr,
+            )
+        delay = min(5 * 2 ** attempt, 60)
+        print(f"Registry evidence not discoverable yet; retry {attempt + 1}/9 in {delay}s",
+              file=sys.stderr, flush=True)
+        time.sleep(delay)
+    raise ReleaseError("registry evidence verification did not complete")
 
 
 def inspect(reference: str, *, missing_ok: bool = False) -> dict | None:
@@ -122,12 +151,12 @@ def sign(reference: str, sbom: Path, commit: str, name: str, prefix: Path) -> No
     run(["cosign", "sign", "--yes", "--bundle", str(prefix.with_suffix(".signature-bundle.json")),
          *annotations, reference])
     verification = ["--certificate-identity-regexp", IDENTITY, "--certificate-oidc-issuer", ISSUER]
-    signature = run(["cosign", "verify", *verification, *annotations, reference], capture=True)
+    signature = verify_registry_evidence(["cosign", "verify", *verification, *annotations, reference])
     prefix.with_suffix(".signature.json").write_text(signature, encoding="utf-8")
     run(["cosign", "attest", "--yes", "--bundle", str(prefix.with_suffix(".attestation-bundle.json")),
          "--type", "cyclonedx", "--predicate", str(sbom), reference])
-    attestation = run(["cosign", "verify-attestation", *verification,
-                       "--type", "cyclonedx", reference], capture=True)
+    attestation = verify_registry_evidence(["cosign", "verify-attestation", *verification,
+                                          "--type", "cyclonedx", reference])
     prefix.with_suffix(".attestation.jsonl").write_text(attestation, encoding="utf-8")
     expected = json.loads(sbom.read_text(encoding="utf-8"))
     digest = reference.rsplit("@sha256:", 1)[1]
@@ -162,13 +191,16 @@ def promote(repository: str, digest: str, version: str, commit: str, name: str) 
             raise ReleaseError(f"digest changed while promoting {alias}")
 
 
-def execute(group: str, version: str, commit: str, namespace: str, publish: bool, output: Path) -> dict:
+def execute(group: str, version: str, commit: str, namespace: str, publish: bool, output: Path,
+            *, staging_run: str | None = None) -> dict:
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
         raise ReleaseError("version must be stable semver")
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise ReleaseError("source commit must be a full lowercase commit SHA")
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", namespace):
         raise ReleaseError("Docker Hub namespace must be a lowercase user or organization name")
+    if staging_run and not re.fullmatch(r"[1-9][0-9]*-[1-9][0-9]*", staging_run):
+        raise ReleaseError("staging run must be a positive GitHub run ID and attempt separated by a hyphen")
     actual = run(["git", "rev-parse", "HEAD"], capture=True).strip()
     workspace = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
     if actual != commit or workspace["workspace"]["package"]["version"] != version:
@@ -176,7 +208,8 @@ def execute(group: str, version: str, commit: str, namespace: str, publish: bool
     policy = json.loads((ROOT / "docker/release-images.json").read_text(encoding="utf-8"))
     images = policy["groups"][group]
     output.mkdir(parents=True, exist_ok=True)
-    result = {"version": version, "source_commit": commit, "group": group,
+    result = {"version": version, "source_commit": commit,
+              "tooling_commit": os.environ.get("RELEASE_TOOLING_COMMIT"), "group": group,
               "dry_run": not publish, "expected_components": [image["name"] for image in images],
               "complete": False, "images": []}
     plan = []
@@ -184,6 +217,11 @@ def execute(group: str, version: str, commit: str, namespace: str, publish: bool
     for image in images:
         repository = f"docker.io/{namespace}/{image['repository']}"
         state = existing_release(repository, version, commit, image["name"]) if publish else None
+        if publish and state is None and staging_run:
+            staging = f"{repository}:staging-{commit[:12]}-{staging_run}"
+            state = inspect(staging, missing_ok=True)
+            if state:
+                check_identity(state, version, commit, image["name"])
         plan.append((image, repository, state))
     qualified = []
     for image, repository, state in plan:
@@ -228,10 +266,12 @@ def main() -> int:
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--namespace", required=True)
     parser.add_argument("--publish", action="store_true", help="push/sign after checks (default: local dry-run)")
+    parser.add_argument("--staging-run", help="reuse staged images from this failed GitHub run ID and attempt")
     parser.add_argument("--output", type=Path, default=ROOT / "target/release/images")
     args = parser.parse_args()
     try:
-        result = execute(args.group, args.version, args.source_commit, args.namespace, args.publish, args.output)
+        result = execute(args.group, args.version, args.source_commit, args.namespace, args.publish, args.output,
+                         staging_run=args.staging_run)
     except (ReleaseError, OSError, KeyError, ValueError, subprocess.CalledProcessError) as error:
         print(f"IMAGE_RELEASE_FAILED: {error}", file=sys.stderr)
         return 1

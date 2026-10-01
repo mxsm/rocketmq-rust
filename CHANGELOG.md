@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(ci):** Wait for newly uploaded Docker Hub signatures and attestations to become discoverable before promoting release tags, retaining all verification checks and loading trusted publication tooling independently of the immutable build source ([#11039](https://github.com/mxsm/rocketmq-rust/issues/11039)).
 - **fix(ci):** Resume partial core crate publication after terminal crates.io HTTP 429 responses with bounded retries that honor the registry cooldown, recheck existing source archives, and preserve immediate failure for other errors ([#11037](https://github.com/mxsm/rocketmq-rust/issues/11037)).
 - **fix(ci):** Give the GHCR publication scanners an explicitly initialized empty YAML configuration, fixing Syft's `Unsupported Config Type ""` failure. Publish verified plain version tags alongside commit tags only for the matching release source, preserving vulnerability, signature, and conflicting-tag checks ([#11035](https://github.com/mxsm/rocketmq-rust/issues/11035)).
 - **fix(ci):** Normalize Windows short-name and provider-qualified roots before AGENTS routing comparisons, preventing false missing-route failures in the scheduled architecture checks ([#11028](https://github.com/mxsm/rocketmq-rust/issues/11028)).
