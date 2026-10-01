@@ -85,6 +85,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(runtime):** Rename the resource-budget rebind result type `PermitRebindOutcome` to `PermitBudgetTransferStatus` across the `rocketmq-runtime` crate, its root re-export, the resource-budget tests, and the public API inventory. The permit transfer flow, the `Rejected`/`Unchanged`/`Rebound` variants, and the `ResourcePermit::try_rebind`/`try_rebind_admitted` methods that return it are unchanged; this is a source-only rename of the returned type ([#11067](https://github.com/mxsm/rocketmq-rust/issues/11067)).
 - **feat(sre):** Read public UI OIDC settings from container startup environment variables, allowing one image to serve multiple deployments while retaining compatible build arguments and requiring OIDC login ([#11033](https://github.com/mxsm/rocketmq-rust/issues/11033)).
 
 - **chore(release):** Publish all 28 root workspace members to crates.io, including `rocketmq-admin-cli`, `rocketmq-admin-tui`, `rocketmq-store-inspect` and `rocketmq-dashboard-common`. The core release scope now classifies the three tools as `registry-publish`; Dashboard common is published with the workspace but stays outside the core package list, and the documented packaging check no longer excludes any member ([#10974](https://github.com/mxsm/rocketmq-rust/issues/10974)).
