@@ -64,6 +64,11 @@ projects are built into images but are not added to the core crates.io release.
 Cargo verifies package archives and publishes missing crates in dependency
 order with `--locked`; archive verification is never disabled.
 
+Docker Hub publication tooling and its tests come from the trusted workflow
+revision. Image builds still use the immutable tagged source and release policy.
+This allows publication fixes to resume an existing release without changing
+its tag or service binaries; `publication.json` records both source and tooling commits.
+
 ## Docker Hub image repositories
 
 Every image is currently built for **linux/amd64**. With namespace `example`,
@@ -95,7 +100,12 @@ generates CycloneDX SBOMs; Trivy blocks every CRITICAL finding, including those
 without a fix. New images are pushed to per-run staging tags, scanned again by
 registry digest, signed with Cosign, and accompanied by verified SBOM
 attestations. Only then are the stable version and commit tags promoted while
-preserving the digest. Staging tags may remain after successful or failed runs;
+preserving the digest. Newly uploaded signatures and attestations may take time
+to become discoverable. Temporary discovery failures are retried up to nine times
+with bounded backoff (at most 375 seconds of waiting per verification).
+Authorization, certificate, issuer, and cryptographic failures stop immediately;
+tags are promoted only after successful verification.
+Staging tags may remain after successful or failed runs;
 retain or remove them according to your Docker Hub retention policy.
 
 ## Retry a partial release
@@ -104,6 +114,10 @@ Publication across crates.io and 13 repositories is not atomic. Crates finish
 before image jobs start; different image groups may finish independently.
 Rerun the **same tag** after a failure:
 
+- To reuse images pushed by a failed image run, set `staging_run` to its run ID
+  and attempt (for example `36800241284-1`). Matching staged images are checked
+  against the release source, rescanned by digest, signed, and verified before
+  promotion. Missing staged images are rebuilt; source conflicts stop publication.
 - Existing crate versions are skipped only when their published archive records
   the same clean source commit. Registry errors and yanked versions stop publication.
 - A terminal crates.io HTTP 429 publication error is retried up to five times,

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import base64
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -169,12 +170,92 @@ class DockerHubReleaseTests(unittest.TestCase):
             statement = {"predicateType": "https://cyclonedx.org/bom", "predicate": {"bomFormat": "CycloneDX"},
                          "subject": [{"digest": {"sha256": actual_digest}}]}
             payload = json.dumps({"payload": base64.b64encode(json.dumps(statement).encode()).decode()})
-            with self.subTest(digest=actual_digest), patch.object(release, "run", side_effect=["", "{}", "", payload]):
+            with self.subTest(digest=actual_digest), patch.object(release, "run", return_value=""), \
+                 patch.object(release, "verify_registry_evidence", side_effect=["{}", payload]):
                 if matches:
                     release.sign(f"{REPOSITORY}@{DIGEST}", sbom, COMMIT, "namesrv", self.root / "sign")
                 else:
                     with self.assertRaises(release.ReleaseError):
                         release.sign(f"{REPOSITORY}@{DIGEST}", sbom, COMMIT, "namesrv", self.root / "sign")
+
+    def test_registry_signature_discovery_retries_without_changing_verification(self):
+        command = ["cosign", "verify", "--certificate-identity-regexp", release.IDENTITY,
+                   "--certificate-oidc-issuer", release.ISSUER,
+                   "--annotations", f"source_commit={COMMIT}", f"{REPOSITORY}@{DIGEST}"]
+        pending = subprocess.CompletedProcess(command, 10, "", "Error: no signatures found\n")
+        available = subprocess.CompletedProcess(command, 0, '{"verified":true}', "")
+        with patch.object(release.subprocess, "run", side_effect=[pending, available]) as run, \
+             patch.object(release.time, "sleep") as sleep, patch("sys.stderr", new_callable=io.StringIO):
+            self.assertEqual('{"verified":true}', release.verify_registry_evidence(command))
+        self.assertEqual([command, command], [call.args[0] for call in run.call_args_list])
+        sleep.assert_called_once_with(5)
+
+    def test_registry_attestation_predicate_discovery_can_lag_behind_signature(self):
+        command = ["cosign", "verify-attestation", "--type", "cyclonedx", f"{REPOSITORY}@{DIGEST}"]
+        error = ("error during command execution: none of the attestations matched the predicate type: "
+                 "cyclonedx, found: https://sigstore.dev/cosign/sign/v1\n")
+        with patch.object(release.subprocess, "run", side_effect=[
+                subprocess.CompletedProcess(command, 1, "", error),
+                subprocess.CompletedProcess(command, 0, "verified attestation", ""),
+             ]), patch.object(release.time, "sleep") as sleep, patch("sys.stderr", new_callable=io.StringIO):
+            self.assertEqual("verified attestation", release.verify_registry_evidence(command))
+        sleep.assert_called_once_with(5)
+
+    def test_registry_evidence_permanent_failures_stop_immediately(self):
+        command = ["cosign", "verify", f"{REPOSITORY}@{DIGEST}"]
+        for error in ("unauthorized: authentication required", "certificate identity mismatch",
+                      "no matching signatures: invalid signature", "certificate issuer mismatch"):
+            with self.subTest(error=error), patch.object(release.subprocess, "run", return_value=
+                    subprocess.CompletedProcess(command, 1, "", f"error during command execution: {error}\n")) as run, \
+                 patch.object(release.time, "sleep") as sleep, patch("sys.stderr", new_callable=io.StringIO):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    release.verify_registry_evidence(command)
+                run.assert_called_once()
+                sleep.assert_not_called()
+
+    def test_registry_evidence_retry_exhaustion_remains_a_failure(self):
+        command = ["cosign", "verify", f"{REPOSITORY}@{DIGEST}"]
+        with patch.object(release.subprocess, "run", return_value=
+                subprocess.CompletedProcess(command, 10, "", "Error: no signatures found\n")) as run, \
+             patch.object(release.time, "sleep") as sleep, patch("sys.stderr", new_callable=io.StringIO):
+            with self.assertRaises(subprocess.CalledProcessError):
+                release.verify_registry_evidence(command)
+        self.assertEqual(10, run.call_count)
+        self.assertEqual(375, sum(call.args[0] for call in sleep.call_args_list))
+
+    def test_failed_run_staging_is_rescanned_signed_and_promoted_without_rebuilding(self):
+        self.policy["groups"]["core"] = self.policy["groups"]["core"][:1]
+        self.write_policy()
+        with patch.object(release, "ROOT", self.root), patch.object(release, "run", return_value=COMMIT) as commands, \
+             patch.object(release, "existing_release", return_value=None), \
+             patch.object(release, "inspect", return_value=state()) as inspect, \
+             patch.object(release, "build") as build, \
+             patch.object(release, "qualify", return_value=self.root / "sbom.json") as qualify, \
+             patch.object(release, "sign") as sign, patch.object(release, "promote") as promote:
+            result = release.execute("core", "1.0.0", COMMIT, "example", True, self.root / "out",
+                                     staging_run="12345-1")
+        inspect.assert_called_once_with(f"{REPOSITORY}:staging-{COMMIT[:12]}-12345-1", missing_ok=True)
+        build.assert_not_called()
+        self.assertEqual(1, commands.call_count)
+        qualify.assert_called_once_with(f"{REPOSITORY}@{DIGEST}", self.root / "out/namesrv", remote=True)
+        sign.assert_called_once()
+        promote.assert_called_once_with(REPOSITORY, DIGEST, "1.0.0", COMMIT, "namesrv")
+        self.assertTrue(result["complete"])
+
+    def test_staging_from_a_different_source_prevents_all_builds_and_writes(self):
+        wrong_source = state()
+        wrong_source["labels"]["org.opencontainers.image.revision"] = "c" * 40
+        with patch.object(release, "ROOT", self.root), patch.object(release, "run", return_value=COMMIT), \
+             patch.object(release, "existing_release", return_value=None), \
+             patch.object(release, "inspect", return_value=wrong_source), \
+             patch.object(release, "build") as build, patch.object(release, "sign") as sign, \
+             patch.object(release, "promote") as promote:
+            with self.assertRaises(release.ReleaseError):
+                release.execute("core", "1.0.0", COMMIT, "example", True, self.root / "out",
+                                staging_run="12345-1")
+        build.assert_not_called()
+        sign.assert_not_called()
+        promote.assert_not_called()
 
     def test_sre_ui_publication_accepts_deployment_time_oidc_settings(self):
         image = json.loads((release.ROOT / "docker/release-images.json").read_text())["groups"]["sre-ui"][0]
