@@ -69,6 +69,35 @@ class DockerHubTagApiTests(unittest.TestCase):
                 hub.DockerHubTags()
         self.assertNotIn("fixture-secret", str(caught.exception))
 
+    def test_expired_bearer_is_refreshed_once_after_long_build(self):
+        client = hub.DockerHubTags(bearer="old-fixture")
+        client.can_refresh = True
+        with patch.dict(hub.os.environ, {"DOCKERHUB_USERNAME": "example", "DOCKERHUB_TOKEN": "fixture-secret"}), \
+             patch.object(hub, "urlopen", side_effect=[
+                 HTTPError("https://hub.docker.com", 401, "expired", {}, None),
+                 io.BytesIO(b'{"access_token":"new-fixture"}'), io.BytesIO(b'')]) as send:
+            client.delete("example", "repo", "temporary")
+        self.assertEqual(send.call_count, 3)
+        auth = send.call_args_list[1].args[0]
+        self.assertEqual(auth.full_url, "https://hub.docker.com/v2/auth/token")
+        self.assertNotIn("Authorization", auth.headers)
+        self.assertEqual(send.call_args_list[2].args[0].headers["Authorization"], "Bearer new-fixture")
+
+    def test_refresh_does_not_loop_or_retry_permission_denial(self):
+        for status in (401, 403):
+            client = hub.DockerHubTags(bearer="old-fixture")
+            client.can_refresh = True
+            failures = ([HTTPError("https://hub.docker.com", 401, "expired", {}, None),
+                         io.BytesIO(b'{"access_token":"new-fixture"}')]
+                        if status == 401 else [])
+            failures.append(HTTPError("https://hub.docker.com", status, "denied", {}, None))
+            with self.subTest(status=status), patch.dict(hub.os.environ,
+                    {"DOCKERHUB_USERNAME": "example", "DOCKERHUB_TOKEN": "fixture-secret"}), \
+                 patch.object(hub, "urlopen", side_effect=failures) as send, \
+                 self.assertRaises(hub.HubError):
+                client.delete("example", "repo", "temporary")
+            self.assertEqual(send.call_count, 3 if status == 401 else 1)
+
 
 if __name__ == "__main__":
     unittest.main()
