@@ -82,6 +82,13 @@ jobs:
           echo "0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0  $RUNNER_TEMP/crane.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/crane.tar.gz" -C "$RUNNER_TEMP" crane
           sudo install "$RUNNER_TEMP/crane" /usr/local/bin/crane
+      - name: Initialize isolated release registry credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          config_dir="$RUNNER_TEMP/release-docker-config"
+          mkdir -p "$config_dir"
+          echo "DOCKER_CONFIG=$config_dir" >> "$GITHUB_ENV"
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: docker.io
@@ -112,6 +119,17 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s' "$DOCKERHUB_TOKEN" | cosign login index.docker.io --username "$DOCKERHUB_USERNAME" --password-stdin
+          python - <<'PY'
+          import base64, json, os
+          from pathlib import Path
+          config = json.loads((Path(os.environ['DOCKER_CONFIG']) / 'config.json').read_text())
+          entry = config.get('auths', {}).get('https://index.docker.io/v1/', {})
+          actual = base64.b64decode(entry.get('auth', ''), validate=True).decode()
+          expected = os.environ['DOCKERHUB_USERNAME'] + ':' + os.environ['DOCKERHUB_TOKEN']
+          if actual != expected or config.get('credsStore') or config.get('credHelpers'):
+              raise SystemExit('Release registry credential preflight failed')
+          print('Docker Hub release credential preflight passed')
+          PY
       - name: Qualify and mirror the shared release catalog
         shell: bash
         env:
