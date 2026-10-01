@@ -36,6 +36,12 @@ def state(name="namesrv", digest=DIGEST):
     return {"digest": digest, "labels": release.labels("1.0.0", COMMIT, name)}
 
 
+def attestation(predicate, digest=DIGEST):
+    statement = {"predicateType": "https://cyclonedx.org/bom", "predicate": predicate,
+                 "subject": [{"digest": {"sha256": digest.removeprefix("sha256:")}}]}
+    return json.dumps({"payload": base64.b64encode(json.dumps(statement).encode()).decode()})
+
+
 class DockerHubReleaseTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -183,17 +189,57 @@ class DockerHubReleaseTests(unittest.TestCase):
     def test_sbom_attestation_must_match_scanned_predicate_and_digest(self):
         sbom = self.root / "sbom.json"
         sbom.write_text('{"bomFormat":"CycloneDX"}')
-        for actual_digest, matches in [("b" * 64, True), ("c" * 64, False)]:
-            statement = {"predicateType": "https://cyclonedx.org/bom", "predicate": {"bomFormat": "CycloneDX"},
-                         "subject": [{"digest": {"sha256": actual_digest}}]}
-            payload = json.dumps({"payload": base64.b64encode(json.dumps(statement).encode()).decode()})
-            with self.subTest(digest=actual_digest), patch.object(release, "run", return_value=""), \
-                 patch.object(release, "verify_registry_evidence", side_effect=["{}", payload]):
+        expected = {"bomFormat": "CycloneDX"}
+        for predicate, actual_digest, matches in [(expected, DIGEST, True),
+                (expected, "sha256:" + "c" * 64, False), ({"bomFormat": "different"}, DIGEST, False)]:
+            payload = attestation(predicate, actual_digest)
+            verified = subprocess.CompletedProcess([], 0, payload, "")
+            prefix = self.root / "sign"
+            with self.subTest(predicate=predicate, digest=actual_digest), \
+                 patch.object(release, "run", return_value=""), \
+                 patch.object(release.subprocess, "run", side_effect=[
+                     subprocess.CompletedProcess([], 0, "{}", ""), *[verified] * 10,
+                 ]) as commands, patch.object(release.time, "sleep") as sleep, \
+                 patch("sys.stderr", new_callable=io.StringIO):
                 if matches:
-                    release.sign(f"{REPOSITORY}@{DIGEST}", sbom, COMMIT, "namesrv", self.root / "sign")
+                    release.sign(f"{REPOSITORY}@{DIGEST}", sbom, COMMIT, "namesrv", prefix)
+                    self.assertEqual(payload, prefix.with_suffix(".attestation.jsonl").read_text())
+                    sleep.assert_not_called()
                 else:
+                    prefix.with_suffix(".attestation.jsonl").unlink(missing_ok=True)
                     with self.assertRaises(release.ReleaseError):
-                        release.sign(f"{REPOSITORY}@{DIGEST}", sbom, COMMIT, "namesrv", self.root / "sign")
+                        release.sign(f"{REPOSITORY}@{DIGEST}", sbom, COMMIT, "namesrv", prefix)
+                    self.assertEqual(11, commands.call_count)
+                    self.assertEqual(9, sleep.call_count)
+                    self.assertFalse(prefix.with_suffix(".attestation.jsonl").exists())
+
+    def test_resigning_waits_for_the_fresh_sbom_after_an_older_valid_attestation(self):
+        expected = {"bomFormat": "CycloneDX", "serialNumber": "new-scan"}
+        sbom = self.root / "sbom.json"
+        sbom.write_text(json.dumps(expected))
+        old = attestation({"bomFormat": "CycloneDX", "serialNumber": "old-scan"})
+        fresh = attestation(expected)
+        with patch.object(release, "run"), patch.object(release.subprocess, "run", side_effect=[
+                subprocess.CompletedProcess([], 0, "{}", ""),
+                subprocess.CompletedProcess([], 0, old, ""),
+                subprocess.CompletedProcess([], 0, old + "\n" + fresh, ""),
+             ]) as commands, patch.object(release.time, "sleep") as sleep, \
+             patch("sys.stderr", new_callable=io.StringIO):
+            release.sign(f"{REPOSITORY}@{DIGEST}", sbom, COMMIT, "namesrv", self.root / "sign")
+        self.assertEqual(commands.call_args_list[1], commands.call_args_list[2])
+        sleep.assert_called_once_with(5)
+        self.assertEqual(old + "\n" + fresh, (self.root / "sign.attestation.jsonl").read_text())
+
+    def test_malformed_verified_attestation_fails_without_retry(self):
+        sbom = self.root / "sbom.json"
+        sbom.write_text('{"bomFormat":"CycloneDX"}')
+        with patch.object(release, "run"), patch.object(release.subprocess, "run", side_effect=[
+                subprocess.CompletedProcess([], 0, "{}", ""),
+                subprocess.CompletedProcess([], 0, "malformed-json", ""),
+             ]), patch.object(release.time, "sleep") as sleep:
+            with self.assertRaises(json.JSONDecodeError):
+                release.sign(f"{REPOSITORY}@{DIGEST}", sbom, COMMIT, "namesrv", self.root / "sign")
+        sleep.assert_not_called()
 
     def test_registry_signature_discovery_retries_without_changing_verification(self):
         command = ["cosign", "verify", "--certificate-identity-regexp", release.IDENTITY,
@@ -220,13 +266,15 @@ class DockerHubReleaseTests(unittest.TestCase):
 
     def test_registry_evidence_permanent_failures_stop_immediately(self):
         command = ["cosign", "verify", f"{REPOSITORY}@{DIGEST}"]
+        def reject_payload(_):
+            raise AssertionError("unverified evidence must not reach payload validation")
         for error in ("unauthorized: authentication required", "certificate identity mismatch",
                       "no matching signatures: invalid signature", "certificate issuer mismatch"):
             with self.subTest(error=error), patch.object(release.subprocess, "run", return_value=
                     subprocess.CompletedProcess(command, 1, "", f"error during command execution: {error}\n")) as run, \
                  patch.object(release.time, "sleep") as sleep, patch("sys.stderr", new_callable=io.StringIO):
                 with self.assertRaises(subprocess.CalledProcessError):
-                    release.verify_registry_evidence(command)
+                    release.verify_registry_evidence(command, validate=reject_payload)
                 run.assert_called_once()
                 sleep.assert_not_called()
 

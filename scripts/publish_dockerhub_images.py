@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from collections.abc import Callable
 import json
 import os
 from pathlib import Path
@@ -47,29 +48,39 @@ def run(command: list[str], *, capture: bool = False) -> str:
     return result.stdout if capture else ""
 
 
-def verify_registry_evidence(command: list[str]) -> str:
+def verify_registry_evidence(command: list[str], *, validate: Callable[[str], None] | None = None) -> str:
     """Wait for newly uploaded evidence to become discoverable; verification stays mandatory."""
     for attempt in range(10):
         result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True)
         if result.stderr:
             print(result.stderr, end="", file=sys.stderr, flush=True)
         if result.returncode == 0:
-            return result.stdout
-        lines = result.stderr.strip().splitlines()
-        message = lines[-1] if lines else ""
-        message = message.removeprefix("error during command execution: ").removeprefix("Error: ")
-        unavailable = message in {
-            "no signatures found",
-            "no attestations found",
-            "no valid bundles exist in registry",
-            "no matching attestations: no valid bundles exist in registry",
-        } or message.startswith("none of the attestations matched the predicate type: ")
-        if not unavailable or attempt == 9:
-            raise subprocess.CalledProcessError(
-                result.returncode, command, output=result.stdout, stderr=result.stderr,
-            )
+            try:
+                if validate is not None:
+                    validate(result.stdout)
+            except ReleaseError:
+                # Re-signing an immutable image leaves older valid attestations discoverable
+                # while the registry indexes the new one. Only the requested payload satisfies us.
+                if attempt == 9:
+                    raise
+            else:
+                return result.stdout
+        else:
+            lines = result.stderr.strip().splitlines()
+            message = lines[-1] if lines else ""
+            message = message.removeprefix("error during command execution: ").removeprefix("Error: ")
+            unavailable = message in {
+                "no signatures found",
+                "no attestations found",
+                "no valid bundles exist in registry",
+                "no matching attestations: no valid bundles exist in registry",
+            } or message.startswith("none of the attestations matched the predicate type: ")
+            if not unavailable or attempt == 9:
+                raise subprocess.CalledProcessError(
+                    result.returncode, command, output=result.stdout, stderr=result.stderr,
+                )
         delay = min(5 * 2 ** attempt, 60)
-        print(f"Registry evidence not discoverable yet; retry {attempt + 1}/9 in {delay}s",
+        print(f"Requested registry evidence not discoverable yet; retry {attempt + 1}/9 in {delay}s",
               file=sys.stderr, flush=True)
         time.sleep(delay)
     raise ReleaseError("registry evidence verification did not complete")
@@ -159,25 +170,26 @@ def sign(reference: str, sbom: Path, commit: str, name: str, prefix: Path) -> No
     prefix.with_suffix(".signature.json").write_text(signature, encoding="utf-8")
     run(["cosign", "attest", "--yes", "--bundle", str(prefix.with_suffix(".attestation-bundle.json")),
          "--type", "cyclonedx", "--predicate", str(sbom), reference])
-    attestation = verify_registry_evidence(["cosign", "verify-attestation", *verification,
-                                          "--type", "cyclonedx", reference])
-    prefix.with_suffix(".attestation.jsonl").write_text(attestation, encoding="utf-8")
     expected = json.loads(sbom.read_text(encoding="utf-8"))
     digest = reference.rsplit("@sha256:", 1)[1]
-    statements = []
-    for line in attestation.splitlines():
-        if not line.strip():
-            continue
-        envelope = json.loads(line)
-        encoded = envelope["payload"]
-        statement = json.loads(base64.b64decode(encoded + "=" * (-len(encoded) % 4), validate=True))
-        if (statement.get("predicate") == expected
-                and statement.get("predicateType") == "https://cyclonedx.org/bom"
-                and any(subject.get("digest", {}).get("sha256") == digest
-                        for subject in statement.get("subject", []))):
-            statements.append(statement)
-    if not statements:
+
+    def validate_sbom(attestation: str) -> None:
+        for line in attestation.splitlines():
+            if not line.strip():
+                continue
+            envelope = json.loads(line)
+            encoded = envelope["payload"]
+            statement = json.loads(base64.b64decode(encoded + "=" * (-len(encoded) % 4), validate=True))
+            if (statement.get("predicate") == expected
+                    and statement.get("predicateType") == "https://cyclonedx.org/bom"
+                    and any(subject.get("digest", {}).get("sha256") == digest
+                            for subject in statement.get("subject", []))):
+                return
         raise ReleaseError(f"verified attestation does not bind the scanned SBOM to {name}")
+
+    attestation = verify_registry_evidence(["cosign", "verify-attestation", *verification,
+                                          "--type", "cyclonedx", reference], validate=validate_sbom)
+    prefix.with_suffix(".attestation.jsonl").write_text(attestation, encoding="utf-8")
 
 
 def promote(repository: str, digest: str, version: str, commit: str, name: str) -> None:
