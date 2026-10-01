@@ -44,6 +44,17 @@ break does not change the registered request-header wire contracts.
 Repository-owner approval for the original V1/V2 retirement is recorded in
 [#10790](https://github.com/mxsm/rocketmq-rust/issues/10790).
 
+### Resource-budget permit transfer status rename
+
+The runtime resource-budget rebind result type
+`rocketmq_runtime::resource_budget::PermitBudgetTransferStatus` was published
+before 1.0 as `PermitRebindOutcome`. The type, its `Rejected`, `Unchanged`, and
+`Rebound` variants, and the `ResourcePermit::try_rebind` and `try_rebind_admitted`
+methods that return it are otherwise unchanged. Source consumers that matched on
+the returned outcome only rename the type at their import and match sites; the
+resource-budget behavior and the runtime root re-export stay source-compatible
+under the new name ([#11067](https://github.com/mxsm/rocketmq-rust/issues/11067)).
+
 ### Obsolete `RemotingSerializable` derive
 
 Proposed removal: `rocketmq_macros::RemotingSerializable`.
