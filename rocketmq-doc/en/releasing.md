@@ -52,7 +52,7 @@ uploaded.
 ## Release 1.0.0
 
 1. Merge the release tooling and intended release source into `main`. Keep all
-   selected core crate versions at `1.0.0` and commit their lockfiles.
+   selected workspace crate versions at `1.0.0` and commit their lockfiles.
 2. Create and push `v1.0.0` pointing to that source commit. The workflow requires
    an existing stable `vX.Y.Z` tag reachable from `main`, with a version matching
    the root workspace manifest. The tagged source must include the release tools.
@@ -63,16 +63,22 @@ uploaded.
    in the workflow artifacts. Resolve build or CRITICAL vulnerability failures.
 5. Run the same workflow with `dry_run` disabled to publish.
 
-The crates job uses the repository toolchain and the 27 `registry-publish`
-entries in `scripts/core-release-scope.json`. Dashboard, MCP, and SRE standalone
-projects are built into images but are not added to the core crates.io release.
+The crates job uses the repository toolchain and publishes all 28 root workspace
+members: the 27 `registry-publish` entries in `scripts/core-release-scope.json`
+plus `rocketmq-dashboard-common`. Dashboard common retains its separate core
+architecture classification; the publication helper explicitly includes it as
+an additional workspace package. Dashboard, MCP, and SRE standalone projects
+are built into images and remain outside this crates.io publication list.
 Cargo verifies package archives and publishes missing crates in dependency
 order with `--locked`; archive verification is never disabled.
 
-Docker Hub publication tooling and its tests come from the trusted workflow
-revision. Image builds still use the immutable tagged source and release policy.
+Crate and Docker Hub publication tooling and their tests come from the trusted
+workflow revision. Package archives and image builds still use the immutable
+tagged source and release policy.
 This allows publication fixes to resume an existing release without changing
-its tag or service binaries; `publication.json` records both source and tooling commits.
+its tag or service binaries; crate and image publication records include both
+source and tooling commits. Rerunning crate publication verifies and skips
+already published matching versions, including Dashboard common.
 
 ## Docker Hub image repositories
 

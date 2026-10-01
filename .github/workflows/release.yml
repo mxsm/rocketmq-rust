@@ -12,7 +12,7 @@ on:
         type: boolean
         default: true
       publish_crates:
-        description: Include the 27 core crates
+        description: Include all 28 workspace crates (core crates and Dashboard common)
         type: boolean
         default: true
       publish_images:
@@ -114,7 +114,7 @@ jobs:
           PY
 
   crates:
-    name: Verify and publish core crates
+    name: Verify and publish workspace crates
     needs: prepare
     if: inputs.publish_crates
     runs-on: ubuntu-latest
@@ -122,10 +122,18 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 2
       CARGO_TERM_COLOR: always
+      RELEASE_SOURCE_ROOT: ${{ github.workspace }}
+      RELEASE_TOOLING_COMMIT: ${{ github.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - name: Check out crate publication tooling from this trusted workflow revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          path: target/release-tooling
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
@@ -146,12 +154,12 @@ jobs:
         run: |
           python scripts/core_release_guard.py --scope core-release
           python scripts/architecture_dependency_guard.py --scope core-release
-          python -m unittest discover -s scripts/tests -p 'test_publish_core_crates.py'
+          python -m unittest discover -s target/release-tooling/scripts/tests -p 'test_publish_core_crates.py'
       - name: Verify all selected crate archives without uploading
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           SOURCE_COMMIT: ${{ needs.prepare.outputs.commit }}
-        run: python scripts/publish_core_crates.py --tag "$RELEASE_TAG" --source-commit "$SOURCE_COMMIT" --mode verify --output target/release/crates-verified.json
+        run: python target/release-tooling/scripts/publish_core_crates.py --tag "$RELEASE_TAG" --source-commit "$SOURCE_COMMIT" --mode verify --output target/release/crates-verified.json
       - name: Publish missing versions in dependency order
         if: ${{ !inputs.dry_run }}
         env:
@@ -213,7 +221,7 @@ jobs:
 
           if __name__ == "__main__":
               command = [
-                  sys.executable, "scripts/publish_core_crates.py",
+                  sys.executable, "target/release-tooling/scripts/publish_core_crates.py",
                   "--tag", os.environ["RELEASE_TAG"],
                   "--source-commit", os.environ["SOURCE_COMMIT"],
                   "--mode", "publish", "--output", "target/release/crates-published.json",

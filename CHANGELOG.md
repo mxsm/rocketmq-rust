@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(release):** Include `rocketmq-dashboard-common` alongside the 27 core crates in workspace publication, using trusted release tooling with immutable tagged package sources and source-verified resumption ([#11043](https://github.com/mxsm/rocketmq-rust/issues/11043)).
 - **fix(ci):** Accept verified in-toto Statement v0.1 and v1 in GHCR publication and its independent verifier, matching the pinned Cosign custom-predicate format while preserving exact subject, digest, and typed predicate checks ([#11041](https://github.com/mxsm/rocketmq-rust/issues/11041)).
 - **fix(ci):** Wait for newly uploaded Docker Hub signatures and attestations to become discoverable before promoting release tags, retaining all verification checks and loading trusted publication tooling independently of the immutable build source ([#11039](https://github.com/mxsm/rocketmq-rust/issues/11039)).
 - **fix(ci):** Resume partial core crate publication after terminal crates.io HTTP 429 responses with bounded retries that honor the registry cooldown, recheck existing source archives, and preserve immediate failure for other errors ([#11037](https://github.com/mxsm/rocketmq-rust/issues/11037)).
