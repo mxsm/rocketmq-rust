@@ -39,11 +39,11 @@ use tracing::warn;
 use super::FlushStrategy;
 use super::MappedFile;
 use super::MappedFileAdmissionState;
-use super::MappedFileDestroyOutcome;
 use super::MappedFileDetachOutcome;
 use super::MappedFileFailure;
 use super::MappedFileMetrics;
 use super::MappedFileRawCore;
+use super::MappedFileRemovalStatus;
 use super::MappedMemory;
 use super::MappedWriteLease;
 use super::NativeMappedMemory;
@@ -1194,10 +1194,10 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
     ///
     /// Namespace removal is attempted only after both physical owner slots are detached. Existing
     /// external aliases, if any, still release their operating-system owners from final `Drop`.
-    pub fn try_destroy(&self, interval_forcibly: u64) -> MappedFileDestroyOutcome {
+    pub fn try_destroy(&self, interval_forcibly: u64) -> MappedFileRemovalStatus {
         MappedFile::shutdown(self, interval_forcibly);
         if !ReferenceResource::is_cleanup_over(self) {
-            return MappedFileDestroyOutcome::CleanupPending {
+            return MappedFileRemovalStatus::CleanupPending {
                 ref_count: ReferenceResource::get_ref_count(self),
             };
         }
@@ -1205,7 +1205,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         match self.physical_owners.storage.lock().delete() {
             Ok(()) => {
                 info!(file_name = %self.file_name, "mapped-file namespace removal succeeded");
-                MappedFileDestroyOutcome::NamespaceRemoved
+                MappedFileRemovalStatus::NamespaceRemoved
             }
             Err(error) => {
                 // A bare NotFound is not an incarnation-safe absence proof. Until the durable
@@ -1215,7 +1215,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
                     error = ?error,
                     "mapped-file namespace removal failed"
                 );
-                MappedFileDestroyOutcome::DeleteFailed {
+                MappedFileRemovalStatus::DeleteFailed {
                     kind: error.kind(),
                     raw_os_error: error.raw_os_error(),
                 }
