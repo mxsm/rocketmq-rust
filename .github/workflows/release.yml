@@ -154,7 +154,68 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
           SOURCE_COMMIT: ${{ needs.prepare.outputs.commit }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: python scripts/publish_core_crates.py --tag "$RELEASE_TAG" --source-commit "$SOURCE_COMMIT" --mode publish --output target/release/crates-published.json
+        shell: bash
+        run: |
+          python - <<'PY'
+          import collections
+          import email.utils
+          import math
+          import os
+          import re
+          import subprocess
+          import sys
+          import time
+
+          def retry_delay(output, now):
+              plain = re.sub(r"\x1b\[[0-9;]*m", "", output)
+              last_error = plain.rfind("error: ")
+              if last_error < 0:
+                  return None
+              failure = plain[last_error:]
+              if "the remote server responded with an error (status 429 Too Many Requests):" not in failure:
+                  return None
+              advertised = re.search(r"try again after (.+?) GMT", failure)
+              if advertised:
+                  try:
+                      deadline = email.utils.parsedate_to_datetime(advertised[1] + " GMT").timestamp()
+                      return max(2, math.ceil(deadline - now) + 2)
+                  except (TypeError, ValueError, OverflowError):
+                      pass
+              return 60
+
+          def run_command(command):
+              tail = collections.deque(maxlen=200)
+              with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) as process:
+                  for line in process.stdout:
+                      print(line, end="", flush=True)
+                      tail.append(line)
+                  status = process.wait()
+              return status, "".join(tail)
+
+          def publish_with_retries(command):
+              for attempt in range(1, 7):
+                  status, output = run_command(command)
+                  if status == 0:
+                      return 0
+                  delay = retry_delay(output, time.time())
+                  if delay is None or attempt == 6:
+                      return status
+                  if delay > 600:
+                      print("Registry cooldown exceeds the automatic retry limit; rerun later.", flush=True)
+                      return status
+                  print(f"Registry rate limit: retry {attempt}/5 in {delay}s; already published versions will be verified and skipped.", flush=True)
+                  time.sleep(delay)
+              return status
+
+          if __name__ == "__main__":
+              command = [
+                  sys.executable, "scripts/publish_core_crates.py",
+                  "--tag", os.environ["RELEASE_TAG"],
+                  "--source-commit", os.environ["SOURCE_COMMIT"],
+                  "--mode", "publish", "--output", "target/release/crates-published.json",
+              ]
+              raise SystemExit(publish_with_retries(command))
+          PY
       - name: Upload crate verification and publication records
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
