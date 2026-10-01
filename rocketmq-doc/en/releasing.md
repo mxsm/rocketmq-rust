@@ -6,6 +6,15 @@ publishing a GitHub Release does not trigger Docker Hub or crates.io publication
 The existing **Publish signed service images** workflow continues to publish its
 five GHCR images independently.
 
+For a release source, GHCR images receive both `<version>` (for example,
+`ghcr.io/mxsm/rocketmq-rust/broker:1.0.0`) and
+`<version>-<12-character-commit>` tags after all five images pass qualification.
+The plain version tag is enabled only when `v<version>` resolves to the exact
+published source commit. Manual builds of later `main` commits retain only the
+commit tag. Existing version or commit tags with a different digest stop
+publication; neither tag is overwritten. `staging-...` tags are temporary build
+references and do not indicate a completed release.
+
 ## Configure GitHub Actions
 
 Set the following repository **Secrets**:

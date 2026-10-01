@@ -100,11 +100,25 @@ jobs:
             echo "release tag must equal workspace version: expected v${source_version}, got ${REQUESTED_SOURCE_REF}" >&2
             exit 1
           fi
+          version_tag="$(python - "$source_commit" "$source_version" <<'PY'
+          import subprocess
+          import sys
+
+          commit, version = sys.argv[1:]
+          tagged = subprocess.run(
+              ["git", "rev-parse", "--verify", "--quiet", f"refs/tags/v{version}^{{commit}}"],
+              capture_output=True, text=True, check=False,
+          )
+          if tagged.returncode == 0 and tagged.stdout.strip() == commit:
+              print(version)
+          PY
+          )"
           {
             echo "commit=$source_commit"
             echo "version=$source_version"
             echo "tag=$immutable_tag"
             echo "kind=$source_kind"
+            echo "version_tag=$version_tag"
           } >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
@@ -141,6 +155,7 @@ jobs:
           SOURCE_VERSION: ${{ steps.source.outputs.version }}
           SOURCE_KIND: ${{ steps.source.outputs.kind }}
           IMMUTABLE_TAG: ${{ steps.source.outputs.tag }}
+          VERSION_TAG: ${{ steps.source.outputs.version_tag }}
         run: |
           set -Eeuo pipefail
           output="$GITHUB_WORKSPACE/target/service-image-publication"
@@ -223,15 +238,17 @@ jobs:
             sbom="$output/sbom/${service}.cdx.json"
             vulnerability_report="$output/vulnerabilities/${service}.trivy.json"
             scan_workdir="$(mktemp -d "${RUNNER_TEMP%/}/rocketmq-service-scan-${service}.XXXXXX")"
+            scan_config="$scan_workdir/scanners.yaml"
+            printf '{}\n' > "$scan_config"
             (
               cd "$scan_workdir"
               syft scan \
-                --config /dev/null \
+                --config "$scan_config" \
                 --scope all-layers \
                 --output "cyclonedx-json=$sbom" \
                 "registry:$digest_ref"
               trivy image \
-                --config /dev/null \
+                --config "$scan_config" \
                 --ignorefile /dev/null \
                 --scanners vuln \
                 --severity CRITICAL \
@@ -476,27 +493,33 @@ jobs:
 
           missing_promotions="${RUNNER_TEMP%/}/rocketmq-missing-promotions-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
           : > "$missing_promotions"
+          promotion_tags=("$IMMUTABLE_TAG")
+          if [[ -n "$VERSION_TAG" ]]; then
+            promotion_tags+=("$VERSION_TAG")
+          fi
           for service in broker namesrv controller proxy mcp; do
             service_record="$output/services/${service}.json"
             repository="$(jq -er '.image.repository' "$service_record")"
             digest="$(jq -er '.image.digest' "$service_record")"
-            immutable_ref="${repository}:${IMMUTABLE_TAG}"
-            preflight_raw="${RUNNER_TEMP%/}/${service}-promotion-preflight.raw.json"
-            preflight_error="$output/diagnostics/${service}.promotion-preflight.stderr"
-            if docker buildx imagetools inspect --raw "$immutable_ref" > "$preflight_raw" 2> "$preflight_error"; then
-              existing_sha256="$(sha256sum "$preflight_raw" | cut -d' ' -f1)"
-              if [[ "sha256:${existing_sha256}" != "$digest" ]]; then
-                echo "$immutable_ref already exists with a different manifest digest" >&2
-                false
+            for promotion_tag in "${promotion_tags[@]}"; do
+              immutable_ref="${repository}:${promotion_tag}"
+              preflight_raw="${RUNNER_TEMP%/}/${service}-${promotion_tag}-promotion-preflight.raw.json"
+              preflight_error="$output/diagnostics/${service}.${promotion_tag}.promotion-preflight.stderr"
+              if docker buildx imagetools inspect --raw "$immutable_ref" > "$preflight_raw" 2> "$preflight_error"; then
+                existing_sha256="$(sha256sum "$preflight_raw" | cut -d' ' -f1)"
+                if [[ "sha256:${existing_sha256}" != "$digest" ]]; then
+                  echo "$immutable_ref already exists with a different manifest digest" >&2
+                  false
+                fi
+                rm -f -- "$preflight_error"
+              else
+                if ! grep -Eiq '(manifest unknown|name unknown|not found|no such manifest)' "$preflight_error"; then
+                  cat "$preflight_error" >&2
+                  false
+                fi
+                printf '%s\n' "$immutable_ref" >> "$missing_promotions"
               fi
-              rm -f -- "$preflight_error"
-            else
-              if ! grep -Eiq '(manifest unknown|name unknown|not found|no such manifest)' "$preflight_error"; then
-                cat "$preflight_error" >&2
-                false
-              fi
-              printf '%s\n' "$service" >> "$missing_promotions"
-            fi
+            done
           done
 
           for service in broker namesrv controller proxy mcp; do
@@ -504,47 +527,66 @@ jobs:
             repository="$(jq -er '.image.repository' "$service_record")"
             digest="$(jq -er '.image.digest' "$service_record")"
             digest_ref="${repository}@${digest}"
-            immutable_ref="${repository}:${IMMUTABLE_TAG}"
-            promotion_action=reused
-            if grep -Fxq "$service" "$missing_promotions"; then
-              recheck_raw="${RUNNER_TEMP%/}/${service}-promotion-recheck.raw.json"
-              recheck_error="$output/diagnostics/${service}.promotion-recheck.stderr"
-              if docker buildx imagetools inspect --raw "$immutable_ref" > "$recheck_raw" 2> "$recheck_error"; then
-                recheck_sha256="$(sha256sum "$recheck_raw" | cut -d' ' -f1)"
-                if [[ "sha256:${recheck_sha256}" != "$digest" ]]; then
-                  echo "$immutable_ref appeared with a different manifest digest" >&2
-                  false
+            for promotion_tag in "${promotion_tags[@]}"; do
+              immutable_ref="${repository}:${promotion_tag}"
+              promotion_action=reused
+              if grep -Fxq "$immutable_ref" "$missing_promotions"; then
+                recheck_raw="${RUNNER_TEMP%/}/${service}-${promotion_tag}-promotion-recheck.raw.json"
+                recheck_error="$output/diagnostics/${service}.${promotion_tag}.promotion-recheck.stderr"
+                if docker buildx imagetools inspect --raw "$immutable_ref" > "$recheck_raw" 2> "$recheck_error"; then
+                  recheck_sha256="$(sha256sum "$recheck_raw" | cut -d' ' -f1)"
+                  if [[ "sha256:${recheck_sha256}" != "$digest" ]]; then
+                    echo "$immutable_ref appeared with a different manifest digest" >&2
+                    false
+                  fi
+                  rm -f -- "$recheck_error"
+                else
+                  if ! grep -Eiq '(manifest unknown|name unknown|not found|no such manifest)' "$recheck_error"; then
+                    cat "$recheck_error" >&2
+                    false
+                  fi
+                  docker buildx imagetools create --prefer-index=false --tag "$immutable_ref" "$digest_ref"
+                  promotion_action=created
                 fi
-                rm -f -- "$recheck_error"
-              else
-                if ! grep -Eiq '(manifest unknown|name unknown|not found|no such manifest)' "$recheck_error"; then
-                  cat "$recheck_error" >&2
-                  false
-                fi
-                docker buildx imagetools create --prefer-index=false --tag "$immutable_ref" "$digest_ref"
-                promotion_action=created
               fi
-            fi
 
-            promoted_manifest="$output/promotion/${service}.manifest.raw.json"
-            docker buildx imagetools inspect --raw "$immutable_ref" > "$promoted_manifest"
-            promoted_manifest_sha256="$(sha256sum "$promoted_manifest" | cut -d' ' -f1)"
-            if [[ "sha256:${promoted_manifest_sha256}" != "$digest" ]]; then
-              echo "$immutable_ref read-back digest does not match the qualified digest" >&2
-              false
-            fi
-            jq -S \
-              --arg immutable_reference "$immutable_ref" \
-              --arg action "$promotion_action" \
-              --arg raw_manifest_path "promotion/${service}.manifest.raw.json" \
-              --arg raw_manifest_sha256 "$promoted_manifest_sha256" \
-              '.promotion = {
-                immutable_reference: $immutable_reference,
-                action: $action,
-                raw_manifest_path: $raw_manifest_path,
-                raw_manifest_sha256: $raw_manifest_sha256
-              }' "$service_record" > "$service_record.tmp"
-            mv "$service_record.tmp" "$service_record"
+              promoted_manifest="$output/promotion/${service}.manifest.raw.json"
+              if [[ "$promotion_tag" != "$IMMUTABLE_TAG" ]]; then
+                promoted_manifest="$output/promotion/${service}.version.manifest.raw.json"
+              fi
+              docker buildx imagetools inspect --raw "$immutable_ref" > "$promoted_manifest"
+              promoted_manifest_sha256="$(sha256sum "$promoted_manifest" | cut -d' ' -f1)"
+              if [[ "sha256:${promoted_manifest_sha256}" != "$digest" ]]; then
+                echo "$immutable_ref read-back digest does not match the qualified digest" >&2
+                false
+              fi
+              if [[ "$promotion_tag" == "$IMMUTABLE_TAG" ]]; then
+                jq -S \
+                  --arg immutable_reference "$immutable_ref" \
+                  --arg action "$promotion_action" \
+                  --arg raw_manifest_path "promotion/${service}.manifest.raw.json" \
+                  --arg raw_manifest_sha256 "$promoted_manifest_sha256" \
+                  '.promotion = {
+                    immutable_reference: $immutable_reference,
+                    action: $action,
+                    raw_manifest_path: $raw_manifest_path,
+                    raw_manifest_sha256: $raw_manifest_sha256
+                  }' "$service_record" > "$service_record.tmp"
+                mv "$service_record.tmp" "$service_record"
+              else
+                jq -S -n \
+                  --arg source_commit "$SOURCE_COMMIT" \
+                  --arg version_reference "$immutable_ref" \
+                  --arg digest_reference "$digest_ref" \
+                  --arg action "$promotion_action" \
+                  --arg raw_manifest_path "promotion/${service}.version.manifest.raw.json" \
+                  --arg raw_manifest_sha256 "$promoted_manifest_sha256" \
+                  '{source_commit: $source_commit, version_reference: $version_reference,
+                    digest_reference: $digest_reference, action: $action,
+                    raw_manifest_path: $raw_manifest_path, raw_manifest_sha256: $raw_manifest_sha256}' \
+                  > "$output/promotion/${service}.version.json"
+              fi
+            done
           done
 
           jq --sort-keys . "$image_map" > "$image_map.sorted"

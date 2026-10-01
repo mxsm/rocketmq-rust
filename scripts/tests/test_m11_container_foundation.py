@@ -461,7 +461,7 @@ class ContainerFoundationTests(unittest.TestCase):
                     self.assertFalse(rejected_path.exists())
 
     def test_publication_isolates_scanners_and_never_uploads_partial_pass(self) -> None:
-        implicit_scanner_config = self.publication_workflow.replace("--config /dev/null", "", 1)
+        implicit_scanner_config = self.publication_workflow.replace('--config "$scan_config"', "", 1)
         self.assertTrue(
             any(
                 "explicit empty configuration" in finding
@@ -500,6 +500,51 @@ class ContainerFoundationTests(unittest.TestCase):
                 for finding in self.audit(publication_workflow=no_error_cleanup)
             )
         )
+
+    def test_publication_rejects_untyped_or_uninitialized_scanner_config(self) -> None:
+        for original, replacement in (
+            ('--config "$scan_config"', "--config /dev/null"),
+            ('scan_config="$scan_workdir/scanners.yaml"', 'scan_config="$scan_workdir/scanners"'),
+            ("printf '{}\\n' > \"$scan_config\"", ""),
+        ):
+            with self.subTest(original=original):
+                workflow = self.publication_workflow.replace(original, replacement, 1)
+                findings = self.audit(publication_workflow=workflow)
+                self.assertTrue(any("explicit empty configuration in a YAML file" in finding for finding in findings))
+
+    def test_publication_version_tag_requires_the_exact_tagged_commit(self) -> None:
+        lines = self.publication_workflow.splitlines()
+        marker = next(index for index, line in enumerate(lines) if 'version_tag="$(python - ' in line)
+        end = next(index for index in range(marker + 1, len(lines)) if lines[index].strip() == "PY")
+        resolver = "\n".join(line[10:] for line in lines[marker + 1:end])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def git(*arguments):
+                return subprocess.run(["git", *arguments], cwd=root, capture_output=True, text=True, check=True).stdout.strip()
+
+            def resolve(commit, version="1.0.0"):
+                return subprocess.run(
+                    [sys.executable, "-", commit, version], input=resolver,
+                    cwd=root, capture_output=True, text=True, check=True,
+                ).stdout.strip()
+
+            git("init", "--quiet")
+            git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                "commit", "--quiet", "--allow-empty", "--no-gpg-sign", "-m", "release source")
+            release_commit = git("rev-parse", "HEAD")
+            self.assertEqual("", resolve(release_commit))
+            git("tag", "v1.0.0")
+            self.assertEqual("1.0.0", resolve(release_commit))
+            self.assertEqual("", resolve(release_commit, "0.9.0"))
+            git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                "commit", "--quiet", "--allow-empty", "--no-gpg-sign", "-m", "later main commit")
+            self.assertEqual("", resolve(git("rev-parse", "HEAD")))
+
+        unchecked_source = self.publication_workflow.replace(
+            "tagged.returncode == 0 and tagged.stdout.strip() == commit", "tagged.returncode == 0", 1,
+        )
+        self.assertTrue(any("version tags must match" in finding for finding in self.audit(publication_workflow=unchecked_source)))
 
     def test_publication_manifest_is_bundle_compatible_and_hashes_raw_artifacts(self) -> None:
         wrong_category = self.publication_workflow.replace(
