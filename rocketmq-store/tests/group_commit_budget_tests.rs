@@ -16,7 +16,7 @@ use rocketmq_runtime::BudgetClass;
 use rocketmq_runtime::BudgetDimension;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::FullPolicy;
-use rocketmq_runtime::QueuePushOutcome;
+use rocketmq_runtime::QueueEnqueueStatus;
 use rocketmq_runtime::QueuePushRejection;
 use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_store_local::flush::group_commit::GroupCommitQueue;
@@ -29,17 +29,17 @@ fn group_commit_queue<E>(name: &str, count: usize, bytes: usize, policy: FullPol
     GroupCommitQueue::new(budget)
 }
 
-fn admitted<T>(outcome: QueuePushOutcome<T>) {
+fn admitted<T>(outcome: QueueEnqueueStatus<T>) {
     assert!(
-        !matches!(outcome, QueuePushOutcome::Rejected { .. }),
+        !matches!(outcome, QueueEnqueueStatus::Rejected { .. }),
         "group commit request should be admitted"
     );
 }
 
-fn rejection<T>(outcome: QueuePushOutcome<T>) -> QueuePushRejection {
+fn rejection<T>(outcome: QueueEnqueueStatus<T>) -> QueuePushRejection {
     match outcome {
-        QueuePushOutcome::Rejected { rejection, .. } => rejection,
-        QueuePushOutcome::Enqueued | QueuePushOutcome::Coalesced { .. } | QueuePushOutcome::DroppedStale { .. } => {
+        QueueEnqueueStatus::Rejected { rejection, .. } => rejection,
+        QueueEnqueueStatus::Enqueued | QueueEnqueueStatus::Coalesced { .. } | QueueEnqueueStatus::DroppedStale { .. } => {
             panic!("group commit request should be rejected")
         }
     }

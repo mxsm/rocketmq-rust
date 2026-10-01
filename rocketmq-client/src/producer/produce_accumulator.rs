@@ -2332,12 +2332,12 @@ impl GuardForSyncSendService {
         };
         let retained_bytes = command.retained_bytes();
         match schedule_queue.try_push_data(command, retained_bytes) {
-            rocketmq_runtime::QueuePushOutcome::Rejected { .. } => {
+            rocketmq_runtime::QueueEnqueueStatus::Rejected { .. } => {
                 Err(crate::mq_client_err!("sync batch deadline queue is full"))
             }
-            rocketmq_runtime::QueuePushOutcome::Enqueued
-            | rocketmq_runtime::QueuePushOutcome::Coalesced { .. }
-            | rocketmq_runtime::QueuePushOutcome::DroppedStale { .. } => Ok(()),
+            rocketmq_runtime::QueueEnqueueStatus::Enqueued
+            | rocketmq_runtime::QueueEnqueueStatus::Coalesced { .. }
+            | rocketmq_runtime::QueueEnqueueStatus::DroppedStale { .. } => Ok(()),
         }
     }
 
@@ -2527,12 +2527,12 @@ impl GuardForAsyncSendService {
         };
         let retained_bytes = command.retained_bytes();
         match schedule_queue.try_push_data(command, retained_bytes) {
-            rocketmq_runtime::QueuePushOutcome::Rejected { .. } => {
+            rocketmq_runtime::QueueEnqueueStatus::Rejected { .. } => {
                 Err(crate::mq_client_err!("async batch deadline queue is full"))
             }
-            rocketmq_runtime::QueuePushOutcome::Enqueued
-            | rocketmq_runtime::QueuePushOutcome::Coalesced { .. }
-            | rocketmq_runtime::QueuePushOutcome::DroppedStale { .. } => Ok(()),
+            rocketmq_runtime::QueueEnqueueStatus::Enqueued
+            | rocketmq_runtime::QueueEnqueueStatus::Coalesced { .. }
+            | rocketmq_runtime::QueueEnqueueStatus::DroppedStale { .. } => Ok(()),
         }
     }
 

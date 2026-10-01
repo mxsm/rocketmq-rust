@@ -157,7 +157,7 @@ impl GroupTransferServiceInner {
         if matches!(
             self.pending_requests
                 .try_push_data(PendingGroupTransfer::new(request), retained_bytes),
-            rocketmq_runtime::QueuePushOutcome::Rejected { .. }
+            rocketmq_runtime::QueueEnqueueStatus::Rejected { .. }
         ) {
             warn!("HA group-transfer queue rejected a request");
         }

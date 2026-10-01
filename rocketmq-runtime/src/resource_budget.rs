@@ -49,6 +49,6 @@ pub use memory::ProcessMemoryLimit;
 pub use queue::BudgetedItem;
 pub use queue::BudgetedQueue;
 pub use queue::ForeignPermit;
-pub use queue::QueuePushOutcome;
+pub use queue::QueueEnqueueStatus;
 pub use queue::QueuePushRejection;
 pub use queue::QueueSnapshot;

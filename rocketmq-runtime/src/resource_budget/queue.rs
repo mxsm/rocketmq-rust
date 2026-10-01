@@ -35,7 +35,7 @@ use super::limit::FullPolicy;
 
 /// Identifies the queue push outcome state.
 #[derive(Debug)]
-pub enum QueuePushOutcome<T> {
+pub enum QueueEnqueueStatus<T> {
     /// Represents the enqueued case.
     Enqueued,
     /// Represents the coalesced case.
@@ -200,7 +200,7 @@ impl<T> BudgetedQueue<T> {
     }
 
     /// Attempts to push.
-    pub fn try_push(&self, item: T, retained_bytes: usize, class: BudgetClass) -> QueuePushOutcome<T> {
+    pub fn try_push(&self, item: T, retained_bytes: usize, class: BudgetClass) -> QueueEnqueueStatus<T> {
         // Retained permits are released inside admission; arbitrary item
         // destructors run only after every queue and dynamic gate is unlocked.
         let mut discarded = Vec::new();
@@ -217,7 +217,7 @@ impl<T> BudgetedQueue<T> {
         let admission = match self.inner.budget.admit() {
             Ok(admission) => admission,
             Err(_) => {
-                return QueuePushOutcome::Rejected {
+                return QueueEnqueueStatus::Rejected {
                     item,
                     rejection: QueuePushRejection::Closed,
                 }
@@ -230,9 +230,9 @@ impl<T> BudgetedQueue<T> {
                     return rejected;
                 }
                 if dropped == 0 {
-                    QueuePushOutcome::Enqueued
+                    QueueEnqueueStatus::Enqueued
                 } else {
-                    QueuePushOutcome::DroppedStale { dropped }
+                    QueueEnqueueStatus::DroppedStale { dropped }
                 }
             }
             Err(error) => self.handle_full(&admission, item, retained_bytes, class, error, &mut discarded),
@@ -261,7 +261,7 @@ impl<T> BudgetedQueue<T> {
         &self,
         item: T,
         mut permit: ResourcePermit,
-    ) -> Result<QueuePushOutcome<T>, ForeignPermit<T>> {
+    ) -> Result<QueueEnqueueStatus<T>, ForeignPermit<T>> {
         let mut discarded = Vec::new();
         if !permit.belongs_to_tree(&self.inner.budget) {
             return Err(ForeignPermit {
@@ -282,7 +282,7 @@ impl<T> BudgetedQueue<T> {
         let admission = match self.inner.budget.admit() {
             Ok(admission) => admission,
             Err(_) => {
-                return Ok(QueuePushOutcome::Rejected {
+                return Ok(QueueEnqueueStatus::Rejected {
                     item,
                     rejection: QueuePushRejection::Closed,
                 })
@@ -295,12 +295,12 @@ impl<T> BudgetedQueue<T> {
                     return Ok(rejected);
                 }
                 Ok(if dropped == 0 {
-                    QueuePushOutcome::Enqueued
+                    QueueEnqueueStatus::Enqueued
                 } else {
-                    QueuePushOutcome::DroppedStale { dropped }
+                    QueueEnqueueStatus::DroppedStale { dropped }
                 })
             }
-            PermitRebindOutcome::Rejected(rejection) => Ok(QueuePushOutcome::Rejected {
+            PermitRebindOutcome::Rejected(rejection) => Ok(QueueEnqueueStatus::Rejected {
                 item,
                 rejection: QueuePushRejection::BudgetExhausted(rejection),
             }),
@@ -308,12 +308,12 @@ impl<T> BudgetedQueue<T> {
     }
 
     /// Attempts to push data.
-    pub fn try_push_data(&self, item: T, retained_bytes: usize) -> QueuePushOutcome<T> {
+    pub fn try_push_data(&self, item: T, retained_bytes: usize) -> QueueEnqueueStatus<T> {
         self.try_push(item, retained_bytes, BudgetClass::Data)
     }
 
     /// Attempts to push control.
-    pub fn try_push_control(&self, item: T, retained_bytes: usize) -> QueuePushOutcome<T> {
+    pub fn try_push_control(&self, item: T, retained_bytes: usize) -> QueueEnqueueStatus<T> {
         self.try_push(item, retained_bytes, BudgetClass::Control)
     }
 
@@ -331,18 +331,18 @@ impl<T> BudgetedQueue<T> {
         retained_bytes: usize,
         class: BudgetClass,
         deadline: Instant,
-    ) -> QueuePushOutcome<T> {
+    ) -> QueueEnqueueStatus<T> {
         if self.inner.budget.limit().full_policy != FullPolicy::WaitUntilDeadline {
             return self.try_push(item, retained_bytes, class);
         }
         if self.is_closed() {
-            return QueuePushOutcome::Rejected {
+            return QueueEnqueueStatus::Rejected {
                 item,
                 rejection: QueuePushRejection::Closed,
             };
         }
         if let Some(rejection) = self.inner.budget.permanent_acquire_rejection(retained_bytes, class) {
-            return QueuePushOutcome::Rejected {
+            return QueueEnqueueStatus::Rejected {
                 item,
                 rejection: if rejection.is_closed() {
                     QueuePushRejection::Closed
@@ -362,14 +362,14 @@ impl<T> BudgetedQueue<T> {
             state_notified.as_mut().enable();
 
             if self.is_closed() {
-                return QueuePushOutcome::Rejected {
+                return QueueEnqueueStatus::Rejected {
                     item,
                     rejection: QueuePushRejection::Closed,
                 };
             }
             if Instant::now() >= deadline {
                 self.inner.metrics.record_deadline_exceeded();
-                return QueuePushOutcome::Rejected {
+                return QueueEnqueueStatus::Rejected {
                     item,
                     rejection: QueuePushRejection::DeadlineExceeded,
                 };
@@ -381,7 +381,7 @@ impl<T> BudgetedQueue<T> {
                 let admission = match self.inner.budget.admit() {
                     Ok(admission) => admission,
                     Err(_) => {
-                        return QueuePushOutcome::Rejected {
+                        return QueueEnqueueStatus::Rejected {
                             item,
                             rejection: QueuePushRejection::Closed,
                         }
@@ -389,11 +389,11 @@ impl<T> BudgetedQueue<T> {
                 };
                 match admission.try_acquire_waiting(retained_bytes, class) {
                     Ok(permit) => {
-                        return self.enqueue(item, permit).unwrap_or(QueuePushOutcome::Enqueued);
+                        return self.enqueue(item, permit).unwrap_or(QueueEnqueueStatus::Enqueued);
                     }
                     Err(error) if error.dimension() == Some(BudgetDimension::Rate) => {
                         self.inner.budget.record_budget_rejection(&error);
-                        return QueuePushOutcome::Rejected {
+                        return QueueEnqueueStatus::Rejected {
                             item,
                             rejection: QueuePushRejection::BudgetExhausted(error),
                         };
@@ -411,7 +411,7 @@ impl<T> BudgetedQueue<T> {
                 biased;
                 () = &mut deadline_sleep => {
                     self.inner.metrics.record_deadline_exceeded();
-                    return QueuePushOutcome::Rejected { item, rejection: QueuePushRejection::DeadlineExceeded };
+                    return QueueEnqueueStatus::Rejected { item, rejection: QueuePushRejection::DeadlineExceeded };
                 }
                 () = &mut state_notified => {}
                 () = &mut capacity_notified => {}
@@ -563,14 +563,14 @@ impl<T> BudgetedQueue<T> {
         }
     }
 
-    fn enqueue(&self, item: T, permit: ResourcePermit) -> Option<QueuePushOutcome<T>> {
+    fn enqueue(&self, item: T, permit: ResourcePermit) -> Option<QueueEnqueueStatus<T>> {
         let mut state = self
             .inner
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.closed {
-            return Some(QueuePushOutcome::Rejected {
+            return Some(QueueEnqueueStatus::Rejected {
                 item,
                 rejection: QueuePushRejection::Closed,
             });
@@ -593,9 +593,9 @@ impl<T> BudgetedQueue<T> {
         class: BudgetClass,
         rejection: BudgetRejection,
         discarded: &mut Vec<T>,
-    ) -> QueuePushOutcome<T> {
+    ) -> QueueEnqueueStatus<T> {
         match self.inner.budget.limit().full_policy {
-            FullPolicy::Reject | FullPolicy::WaitUntilDeadline | FullPolicy::DropStale => QueuePushOutcome::Rejected {
+            FullPolicy::Reject | FullPolicy::WaitUntilDeadline | FullPolicy::DropStale => QueueEnqueueStatus::Rejected {
                 item,
                 rejection: QueuePushRejection::BudgetExhausted(rejection),
             },
@@ -603,13 +603,13 @@ impl<T> BudgetedQueue<T> {
                 if rejection.dimension() == Some(BudgetDimension::Rate)
                     || rejection.exhausted_path() != self.inner.budget.path()
                 {
-                    return QueuePushOutcome::Rejected {
+                    return QueueEnqueueStatus::Rejected {
                         item,
                         rejection: QueuePushRejection::BudgetExhausted(rejection),
                     };
                 }
                 if !self.item_can_fit(retained_bytes, class) {
-                    return QueuePushOutcome::Rejected {
+                    return QueueEnqueueStatus::Rejected {
                         item,
                         rejection: QueuePushRejection::BudgetExhausted(rejection),
                     };
@@ -621,7 +621,7 @@ impl<T> BudgetedQueue<T> {
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                     if state.closed {
-                        return QueuePushOutcome::Rejected {
+                        return QueueEnqueueStatus::Rejected {
                             item,
                             rejection: QueuePushRejection::Closed,
                         };
@@ -634,14 +634,14 @@ impl<T> BudgetedQueue<T> {
                 let permit = match admission.try_acquire(retained_bytes, class) {
                     Ok(permit) => permit,
                     Err(retry_error) => {
-                        return QueuePushOutcome::Rejected {
+                        return QueueEnqueueStatus::Rejected {
                             item,
                             rejection: QueuePushRejection::BudgetExhausted(retry_error),
                         };
                     }
                 };
                 self.enqueue(item, permit)
-                    .unwrap_or(QueuePushOutcome::Coalesced { replaced })
+                    .unwrap_or(QueueEnqueueStatus::Coalesced { replaced })
             }
             FullPolicy::CloseSlowConsumer => {
                 let dropped = {
@@ -658,7 +658,7 @@ impl<T> BudgetedQueue<T> {
                 self.inner.budget.record_dropped(dropped);
                 self.inner.budget.record_slow_consumer_closed();
                 self.inner.notify.notify_waiters();
-                QueuePushOutcome::Rejected {
+                QueueEnqueueStatus::Rejected {
                     item,
                     rejection: QueuePushRejection::SlowConsumerClosed,
                 }

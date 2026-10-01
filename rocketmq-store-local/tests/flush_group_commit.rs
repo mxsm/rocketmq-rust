@@ -93,11 +93,11 @@ async fn worker_batches_waiters_and_applies_checkpoint_after_completion() {
     let queue = group_commit_queue(2, 4_096);
     assert!(matches!(
         queue.try_push_data(first, first_bytes),
-        rocketmq_runtime::QueuePushOutcome::Enqueued
+        rocketmq_runtime::QueueEnqueueStatus::Enqueued
     ));
     assert!(matches!(
         queue.try_push_data(second, second_bytes),
-        rocketmq_runtime::QueuePushOutcome::Enqueued
+        rocketmq_runtime::QueueEnqueueStatus::Enqueued
     ));
     queue.close();
 
@@ -163,7 +163,7 @@ async fn worker_propagates_forced_error_once_to_the_whole_batch() {
     let queue = group_commit_queue(1, 2_048);
     assert!(matches!(
         queue.try_push_data(request, retained_bytes),
-        rocketmq_runtime::QueuePushOutcome::Enqueued
+        rocketmq_runtime::QueueEnqueueStatus::Enqueued
     ));
     queue.close();
 
@@ -216,7 +216,7 @@ async fn worker_panic_drops_request_permit_and_records_abandonment() {
     let queue = group_commit_queue(1, retained_bytes);
     assert!(matches!(
         queue.try_push_data(request, retained_bytes),
-        rocketmq_runtime::QueuePushOutcome::Enqueued
+        rocketmq_runtime::QueueEnqueueStatus::Enqueued
     ));
     queue.close();
     let diagnostics = queue.clone();
