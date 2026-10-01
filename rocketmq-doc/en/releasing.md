@@ -1,24 +1,18 @@
-# Releasing crates and Docker Hub images
+# Releasing crates and container images
 
 Use **Release crates and Docker Hub images** (`.github/workflows/release.yml`)
 from the `main` branch. This workflow is manually dispatched; creating a tag or
 publishing a GitHub Release does not trigger Docker Hub or crates.io publication.
-The existing **Publish signed service images** workflow continues to publish its
-five GHCR images independently.
+After Docker Hub publication succeeds, the workflow calls **Publish release
+images to GHCR** (`.github/workflows/release-ghcr.yml`). Both registries use the
+same 13-component catalog in `docker/release-images.json`. GHCR copies the exact
+qualified Docker Hub image digest; services are not rebuilt independently.
+GHCR publishes only the version tag, for example
+`ghcr.io/mxsm/rocketmq-rust/broker:1.0.0`.
 
-For a release source, GHCR images receive both `<version>` (for example,
-`ghcr.io/mxsm/rocketmq-rust/broker:1.0.0`) and
-`<version>-<12-character-commit>` tags after all five images pass qualification.
-The plain version tag is enabled only when `v<version>` resolves to the exact
-published source commit. Manual builds of later `main` commits retain only the
-commit tag. Existing version or commit tags with a different digest stop
-publication; neither tag is overwritten. `staging-...` tags are temporary build
-references and do not indicate a completed release.
-
-GHCR attestation verification accepts in-toto Statement v0.1 (emitted by the
-pinned Cosign 3.1.2 custom-predicate signer) and v1. Both require cryptographic
-verification, one exact repository/digest subject, and the complete typed
-canonical predicate. Unknown statement versions are rejected.
+The older **Publish signed service images** workflow is manual only, for the
+five-service architecture qualification process. Publishing a GitHub Release
+no longer triggers it. Use the release workflows for formal releases.
 
 ## Configure GitHub Actions
 
@@ -119,6 +113,49 @@ tags are promoted only after successful verification.
 Staging tags may remain after successful or failed runs;
 retain or remove them according to your Docker Hub retention policy.
 
+## Matching GHCR release images
+
+GHCR repository names are `ghcr.io/mxsm/rocketmq-rust/<component>`, with the same
+components as the Docker Hub table above. Each version is a single linux/amd64
+manifest with the same digest in both registries. The mirror does not create
+Buildx attestation indexes, staging tags, commit aliases, or Cosign referrer tags
+in GHCR. Existing matching version tags are verified and skipped; a conflicting
+digest stops publication instead of overwriting a release.
+
+Before copying any selected image, the mirror verifies the immutable tag/source
+and OCI labels, the Docker Hub keyless signature with its release workflow
+identity and source/component annotations, and the signed CycloneDX SBOM's exact
+repository/digest subject. It accepts in-toto Statement v0.1 and v1 and rejects
+unknown versions. All selected images receive fresh SBOMs and Trivy scans with
+zero CRITICAL findings required before the first copy.
+
+The complete publication record binds the image digests and hashes of the SBOMs,
+scans, and source proofs. Cosign signs this record as a blob; evidence is uploaded
+to the Actions artifact (90 days) and to the existing GitHub Release as
+`ghcr-images-<version>-<group>-<run>-<attempt>.tar.gz`. If the GitHub Release has
+not been created yet, download the Actions artifact and attach it when creating
+the Release, or rerun the mirror after the Release exists. Evidence stays outside
+the image registry, so it does not add package versions.
+
+After extracting the evidence archive, verify its publication record:
+
+```bash
+cosign verify-blob --bundle publication.sigstore.json \
+  --certificate-identity-regexp '^https://github\.com/mxsm/rocketmq-rust/\.github/workflows/(release-ghcr|release)\.yml@refs/heads/main$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com publication.json
+```
+
+Then compare the pulled image digest and each evidence file's SHA-256 with the
+signed record. The `GITHUB_TOKEN` handles GHCR publication; no additional PAT is
+required. New GHCR packages initially have private visibility: set them public
+in **Package settings** for anonymous pulls. Their source label links them to
+this repository and grants its Actions workflows access.
+
+To mirror an already published Docker Hub release without rebuilding images or
+rerunning crates, dispatch **Publish release images to GHCR** from `main` with
+the same tag and `image_group=all`. Its default dry-run verifies and scans sources
+without any registry writes; disable `dry_run` to copy them.
+
 ## Retry a partial release
 
 Publication across crates.io and 13 repositories is not atomic. Crates finish
@@ -202,7 +239,7 @@ cannot be supplied through the runtime configuration file.
 
 ```bash
 python -m unittest discover -s scripts/tests -p 'test_publish_*.py'
-actionlint .github/workflows/release.yml .github/workflows/release-check.yml
+actionlint .github/workflows/release.yml .github/workflows/release-ghcr.yml .github/workflows/release-check.yml .github/workflows/service-image-publish.yml
 git diff --check
 ```
 

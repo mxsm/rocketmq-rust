@@ -1,0 +1,155 @@
+name: Publish release images to GHCR
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable release tag (for example v1.0.0)
+        type: string
+        required: true
+      dry_run:
+        description: Verify and scan Docker Hub sources without writing GHCR
+        type: boolean
+        default: true
+      image_group:
+        description: Use all to mirror the complete Docker Hub catalog
+        type: choice
+        default: all
+        options: [all, core, mcp, dashboard-backend, dashboard-frontend, sre-backend, sre-ui]
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      dry_run:
+        type: boolean
+        default: true
+      image_group:
+        type: string
+        default: all
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+concurrency:
+  group: release-ghcr
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'mxsm/rocketmq-rust'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13'
+      - name: Validate immutable release source and credentials
+        id: source
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main ]] || { echo "Run from main" >&2; exit 1; }
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "A stable vX.Y.Z tag is required" >&2; exit 1; }
+          [[ -n "$DOCKERHUB_USERNAME" && -n "$DOCKERHUB_TOKEN" ]] || { echo "Docker Hub credentials are required for source verification" >&2; exit 1; }
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse "refs/tags/${TAG}^{commit}")" >> "$GITHUB_OUTPUT"
+          echo "namespace=${DOCKERHUB_NAMESPACE:-$DOCKERHUB_USERNAME}" >> "$GITHUB_OUTPUT"
+      - name: Test publication boundaries
+        run: python -m unittest discover -s scripts/tests -p 'test_publish_ghcr_images.py'
+      - name: Install pinned registry copy tool
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_x86_64.tar.gz -o "$RUNNER_TEMP/crane.tar.gz"
+          echo "0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0  $RUNNER_TEMP/crane.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/crane.tar.gz" -C "$RUNNER_TEMP" crane
+          sudo install "$RUNNER_TEMP/crane" /usr/local/bin/crane
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: docker.io
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Log in to GHCR
+        if: ${{ !inputs.dry_run }}
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+        with:
+          syft-version: v1.48.0
+      - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567
+        with:
+          version: v0.72.0
+          cache: true
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+        with:
+          cosign-release: v3.1.2
+      - name: Qualify and mirror the shared release catalog
+        shell: bash
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+          NAMESPACE: ${{ steps.source.outputs.namespace }}
+          GROUP: ${{ inputs.image_group }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ "$DRY_RUN" == false ]]; then args+=(--publish); fi
+          python scripts/publish_ghcr_images.py --group "$GROUP" --version "$VERSION" \
+            --source-commit "$SOURCE_COMMIT" --namespace "$NAMESPACE" --output target/release/ghcr "${args[@]}"
+          echo "GHCR group \`$GROUP\` passed; dry-run: \`$DRY_RUN\`. Digests match Docker Hub." >> "$GITHUB_STEP_SUMMARY"
+      - name: Sign and verify publication evidence without registry attachments
+        if: ${{ !inputs.dry_run }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes --bundle target/release/ghcr/publication.sigstore.json target/release/ghcr/publication.json
+          cosign verify-blob --bundle target/release/ghcr/publication.sigstore.json \
+            --certificate-identity-regexp '^https://github\.com/mxsm/rocketmq-rust/\.github/workflows/(release-ghcr|release)\.yml@refs/heads/main$' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com target/release/ghcr/publication.json
+      - name: Attach evidence to the existing GitHub Release
+        if: ${{ !inputs.dry_run }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          GROUP: ${{ inputs.image_group }}
+        run: |
+          set -euo pipefail
+          archive="ghcr-images-${TAG#v}-$GROUP-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.tar.gz"
+          tar -czf "$RUNNER_TEMP/$archive" -C target/release/ghcr .
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > "$RUNNER_TEMP/release.json" 2> "$RUNNER_TEMP/release-error.txt"; then
+            gh release upload "$TAG" "$RUNNER_TEMP/$archive" --repo "$GITHUB_REPOSITORY"
+          elif grep -q 'HTTP 404' "$RUNNER_TEMP/release-error.txt"; then
+            echo "GitHub Release does not exist yet; evidence is available in the Actions artifact." >> "$GITHUB_STEP_SUMMARY"
+          else
+            cat "$RUNNER_TEMP/release-error.txt" >&2
+            exit 1
+          fi
+      - name: Upload SBOMs, scans, source proofs, and signed publication
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-ghcr-${{ inputs.image_group }}-${{ steps.source.outputs.version }}
+          path: target/release/ghcr/
+          if-no-files-found: warn
+          retention-days: 90
