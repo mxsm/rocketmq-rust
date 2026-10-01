@@ -4,19 +4,23 @@ on:
   pull_request:
     paths:
       - .github/workflows/release*.yml
+      - .github/workflows/service-image-publish.yml
       - docker/release-images.json
       - docker/Dockerfile.base
       - scripts/publish_core_crates.py
       - scripts/publish_dockerhub_images.py
+      - scripts/publish_ghcr_images.py
       - scripts/tests/test_publish_*.py
   push:
     branches: [main]
     paths:
       - .github/workflows/release*.yml
+      - .github/workflows/service-image-publish.yml
       - docker/release-images.json
       - docker/Dockerfile.base
       - scripts/publish_core_crates.py
       - scripts/publish_dockerhub_images.py
+      - scripts/publish_ghcr_images.py
       - scripts/tests/test_publish_*.py
   workflow_dispatch:
 
@@ -45,4 +49,4 @@ jobs:
           curl -fsSL --retry 3 https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz -o "$tools_dir/actionlint.tar.gz"
           echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $tools_dir/actionlint.tar.gz" | sha256sum -c -
           tar -xzf "$tools_dir/actionlint.tar.gz" -C "$tools_dir" actionlint
-          "$tools_dir/actionlint" .github/workflows/release.yml .github/workflows/release-check.yml
+          "$tools_dir/actionlint" .github/workflows/release.yml .github/workflows/release-ghcr.yml .github/workflows/release-check.yml .github/workflows/service-image-publish.yml

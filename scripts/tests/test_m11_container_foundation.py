@@ -146,6 +146,11 @@ class ContainerFoundationTests(unittest.TestCase):
         self.assertTrue(any("if: always()" in finding for finding in findings))
 
     def test_publication_requires_immutable_signed_digest_outputs(self) -> None:
+        release_publish = self.publication_workflow.replace(
+            "  workflow_dispatch:", "  release:\n    types: [published]\n  workflow_dispatch:", 1,
+        )
+        self.assertTrue(any("must be manual" in finding
+                            for finding in self.audit(publication_workflow=release_publish)))
         pull_request_publish = self.publication_workflow.replace(
             "  workflow_dispatch:",
             "  pull_request:\n  workflow_dispatch:",

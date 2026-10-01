@@ -7,8 +7,6 @@ on:
         description: Full 40-character commit SHA reachable from the protected main branch
         required: true
         type: string
-  release:
-    types: [published]
 
 permissions:
   contents: read

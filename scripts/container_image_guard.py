@@ -515,8 +515,6 @@ def audit_foundation(
 
     publication_fragments = [
         "workflow_dispatch:",
-        "release:",
-        "types: [published]",
         "contents: read",
         "packages: write",
         "id-token: write",
@@ -543,6 +541,8 @@ def audit_foundation(
             findings.append(f"service image publication workflow missing: {fragment}")
     if "pull_request:" in publication_workflow:
         findings.append("service image publication workflow must never run for pull requests")
+    if re.search(r"^  release:\s*$", publication_workflow, re.MULTILINE):
+        findings.append("five-service qualification must be manual; formal releases use the shared image catalog")
     for mutable_tag in (":latest", ":main", ":master"):
         if mutable_tag in publication_workflow:
             findings.append(f"service image publication workflow contains mutable tag: {mutable_tag}")

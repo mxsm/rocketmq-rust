@@ -16,7 +16,7 @@ on:
         type: boolean
         default: true
       publish_images:
-        description: Include Docker Hub service images
+        description: Include the shared Docker Hub and GHCR service image catalog
         type: boolean
         default: true
       image_group:
@@ -321,3 +321,18 @@ jobs:
           path: target/release/images/${{ matrix.group }}/
           if-no-files-found: warn
           retention-days: 30
+
+  ghcr:
+    name: GHCR release mirror
+    needs: [prepare, images]
+    if: ${{ always() && needs.prepare.result == 'success' && needs.images.result == 'success' && inputs.publish_images && !inputs.dry_run }}
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/release-ghcr.yml
+    with:
+      tag: ${{ inputs.tag }}
+      image_group: ${{ inputs.image_group }}
+      dry_run: false
+    secrets: inherit
