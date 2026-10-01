@@ -3349,8 +3349,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use resource_budget::PermitRebindOutcome",
-          "identity": "rocketmq-runtime/src/lib.rs:pub use resource_budget::PermitRebindOutcome",
+          "declaration": "pub use resource_budget::PermitBudgetTransferStatus",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use resource_budget::PermitBudgetTransferStatus",
           "owner": "runtime",
           "path": "rocketmq-runtime/src/lib.rs",
           "rationale": "deliberate root entry point",
