@@ -296,6 +296,7 @@ jobs:
         with:
           cosign-release: v3.1.2
       - name: Build, scan, sign, and publish the selected group
+        id: publication
         shell: bash
         env:
           GROUP: ${{ matrix.group }}
@@ -304,6 +305,8 @@ jobs:
           NAMESPACE: ${{ needs.prepare.outputs.namespace }}
           DRY_RUN: ${{ inputs.dry_run }}
           STAGING_RUN: ${{ inputs.staging_run }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
           publish_args=()
@@ -313,6 +316,20 @@ jobs:
             --source-commit "$SOURCE_COMMIT" --namespace "$NAMESPACE" \
             --output "target/release/images/$GROUP" "${publish_args[@]}"
           echo "Docker Hub group \`$GROUP\` passed; dry-run: \`$DRY_RUN\`. See publication.json and scan artifacts." >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove this run's temporary Docker Hub tags
+        if: ${{ always() && !inputs.dry_run && steps.publication.outcome != 'skipped' && steps.publication.outcome != '' }}
+        shell: bash
+        env:
+          GROUP: ${{ matrix.group }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SOURCE_COMMIT: ${{ needs.prepare.outputs.commit }}
+          NAMESPACE: ${{ needs.prepare.outputs.namespace }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          python target/release-tooling/scripts/publish_dockerhub_images.py --group "$GROUP" --version "$VERSION" \
+            --source-commit "$SOURCE_COMMIT" --namespace "$NAMESPACE" \
+            --cleanup-staging-only --staging-run "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
       - name: Upload SBOMs, scans, signatures, and publication records
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

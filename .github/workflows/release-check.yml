@@ -9,6 +9,7 @@ on:
       - docker/Dockerfile.base
       - scripts/publish_core_crates.py
       - scripts/publish_dockerhub_images.py
+      - scripts/dockerhub_tags.py
       - scripts/publish_ghcr_images.py
       - scripts/tests/test_publish_*.py
   push:
@@ -20,6 +21,7 @@ on:
       - docker/Dockerfile.base
       - scripts/publish_core_crates.py
       - scripts/publish_dockerhub_images.py
+      - scripts/dockerhub_tags.py
       - scripts/publish_ghcr_images.py
       - scripts/tests/test_publish_*.py
   workflow_dispatch:

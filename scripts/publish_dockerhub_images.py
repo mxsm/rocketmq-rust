@@ -28,6 +28,8 @@ import sys
 import time
 import tomllib
 
+from dockerhub_tags import DockerHubTags, HubError
+
 
 ROOT = Path(os.environ.get("RELEASE_SOURCE_ROOT", Path(__file__).resolve().parents[1])).resolve()
 SOURCE = "https://github.com/mxsm/rocketmq-rust"
@@ -109,6 +111,8 @@ def check_identity(state: dict, version: str, commit: str, name: str) -> None:
 
 
 def existing_release(repository: str, version: str, commit: str, name: str) -> dict | None:
+    # Older publishers may have completed only the commit alias. Reuse and validate it
+    # during migration, but promotion never creates a commit alias again.
     states = [inspect(f"{repository}:{tag}", missing_ok=True)
               for tag in (version, f"{version}-{commit[:12]}")]
     for state in states:
@@ -116,7 +120,7 @@ def existing_release(repository: str, version: str, commit: str, name: str) -> d
             check_identity(state, version, commit, name)
     present = [state for state in states if state]
     if len(present) == 2 and present[0]["digest"] != present[1]["digest"]:
-        raise ReleaseError(f"existing version and commit tags disagree for {name}")
+        raise ReleaseError(f"existing version and legacy commit tags disagree for {name}")
     return present[0] if present else None
 
 
@@ -178,17 +182,50 @@ def sign(reference: str, sbom: Path, commit: str, name: str, prefix: Path) -> No
 
 def promote(repository: str, digest: str, version: str, commit: str, name: str) -> None:
     reference = f"{repository}@{digest}"
-    for tag in (f"{version}-{commit[:12]}", version):
-        alias = f"{repository}:{tag}"
-        state = inspect(alias, missing_ok=True)
-        if state:
-            check_identity(state, version, commit, name)
-            if state["digest"] != digest:
-                raise ReleaseError(f"refusing to overwrite {alias} with a different digest")
-        else:
-            run(["docker", "buildx", "imagetools", "create", "--prefer-index=false", "--tag", alias, reference])
-        if inspect(alias)["digest"] != digest:
-            raise ReleaseError(f"digest changed while promoting {alias}")
+    alias = f"{repository}:{version}"
+    state = inspect(alias, missing_ok=True)
+    if state:
+        check_identity(state, version, commit, name)
+        if state["digest"] != digest:
+            raise ReleaseError(f"refusing to overwrite {alias} with a different digest")
+    else:
+        run(["docker", "buildx", "imagetools", "create", "--prefer-index=false", "--tag", alias, reference])
+    if inspect(alias)["digest"] != digest:
+        raise ReleaseError(f"digest changed while promoting {alias}")
+
+
+def cleanup_aliases(client: DockerHubTags, namespace: str, image: dict, version: str,
+                    commit: str, digest: str) -> list[str]:
+    repository = f"docker.io/{namespace}/{image['repository']}"
+    stable = inspect(f"{repository}:{version}")
+    check_identity(stable, version, commit, image["name"])
+    if stable["digest"] != digest:
+        raise ReleaseError("stable digest changed before tag cleanup")
+    candidates = [tag for tag in client.tags(namespace, image["repository"])
+                  if tag["name"] == f"{version}-{commit[:12]}"
+                  or re.fullmatch(rf"staging-{commit[:12]}-(?:[1-9][0-9]*|local)-[1-9][0-9]*", tag["name"])]
+    # Validate every candidate before deleting one; preserve other releases and signature referrers.
+    for tag in candidates:
+        if tag.get("digest") != digest:
+            raise ReleaseError(f"refusing to delete conflicting alias {repository}:{tag['name']}")
+    removed = []
+    for tag in candidates:
+        client.delete(namespace, image["repository"], tag["name"])
+        removed.append(tag["name"])
+    if inspect(f"{repository}:{version}")["digest"] != digest:
+        raise ReleaseError("stable digest changed after tag cleanup")
+    return removed
+
+
+def cleanup_run_tags(group: str, commit: str, namespace: str, staging_run: str) -> None:
+    if not re.fullmatch(r"[0-9a-f]{40}", commit) or not re.fullmatch(r"[1-9][0-9]*-[1-9][0-9]*", staging_run):
+        raise ReleaseError("cleanup requires an exact source commit and positive run ID/attempt")
+    policy = json.loads((ROOT / "docker/release-images.json").read_text(encoding="utf-8"))
+    images = policy["groups"][group]
+    client = DockerHubTags()
+    tag = f"staging-{commit[:12]}-{staging_run}"
+    for image in images:
+        client.delete(namespace, image["repository"], tag)
 
 
 def execute(group: str, version: str, commit: str, namespace: str, publish: bool, output: Path,
@@ -207,11 +244,19 @@ def execute(group: str, version: str, commit: str, namespace: str, publish: bool
         raise ReleaseError("checkout does not match the requested release source/version")
     policy = json.loads((ROOT / "docker/release-images.json").read_text(encoding="utf-8"))
     images = policy["groups"][group]
+    client = DockerHubTags() if publish else None
+    if publish:
+        # Check tag deletion rights before building/pushing; an absent owned run tag is
+        # idempotent. This also removes remnants when the same helper step is retried.
+        owned_tag = f"staging-{commit[:12]}-{os.environ.get('GITHUB_RUN_ID', 'local')}-{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}"
+        for image in images:
+            client.delete(namespace, image["repository"], owned_tag)
     output.mkdir(parents=True, exist_ok=True)
     result = {"version": version, "source_commit": commit,
               "tooling_commit": os.environ.get("RELEASE_TOOLING_COMMIT"), "group": group,
               "dry_run": not publish, "expected_components": [image["name"] for image in images],
               "complete": False, "images": []}
+    (output / "publication.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     plan = []
     # Check every existing alias before building or pushing any member of this group.
     for image in images:
@@ -241,17 +286,32 @@ def execute(group: str, version: str, commit: str, namespace: str, publish: bool
         name = image["name"]
         record = {"component": name, "repository": repository, "checks": "passed"}
         if publish:
-            if not state:
-                staging = f"{repository}:staging-{commit[:12]}-{os.environ.get('GITHUB_RUN_ID', 'local')}-{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}"
-                run(["docker", "tag", reference, staging])
-                run(["docker", "push", staging])
-                state = inspect(staging)
-                check_identity(state, version, commit, name)
-                reference = f"{repository}@{state['digest']}"
-                sbom = qualify(reference, output / f"{name}-registry", remote=True)
-            sign(reference, sbom, commit, name, output / name)
-            promote(repository, state["digest"], version, commit, name)
-            record.update(digest=state["digest"], tags=[version, f"{version}-{commit[:12]}"], published=True)
+            temporary = None
+            try:
+                if not state:
+                    temporary = owned_tag
+                    staging = f"{repository}:{temporary}"
+                    run(["docker", "tag", reference, staging])
+                    run(["docker", "push", staging])
+                    state = inspect(staging)
+                    check_identity(state, version, commit, name)
+                    reference = f"{repository}@{state['digest']}"
+                    sbom = qualify(reference, output / f"{name}-registry", remote=True)
+                sign(reference, sbom, commit, name, output / name)
+                promote(repository, state["digest"], version, commit, name)
+            except (ReleaseError, OSError, ValueError, subprocess.CalledProcessError) as error:
+                if temporary:
+                    try:
+                        client.delete(namespace, image["repository"], temporary)
+                    except HubError as cleanup_error:
+                        raise ReleaseError(f"{error}; temporary tag cleanup also failed: {cleanup_error}") from error
+                raise
+            if temporary:
+                client.delete(namespace, image["repository"], temporary)
+            removed = ([temporary] if temporary else []) + cleanup_aliases(
+                client, namespace, image, version, commit, state["digest"],
+            )
+            record.update(digest=state["digest"], tags=[version], published=True, removed_tags=removed)
         result["images"].append(record)
         (output / "publication.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     result["complete"] = True
@@ -267,12 +327,19 @@ def main() -> int:
     parser.add_argument("--namespace", required=True)
     parser.add_argument("--publish", action="store_true", help="push/sign after checks (default: local dry-run)")
     parser.add_argument("--staging-run", help="reuse staged images from this failed GitHub run ID and attempt")
+    parser.add_argument("--cleanup-staging-only", action="store_true", help="remove only this exact run's staging tags")
     parser.add_argument("--output", type=Path, default=ROOT / "target/release/images")
     args = parser.parse_args()
     try:
+        if args.cleanup_staging_only:
+            if args.publish or not args.staging_run:
+                raise ReleaseError("staging cleanup requires --staging-run and cannot publish")
+            cleanup_run_tags(args.group, args.source_commit, args.namespace, args.staging_run)
+            print(f"STAGING_CLEANUP_OK group={args.group} run={args.staging_run}")
+            return 0
         result = execute(args.group, args.version, args.source_commit, args.namespace, args.publish, args.output,
                          staging_run=args.staging_run)
-    except (ReleaseError, OSError, KeyError, ValueError, subprocess.CalledProcessError) as error:
+    except (ReleaseError, HubError, OSError, KeyError, ValueError, subprocess.CalledProcessError) as error:
         print(f"IMAGE_RELEASE_FAILED: {error}", file=sys.stderr)
         return 1
     print(f"IMAGE_RELEASE_OK group={args.group} dry_run={result['dry_run']} images={len(result['images'])}")

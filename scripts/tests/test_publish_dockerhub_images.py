@@ -29,6 +29,7 @@ import publish_dockerhub_images as release
 COMMIT = "a" * 40
 DIGEST = "sha256:" + "b" * 64
 REPOSITORY = "docker.io/example/rocketmq-rust-namesrv"
+REAL_CLEANUP = release.cleanup_aliases
 
 
 def state(name="namesrv", digest=DIGEST):
@@ -46,6 +47,12 @@ class DockerHubReleaseTests(unittest.TestCase):
             {"name": "namesrv", "repository": "rocketmq-rust-namesrv", "dockerfile": "Dockerfile"},
             {"name": "broker", "repository": "rocketmq-rust-broker", "dockerfile": "Dockerfile"}]}}
         self.write_policy()
+        hub_patch = patch.object(release, "DockerHubTags")
+        self.hub = hub_patch.start().return_value
+        self.addCleanup(hub_patch.stop)
+        cleanup_patch = patch.object(release, "cleanup_aliases", return_value=[])
+        self.cleanup = cleanup_patch.start()
+        self.addCleanup(cleanup_patch.stop)
 
     def write_policy(self):
         (self.root / "docker/release-images.json").write_text(json.dumps(self.policy))
@@ -138,19 +145,29 @@ class DockerHubReleaseTests(unittest.TestCase):
             self.assertEqual(release.inspect(f"{REPOSITORY}:1.0.0"), state())
         self.assertIn(f"{REPOSITORY}@{DIGEST}", command.call_args.args[0])
 
-    def test_conflicting_existing_tags_abort(self):
+    def test_existing_release_rejects_wrong_source_and_validates_legacy_alias(self):
+        wrong = state()
+        wrong["labels"]["org.opencontainers.image.revision"] = "c" * 40
+        with patch.object(release, "inspect", return_value=wrong) as inspect:
+            with self.assertRaises(release.ReleaseError):
+                release.existing_release(REPOSITORY, "1.0.0", COMMIT, "namesrv")
+        self.assertEqual(inspect.call_count, 2)
+        inspect.assert_any_call(f"{REPOSITORY}:1.0.0", missing_ok=True)
+        with patch.object(release, "inspect", side_effect=[None, state()]):
+            self.assertEqual(release.existing_release(REPOSITORY, "1.0.0", COMMIT, "namesrv"), state())
         with patch.object(release, "inspect", side_effect=[state(), state(digest="sha256:" + "c" * 64)]):
             with self.assertRaises(release.ReleaseError):
                 release.existing_release(REPOSITORY, "1.0.0", COMMIT, "namesrv")
 
     def test_promotion_preserves_digest_and_never_overwrites(self):
-        with patch.object(release, "inspect", side_effect=[None, state(), None, state()]), \
+        with patch.object(release, "inspect", side_effect=[None, state()]), \
              patch.object(release, "run") as command:
             release.promote(REPOSITORY, DIGEST, "1.0.0", COMMIT, "namesrv")
-        self.assertEqual(command.call_count, 2)
+        self.assertEqual(command.call_count, 1)
         for call in command.call_args_list:
             self.assertIn("--prefer-index=false", call.args[0])
             self.assertEqual(call.args[0][-1], f"{REPOSITORY}@{DIGEST}")
+            self.assertEqual(call.args[0][call.args[0].index("--tag") + 1], f"{REPOSITORY}:1.0.0")
         with patch.object(release, "inspect", return_value=state(digest="sha256:" + "c" * 64)), \
              patch.object(release, "run") as command:
             with self.assertRaises(release.ReleaseError):
@@ -282,6 +299,85 @@ class DockerHubReleaseTests(unittest.TestCase):
         for value in arguments:
             self.assertNotIn("VITE_SRE_OIDC_", value)
             self.assertNotIn("VITE_SRE_DEV_", value)
+
+    def test_cleanup_deletes_only_matching_release_aliases_and_preserves_stable_digest(self):
+        aliases = [f"1.0.0-{COMMIT[:12]}", f"staging-{COMMIT[:12]}-12345-1"]
+        self.hub.tags.return_value = [{"name": tag, "digest": DIGEST} for tag in aliases + [
+            "1.0.0", "0.9.0", "sha256-" + "b" * 64, "staging-cccccccccccc-12345-1"]]
+        with patch.object(release, "inspect", return_value=state()):
+            removed = REAL_CLEANUP(self.hub, "example", self.policy["groups"]["core"][0], "1.0.0", COMMIT, DIGEST)
+        self.assertEqual(removed, aliases)
+        self.assertEqual([call.args for call in self.hub.delete.call_args_list],
+                         [("example", "rocketmq-rust-namesrv", tag) for tag in aliases])
+
+    def test_late_conflicting_cleanup_alias_prevents_every_delete(self):
+        self.hub.tags.return_value = [{"name": f"1.0.0-{COMMIT[:12]}", "digest": DIGEST},
+            {"name": f"staging-{COMMIT[:12]}-12345-1", "digest": "sha256:" + "c" * 64}]
+        with patch.object(release, "inspect", return_value=state()), self.assertRaises(release.ReleaseError):
+            REAL_CLEANUP(self.hub, "example", self.policy["groups"]["core"][0], "1.0.0", COMMIT, DIGEST)
+        self.hub.delete.assert_not_called()
+
+    def test_failed_new_image_signature_cleans_its_temporary_tag_without_promotion(self):
+        self.policy["groups"]["core"] = self.policy["groups"]["core"][:1]
+        self.write_policy()
+        with patch.object(release, "ROOT", self.root), patch.object(release, "run", return_value=COMMIT), \
+             patch.dict(release.os.environ, {"GITHUB_RUN_ID": "12345", "GITHUB_RUN_ATTEMPT": "1"}), \
+             patch.object(release, "existing_release", return_value=None), patch.object(release, "build"), \
+             patch.object(release, "inspect", return_value=state()), \
+             patch.object(release, "qualify", return_value=self.root / "sbom.json"), \
+             patch.object(release, "sign", side_effect=release.ReleaseError("signature failure")), \
+             patch.object(release, "promote") as promote:
+            with self.assertRaisesRegex(release.ReleaseError, "signature failure"):
+                release.execute("core", "1.0.0", COMMIT, "example", True, self.root / "out")
+        promote.assert_not_called()
+        self.assertEqual(self.hub.delete.call_count, 2)
+        self.hub.delete.assert_called_with("example", "rocketmq-rust-namesrv", f"staging-{COMMIT[:12]}-12345-1")
+        self.assertFalse(json.loads((self.root / "out/publication.json").read_text())["complete"])
+
+    def test_successful_new_image_removes_staging_and_records_only_version_tag(self):
+        self.policy["groups"]["core"] = self.policy["groups"]["core"][:1]
+        self.write_policy()
+        with patch.object(release, "ROOT", self.root), patch.object(release, "run", return_value=COMMIT), \
+             patch.dict(release.os.environ, {"GITHUB_RUN_ID": "12345", "GITHUB_RUN_ATTEMPT": "1"}), \
+             patch.object(release, "existing_release", return_value=None), patch.object(release, "build"), \
+             patch.object(release, "inspect", return_value=state()), \
+             patch.object(release, "qualify", return_value=self.root / "sbom.json"), \
+             patch.object(release, "sign"), patch.object(release, "promote"):
+            result = release.execute("core", "1.0.0", COMMIT, "example", True, self.root / "out")
+        self.assertEqual(self.hub.delete.call_count, 2)
+        self.hub.delete.assert_called_with("example", "rocketmq-rust-namesrv", f"staging-{COMMIT[:12]}-12345-1")
+        self.assertEqual(result["images"][0]["tags"], ["1.0.0"])
+        self.assertEqual(result["images"][0]["removed_tags"], [f"staging-{COMMIT[:12]}-12345-1"])
+
+    def test_cleanup_failure_does_not_report_a_complete_publication(self):
+        self.cleanup.side_effect = release.HubError("HTTP 403")
+        with patch.object(release, "ROOT", self.root), patch.object(release, "run", return_value=COMMIT), \
+             patch.object(release, "existing_release", side_effect=[state(), state("broker")]), \
+             patch.object(release, "qualify", return_value=self.root / "sbom.json"), \
+             patch.object(release, "sign"), patch.object(release, "promote"):
+            with self.assertRaises(release.HubError):
+                release.execute("core", "1.0.0", COMMIT, "example", True, self.root / "out")
+        self.assertFalse(json.loads((self.root / "out/publication.json").read_text())["complete"])
+
+    def test_always_cleanup_deletes_only_the_exact_run_tags_in_selected_group(self):
+        with patch.object(release, "ROOT", self.root):
+            release.cleanup_run_tags("core", COMMIT, "example", "12345-2")
+        self.assertEqual([call.args for call in self.hub.delete.call_args_list], [
+            ("example", "rocketmq-rust-namesrv", f"staging-{COMMIT[:12]}-12345-2"),
+            ("example", "rocketmq-rust-broker", f"staging-{COMMIT[:12]}-12345-2")])
+        self.hub.delete.reset_mock()
+        with self.assertRaises(release.ReleaseError):
+            release.cleanup_run_tags("core", COMMIT, "example", "../other")
+        self.hub.delete.assert_not_called()
+
+    def test_missing_delete_permission_fails_before_building_or_pushing(self):
+        self.hub.delete.side_effect = release.HubError("HTTP 403")
+        with patch.object(release, "ROOT", self.root), patch.object(release, "run", return_value=COMMIT), \
+             patch.object(release, "build") as build, patch.object(release, "existing_release") as existing:
+            with self.assertRaises(release.HubError):
+                release.execute("core", "1.0.0", COMMIT, "example", True, self.root / "out")
+        build.assert_not_called()
+        existing.assert_not_called()
 
 
 if __name__ == "__main__":
