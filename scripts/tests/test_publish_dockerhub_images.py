@@ -196,7 +196,7 @@ class DockerHubReleaseTests(unittest.TestCase):
             verified = subprocess.CompletedProcess([], 0, payload, "")
             prefix = self.root / "sign"
             with self.subTest(predicate=predicate, digest=actual_digest), \
-                 patch.object(release, "run", return_value=""), \
+                 patch.object(release, "upload_cosign_evidence"), \
                  patch.object(release.subprocess, "run", side_effect=[
                      subprocess.CompletedProcess([], 0, "{}", ""), *[verified] * 10,
                  ]) as commands, patch.object(release.time, "sleep") as sleep, \
@@ -219,7 +219,7 @@ class DockerHubReleaseTests(unittest.TestCase):
         sbom.write_text(json.dumps(expected))
         old = attestation({"bomFormat": "CycloneDX", "serialNumber": "old-scan"})
         fresh = attestation(expected)
-        with patch.object(release, "run"), patch.object(release.subprocess, "run", side_effect=[
+        with patch.object(release, "upload_cosign_evidence"), patch.object(release.subprocess, "run", side_effect=[
                 subprocess.CompletedProcess([], 0, "{}", ""),
                 subprocess.CompletedProcess([], 0, old, ""),
                 subprocess.CompletedProcess([], 0, old + "\n" + fresh, ""),
@@ -233,13 +233,47 @@ class DockerHubReleaseTests(unittest.TestCase):
     def test_malformed_verified_attestation_fails_without_retry(self):
         sbom = self.root / "sbom.json"
         sbom.write_text('{"bomFormat":"CycloneDX"}')
-        with patch.object(release, "run"), patch.object(release.subprocess, "run", side_effect=[
+        with patch.object(release, "upload_cosign_evidence"), patch.object(release.subprocess, "run", side_effect=[
                 subprocess.CompletedProcess([], 0, "{}", ""),
                 subprocess.CompletedProcess([], 0, "malformed-json", ""),
              ]), patch.object(release.time, "sleep") as sleep:
             with self.assertRaises(json.JSONDecodeError):
                 release.sign(f"{REPOSITORY}@{DIGEST}", sbom, COMMIT, "namesrv", self.root / "sign")
         sleep.assert_not_called()
+
+    def test_evidence_upload_retries_registry_throttling_and_server_errors(self):
+        command = ["cosign", "attest", "--type", "cyclonedx", f"{REPOSITORY}@{DIGEST}"]
+        with patch.object(release.subprocess, "run", side_effect=[
+                subprocess.CompletedProcess(command, 1, "", "unexpected status code 429 Too Many Requests"),
+                subprocess.CompletedProcess(command, 1, "", "unexpected status code 503 Service Unavailable"),
+                subprocess.CompletedProcess(command, 0, "", ""),
+             ]) as run, patch.object(release.time, "sleep") as sleep, \
+             patch("sys.stderr", new_callable=io.StringIO):
+            release.upload_cosign_evidence(command)
+        self.assertEqual([command] * 3, [call.args[0] for call in run.call_args_list])
+        self.assertEqual([15, 30], [call.args[0] for call in sleep.call_args_list])
+
+    def test_evidence_upload_permanent_failures_stop_immediately(self):
+        command = ["cosign", "sign", f"{REPOSITORY}@{DIGEST}"]
+        for error in ("unexpected status code 401 Unauthorized", "unexpected status code 403 Forbidden",
+                      "unexpected status code 404 Not Found", "invalid signature", "OIDC token expired"):
+            with self.subTest(error=error), patch.object(release.subprocess, "run", return_value=
+                    subprocess.CompletedProcess(command, 1, "", error)) as run, \
+                 patch.object(release.time, "sleep") as sleep, patch("sys.stderr", new_callable=io.StringIO):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    release.upload_cosign_evidence(command)
+                run.assert_called_once()
+                sleep.assert_not_called()
+
+    def test_evidence_upload_retry_exhaustion_remains_a_failure(self):
+        command = ["cosign", "attest", "--type", "cyclonedx", f"{REPOSITORY}@{DIGEST}"]
+        with patch.object(release.subprocess, "run", return_value=
+                subprocess.CompletedProcess(command, 1, "", "unexpected status code 429 Too Many Requests")) as run, \
+             patch.object(release.time, "sleep") as sleep, patch("sys.stderr", new_callable=io.StringIO):
+            with self.assertRaises(subprocess.CalledProcessError):
+                release.upload_cosign_evidence(command)
+        self.assertEqual(5, run.call_count)
+        self.assertEqual(165, sum(call.args[0] for call in sleep.call_args_list))
 
     def test_registry_signature_discovery_retries_without_changing_verification(self):
         command = ["cosign", "verify", "--certificate-identity-regexp", release.IDENTITY,

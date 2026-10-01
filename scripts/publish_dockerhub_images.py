@@ -48,6 +48,27 @@ def run(command: list[str], *, capture: bool = False) -> str:
     return result.stdout if capture else ""
 
 
+def upload_cosign_evidence(command: list[str]) -> None:
+    """Retry idempotent evidence uploads only for registry throttling or server failures."""
+    for attempt in range(5):
+        result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True)
+        if result.stdout:
+            print(result.stdout, end="", flush=True)
+        if result.stderr:
+            print(result.stderr, end="", file=sys.stderr, flush=True)
+        if result.returncode == 0:
+            return
+        transient = re.search(r"unexpected status code (?:429|5[0-9]{2})\b", result.stderr)
+        if not transient or attempt == 4:
+            raise subprocess.CalledProcessError(
+                result.returncode, command, output=result.stdout, stderr=result.stderr,
+            )
+        delay = min(15 * 2 ** attempt, 60)
+        print(f"Registry evidence upload temporarily unavailable; retry {attempt + 1}/4 in {delay}s",
+              file=sys.stderr, flush=True)
+        time.sleep(delay)
+
+
 def verify_registry_evidence(command: list[str], *, validate: Callable[[str], None] | None = None) -> str:
     """Wait for newly uploaded evidence to become discoverable; verification stays mandatory."""
     for attempt in range(10):
@@ -163,13 +184,14 @@ def qualify(reference: str, prefix: Path, *, remote: bool) -> Path:
 
 def sign(reference: str, sbom: Path, commit: str, name: str, prefix: Path) -> None:
     annotations = ["--annotations", f"source_commit={commit}", "--annotations", f"component={name}"]
-    run(["cosign", "sign", "--yes", "--bundle", str(prefix.with_suffix(".signature-bundle.json")),
-         *annotations, reference])
+    upload_cosign_evidence(["cosign", "sign", "--yes", "--bundle",
+                           str(prefix.with_suffix(".signature-bundle.json")), *annotations, reference])
     verification = ["--certificate-identity-regexp", IDENTITY, "--certificate-oidc-issuer", ISSUER]
     signature = verify_registry_evidence(["cosign", "verify", *verification, *annotations, reference])
     prefix.with_suffix(".signature.json").write_text(signature, encoding="utf-8")
-    run(["cosign", "attest", "--yes", "--bundle", str(prefix.with_suffix(".attestation-bundle.json")),
-         "--type", "cyclonedx", "--predicate", str(sbom), reference])
+    upload_cosign_evidence(["cosign", "attest", "--yes", "--bundle",
+                           str(prefix.with_suffix(".attestation-bundle.json")),
+                           "--type", "cyclonedx", "--predicate", str(sbom), reference])
     expected = json.loads(sbom.read_text(encoding="utf-8"))
     digest = reference.rsplit("@sha256:", 1)[1]
 
