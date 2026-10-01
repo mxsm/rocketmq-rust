@@ -121,7 +121,7 @@ impl BudgetRejection {
 
 /// The result of an attempted permit rebind.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PermitRebindOutcome {
+pub enum PermitBudgetTransferStatus {
     /// The permit now owns the target budget chain.
     Rebound,
     /// The permit was already bound to the requested target.
@@ -673,13 +673,13 @@ impl ResourcePermit {
     pub fn try_rebind(
         &mut self,
         target: &ResourceBudget,
-    ) -> Result<PermitRebindOutcome, crate::RuntimeContractViolation> {
+    ) -> Result<PermitBudgetTransferStatus, crate::RuntimeContractViolation> {
         if !self.belongs_to_tree(target) {
             return Err(crate::RuntimeContractViolation::PermitTargetInDifferentTree);
         }
         let admission = match target.admit() {
             Ok(admission) => admission,
-            Err(rejection) => return Ok(PermitRebindOutcome::Rejected(rejection)),
+            Err(rejection) => return Ok(PermitBudgetTransferStatus::Rejected(rejection)),
         };
         Ok(self.try_rebind_admitted(&admission))
     }
@@ -691,7 +691,7 @@ impl ResourcePermit {
             .is_some_and(|(reservation, node)| Arc::ptr_eq(&reservation.node, node))
     }
 
-    pub(super) fn try_rebind_admitted(&mut self, admission: &BudgetAdmission<'_>) -> PermitRebindOutcome {
+    pub(super) fn try_rebind_admitted(&mut self, admission: &BudgetAdmission<'_>) -> PermitBudgetTransferStatus {
         let target = admission.budget;
         let common_ancestors = self
             .reservations
@@ -704,7 +704,7 @@ impl ResourcePermit {
             "caller validates the permit tree before admission"
         );
         if common_ancestors == self.reservations.len() && common_ancestors == target.chain.len() {
-            return PermitRebindOutcome::Unchanged;
+            return PermitBudgetTransferStatus::Unchanged;
         }
 
         let mut target_reservations =
@@ -714,7 +714,7 @@ impl ResourcePermit {
                 Ok(reservation) => target_reservations.push(reservation),
                 Err(dimension) => {
                     target.record_node_rejection(node, BudgetRejectionReason::Capacity(dimension));
-                    return PermitRebindOutcome::Rejected(BudgetRejection {
+                    return PermitBudgetTransferStatus::Rejected(BudgetRejection {
                         path: Arc::clone(&target.node.path),
                         exhausted_path: Arc::clone(&node.path),
                         reason: BudgetRejectionReason::Capacity(dimension),
@@ -730,7 +730,7 @@ impl ResourcePermit {
         self.reservations.truncate(common_ancestors);
         self.reservations.extend(target_reservations);
         self.capacity_notify.notify_waiters();
-        PermitRebindOutcome::Rebound
+        PermitBudgetTransferStatus::Rebound
     }
 }
 
