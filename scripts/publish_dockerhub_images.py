@@ -196,36 +196,57 @@ def qualify(reference: str, prefix: Path, *, remote: bool) -> Path:
     return sbom
 
 
+def verify_bundle(bundle: Path, digest: str, predicate_type: str) -> tuple[dict, dict]:
+    # Verify the exact uploaded bundle, including certificate, transparency proof and subject
+    # digest. Registry discovery otherwise downloads every historical bundle for this image.
+    run(["cosign", "verify-blob-attestation", "--bundle", str(bundle), "--type", predicate_type,
+         "--certificate-identity-regexp", IDENTITY, "--certificate-oidc-issuer", ISSUER,
+         "--check-claims=true", "--digest", digest.removeprefix("sha256:"), "--digestAlg", "sha256"])
+    envelope = json.loads(bundle.read_text(encoding="utf-8"))["dsseEnvelope"]
+    encoded = envelope["payload"]
+    statement = json.loads(base64.b64decode(encoded + "=" * (-len(encoded) % 4), validate=True))
+    subjects = statement.get("subject", [])
+    if (statement.get("_type") not in {"https://in-toto.io/Statement/v0.1", "https://in-toto.io/Statement/v1"}
+            or statement.get("predicateType") != predicate_type or len(subjects) != 1
+            or subjects[0].get("digest") != {"sha256": digest.removeprefix("sha256:")}):
+        raise ReleaseError("verified bundle does not bind the exact release digest and predicate type")
+    return statement, envelope
+
+
+def verify_release_bundles(reference: str, sbom: Path, commit: str, name: str, prefix: Path) -> tuple[str, str]:
+    repository, digest = reference.split("@", 1)
+    signature, _ = verify_bundle(prefix.with_suffix(".signature-bundle.json"), digest,
+                                 "https://sigstore.dev/cosign/sign/v1")
+    annotations = signature["subject"][0].get("annotations", {})
+    if annotations.get("source_commit") != commit or annotations.get("component") != name:
+        raise ReleaseError(f"verified signature annotations do not bind the release source to {name}")
+    statement, envelope = verify_bundle(prefix.with_suffix(".attestation-bundle.json"), digest,
+                                        "https://cyclonedx.org/bom")
+    canonical = registry_reference(repository)
+    names = {repository, canonical}
+    if canonical.startswith("registry-1.docker.io/"):
+        path = canonical.removeprefix("registry-1.docker.io/")
+        names.update({f"docker.io/{path}", f"index.docker.io/{path}"})
+    if (statement["subject"][0].get("name") not in names
+            or statement.get("predicate") != json.loads(sbom.read_text(encoding="utf-8"))):
+        raise ReleaseError(f"verified attestation does not bind the scanned SBOM to {name}")
+    # Preserve Cosign's image-verification JSON view for existing evidence consumers.
+    signature_view = [{"critical": {"identity": {"docker-reference": repository},
+                                   "image": {"docker-manifest-digest": digest},
+                                   "type": "cosign container image signature"}, "optional": annotations}]
+    return json.dumps(signature_view), json.dumps(envelope) + "\n"
+
+
 def sign(reference: str, sbom: Path, commit: str, name: str, prefix: Path) -> None:
     reference = registry_reference(reference)
     annotations = ["--annotations", f"source_commit={commit}", "--annotations", f"component={name}"]
     upload_cosign_evidence(["cosign", "sign", "--yes", "--bundle",
                            str(prefix.with_suffix(".signature-bundle.json")), *annotations, reference])
-    verification = ["--certificate-identity-regexp", IDENTITY, "--certificate-oidc-issuer", ISSUER]
-    signature = verify_registry_evidence(["cosign", "verify", *verification, *annotations, reference])
-    prefix.with_suffix(".signature.json").write_text(signature, encoding="utf-8")
     upload_cosign_evidence(["cosign", "attest", "--yes", "--bundle",
                            str(prefix.with_suffix(".attestation-bundle.json")),
                            "--type", "cyclonedx", "--predicate", str(sbom), reference])
-    expected = json.loads(sbom.read_text(encoding="utf-8"))
-    digest = reference.rsplit("@sha256:", 1)[1]
-
-    def validate_sbom(attestation: str) -> None:
-        for line in attestation.splitlines():
-            if not line.strip():
-                continue
-            envelope = json.loads(line)
-            encoded = envelope["payload"]
-            statement = json.loads(base64.b64decode(encoded + "=" * (-len(encoded) % 4), validate=True))
-            if (statement.get("predicate") == expected
-                    and statement.get("predicateType") == "https://cyclonedx.org/bom"
-                    and any(subject.get("digest", {}).get("sha256") == digest
-                            for subject in statement.get("subject", []))):
-                return
-        raise ReleaseError(f"verified attestation does not bind the scanned SBOM to {name}")
-
-    attestation = verify_registry_evidence(["cosign", "verify-attestation", *verification,
-                                          "--type", "cyclonedx", reference], validate=validate_sbom)
+    signature, attestation = verify_release_bundles(reference, sbom, commit, name, prefix)
+    prefix.with_suffix(".signature.json").write_text(signature, encoding="utf-8")
     prefix.with_suffix(".attestation.jsonl").write_text(attestation, encoding="utf-8")
 
 

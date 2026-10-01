@@ -24,13 +24,15 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tomllib
 from urllib.parse import quote
 
 from publish_dockerhub_images import (IDENTITY, ISSUER, ReleaseError, check_identity,
-                                      qualify, registry_reference, run, verify_registry_evidence)
+                                      qualify, registry_reference, run, verify_registry_evidence,
+                                      verify_release_bundles)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -95,8 +97,20 @@ def verify_sbom_subject(attestations: str, repository: str, digest: str) -> None
     raise ReleaseError("verified source SBOM does not bind the exact repository/digest")
 
 
-def verify_source(repository: str, digest: str, commit: str, name: str, prefix: Path) -> None:
+def verify_source(repository: str, digest: str, commit: str, name: str, prefix: Path,
+                  *, evidence_prefix: Path | None = None) -> None:
     reference = registry_reference(f"{repository}@{digest}")
+    if evidence_prefix is not None:
+        signature, attestation = verify_release_bundles(
+            f"{repository}@{digest}", evidence_prefix.with_suffix(".cdx.json"), commit, name, evidence_prefix,
+        )
+        verify_sbom_subject(attestation, repository, digest)
+        for kind in ("signature", "attestation"):
+            shutil.copyfile(evidence_prefix.with_suffix(f".{kind}-bundle.json"),
+                            prefix.with_suffix(f".source-{kind}-bundle.json"))
+        prefix.with_suffix(".source-signature.json").write_text(signature, encoding="utf-8")
+        prefix.with_suffix(".source-attestation.jsonl").write_text(attestation, encoding="utf-8")
+        return
     verification = ["--certificate-identity-regexp", IDENTITY, "--certificate-oidc-issuer", ISSUER]
     signature = verify_registry_evidence([
         "cosign", "verify", *verification, "--annotations", f"source_commit={commit}",
@@ -116,6 +130,40 @@ def scan(reference: str, prefix: Path) -> None:
     if any(vulnerability.get("Severity") == "CRITICAL"
            for result in findings.get("Results", []) for vulnerability in result.get("Vulnerabilities", [])):
         raise ReleaseError(f"CRITICAL findings block {reference}")
+
+
+def publication_evidence(directory: Path, version: str, commit: str, name: str,
+                         repository: str, digest: str) -> Path:
+    matches = []
+    for path in directory.rglob("publication.json"):
+        publication = json.loads(path.read_text(encoding="utf-8"))
+        if (not publication.get("complete") or publication.get("dry_run")
+                or publication.get("version") != version or publication.get("source_commit") != commit):
+            raise ReleaseError("source publication evidence is incomplete or belongs to a different release")
+        for image in publication.get("images", []):
+            if image.get("component") != name:
+                continue
+            if (image.get("repository") != repository or image.get("digest") != digest
+                    or image.get("tags") != [version] or not image.get("published")
+                    or image.get("checks") != "passed"):
+                raise ReleaseError(f"source publication evidence conflicts with {name}")
+            matches.append(path.parent / name)
+    if len(matches) != 1:
+        raise ReleaseError(f"expected one complete source publication record for {name}")
+    return matches[0]
+
+
+def reuse_scan(reference: str, evidence_prefix: Path, prefix: Path) -> None:
+    findings = json.loads(evidence_prefix.with_suffix(".trivy.json").read_text(encoding="utf-8"))
+    names = {reference, registry_reference(reference), reference.replace("docker.io/", "index.docker.io/", 1)}
+    if (findings.get("SchemaVersion") != 2 or findings.get("ArtifactType") != "container_image"
+            or findings.get("ArtifactName") not in names or not isinstance(findings.get("Results"), list)):
+        raise ReleaseError("source vulnerability scan does not bind the exact image")
+    if any(vulnerability.get("Severity") == "CRITICAL"
+           for result in findings["Results"] for vulnerability in result.get("Vulnerabilities", [])):
+        raise ReleaseError(f"CRITICAL findings block {reference}")
+    for suffix in (".cdx.json", ".trivy.json"):
+        shutil.copyfile(evidence_prefix.with_suffix(suffix), prefix.with_suffix(suffix))
 
 
 def selected_images(group: str) -> list[dict]:
@@ -147,7 +195,7 @@ def validate_source(version: str, commit: str) -> None:
 
 
 def execute(group: str, version: str, commit: str, namespace: str, owner: str,
-            publish: bool, output: Path) -> dict:
+            publish: bool, output: Path, *, source_evidence: Path | None = None) -> dict:
     validate_source(version, commit)
     if any(not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", value) for value in (namespace, owner)):
         raise ReleaseError("registry namespace/owner must be lowercase")
@@ -180,8 +228,13 @@ def execute(group: str, version: str, commit: str, namespace: str, owner: str,
     # Every selected source passes identity, signature, SBOM and fresh scan checks before any copy.
     for name, source, _, digest, _ in plan:
         print(f"Qualifying {name} {digest}", flush=True)
-        verify_source(source, digest, commit, name, output / name)
-        scan(f"{source}@{digest}", output / name)
+        if source_evidence is not None:
+            evidence_prefix = publication_evidence(source_evidence, version, commit, name, source, digest)
+            verify_source(source, digest, commit, name, output / name, evidence_prefix=evidence_prefix)
+            reuse_scan(f"{source}@{digest}", evidence_prefix, output / name)
+        else:
+            verify_source(source, digest, commit, name, output / name)
+            scan(f"{source}@{digest}", output / name)
     for name, source, destination, digest, present in plan:
         reference = f"{destination}:{version}"
         if publish:
@@ -216,10 +269,12 @@ def main() -> int:
     parser.add_argument("--owner", default="mxsm")
     parser.add_argument("--publish", action="store_true")
     parser.add_argument("--output", type=Path, default=ROOT / "target/release/ghcr")
+    parser.add_argument("--source-evidence", type=Path,
+                        help="reuse freshly verified Docker Hub artifacts from this same workflow run")
     args = parser.parse_args()
     try:
         result = execute(args.group, args.version, args.source_commit, args.namespace,
-                         args.owner, args.publish, args.output)
+                         args.owner, args.publish, args.output, source_evidence=args.source_evidence)
     except (ReleaseError, OSError, KeyError, ValueError, TypeError, subprocess.CalledProcessError) as error:
         print(f"GHCR_RELEASE_FAILED: {error}", file=sys.stderr)
         return 1

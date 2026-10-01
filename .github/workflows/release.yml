@@ -373,6 +373,7 @@ jobs:
     needs: [prepare, images]
     if: ${{ always() && needs.prepare.result == 'success' && needs.images.result == 'success' && inputs.publish_images && !inputs.dry_run }}
     permissions:
+      actions: read
       contents: write
       packages: write
       id-token: write
@@ -381,4 +382,5 @@ jobs:
       tag: ${{ inputs.tag }}
       image_group: ${{ inputs.image_group }}
       dry_run: false
+      reuse_publication_artifacts: true
     secrets: inherit
