@@ -21,7 +21,7 @@ Set the following repository **Secrets**:
 | Secret | Purpose |
 | --- | --- |
 | `CARGO_REGISTRY_TOKEN` | crates.io API token with permission to publish the core crates, including creating new crate names on the first release |
-| `DOCKERHUB_TOKEN` | Docker Hub access token with read/write access to all selected repositories |
+| `DOCKERHUB_TOKEN` | Docker Hub personal access token with Read, Write, Delete permission for all selected repositories; tag cleanup requires Delete |
 
 Set the following repository **Variables**:
 
@@ -95,8 +95,8 @@ the release produces these repositories:
 | SRE Probe | `example/rocketmq-rust-sre-probe:1.0.0` |
 | SRE UI | `example/rocketmq-rust-sre-ui:1.0.0` |
 
-Each image also receives `1.0.0-<12-character-commit>` and records the full source
-commit in its OCI labels. The release does not write `latest`, `main`, or `master`.
+Each image receives only the stable version tag and records the full source
+commit in its OCI labels. The release does not write commit aliases, `latest`, `main`, or `master`.
 Development issuers, model mocks, and qualification drivers are excluded.
 `docker/release-images.json` owns the six build groups and repository names.
 
@@ -104,14 +104,20 @@ Each group builds and scans all missing images before its first upload. Syft
 generates CycloneDX SBOMs; Trivy blocks every CRITICAL finding, including those
 without a fix. New images are pushed to per-run staging tags, scanned again by
 registry digest, signed with Cosign, and accompanied by verified SBOM
-attestations. Only then are the stable version and commit tags promoted while
+attestations. Only then is the stable version tag promoted while
 preserving the digest. Newly uploaded signatures and attestations may take time
 to become discoverable. Temporary discovery failures are retried up to nine times
 with bounded backoff (at most 375 seconds of waiting per verification).
 Authorization, certificate, issuer, and cryptographic failures stop immediately;
 tags are promoted only after successful verification.
-Staging tags may remain after successful or failed runs;
-retain or remove them according to your Docker Hub retention policy.
+The publisher deletes its temporary tag after promotion and on handled publication
+failures. An `always()` workflow step also removes only the current run's staging
+tags, including failed or cancelled runs when the runner remains available.
+Successful publication removes matching legacy commit/staging aliases only after
+checking their digest against the stable release. Other releases and Cosign
+referrers remain intact. Cleanup uses Docker Hub's tag-only API: deleting a shared
+registry manifest would also break the stable tag. Authorization or cleanup
+failures fail the release rather than reporting complete publication.
 
 ## Matching GHCR release images
 
@@ -162,7 +168,7 @@ Publication across crates.io and 13 repositories is not atomic. Crates finish
 before image jobs start; different image groups may finish independently.
 Rerun the **same tag** after a failure:
 
-- To reuse images pushed by a failed image run, set `staging_run` to its run ID
+- To reuse legacy images left by an older or interrupted image run, set `staging_run` to its run ID
   and attempt (for example `36800241284-1`). Matching staged images are checked
   against the release source, rescanned by digest, signed, and verified before
   promotion. Missing staged images are rebuilt; source conflicts stop publication.
@@ -173,7 +179,7 @@ Rerun the **same tag** after a failure:
   Every retry rechecks existing archives and publishes only missing versions.
   Other failures stop immediately. Cooldowns longer than ten minutes require a
   later manual rerun; the release tag and source commit remain unchanged.
-- Existing image version/commit tags must match the release source and each other.
+- Existing image version tags must match the release source.
   Their digest is reused, rescanned, and signed again; conflicting tags stop the
   group instead of being overwritten.
 - Disable `publish_crates` to retry only images. Select one `image_group` to
