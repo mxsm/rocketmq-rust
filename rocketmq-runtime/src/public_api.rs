@@ -41,9 +41,11 @@ pub use crate::diagnostics::RuntimeTaskKindSummaryV1;
 pub use crate::diagnostics::RuntimeTaskKindV1;
 pub use crate::diagnostics::RuntimeTaskSectionV2;
 pub use crate::operation::OperationContext;
+pub use crate::operation::OperationDrainStatus;
+/// Compatibility name for [`OperationDrainStatus`].
+pub use crate::operation::OperationDrainStatus as OperationWaitOutcome;
 pub use crate::operation::OperationOutcome;
 pub use crate::operation::OperationOutcomeObserver;
-pub use crate::operation::OperationWaitOutcome;
 pub use crate::operation::OperationWaitPolicy;
 pub use crate::owner::RuntimeOwner;
 pub use crate::owner::RuntimeOwnerPlan;
