@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "platform": "linux/amd64",
+  "groups": {
+    "core": [
+      {"name": "namesrv", "repository": "rocketmq-rust-namesrv", "dockerfile": "docker/Dockerfile.base", "target": "namesrv"},
+      {"name": "controller", "repository": "rocketmq-rust-controller", "dockerfile": "docker/Dockerfile.base", "target": "controller"},
+      {"name": "broker", "repository": "rocketmq-rust-broker", "dockerfile": "docker/Dockerfile.base", "target": "broker"},
+      {"name": "proxy", "repository": "rocketmq-rust-proxy", "dockerfile": "docker/Dockerfile.base", "target": "proxy"}
+    ],
+    "mcp": [
+      {"name": "mcp", "repository": "rocketmq-rust-mcp", "dockerfile": "docker/Dockerfile.base", "target": "mcp-http"}
+    ],
+    "dashboard-backend": [
+      {"name": "dashboard-web-backend", "repository": "rocketmq-rust-dashboard-web-backend", "dockerfile": "rocketmq-dashboard/rocketmq-dashboard-web/deploy/backend.Dockerfile"}
+    ],
+    "dashboard-frontend": [
+      {"name": "dashboard-web-frontend", "repository": "rocketmq-rust-dashboard-web-frontend", "dockerfile": "rocketmq-dashboard/rocketmq-dashboard-web/deploy/frontend.Dockerfile"}
+    ],
+    "sre-backend": [
+      {"name": "sre-control-plane", "repository": "rocketmq-rust-sre-control-plane", "dockerfile": "rocketmq-ai/rocketmq-sre/deploy/docker/Dockerfile", "target": "control-plane"},
+      {"name": "sre-connector", "repository": "rocketmq-rust-sre-connector", "dockerfile": "rocketmq-ai/rocketmq-sre/deploy/docker/Dockerfile", "target": "connector"},
+      {"name": "sre-executor", "repository": "rocketmq-rust-sre-executor", "dockerfile": "rocketmq-ai/rocketmq-sre/deploy/docker/Dockerfile", "target": "executor"},
+      {"name": "sre-execution-agent", "repository": "rocketmq-rust-sre-execution-agent", "dockerfile": "rocketmq-ai/rocketmq-sre/deploy/docker/Dockerfile", "target": "execution-agent"},
+      {"name": "sre-probe", "repository": "rocketmq-rust-sre-probe", "dockerfile": "rocketmq-ai/rocketmq-sre/deploy/docker/Dockerfile", "target": "probe"}
+    ],
+    "sre-ui": [
+      {"name": "sre-ui", "repository": "rocketmq-rust-sre-ui", "dockerfile": "rocketmq-ai/rocketmq-sre/deploy/docker/ui.Dockerfile", "build_args": {"VITE_SRE_AUTH_MODE": "oidc"}}
+    ]
+  }
+}

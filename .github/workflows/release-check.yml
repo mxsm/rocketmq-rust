@@ -1,0 +1,48 @@
+name: Release tooling checks
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/release*.yml
+      - docker/release-images.json
+      - docker/Dockerfile.base
+      - scripts/publish_core_crates.py
+      - scripts/publish_dockerhub_images.py
+      - scripts/tests/test_publish_*.py
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release*.yml
+      - docker/release-images.json
+      - docker/Dockerfile.base
+      - scripts/publish_core_crates.py
+      - scripts/publish_dockerhub_images.py
+      - scripts/tests/test_publish_*.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13'
+      - name: Test release failure handling and publication boundaries
+        run: python -m unittest discover -s scripts/tests -p 'test_publish_*.py'
+      - name: Validate workflow syntax with pinned actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools_dir="$RUNNER_TEMP/release-tools"
+          mkdir -p "$tools_dir"
+          curl -fsSL --retry 3 https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz -o "$tools_dir/actionlint.tar.gz"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $tools_dir/actionlint.tar.gz" | sha256sum -c -
+          tar -xzf "$tools_dir/actionlint.tar.gz" -C "$tools_dir" actionlint
+          "$tools_dir/actionlint" .github/workflows/release.yml .github/workflows/release-check.yml

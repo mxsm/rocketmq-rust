@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+# Copyright 2026 The RocketMQ Rust Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Build, scan, and optionally publish one group of Docker Hub release images."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tomllib
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE = "https://github.com/mxsm/rocketmq-rust"
+IDENTITY = r"^https://github\.com/mxsm/rocketmq-rust/\.github/workflows/release\.yml@refs/heads/main$"
+ISSUER = "https://token.actions.githubusercontent.com"
+
+
+class ReleaseError(ValueError):
+    """Publication cannot proceed without changing an existing release or bypassing a check."""
+
+
+def run(command: list[str], *, capture: bool = False) -> str:
+    result = subprocess.run(command, cwd=ROOT, check=True, text=True,
+                            stdout=subprocess.PIPE if capture else None)
+    return result.stdout if capture else ""
+
+
+def inspect(reference: str, *, missing_ok: bool = False) -> dict | None:
+    command = ["docker", "buildx", "imagetools", "inspect", reference,
+               "--format", "{{json .Manifest}}"]
+    result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True)
+    if result.returncode:
+        # Authentication, rate limits, and transport failures must never mean 'tag absent'.
+        message = result.stderr.strip()
+        absent = message in {f"{reference}: not found", f"ERROR: {reference}: not found"}
+        if missing_ok and (absent or re.search(r"(?i)\bmanifest unknown\b", message)):
+            return None
+        raise ReleaseError(f"cannot inspect {reference}: {result.stderr.strip()}")
+    manifest = json.loads(result.stdout)
+    digest = manifest["digest"]
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise ReleaseError(f"invalid registry digest for {reference}")
+    immutable = f"{reference.split('@')[0].rsplit(':', 1)[0]}@{digest}"
+    config = json.loads(run(["docker", "buildx", "imagetools", "inspect", immutable,
+                            "--format", "{{json .Image}}"], capture=True))
+    if config.get("os") != "linux" or config.get("architecture") != "amd64":
+        raise ReleaseError(f"{reference} is not a single linux/amd64 image")
+    return {"digest": digest, "labels": config.get("config", {}).get("Labels", {})}
+
+
+def labels(version: str, commit: str, name: str) -> dict[str, str]:
+    return {"org.opencontainers.image.source": SOURCE,
+            "org.opencontainers.image.version": version,
+            "org.opencontainers.image.revision": commit,
+            "io.rocketmq.release.component": name}
+
+
+def check_identity(state: dict, version: str, commit: str, name: str) -> None:
+    if any(state["labels"].get(key) != value for key, value in labels(version, commit, name).items()):
+        raise ReleaseError(f"existing {name} {version} belongs to a different release source")
+
+
+def existing_release(repository: str, version: str, commit: str, name: str) -> dict | None:
+    states = [inspect(f"{repository}:{tag}", missing_ok=True)
+              for tag in (version, f"{version}-{commit[:12]}")]
+    for state in states:
+        if state:
+            check_identity(state, version, commit, name)
+    present = [state for state in states if state]
+    if len(present) == 2 and present[0]["digest"] != present[1]["digest"]:
+        raise ReleaseError(f"existing version and commit tags disagree for {name}")
+    return present[0] if present else None
+
+
+def build(image: dict, local: str, version: str, commit: str, platform: str) -> None:
+    command = ["docker", "buildx", "build", "--load", "--platform", platform,
+               "--provenance=false", "--sbom=false", "--file", image["dockerfile"], "--tag", local,
+               "--build-arg", f"SOURCE_REVISION={commit}", "--build-arg", f"SOURCE_VERSION={version}"]
+    if image.get("target"):
+        command.extend(["--target", image["target"]])
+    arguments = dict(image.get("build_args", {}))
+    for key, value in arguments.items():
+        command.extend(["--build-arg", f"{key}={value}"])
+    for key, value in labels(version, commit, image["name"]).items():
+        command.extend(["--label", f"{key}={value}"])
+    command.append(".")
+    run(command)
+
+
+def qualify(reference: str, prefix: Path, *, remote: bool) -> Path:
+    sbom = prefix.with_suffix(".cdx.json")
+    run(["syft", f"{'registry' if remote else 'docker'}:{reference}",
+         "--output", f"cyclonedx-json={sbom}"])
+    run(["trivy", "image", "--no-progress", "--skip-version-check",
+         "--image-src", "remote" if remote else "docker", "--scanners", "vuln",
+         "--severity", "CRITICAL", "--exit-code", "1", "--format", "json",
+         "--output", str(prefix.with_suffix(".trivy.json")), reference])
+    return sbom
+
+
+def sign(reference: str, sbom: Path, commit: str, name: str, prefix: Path) -> None:
+    annotations = ["--annotations", f"source_commit={commit}", "--annotations", f"component={name}"]
+    run(["cosign", "sign", "--yes", "--bundle", str(prefix.with_suffix(".signature-bundle.json")),
+         *annotations, reference])
+    verification = ["--certificate-identity-regexp", IDENTITY, "--certificate-oidc-issuer", ISSUER]
+    signature = run(["cosign", "verify", *verification, *annotations, reference], capture=True)
+    prefix.with_suffix(".signature.json").write_text(signature, encoding="utf-8")
+    run(["cosign", "attest", "--yes", "--bundle", str(prefix.with_suffix(".attestation-bundle.json")),
+         "--type", "cyclonedx", "--predicate", str(sbom), reference])
+    attestation = run(["cosign", "verify-attestation", *verification,
+                       "--type", "cyclonedx", reference], capture=True)
+    prefix.with_suffix(".attestation.jsonl").write_text(attestation, encoding="utf-8")
+    expected = json.loads(sbom.read_text(encoding="utf-8"))
+    digest = reference.rsplit("@sha256:", 1)[1]
+    statements = []
+    for line in attestation.splitlines():
+        if not line.strip():
+            continue
+        envelope = json.loads(line)
+        encoded = envelope["payload"]
+        statement = json.loads(base64.b64decode(encoded + "=" * (-len(encoded) % 4), validate=True))
+        if (statement.get("predicate") == expected
+                and statement.get("predicateType") == "https://cyclonedx.org/bom"
+                and any(subject.get("digest", {}).get("sha256") == digest
+                        for subject in statement.get("subject", []))):
+            statements.append(statement)
+    if not statements:
+        raise ReleaseError(f"verified attestation does not bind the scanned SBOM to {name}")
+
+
+def promote(repository: str, digest: str, version: str, commit: str, name: str) -> None:
+    reference = f"{repository}@{digest}"
+    for tag in (f"{version}-{commit[:12]}", version):
+        alias = f"{repository}:{tag}"
+        state = inspect(alias, missing_ok=True)
+        if state:
+            check_identity(state, version, commit, name)
+            if state["digest"] != digest:
+                raise ReleaseError(f"refusing to overwrite {alias} with a different digest")
+        else:
+            run(["docker", "buildx", "imagetools", "create", "--prefer-index=false", "--tag", alias, reference])
+        if inspect(alias)["digest"] != digest:
+            raise ReleaseError(f"digest changed while promoting {alias}")
+
+
+def execute(group: str, version: str, commit: str, namespace: str, publish: bool, output: Path) -> dict:
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+        raise ReleaseError("version must be stable semver")
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ReleaseError("source commit must be a full lowercase commit SHA")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", namespace):
+        raise ReleaseError("Docker Hub namespace must be a lowercase user or organization name")
+    actual = run(["git", "rev-parse", "HEAD"], capture=True).strip()
+    workspace = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
+    if actual != commit or workspace["workspace"]["package"]["version"] != version:
+        raise ReleaseError("checkout does not match the requested release source/version")
+    policy = json.loads((ROOT / "docker/release-images.json").read_text(encoding="utf-8"))
+    images = policy["groups"][group]
+    output.mkdir(parents=True, exist_ok=True)
+    result = {"version": version, "source_commit": commit, "group": group,
+              "dry_run": not publish, "expected_components": [image["name"] for image in images],
+              "complete": False, "images": []}
+    plan = []
+    # Check every existing alias before building or pushing any member of this group.
+    for image in images:
+        repository = f"docker.io/{namespace}/{image['repository']}"
+        state = existing_release(repository, version, commit, image["name"]) if publish else None
+        plan.append((image, repository, state))
+    qualified = []
+    for image, repository, state in plan:
+        name = image["name"]
+        prefix = output / name
+        local = f"rocketmq-release/{name}:{version}-{commit[:12]}"
+        if state:
+            reference = f"{repository}@{state['digest']}"
+            sbom = qualify(reference, prefix, remote=True)
+        else:
+            build(image, local, version, commit, policy["platform"])
+            sbom = qualify(local, prefix, remote=False)
+            reference = local
+        qualified.append((image, repository, state, reference, sbom))
+    # All members passed scans before the first registry write.
+    for image, repository, state, reference, sbom in qualified:
+        name = image["name"]
+        record = {"component": name, "repository": repository, "checks": "passed"}
+        if publish:
+            if not state:
+                staging = f"{repository}:staging-{commit[:12]}-{os.environ.get('GITHUB_RUN_ID', 'local')}-{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}"
+                run(["docker", "tag", reference, staging])
+                run(["docker", "push", staging])
+                state = inspect(staging)
+                check_identity(state, version, commit, name)
+                reference = f"{repository}@{state['digest']}"
+                sbom = qualify(reference, output / f"{name}-registry", remote=True)
+            sign(reference, sbom, commit, name, output / name)
+            promote(repository, state["digest"], version, commit, name)
+            record.update(digest=state["digest"], tags=[version, f"{version}-{commit[:12]}"], published=True)
+        result["images"].append(record)
+        (output / "publication.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    result["complete"] = True
+    (output / "publication.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    return result
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--group", required=True)
+    parser.add_argument("--version", required=True)
+    parser.add_argument("--source-commit", required=True)
+    parser.add_argument("--namespace", required=True)
+    parser.add_argument("--publish", action="store_true", help="push/sign after checks (default: local dry-run)")
+    parser.add_argument("--output", type=Path, default=ROOT / "target/release/images")
+    args = parser.parse_args()
+    try:
+        result = execute(args.group, args.version, args.source_commit, args.namespace, args.publish, args.output)
+    except (ReleaseError, OSError, KeyError, ValueError, subprocess.CalledProcessError) as error:
+        print(f"IMAGE_RELEASE_FAILED: {error}", file=sys.stderr)
+        return 1
+    print(f"IMAGE_RELEASE_OK group={args.group} dry_run={result['dry_run']} images={len(result['images'])}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

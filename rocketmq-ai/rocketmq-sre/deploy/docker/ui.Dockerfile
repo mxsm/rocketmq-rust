@@ -32,6 +32,8 @@ COPY rocketmq-ai/rocketmq-sre/openapi/ ../openapi/
 RUN npm run build
 
 FROM nginx:1.29-alpine
+RUN apk add --no-cache jq
+COPY --chmod=0755 rocketmq-ai/rocketmq-sre/deploy/docker/40-sre-runtime-config.sh /docker-entrypoint.d/
 COPY rocketmq-ai/rocketmq-sre/deploy/docker/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /workspace/rocketmq-sre/ui/dist /usr/share/nginx/html
 EXPOSE 3004

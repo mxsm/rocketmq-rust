@@ -1,0 +1,238 @@
+name: Release crates and Docker Hub images
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable tag reachable from main (for example v1.0.0)
+        required: true
+        type: string
+      dry_run:
+        description: Verify crates and build/scan images without publishing
+        type: boolean
+        default: true
+      publish_crates:
+        description: Include the 27 core crates
+        type: boolean
+        default: true
+      publish_images:
+        description: Include Docker Hub service images
+        type: boolean
+        default: true
+      image_group:
+        description: Image group (select one when retrying a partial release)
+        type: choice
+        default: all
+        options:
+          - all
+          - core
+          - mcp
+          - dashboard-backend
+          - dashboard-frontend
+          - sre-backend
+          - sre-ui
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-registries
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository == 'mxsm/rocketmq-rust'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+      version: ${{ steps.source.outputs.version }}
+      groups: ${{ steps.source.outputs.groups }}
+      namespace: ${{ steps.source.outputs.namespace }}
+    steps:
+      - name: Check out the trusted release workflow source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: refs/heads/main
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Validate release source and selected publication settings
+        id: source
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          PUBLISH_CRATES: ${{ inputs.publish_crates }}
+          PUBLISH_IMAGES: ${{ inputs.publish_images }}
+          IMAGE_GROUP: ${{ inputs.image_group }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main ]] || { echo "Run this workflow from main" >&2; exit 1; }
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "A stable vX.Y.Z tag is required" >&2; exit 1; }
+          [[ "$PUBLISH_CRATES" == true || "$PUBLISH_IMAGES" == true ]] || { echo "Select crates or images" >&2; exit 1; }
+          git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"
+          source_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          git merge-base --is-ancestor "$source_commit" refs/remotes/origin/main
+          git checkout --detach "$source_commit"
+          export SOURCE_COMMIT="$source_commit"
+          python - <<'PY'
+          import json, os, re, tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path('Cargo.toml').read_text())['workspace']['package']['version']
+          if os.environ['RELEASE_TAG'] != f'v{version}':
+              raise SystemExit('Release tag does not match workspace version')
+          policy = json.loads(Path('docker/release-images.json').read_text())
+          selected = os.environ['IMAGE_GROUP']
+          groups = list(policy['groups']) if selected == 'all' else [selected]
+          if any(group not in policy['groups'] for group in groups):
+              raise SystemExit('Unknown image group')
+          namespace = os.environ['DOCKERHUB_NAMESPACE'] or os.environ['DOCKERHUB_USERNAME']
+          if os.environ['DRY_RUN'] == 'false':
+              if os.environ['PUBLISH_CRATES'] == 'true' and not os.environ['CARGO_REGISTRY_TOKEN']:
+                  raise SystemExit('Set CARGO_REGISTRY_TOKEN before publishing crates')
+              if os.environ['PUBLISH_IMAGES'] == 'true':
+                  if not os.environ['DOCKERHUB_USERNAME'] or not os.environ['DOCKERHUB_TOKEN']:
+                      raise SystemExit('Set DOCKERHUB_USERNAME and DOCKERHUB_TOKEN before publishing images')
+          namespace = namespace or 'rocketmq-release-test'
+          if not re.fullmatch(r'[a-z0-9][a-z0-9_-]*', namespace):
+              raise SystemExit('Docker Hub namespace must be lowercase')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f"commit={os.environ['SOURCE_COMMIT']}\nversion={version}\n")
+              output.write(f'groups={json.dumps(groups)}\nnamespace={namespace}\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(f"Release `{version}` from `{os.environ['SOURCE_COMMIT']}`; dry-run: `{os.environ['DRY_RUN']}`.\n")
+          PY
+
+  crates:
+    name: Verify and publish core crates
+    needs: prepare
+    if: inputs.publish_crates
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13'
+      - name: Install native build dependencies and repository toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes clang llvm libclang-dev cmake ninja-build pkg-config protobuf-compiler libprotobuf-dev libssl-dev
+          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
+          toolchain="$(python -c "import tomllib; print(tomllib.load(open('rust-toolchain.toml', 'rb'))['toolchain']['channel'])")"
+          rustup toolchain install "$toolchain" --profile minimal --component rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: core-release
+      - name: Validate the core release boundary
+        run: |
+          python scripts/core_release_guard.py --scope core-release
+          python scripts/architecture_dependency_guard.py --scope core-release
+          python -m unittest discover -s scripts/tests -p 'test_publish_core_crates.py'
+      - name: Verify all selected crate archives without uploading
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          SOURCE_COMMIT: ${{ needs.prepare.outputs.commit }}
+        run: python scripts/publish_core_crates.py --tag "$RELEASE_TAG" --source-commit "$SOURCE_COMMIT" --mode verify --output target/release/crates-verified.json
+      - name: Publish missing versions in dependency order
+        if: ${{ !inputs.dry_run }}
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          SOURCE_COMMIT: ${{ needs.prepare.outputs.commit }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: python scripts/publish_core_crates.py --tag "$RELEASE_TAG" --source-commit "$SOURCE_COMMIT" --mode publish --output target/release/crates-published.json
+      - name: Upload crate verification and publication records
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-crates-${{ needs.prepare.outputs.version }}
+          path: target/release/crates-*.json
+          if-no-files-found: warn
+
+  images:
+    name: Docker Hub / ${{ matrix.group }}
+    needs: [prepare, crates]
+    if: ${{ always() && needs.prepare.result == 'success' && (needs.crates.result == 'success' || needs.crates.result == 'skipped') && inputs.publish_images }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        group: ${{ fromJSON(needs.prepare.outputs.groups) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13'
+      - name: Free runner disk space for Rust release builds
+        shell: bash
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - name: Test image publication failure handling
+        run: python -m unittest discover -s scripts/tests -p 'test_publish_dockerhub_images.py'
+      - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+      - name: Log in to Docker Hub
+        if: ${{ !inputs.dry_run }}
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: docker.io
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+        with:
+          syft-version: v1.48.0
+      - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567
+        with:
+          version: v0.72.0
+          cache: true
+      - name: Install image signing tool
+        if: ${{ !inputs.dry_run }}
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+        with:
+          cosign-release: v3.1.2
+      - name: Build, scan, sign, and publish the selected group
+        shell: bash
+        env:
+          GROUP: ${{ matrix.group }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SOURCE_COMMIT: ${{ needs.prepare.outputs.commit }}
+          NAMESPACE: ${{ needs.prepare.outputs.namespace }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          publish_args=()
+          if [[ "$DRY_RUN" == false ]]; then publish_args+=(--publish); fi
+          python scripts/publish_dockerhub_images.py --group "$GROUP" --version "$VERSION" \
+            --source-commit "$SOURCE_COMMIT" --namespace "$NAMESPACE" \
+            --output "target/release/images/$GROUP" "${publish_args[@]}"
+          echo "Docker Hub group \`$GROUP\` passed; dry-run: \`$DRY_RUN\`. See publication.json and scan artifacts." >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload SBOMs, scans, signatures, and publication records
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-images-${{ matrix.group }}-${{ needs.prepare.outputs.version }}
+          path: target/release/images/${{ matrix.group }}/
+          if-no-files-found: warn
+          retention-days: 30

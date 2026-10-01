@@ -1,5 +1,6 @@
 ARG BUILDER_IMAGE=rust:1.95.0-bookworm
-ARG RUNTIME_IMAGE=debian:bookworm-slim
+# Debian 13 contains the patched Perl and zlib packages required by release scans.
+ARG RUNTIME_IMAGE=docker.io/library/debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
 
 FROM ${BUILDER_IMAGE} AS builder
 

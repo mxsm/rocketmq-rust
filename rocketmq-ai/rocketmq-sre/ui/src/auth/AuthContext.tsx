@@ -14,6 +14,8 @@ import {
   useState,
 } from "react";
 
+import { resolveOidcSettings } from "./oidcConfig";
+
 export type AuthMode = "development" | "oidc";
 export type AuthStatus = "loading" | "authenticated" | "anonymous" | "error";
 
@@ -107,24 +109,22 @@ function developmentSession(): AuthSession {
 }
 
 function oidcSettings(): UserManagerSettings | undefined {
-  const authority = import.meta.env.VITE_SRE_OIDC_AUTHORITY;
-  const clientId = import.meta.env.VITE_SRE_OIDC_CLIENT_ID;
-  if (!authority || !clientId) {
+  const settings = resolveOidcSettings(
+    window.__ROCKETMQ_SRE_CONFIG__?.oidc,
+    {
+      authority: import.meta.env.VITE_SRE_OIDC_AUTHORITY,
+      clientId: import.meta.env.VITE_SRE_OIDC_CLIENT_ID,
+      redirectUri: import.meta.env.VITE_SRE_OIDC_REDIRECT_URI,
+      postLogoutRedirectUri: import.meta.env.VITE_SRE_OIDC_POST_LOGOUT_REDIRECT_URI,
+      scope: import.meta.env.VITE_SRE_OIDC_SCOPE,
+    },
+    window.location.origin,
+  );
+  if (!settings) {
     return undefined;
   }
   return {
-    authority,
-    client_id: clientId,
-    redirect_uri:
-      import.meta.env.VITE_SRE_OIDC_REDIRECT_URI ??
-      `${window.location.origin}/auth/callback`,
-    post_logout_redirect_uri:
-      import.meta.env.VITE_SRE_OIDC_POST_LOGOUT_REDIRECT_URI ??
-      window.location.origin,
-    response_type: "code",
-    scope:
-      import.meta.env.VITE_SRE_OIDC_SCOPE ??
-      "openid profile rocketmq:read rocketmq:diagnose rocketmq:model-governance",
+    ...settings,
     userStore: new WebStorageStateStore({ store: window.sessionStorage }),
     automaticSilentRenew: true,
     monitorSession: true,

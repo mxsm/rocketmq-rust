@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **fix(docker):** Use a digest-pinned Debian 13 runtime for Dashboard Web backend and the five SRE backends, resolving four CRITICAL Perl/zlib reports per image while preserving the release vulnerability gate ([#11033](https://github.com/mxsm/rocketmq-rust/issues/11033)).
+
 ### Fixed
 
 - **fix(ci):** Normalize Windows short-name and provider-qualified roots before AGENTS routing comparisons, preventing false missing-route failures in the scheduled architecture checks ([#11028](https://github.com/mxsm/rocketmq-rust/issues/11028)).
@@ -54,6 +58,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **feat(release):** Add a manual, default dry-run GitHub Actions workflow for the 27 core crates and 13 separate Docker Hub service images, with resumable publication, SBOMs, CRITICAL scans, verified Cosign signatures/attestations, and release documentation ([#11033](https://github.com/mxsm/rocketmq-rust/issues/11033)).
+
 - **feat(runtime):** Add `RuntimeError::kind()` with `RuntimeErrorKind`, `TaskGroup::owns_task` and `TaskId::group_id`, `TaskName`, `TaskGroupEventCounts`, `DrainRequestMethods`, and the `runtime_convergence_bench` benchmark for contended submission, budget permits, idle memory and blocking admission ([#10935](https://github.com/mxsm/rocketmq-rust/issues/10935)).
 - **test(model):** Add attribute update and validation contract coverage ([#10452](https://github.com/mxsm/rocketmq-rust/issues/10452)).
 - **test(remoting):** Add comprehensive test coverage for `QueryMessageResponseHeader` including integration with RemotingCommand, boundary checks, and error handling
@@ -73,6 +79,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **feat(common):** Add test coverage for `MessageQueueAssignment` struct to in rocketmq-common crate ([#5752](https://github.com/mxsm/rocketmq-rust/issues/5752))
 
 ### Changed
+
+- **feat(sre):** Read public UI OIDC settings from container startup environment variables, allowing one image to serve multiple deployments while retaining compatible build arguments and requiring OIDC login ([#11033](https://github.com/mxsm/rocketmq-rust/issues/11033)).
 
 - **chore(release):** Publish all 28 root workspace members to crates.io, including `rocketmq-admin-cli`, `rocketmq-admin-tui`, `rocketmq-store-inspect` and `rocketmq-dashboard-common`. The core release scope now classifies the three tools as `registry-publish`; Dashboard common is published with the workspace but stays outside the core package list, and the documented packaging check no longer excludes any member ([#10974](https://github.com/mxsm/rocketmq-rust/issues/10974)).
 - **refactor(observability):** Keep OpenTelemetry types out of the `rocketmq-observability` public API (breaking). Attribute-taking metric recorders take the crate-owned `MetricAttributes` instead of `&[KeyValue]`, and `AttributesBuilderSupplier::get` returns it; span-parent assignment failures are reported as `SpanParentError`; the OpenTelemetry layer builders, their type aliases, `try_init_tracing_subscriber` and `extract_context_with_handle` are crate-private; the unused `CounterWrapper` and `HistogramWrapper` enums are removed. Callers build attributes once with `MetricAttributes::new().with(key, value)`, and an architecture guard keeps OpenTelemetry names out of public signatures ([#10968](https://github.com/mxsm/rocketmq-rust/issues/10968)).
