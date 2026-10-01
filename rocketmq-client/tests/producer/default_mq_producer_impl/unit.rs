@@ -1500,8 +1500,6 @@ fn semaphore_async_adjust_updates_backpressure_limits_like_java_callback() {
         producer.semaphore_async_send_size.available_permits(),
         (MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE + 16) as usize
     );
-
-    producer.semaphore_processor();
 }
 
 #[test]

@@ -59,6 +59,7 @@ use crate::connection::Connection;
 use crate::connection::ConnectionId;
 use crate::connection::ConnectionState;
 use crate::connection::SessionLifecycle;
+use crate::connection::SessionSendLease;
 use crate::connection::SessionWriterDiagnostics;
 use crate::connection::SessionWriterSnapshot;
 use crate::dispatch::reserve_session_owner;
@@ -212,8 +213,10 @@ impl SessionCloseCause {
     }
 }
 
-pub(crate) struct ServerOutboundLease {
+pub(crate) struct ServerOutboundLease<'a> {
     admission: Arc<ServerOutboundAdmission>,
+    // Released after Drop decrements the outbound count, allowing writer retirement to proceed.
+    _send_lease: SessionSendLease<'a>,
 }
 
 impl ServerOutboundAdmission {
@@ -224,14 +227,16 @@ impl ServerOutboundAdmission {
         })
     }
 
-    fn acquire(self: &Arc<Self>) -> Option<ServerOutboundLease> {
+    fn acquire<'a>(self: &Arc<Self>, lifecycle: &'a SessionLifecycle) -> Option<ServerOutboundLease<'a>> {
         if self.close_cause.load(Ordering::Acquire) != 0 {
             return None;
         }
+        let send_lease = lifecycle.begin_send()?;
         self.active.fetch_add(1, Ordering::AcqRel);
         if self.close_cause.load(Ordering::Acquire) == 0 {
             Some(ServerOutboundLease {
                 admission: Arc::clone(self),
+                _send_lease: send_lease,
             })
         } else {
             self.active.fetch_sub(1, Ordering::AcqRel);
@@ -257,7 +262,7 @@ impl ServerOutboundAdmission {
     }
 }
 
-impl Drop for ServerOutboundLease {
+impl Drop for ServerOutboundLease<'_> {
     fn drop(&mut self) {
         self.admission.active.fetch_sub(1, Ordering::AcqRel);
     }
@@ -695,10 +700,10 @@ impl SessionHandle {
         outcome
     }
 
-    pub(crate) fn acquire_server_outbound(&self) -> Result<ServerOutboundLease, rocketmq_error::SharedError> {
+    pub(crate) fn acquire_server_outbound(&self) -> Result<ServerOutboundLease<'_>, rocketmq_error::SharedError> {
         self.send
             .server_outbound
-            .acquire()
+            .acquire(&self.send.lifecycle)
             .ok_or_else(|| connection_failed_without_source(TransportStage::Closed))
     }
 
@@ -1528,9 +1533,9 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
             executor: executor.drain_report_until(request_deadline).await,
             deferred_cleanup: DeferredSessionCleanupReport::empty_completed(),
             remaining_wait_permits: 0,
+            writer: SessionWriterCompletionReport::new(session.retire_writer_owned().await, session.writer_snapshot()),
             remaining_server_outbound_leases: session.send.server_outbound.active(),
             disconnected_panicked: false,
-            writer: SessionWriterCompletionReport::new(session.retire_writer_owned().await, session.writer_snapshot()),
         };
         report.log(session.session_id());
         close_completion.complete(&report);
@@ -3011,7 +3016,7 @@ mod retirement_tests {
             .expect("server result");
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn retirement_waits_for_a_checked_send_before_closing_the_writer() {
         let runtime = RuntimeContext::from_current("transport-retirement-interleaving-test");
         let service = runtime.service_context("transport-retirement-interleaving");
@@ -3034,6 +3039,7 @@ mod retirement_tests {
             handler,
         ));
         let session = session_rx.await.expect("session capture");
+        let outbound = session.acquire_server_outbound().expect("outbound admission");
         let checked = Arc::new(Notify::new());
         let resume_enqueue = Arc::new(Notify::new());
         let mut checked_connection = session.connection_with_enqueue_gate(checked.clone(), resume_enqueue.clone());
@@ -3058,6 +3064,13 @@ mod retirement_tests {
 
         resume_enqueue.notify_one();
         checked_send.await.unwrap().expect("checked send completes");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut retirement)
+                .await
+                .is_err(),
+            "retirement must wait for the outbound caller to release its lease"
+        );
+        drop(outbound);
         retirement.await.unwrap().expect("retirement completes");
 
         let mut post_retirement = session.connection();
