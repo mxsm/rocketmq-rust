@@ -30,26 +30,32 @@ class HubError(ValueError):
 class DockerHubTags:
     def __init__(self, *, bearer: str | None = None):
         self.token = bearer
+        self.can_refresh = bearer is None
         if bearer is None:
-            username = os.environ.get("DOCKERHUB_USERNAME")
-            secret = os.environ.get("DOCKERHUB_TOKEN")
-            if not username or not secret:
-                raise HubError("Set DOCKERHUB_USERNAME and DOCKERHUB_TOKEN for tag cleanup")
-            result = self.request("/v2/auth/token", method="POST", payload={"identifier": username, "secret": secret})
-            self.token = result.get("access_token")
-            if not isinstance(self.token, str) or not self.token:
-                raise HubError("Docker Hub did not return an access token")
+            self.authenticate()
+
+    def authenticate(self) -> None:
+        username = os.environ.get("DOCKERHUB_USERNAME")
+        secret = os.environ.get("DOCKERHUB_TOKEN")
+        if not username or not secret:
+            raise HubError("Set DOCKERHUB_USERNAME and DOCKERHUB_TOKEN for tag cleanup")
+        result = self.request("/v2/auth/token", method="POST", payload={"identifier": username, "secret": secret})
+        self.token = result.get("access_token") if isinstance(result, dict) else None
+        if not isinstance(self.token, str) or not self.token:
+            raise HubError("Docker Hub did not return an access token")
 
     def request(self, path: str, *, method: str = "GET", payload: dict | None = None,
                 missing_ok: bool = False) -> dict | None:
         headers = {"Accept": "application/json", "User-Agent": "rocketmq-rust-release"}
-        if self.token:
+        if self.token and path != "/v2/auth/token":
             headers["Authorization"] = f"Bearer {self.token}"
         data = json.dumps(payload).encode() if payload is not None else None
         if data is not None:
             headers["Content-Type"] = "application/json"
         request = Request("https://hub.docker.com" + path, headers=headers, method=method, data=data)
-        for attempt in range(4):
+        attempt = 0
+        refreshed = False
+        while True:
             try:
                 with urlopen(request, timeout=30) as response:
                     body = response.read()
@@ -59,8 +65,16 @@ class DockerHubTags:
                 error.close()
                 if missing_ok and status == 404:
                     return None
+                if status == 401 and self.can_refresh and not refreshed and path != "/v2/auth/token":
+                    # Rust builds can outlive the short-lived Hub bearer. Refresh once with
+                    # the configured PAT; authentication/permission failures remain fatal.
+                    self.authenticate()
+                    request.add_header("Authorization", f"Bearer {self.token}")
+                    refreshed = True
+                    continue
                 if status in {429, 500, 502, 503, 504} and attempt < 3 and method != "POST":
                     time.sleep(2 ** attempt)
+                    attempt += 1
                     continue
                 permission = " (DOCKERHUB_TOKEN needs Read, Write, Delete permission)" if status == 403 and method == "DELETE" else ""
                 # Response bodies and authentication payloads may contain credentials; never report them.
@@ -68,9 +82,9 @@ class DockerHubTags:
             except (URLError, TimeoutError):
                 if attempt < 3 and method != "POST":
                     time.sleep(2 ** attempt)
+                    attempt += 1
                     continue
                 raise HubError(f"Docker Hub {method} {path} failed: transport error") from None
-        raise HubError("Docker Hub request did not complete")
 
     @staticmethod
     def repository_path(namespace: str, repository: str) -> str:
