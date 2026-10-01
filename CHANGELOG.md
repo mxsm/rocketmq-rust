@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(ci):** Give the GHCR publication scanners an explicitly initialized empty YAML configuration, fixing Syft's `Unsupported Config Type ""` failure. Publish verified plain version tags alongside commit tags only for the matching release source, preserving vulnerability, signature, and conflicting-tag checks ([#11035](https://github.com/mxsm/rocketmq-rust/issues/11035)).
 - **fix(ci):** Normalize Windows short-name and provider-qualified roots before AGENTS routing comparisons, preventing false missing-route failures in the scheduled architecture checks ([#11028](https://github.com/mxsm/rocketmq-rust/issues/11028)).
 - **test(sre):** Pin the FinOps PostgreSQL integration test clock and verify UTC daily budget resets, avoiding failures when costs recorded ten minutes earlier fall into the previous day ([#11022](https://github.com/mxsm/rocketmq-rust/issues/11022)).
 - **test(dashboard):** Accept unconfirmed task abortion in the topic guard construction timeout report and explicitly wait for task destruction before checking that no tasks or topic sessions remain ([#11019](https://github.com/mxsm/rocketmq-rust/issues/11019)).
