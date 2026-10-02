@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use rocketmq_runtime::{
-    OperationContext, OperationWaitOutcome, OperationWaitPolicy, RuntimeContext, ShutdownDeadline, TaskKind,
+    OperationContext, OperationDrainStatus, OperationWaitPolicy, RuntimeContext, ShutdownDeadline, TaskKind,
 };
 use std::time::Duration;
 
@@ -27,13 +27,11 @@ async fn graceful_completion_closes_admission_and_confirms_owner_settlement() {
         .spawn_operation(&operation, "ready", async {})
         .unwrap();
     let deadline = ShutdownDeadline::after(Duration::from_secs(5));
-    assert_eq!(
-        operation
-            .wait_with_policy(service.task_group(), OperationWaitPolicy::new(deadline, deadline))
-            .await
-            .unwrap(),
-        OperationWaitOutcome::Completed
-    );
+    let outcome: rocketmq_runtime::OperationWaitOutcome = operation
+        .wait_with_policy(service.task_group(), OperationWaitPolicy::new(deadline, deadline))
+        .await
+        .unwrap();
+    assert_eq!(outcome, OperationDrainStatus::Completed);
     assert_eq!(operation.active_task_count(), 0);
     assert!(service
         .task_group()
@@ -57,7 +55,7 @@ async fn abort_confirmation_is_distinct_from_graceful_completion() {
     );
     assert_eq!(
         operation.wait_with_policy(service.task_group(), policy).await.unwrap(),
-        OperationWaitOutcome::AbortConfirmed
+        OperationDrainStatus::AbortConfirmed
     );
     assert_eq!(operation.active_task_count(), 0);
     assert!(context.shutdown_tasks(Duration::from_secs(5)).await.is_healthy());
@@ -80,7 +78,7 @@ async fn earlier_confirmation_deadline_tightens_grace_and_reports_unconfirmed_wo
     );
     assert_eq!(
         operation.wait_with_policy(service.task_group(), policy).await.unwrap(),
-        OperationWaitOutcome::Unconfirmed { remaining_tasks: 1 }
+        OperationDrainStatus::Unconfirmed { remaining_tasks: 1 }
     );
     assert_eq!(operation.active_task_count(), 1);
     assert!(operation

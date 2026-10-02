@@ -4069,12 +4069,21 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::operation::OperationWaitOutcome",
-          "identity": "rocketmq-runtime/src/public_api.rs:pub use crate::operation::OperationWaitOutcome",
+          "declaration": "pub use crate::operation::OperationDrainStatus",
+          "identity": "rocketmq-runtime/src/public_api.rs:pub use crate::operation::OperationDrainStatus",
           "owner": "runtime",
           "path": "rocketmq-runtime/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
+          "rationale": "preferred bounded task-draining status for operations",
+          "removal_condition": "retain while bounded operation draining remains supported"
+        },
+        {
+          "category": "compat",
+          "declaration": "pub use crate::operation::OperationDrainStatus as OperationWaitOutcome",
+          "identity": "rocketmq-runtime/src/public_api.rs:pub use crate::operation::OperationDrainStatus as OperationWaitOutcome",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/public_api.rs",
+          "rationale": "source-compatible name for existing OperationWaitOutcome callers",
+          "removal_condition": "remove only at an approved breaking source-compatibility boundary"
         },
         {
           "category": "stable",
@@ -4167,7 +4176,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 169
+      "maximum_exports": 170
     },
     "rocketmq-store": {
       "entries": [
