@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(tieredstore):** Wait for a completed cleanup run within a bounded deadline before sampling lifecycle probe health, avoiding false failures during metadata persistence or between periodic runs ([#11081](https://github.com/mxsm/rocketmq-rust/issues/11081)).
 - **fix(release):** Include `rocketmq-dashboard-common` alongside the 27 core crates in workspace publication, using trusted release tooling with immutable tagged package sources and source-verified resumption ([#11043](https://github.com/mxsm/rocketmq-rust/issues/11043)).
 - **fix(ci):** Accept verified in-toto Statement v0.1 and v1 in GHCR publication and its independent verifier, matching the pinned Cosign custom-predicate format while preserving exact subject, digest, and typed predicate checks ([#11041](https://github.com/mxsm/rocketmq-rust/issues/11041)).
 - **fix(ci):** Wait for newly uploaded Docker Hub signatures and attestations to become discoverable before promoting release tags, retaining all verification checks and loading trusted publication tooling independently of the immutable build source ([#11039](https://github.com/mxsm/rocketmq-rust/issues/11039)).
@@ -86,6 +87,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **refactor(runtime):** Rename the resource-budget rebind result type `PermitRebindOutcome` to `PermitBudgetTransferStatus` across the `rocketmq-runtime` crate, its root re-export, the resource-budget tests, and the public API inventory. The permit transfer flow, the `Rejected`/`Unchanged`/`Rebound` variants, and the `ResourcePermit::try_rebind`/`try_rebind_admitted` methods that return it are unchanged; this is a source-only rename of the returned type ([#11067](https://github.com/mxsm/rocketmq-rust/issues/11067)).
+- **refactor(store-local):** Rename `MappedFileDestroyOutcome` to `MappedFileRemovalStatus` (breaking), exported as `rocketmq_store_local::mapped_file::MappedFileRemovalStatus`. External callers must update imports and type references; no compatibility alias is provided. Variants, `try_destroy` and retry behavior are unchanged ([#11068](https://github.com/mxsm/rocketmq-rust/issues/11068)).
+
 - **feat(sre):** Read public UI OIDC settings from container startup environment variables, allowing one image to serve multiple deployments while retaining compatible build arguments and requiring OIDC login ([#11033](https://github.com/mxsm/rocketmq-rust/issues/11033)).
 
 - **chore(release):** Publish all 28 root workspace members to crates.io, including `rocketmq-admin-cli`, `rocketmq-admin-tui`, `rocketmq-store-inspect` and `rocketmq-dashboard-common`. The core release scope now classifies the three tools as `registry-publish`; Dashboard common is published with the workspace but stays outside the core package list, and the documented packaging check no longer excludes any member ([#10974](https://github.com/mxsm/rocketmq-rust/issues/10974)).

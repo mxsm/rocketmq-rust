@@ -186,7 +186,7 @@ owned child service context. Configuration and invariant failures return
 callers cannot supply arbitrary policy text.
 
 Budget exhaustion, queue admission and scheduled-task registration are normal
-typed outcomes (`BudgetRejection`, `QueuePushOutcome` and
+typed outcomes (`BudgetRejection`, `QueueEnqueueStatus` and
 `ScheduledTaskRegistrationOutcome`). Match those outcomes directly. Reserve
 `RuntimeError` for catalog-backed operational failure, preserving its closed
 operation and typed source rather than parsing a rendered message; branch on
@@ -257,6 +257,18 @@ triggers and their outcomes), `ScheduledTaskManager`, `ActorRuntime`, the
 map each removed API to its replacement and list the changed contracts,
 including `/drainz` accepting only `POST` by default, `TaskId` recording its
 group and `RuntimeError::kind()`.
+
+### Mapped-file removal status
+
+`MappedFileDestroyOutcome` is now `MappedFileRemovalStatus`, because the type
+reports one attempt to remove a mapped-file path from the filesystem namespace,
+not a broader destroy. This is an `approved-break`: external callers must
+replace the old name in imports and type references, for example
+`rocketmq_store_local::mapped_file::MappedFileRemovalStatus`. No alias or
+wrapper under the old name is provided. `try_destroy`, the variants
+(`NamespaceRemoved`, `CleanupPending`, `DeleteFailed`) and their fields are
+unchanged, and `NamespaceRemoved` still does not claim the mapping or file
+owners have been dropped.
 
 ### Typed filter compilation
 

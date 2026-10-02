@@ -25,7 +25,7 @@ use rocketmq_runtime::BudgetClass;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::FullPolicy;
-use rocketmq_runtime::QueuePushOutcome;
+use rocketmq_runtime::QueueEnqueueStatus;
 use rocketmq_runtime::QueuePushRejection;
 use rocketmq_runtime::QueueSnapshot;
 use rocketmq_runtime::TaskGroup;
@@ -344,7 +344,7 @@ impl TimerPipeline {
         };
         if !matches!(
             queue.try_push_data(request, PUMP_RETAINED_BYTES),
-            QueuePushOutcome::Rejected { .. }
+            QueueEnqueueStatus::Rejected { .. }
         ) {
             *sequence = request.sequence;
         } else {
@@ -442,10 +442,10 @@ impl TimerPipeline {
                 .push_until(event, COMPLETION_RETAINED_BYTES, BudgetClass::Control, deadline.into())
                 .await
             {
-                QueuePushOutcome::Enqueued
-                | QueuePushOutcome::Coalesced { .. }
-                | QueuePushOutcome::DroppedStale { .. } => return,
-                QueuePushOutcome::Rejected {
+                QueueEnqueueStatus::Enqueued
+                | QueueEnqueueStatus::Coalesced { .. }
+                | QueueEnqueueStatus::DroppedStale { .. } => return,
+                QueueEnqueueStatus::Rejected {
                     item,
                     rejection: QueuePushRejection::DeadlineExceeded,
                 } => {
@@ -453,11 +453,11 @@ impl TimerPipeline {
                     self.metrics.completion_backpressured.store(true, Ordering::Release);
                     self.metrics.retries.fetch_add(1, Ordering::Relaxed);
                 }
-                QueuePushOutcome::Rejected {
+                QueueEnqueueStatus::Rejected {
                     rejection: QueuePushRejection::Closed,
                     ..
                 } => return,
-                QueuePushOutcome::Rejected { .. } => {
+                QueueEnqueueStatus::Rejected { .. } => {
                     // The event is smaller than every validated completion queue. A permanent
                     // budget failure therefore indicates a broken runtime budget tree, not load.
                     self.metrics.quarantined.fetch_add(1, Ordering::Relaxed);

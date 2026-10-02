@@ -3818,7 +3818,7 @@ mod tests {
         queued.queue_deadline = Duration::from_millis(1);
         assert!(matches!(
             registration.queue.try_push_control(queued, size_of::<ClusterCommand>()),
-            rocketmq_runtime::QueuePushOutcome::Enqueued
+            rocketmq_runtime::QueueEnqueueStatus::Enqueued
         ));
         registration.queue.close();
 

@@ -20,7 +20,7 @@ use rocketmq_runtime::resource_budget::BudgetLimit;
 use rocketmq_runtime::resource_budget::BudgetedItem;
 use rocketmq_runtime::resource_budget::BudgetedQueue;
 use rocketmq_runtime::resource_budget::FullPolicy;
-use rocketmq_runtime::resource_budget::QueuePushOutcome;
+use rocketmq_runtime::resource_budget::QueueEnqueueStatus;
 use rocketmq_runtime::resource_budget::QueuePushRejection;
 use rocketmq_runtime::resource_budget::QueueSnapshot;
 use rocketmq_runtime::resource_budget::ResourceBudgetTree;
@@ -97,10 +97,10 @@ impl<T> AppendSequencerSender<T> {
     /// Returns whether the request was accepted or rejected with ownership preserved.
     pub fn try_submit(&self, request: T, retained_bytes: usize) -> AppendAdmissionOutcome<T> {
         match self.queue.try_push_data(request, retained_bytes) {
-            QueuePushOutcome::Enqueued | QueuePushOutcome::Coalesced { .. } | QueuePushOutcome::DroppedStale { .. } => {
-                AppendAdmissionOutcome::Accepted
-            }
-            QueuePushOutcome::Rejected {
+            QueueEnqueueStatus::Enqueued
+            | QueueEnqueueStatus::Coalesced { .. }
+            | QueueEnqueueStatus::DroppedStale { .. } => AppendAdmissionOutcome::Accepted,
+            QueueEnqueueStatus::Rejected {
                 item: request,
                 rejection,
             } => {

@@ -142,7 +142,7 @@ pub use resource_budget::MemoryLimitSource;
 pub use resource_budget::MonotonicClock;
 pub use resource_budget::PermitBudgetTransferStatus;
 pub use resource_budget::ProcessMemoryLimit;
-pub use resource_budget::QueuePushOutcome;
+pub use resource_budget::QueueEnqueueStatus;
 pub use resource_budget::QueuePushRejection;
 pub use resource_budget::QueueSnapshot;
 pub use resource_budget::RateLimit;

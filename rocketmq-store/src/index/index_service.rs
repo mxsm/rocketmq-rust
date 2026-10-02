@@ -59,7 +59,7 @@ use rocketmq_store_local::index::service::IndexBuildPreflight;
 use rocketmq_store_local::index::service::IndexServiceFile;
 use rocketmq_store_local::index::service::IndexServiceRoot;
 use rocketmq_store_local::index::service::MAX_TRY_INDEX_FILE_CREATE;
-use rocketmq_store_local::mapped_file::MappedFileDestroyOutcome;
+use rocketmq_store_local::mapped_file::MappedFileRemovalStatus;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -349,11 +349,11 @@ impl IndexServiceAdapter {
         for file in files.iter() {
             let file_name = file.get_file_name();
             match file.try_destroy(3000) {
-                MappedFileDestroyOutcome::NamespaceRemoved => {
+                MappedFileRemovalStatus::NamespaceRemoved => {
                     destroyed_files.push(file_name.clone());
                     info!(file_name = %file_name, "expired index-file namespace removal succeeded");
                 }
-                MappedFileDestroyOutcome::CleanupPending { ref_count } => {
+                MappedFileRemovalStatus::CleanupPending { ref_count } => {
                     warn!(
                         file_name = %file_name,
                         ref_count,
@@ -361,7 +361,7 @@ impl IndexServiceAdapter {
                     );
                     break;
                 }
-                MappedFileDestroyOutcome::DeleteFailed { kind, raw_os_error } => {
+                MappedFileRemovalStatus::DeleteFailed { kind, raw_os_error } => {
                     error!(
                         file_name = %file_name,
                         ?kind,
@@ -388,8 +388,8 @@ impl IndexServiceAdapter {
     pub fn destroy_with_outcome(&self) -> bool {
         let mut index_file_list = self.index_file_list.write();
         destroy_index_files_with_outcome(&mut index_file_list, |file| match file.try_destroy(3000) {
-            MappedFileDestroyOutcome::NamespaceRemoved => true,
-            MappedFileDestroyOutcome::CleanupPending { ref_count } => {
+            MappedFileRemovalStatus::NamespaceRemoved => true,
+            MappedFileRemovalStatus::CleanupPending { ref_count } => {
                 warn!(
                     file_name = %file.get_file_name(),
                     ref_count,
@@ -397,7 +397,7 @@ impl IndexServiceAdapter {
                 );
                 false
             }
-            MappedFileDestroyOutcome::DeleteFailed { kind, raw_os_error } => {
+            MappedFileRemovalStatus::DeleteFailed { kind, raw_os_error } => {
                 error!(
                     file_name = %file.get_file_name(),
                     ?kind,
