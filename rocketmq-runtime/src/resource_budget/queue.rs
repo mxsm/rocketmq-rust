@@ -26,7 +26,7 @@ use tokio::time::Instant;
 
 use super::budget::BudgetAdmission;
 use super::budget::BudgetRejection;
-use super::budget::PermitRebindOutcome;
+use super::budget::PermitBudgetTransferStatus;
 use super::budget::ResourceBudget;
 use super::budget::ResourcePermit;
 use super::limit::BudgetClass;
@@ -290,7 +290,7 @@ impl<T> BudgetedQueue<T> {
         };
         let dropped = self.apply_age_policy(&mut discarded);
         match permit.try_rebind_admitted(&admission) {
-            PermitRebindOutcome::Rebound | PermitRebindOutcome::Unchanged => {
+            PermitBudgetTransferStatus::Rebound | PermitBudgetTransferStatus::Unchanged => {
                 if let Some(rejected) = self.enqueue(item, permit) {
                     return Ok(rejected);
                 }
@@ -300,7 +300,7 @@ impl<T> BudgetedQueue<T> {
                     QueueEnqueueStatus::DroppedStale { dropped }
                 })
             }
-            PermitRebindOutcome::Rejected(rejection) => Ok(QueueEnqueueStatus::Rejected {
+            PermitBudgetTransferStatus::Rejected(rejection) => Ok(QueueEnqueueStatus::Rejected {
                 item,
                 rejection: QueuePushRejection::BudgetExhausted(rejection),
             }),

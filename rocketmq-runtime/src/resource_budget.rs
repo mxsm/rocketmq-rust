@@ -22,7 +22,7 @@ mod queue;
 pub use budget::BudgetRejection;
 pub use budget::BudgetRejectionReason;
 pub use budget::BudgetSnapshot;
-pub use budget::PermitRebindOutcome;
+pub use budget::PermitBudgetTransferStatus;
 pub use budget::ResourceBudget;
 pub use budget::ResourceBudgetTree;
 pub use budget::ResourcePermit;
