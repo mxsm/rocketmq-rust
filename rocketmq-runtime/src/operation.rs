@@ -123,9 +123,12 @@ impl OperationWaitPolicy {
     }
 }
 
-/// Whether an operation's task destruction was confirmed when waiting stopped.
+/// Whether task draining was confirmed when an operation's bounded wait stopped.
+///
+/// `Completed` confirms that tasks settled during the graceful phase; it does
+/// not describe whether the operation's business work succeeded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OperationWaitOutcome {
+pub enum OperationDrainStatus {
     /// All tasks settled during the graceful phase.
     Completed,
     /// All tasks settled after aborts were requested.
@@ -173,11 +176,11 @@ impl OperationContext {
         &self,
         owner: &TaskGroup,
         policy: OperationWaitPolicy,
-    ) -> RuntimeResult<OperationWaitOutcome> {
+    ) -> RuntimeResult<OperationDrainStatus> {
         self.ensure_owner(owner.id())?;
         self.close_admission();
         if self.wait_until_settled(owner, policy.graceful.instant()).await? {
-            return Ok(OperationWaitOutcome::Completed);
+            return Ok(OperationDrainStatus::Completed);
         }
         let remaining = owner.operation_task_ids(self.inner.id);
         join_all(
@@ -188,9 +191,9 @@ impl OperationContext {
         .await;
         let remaining_tasks = owner.operation_task_ids(self.inner.id).len();
         Ok(if remaining_tasks == 0 {
-            OperationWaitOutcome::AbortConfirmed
+            OperationDrainStatus::AbortConfirmed
         } else {
-            OperationWaitOutcome::Unconfirmed { remaining_tasks }
+            OperationDrainStatus::Unconfirmed { remaining_tasks }
         })
     }
 
