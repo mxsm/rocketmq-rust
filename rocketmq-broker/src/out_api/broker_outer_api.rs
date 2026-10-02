@@ -475,8 +475,6 @@ impl BrokerOuterAPI {
         self.remoting_client.shutdown_with_report(timeout).await
     }
 
-    pub fn refresh_metadata(&self) {}
-
     /// Send heartbeat to name servers
     ///
     /// # Arguments

@@ -1201,28 +1201,6 @@ impl BrokerRuntime {
             self.lifecycle.startup_journal.complete(BrokerComponent::Registration);
         }
 
-        let metadata_shutdown = Arc::clone(&self.composition.state.shutdown);
-        let broker_outer_api = self.composition.state.broker_outer_api.clone();
-        let period = Duration::from_secs(5);
-        let initial_delay = Duration::from_secs(10);
-        Self::log_scheduled_task_start(
-            "refresh_broker_metadata",
-            self.lifecycle.scheduled_tasks.schedule(
-                ScheduledTaskConfig::fixed_rate_no_overlap("broker.metadata.refresh", period)
-                    .with_initial_delay(initial_delay),
-                ScheduledExecutionPolicy::default(),
-                move || {
-                    let metadata_shutdown = Arc::clone(&metadata_shutdown);
-                    let broker_outer_api = broker_outer_api.clone();
-                    async move {
-                        if metadata_shutdown.load(Ordering::Acquire) {
-                            return;
-                        }
-                        broker_outer_api.refresh_metadata();
-                    }
-                },
-            ),
-        );
         let live_broker_config = self.composition.state.broker_config();
         // Controller-mode brokers start fenced and acquire write authority only after the
         // Controller assigns a role and grants a lease. Process readiness therefore depends on
