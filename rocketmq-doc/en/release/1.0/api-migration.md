@@ -175,7 +175,7 @@ owned child service context. Configuration and invariant failures return
 callers cannot supply arbitrary policy text.
 
 Budget exhaustion, queue admission and scheduled-task registration are normal
-typed outcomes (`BudgetRejection`, `QueuePushOutcome` and
+typed outcomes (`BudgetRejection`, `QueueEnqueueStatus` and
 `ScheduledTaskRegistrationOutcome`). Match those outcomes directly. Reserve
 `RuntimeError` for catalog-backed operational failure, preserving its closed
 operation and typed source rather than parsing a rendered message; branch on

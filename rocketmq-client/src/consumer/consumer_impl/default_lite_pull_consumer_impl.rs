@@ -643,12 +643,12 @@ impl DefaultLitePullConsumerImpl {
     fn enqueue_consume_request(&self, request: LitePullConsumeRequest) -> ClientResult<()> {
         let retained_bytes = request.retained_bytes();
         match self.consume_requests.try_push_data(request, retained_bytes) {
-            rocketmq_runtime::QueuePushOutcome::Rejected { .. } => {
+            rocketmq_runtime::QueueEnqueueStatus::Rejected { .. } => {
                 Err(crate::mq_client_err!("Lite pull consume request rejected"))
             }
-            rocketmq_runtime::QueuePushOutcome::Enqueued
-            | rocketmq_runtime::QueuePushOutcome::Coalesced { .. }
-            | rocketmq_runtime::QueuePushOutcome::DroppedStale { .. } => Ok(()),
+            rocketmq_runtime::QueueEnqueueStatus::Enqueued
+            | rocketmq_runtime::QueueEnqueueStatus::Coalesced { .. }
+            | rocketmq_runtime::QueueEnqueueStatus::DroppedStale { .. } => Ok(()),
         }
     }
 

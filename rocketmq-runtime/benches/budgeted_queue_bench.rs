@@ -23,7 +23,7 @@ use rocketmq_runtime::BudgetClass;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::FullPolicy;
-use rocketmq_runtime::QueuePushOutcome;
+use rocketmq_runtime::QueueEnqueueStatus;
 use rocketmq_runtime::QueuePushRejection;
 use rocketmq_runtime::ResourceBudgetTree;
 use tokio::task::JoinSet;
@@ -38,13 +38,13 @@ fn queue(capacity: usize, policy: FullPolicy) -> BudgetedQueue<usize> {
 fn reject_batch(queue: &BudgetedQueue<usize>, size: usize) {
     for item in 0..size {
         let outcome = queue.try_push_data(black_box(item), 1);
-        assert!(!matches!(&outcome, QueuePushOutcome::Rejected { .. }));
+        assert!(!matches!(&outcome, QueueEnqueueStatus::Rejected { .. }));
         black_box(outcome);
     }
     let rejected = queue.try_push_data(size, 1);
     assert!(matches!(
         &rejected,
-        QueuePushOutcome::Rejected {
+        QueueEnqueueStatus::Rejected {
             rejection: QueuePushRejection::BudgetExhausted(_),
             ..
         }
@@ -60,7 +60,7 @@ async fn wait_release_batch(queue: &BudgetedQueue<usize>, size: usize) {
     for item in 0..size {
         assert!(!matches!(
             queue.try_push_data(item, 1),
-            QueuePushOutcome::Rejected { .. }
+            QueueEnqueueStatus::Rejected { .. }
         ));
     }
 
@@ -72,7 +72,7 @@ async fn wait_release_batch(queue: &BudgetedQueue<usize>, size: usize) {
             assert!(
                 !matches!(
                     queue.push_until(item, 1, BudgetClass::Data, deadline).await,
-                    QueuePushOutcome::Rejected { .. }
+                    QueueEnqueueStatus::Rejected { .. }
                 ),
                 "released capacity should admit waiter"
             );
@@ -108,7 +108,7 @@ fn churn_cycles(queue: &BudgetedQueue<usize>, size: usize, cycles: usize) {
             black_box(queue.try_pop().expect("queued item"));
             assert!(!matches!(
                 queue.try_push_data(next, 1),
-                QueuePushOutcome::Rejected { .. }
+                QueueEnqueueStatus::Rejected { .. }
             ));
             next += 1;
         }
@@ -152,7 +152,7 @@ fn bench_budgeted_queue(criterion: &mut Criterion) {
                 for item in 0..*size {
                     assert!(!matches!(
                         queue.try_push_data(item, 1),
-                        QueuePushOutcome::Rejected { .. }
+                        QueueEnqueueStatus::Rejected { .. }
                     ));
                 }
                 bencher.iter(|| churn_cycles(&queue, black_box(*size), black_box(*cycles)));

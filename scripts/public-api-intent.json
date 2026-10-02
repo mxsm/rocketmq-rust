@@ -3367,8 +3367,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use resource_budget::QueuePushOutcome",
-          "identity": "rocketmq-runtime/src/lib.rs:pub use resource_budget::QueuePushOutcome",
+          "declaration": "pub use resource_budget::QueueEnqueueStatus",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use resource_budget::QueueEnqueueStatus",
           "owner": "runtime",
           "path": "rocketmq-runtime/src/lib.rs",
           "rationale": "deliberate root entry point",

@@ -36,7 +36,7 @@ use rocketmq_runtime::BudgetCapacity;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::FullPolicy;
-use rocketmq_runtime::QueuePushOutcome;
+use rocketmq_runtime::QueueEnqueueStatus;
 use rocketmq_runtime::QueuePushRejection;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourceBudgetTree;
@@ -230,7 +230,9 @@ impl ClusterExecutionLanes {
             }
         };
         match push_result {
-            QueuePushOutcome::Enqueued | QueuePushOutcome::Coalesced { .. } | QueuePushOutcome::DroppedStale { .. } => {
+            QueueEnqueueStatus::Enqueued
+            | QueueEnqueueStatus::Coalesced { .. }
+            | QueueEnqueueStatus::DroppedStale { .. } => {
                 self.counters.admitted.fetch_add(1, Ordering::Relaxed);
                 if created {
                     Ok(Some(ClusterLaneRegistration {
@@ -242,7 +244,7 @@ impl ClusterExecutionLanes {
                     Ok(None)
                 }
             }
-            QueuePushOutcome::Rejected { item: _item, rejection } => {
+            QueueEnqueueStatus::Rejected { item: _item, rejection } => {
                 if created {
                     registry.remove(&key);
                     registered.queue.close();
