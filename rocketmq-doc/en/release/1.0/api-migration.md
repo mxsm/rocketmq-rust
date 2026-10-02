@@ -38,6 +38,10 @@ The enum variants, numeric discriminants, snapshot ordering, and diagnostic
 labels are unchanged. The observer callback remains `on_outcome`, and the
 `rocketmq_runtime_operation_outcomes_total` metric retains its existing name
 and bounded label values.
+### `MetadataWriteSubmissionStatus` rename
+
+The public enum `MetadataIoAdmissionOutcome` has been renamed to `MetadataWriteSubmissionStatus`.
+Consumers must update their imports and type references. No compatibility alias is provided.
 
 ### Request-header derive migration
 
