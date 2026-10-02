@@ -192,7 +192,7 @@ callers cannot supply arbitrary policy text.
 
 Budget exhaustion, queue admission and scheduled-task registration are normal
 typed outcomes (`BudgetRejection`, `QueueEnqueueStatus` and
-`ScheduledTaskRegistrationOutcome`). Match those outcomes directly. Reserve
+`ScheduledTaskRegistrationStatus`). Match those outcomes directly. Reserve
 `RuntimeError` for catalog-backed operational failure, preserving its closed
 operation and typed source rather than parsing a rendered message; branch on
 `RuntimeError::kind()` rather than inferring the reason from `operation()`.
@@ -262,6 +262,17 @@ triggers and their outcomes), `ScheduledTaskManager`, `ActorRuntime`, the
 map each removed API to its replacement and list the changed contracts,
 including `/drainz` accepting only `POST` by default, `TaskId` recording its
 group and `RuntimeError::kind()`.
+
+### Scheduled-task registration status
+
+`ScheduledTaskRegistrationOutcome` is now `ScheduledTaskRegistrationStatus`.
+This is an `approved-break`: external callers must update imports and type
+references to `rocketmq_runtime::ScheduledTaskRegistrationStatus`. No
+compatibility alias or wrapper is provided. `Scheduled(TaskId)` still identifies
+the newly started schedule driver; `AlreadyPresent` leaves the existing
+registration, driver, and metrics unchanged. Registration failures still use
+`RuntimeResult`, and scheduling behavior is unchanged
+([#11089](https://github.com/mxsm/rocketmq-rust/issues/11089)).
 
 ### Permit transfer status
 

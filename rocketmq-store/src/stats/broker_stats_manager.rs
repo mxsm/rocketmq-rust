@@ -34,7 +34,7 @@ use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
-use rocketmq_runtime::ScheduledTaskRegistrationOutcome;
+use rocketmq_runtime::ScheduledTaskRegistrationStatus;
 use rocketmq_runtime::TaskGroup;
 use tokio::time::Duration;
 use tracing::info;
@@ -180,7 +180,7 @@ impl BrokerStatsManager {
         );
     }
 
-    fn track_sampling_task(registration: RuntimeResult<ScheduledTaskRegistrationOutcome>, task_name: &str) {
+    fn track_sampling_task(registration: RuntimeResult<ScheduledTaskRegistrationStatus>, task_name: &str) {
         if let Err(error) = registration {
             warn!("Failed to start BrokerStatsManager scheduled task {task_name}: {error}");
         }

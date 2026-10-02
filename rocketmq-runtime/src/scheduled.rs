@@ -112,13 +112,13 @@ pub enum ScheduledTaskControl {
     Stop,
 }
 
-/// Describes the result of registering a scheduled task.
+/// Describes the registration status of a scheduled task.
 ///
 /// A duplicate schedule name is a normal outcome. The existing registration,
 /// its driver, and its metrics remain unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScheduledTaskRegistrationOutcome {
-    /// The task was registered and its driver was started.
+pub enum ScheduledTaskRegistrationStatus {
+    /// The task was registered and its driver was started with this task ID.
     Scheduled(TaskId),
     /// A task with the requested name was already registered.
     AlreadyPresent,
@@ -387,7 +387,7 @@ impl ScheduledTaskGroup {
         config: ScheduledTaskConfig,
         policy: ScheduledExecutionPolicy,
         task: F,
-    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
+    ) -> RuntimeResult<ScheduledTaskRegistrationStatus>
     where
         F: FnMut() -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
@@ -409,7 +409,7 @@ impl ScheduledTaskGroup {
         config: ScheduledTaskConfig,
         policy: ScheduledExecutionPolicy,
         task: F,
-    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
+    ) -> RuntimeResult<ScheduledTaskRegistrationStatus>
     where
         F: FnMut() -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
@@ -430,7 +430,7 @@ impl ScheduledTaskGroup {
         &self,
         config: ScheduledTaskConfig,
         task: F,
-    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
+    ) -> RuntimeResult<ScheduledTaskRegistrationStatus>
     where
         F: FnMut() -> Fut + Send + 'static,
         Fut: Future<Output = ScheduledTaskControl> + Send + 'static,
@@ -450,7 +450,7 @@ impl ScheduledTaskGroup {
         config: ScheduledTaskConfig,
         policy: ScheduledExecutionPolicy,
         task: ScheduledTaskFn,
-    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome> {
+    ) -> RuntimeResult<ScheduledTaskRegistrationStatus> {
         let max_concurrency = config.run_limit(policy)?;
         if config.mode == ScheduleMode::FixedDelay {
             return self.register_fixed_delay(binding, config, task);
@@ -463,10 +463,10 @@ impl ScheduledTaskGroup {
         binding: ScheduleBinding<'_>,
         config: ScheduledTaskConfig,
         task: ScheduledTaskFn,
-    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome> {
+    ) -> RuntimeResult<ScheduledTaskRegistrationStatus> {
         let name: Arc<str> = Arc::from(config.name.as_str());
         let Some(metrics) = self.register(name.clone(), config.clone(), 1) else {
-            return Ok(ScheduledTaskRegistrationOutcome::AlreadyPresent);
+            return Ok(ScheduledTaskRegistrationStatus::AlreadyPresent);
         };
         let token = binding.cancellation_token(&self.group);
         let driver = async move {
@@ -482,10 +482,10 @@ impl ScheduledTaskGroup {
         max_concurrency: usize,
         missed_ticks: MissedTickPolicy,
         task: ScheduledTaskFn,
-    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome> {
+    ) -> RuntimeResult<ScheduledTaskRegistrationStatus> {
         let name: Arc<str> = Arc::from(config.name.as_str());
         let Some(metrics) = self.register(name.clone(), config.clone(), max_concurrency) else {
-            return Ok(ScheduledTaskRegistrationOutcome::AlreadyPresent);
+            return Ok(ScheduledTaskRegistrationStatus::AlreadyPresent);
         };
         let token = binding.cancellation_token(&self.group);
         let runs = binding.run_spawner(&self.group);
@@ -503,7 +503,7 @@ impl ScheduledTaskGroup {
         binding: ScheduleBinding<'_>,
         name: Arc<str>,
         driver: F,
-    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
+    ) -> RuntimeResult<ScheduledTaskRegistrationStatus>
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -519,7 +519,7 @@ impl ScheduledTaskGroup {
         if spawn_result.is_err() {
             self.schedules.remove(&name);
         }
-        spawn_result.map(ScheduledTaskRegistrationOutcome::Scheduled)
+        spawn_result.map(ScheduledTaskRegistrationStatus::Scheduled)
     }
 
     /// Returns the snapshot.
@@ -1121,17 +1121,14 @@ mod tests {
             } else {
                 scheduled.schedule(config.clone(), ScheduledExecutionPolicy::default(), task)
             };
-            assert!(matches!(
-                result.unwrap(),
-                ScheduledTaskRegistrationOutcome::Scheduled(_)
-            ));
+            assert!(matches!(result.unwrap(), ScheduledTaskRegistrationStatus::Scheduled(_)));
             assert_eq!(
                 scheduled
                     .schedule(config, ScheduledExecutionPolicy::default(), || async {
                         panic!("duplicate ran")
                     })
                     .unwrap(),
-                ScheduledTaskRegistrationOutcome::AlreadyPresent,
+                ScheduledTaskRegistrationStatus::AlreadyPresent,
             );
             let (count, first) = started.recv().await.unwrap();
             assert_eq!(count, 1);
