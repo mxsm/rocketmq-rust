@@ -32,7 +32,7 @@ use rocketmq_runtime::BudgetCapacity;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::FullPolicy;
-use rocketmq_runtime::QueuePushOutcome;
+use rocketmq_runtime::QueueEnqueueStatus;
 use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -589,10 +589,10 @@ impl LocalFileOffsetStore {
     ) {
         let retained_bytes = command.retained_bytes();
         match self.persist_commands.try_push_data(command, retained_bytes) {
-            QueuePushOutcome::Enqueued | QueuePushOutcome::Coalesced { .. } | QueuePushOutcome::DroppedStale { .. } => {
-                Self::await_persist_result(receiver, operation).await
-            }
-            QueuePushOutcome::Rejected { item, rejection } => {
+            QueueEnqueueStatus::Enqueued
+            | QueueEnqueueStatus::Coalesced { .. }
+            | QueueEnqueueStatus::DroppedStale { .. } => Self::await_persist_result(receiver, operation).await,
+            QueueEnqueueStatus::Rejected { item, rejection } => {
                 drop(item);
                 warn!(
                     operation,
@@ -604,12 +604,12 @@ impl LocalFileOffsetStore {
                 let fallback = PersistCommand::PersistAll(Some(fallback_sender));
                 let retained_bytes = fallback.retained_bytes();
                 match self.persist_commands.try_push_control(fallback, retained_bytes) {
-                    QueuePushOutcome::Enqueued
-                    | QueuePushOutcome::Coalesced { .. }
-                    | QueuePushOutcome::DroppedStale { .. } => {
+                    QueueEnqueueStatus::Enqueued
+                    | QueueEnqueueStatus::Coalesced { .. }
+                    | QueueEnqueueStatus::DroppedStale { .. } => {
                         Self::await_persist_result(fallback_receiver, operation).await
                     }
-                    QueuePushOutcome::Rejected { rejection, .. } => {
+                    QueueEnqueueStatus::Rejected { rejection, .. } => {
                         error!(
                             operation,
                             ?rejection,
@@ -1107,16 +1107,16 @@ mod tests {
             let command = super::PersistCommand::PersistAll(None);
             assert!(matches!(
                 queue.try_push_data(command, command_bytes),
-                rocketmq_runtime::QueuePushOutcome::Enqueued
+                rocketmq_runtime::QueueEnqueueStatus::Enqueued
             ));
         }
         assert!(matches!(
             queue.try_push_data(super::PersistCommand::PersistAll(None), command_bytes),
-            rocketmq_runtime::QueuePushOutcome::Rejected { .. }
+            rocketmq_runtime::QueueEnqueueStatus::Rejected { .. }
         ));
         assert!(matches!(
             queue.try_push_control(super::PersistCommand::Shutdown, command_bytes),
-            rocketmq_runtime::QueuePushOutcome::Enqueued
+            rocketmq_runtime::QueueEnqueueStatus::Enqueued
         ));
 
         let snapshot = queue.snapshot();

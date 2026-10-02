@@ -37,7 +37,7 @@ use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetedItem;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::FullPolicy;
-use rocketmq_runtime::QueuePushOutcome;
+use rocketmq_runtime::QueueEnqueueStatus;
 use rocketmq_runtime::QueuePushRejection;
 use rocketmq_runtime::ResourceBudgetTree;
 
@@ -321,7 +321,7 @@ impl<T> TelemetryOutageQueue<T> {
             return TelemetryEnqueueOutcome::Dropped(TelemetryDropReason::Closed);
         }
         let record = Queued { item, estimated_bytes };
-        if let QueuePushOutcome::Rejected {
+        if let QueueEnqueueStatus::Rejected {
             item: _record,
             rejection,
         } = self.queue.try_push_data(record, estimated_bytes)

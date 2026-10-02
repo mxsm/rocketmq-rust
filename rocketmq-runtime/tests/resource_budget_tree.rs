@@ -29,7 +29,7 @@ use rocketmq_runtime::DynamicKeyRegistrationFailure;
 use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::MonotonicClock;
 use rocketmq_runtime::PermitBudgetTransferStatus;
-use rocketmq_runtime::QueuePushOutcome;
+use rocketmq_runtime::QueueEnqueueStatus;
 use rocketmq_runtime::QueuePushRejection;
 use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudgetTree;
@@ -137,17 +137,17 @@ fn resizing_a_rebound_permit_observes_the_new_dynamic_gate() {
     assert_eq!(root.snapshot().current_bytes, 0);
 }
 
-fn accepted<T>(outcome: QueuePushOutcome<T>) -> QueuePushOutcome<T> {
+fn accepted<T>(outcome: QueueEnqueueStatus<T>) -> QueueEnqueueStatus<T> {
     assert!(
-        !matches!(&outcome, QueuePushOutcome::Rejected { .. }),
+        !matches!(&outcome, QueueEnqueueStatus::Rejected { .. }),
         "queue item should be admitted"
     );
     outcome
 }
 
-fn rejected<T>(outcome: QueuePushOutcome<T>) -> (T, QueuePushRejection) {
+fn rejected<T>(outcome: QueueEnqueueStatus<T>) -> (T, QueuePushRejection) {
     match outcome {
-        QueuePushOutcome::Rejected { item, rejection } => (item, rejection),
+        QueueEnqueueStatus::Rejected { item, rejection } => (item, rejection),
         _ => panic!("queue item should be rejected"),
     }
 }
@@ -413,7 +413,7 @@ fn reject_policy_keeps_depth_and_bytes_bounded_at_two_times_overload() {
     let mut rejected = Vec::new();
 
     for item in 0..8 {
-        if let QueuePushOutcome::Rejected { item, .. } = queue.try_push_data(item, 10) {
+        if let QueueEnqueueStatus::Rejected { item, .. } = queue.try_push_data(item, 10) {
             rejected.push(item);
         }
     }
@@ -432,11 +432,11 @@ fn coalesce_latest_replaces_pending_state_and_releases_old_permits() {
 
     assert!(matches!(
         accepted(queue.try_push_data("old", 8)),
-        QueuePushOutcome::Enqueued
+        QueueEnqueueStatus::Enqueued
     ));
     assert!(matches!(
         accepted(queue.try_push_data("new", 8)),
-        QueuePushOutcome::Coalesced { replaced: 1 }
+        QueueEnqueueStatus::Coalesced { replaced: 1 }
     ));
     assert_eq!(queue.try_pop(), Some("new"));
     assert_eq!(queue.snapshot().coalesced_count, 1);
@@ -507,7 +507,7 @@ fn drop_stale_policy_uses_virtual_time_and_reports_oldest_age() {
     clock.advance(Duration::from_secs(6));
     assert!(matches!(
         accepted(queue.try_push_data("fresh", 8)),
-        QueuePushOutcome::DroppedStale { dropped: 1 }
+        QueueEnqueueStatus::DroppedStale { dropped: 1 }
     ));
     assert_eq!(queue.try_pop(), Some("fresh"));
     assert_eq!(queue.snapshot().dropped_count, 1);
@@ -613,7 +613,7 @@ async fn wait_until_deadline_observes_item_capacity_release() {
     assert_eq!(queue.try_pop(), Some("held"));
     assert!(matches!(
         accepted(waiter.await.expect("join waiter")),
-        QueuePushOutcome::Enqueued
+        QueueEnqueueStatus::Enqueued
     ));
     assert_eq!(queue.try_pop(), Some("waiting"));
     assert_eq!(queue.snapshot().reserved_count, 0);
@@ -1159,7 +1159,7 @@ fn coalesced_item_destructors_can_close_the_dynamic_key_after_admission_unlocks(
         accepted(queue.try_push_data(CloseOnDrop(Some(key.clone())), 8));
         assert!(matches!(
             queue.try_push_data(CloseOnDrop(None), 8),
-            QueuePushOutcome::Coalesced { replaced: 1 }
+            QueueEnqueueStatus::Coalesced { replaced: 1 }
         ));
         assert!(key.is_closed());
         assert_eq!(queue.len(), 1);

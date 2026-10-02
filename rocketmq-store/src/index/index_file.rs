@@ -35,7 +35,7 @@ use rocketmq_store_local::index::file::IndexHeaderUpdate;
 use rocketmq_store_local::index::file::IndexPutOutcome;
 #[cfg(test)]
 use rocketmq_store_local::mapped_file::MappedFileAdmissionState;
-use rocketmq_store_local::mapped_file::MappedFileDestroyOutcome;
+use rocketmq_store_local::mapped_file::MappedFileRemovalStatus;
 use tracing::info;
 use tracing::warn;
 
@@ -268,7 +268,7 @@ impl IndexFile {
     }
 
     #[inline]
-    pub fn try_destroy(&self, interval_forcibly: u64) -> MappedFileDestroyOutcome {
+    pub fn try_destroy(&self, interval_forcibly: u64) -> MappedFileRemovalStatus {
         self.try_destroy_with_callbacks(interval_forcibly, || {}, || {})
     }
 
@@ -441,7 +441,7 @@ impl IndexFile {
         interval_forcibly: u64,
         before_wait: BeforeWait,
         on_closing: OnClosing,
-    ) -> MappedFileDestroyOutcome
+    ) -> MappedFileRemovalStatus
     where
         BeforeWait: FnOnce(),
         OnClosing: FnOnce(),

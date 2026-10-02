@@ -293,16 +293,16 @@ pub mod bench_support {
         }
 
         let mut snapshots = services.cleanup_schedule_snapshot().await;
-        for _ in 0..50 {
-            if snapshots
-                .iter()
-                .any(|snapshot| snapshot.runs > 0 && snapshot.active_runs == 0)
-            {
-                break;
+        // Provider deletion precedes durable metadata updates and run settlement.
+        // Wait for a completed run instead of a short, potentially missed idle
+        // window; the next periodic run may already be active when we sample.
+        let _ = tokio::time::timeout(Duration::from_secs(5), async {
+            while !snapshots.iter().any(|snapshot| snapshot.runs > 0) {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                snapshots = services.cleanup_schedule_snapshot().await;
             }
-            tokio::time::sleep(Duration::from_millis(1)).await;
-            snapshots = services.cleanup_schedule_snapshot().await;
-        }
+        })
+        .await;
         let scheduled_runs = snapshots.iter().map(|snapshot| snapshot.runs).sum();
         let scheduled_skips = snapshots.iter().map(|snapshot| snapshot.skips).sum();
         let scheduled_overlaps = snapshots.iter().map(|snapshot| snapshot.overlaps).sum();
