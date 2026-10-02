@@ -33,7 +33,7 @@ use rocketmq_error::SharedError;
 use rocketmq_protocol::protocol::body::supervised_mutation::MutationPersistenceState;
 use rocketmq_runtime::MetadataGeneration;
 use rocketmq_runtime::MetadataIoCommitObservation;
-use rocketmq_runtime::MetadataIoCommitOutcome;
+use rocketmq_runtime::MetadataWritePersistenceStatus;
 
 use crate::broker_error;
 
@@ -121,16 +121,16 @@ pub(crate) fn conclude_metadata_write(
 ) -> MetadataWriteConclusion {
     match observation {
         MetadataIoCommitObservation::Settled {
-            outcome: MetadataIoCommitOutcome::Durable(generation),
+            outcome: MetadataWritePersistenceStatus::Durable(generation),
             ..
         } => MetadataWriteConclusion::Durable(generation),
         MetadataIoCommitObservation::Settled {
-            outcome: MetadataIoCommitOutcome::FailedBeforeCommit(error),
+            outcome: MetadataWritePersistenceStatus::FailedBeforeCommit(error),
             ..
         } => MetadataWriteConclusion::FailedBeforeCommit(broker_error::internal("metadata_io", error)),
         MetadataIoCommitObservation::Settled {
             generation,
-            outcome: MetadataIoCommitOutcome::CommitOutcomeUnknown(error),
+            outcome: MetadataWritePersistenceStatus::CommitOutcomeUnknown(error),
         } => record_unconfirmed(resource, generation, UnconfirmedReason::CommitUnconfirmed, error),
         MetadataIoCommitObservation::Unobserved { generation } => record_unconfirmed(
             resource,
@@ -205,7 +205,7 @@ mod tests {
 
     use super::*;
 
-    fn observation(outcome: MetadataIoCommitOutcome) -> MetadataIoCommitObservation {
+    fn observation(outcome: MetadataWritePersistenceStatus) -> MetadataIoCommitObservation {
         MetadataIoCommitObservation::Settled {
             generation: MetadataGeneration::new(4),
             outcome,
@@ -223,7 +223,7 @@ mod tests {
     fn every_observation_maps_to_one_conclusion() {
         let durable = conclude_metadata_write(
             "broker.topic-config",
-            observation(MetadataIoCommitOutcome::Durable(MetadataGeneration::new(4))),
+            observation(MetadataWritePersistenceStatus::Durable(MetadataGeneration::new(4))),
         );
         assert!(durable.is_durable());
         assert!(!durable.retains_dirty_marker());
@@ -231,7 +231,7 @@ mod tests {
 
         let failed = conclude_metadata_write(
             "broker.topic-config",
-            observation(MetadataIoCommitOutcome::FailedBeforeCommit(sync_parent_error())),
+            observation(MetadataWritePersistenceStatus::FailedBeforeCommit(sync_parent_error())),
         );
         assert!(!failed.is_durable());
         assert!(
@@ -242,7 +242,7 @@ mod tests {
 
         let unknown = conclude_metadata_write(
             "broker.topic-config",
-            observation(MetadataIoCommitOutcome::CommitOutcomeUnknown(sync_parent_error())),
+            observation(MetadataWritePersistenceStatus::CommitOutcomeUnknown(sync_parent_error())),
         );
         assert!(unknown.retains_dirty_marker());
         assert!(conclusion_error(&unknown).is_some());

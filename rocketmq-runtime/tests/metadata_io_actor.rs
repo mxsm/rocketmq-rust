@@ -32,12 +32,12 @@ use rocketmq_runtime::MetadataFileSystem;
 use rocketmq_runtime::MetadataGeneration;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_runtime::MetadataIoCommitAdmissionOutcome;
-use rocketmq_runtime::MetadataIoCommitOutcome;
 use rocketmq_runtime::MetadataIoConfig;
 use rocketmq_runtime::MetadataIoOperation;
 use rocketmq_runtime::MetadataIoPlan;
 use rocketmq_runtime::MetadataLimitSource;
 use rocketmq_runtime::MetadataTargetRetirementOutcome;
+use rocketmq_runtime::MetadataWritePersistenceStatus;
 use rocketmq_runtime::MetadataWriteRequest;
 use rocketmq_runtime::MetadataWriteSubmissionStatus;
 use rocketmq_runtime::ProcessMemoryLimit;
@@ -406,7 +406,7 @@ async fn retirement_keeps_unknown_outcome_fenced_and_old_actor_cannot_rebind_a_r
     let receipt = accepted(failed.submit(request("fenced", 1, b"one"), deadline).unwrap());
     assert!(matches!(
         receipt.wait_until_outcome(deadline).await.unwrap(),
-        MetadataIoCommitOutcome::CommitOutcomeUnknown(_)
+        MetadataWritePersistenceStatus::CommitOutcomeUnknown(_)
     ));
     assert!(!failed.shutdown_until(deadline).await.timed_out);
     assert_eq!(
@@ -811,7 +811,7 @@ async fn cancelled_actor_retains_target_until_the_real_closure_exits() {
         .await
         .unwrap();
     match newer {
-        MetadataIoCommitAdmissionOutcome::Completed(MetadataIoCommitOutcome::Durable(generation)) => {
+        MetadataIoCommitAdmissionOutcome::Completed(MetadataWritePersistenceStatus::Durable(generation)) => {
             assert_eq!(generation, MetadataGeneration::new(2));
         }
         outcome => panic!("replacement write must become durable: {outcome:?}"),
@@ -849,7 +849,7 @@ async fn commit_outcome_distinguishes_unknown_durability() {
         .unwrap();
     assert!(matches!(
         unknown,
-        MetadataIoCommitAdmissionOutcome::Completed(MetadataIoCommitOutcome::CommitOutcomeUnknown(_))
+        MetadataIoCommitAdmissionOutcome::Completed(MetadataWritePersistenceStatus::CommitOutcomeUnknown(_))
     ));
     let blocked = unknown_actor
         .submit_next_commit("unknown-resource", PathBuf::from("unknown.json"), b"retry", deadline)
@@ -863,7 +863,7 @@ async fn commit_outcome_distinguishes_unknown_durability() {
         .unwrap();
     assert!(matches!(
         failed,
-        MetadataIoCommitAdmissionOutcome::Completed(MetadataIoCommitOutcome::FailedBeforeCommit(_))
+        MetadataIoCommitAdmissionOutcome::Completed(MetadataWritePersistenceStatus::FailedBeforeCommit(_))
     ));
     assert!(context.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
 }
@@ -1154,7 +1154,7 @@ async fn observed_submission_classifies_every_settled_conclusion() {
     assert!(!observed.requires_reconciliation());
     assert!(matches!(
         observed.settled(),
-        Some(MetadataIoCommitOutcome::Durable(generation)) if generation == MetadataGeneration::new(1)
+        Some(MetadataWritePersistenceStatus::Durable(generation)) if generation == MetadataGeneration::new(1)
     ));
 
     // A second resource cannot bind the same target; the conflict is reported
@@ -1186,7 +1186,7 @@ async fn observed_submission_classifies_every_settled_conclusion() {
     );
     assert!(matches!(
         observed.settled(),
-        Some(MetadataIoCommitOutcome::FailedBeforeCommit(_))
+        Some(MetadataWritePersistenceStatus::FailedBeforeCommit(_))
     ));
     assert!(failed.confirmed_durable_generation("failed-resource").is_none());
 
@@ -1210,7 +1210,7 @@ async fn observed_submission_classifies_every_settled_conclusion() {
     assert_eq!(observed.unobserved_generation(), None);
     assert!(matches!(
         observed.settled(),
-        Some(MetadataIoCommitOutcome::CommitOutcomeUnknown(_))
+        Some(MetadataWritePersistenceStatus::CommitOutcomeUnknown(_))
     ));
 }
 
@@ -1372,7 +1372,7 @@ async fn unconfirmed_commit_fences_a_target_that_still_has_queued_work() {
     assert!(
         matches!(
             first.wait_until_outcome(deadline).await.unwrap(),
-            MetadataIoCommitOutcome::CommitOutcomeUnknown(_)
+            MetadataWritePersistenceStatus::CommitOutcomeUnknown(_)
         ),
         "generation 1 must be reported as an unconfirmed replacement"
     );
@@ -1530,7 +1530,7 @@ async fn a_request_lane_deadline_tightens_the_shared_lane_budget() {
     assert!(
         matches!(
             observation.settled(),
-            Some(MetadataIoCommitOutcome::FailedBeforeCommit(_))
+            Some(MetadataWritePersistenceStatus::FailedBeforeCommit(_))
         ),
         "the tightened deadline must settle as a failure before replacement"
     );
@@ -1585,7 +1585,7 @@ async fn a_request_lane_deadline_cannot_widen_the_lane_budget() {
     assert!(
         matches!(
             observation.settled(),
-            Some(MetadataIoCommitOutcome::FailedBeforeCommit(_))
+            Some(MetadataWritePersistenceStatus::FailedBeforeCommit(_))
         ),
         "the lane budget must settle the request as a failure before replacement"
     );

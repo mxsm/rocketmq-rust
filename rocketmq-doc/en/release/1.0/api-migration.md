@@ -263,6 +263,17 @@ map each removed API to its replacement and list the changed contracts,
 including `/drainz` accepting only `POST` by default, `TaskId` recording its
 group and `RuntimeError::kind()`.
 
+### Metadata write persistence status
+
+`MetadataIoCommitOutcome` is now `MetadataWritePersistenceStatus`. This is an
+`approved-break`: external callers must update imports and type references to
+`rocketmq_runtime::MetadataWritePersistenceStatus`. No compatibility alias or
+wrapper is provided. The variants (`Durable`, `FailedBeforeCommit`, and
+`CommitOutcomeUnknown`) and their payloads are unchanged. Receipt completion,
+generation ordering, and reconciliation behavior are unchanged;
+`MetadataIoCommitObservation::Unobserved` still allows accepted work to complete
+later and is not a definite persistence failure
+([#11088](https://github.com/mxsm/rocketmq-rust/issues/11088)).
 ### Scheduled-task registration status
 
 `ScheduledTaskRegistrationOutcome` is now `ScheduledTaskRegistrationStatus`.

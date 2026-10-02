@@ -20,7 +20,7 @@ use crate::NameServerResult;
 use cheetah_string::CheetahString;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoCommitObservation;
-use rocketmq_runtime::MetadataIoCommitOutcome;
+use rocketmq_runtime::MetadataWritePersistenceStatus;
 use rocketmq_runtime::MetadataWriteRequest;
 use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::RuntimeOperation;
@@ -116,17 +116,17 @@ pub(crate) async fn apply_runtime_updates(
         .map_err(crate::namesrv_error::storage_write)?
     {
         MetadataIoCommitObservation::Settled {
-            outcome: MetadataIoCommitOutcome::Durable(generation),
+            outcome: MetadataWritePersistenceStatus::Durable(generation),
             ..
         } => generation.get(),
         MetadataIoCommitObservation::Settled {
-            outcome: MetadataIoCommitOutcome::FailedBeforeCommit(error),
+            outcome: MetadataWritePersistenceStatus::FailedBeforeCommit(error),
             ..
         } => {
             return Err(crate::namesrv_error::storage_write(error));
         }
         MetadataIoCommitObservation::Settled {
-            outcome: MetadataIoCommitOutcome::CommitOutcomeUnknown(error),
+            outcome: MetadataWritePersistenceStatus::CommitOutcomeUnknown(error),
             ..
         } => {
             runtime.config_generations.write().reconciliation_required = true;

@@ -3007,11 +3007,11 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use metadata_io::MetadataIoCommitOutcome",
-          "identity": "rocketmq-runtime/src/lib.rs:pub use metadata_io::MetadataIoCommitOutcome",
+          "declaration": "pub use metadata_io::MetadataWritePersistenceStatus",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use metadata_io::MetadataWritePersistenceStatus",
           "owner": "runtime",
           "path": "rocketmq-runtime/src/lib.rs",
-          "rationale": "metadata commit admission, completion, and durability evidence",
+          "rationale": "persistence conclusion for an accepted metadata write",
           "removal_condition": "retain while the stable entry point remains supported"
         },
         {
