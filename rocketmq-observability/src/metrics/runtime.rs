@@ -109,8 +109,8 @@ impl std::fmt::Debug for RuntimeMetricsRecorder {
     }
 }
 
-impl rocketmq_runtime::OperationOutcomeObserver for RuntimeMetricsRecorder {
-    fn on_outcome(&self, kind: rocketmq_runtime::TaskKind, outcome: rocketmq_runtime::OperationOutcome) {
+impl rocketmq_runtime::OperationTaskExitObserver for RuntimeMetricsRecorder {
+    fn on_outcome(&self, kind: rocketmq_runtime::TaskKind, outcome: rocketmq_runtime::OperationTaskExitReason) {
         #[cfg(feature = "otel-metrics")]
         if self.telemetry.is_active() {
             if let Some(metrics) = &self.metrics {
