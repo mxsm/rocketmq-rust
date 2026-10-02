@@ -43,7 +43,7 @@ use crate::task_group::TaskKind;
 /// distinct from a cancellation branch selected by the task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum OperationOutcome {
+pub enum OperationTaskExitReason {
     /// The future returned normally.
     Completed = 1,
     /// The operation-local cancellation branch won.
@@ -58,7 +58,7 @@ pub enum OperationOutcome {
     Aborted = 6,
 }
 
-impl OperationOutcome {
+impl OperationTaskExitReason {
     /// All outcomes in counter snapshot order.
     pub const ALL: [Self; 6] = [
         Self::Completed,
@@ -86,9 +86,9 @@ impl OperationOutcome {
 ///
 /// Callbacks must be short, nonblocking and panic-free, including during panic
 /// unwinding. They must not flush exporters or retain request data.
-pub trait OperationOutcomeObserver: std::fmt::Debug + Send + Sync {
+pub trait OperationTaskExitObserver: std::fmt::Debug + Send + Sync {
     /// Records one terminal task outcome using bounded labels.
-    fn on_outcome(&self, kind: TaskKind, outcome: OperationOutcome);
+    fn on_outcome(&self, kind: TaskKind, outcome: OperationTaskExitReason);
 }
 
 /// Cancellation, deadline, and task-class metadata for one bounded operation.
@@ -153,7 +153,7 @@ struct OperationContextInner {
     /// Woken when `active` drops to zero.
     idle: Notify,
     outcomes: [AtomicU64; 6],
-    observer: OnceLock<Arc<dyn OperationOutcomeObserver>>,
+    observer: OnceLock<Arc<dyn OperationTaskExitObserver>>,
 }
 
 impl OperationContext {
@@ -281,8 +281,8 @@ impl OperationContext {
     ///
     /// Counters share this operation's lifetime and are individually atomic;
     /// completions can occur between fields in this snapshot.
-    pub fn outcomes(&self) -> [(OperationOutcome, u64); 6] {
-        OperationOutcome::ALL.map(|outcome| {
+    pub fn outcomes(&self) -> [(OperationTaskExitReason, u64); 6] {
+        OperationTaskExitReason::ALL.map(|outcome| {
             (
                 outcome,
                 self.inner.outcomes[outcome as usize - 1].load(Ordering::Acquire),
@@ -295,7 +295,7 @@ impl OperationContext {
     /// # Errors
     ///
     /// Returns an error after owner binding or an earlier observer installation.
-    pub fn set_outcome_observer(&self, observer: Arc<dyn OperationOutcomeObserver>) -> RuntimeResult<()> {
+    pub fn set_outcome_observer(&self, observer: Arc<dyn OperationTaskExitObserver>) -> RuntimeResult<()> {
         let _gate = self.inner.spawn_gate.lock();
         if self.inner.owner_id.load(Ordering::Acquire) != 0 || self.inner.observer.set(observer).is_err() {
             return Err(RuntimeError::context_unavailable(
@@ -452,7 +452,7 @@ impl OperationContext {
         self.inner.spawn_gate.lock()
     }
 
-    async fn run<F>(&self, future: F) -> OperationOutcome
+    async fn run<F>(&self, future: F) -> OperationTaskExitReason
     where
         F: Future<Output = ()>,
     {
@@ -460,16 +460,16 @@ impl OperationContext {
             Some(deadline) => {
                 tokio::select! {
                     biased;
-                    _ = self.inner.cancellation.cancelled() => OperationOutcome::Cancelled,
-                    _ = tokio::time::sleep_until(deadline.into()) => OperationOutcome::DeadlineExceeded,
-                    _ = future => OperationOutcome::Completed,
+                    _ = self.inner.cancellation.cancelled() => OperationTaskExitReason::Cancelled,
+                    _ = tokio::time::sleep_until(deadline.into()) => OperationTaskExitReason::DeadlineExceeded,
+                    _ = future => OperationTaskExitReason::Completed,
                 }
             }
             None => {
                 tokio::select! {
                     biased;
-                    _ = self.inner.cancellation.cancelled() => OperationOutcome::Cancelled,
-                    _ = future => OperationOutcome::Completed,
+                    _ = self.inner.cancellation.cancelled() => OperationTaskExitReason::Cancelled,
+                    _ = future => OperationTaskExitReason::Completed,
                 }
             }
         }
@@ -530,7 +530,7 @@ impl OperationTaskRegistration {
     pub(crate) fn guard(&self) -> OperationTaskGuard {
         OperationTaskGuard {
             state: Arc::clone(&self.state),
-            outcome: OperationOutcome::Aborted,
+            outcome: OperationTaskExitReason::Aborted,
         }
     }
 
@@ -546,13 +546,13 @@ impl OperationTaskRegistration {
 
 pub(crate) struct OperationTaskGuard {
     state: Arc<OperationTaskRegistrationState>,
-    outcome: OperationOutcome,
+    outcome: OperationTaskExitReason,
 }
 
 impl Drop for OperationTaskGuard {
     fn drop(&mut self) {
         let outcome = if std::thread::panicking() {
-            OperationOutcome::Panicked
+            OperationTaskExitReason::Panicked
         } else {
             self.outcome
         };
@@ -571,7 +571,7 @@ impl Drop for OperationTaskGuard {
 
 impl OperationTaskRegistrationState {
     fn record(&self, value: u8) {
-        let Some(outcome) = OperationOutcome::ALL
+        let Some(outcome) = OperationTaskExitReason::ALL
             .into_iter()
             .find(|outcome| *outcome as u8 == value)
         else {
@@ -612,7 +612,7 @@ impl<F: Future<Output = ()>> OperationExecution<F> {
         let outcome = match self.owner_cancellation {
             Some(owner) => tokio::select! {
                 biased;
-                _ = owner.cancelled() => OperationOutcome::OwnerCancelled,
+                _ = owner.cancelled() => OperationTaskExitReason::OwnerCancelled,
                 outcome = self.operation.run(self.future) => outcome,
             },
             None => self.operation.run(self.future).await,
@@ -697,11 +697,11 @@ mod tests {
     #[derive(Debug)]
     struct RecordingOutcomeObserver {
         dropped: Arc<AtomicBool>,
-        events: Mutex<Vec<OperationOutcome>>,
+        events: Mutex<Vec<OperationTaskExitReason>>,
     }
 
-    impl OperationOutcomeObserver for RecordingOutcomeObserver {
-        fn on_outcome(&self, _kind: TaskKind, outcome: OperationOutcome) {
+    impl OperationTaskExitObserver for RecordingOutcomeObserver {
+        fn on_outcome(&self, _kind: TaskKind, outcome: OperationTaskExitReason) {
             assert!(
                 self.dropped.load(Ordering::Acquire),
                 "outcome preceded future destruction"
@@ -712,10 +712,10 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn all_outcomes_are_recorded_once_after_future_destruction() {
-        for expected in OperationOutcome::ALL {
+        for expected in OperationTaskExitReason::ALL {
             let runtime = RuntimeContext::from_current("operation-outcome");
             let owner = runtime.service_context("operation-owner");
-            let operation = if expected == OperationOutcome::DeadlineExceeded {
+            let operation = if expected == OperationTaskExitReason::DeadlineExceeded {
                 OperationContext::new(Instant::now() + Duration::from_secs(60), TaskKind::Worker)
             } else {
                 OperationContext::without_deadline(TaskKind::Worker)
@@ -733,20 +733,20 @@ mod tests {
                     "selected-outcome",
                     OutcomeFuture {
                         dropped,
-                        ready: expected == OperationOutcome::Completed,
-                        panic_poll: expected == OperationOutcome::Panicked,
+                        ready: expected == OperationTaskExitReason::Completed,
+                        panic_poll: expected == OperationTaskExitReason::Panicked,
                         panic_drop: false,
                     },
                 )
                 .unwrap();
             match expected {
-                OperationOutcome::Cancelled => operation.cancel(),
-                OperationOutcome::OwnerCancelled => owner.task_group().cancel(),
-                OperationOutcome::DeadlineExceeded => tokio::time::advance(Duration::from_secs(61)).await,
-                OperationOutcome::Aborted => {
+                OperationTaskExitReason::Cancelled => operation.cancel(),
+                OperationTaskExitReason::OwnerCancelled => owner.task_group().cancel(),
+                OperationTaskExitReason::DeadlineExceeded => tokio::time::advance(Duration::from_secs(61)).await,
+                OperationTaskExitReason::Aborted => {
                     assert!(owner.task_group().abort_task(id));
                 }
-                OperationOutcome::Completed | OperationOutcome::Panicked => {}
+                OperationTaskExitReason::Completed | OperationTaskExitReason::Panicked => {}
             }
             while owner.task_group().task_count() != 0 {
                 tokio::task::yield_now().await;
@@ -757,7 +757,7 @@ mod tests {
                 assert_eq!(count, u64::from(outcome == expected), "{expected:?}: {outcome:?}");
             }
             let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
-            assert_eq!(report.is_healthy(), expected != OperationOutcome::Panicked);
+            assert_eq!(report.is_healthy(), expected != OperationTaskExitReason::Panicked);
         }
     }
 
@@ -788,7 +788,7 @@ mod tests {
         while owner.task_group().task_count() != 0 {
             tokio::task::yield_now().await;
         }
-        assert_eq!(*observer.events.lock(), [OperationOutcome::Panicked]);
+        assert_eq!(*observer.events.lock(), [OperationTaskExitReason::Panicked]);
         runtime.shutdown_tasks(Duration::from_secs(1)).await;
 
         let rejected = OperationContext::without_deadline(TaskKind::Worker);
@@ -825,7 +825,10 @@ mod tests {
         .expect("operation tasks should complete");
 
         assert_eq!(owner.task_group().component_count(), baseline_components);
-        assert_eq!(operation.outcomes()[0], (OperationOutcome::Completed, TASKS as u64));
+        assert_eq!(
+            operation.outcomes()[0],
+            (OperationTaskExitReason::Completed, TASKS as u64)
+        );
         let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
     }

@@ -4051,20 +4051,20 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::operation::OperationOutcome",
-          "identity": "rocketmq-runtime/src/public_api.rs:pub use crate::operation::OperationOutcome",
+          "declaration": "pub use crate::operation::OperationTaskExitReason",
+          "identity": "rocketmq-runtime/src/public_api.rs:pub use crate::operation::OperationTaskExitReason",
           "owner": "runtime",
           "path": "rocketmq-runtime/src/public_api.rs",
-          "rationale": "terminal operation task outcomes after future destruction",
+          "rationale": "terminal operation task exit reasons after future destruction",
           "removal_condition": "retain while the stable entry point remains supported"
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::operation::OperationOutcomeObserver",
-          "identity": "rocketmq-runtime/src/public_api.rs:pub use crate::operation::OperationOutcomeObserver",
+          "declaration": "pub use crate::operation::OperationTaskExitObserver",
+          "identity": "rocketmq-runtime/src/public_api.rs:pub use crate::operation::OperationTaskExitObserver",
           "owner": "runtime",
           "path": "rocketmq-runtime/src/public_api.rs",
-          "rationale": "bounded observation of terminal operation outcomes without retaining request data",
+          "rationale": "bounded observation of terminal operation task exit reasons without retaining request data",
           "removal_condition": "retain while the stable entry point remains supported"
         },
         {
