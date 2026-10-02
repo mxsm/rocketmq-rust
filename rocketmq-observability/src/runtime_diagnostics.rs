@@ -751,8 +751,8 @@ mod tests {
     #[tokio::test]
     async fn caller_owned_sources_reach_http_and_outlive_the_listener_without_write_authority() {
         use rocketmq_runtime::{
-            MetadataDeadline, MetadataIoAdmissionOutcome, MetadataIoConfig, MetadataWriteRequest, ScheduledTaskConfig,
-            ShutdownDeadline, ShutdownReport,
+            MetadataDeadline, MetadataIoConfig, MetadataWriteRequest, MetadataWriteSubmissionStatus,
+            ScheduledTaskConfig, ShutdownDeadline, ShutdownReport,
         };
 
         let token_file = test_token_path();
@@ -785,8 +785,8 @@ mod tests {
             )
             .unwrap()
         {
-            MetadataIoAdmissionOutcome::Accepted(receipt) => receipt,
-            MetadataIoAdmissionOutcome::TargetConflict(_) => panic!("unexpected target conflict"),
+            MetadataWriteSubmissionStatus::Accepted(receipt) => receipt,
+            MetadataWriteSubmissionStatus::TargetConflict(_) => panic!("unexpected target conflict"),
         };
         receipt.wait_until(deadline).await.unwrap();
         assert_eq!(fs::read(&target).unwrap(), b"payload");

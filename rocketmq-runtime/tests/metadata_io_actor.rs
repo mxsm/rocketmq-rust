@@ -31,7 +31,6 @@ use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataFileSystem;
 use rocketmq_runtime::MetadataGeneration;
 use rocketmq_runtime::MetadataIoActor;
-use rocketmq_runtime::MetadataIoAdmissionOutcome;
 use rocketmq_runtime::MetadataIoCommitAdmissionOutcome;
 use rocketmq_runtime::MetadataIoConfig;
 use rocketmq_runtime::MetadataIoOperation;
@@ -40,6 +39,7 @@ use rocketmq_runtime::MetadataLimitSource;
 use rocketmq_runtime::MetadataTargetRetirementOutcome;
 use rocketmq_runtime::MetadataWritePersistenceStatus;
 use rocketmq_runtime::MetadataWriteRequest;
+use rocketmq_runtime::MetadataWriteSubmissionStatus;
 use rocketmq_runtime::ProcessMemoryLimit;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeContext;
@@ -221,10 +221,10 @@ fn request(resource: &str, generation: u64, bytes: &[u8]) -> MetadataWriteReques
     )
 }
 
-fn accepted(outcome: MetadataIoAdmissionOutcome) -> rocketmq_runtime::MetadataIoReceipt {
+fn accepted(outcome: MetadataWriteSubmissionStatus) -> rocketmq_runtime::MetadataIoReceipt {
     match outcome {
-        MetadataIoAdmissionOutcome::Accepted(receipt) => receipt,
-        MetadataIoAdmissionOutcome::TargetConflict(_) => {
+        MetadataWriteSubmissionStatus::Accepted(receipt) => receipt,
+        MetadataWriteSubmissionStatus::TargetConflict(_) => {
             panic!("test request unexpectedly conflicted with another target")
         }
     }
@@ -560,8 +560,8 @@ async fn pending_resource_target_conflict_returns_the_original_request() {
     let conflicting_request =
         MetadataWriteRequest::new("routes", 2, PathBuf::from("alternate-routes.json"), b"two".to_vec());
     let rejected_request = match actor.submit(conflicting_request, deadline).unwrap() {
-        MetadataIoAdmissionOutcome::Accepted(_) => panic!("different pending target must not be accepted"),
-        MetadataIoAdmissionOutcome::TargetConflict(request) => request,
+        MetadataWriteSubmissionStatus::Accepted(_) => panic!("different pending target must not be accepted"),
+        MetadataWriteSubmissionStatus::TargetConflict(request) => request,
     };
     assert_eq!(rejected_request.resource(), "routes");
     assert_eq!(rejected_request.generation(), MetadataGeneration::new(2));
@@ -745,10 +745,10 @@ async fn target_binding_is_process_local_and_rejects_a_second_resource() {
 
     let conflicting = MetadataWriteRequest::new("second", 1, PathBuf::from("first.json"), b"two");
     match actor.submit(conflicting, deadline).unwrap() {
-        MetadataIoAdmissionOutcome::TargetConflict(request) => {
+        MetadataWriteSubmissionStatus::TargetConflict(request) => {
             assert_eq!(request.resource(), "second");
         }
-        MetadataIoAdmissionOutcome::Accepted(_) => {
+        MetadataWriteSubmissionStatus::Accepted(_) => {
             panic!("a second resource must not bind the same target")
         }
     }
@@ -780,7 +780,7 @@ async fn cancelled_actor_retains_target_until_the_real_closure_exits() {
         replacement_actor
             .submit(request("shared", 1, b"two"), deadline)
             .unwrap(),
-        MetadataIoAdmissionOutcome::TargetConflict(_)
+        MetadataWriteSubmissionStatus::TargetConflict(_)
     ));
 
     gated_file_system.gate.release();
@@ -790,8 +790,8 @@ async fn cancelled_actor_retains_target_until_the_real_closure_exits() {
                 .submit(request("shared", 1, b"two"), deadline)
                 .unwrap()
             {
-                MetadataIoAdmissionOutcome::Accepted(receipt) => break receipt,
-                MetadataIoAdmissionOutcome::TargetConflict(_) => tokio::task::yield_now().await,
+                MetadataWriteSubmissionStatus::Accepted(receipt) => break receipt,
+                MetadataWriteSubmissionStatus::TargetConflict(_) => tokio::task::yield_now().await,
             }
         }
     })
@@ -1314,7 +1314,7 @@ async fn a_published_generation_releases_the_target_for_the_next_write() {
             .expect("the follow-up write should be admitted for this resource");
 
         assert!(
-            matches!(follow_up, MetadataIoAdmissionOutcome::Accepted(_)),
+            matches!(follow_up, MetadataWriteSubmissionStatus::Accepted(_)),
             "round {round}: a write that follows a confirmed generation was refused as a target conflict"
         );
     }

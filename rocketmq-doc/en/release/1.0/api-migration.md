@@ -27,6 +27,22 @@ reviewed post-freeze approval.
 
 ## Direct source migrations
 
+### Operation task exit type names
+
+`OperationOutcome` was renamed to `OperationTaskExitReason`, and
+`OperationOutcomeObserver` was renamed to `OperationTaskExitObserver`. Update
+imports, type references, and observer implementations to use the new names.
+No compatibility aliases are provided.
+
+The enum variants, numeric discriminants, snapshot ordering, and diagnostic
+labels are unchanged. The observer callback remains `on_outcome`, and the
+`rocketmq_runtime_operation_outcomes_total` metric retains its existing name
+and bounded label values.
+### `MetadataWriteSubmissionStatus` rename
+
+The public enum `MetadataIoAdmissionOutcome` has been renamed to `MetadataWriteSubmissionStatus`.
+Consumers must update their imports and type references. No compatibility alias is provided.
+
 ### Request-header derive migration
 
 The historical V1 implementation of `rocketmq_macros::RequestHeaderCodec` and

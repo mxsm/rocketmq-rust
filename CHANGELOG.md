@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **refactor(runtime):** Renamed `MetadataIoAdmissionOutcome` to `MetadataWriteSubmissionStatus` in the public API.
+
 ### Security
 
 - **fix(docker):** Use a digest-pinned Debian 13 runtime for Dashboard Web backend and the five SRE backends, resolving four CRITICAL Perl/zlib reports per image while preserving the release vulnerability gate ([#11033](https://github.com/mxsm/rocketmq-rust/issues/11033)).
@@ -87,6 +91,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(runtime):** Rename `OperationOutcome` to `OperationTaskExitReason` and `OperationOutcomeObserver` to `OperationTaskExitObserver`; callers must update imports and observer implementations because no compatibility aliases are retained ([#11085](https://github.com/mxsm/rocketmq-rust/issues/11085)).
 - **refactor(runtime):** Prefer `OperationDrainStatus` for bounded operation task-draining results while retaining `OperationWaitOutcome` as a source-compatible name ([#11066](https://github.com/mxsm/rocketmq-rust/issues/11066)).
 - **refactor(runtime):** Rename `MetadataIoCommitOutcome` to `MetadataWritePersistenceStatus` (breaking), exported as `rocketmq_runtime::MetadataWritePersistenceStatus`. External callers must update imports and type references; no compatibility alias is provided. Variants, persistence, and reconciliation behavior are unchanged ([#11088](https://github.com/mxsm/rocketmq-rust/issues/11088)).
 - **refactor(runtime):** Rename `PermitRebindOutcome` to `PermitBudgetTransferStatus` (breaking), exported as `rocketmq_runtime::PermitBudgetTransferStatus` and `rocketmq_runtime::resource_budget::PermitBudgetTransferStatus`. External callers must update imports and type references; no compatibility alias is provided. Variants and `try_rebind` behavior are unchanged ([#11067](https://github.com/mxsm/rocketmq-rust/issues/11067)).

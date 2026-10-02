@@ -664,12 +664,13 @@ pub struct MetadataIoReceipt {
     durable: oneshot::Receiver<RuntimeResult<MetadataWritePersistenceStatus>>,
 }
 
-/// The normal admission result for one metadata write request.
+/// Describes request submission for one metadata write request.
+/// Persistence is observed through the receipt.
 ///
 /// A target conflict retains the original immutable request so the caller can
 /// retry it after reconciling the resource-to-target mapping.
 #[derive(Debug)]
-pub enum MetadataIoAdmissionOutcome {
+pub enum MetadataWriteSubmissionStatus {
     /// The actor accepted the snapshot and returned its durability receipt.
     Accepted(MetadataIoReceipt),
     /// The resource already has pending work for a different target path.
@@ -1080,7 +1081,7 @@ impl MetadataIoActor {
     /// returned immediately and the absolute deadline is checked before
     /// admission.
     ///
-    /// Returns a normal [`MetadataIoAdmissionOutcome::TargetConflict`] when
+    /// Returns a normal [`MetadataWriteSubmissionStatus::TargetConflict`] when
     /// the same resource already has pending work for a different target.
     ///
     /// # Errors
@@ -1090,7 +1091,7 @@ impl MetadataIoActor {
         &self,
         request: MetadataWriteRequest,
         deadline: MetadataDeadline,
-    ) -> RuntimeResult<MetadataIoAdmissionOutcome> {
+    ) -> RuntimeResult<MetadataWriteSubmissionStatus> {
         if deadline.is_expired() {
             return Err(RuntimeError::timed_out(crate::RuntimeOperation::AdmitMetadataSnapshot));
         }
@@ -1104,7 +1105,7 @@ impl MetadataIoActor {
         }
 
         let Some(target_registration) = ensure_target_registration(&mut state, &self.inner.targets, &request)? else {
-            return Ok(MetadataIoAdmissionOutcome::TargetConflict(request));
+            return Ok(MetadataWriteSubmissionStatus::TargetConflict(request));
         };
 
         let existing = state.resources.get(&resource);
@@ -1112,7 +1113,7 @@ impl MetadataIoActor {
             if let Some(durable_generation) = existing.durable_generation {
                 if generation <= durable_generation {
                     let _ = waiter_sender.send(Ok(MetadataWritePersistenceStatus::Durable(durable_generation)));
-                    return Ok(MetadataIoAdmissionOutcome::Accepted(MetadataIoReceipt {
+                    return Ok(MetadataWriteSubmissionStatus::Accepted(MetadataIoReceipt {
                         generation,
                         identity: target_registration.identity(),
                         durable,
@@ -1130,7 +1131,7 @@ impl MetadataIoActor {
                         sender: waiter_sender,
                         _permit: waiter_permit,
                     });
-                    return Ok(MetadataIoAdmissionOutcome::Accepted(MetadataIoReceipt {
+                    return Ok(MetadataWriteSubmissionStatus::Accepted(MetadataIoReceipt {
                         generation,
                         identity: target_registration.identity(),
                         durable,
@@ -1148,7 +1149,7 @@ impl MetadataIoActor {
                         sender: waiter_sender,
                         _permit: waiter_permit,
                     });
-                    return Ok(MetadataIoAdmissionOutcome::Accepted(MetadataIoReceipt {
+                    return Ok(MetadataWriteSubmissionStatus::Accepted(MetadataIoReceipt {
                         generation,
                         identity: target_registration.identity(),
                         durable,
@@ -1228,7 +1229,7 @@ impl MetadataIoActor {
         if let Some(permit) = queue_permit {
             permit.send(resource.clone());
         }
-        Ok(MetadataIoAdmissionOutcome::Accepted(MetadataIoReceipt {
+        Ok(MetadataWriteSubmissionStatus::Accepted(MetadataIoReceipt {
             generation,
             identity,
             durable,
@@ -1252,7 +1253,7 @@ impl MetadataIoActor {
         target: impl Into<PathBuf>,
         bytes: impl Into<Vec<u8>>,
         deadline: MetadataDeadline,
-    ) -> RuntimeResult<MetadataIoAdmissionOutcome> {
+    ) -> RuntimeResult<MetadataWriteSubmissionStatus> {
         let generation = self.inner.targets.next_generation();
         self.submit(MetadataWriteRequest::new(resource, generation, target, bytes), deadline)
     }
@@ -1272,11 +1273,11 @@ impl MetadataIoActor {
         deadline: MetadataDeadline,
     ) -> RuntimeResult<MetadataIoDurabilityOutcome> {
         match self.submit(request, deadline)? {
-            MetadataIoAdmissionOutcome::Accepted(receipt) => receipt
+            MetadataWriteSubmissionStatus::Accepted(receipt) => receipt
                 .wait_until(deadline)
                 .await
                 .map(MetadataIoDurabilityOutcome::Durable),
-            MetadataIoAdmissionOutcome::TargetConflict(request) => {
+            MetadataWriteSubmissionStatus::TargetConflict(request) => {
                 Ok(MetadataIoDurabilityOutcome::TargetConflict(request))
             }
         }
@@ -1292,11 +1293,11 @@ impl MetadataIoActor {
         deadline: MetadataDeadline,
     ) -> RuntimeResult<MetadataIoCommitAdmissionOutcome> {
         match self.submit(request, deadline)? {
-            MetadataIoAdmissionOutcome::Accepted(receipt) => receipt
+            MetadataWriteSubmissionStatus::Accepted(receipt) => receipt
                 .wait_until_outcome(deadline)
                 .await
                 .map(MetadataIoCommitAdmissionOutcome::Completed),
-            MetadataIoAdmissionOutcome::TargetConflict(request) => {
+            MetadataWriteSubmissionStatus::TargetConflict(request) => {
                 Ok(MetadataIoCommitAdmissionOutcome::TargetConflict(request))
             }
         }
@@ -1317,11 +1318,11 @@ impl MetadataIoActor {
         deadline: MetadataDeadline,
     ) -> RuntimeResult<MetadataIoDurabilityOutcome> {
         match self.submit_next(resource, target, bytes, deadline)? {
-            MetadataIoAdmissionOutcome::Accepted(receipt) => receipt
+            MetadataWriteSubmissionStatus::Accepted(receipt) => receipt
                 .wait_until(deadline)
                 .await
                 .map(MetadataIoDurabilityOutcome::Durable),
-            MetadataIoAdmissionOutcome::TargetConflict(request) => {
+            MetadataWriteSubmissionStatus::TargetConflict(request) => {
                 Ok(MetadataIoDurabilityOutcome::TargetConflict(request))
             }
         }
@@ -1337,11 +1338,11 @@ impl MetadataIoActor {
         deadline: MetadataDeadline,
     ) -> RuntimeResult<MetadataIoCommitAdmissionOutcome> {
         match self.submit_next(resource, target, bytes, deadline)? {
-            MetadataIoAdmissionOutcome::Accepted(receipt) => receipt
+            MetadataWriteSubmissionStatus::Accepted(receipt) => receipt
                 .wait_until_outcome(deadline)
                 .await
                 .map(MetadataIoCommitAdmissionOutcome::Completed),
-            MetadataIoAdmissionOutcome::TargetConflict(request) => {
+            MetadataWriteSubmissionStatus::TargetConflict(request) => {
                 Ok(MetadataIoCommitAdmissionOutcome::TargetConflict(request))
             }
         }
@@ -1364,8 +1365,8 @@ impl MetadataIoActor {
         deadline: MetadataDeadline,
     ) -> RuntimeResult<MetadataIoCommitObservation> {
         match self.submit(request, deadline)? {
-            MetadataIoAdmissionOutcome::Accepted(receipt) => Ok(receipt.observe_until(deadline).await),
-            MetadataIoAdmissionOutcome::TargetConflict(request) => {
+            MetadataWriteSubmissionStatus::Accepted(receipt) => Ok(receipt.observe_until(deadline).await),
+            MetadataWriteSubmissionStatus::TargetConflict(request) => {
                 Ok(MetadataIoCommitObservation::TargetConflict(request))
             }
         }
@@ -1386,8 +1387,8 @@ impl MetadataIoActor {
         deadline: MetadataDeadline,
     ) -> RuntimeResult<MetadataIoCommitObservation> {
         match self.submit_next(resource, target, bytes, deadline)? {
-            MetadataIoAdmissionOutcome::Accepted(receipt) => Ok(receipt.observe_until(deadline).await),
-            MetadataIoAdmissionOutcome::TargetConflict(request) => {
+            MetadataWriteSubmissionStatus::Accepted(receipt) => Ok(receipt.observe_until(deadline).await),
+            MetadataWriteSubmissionStatus::TargetConflict(request) => {
                 Ok(MetadataIoCommitObservation::TargetConflict(request))
             }
         }
