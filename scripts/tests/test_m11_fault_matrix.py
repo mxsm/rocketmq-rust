@@ -387,6 +387,22 @@ class FaultMatrixGuardTests(unittest.TestCase):
         source = verifier.read_text(encoding="utf-8")
         mutations = (
             (
+                'STATEMENT_TYPE = "https://in-toto.io/Statement/v1"',
+                'STATEMENT_TYPE = "https://in-toto.io/Statement/v2"',
+            ),
+            (
+                'STATEMENT_TYPES = ("https://in-toto.io/Statement/v0.1", STATEMENT_TYPE)',
+                'STATEMENT_TYPES = (STATEMENT_TYPE,)',
+            ),
+            (
+                'STATEMENT_TYPES = ("https://in-toto.io/Statement/v0.1", STATEMENT_TYPE)',
+                'STATEMENT_TYPES = ("https://in-toto.io/Statement/v0.1", STATEMENT_TYPE, "https://in-toto.io/Statement/v2")',
+            ),
+            (
+                'statement.get("_type") in STATEMENT_TYPES',
+                'True',
+            ),
+            (
                 'subjects[0].get("name") == repository',
                 'subjects[0].get("name") is not None',
             ),
@@ -401,6 +417,7 @@ class FaultMatrixGuardTests(unittest.TestCase):
                 verifier.write_text(source.replace(old, new, 1), encoding="utf-8")
                 result = self.run_guard("--policy-only", expect_success=False)
                 self.assertIn("publication verifier contract missing", result.stderr)
+                self.assertIn(old, result.stderr)
 
     def test_deliberate_fault_causality_regressions_are_rejected(self) -> None:
         runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"

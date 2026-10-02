@@ -218,13 +218,13 @@ and inject `ChildServiceContext`/`TaskGroup` capabilities.
 
 ## Python architecture test inventory
 
-- Inventoried test modules: 40.
+- Inventoried test modules: 45.
 - Guard runner: `python scripts/run_architecture_tests.py --tier pr_static`.
 - Contract runner: `python scripts/run_architecture_tests.py --tier phase_contract --tier dynamic_fixture`.
 
 | Tier | Modules |
 |---|---:|
-| `pr_static` | 21 |
+| `pr_static` | 26 |
 | `phase_contract` | 3 |
 | `dynamic_fixture` | 12 |
 | `deferred_validation` | 4 |
