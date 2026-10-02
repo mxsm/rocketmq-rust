@@ -119,7 +119,11 @@ impl BudgetRejection {
     }
 }
 
-/// The result of an attempted permit rebind.
+/// The result of moving a permit's reservations from its source budget to a
+/// target budget in the same tree.
+///
+/// Reservations held by ancestors shared by both budgets stay held throughout
+/// the transfer. A rejection leaves the source permit exactly as it was.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermitBudgetTransferStatus {
     /// The permit now owns the target budget chain.
