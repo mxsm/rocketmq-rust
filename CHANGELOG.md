@@ -85,6 +85,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(store-local):** Rename `MappedFileDestroyOutcome` to `MappedFileRemovalStatus` (breaking), exported as `rocketmq_store_local::mapped_file::MappedFileRemovalStatus`. External callers must update imports and type references; no compatibility alias is provided. Variants, `try_destroy` and retry behavior are unchanged ([#11068](https://github.com/mxsm/rocketmq-rust/issues/11068)).
+
 - **feat(sre):** Read public UI OIDC settings from container startup environment variables, allowing one image to serve multiple deployments while retaining compatible build arguments and requiring OIDC login ([#11033](https://github.com/mxsm/rocketmq-rust/issues/11033)).
 
 - **chore(release):** Publish all 28 root workspace members to crates.io, including `rocketmq-admin-cli`, `rocketmq-admin-tui`, `rocketmq-store-inspect` and `rocketmq-dashboard-common`. The core release scope now classifies the three tools as `registry-publish`; Dashboard common is published with the workspace but stays outside the core package list, and the documented packaging check no longer excludes any member ([#10974](https://github.com/mxsm/rocketmq-rust/issues/10974)).
