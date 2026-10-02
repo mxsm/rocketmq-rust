@@ -2971,12 +2971,12 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use metadata_io::MetadataIoAdmissionOutcome",
-          "identity": "rocketmq-runtime/src/lib.rs:pub use metadata_io::MetadataIoAdmissionOutcome",
+          "declaration": "pub use metadata_io::MetadataWriteSubmissionStatus",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use metadata_io::MetadataWriteSubmissionStatus",
           "owner": "runtime",
           "path": "rocketmq-runtime/src/lib.rs",
-          "rationale": "source-free metadata admission result",
-          "removal_condition": "retain while metadata admission is a public outcome"
+          "rationale": "source-free metadata write submission status",
+          "removal_condition": "retain while metadata write submission is a public status"
         },
         {
           "category": "stable",

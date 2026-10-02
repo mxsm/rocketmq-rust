@@ -27,6 +27,11 @@ reviewed post-freeze approval.
 
 ## Direct source migrations
 
+### `MetadataWriteSubmissionStatus` rename
+
+The public enum `MetadataIoAdmissionOutcome` has been renamed to `MetadataWriteSubmissionStatus`.
+Consumers must update their imports and type references. No compatibility alias is provided.
+
 ### Request-header derive migration
 
 The historical V1 implementation of `rocketmq_macros::RequestHeaderCodec` and
