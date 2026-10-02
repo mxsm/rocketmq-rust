@@ -157,7 +157,7 @@ pub use scheduled::ScheduledTaskConfig;
 pub use scheduled::ScheduledTaskControl;
 pub use scheduled::ScheduledTaskGroup;
 pub use scheduled::ScheduledTaskObserver;
-pub use scheduled::ScheduledTaskRegistrationOutcome;
+pub use scheduled::ScheduledTaskRegistrationStatus;
 pub use scheduled::ScheduledTaskSnapshot;
 pub use service_context::ScopeId;
 pub use service_lifecycle::CriticalFailureRecovery;

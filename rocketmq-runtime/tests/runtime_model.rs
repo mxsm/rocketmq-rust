@@ -38,7 +38,7 @@ use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskControl;
-use rocketmq_runtime::ScheduledTaskRegistrationOutcome;
+use rocketmq_runtime::ScheduledTaskRegistrationStatus;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroupLifecycleState;
@@ -1100,7 +1100,7 @@ async fn scheduled_duplicate_is_an_outcome_without_replacing_driver_or_metrics()
             || async {},
         )
         .expect("first schedule should start");
-    assert!(matches!(first, ScheduledTaskRegistrationOutcome::Scheduled(_)));
+    assert!(matches!(first, ScheduledTaskRegistrationStatus::Scheduled(_)));
     let before = scheduled.snapshot();
 
     let duplicate = scheduled
@@ -1110,7 +1110,7 @@ async fn scheduled_duplicate_is_an_outcome_without_replacing_driver_or_metrics()
             || async {},
         )
         .expect("duplicate registration is a normal outcome");
-    assert_eq!(duplicate, ScheduledTaskRegistrationOutcome::AlreadyPresent);
+    assert_eq!(duplicate, ScheduledTaskRegistrationStatus::AlreadyPresent);
     assert_eq!(scheduled.snapshot().len(), 1);
     assert_eq!(scheduled.snapshot()[0].mode, before[0].mode);
     assert_eq!(scheduled.group().task_count(), 1);

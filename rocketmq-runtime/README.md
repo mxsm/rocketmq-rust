@@ -130,7 +130,7 @@ The error channels are intentional:
   `RuntimeError::kind()` rather than on the operation label: a submission to a
   closing owner reports `RuntimeErrorKind::Closed`, and one to a poisoned group
   reports `RuntimeErrorKind::Poisoned`.
-- Normal outcomes such as `ScheduledTaskRegistrationOutcome::AlreadyPresent`,
+- Normal outcomes such as `ScheduledTaskRegistrationStatus::AlreadyPresent`,
   `BudgetRejection`, and metadata target conflicts have their own types.
 
 `RuntimeOperation` names what failed. Its named variants are operations this

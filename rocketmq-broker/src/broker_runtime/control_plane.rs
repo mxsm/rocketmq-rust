@@ -672,7 +672,7 @@ impl BrokerRuntime {
 
     pub(super) fn log_scheduled_task_start(
         task_name: &str,
-        task_id: rocketmq_runtime::RuntimeResult<rocketmq_runtime::ScheduledTaskRegistrationOutcome>,
+        task_id: rocketmq_runtime::RuntimeResult<rocketmq_runtime::ScheduledTaskRegistrationStatus>,
     ) {
         if let Err(error) = task_id {
             error!("Failed to start scheduled task {task_name}: {error}");
