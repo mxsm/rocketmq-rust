@@ -192,7 +192,7 @@
     ]
   },
   "python_tests": {
-    "expected_count": 40,
+    "expected_count": 45,
     "ci": {
       "guards": "python scripts/run_architecture_tests.py --tier pr_static",
       "contracts": "python scripts/run_architecture_tests.py --tier phase_contract --tier dynamic_fixture"
@@ -212,6 +212,11 @@
       {"path": "scripts/tests/test_m11_fault_matrix.py", "owner": "sre", "tier": "dynamic_fixture", "trigger_paths": ["scripts/**", "distribution/**"], "command": "python -m unittest scripts.tests.test_m11_fault_matrix -v", "estimated_seconds": 60, "platform": "any", "fixture_policy": "repository-fixtures"},
       {"path": "scripts/tests/test_m11_kubernetes_assets.py", "owner": "sre", "tier": "dynamic_fixture", "trigger_paths": ["scripts/**", "distribution/**"], "command": "python -m unittest scripts.tests.test_m11_kubernetes_assets -v", "estimated_seconds": 60, "platform": "any", "fixture_policy": "repository-fixtures"},
       {"path": "scripts/tests/test_m11_service_lifecycle.py", "owner": "runtime", "tier": "phase_contract", "trigger_paths": ["scripts/**", "distribution/**", "**/*.rs"], "command": "python -m unittest scripts.tests.test_m11_service_lifecycle -v", "estimated_seconds": 60, "platform": "any", "fixture_policy": "none"},
+      {"path": "scripts/tests/test_publish_core_crates.py", "owner": "release-engineering", "tier": "pr_static", "trigger_paths": ["scripts/**", "**/Cargo.toml", ".github/workflows/release.yml"], "command": "python -m unittest scripts.tests.test_publish_core_crates -v", "estimated_seconds": 10, "platform": "any", "fixture_policy": "temporary-only"},
+      {"path": "scripts/tests/test_publish_crate_retries.py", "owner": "release-engineering", "tier": "pr_static", "trigger_paths": ["scripts/**", ".github/workflows/release.yml"], "command": "python -m unittest scripts.tests.test_publish_crate_retries -v", "estimated_seconds": 10, "platform": "any", "fixture_policy": "none"},
+      {"path": "scripts/tests/test_publish_dockerhub_images.py", "owner": "release-engineering", "tier": "pr_static", "trigger_paths": ["scripts/**", "docker/**", ".github/workflows/release.yml"], "command": "python -m unittest scripts.tests.test_publish_dockerhub_images -v", "estimated_seconds": 10, "platform": "any", "fixture_policy": "temporary-only"},
+      {"path": "scripts/tests/test_publish_dockerhub_tags.py", "owner": "release-engineering", "tier": "pr_static", "trigger_paths": ["scripts/dockerhub_tags.py", "scripts/tests/test_publish_dockerhub_tags.py"], "command": "python -m unittest scripts.tests.test_publish_dockerhub_tags -v", "estimated_seconds": 10, "platform": "any", "fixture_policy": "none"},
+      {"path": "scripts/tests/test_publish_ghcr_images.py", "owner": "release-engineering", "tier": "pr_static", "trigger_paths": ["scripts/**", "docker/**", ".github/workflows/release.yml"], "command": "python -m unittest scripts.tests.test_publish_ghcr_images -v", "estimated_seconds": 10, "platform": "any", "fixture_policy": "temporary-only"},
       {"path": "scripts/tests/test_public_api_intent_guard.py", "owner": "architecture", "tier": "pr_static", "trigger_paths": ["scripts/**", "rocketmq-client/**", "rocketmq-runtime/**", "rocketmq-transport/**"], "command": "python -m unittest scripts.tests.test_public_api_intent_guard -v", "estimated_seconds": 60, "platform": "any", "fixture_policy": "repository-fixtures"},
       {"path": "scripts/tests/test_p3_production_release_state.py", "owner": "release-engineering", "tier": "phase_contract", "trigger_paths": ["scripts/**", "distribution/**"], "command": "python -m unittest scripts.tests.test_p3_production_release_state -v", "estimated_seconds": 60, "platform": "powershell", "fixture_policy": "temporary-only"},
       {"path": "scripts/tests/test_p3_release_rollback.py", "owner": "release-engineering", "tier": "phase_contract", "trigger_paths": ["scripts/**", "distribution/**"], "command": "python -m unittest scripts.tests.test_p3_release_rollback -v", "estimated_seconds": 60, "platform": "powershell", "fixture_policy": "temporary-only"},
