@@ -89,7 +89,7 @@ fn metadata_history_retirement_remains_bounded_over_many_actor_generations() {
                 .start_with_file_system(&parent, Arc::new(CompletedWrite))
                 .unwrap();
             let deadline = MetadataDeadline::after(Duration::from_secs(2));
-            let MetadataIoAdmissionOutcome::Accepted(receipt) = actor
+            let MetadataWriteSubmissionStatus::Accepted(receipt) = actor
                 .submit(
                     MetadataWriteRequest::new("resource", index, "metadata-churn.json", vec![1]),
                     deadline,

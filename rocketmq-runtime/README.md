@@ -409,7 +409,7 @@ allocations before admission, and caller-retained snapshot clones, are outside
 this actor-owned accounting.
 
 `submit` and `submit_next` accept immutable snapshots without waiting for
-durability. Match `MetadataIoAdmissionOutcome`: `Accepted` provides a receipt;
+durability. Match `MetadataWriteSubmissionStatus`: `Accepted` provides a receipt;
 `TargetConflict` returns the request when a resource already has pending work
 for a different target. Wait for persistence through the receipt's
 `wait_until`, or use `submit_durable` / `submit_next_durable` and match the

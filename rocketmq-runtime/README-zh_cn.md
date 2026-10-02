@@ -329,7 +329,7 @@ actor 的局部 pending 计数随后结算，因此可能短暂落后于共享�
 actor 所有权范围内的核算。
 
 `submit` 和 `submit_next` 接收不可变快照，但不等待持久化完成。
-调用方需要匹配 `MetadataIoAdmissionOutcome`：`Accepted` 提供回执；当同一资源已有
+调用方需要匹配 `MetadataWriteSubmissionStatus`：`Accepted` 提供回执；当同一资源已有
 写向其他目标的待处理工作时，`TargetConflict` 返回请求。通过回执的 `wait_until`
 等待持久化，或使用 `submit_durable` / `submit_next_durable`，
 并匹配持久化代次或目标冲突结果。

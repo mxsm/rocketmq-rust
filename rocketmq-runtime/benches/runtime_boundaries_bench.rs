@@ -23,10 +23,9 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use rocketmq_runtime::{
-    BlockingExecutor, BlockingLane, BlockingPoolPolicy, MetadataDeadline, MetadataFileSystem,
-    MetadataIoAdmissionOutcome, MetadataIoConfig, MetadataIoReceipt, MetadataWriteRequest, ProcessMemoryLimit,
-    RuntimeComponent, RuntimeConfig, RuntimeDiagnosticsInputs, RuntimeErrorKind, RuntimeOwner, RuntimeResult,
-    ShutdownDeadline,
+    BlockingExecutor, BlockingLane, BlockingPoolPolicy, MetadataDeadline, MetadataFileSystem, MetadataIoConfig,
+    MetadataIoReceipt, MetadataWriteRequest, MetadataWriteSubmissionStatus, ProcessMemoryLimit, RuntimeComponent,
+    RuntimeConfig, RuntimeDiagnosticsInputs, RuntimeErrorKind, RuntimeOwner, RuntimeResult, ShutdownDeadline,
 };
 use serde_json::{json, Value};
 
@@ -175,10 +174,10 @@ impl Drop for ReleaseOnDrop {
     }
 }
 
-fn accepted(outcome: MetadataIoAdmissionOutcome) -> MetadataIoReceipt {
+fn accepted(outcome: MetadataWriteSubmissionStatus) -> MetadataIoReceipt {
     match outcome {
-        MetadataIoAdmissionOutcome::Accepted(receipt) => receipt,
-        MetadataIoAdmissionOutcome::TargetConflict(_) => panic!("unique benchmark targets"),
+        MetadataWriteSubmissionStatus::Accepted(receipt) => receipt,
+        MetadataWriteSubmissionStatus::TargetConflict(_) => panic!("unique benchmark targets"),
     }
 }
 

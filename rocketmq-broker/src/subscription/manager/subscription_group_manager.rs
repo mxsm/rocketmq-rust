@@ -40,7 +40,7 @@ use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::file_utils;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
-use rocketmq_runtime::MetadataIoAdmissionOutcome;
+use rocketmq_runtime::MetadataWriteSubmissionStatus;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::StateMachineVersionView;
 use serde::Deserialize;
@@ -223,8 +223,8 @@ impl SubscriptionGroupManager {
             content.into_bytes(),
             MetadataDeadline::after(Duration::from_secs(5)),
         ) {
-            Ok(MetadataIoAdmissionOutcome::Accepted(_)) => {}
-            Ok(MetadataIoAdmissionOutcome::TargetConflict(_request)) => {
+            Ok(MetadataWriteSubmissionStatus::Accepted(_)) => {}
+            Ok(MetadataWriteSubmissionStatus::TargetConflict(_request)) => {
                 warn!(
                     operation,
                     "Metadata target conflict rejected subscription group snapshot"

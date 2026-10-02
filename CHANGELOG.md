@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **refactor(runtime):** Renamed `MetadataIoAdmissionOutcome` to `MetadataWriteSubmissionStatus` in the public API.
+
 ### Security
 
 - **fix(docker):** Use a digest-pinned Debian 13 runtime for Dashboard Web backend and the five SRE backends, resolving four CRITICAL Perl/zlib reports per image while preserving the release vulnerability gate ([#11033](https://github.com/mxsm/rocketmq-rust/issues/11033)).
