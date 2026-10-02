@@ -88,6 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **refactor(runtime):** Prefer `OperationDrainStatus` for bounded operation task-draining results while retaining `OperationWaitOutcome` as a source-compatible name ([#11066](https://github.com/mxsm/rocketmq-rust/issues/11066)).
+- **refactor(runtime):** Rename `MetadataIoCommitOutcome` to `MetadataWritePersistenceStatus` (breaking), exported as `rocketmq_runtime::MetadataWritePersistenceStatus`. External callers must update imports and type references; no compatibility alias is provided. Variants, persistence, and reconciliation behavior are unchanged ([#11088](https://github.com/mxsm/rocketmq-rust/issues/11088)).
 - **refactor(runtime):** Rename `PermitRebindOutcome` to `PermitBudgetTransferStatus` (breaking), exported as `rocketmq_runtime::PermitBudgetTransferStatus` and `rocketmq_runtime::resource_budget::PermitBudgetTransferStatus`. External callers must update imports and type references; no compatibility alias is provided. Variants and `try_rebind` behavior are unchanged ([#11067](https://github.com/mxsm/rocketmq-rust/issues/11067)).
 - **refactor(store-local):** Rename `MappedFileDestroyOutcome` to `MappedFileRemovalStatus` (breaking), exported as `rocketmq_store_local::mapped_file::MappedFileRemovalStatus`. External callers must update imports and type references; no compatibility alias is provided. Variants, `try_destroy` and retry behavior are unchanged ([#11068](https://github.com/mxsm/rocketmq-rust/issues/11068)).
 

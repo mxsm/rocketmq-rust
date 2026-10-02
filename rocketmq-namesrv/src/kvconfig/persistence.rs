@@ -38,9 +38,9 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_runtime::MetadataIoCommitObservation;
-use rocketmq_runtime::MetadataIoCommitOutcome;
 #[cfg(test)]
 use rocketmq_runtime::MetadataIoOperation;
+use rocketmq_runtime::MetadataWritePersistenceStatus;
 use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::RuntimeOperation;
 use rocketmq_runtime::RuntimeResult;
@@ -514,11 +514,11 @@ async fn process_batch(
             .await
         {
             Ok(MetadataIoCommitObservation::Settled {
-                outcome: MetadataIoCommitOutcome::Durable(_),
+                outcome: MetadataWritePersistenceStatus::Durable(_),
                 ..
             }) => {}
             Ok(MetadataIoCommitObservation::Settled {
-                outcome: MetadataIoCommitOutcome::FailedBeforeCommit(error),
+                outcome: MetadataWritePersistenceStatus::FailedBeforeCommit(error),
                 ..
             }) => {
                 metrics.record_kv_persist(persist_started.elapsed(), false, batch_size);
@@ -527,7 +527,7 @@ async fn process_batch(
                 return;
             }
             Ok(MetadataIoCommitObservation::Settled {
-                outcome: MetadataIoCommitOutcome::CommitOutcomeUnknown(error),
+                outcome: MetadataWritePersistenceStatus::CommitOutcomeUnknown(error),
                 ..
             }) => {
                 inner.reconciliation_required.store(true, Ordering::Release);
