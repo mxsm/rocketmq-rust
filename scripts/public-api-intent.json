@@ -3502,12 +3502,12 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use scheduled::ScheduledTaskRegistrationOutcome",
-          "identity": "rocketmq-runtime/src/lib.rs:pub use scheduled::ScheduledTaskRegistrationOutcome",
+          "declaration": "pub use scheduled::ScheduledTaskRegistrationStatus",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use scheduled::ScheduledTaskRegistrationStatus",
           "owner": "runtime",
           "path": "rocketmq-runtime/src/lib.rs",
-          "rationale": "source-free scheduled registration result",
-          "removal_condition": "retain while duplicate registration is a public outcome"
+          "rationale": "scheduled task registration status without operational errors",
+          "removal_condition": "retain while scheduled task registration status is public"
         },
         {
           "category": "stable",

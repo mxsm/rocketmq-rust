@@ -112,7 +112,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 - `RuntimeResult<T>` 使用 `RuntimeError` 表示运行故障，例如运行时构建、I/O、容量或超时错误。
   应按 `RuntimeError::kind()` 分支，而不是按操作标签推断：向正在关闭的所有者提交返回
   `RuntimeErrorKind::Closed`，向已毒化的任务组提交返回 `RuntimeErrorKind::Poisoned`。
-- `ScheduledTaskRegistrationOutcome::AlreadyPresent`、`BudgetRejection` 和元数据目标冲突
+- `ScheduledTaskRegistrationStatus::AlreadyPresent`、`BudgetRejection` 和元数据目标冲突
   等正常结果有各自的类型。
 
 `RuntimeOperation` 标识失败的操作。其具名变体是本 crate 自身执行的操作；基于运行时构建的
