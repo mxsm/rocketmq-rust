@@ -3133,11 +3133,11 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use metadata_target::{MetadataTargetIdentity, MetadataTargetRegistryStats, MetadataTargetRetirementOutcome}",
-          "identity": "rocketmq-runtime/src/lib.rs:pub use metadata_target::{MetadataTargetIdentity, MetadataTargetRegistryStats, MetadataTargetRetirementOutcome}",
+          "declaration": "pub use metadata_target::{MetadataTargetIdentity, MetadataTargetRegistryStats, MetadataTargetRetirementStatus}",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use metadata_target::{MetadataTargetIdentity, MetadataTargetRegistryStats, MetadataTargetRetirementStatus}",
           "owner": "runtime",
           "path": "rocketmq-runtime/src/lib.rs",
-          "rationale": "metadata target history identity, bounded registry occupancy, and explicit retirement outcomes",
+          "rationale": "metadata target history identity, bounded registry occupancy, and explicit retirement status",
           "removal_condition": "retain while the stable entry point remains supported"
         },
         {

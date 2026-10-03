@@ -43,6 +43,16 @@ and bounded label values.
 The public enum `MetadataIoAdmissionOutcome` has been renamed to `MetadataWriteSubmissionStatus`.
 Consumers must update their imports and type references. No compatibility alias is provided.
 
+### Metadata target registry status names
+
+Update `MetadataTargetRetirementOutcome` to
+`MetadataTargetRetirementStatus` and update internal references to
+`MetadataTargetRegistrationStatus` for the crate-private registration result.
+Only `MetadataTargetRetirementStatus` remains crate-root exported. The retirement
+variants, registration ownership, identity and history checks, reconciliation
+fences, and retained read-only receipts are unchanged. No old-name aliases or
+additional public registration API are provided.
+
 ### Request-header derive migration
 
 The historical V1 implementation of `rocketmq_macros::RequestHeaderCodec` and

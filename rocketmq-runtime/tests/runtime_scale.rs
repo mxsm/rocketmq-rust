@@ -101,7 +101,7 @@ fn metadata_history_retirement_remains_bounded_over_many_actor_generations() {
             assert!(!actor.shutdown_until(deadline).await.timed_out);
             assert_eq!(
                 actor.retire_target_for_new_identity("resource").unwrap(),
-                MetadataTargetRetirementOutcome::Retired
+                MetadataTargetRetirementStatus::Retired
             );
             assert_eq!(owner.resources().metadata_target_stats().retained_targets, 0);
             receipts.push((index, receipt));
