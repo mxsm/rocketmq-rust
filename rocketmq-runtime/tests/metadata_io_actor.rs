@@ -36,7 +36,7 @@ use rocketmq_runtime::MetadataIoConfig;
 use rocketmq_runtime::MetadataIoOperation;
 use rocketmq_runtime::MetadataIoPlan;
 use rocketmq_runtime::MetadataLimitSource;
-use rocketmq_runtime::MetadataTargetRetirementOutcome;
+use rocketmq_runtime::MetadataTargetRetirementStatus;
 use rocketmq_runtime::MetadataWritePersistenceStatus;
 use rocketmq_runtime::MetadataWriteRequest;
 use rocketmq_runtime::MetadataWriteSubmissionStatus;
@@ -287,7 +287,7 @@ fn small_target_capacity_supports_explicit_retirement_and_read_only_old_receipts
                 actor
                     .retire_target_for_new_identity(&format!("resource-{generation}"))
                     .unwrap(),
-                MetadataTargetRetirementOutcome::AdmissionOpen
+                MetadataTargetRetirementStatus::AdmissionOpen
             );
             let report = actor.shutdown_until(deadline).await;
             assert!(!report.timed_out);
@@ -299,7 +299,7 @@ fn small_target_capacity_supports_explicit_retirement_and_read_only_old_receipts
                 actor
                     .retire_target_for_new_identity(&format!("resource-{generation}"))
                     .unwrap(),
-                MetadataTargetRetirementOutcome::Retired
+                MetadataTargetRetirementStatus::Retired
             );
             assert_eq!(owner.resources().metadata_target_stats().retained_targets, 0);
             assert_eq!(std::fs::read(&target).unwrap(), generation.to_string().into_bytes());
@@ -331,7 +331,7 @@ async fn retirement_rejects_queued_work_and_actual_blocking_authority() {
     actor.stop_admission();
     assert_eq!(
         actor.retire_target_for_new_identity("held").unwrap(),
-        MetadataTargetRetirementOutcome::WorkInProgress
+        MetadataTargetRetirementStatus::WorkInProgress
     );
     file_system.gate.release();
     first.wait_until(deadline).await.unwrap();
@@ -339,7 +339,7 @@ async fn retirement_rejects_queued_work_and_actual_blocking_authority() {
     assert!(!actor.shutdown_until(deadline).await.timed_out);
     assert_eq!(
         actor.retire_target_for_new_identity("held").unwrap(),
-        MetadataTargetRetirementOutcome::Retired
+        MetadataTargetRetirementStatus::Retired
     );
     assert!(context.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
 }
@@ -375,7 +375,7 @@ fn retirement_churn_cannot_grow_an_open_actors_history_cache() {
         assert!(!replacement.shutdown_until(deadline).await.timed_out);
         assert_eq!(
             replacement.retire_target_for_new_identity("shared").unwrap(),
-            MetadataTargetRetirementOutcome::Retired
+            MetadataTargetRetirementStatus::Retired
         );
         assert_eq!(owner.resources().metadata_target_stats().retained_targets, 0);
         assert_eq!(
@@ -411,7 +411,7 @@ async fn retirement_keeps_unknown_outcome_fenced_and_old_actor_cannot_rebind_a_r
     assert!(!failed.shutdown_until(deadline).await.timed_out);
     assert_eq!(
         failed.retire_target_for_new_identity("fenced").unwrap(),
-        MetadataTargetRetirementOutcome::ReconciliationRequired
+        MetadataTargetRetirementStatus::ReconciliationRequired
     );
     assert_eq!(
         context
@@ -447,7 +447,7 @@ async fn retirement_keeps_unknown_outcome_fenced_and_old_actor_cannot_rebind_a_r
     assert!(!replacement.shutdown_until(deadline).await.timed_out);
     assert_eq!(
         replacement.retire_target_for_new_identity("shared").unwrap(),
-        MetadataTargetRetirementOutcome::Retired
+        MetadataTargetRetirementStatus::Retired
     );
     assert!(old.submit(request("shared", 3, b"stale"), deadline).is_err());
     assert!(context.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
@@ -887,7 +887,7 @@ fn local_filesystem_atomically_replaces_target_and_cleans_temporary_file() {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum FirstWriteOutcome {
+enum FirstWriteBehavior {
     Success,
     Failure,
     Panic,
@@ -896,7 +896,7 @@ enum FirstWriteOutcome {
 #[derive(Debug)]
 struct LateCompletionFileSystem {
     gate: Arc<Gate>,
-    outcome: FirstWriteOutcome,
+    outcome: FirstWriteBehavior,
     writes: Mutex<Vec<Vec<u8>>>,
 }
 
@@ -905,14 +905,14 @@ impl MetadataFileSystem for LateCompletionFileSystem {
         if bytes == b"one" {
             self.gate.wait();
             match self.outcome {
-                FirstWriteOutcome::Success => {}
-                FirstWriteOutcome::Failure => {
+                FirstWriteBehavior::Success => {}
+                FirstWriteBehavior::Failure => {
                     return Err(RuntimeError::io(
                         MetadataIoOperation::WriteTemporary.runtime_operation(),
                         io::Error::other("late write failure"),
                     ));
                 }
-                FirstWriteOutcome::Panic => panic!("late write panic"),
+                FirstWriteBehavior::Panic => panic!("late write panic"),
             }
         }
         self.writes.lock().unwrap().push(bytes.to_vec());
@@ -928,7 +928,7 @@ impl Drop for ReleaseGateOnDrop {
     }
 }
 
-async fn verify_late_write_order(outcome: FirstWriteOutcome) {
+async fn verify_late_write_order(outcome: FirstWriteBehavior) {
     let file_system = Arc::new(LateCompletionFileSystem {
         gate: Arc::new(Gate::default()),
         outcome,
@@ -986,12 +986,12 @@ async fn verify_late_write_order(outcome: FirstWriteOutcome) {
 
     file_system.gate.release();
     match outcome {
-        FirstWriteOutcome::Success => assert_eq!(late_result.await.unwrap(), 1.into()),
-        FirstWriteOutcome::Failure => assert_eq!(
+        FirstWriteBehavior::Success => assert_eq!(late_result.await.unwrap(), 1.into()),
+        FirstWriteBehavior::Failure => assert_eq!(
             late_result.await.unwrap_err().operation(),
             MetadataIoOperation::WriteTemporary.runtime_operation()
         ),
-        FirstWriteOutcome::Panic => assert_eq!(
+        FirstWriteBehavior::Panic => assert_eq!(
             late_result.await.unwrap_err().operation(),
             rocketmq_runtime::RuntimeOperation::RunBlockingTask
         ),
@@ -1003,25 +1003,25 @@ async fn verify_late_write_order(outcome: FirstWriteOutcome) {
     assert_eq!(drained.pending_bytes, 0);
     assert_eq!(actor.snapshot().resources[0].durable_generation, Some(2.into()));
     let expected = match outcome {
-        FirstWriteOutcome::Success => vec![b"one".to_vec(), b"two".to_vec()],
-        FirstWriteOutcome::Failure | FirstWriteOutcome::Panic => vec![b"two".to_vec()],
+        FirstWriteBehavior::Success => vec![b"one".to_vec(), b"two".to_vec()],
+        FirstWriteBehavior::Failure | FirstWriteBehavior::Panic => vec![b"two".to_vec()],
     };
     assert_eq!(*file_system.writes.lock().unwrap(), expected);
 }
 
 #[tokio::test(start_paused = true)]
 async fn late_success_preserves_write_order_after_observer_and_lane_deadlines() {
-    verify_late_write_order(FirstWriteOutcome::Success).await;
+    verify_late_write_order(FirstWriteBehavior::Success).await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn late_failure_preserves_write_order_after_observer_and_lane_deadlines() {
-    verify_late_write_order(FirstWriteOutcome::Failure).await;
+    verify_late_write_order(FirstWriteBehavior::Failure).await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn late_panic_preserves_write_order_after_observer_and_lane_deadlines() {
-    verify_late_write_order(FirstWriteOutcome::Panic).await;
+    verify_late_write_order(FirstWriteBehavior::Panic).await;
 }
 
 /// Waits until one generation occupies the actor's single in-flight slot.
@@ -1103,7 +1103,7 @@ async fn observation_timeout_reports_the_unobserved_generation_and_late_success_
 async fn observation_timeout_does_not_publish_a_generation_for_a_late_failure() {
     let file_system = Arc::new(LateCompletionFileSystem {
         gate: Arc::new(Gate::default()),
-        outcome: FirstWriteOutcome::Failure,
+        outcome: FirstWriteBehavior::Failure,
         writes: Mutex::new(Vec::new()),
     });
     let _release_on_failure = ReleaseGateOnDrop(file_system.gate.clone());

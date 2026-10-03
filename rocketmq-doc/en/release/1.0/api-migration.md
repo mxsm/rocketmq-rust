@@ -47,6 +47,15 @@ Consumers must update their imports and type references. No compatibility alias 
 
 `OperationWaitOutcome` has been removed. Use `OperationDrainStatus` in imports
 and type references. Its variants and task-draining behavior are unchanged.
+### Metadata target registry status names
+
+Update `MetadataTargetRetirementOutcome` to
+`MetadataTargetRetirementStatus` and update internal references to
+`MetadataTargetRegistrationStatus` for the crate-private registration result.
+Only `MetadataTargetRetirementStatus` remains crate-root exported. The retirement
+variants, registration ownership, identity and history checks, reconciliation
+fences, and retained read-only receipts are unchanged. No old-name aliases or
+additional public registration API are provided.
 
 ### Request-header derive migration
 
