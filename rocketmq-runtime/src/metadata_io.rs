@@ -50,9 +50,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::metadata_target::MetadataTargetIdentity;
 use crate::metadata_target::MetadataTargetRegistration;
-use crate::metadata_target::MetadataTargetRegistrationOutcome;
+use crate::metadata_target::MetadataTargetRegistrationStatus;
 use crate::metadata_target::MetadataTargetRegistry;
-use crate::metadata_target::MetadataTargetRetirementOutcome;
+use crate::metadata_target::MetadataTargetRetirementStatus;
 use crate::resource_budget::BudgetCapacity;
 use crate::resource_budget::BudgetLimit;
 use crate::resource_budget::FullPolicy;
@@ -1481,22 +1481,22 @@ impl MetadataIoActor {
     /// # Errors
     ///
     /// Returns a typed path normalization error without modifying the history.
-    pub fn retire_target_for_new_identity(&self, resource: &str) -> RuntimeResult<MetadataTargetRetirementOutcome> {
+    pub fn retire_target_for_new_identity(&self, resource: &str) -> RuntimeResult<MetadataTargetRetirementStatus> {
         let mut state = self.inner.state.lock();
         if state.accepting {
-            return Ok(MetadataTargetRetirementOutcome::AdmissionOpen);
+            return Ok(MetadataTargetRetirementStatus::AdmissionOpen);
         }
         if !state.worker_finished {
-            return Ok(MetadataTargetRetirementOutcome::WorkInProgress);
+            return Ok(MetadataTargetRetirementStatus::WorkInProgress);
         }
         let Some(resource_state) = state.resources.get_mut(resource) else {
-            return Ok(MetadataTargetRetirementOutcome::NotFound);
+            return Ok(MetadataTargetRetirementStatus::NotFound);
         };
         if resource_state.in_flight.is_some() || resource_state.queued.is_some() || !resource_state.waiters.is_empty() {
-            return Ok(MetadataTargetRetirementOutcome::WorkInProgress);
+            return Ok(MetadataTargetRetirementStatus::WorkInProgress);
         }
         let (Some(target), Some(identity)) = (&resource_state.target, &resource_state.identity) else {
-            return Ok(MetadataTargetRetirementOutcome::NotFound);
+            return Ok(MetadataTargetRetirementStatus::NotFound);
         };
         // A cached, idle registration has no pending work after coordinator completion.
         // Real blocking closures retain their own clone and still prevent retirement.
@@ -1505,7 +1505,7 @@ impl MetadataIoActor {
             .inner
             .targets
             .retire(target, resource, identity, resource_state.durable_generation)?;
-        if outcome == MetadataTargetRetirementOutcome::Retired {
+        if outcome == MetadataTargetRetirementStatus::Retired {
             state.resources.remove(resource);
         }
         Ok(outcome)
@@ -1588,9 +1588,9 @@ fn ensure_target_registration(
         .filter(|_| !target_changed)
         .and_then(|state| state.identity.as_ref());
     let registration = match registry.register_with_identity(request.target.as_ref(), Arc::clone(resource), expected)? {
-        MetadataTargetRegistrationOutcome::Registered(registration) => registration,
-        MetadataTargetRegistrationOutcome::Conflict => return Ok(None),
-        MetadataTargetRegistrationOutcome::ReconciliationRequired => {
+        MetadataTargetRegistrationStatus::Registered(registration) => registration,
+        MetadataTargetRegistrationStatus::Conflict => return Ok(None),
+        MetadataTargetRegistrationStatus::ReconciliationRequired => {
             return Err(RuntimeError::context_unavailable(
                 crate::RuntimeOperation::MetadataResourceTarget,
             ));

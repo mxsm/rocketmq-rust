@@ -116,7 +116,7 @@ pub use metadata_io::MetadataLimitSource;
 pub use metadata_io::MetadataWritePersistenceStatus;
 pub use metadata_io::MetadataWriteRequest;
 pub use metadata_io::MetadataWriteSubmissionStatus;
-pub use metadata_target::{MetadataTargetIdentity, MetadataTargetRegistryStats, MetadataTargetRetirementOutcome};
+pub use metadata_target::{MetadataTargetIdentity, MetadataTargetRegistryStats, MetadataTargetRetirementStatus};
 pub use public_api::*;
 pub use resource_budget::BudgetCapacity;
 pub use resource_budget::BudgetClass;

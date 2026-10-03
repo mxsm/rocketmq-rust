@@ -36,7 +36,7 @@ use rocketmq_runtime::MetadataIoConfig;
 use rocketmq_runtime::MetadataIoOperation;
 use rocketmq_runtime::MetadataIoPlan;
 use rocketmq_runtime::MetadataLimitSource;
-use rocketmq_runtime::MetadataTargetRetirementOutcome;
+use rocketmq_runtime::MetadataTargetRetirementStatus;
 use rocketmq_runtime::MetadataWritePersistenceStatus;
 use rocketmq_runtime::MetadataWriteRequest;
 use rocketmq_runtime::MetadataWriteSubmissionStatus;
@@ -287,7 +287,7 @@ fn small_target_capacity_supports_explicit_retirement_and_read_only_old_receipts
                 actor
                     .retire_target_for_new_identity(&format!("resource-{generation}"))
                     .unwrap(),
-                MetadataTargetRetirementOutcome::AdmissionOpen
+                MetadataTargetRetirementStatus::AdmissionOpen
             );
             let report = actor.shutdown_until(deadline).await;
             assert!(!report.timed_out);
@@ -299,7 +299,7 @@ fn small_target_capacity_supports_explicit_retirement_and_read_only_old_receipts
                 actor
                     .retire_target_for_new_identity(&format!("resource-{generation}"))
                     .unwrap(),
-                MetadataTargetRetirementOutcome::Retired
+                MetadataTargetRetirementStatus::Retired
             );
             assert_eq!(owner.resources().metadata_target_stats().retained_targets, 0);
             assert_eq!(std::fs::read(&target).unwrap(), generation.to_string().into_bytes());
@@ -331,7 +331,7 @@ async fn retirement_rejects_queued_work_and_actual_blocking_authority() {
     actor.stop_admission();
     assert_eq!(
         actor.retire_target_for_new_identity("held").unwrap(),
-        MetadataTargetRetirementOutcome::WorkInProgress
+        MetadataTargetRetirementStatus::WorkInProgress
     );
     file_system.gate.release();
     first.wait_until(deadline).await.unwrap();
@@ -339,7 +339,7 @@ async fn retirement_rejects_queued_work_and_actual_blocking_authority() {
     assert!(!actor.shutdown_until(deadline).await.timed_out);
     assert_eq!(
         actor.retire_target_for_new_identity("held").unwrap(),
-        MetadataTargetRetirementOutcome::Retired
+        MetadataTargetRetirementStatus::Retired
     );
     assert!(context.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
 }
@@ -375,7 +375,7 @@ fn retirement_churn_cannot_grow_an_open_actors_history_cache() {
         assert!(!replacement.shutdown_until(deadline).await.timed_out);
         assert_eq!(
             replacement.retire_target_for_new_identity("shared").unwrap(),
-            MetadataTargetRetirementOutcome::Retired
+            MetadataTargetRetirementStatus::Retired
         );
         assert_eq!(owner.resources().metadata_target_stats().retained_targets, 0);
         assert_eq!(
@@ -411,7 +411,7 @@ async fn retirement_keeps_unknown_outcome_fenced_and_old_actor_cannot_rebind_a_r
     assert!(!failed.shutdown_until(deadline).await.timed_out);
     assert_eq!(
         failed.retire_target_for_new_identity("fenced").unwrap(),
-        MetadataTargetRetirementOutcome::ReconciliationRequired
+        MetadataTargetRetirementStatus::ReconciliationRequired
     );
     assert_eq!(
         context
@@ -447,7 +447,7 @@ async fn retirement_keeps_unknown_outcome_fenced_and_old_actor_cannot_rebind_a_r
     assert!(!replacement.shutdown_until(deadline).await.timed_out);
     assert_eq!(
         replacement.retire_target_for_new_identity("shared").unwrap(),
-        MetadataTargetRetirementOutcome::Retired
+        MetadataTargetRetirementStatus::Retired
     );
     assert!(old.submit(request("shared", 3, b"stale"), deadline).is_err());
     assert!(context.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
