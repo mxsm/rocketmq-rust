@@ -448,7 +448,6 @@ fn try_read_custom_header_ref_reports_missing_header() {
     let error = command.try_read_custom_header_ref::<TestCustomHeader>().unwrap_err();
 
     assert_eq!(error.descriptor(), &rocketmq_error::CORE_SERIALIZATION_FAILED);
-    assert!(command.read_custom_header_ref_unchecked::<TestCustomHeader>().is_err());
 }
 
 #[test]
@@ -462,7 +461,6 @@ fn try_read_custom_header_ref_reports_type_mismatch() {
     let error = command.try_read_custom_header_ref::<OtherCustomHeader>().unwrap_err();
 
     assert_eq!(error.descriptor(), &rocketmq_error::CORE_SERIALIZATION_FAILED);
-    assert!(command.read_custom_header_ref_unchecked::<OtherCustomHeader>().is_err());
 }
 
 #[test]
@@ -1116,11 +1114,7 @@ fn fast_rocketmq_encode_frame_decodes_with_body() {
 }
 
 #[test]
-#[allow(
-    deprecated,
-    reason = "verifies legacy header read compatibility facades during their deprecation window"
-)]
-fn legacy_header_read_facades_match_typed_results() {
+fn header_read_facades_match_typed_results() {
     let command = RemotingCommand::create_request_command(1, TestCustomHeader { value: 7 });
 
     assert_eq!(
@@ -1129,28 +1123,14 @@ fn legacy_header_read_facades_match_typed_results() {
             .map(|header| header.value),
         Some(7)
     );
-    assert_eq!(
-        command
-            .read_custom_header_ref_unchecked::<TestCustomHeader>()
-            .unwrap()
-            .value,
-        7
-    );
-
     let missing = RemotingCommand::create_remoting_command(1);
     assert!(missing.read_custom_header_ref::<TestCustomHeader>().is_none());
-    assert!(missing.read_custom_header_ref_unchecked::<TestCustomHeader>().is_err());
 
     assert!(command.read_custom_header_ref::<OtherCustomHeader>().is_none());
-    assert!(command.read_custom_header_ref_unchecked::<OtherCustomHeader>().is_err());
 }
 
 #[test]
-#[allow(
-    deprecated,
-    reason = "verifies legacy mutable compatibility facades preserve typed invalidation and shared-header behavior"
-)]
-fn legacy_mutable_header_facades_preserve_typed_invalidation_and_shared_errors() {
+fn mutable_header_facade_preserves_typed_invalidation() {
     let mut command = RemotingCommand::create_request_command(1, TestCustomHeader { value: 7 });
     command.try_make_custom_header_to_net().unwrap();
 
@@ -1168,33 +1148,8 @@ fn legacy_mutable_header_facades_preserve_typed_invalidation_and_shared_errors()
         Some("9")
     );
 
-    let mut from_ref = RemotingCommand::create_request_command(1, TestCustomHeader { value: 3 });
-    from_ref
-        .read_custom_header_mut_from_ref::<TestCustomHeader>()
-        .expect("legacy shared-reference compatibility name should mutate unique headers")
-        .value = 4;
-    assert_eq!(
-        from_ref.try_read_custom_header_ref::<TestCustomHeader>().unwrap().value,
-        4
-    );
-
-    let mut unchecked = RemotingCommand::create_request_command(1, TestCustomHeader { value: 5 });
-    unchecked
-        .read_custom_header_mut_unchecked::<TestCustomHeader>()
-        .unwrap()
-        .value = 6;
-    assert_eq!(
-        unchecked
-            .try_read_custom_header_ref::<TestCustomHeader>()
-            .unwrap()
-            .value,
-        6
-    );
-
     let _shared = command.clone();
     assert!(command.read_custom_header_mut::<TestCustomHeader>().is_none());
-    assert!(command.read_custom_header_mut_from_ref::<TestCustomHeader>().is_none());
-    assert!(command.read_custom_header_mut_unchecked::<TestCustomHeader>().is_err());
 }
 
 #[test]
@@ -1268,31 +1223,4 @@ fn legacy_header_and_fast_facades_map_typed_failures_without_mutation() {
         legacy_fast.fast_header_encode(&mut destination);
         assert_eq!(destination.as_ref(), b"prefix");
     }
-}
-
-#[test]
-#[allow(
-    deprecated,
-    reason = "verifies ambiguous response compatibility factories retain their documented SUCCESS behavior"
-)]
-fn legacy_response_factories_preserve_success_semantics() {
-    let response = RemotingCommand::create_response_command();
-    assert_eq!(
-        response.code(),
-        crate::code::response_code::RemotingSysResponseCode::Success as i32
-    );
-    assert!(response.is_response_type());
-
-    let response_with_header = RemotingCommand::create_response_command_with_header(TestCustomHeader { value: 7 });
-    assert_eq!(
-        response_with_header.code(),
-        crate::code::response_code::RemotingSysResponseCode::Success as i32
-    );
-    assert_eq!(
-        response_with_header
-            .try_read_custom_header_ref::<TestCustomHeader>()
-            .unwrap()
-            .value,
-        7
-    );
 }
