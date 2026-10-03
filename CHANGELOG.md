@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(dashboard):** Consolidate Web backend SQL migrations into one initial file per database while preserving existing migration versions and data; start future migration filenames at `0002_*.sql` ([#11113](https://github.com/mxsm/rocketmq-rust/issues/11113)).
 - **refactor(runtime):** Renamed `MetadataIoAdmissionOutcome` to `MetadataWriteSubmissionStatus` in the public API.
 
 ### Security
