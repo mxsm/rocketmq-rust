@@ -27,7 +27,7 @@ async fn graceful_completion_closes_admission_and_confirms_owner_settlement() {
         .spawn_operation(&operation, "ready", async {})
         .unwrap();
     let deadline = ShutdownDeadline::after(Duration::from_secs(5));
-    let outcome: rocketmq_runtime::OperationWaitOutcome = operation
+    let outcome: OperationDrainStatus = operation
         .wait_with_policy(service.task_group(), OperationWaitPolicy::new(deadline, deadline))
         .await
         .unwrap();
