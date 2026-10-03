@@ -43,6 +43,13 @@ and bounded label values.
 The public enum `MetadataIoAdmissionOutcome` has been renamed to `MetadataWriteSubmissionStatus`.
 Consumers must update their imports and type references. No compatibility alias is provided.
 
+### Metadata write status names
+
+Update `MetadataIoDurabilityOutcome` to `MetadataWriteDurabilityStatus` and
+`MetadataIoCommitAdmissionOutcome` to `MetadataWriteCompletionStatus`.
+Durability, completion classifications, conflict handling, and reconciliation
+behavior are unchanged. No compatibility aliases are provided.
+
 ### Request-header derive migration
 
 The historical V1 implementation of `rocketmq_macros::RequestHeaderCodec` and
