@@ -140,6 +140,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **namesrv:** Remove the unused `RouteManagerConfig` compatibility DTO; use `NamesrvConfig` for runtime configuration.
 - **broker:** Remove the no-op `BrokerOuterAPI::refresh_metadata` method and its periodic task (breaking); remove calls to this method.
+- **protocol:** Remove deprecated `RemotingCommand` response and custom-header compatibility aliases; use the explicit and fallible APIs instead.
 - **model:** Remove deprecated `SerdeJsonUtils::decode`; use `from_json_slice` or `from_json_bytes` instead.
 - **client:** Remove the no-op `AsyncTraceDispatcher::{register_shutdown_hook, register_shut_down_hook, remove_shutdown_hook}` and `DefaultMQProducerImpl::semaphore_processor` methods; remove calls to these methods.
 - **model:** Remove the ten deprecated `Message` constructors and `with_details_body`; use `Message::builder()` instead.
