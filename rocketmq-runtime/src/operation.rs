@@ -671,14 +671,14 @@ mod tests {
         assert_eq!(owner.task_count(), 0);
     }
 
-    struct OutcomeFuture {
+    struct OperationTaskExitTestFuture {
         dropped: Arc<AtomicBool>,
         ready: bool,
         panic_poll: bool,
         panic_drop: bool,
     }
 
-    impl Future for OutcomeFuture {
+    impl Future for OperationTaskExitTestFuture {
         type Output = ();
         fn poll(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<()> {
             assert!(!self.panic_poll, "operation poll panic");
@@ -690,7 +690,7 @@ mod tests {
         }
     }
 
-    impl Drop for OutcomeFuture {
+    impl Drop for OperationTaskExitTestFuture {
         fn drop(&mut self) {
             self.dropped.store(true, Ordering::Release);
             assert!(!self.panic_drop, "operation destructor panic");
@@ -698,12 +698,12 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct RecordingOutcomeObserver {
+    struct RecordingTaskExitObserver {
         dropped: Arc<AtomicBool>,
         events: Mutex<Vec<OperationTaskExitReason>>,
     }
 
-    impl OperationTaskExitObserver for RecordingOutcomeObserver {
+    impl OperationTaskExitObserver for RecordingTaskExitObserver {
         fn on_outcome(&self, _kind: TaskKind, outcome: OperationTaskExitReason) {
             assert!(
                 self.dropped.load(Ordering::Acquire),
@@ -724,7 +724,7 @@ mod tests {
                 OperationContext::without_deadline(TaskKind::Worker)
             };
             let dropped = Arc::new(AtomicBool::new(false));
-            let observer = Arc::new(RecordingOutcomeObserver {
+            let observer = Arc::new(RecordingTaskExitObserver {
                 dropped: dropped.clone(),
                 events: Mutex::new(Vec::new()),
             });
@@ -734,7 +734,7 @@ mod tests {
                 .spawn_operation(
                     &operation,
                     "selected-outcome",
-                    OutcomeFuture {
+                    OperationTaskExitTestFuture {
                         dropped,
                         ready: expected == OperationTaskExitReason::Completed,
                         panic_poll: expected == OperationTaskExitReason::Panicked,
@@ -770,7 +770,7 @@ mod tests {
         let owner = runtime.service_context("operation-owner");
         let operation = OperationContext::without_deadline(TaskKind::Worker);
         let dropped = Arc::new(AtomicBool::new(false));
-        let observer = Arc::new(RecordingOutcomeObserver {
+        let observer = Arc::new(RecordingTaskExitObserver {
             dropped: dropped.clone(),
             events: Mutex::new(Vec::new()),
         });
@@ -780,7 +780,7 @@ mod tests {
             .spawn_operation(
                 &operation,
                 "destructor-panic",
-                OutcomeFuture {
+                OperationTaskExitTestFuture {
                     dropped,
                     ready: true,
                     panic_poll: false,
