@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(fuzz):** Align the OpenRaft macro pin and standalone lockfile with the controller's `0.10.0-alpha.36` requirement so locked builds resolve all four fuzz targets ([#11115](https://github.com/mxsm/rocketmq-rust/issues/11115)).
 - **fix(ci):** Register five publication test modules and synchronize architecture evidence counts; align fault-matrix verifier contracts with supported in-toto Statement v0.1 and v1 formats while detecting unsupported versions and bypassed validation ([#11083](https://github.com/mxsm/rocketmq-rust/issues/11083)).
 - **fix(tieredstore):** Wait for a completed cleanup run within a bounded deadline before sampling lifecycle probe health, avoiding false failures during metadata persistence or between periodic runs ([#11081](https://github.com/mxsm/rocketmq-rust/issues/11081)).
 - **fix(release):** Include `rocketmq-dashboard-common` alongside the 27 core crates in workspace publication, using trusted release tooling with immutable tagged package sources and source-verified resumption ([#11043](https://github.com/mxsm/rocketmq-rust/issues/11043)).
