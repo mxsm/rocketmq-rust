@@ -696,11 +696,13 @@ impl ScheduledTaskMetrics {
 struct ScheduledRunGuard {
     metrics: Arc<ScheduledTaskMetrics>,
     started_at: Option<Instant>,
-    outcome: ScheduledRunOutcome,
+    outcome: ScheduledRunExitReason,
 }
 
+// Classifies how a reserved scheduled run settled: normal completion, timeout,
+// panic, cancellation, or rejection before the run's future was first polled.
 #[derive(Clone, Copy)]
-enum ScheduledRunOutcome {
+enum ScheduledRunExitReason {
     Completed,
     TimedOut,
     Panicked,
@@ -713,20 +715,20 @@ impl ScheduledRunGuard {
         Self {
             metrics,
             started_at: None,
-            outcome: ScheduledRunOutcome::RejectedBeforeStart,
+            outcome: ScheduledRunExitReason::RejectedBeforeStart,
         }
     }
 
     fn start(&mut self) {
         self.started_at = Some(Instant::now());
-        self.outcome = ScheduledRunOutcome::Cancelled;
+        self.outcome = ScheduledRunExitReason::Cancelled;
     }
 
     fn finish(mut self, timed_out: bool) {
         self.outcome = if timed_out {
-            ScheduledRunOutcome::TimedOut
+            ScheduledRunExitReason::TimedOut
         } else {
-            ScheduledRunOutcome::Completed
+            ScheduledRunExitReason::Completed
         };
     }
 }
@@ -739,18 +741,18 @@ impl Drop for ScheduledRunGuard {
             self.metrics.max_elapsed_ms.fetch_max(elapsed_ms, Ordering::Relaxed);
         }
         let outcome = if std::thread::panicking() {
-            ScheduledRunOutcome::Panicked
+            ScheduledRunExitReason::Panicked
         } else {
             self.outcome
         };
         match outcome {
-            ScheduledRunOutcome::Completed => {
+            ScheduledRunExitReason::Completed => {
                 self.metrics.runs.fetch_add(1, Ordering::Relaxed);
             }
-            ScheduledRunOutcome::TimedOut
-            | ScheduledRunOutcome::Panicked
-            | ScheduledRunOutcome::Cancelled
-            | ScheduledRunOutcome::RejectedBeforeStart => {
+            ScheduledRunExitReason::TimedOut
+            | ScheduledRunExitReason::Panicked
+            | ScheduledRunExitReason::Cancelled
+            | ScheduledRunExitReason::RejectedBeforeStart => {
                 self.metrics.failures.fetch_add(1, Ordering::Relaxed);
             }
         }
