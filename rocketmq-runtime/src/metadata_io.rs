@@ -677,9 +677,9 @@ pub enum MetadataWriteSubmissionStatus {
     TargetConflict(MetadataWriteRequest),
 }
 
-/// The normal durable-completion result for one metadata write request.
+/// Reports durable completion or a target conflict for a metadata write.
 #[derive(Debug)]
-pub enum MetadataIoDurabilityOutcome {
+pub enum MetadataWriteDurabilityStatus {
     /// The accepted snapshot, or a coalesced newer snapshot, became durable.
     Durable(MetadataGeneration),
     /// The request was not admitted because its resource has a pending
@@ -700,9 +700,9 @@ pub enum MetadataWritePersistenceStatus {
     CommitOutcomeUnknown(RuntimeError),
 }
 
-/// Result of waiting for a committed metadata snapshot.
+/// Reports the persistence conclusion for an accepted write or a target conflict.
 #[derive(Debug)]
-pub enum MetadataIoCommitAdmissionOutcome {
+pub enum MetadataWriteCompletionStatus {
     /// The accepted snapshot reached a terminal persistence conclusion.
     Completed(MetadataWritePersistenceStatus),
     /// The request was not admitted because the resource or target has a
@@ -1261,7 +1261,7 @@ impl MetadataIoActor {
     /// Accepts a snapshot and waits for durable completion using the same
     /// absolute deadline.
     ///
-    /// Returns [`MetadataIoDurabilityOutcome::TargetConflict`] without
+    /// Returns [`MetadataWriteDurabilityStatus::TargetConflict`] without
     /// starting I/O when a pending request owns a different target path.
     ///
     /// # Errors
@@ -1271,14 +1271,14 @@ impl MetadataIoActor {
         &self,
         request: MetadataWriteRequest,
         deadline: MetadataDeadline,
-    ) -> RuntimeResult<MetadataIoDurabilityOutcome> {
+    ) -> RuntimeResult<MetadataWriteDurabilityStatus> {
         match self.submit(request, deadline)? {
             MetadataWriteSubmissionStatus::Accepted(receipt) => receipt
                 .wait_until(deadline)
                 .await
-                .map(MetadataIoDurabilityOutcome::Durable),
+                .map(MetadataWriteDurabilityStatus::Durable),
             MetadataWriteSubmissionStatus::TargetConflict(request) => {
-                Ok(MetadataIoDurabilityOutcome::TargetConflict(request))
+                Ok(MetadataWriteDurabilityStatus::TargetConflict(request))
             }
         }
     }
@@ -1291,14 +1291,14 @@ impl MetadataIoActor {
         &self,
         request: MetadataWriteRequest,
         deadline: MetadataDeadline,
-    ) -> RuntimeResult<MetadataIoCommitAdmissionOutcome> {
+    ) -> RuntimeResult<MetadataWriteCompletionStatus> {
         match self.submit(request, deadline)? {
             MetadataWriteSubmissionStatus::Accepted(receipt) => receipt
                 .wait_until_outcome(deadline)
                 .await
-                .map(MetadataIoCommitAdmissionOutcome::Completed),
+                .map(MetadataWriteCompletionStatus::Completed),
             MetadataWriteSubmissionStatus::TargetConflict(request) => {
-                Ok(MetadataIoCommitAdmissionOutcome::TargetConflict(request))
+                Ok(MetadataWriteCompletionStatus::TargetConflict(request))
             }
         }
     }
@@ -1316,14 +1316,14 @@ impl MetadataIoActor {
         target: impl Into<PathBuf>,
         bytes: impl Into<Vec<u8>>,
         deadline: MetadataDeadline,
-    ) -> RuntimeResult<MetadataIoDurabilityOutcome> {
+    ) -> RuntimeResult<MetadataWriteDurabilityStatus> {
         match self.submit_next(resource, target, bytes, deadline)? {
             MetadataWriteSubmissionStatus::Accepted(receipt) => receipt
                 .wait_until(deadline)
                 .await
-                .map(MetadataIoDurabilityOutcome::Durable),
+                .map(MetadataWriteDurabilityStatus::Durable),
             MetadataWriteSubmissionStatus::TargetConflict(request) => {
-                Ok(MetadataIoDurabilityOutcome::TargetConflict(request))
+                Ok(MetadataWriteDurabilityStatus::TargetConflict(request))
             }
         }
     }
@@ -1336,14 +1336,14 @@ impl MetadataIoActor {
         target: impl Into<PathBuf>,
         bytes: impl Into<Vec<u8>>,
         deadline: MetadataDeadline,
-    ) -> RuntimeResult<MetadataIoCommitAdmissionOutcome> {
+    ) -> RuntimeResult<MetadataWriteCompletionStatus> {
         match self.submit_next(resource, target, bytes, deadline)? {
             MetadataWriteSubmissionStatus::Accepted(receipt) => receipt
                 .wait_until_outcome(deadline)
                 .await
-                .map(MetadataIoCommitAdmissionOutcome::Completed),
+                .map(MetadataWriteCompletionStatus::Completed),
             MetadataWriteSubmissionStatus::TargetConflict(request) => {
-                Ok(MetadataIoCommitAdmissionOutcome::TargetConflict(request))
+                Ok(MetadataWriteCompletionStatus::TargetConflict(request))
             }
         }
     }

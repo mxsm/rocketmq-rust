@@ -31,12 +31,12 @@ use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataFileSystem;
 use rocketmq_runtime::MetadataGeneration;
 use rocketmq_runtime::MetadataIoActor;
-use rocketmq_runtime::MetadataIoCommitAdmissionOutcome;
 use rocketmq_runtime::MetadataIoConfig;
 use rocketmq_runtime::MetadataIoOperation;
 use rocketmq_runtime::MetadataIoPlan;
 use rocketmq_runtime::MetadataLimitSource;
 use rocketmq_runtime::MetadataTargetRetirementOutcome;
+use rocketmq_runtime::MetadataWriteCompletionStatus;
 use rocketmq_runtime::MetadataWritePersistenceStatus;
 use rocketmq_runtime::MetadataWriteRequest;
 use rocketmq_runtime::MetadataWriteSubmissionStatus;
@@ -811,7 +811,7 @@ async fn cancelled_actor_retains_target_until_the_real_closure_exits() {
         .await
         .unwrap();
     match newer {
-        MetadataIoCommitAdmissionOutcome::Completed(MetadataWritePersistenceStatus::Durable(generation)) => {
+        MetadataWriteCompletionStatus::Completed(MetadataWritePersistenceStatus::Durable(generation)) => {
             assert_eq!(generation, MetadataGeneration::new(2));
         }
         outcome => panic!("replacement write must become durable: {outcome:?}"),
@@ -849,7 +849,7 @@ async fn commit_outcome_distinguishes_unknown_durability() {
         .unwrap();
     assert!(matches!(
         unknown,
-        MetadataIoCommitAdmissionOutcome::Completed(MetadataWritePersistenceStatus::CommitOutcomeUnknown(_))
+        MetadataWriteCompletionStatus::Completed(MetadataWritePersistenceStatus::CommitOutcomeUnknown(_))
     ));
     let blocked = unknown_actor
         .submit_next_commit("unknown-resource", PathBuf::from("unknown.json"), b"retry", deadline)
@@ -863,7 +863,7 @@ async fn commit_outcome_distinguishes_unknown_durability() {
         .unwrap();
     assert!(matches!(
         failed,
-        MetadataIoCommitAdmissionOutcome::Completed(MetadataWritePersistenceStatus::FailedBeforeCommit(_))
+        MetadataWriteCompletionStatus::Completed(MetadataWritePersistenceStatus::FailedBeforeCommit(_))
     ));
     assert!(context.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
 }
