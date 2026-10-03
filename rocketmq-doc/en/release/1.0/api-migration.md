@@ -43,6 +43,11 @@ and bounded label values.
 The public enum `MetadataIoAdmissionOutcome` has been renamed to `MetadataWriteSubmissionStatus`.
 Consumers must update their imports and type references. No compatibility alias is provided.
 
+### Operation drain status name
+
+`OperationWaitOutcome` has been removed. Use `OperationDrainStatus` in imports
+and type references. Its variants and task-draining behavior are unchanged.
+
 ### Request-header derive migration
 
 The historical V1 implementation of `rocketmq_macros::RequestHeaderCodec` and

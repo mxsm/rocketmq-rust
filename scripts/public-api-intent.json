@@ -4077,15 +4077,6 @@
           "removal_condition": "retain while bounded operation draining remains supported"
         },
         {
-          "category": "compat",
-          "declaration": "pub use crate::operation::OperationDrainStatus as OperationWaitOutcome",
-          "identity": "rocketmq-runtime/src/public_api.rs:pub use crate::operation::OperationDrainStatus as OperationWaitOutcome",
-          "owner": "runtime",
-          "path": "rocketmq-runtime/src/public_api.rs",
-          "rationale": "source-compatible name for existing OperationWaitOutcome callers",
-          "removal_condition": "remove only at an approved breaking source-compatibility boundary"
-        },
-        {
           "category": "stable",
           "declaration": "pub use crate::operation::OperationWaitPolicy",
           "identity": "rocketmq-runtime/src/public_api.rs:pub use crate::operation::OperationWaitPolicy",
