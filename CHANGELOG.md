@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **refactor(dashboard):** Consolidate Web backend SQL migrations into one initial file per database while preserving existing migration versions and data; start future migration filenames at `0002_*.sql` ([#11113](https://github.com/mxsm/rocketmq-rust/issues/11113)).
 - **refactor(runtime):** Renamed `MetadataIoAdmissionOutcome` to `MetadataWriteSubmissionStatus` in the public API.
+- **refactor(auth):** Renamed `CredentialAuditOutcome` to `CredentialChangeDecision`, its `Authorized` variant to `Approved`, and `CredentialAuditEvent::outcome()` to `decision()` in the public API ([#11117](https://github.com/mxsm/rocketmq-rust/issues/11117)).
 
 ### Security
 
