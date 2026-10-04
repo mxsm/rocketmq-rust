@@ -21,8 +21,13 @@ mod admin_facade;
 mod commands;
 mod errors;
 mod event;
+mod motion;
+mod result_view;
 mod rocketmq_tui_app;
 mod state;
+mod terminal;
+mod text;
+mod text_input;
 mod ui;
 mod view_model;
 
@@ -34,6 +39,15 @@ use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
 use rocketmq_admin_core::client_adapter::TelemetryHandle;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
+
+/// Stack size of the runtime threads, which are the ones that poll admin commands.
+///
+/// A command awaits the complete admin, client, and transport call graph. An
+/// unoptimized Windows build needs about 1.3 MiB of stack for it, which is more than
+/// the 1 MiB that platform gives the main thread. The main thread therefore only draws
+/// the interface and reads input, and the runtime threads get the budget the admin CLI
+/// gives the same call graph.
+const RUNTIME_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
 
 fn main() -> anyhow::Result<()> {
     let owner = RuntimeOwner::plan(admin_tui_runtime_config())
@@ -77,14 +91,16 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn admin_tui_runtime_config() -> RuntimeConfig {
-    RuntimeConfig::server_default("rocketmq-admin-tui")
+    let mut config = RuntimeConfig::server_default("rocketmq-admin-tui");
+    config.thread_stack_size = Some(RUNTIME_THREAD_STACK_SIZE);
+    config
 }
 
 async fn run(client_runtime: std::sync::Arc<ClientRuntime>) -> anyhow::Result<()> {
-    let terminal = ratatui::try_init()?;
+    let terminal = terminal::enter()?;
     let local = tokio::task::LocalSet::new();
     let result = local.run_until(RocketmqTuiApp::new(client_runtime).run(terminal)).await;
-    ratatui::try_restore()?;
+    terminal::leave()?;
     result
 }
 

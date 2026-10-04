@@ -14,26 +14,27 @@
 
 use std::collections::VecDeque;
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
+use std::pin::Pin;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::task::Context;
+use std::task::Poll;
 use std::time::Duration;
 use std::time::Instant;
 
-use crossterm::event::Event;
 use crossterm::event::EventStream;
-use crossterm::event::KeyCode;
-use crossterm::event::KeyEvent;
-use crossterm::event::KeyEventKind;
 use ratatui::DefaultTerminal;
 use ratatui::Frame;
 use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
 use rocketmq_error::Result as CanonicalResult;
 use rocketmq_runtime::ScopeId;
+use rocketmq_runtime::TaskKind;
 use tokio::sync::mpsc;
-use tokio::task::AbortHandle;
+use tokio::sync::oneshot;
 use tokio::task::JoinError;
 use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
@@ -41,12 +42,16 @@ use tokio_stream::StreamExt;
 use crate::action::Action;
 use crate::admin_facade::TuiAdminFacade;
 use crate::commands::execute_command_with_progress;
-use crate::event::is_ctrl;
-use crate::event::key_char;
+use crate::motion::FRAMES_PER_SECOND;
+use crate::result_view::ResultTone;
 use crate::state::AppState;
 use crate::state::CommandExecutionState;
 use crate::state::CommandTreeItem;
 use crate::state::FocusArea;
+use crate::state::FramePace;
+use crate::state::ToastLevel;
+use crate::ui::ColorDepth;
+use crate::ui::ViewCache;
 use crate::view_model::CommandResultViewModel;
 
 pub struct RocketmqTuiApp {
@@ -58,9 +63,16 @@ pub struct RocketmqTuiApp {
     action_queue_diagnostics: Arc<ActionQueueDiagnostics>,
     running_task: Option<RunningCommandTask>,
     command_tasks: JoinSet<Option<Action>>,
+    view: ViewCache,
+    /// Mouse capture setting that still has to reach the terminal.
+    pending_mouse_capture: Option<bool>,
+    /// Whether input or a command changed something since the last frame.
+    redraw: bool,
 }
 
 const ACTION_QUEUE_CAPACITY: usize = 128;
+/// Ticks between two frames while only ambient effects are playing.
+const AMBIENT_FRAME_TICKS: u64 = 2;
 
 #[derive(Default)]
 struct ActionQueueDiagnostics {
@@ -98,14 +110,46 @@ pub struct ActionQueueSnapshot {
     pub coalesced: u64,
 }
 
+/// The command that is executing.
+///
+/// Dropping it stops the command at its next suspension point. The task that ran the
+/// command still drains the client scope the command used.
 struct RunningCommandTask {
     execution_id: u64,
-    abort_handle: AbortHandle,
+    /// Nothing is ever sent: the command's task observes this sender being dropped.
+    _stop_on_drop: oneshot::Sender<()>,
 }
 
-impl Drop for RunningCommandTask {
-    fn drop(&mut self) {
-        self.abort_handle.abort();
+/// Marks a command whose future panicked while it was polled.
+struct CommandPanicked;
+
+/// Polls a command and reports a panic as a value.
+///
+/// A command shares its task with the cleanup of its client scope, and that task
+/// belongs to the application's client scope. A panic that left the command would skip
+/// the cleanup and poison that owner against every later command.
+struct ContainPanic<F> {
+    command: Pin<Box<F>>,
+}
+
+impl<F> ContainPanic<F> {
+    fn new(command: F) -> Self {
+        Self {
+            command: Box::pin(command),
+        }
+    }
+}
+
+impl<F: Future> Future for ContainPanic<F> {
+    type Output = Result<F::Output, CommandPanicked>;
+
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        let command = self.command.as_mut();
+        match std::panic::catch_unwind(AssertUnwindSafe(|| command.poll(context))) {
+            Ok(poll) => poll.map(Ok),
+            // The command is finished: it is dropped without being polled again.
+            Err(_) => Poll::Ready(Err(CommandPanicked)),
+        }
     }
 }
 
@@ -126,6 +170,9 @@ impl RocketmqTuiApp {
             action_queue_diagnostics: Arc::new(ActionQueueDiagnostics::default()),
             running_task: None,
             command_tasks: JoinSet::new(),
+            view: ViewCache::new(ColorDepth::detect()),
+            pending_mouse_capture: None,
+            redraw: true,
         }
     }
 
@@ -214,8 +261,6 @@ fn try_send_progress(
 }
 
 impl RocketmqTuiApp {
-    const FRAMES_PER_SECOND: f32 = 30.0;
-
     pub async fn run(mut self, mut terminal: DefaultTerminal) -> anyhow::Result<()> {
         let result = self.run_events(&mut terminal).await;
         self.shutdown_commands().await;
@@ -223,22 +268,33 @@ impl RocketmqTuiApp {
     }
 
     async fn run_events(&mut self, terminal: &mut DefaultTerminal) -> anyhow::Result<()> {
-        let period = Duration::from_secs_f32(1.0 / Self::FRAMES_PER_SECOND);
+        let period = Duration::from_secs(1) / FRAMES_PER_SECOND as u32;
         let mut interval = tokio::time::interval(period);
         let mut events = EventStream::new();
         while !self.should_quit() {
             tokio::select! {
                 _ = interval.tick() => {
+                    self.redraw |= crate::terminal::recover_if_disturbed(terminal, self.state.mouse_capture())?;
                     self.state.advance_animation();
-                    terminal.draw(|frame| self.draw(frame))?;
+                    if self.take_frame_due() {
+                        crate::terminal::draw(terminal, |frame| self.draw(frame))?;
+                    }
                 },
-                Some(Ok(event)) = events.next() => self.handle_event(&event),
+                Some(Ok(event)) = events.next() => {
+                    self.handle_event(&event);
+                    self.redraw = true;
+                    if let Some(enabled) = self.pending_mouse_capture.take() {
+                        crate::terminal::set_mouse_capture(terminal.backend_mut(), enabled)?;
+                    }
+                },
                 Some(queued) = self.action_rx.recv() => {
                     self.action_queue_diagnostics.dequeue(queued.id);
                     self.apply_action(queued.action);
+                    self.redraw = true;
                 },
                 Some(completion) = self.command_tasks.join_next(), if !self.command_tasks.is_empty() => {
                     self.complete_command_task(completion);
+                    self.redraw = true;
                 },
             }
         }
@@ -256,260 +312,19 @@ impl RocketmqTuiApp {
         Ok(())
     }
 
-    fn handle_event(&mut self, event: &Event) {
-        if let Event::Key(key) = event {
-            if key.kind == KeyEventKind::Press {
-                self.handle_key_event(*key);
+    /// Returns whether the current tick has to draw, and consumes a pending request.
+    ///
+    /// Transitions get every tick and ambient effects every other one. A screen that
+    /// shows nothing time-dependent is left alone until something happens, so it
+    /// writes nothing to the terminal.
+    fn take_frame_due(&mut self) -> bool {
+        let requested = std::mem::take(&mut self.redraw);
+        requested
+            || match self.state.frame_pace() {
+                FramePace::Full => true,
+                FramePace::Ambient => self.state.animation_tick().is_multiple_of(AMBIENT_FRAME_TICKS),
+                FramePace::Still => false,
             }
-        }
-    }
-
-    fn handle_key_event(&mut self, key: KeyEvent) {
-        if self.state.show_help {
-            match key.code {
-                KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('?') => {
-                    self.apply_action(Action::HelpToggled);
-                }
-                _ => {}
-            }
-            return;
-        }
-
-        if matches!(self.state.execution, CommandExecutionState::Confirming { .. }) {
-            self.handle_confirmation_key(key);
-            return;
-        }
-
-        if is_ctrl(&key, 'l') {
-            self.apply_action(Action::ResultCleared);
-            return;
-        }
-        if is_ctrl(&key, 'r') {
-            self.apply_action(Action::ExecuteRequested);
-            return;
-        }
-
-        let text_input_focused = matches!(
-            self.state.focus,
-            FocusArea::Namesrv | FocusArea::Search | FocusArea::Args
-        );
-        match key.code {
-            KeyCode::Char('?') if !text_input_focused => self.apply_action(Action::HelpToggled),
-            KeyCode::Char('q') if !text_input_focused => self.apply_action(Action::Quit),
-            KeyCode::Esc => self.handle_escape(),
-            KeyCode::Tab => self.apply_action(Action::FocusNext),
-            KeyCode::BackTab => self.apply_action(Action::FocusPrevious),
-            KeyCode::Char('n') if !text_input_focused => self.apply_action(Action::FocusNamesrv),
-            KeyCode::Char('/') if !text_input_focused => self.apply_action(Action::FocusSearch),
-            KeyCode::Char('s') if self.state.focus == FocusArea::CommandTree => self.apply_action(Action::FocusSearch),
-            KeyCode::Enter => self.handle_enter(),
-            KeyCode::Down => self.move_down(),
-            KeyCode::Char('j') if !text_input_focused => self.move_down(),
-            KeyCode::Up => self.move_up(),
-            KeyCode::Char('k') if !text_input_focused => self.move_up(),
-            KeyCode::Left => self.move_left(),
-            KeyCode::Right => self.move_right(),
-            KeyCode::Backspace => self.handle_backspace(),
-            KeyCode::Char(' ') => self.handle_space(),
-            _ => {
-                if let Some(value) = key_char(&key) {
-                    self.handle_char(value);
-                }
-            }
-        }
-    }
-
-    fn handle_confirmation_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Esc => {
-                if let CommandExecutionState::Confirming {
-                    execution_id,
-                    command_id,
-                    ..
-                } = self.state.execution.clone()
-                {
-                    self.apply_action(Action::CancelExecution {
-                        execution_id,
-                        command_id,
-                    });
-                }
-            }
-            KeyCode::Enter => {
-                if let CommandExecutionState::Confirming {
-                    execution_id,
-                    command_id,
-                    expected,
-                } = self.state.execution.clone()
-                {
-                    if self.state.confirm_input.trim() == expected {
-                        self.start_execution(execution_id, command_id);
-                    } else {
-                        self.state.last_error = Some(format!("confirmation must match '{expected}'"));
-                    }
-                }
-            }
-            KeyCode::Backspace => {
-                self.state.confirm_input.pop();
-            }
-            _ => {
-                if let Some(value) = key_char(&key) {
-                    self.state.confirm_input.push(value);
-                }
-            }
-        }
-    }
-
-    fn handle_escape(&mut self) {
-        match self.state.execution.clone() {
-            CommandExecutionState::Running {
-                execution_id,
-                command_id,
-            } => self.apply_action(Action::CancelExecution {
-                execution_id,
-                command_id,
-            }),
-            _ => self.apply_action(Action::Quit),
-        }
-    }
-
-    fn handle_enter(&mut self) {
-        match self.state.focus {
-            FocusArea::CommandTree => match self.state.focused_tree_item() {
-                Some(CommandTreeItem::Category(_)) => self.state.toggle_focused_tree_category(),
-                Some(CommandTreeItem::Command(_)) => {
-                    self.state.reset_form_for_selected_command();
-                    self.state.focus = FocusArea::Args;
-                }
-                None => {}
-            },
-            FocusArea::Namesrv => self.submit_namesrv_input(),
-            FocusArea::Search => self.submit_search_input(),
-            FocusArea::Args => self.apply_action(Action::ExecuteRequested),
-            FocusArea::Result => {
-                self.state.result_scroll = 0;
-                self.state.result_horizontal_scroll = 0;
-            }
-        }
-    }
-
-    fn submit_namesrv_input(&mut self) {
-        let namesrv_addr = self.state.namesrv_addr.trim().to_string();
-        self.apply_action(Action::NamesrvChanged(namesrv_addr.clone()));
-        self.state.last_error = None;
-        self.state.progress_message = Some(if namesrv_addr.is_empty() {
-            "NameServer address cleared".to_string()
-        } else {
-            format!("NameServer address set to {namesrv_addr}")
-        });
-        self.state.focus = FocusArea::CommandTree;
-    }
-
-    fn submit_search_input(&mut self) {
-        self.state.last_error = None;
-        self.state.focus = FocusArea::CommandTree;
-    }
-
-    fn move_down(&mut self) {
-        match self.state.focus {
-            FocusArea::CommandTree => {
-                self.state.select_next_tree_item();
-                self.emit_selected_command_action();
-            }
-            FocusArea::Args => {
-                let command = self.state.selected_command().clone();
-                self.state.form.focus_next_arg(&command);
-            }
-            FocusArea::Result => self.state.result_scroll = self.state.result_scroll.saturating_add(1),
-            FocusArea::Namesrv | FocusArea::Search => {}
-        }
-    }
-
-    fn move_up(&mut self) {
-        match self.state.focus {
-            FocusArea::CommandTree => {
-                self.state.select_previous_tree_item();
-                self.emit_selected_command_action();
-            }
-            FocusArea::Args => self.state.form.focus_previous_arg(),
-            FocusArea::Result => self.state.result_scroll = self.state.result_scroll.saturating_sub(1),
-            FocusArea::Namesrv | FocusArea::Search => {}
-        }
-    }
-
-    fn move_left(&mut self) {
-        match self.state.focus {
-            FocusArea::CommandTree => self.state.collapse_focused_tree_category(),
-            FocusArea::Args => {
-                let command = self.state.selected_command().clone();
-                self.state.form.cycle_enum_current(&command, true);
-            }
-            FocusArea::Result => {
-                self.state.result_horizontal_scroll = self.state.result_horizontal_scroll.saturating_sub(1);
-            }
-            _ => {}
-        }
-    }
-
-    fn move_right(&mut self) {
-        match self.state.focus {
-            FocusArea::CommandTree => self.state.expand_focused_tree_category(),
-            FocusArea::Args => {
-                let command = self.state.selected_command().clone();
-                self.state.form.cycle_enum_current(&command, false);
-            }
-            FocusArea::Result => {
-                self.state.result_horizontal_scroll = self.state.result_horizontal_scroll.saturating_add(1);
-            }
-            _ => {}
-        }
-    }
-
-    fn handle_backspace(&mut self) {
-        match self.state.focus {
-            FocusArea::Namesrv => {
-                self.state.namesrv_addr.pop();
-                self.apply_action(Action::NamesrvChanged(self.state.namesrv_addr.clone()));
-            }
-            FocusArea::Search => {
-                let mut search = self.state.search.clone();
-                search.pop();
-                self.apply_action(Action::SearchChanged(search));
-            }
-            FocusArea::Args => {
-                let command = self.state.selected_command().clone();
-                self.state.form.backspace_current(&command);
-                self.emit_current_arg_changed(&command);
-            }
-            FocusArea::CommandTree | FocusArea::Result => {}
-        }
-    }
-
-    fn handle_space(&mut self) {
-        if self.state.focus == FocusArea::Args {
-            let command = self.state.selected_command().clone();
-            self.state.form.toggle_bool_current(&command);
-            self.emit_current_arg_changed(&command);
-        }
-    }
-
-    fn handle_char(&mut self, value: char) {
-        match self.state.focus {
-            FocusArea::Namesrv => {
-                self.state.namesrv_addr.push(value);
-                self.apply_action(Action::NamesrvChanged(self.state.namesrv_addr.clone()));
-            }
-            FocusArea::Search => {
-                let mut search = self.state.search.clone();
-                search.push(value);
-                self.apply_action(Action::SearchChanged(search));
-            }
-            FocusArea::Args => {
-                let command = self.state.selected_command().clone();
-                self.state.form.append_to_current(&command, value);
-                self.emit_current_arg_changed(&command);
-            }
-            FocusArea::CommandTree | FocusArea::Result => {}
-        }
     }
 
     fn apply_action(&mut self, action: Action) {
@@ -517,8 +332,8 @@ impl RocketmqTuiApp {
             Action::Quit => self.quit(),
             Action::FocusNext => self.focus_next(),
             Action::FocusPrevious => self.focus_previous(),
-            Action::FocusSearch => self.state.focus = FocusArea::Search,
-            Action::FocusNamesrv => self.state.focus = FocusArea::Namesrv,
+            Action::FocusSearch => self.state.set_focus(FocusArea::Search),
+            Action::FocusNamesrv => self.state.set_focus(FocusArea::Namesrv),
             Action::SearchChanged(search) => self.state.set_search(search),
             Action::NamesrvChanged(namesrv_addr) => {
                 self.admin_facade.set_namesrv_addr(Some(namesrv_addr.clone()));
@@ -531,6 +346,7 @@ impl RocketmqTuiApp {
                 expected,
             } => {
                 self.state.confirm_input.clear();
+                self.state.last_error = None;
                 self.state.execution = CommandExecutionState::Confirming {
                     execution_id,
                     command_id,
@@ -543,7 +359,8 @@ impl RocketmqTuiApp {
             } => {
                 self.state.last_error = None;
                 self.state.progress_message = Some(format!("started {command_id}"));
-                self.state.result = None;
+                self.state.clear_result();
+                self.state.mark_run_started();
                 self.state.execution = CommandExecutionState::Running {
                     execution_id,
                     command_id,
@@ -556,10 +373,9 @@ impl RocketmqTuiApp {
             } => {
                 if self.is_current_running_execution(execution_id) {
                     self.clear_running_task(execution_id);
-                    self.state.result = Some(result);
+                    self.state.set_result(result, ResultTone::Normal);
                     self.state.progress_message = Some(format!("finished {command_id}"));
-                    self.state.result_scroll = 0;
-                    self.state.result_horizontal_scroll = 0;
+                    self.state.mark_run_finished();
                     self.state.execution = CommandExecutionState::Succeeded {
                         execution_id,
                         command_id,
@@ -575,10 +391,11 @@ impl RocketmqTuiApp {
                     self.clear_running_task(execution_id);
                     self.state.last_error = Some(error.clone());
                     self.state.progress_message = Some(format!("failed {command_id}"));
-                    self.state.result = Some(crate::view_model::CommandResultViewModel::error(
-                        "Command Failed",
-                        error,
-                    ));
+                    self.state.set_result(
+                        CommandResultViewModel::error("Command Failed", error),
+                        ResultTone::Failure,
+                    );
+                    self.state.mark_run_finished();
                     self.state.execution = CommandExecutionState::Failed {
                         execution_id,
                         command_id,
@@ -590,22 +407,36 @@ impl RocketmqTuiApp {
                 command_id,
             } => {
                 if self.state.execution.execution_id() == Some(execution_id) {
+                    let was_running = self.is_current_running_execution(execution_id);
                     self.abort_running_task_if_matches(execution_id);
                     self.state.execution = CommandExecutionState::Cancelled {
                         execution_id,
                         command_id,
                     };
-                    self.state.progress_message = Some("cancelled locally; late result will be ignored".to_string());
                     self.state.confirm_input.clear();
+                    if was_running {
+                        self.state.mark_run_finished();
+                        self.state.progress_message =
+                            Some("cancelled locally; late result will be ignored".to_string());
+                        self.state.notify(
+                            ToastLevel::Warning,
+                            "Cancelled locally. A request the server accepted is not undone.",
+                        );
+                    } else {
+                        self.state.clear_run_timing();
+                        self.state
+                            .notify(ToastLevel::Info, "Confirmation cancelled. Nothing was sent.");
+                    }
                 }
             }
-            Action::HelpToggled => self.state.show_help = !self.state.show_help,
+            Action::HelpToggled => {
+                self.state.show_help = !self.state.show_help;
+                self.state.overlay_scroll = 0;
+            }
             Action::ResultCleared => {
-                self.state.result = None;
+                self.state.clear_result();
                 self.state.last_error = None;
                 self.state.progress_message = None;
-                self.state.result_scroll = 0;
-                self.state.result_horizontal_scroll = 0;
             }
             Action::CommandSelected(command_id) => {
                 if let Some(position) = self
@@ -627,29 +458,44 @@ impl RocketmqTuiApp {
     }
 
     fn focus_next(&mut self) {
-        self.state.focus = match self.state.focus {
+        self.state.set_focus(match self.state.focus {
             FocusArea::Namesrv => FocusArea::Search,
             FocusArea::Search => FocusArea::CommandTree,
             FocusArea::CommandTree => FocusArea::Args,
             FocusArea::Args => FocusArea::Result,
             FocusArea::Result => FocusArea::Namesrv,
-        };
+        });
     }
 
     fn focus_previous(&mut self) {
-        self.state.focus = match self.state.focus {
+        self.state.set_focus(match self.state.focus {
             FocusArea::Namesrv => FocusArea::Result,
             FocusArea::Search => FocusArea::Namesrv,
             FocusArea::CommandTree => FocusArea::Search,
             FocusArea::Args => FocusArea::CommandTree,
             FocusArea::Result => FocusArea::Args,
-        };
+        });
     }
 
     fn prepare_execution(&mut self) {
         if !self.state.validate_selected_form() {
+            let command = self.state.selected_command().clone();
+            let invalid = self.state.form.validation_errors().len();
             self.state.last_error = Some("fix argument validation errors before executing".to_string());
-            self.state.focus = FocusArea::Args;
+            self.state.set_focus(FocusArea::Args);
+            // Land on the first field that needs attention.
+            if let Some(index) = self.state.form.first_invalid_arg(&command) {
+                self.state.focus_arg(index);
+            }
+            self.state.flag_invalid();
+            self.state.notify(
+                ToastLevel::Error,
+                if invalid == 1 {
+                    "1 parameter needs attention".to_string()
+                } else {
+                    format!("{invalid} parameters need attention")
+                },
+            );
             return;
         }
 
@@ -714,6 +560,12 @@ impl RocketmqTuiApp {
         Ok(self.admin_facade.with_client_runtime(client_runtime))
     }
 
+    /// Runs `operation` on the runtime and hands its outcome to the interface thread.
+    ///
+    /// The interface thread only draws and reads input. A command awaits the complete
+    /// admin, client, and transport call graph, so a runtime worker polls it: the
+    /// runtime configuration sizes the stack that call graph runs on, and the interface
+    /// keeps responding while the command runs.
     fn spawn_command_task<F>(
         &mut self,
         execution_id: u64,
@@ -721,28 +573,38 @@ impl RocketmqTuiApp {
         client_runtime: Arc<ClientRuntime>,
         operation: F,
     ) where
-        F: Future<Output = CanonicalResult<CommandResultViewModel>> + 'static,
+        F: Future<Output = CanonicalResult<CommandResultViewModel>> + Send + 'static,
     {
-        let command_task = tokio::task::spawn_local(operation);
-        let abort_handle = command_task.abort_handle();
-        // The UI may abort the operation, but this owner retains its JoinHandle and
-        // drains its isolated client pool before completing. Shutdown never touches
-        // a subsequent command's connections or the application's client runtime.
-        self.command_tasks.spawn_local(async move {
-            let result = command_task.await;
+        let (stop_on_drop, mut stopped) = oneshot::channel::<()>();
+        let (completion_tx, completion_rx) = oneshot::channel();
+        let reported_command_id = command_id.clone();
+        let task = async move {
+            let outcome = tokio::select! {
+                biased;
+                _ = &mut stopped => None,
+                outcome = ContainPanic::new(operation) => Some(outcome),
+            };
+            // The command is destroyed by now, whether it finished or was stopped. Its
+            // isolated client pool is drained before anything is reported. Shutdown
+            // never touches a subsequent command's connections or the application's
+            // client runtime.
             let report = client_runtime.shutdown().await;
             if !report.is_healthy() {
                 tracing::warn!(execution_id, report = %report.to_json(), "admin command runtime shutdown is unhealthy");
             }
-            let result = match result {
-                Err(error) if error.is_cancelled() => return None,
-                Err(_) => Err(crate::errors::invariant_violated("admin command task failed")),
-                Ok(result) if report.is_healthy() => result,
-                Ok(_) => Err(crate::errors::invariant_violated(
+            let result = match outcome {
+                // The cancellation is already on screen.
+                None => {
+                    let _ = completion_tx.send(None);
+                    return;
+                }
+                Some(Err(CommandPanicked)) => Err(crate::errors::invariant_violated("admin command task failed")),
+                Some(Ok(result)) if report.is_healthy() => result,
+                Some(Ok(_)) => Err(crate::errors::invariant_violated(
                     "admin command runtime shutdown is unhealthy",
                 )),
             };
-            Some(match result {
+            let _ = completion_tx.send(Some(match result {
                 Ok(result) => Action::CommandSucceeded {
                     execution_id,
                     command_id,
@@ -753,11 +615,40 @@ impl RocketmqTuiApp {
                     command_id,
                     error: error.to_string(),
                 },
-            })
+            }));
+        };
+
+        // The application's client scope owns the task, so quitting waits for the
+        // cleanup of every command that was started.
+        let owner = self.admin_facade.client_runtime();
+        let spawned = owner
+            .service_context()
+            .task_group()
+            .spawn("admin-command", TaskKind::Worker, task);
+        if let Err(error) = spawned {
+            // The rejected task was dropped with the command and its unused client scope.
+            let error = rocketmq_error::Error::caused_by(error.descriptor(), error);
+            self.apply_action(Action::CommandFailed {
+                execution_id,
+                command_id: reported_command_id,
+                error: error.to_string(),
+            });
+            return;
+        }
+        self.command_tasks.spawn_local(async move {
+            match completion_rx.await {
+                Ok(action) => action,
+                // The task ended without reporting, so it was torn down after the command.
+                Err(_) => Some(Action::CommandFailed {
+                    execution_id,
+                    command_id: reported_command_id,
+                    error: crate::errors::invariant_violated("admin command task failed").to_string(),
+                }),
+            }
         });
         self.running_task = Some(RunningCommandTask {
             execution_id,
-            abort_handle,
+            _stop_on_drop: stop_on_drop,
         });
     }
 
@@ -787,9 +678,8 @@ impl RocketmqTuiApp {
     }
 
     fn abort_running_task(&mut self) {
-        if let Some(task) = self.running_task.take() {
-            task.abort_handle.abort();
-        }
+        // Dropping the handle is what stops the command.
+        self.running_task = None;
     }
 
     fn abort_running_task_if_matches(&mut self, execution_id: u64) {
@@ -812,36 +702,25 @@ impl RocketmqTuiApp {
         }
     }
 
-    fn emit_current_arg_changed(&mut self, command: &crate::commands::CommandSpec) {
-        if let Some(arg) = self.state.form.current_arg(command) {
-            let value = self.state.form.raw_value(arg.name).unwrap_or_default().to_string();
-            self.apply_action(Action::ArgChanged {
-                name: arg.name.to_string(),
-                value,
-            });
-        }
-    }
-
     fn emit_selected_command_action(&mut self) {
         if matches!(self.state.focused_tree_item(), Some(CommandTreeItem::Command(_))) {
             self.apply_action(Action::CommandSelected(self.state.selected_command().id.to_string()));
         }
     }
 
-    fn draw(&self, frame: &mut Frame) {
-        crate::ui::render(frame, &self.state);
+    fn draw(&mut self, frame: &mut Frame) {
+        crate::ui::render(frame, &mut self.state, &mut self.view);
     }
 }
 
+mod input;
+
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::rc::Rc;
-    use std::task::Context;
-    use std::task::Poll;
+    use std::sync::atomic::AtomicBool;
 
+    use ratatui::crossterm::event::KeyCode;
+    use ratatui::crossterm::event::KeyEvent;
     use ratatui::crossterm::event::KeyModifiers;
 
     use super::*;
@@ -947,7 +826,7 @@ mod tests {
     fn execution_requires_valid_args() {
         let mut app = RocketmqTuiApp::new(test_client_runtime());
         app.apply_action(Action::SearchChanged("topic.cluster".to_string()));
-        app.state.select_next_tree_item();
+        app.state.move_tree_cursor(1);
         app.apply_action(Action::ExecuteRequested);
 
         assert!(app.state.last_error.is_some());
@@ -982,7 +861,7 @@ mod tests {
     }
 
     #[test]
-    fn cancel_execution_aborts_tracked_local_task() {
+    fn cancel_execution_stops_the_running_command() {
         let local = tokio::task::LocalSet::new();
 
         local.block_on(
@@ -991,7 +870,7 @@ mod tests {
                 .build()
                 .unwrap(),
             async {
-                let aborted = Rc::new(Cell::new(false));
+                let aborted = Arc::new(AtomicBool::new(false));
                 let mut app = RocketmqTuiApp::new(test_client_runtime());
                 let client_runtime = app.command_facade(7).unwrap().client_runtime();
                 app.spawn_command_task(
@@ -1013,7 +892,7 @@ mod tests {
                 });
 
                 app.shutdown_commands().await;
-                assert!(aborted.get());
+                assert!(aborted.load(Ordering::Acquire));
                 assert!(client_runtime.is_shutdown());
                 assert!(app.command_tasks.is_empty());
                 assert!(app.running_task.is_none());
@@ -1105,6 +984,37 @@ mod tests {
                 app.shutdown_commands().await;
             },
         );
+    }
+
+    #[test]
+    fn frames_are_drawn_only_when_they_are_due() {
+        let mut app = RocketmqTuiApp::new(test_client_runtime());
+        assert!(app.take_frame_due(), "the first frame is always drawn");
+
+        app.state.toggle_motion();
+        for _ in 0..3 {
+            app.state.advance_animation();
+        }
+        assert!(!app.take_frame_due(), "a still screen writes nothing to the terminal");
+
+        // What an input event, a queued action, or a finished command leaves behind.
+        app.redraw = true;
+        assert!(app.take_frame_due());
+        assert!(!app.take_frame_due(), "a request is served once");
+
+        app.state.execution = CommandExecutionState::Running {
+            execution_id: 1,
+            command_id: "topic.list".to_string(),
+        };
+        app.state.advance_animation();
+        assert!(app.take_frame_due(), "a change is drawn on the tick that observes it");
+        let drawn = (0..10)
+            .filter(|_| {
+                app.state.advance_animation();
+                app.take_frame_due()
+            })
+            .count();
+        assert_eq!(drawn, 5, "a running command is redrawn on every other tick");
     }
 
     #[test]
@@ -1229,7 +1139,7 @@ mod tests {
     }
 
     struct AbortProbe {
-        aborted: Rc<Cell<bool>>,
+        aborted: Arc<AtomicBool>,
     }
 
     impl Future for AbortProbe {
@@ -1242,10 +1152,12 @@ mod tests {
 
     impl Drop for AbortProbe {
         fn drop(&mut self) {
-            self.aborted.set(true);
+            self.aborted.store(true, Ordering::Release);
         }
     }
 }
 
 #[cfg(test)]
 mod command_lifecycle_tests;
+#[cfg(test)]
+mod input_tests;

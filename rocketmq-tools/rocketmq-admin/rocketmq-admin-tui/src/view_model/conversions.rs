@@ -1540,39 +1540,6 @@ impl CommandResultViewModel {
             Self::OperationSummary(value) => &value.title,
         }
     }
-
-    pub fn text_body(&self) -> String {
-        match self {
-            Self::Table(table) => {
-                let mut lines = Vec::new();
-                lines.push(table.headers.join(" | "));
-                lines.extend(table.rows.iter().map(|row| row.join(" | ")));
-                lines.join("\n")
-            }
-            Self::KeyValue(key_values) => key_values
-                .rows
-                .iter()
-                .map(|(key, value)| format!("{key}: {value}"))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            Self::Json { body, .. } | Self::Text { body, .. } => body.clone(),
-            Self::OperationSummary(summary) => {
-                let mut lines = vec![
-                    format!("success: {}", summary.success_count),
-                    format!("failed: {}", summary.failure_count),
-                ];
-                if !summary.targets.is_empty() {
-                    lines.push("targets:".to_string());
-                    lines.extend(summary.targets.iter().map(|target| format!("  {target}")));
-                }
-                if !summary.errors.is_empty() {
-                    lines.push("errors:".to_string());
-                    lines.extend(summary.errors.iter().map(|error| format!("  {error}")));
-                }
-                lines.join("\n")
-            }
-        }
-    }
 }
 
 fn unique_key_track_note(entry: &QueryMessageByUniqueKeyEntry) -> String {

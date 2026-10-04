@@ -91,11 +91,13 @@ pub(crate) fn test_client_runtime() -> Arc<ClientRuntime> {
 
     use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
     use rocketmq_admin_core::client_adapter::TelemetryHandle;
-    use rocketmq_runtime::RuntimeConfig;
     use rocketmq_runtime::RuntimeOwner;
 
     static OWNER: LazyLock<RuntimeOwner> = LazyLock::new(|| {
-        RuntimeOwner::plan(RuntimeConfig::server_default("rocketmq-admin-tui-test"))
+        // Commands run on these workers, so they get the stacks the application gives them.
+        let mut config = crate::admin_tui_runtime_config();
+        config.thread_name = "rocketmq-admin-tui-test".to_string();
+        RuntimeOwner::plan(config)
             .expect("runtime configuration is valid")
             .build()
             .expect("admin TUI test runtime should start")
