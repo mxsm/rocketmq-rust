@@ -1,6 +1,7 @@
 import type {Config} from '@docusaurus/types';
 import type {Options as PresetOptions} from '@docusaurus/preset-classic';
-import {themes as prismThemes} from 'prism-react-renderer';
+import {diagramThemeCss} from './src/mermaid/diagramTheme';
+import {darkCodeTheme, lightCodeTheme} from './src/prism/codeThemes';
 
 const config: Config = {
     title: 'RocketMQ-Rust',
@@ -83,7 +84,7 @@ const config: Config = {
                     blogSidebarCount: 'ALL',
                 },
                 theme: {
-                    customCss: './src/css/custom.css',
+                    customCss: ['./src/css/custom.css', './src/css/content.css'],
                 },
             } satisfies PresetOptions,
         ],
@@ -238,9 +239,19 @@ const config: Config = {
             copyright: `Copyright © ${new Date().getFullYear()} RocketMQ-Rust Community. Built with Docusaurus.`,
         },
         prism: {
-            theme: prismThemes.github,
-            darkTheme: prismThemes.dracula,
-            additionalLanguages: ['rust', 'java', 'yaml', 'bash', 'toml'],
+            theme: lightCodeTheme,
+            darkTheme: darkCodeTheme,
+            additionalLanguages: ['rust', 'java', 'yaml', 'bash', 'toml', 'powershell'],
+        },
+        mermaid: {
+            theme: {light: 'neutral', dark: 'dark'},
+            options: {
+                // System fonts only: Mermaid sizes nodes from measured text, and a web font that
+                // finishes loading after the diagram renders would leave labels overflowing.
+                fontFamily:
+                    "system-ui, -apple-system, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif",
+                themeCSS: diagramThemeCss,
+            },
         },
         algolia: {
             appId: '2B1J2W7AVD',
