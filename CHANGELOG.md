@@ -140,6 +140,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **transport:** Remove deprecated `ClientMetadata::broker_addr_table`; use owned snapshots and controlled address updates instead.
 - **transport:** Remove deprecated `Connection::connection_is_ok`; use `is_healthy()` or `state()` instead.
 - **namesrv:** Remove the unused `RouteManagerConfig` compatibility DTO; use `NamesrvConfig` for runtime configuration.
 - **broker:** Remove the no-op `BrokerOuterAPI::refresh_metadata` method and its periodic task (breaking); remove calls to this method.
