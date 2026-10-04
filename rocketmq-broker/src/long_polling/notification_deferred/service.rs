@@ -79,8 +79,8 @@ use super::index::NotificationIndexReserveRejection;
 use super::index::NotificationIndexSnapshot;
 use super::index::NotificationMatchCriteria;
 use super::index::NotificationScanCursor;
+use crate::long_polling::pending_arrival_latch::PendingArrivalAdmissionStatus;
 use crate::long_polling::pending_arrival_latch::PendingArrivalInsertOperationalError;
-use crate::long_polling::pending_arrival_latch::PendingArrivalInsertOutcome;
 use crate::long_polling::pending_arrival_latch::PendingArrivalInsertRejection;
 use crate::long_polling::pending_arrival_latch::PendingArrivalLatch;
 use crate::long_polling::pending_arrival_latch::PendingArrivalReservation;
@@ -609,8 +609,8 @@ impl NotificationDeferredService {
                 }
             };
         match self.pending_arrivals.insert(key, pending) {
-            Ok(PendingArrivalInsertOutcome::Inserted) => Ok(NotificationPendingArrivalOutcome::Latched),
-            Ok(PendingArrivalInsertOutcome::Rejected(rejection)) => Ok(NotificationPendingArrivalOutcome::Rejected(
+            Ok(PendingArrivalAdmissionStatus::Accepted) => Ok(NotificationPendingArrivalOutcome::Latched),
+            Ok(PendingArrivalAdmissionStatus::Rejected(rejection)) => Ok(NotificationPendingArrivalOutcome::Rejected(
                 NotificationPendingArrivalRejection::Latch(rejection),
             )),
             Err(error) => Err(NotificationPendingArrivalOperationalError::Latch(error)),
@@ -626,9 +626,9 @@ impl NotificationDeferredService {
         topic: &CheetahString,
         queue_id: i32,
         logical_offset: i64,
-    ) -> Result<PendingArrivalInsertOutcome, PendingArrivalInsertOperationalError> {
+    ) -> Result<PendingArrivalAdmissionStatus, PendingArrivalInsertOperationalError> {
         if logical_offset <= 0 || !self.index.has_arrival_target(topic, queue_id) {
-            return Ok(PendingArrivalInsertOutcome::Inserted);
+            return Ok(PendingArrivalAdmissionStatus::Accepted);
         }
         self.pending_offsets
             .retain_targets(|target| self.index.has_arrival_target(target.topic(), target.queue_id()));

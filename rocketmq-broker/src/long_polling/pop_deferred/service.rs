@@ -66,8 +66,8 @@ use rocketmq_transport::api::TransportContractViolation;
 use rocketmq_transport::api::TransportError;
 use tokio::sync::oneshot;
 
+use crate::long_polling::pending_arrival_latch::PendingArrivalAdmissionStatus;
 use crate::long_polling::pending_arrival_latch::PendingArrivalInsertOperationalError;
-use crate::long_polling::pending_arrival_latch::PendingArrivalInsertOutcome;
 use crate::long_polling::pending_arrival_latch::PendingArrivalInsertRejection;
 use crate::long_polling::pending_arrival_latch::PendingArrivalLatch;
 use crate::long_polling::pending_arrival_latch::PendingArrivalReservation;
@@ -931,14 +931,14 @@ impl PopDeferredService {
         )
         .map_err(PopPendingArrivalError::Continuation)?;
         match self.pending_arrivals.insert(key, pending) {
-            Ok(PendingArrivalInsertOutcome::Inserted) => Ok(PopPendingArrivalOutcome::Latched),
-            Ok(PendingArrivalInsertOutcome::Rejected(PendingArrivalInsertRejection::Closed)) => {
+            Ok(PendingArrivalAdmissionStatus::Accepted) => Ok(PopPendingArrivalOutcome::Latched),
+            Ok(PendingArrivalAdmissionStatus::Rejected(PendingArrivalInsertRejection::Closed)) => {
                 Ok(PopPendingArrivalOutcome::Rejected(PopPendingArrivalRejection::Closed))
             }
-            Ok(PendingArrivalInsertOutcome::Rejected(PendingArrivalInsertRejection::CountFull)) => Ok(
+            Ok(PendingArrivalAdmissionStatus::Rejected(PendingArrivalInsertRejection::CountFull)) => Ok(
                 PopPendingArrivalOutcome::Rejected(PopPendingArrivalRejection::CountFull),
             ),
-            Ok(PendingArrivalInsertOutcome::Rejected(PendingArrivalInsertRejection::BytesFull)) => Ok(
+            Ok(PendingArrivalAdmissionStatus::Rejected(PendingArrivalInsertRejection::BytesFull)) => Ok(
                 PopPendingArrivalOutcome::Rejected(PopPendingArrivalRejection::BytesFull),
             ),
             Err(error) => Err(PopPendingArrivalError::Latch(error)),
@@ -954,9 +954,9 @@ impl PopDeferredService {
         topic: &CheetahString,
         queue_id: i32,
         logical_offset: i64,
-    ) -> Result<PendingArrivalInsertOutcome, PendingArrivalInsertOperationalError> {
+    ) -> Result<PendingArrivalAdmissionStatus, PendingArrivalInsertOperationalError> {
         if logical_offset <= 0 || !self.index.has_arrival_target(topic, queue_id) {
-            return Ok(PendingArrivalInsertOutcome::Inserted);
+            return Ok(PendingArrivalAdmissionStatus::Accepted);
         }
         self.pending_offsets
             .retain_targets(|target| self.index.has_arrival_target(target.topic(), target.queue_id()));
@@ -970,7 +970,7 @@ impl PopDeferredService {
         topic: &CheetahString,
         queue_id: i32,
         queue_offset: i64,
-    ) -> Result<PendingArrivalInsertOutcome, PendingArrivalInsertOperationalError> {
+    ) -> Result<PendingArrivalAdmissionStatus, PendingArrivalInsertOperationalError> {
         self.pending_offsets
             .merge(PopPendingOffsetTarget::new(topic.clone(), queue_id), queue_offset)
     }
