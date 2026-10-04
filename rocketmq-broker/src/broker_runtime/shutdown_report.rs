@@ -237,15 +237,15 @@ impl BrokerShutdownComponentReport {
 pub(super) fn record_message_store_shutdown_outcome(
     shutdown_report: &mut BrokerBasicServiceShutdownReport,
     progress: &BrokerShutdownProgress,
-    outcome: MessageStoreShutdownOutcome,
+    outcome: MessageStoreShutdownStatus,
     elapsed: Duration,
 ) {
     match outcome {
-        MessageStoreShutdownOutcome::Absent => {
+        MessageStoreShutdownStatus::Absent => {
             shutdown_report.message_store = BrokerShutdownComponentReport::skipped("message_store");
             progress.complete("message_store");
         }
-        MessageStoreShutdownOutcome::Completed(store_report) => {
+        MessageStoreShutdownStatus::Completed(store_report) => {
             shutdown_report.message_store = BrokerShutdownComponentReport::completed_with_detail(
                 "message_store",
                 elapsed,
@@ -253,7 +253,7 @@ pub(super) fn record_message_store_shutdown_outcome(
             );
             progress.complete("message_store");
         }
-        MessageStoreShutdownOutcome::Failed(error) => {
+        MessageStoreShutdownStatus::Failed(error) => {
             let error_code = error.code().as_str();
             warn!(error_code, error = %error, "Failed to shutdown message store durably");
             shutdown_report.message_store = BrokerShutdownComponentReport {
@@ -266,7 +266,7 @@ pub(super) fn record_message_store_shutdown_outcome(
                 detail: Some(error.to_string()),
             };
         }
-        MessageStoreShutdownOutcome::TimedOut => {
+        MessageStoreShutdownStatus::TimedOut => {
             warn!("Timed out shutting down message store durably");
             shutdown_report.message_store = BrokerShutdownComponentReport::timed_out("message_store", elapsed);
         }
