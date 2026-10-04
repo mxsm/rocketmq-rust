@@ -177,8 +177,8 @@ impl BrokerDeferredLifecycle {
         self.pop_lite.seal();
     }
 
-    pub(super) fn shutdown(&self) -> BrokerDeferredRegistryShutdownOutcomes {
-        BrokerDeferredRegistryShutdownOutcomes {
+    pub(super) fn shutdown(&self) -> BrokerDeferredRegistryShutdownSnapshot {
+        BrokerDeferredRegistryShutdownSnapshot {
             pop: self.pop.shutdown(),
             pull: self.pull.shutdown(),
             notification: self.notification.shutdown(),
@@ -432,14 +432,14 @@ mod resource_snapshot_tests {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct BrokerDeferredRegistryShutdownOutcomes {
+pub(crate) struct BrokerDeferredRegistryShutdownSnapshot {
     pub(crate) pop: DeferredRegistryShutdownOutcome,
     pub(crate) pull: DeferredRegistryShutdownOutcome,
     pub(crate) notification: DeferredRegistryShutdownOutcome,
     pub(crate) pop_lite: DeferredRegistryShutdownOutcome,
 }
 
-impl BrokerDeferredRegistryShutdownOutcomes {
+impl BrokerDeferredRegistryShutdownSnapshot {
     pub(crate) fn is_healthy(self) -> bool {
         [self.pop, self.pull, self.notification, self.pop_lite]
             .into_iter()
@@ -449,14 +449,14 @@ impl BrokerDeferredRegistryShutdownOutcomes {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct BrokerDeferredRegistryShutdownReport {
-    pub(crate) initial: BrokerDeferredRegistryShutdownOutcomes,
-    pub(crate) terminal: BrokerDeferredRegistryShutdownOutcomes,
+    pub(crate) initial: BrokerDeferredRegistryShutdownSnapshot,
+    pub(crate) terminal: BrokerDeferredRegistryShutdownSnapshot,
 }
 
 impl BrokerDeferredRegistryShutdownReport {
     pub(crate) const fn new(
-        initial: BrokerDeferredRegistryShutdownOutcomes,
-        terminal: BrokerDeferredRegistryShutdownOutcomes,
+        initial: BrokerDeferredRegistryShutdownSnapshot,
+        terminal: BrokerDeferredRegistryShutdownSnapshot,
     ) -> Self {
         Self { initial, terminal }
     }
