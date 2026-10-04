@@ -340,7 +340,7 @@ where
     pub(crate) fn reserve(
         &self,
         key: NotificationCriteriaKey,
-    ) -> Result<NotificationIndexReserveOutcome<I>, NotificationIndexOperationalError> {
+    ) -> Result<NotificationIndexReservationStatus<I>, NotificationIndexOperationalError> {
         self.reserve_at(key, tokio::time::Instant::now())
     }
 
@@ -348,14 +348,14 @@ where
         &self,
         key: NotificationCriteriaKey,
         admitted_at: tokio::time::Instant,
-    ) -> Result<NotificationIndexReserveOutcome<I>, NotificationIndexOperationalError> {
+    ) -> Result<NotificationIndexReservationStatus<I>, NotificationIndexOperationalError> {
         let mut state = self.inner.state.lock();
         let occupied = state
             .live
             .checked_add(state.reserved)
             .ok_or(NotificationIndexOperationalError::AccountingOverflow)?;
         if occupied >= self.inner.limits.max_entries.get() {
-            return Ok(NotificationIndexReserveOutcome::Rejected(
+            return Ok(NotificationIndexReservationStatus::Rejected(
                 NotificationIndexReserveRejection::GlobalCapacity,
             ));
         }
@@ -369,7 +369,7 @@ where
             None => 0,
         };
         if occupied >= self.inner.limits.max_entries_per_key.get() {
-            return Ok(NotificationIndexReserveOutcome::Rejected(
+            return Ok(NotificationIndexReservationStatus::Rejected(
                 NotificationIndexReserveRejection::PerKeyCapacity,
             ));
         }
@@ -410,7 +410,7 @@ where
         state.reserved += 1;
         state.next_sequence = sequence;
         drop(state);
-        Ok(NotificationIndexReserveOutcome::Reserved(
+        Ok(NotificationIndexReservationStatus::Reserved(
             NotificationIndexReservation {
                 inner: Some(Arc::clone(&self.inner)),
                 key: Some(key),
@@ -873,7 +873,7 @@ pub(crate) enum NotificationIndexReserveRejection {
 }
 
 #[must_use]
-pub(crate) enum NotificationIndexReserveOutcome<I> {
+pub(crate) enum NotificationIndexReservationStatus<I> {
     Reserved(NotificationIndexReservation<I>),
     Rejected(NotificationIndexReserveRejection),
 }
