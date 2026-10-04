@@ -1004,7 +1004,7 @@ fn broker_store_shutdown_failure_preserves_typed_cause_and_remains_unfinished() 
     record_message_store_shutdown_outcome(
         &mut report,
         &progress,
-        MessageStoreShutdownOutcome::Failed(error),
+        MessageStoreShutdownStatus::Failed(error),
         Duration::from_millis(3),
     );
 
