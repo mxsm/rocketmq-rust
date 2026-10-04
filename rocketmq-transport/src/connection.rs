@@ -1841,17 +1841,6 @@ impl Connection {
         self.mark_closed();
         result
     }
-
-    /// Legacy alias for backward compatibility.
-    ///
-    /// # Deprecated
-    ///
-    /// Use `is_healthy()` or `state()` instead for clearer semantics.
-    #[inline]
-    #[deprecated(since = "0.7.0", note = "Use `is_healthy()` or `state()` instead")]
-    pub fn connection_is_ok(&self) -> bool {
-        self.is_healthy()
-    }
 }
 
 #[cfg(test)]
