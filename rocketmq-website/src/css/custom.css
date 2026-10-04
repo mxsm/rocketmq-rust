@@ -9,7 +9,7 @@
  * Infima variables and Docusaurus custom CSS variables.
  */
 
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Sora:wght@500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=Sora:wght@500;600;700&display=swap');
 
 :root {
   --ifm-color-primary: #a855f7;
@@ -33,9 +33,6 @@
   --ifm-global-border-radius: 12px;
   --ifm-heading-margin-top: 2rem;
   --ifm-heading-margin-bottom: 1rem;
-
-  /* Homepage background for light mode */
-  --homepage-bg: #f8f5ff;
 }
 
 /* Dark mode overrides */
@@ -52,9 +49,6 @@
 
   --ifm-card-background-color: #1e293b;
   --ifm-table-stripe-background: #334155;
-
-  /* Homepage background for dark mode */
-  --homepage-bg: #07030f;
 
   --ifm-code-background: #1e293b;
   --ifm-menu-color-active: #c084fc;
@@ -95,9 +89,36 @@
   margin: 0 auto;
 }
 
-/* Custom hero gradient - removed to use module CSS */
-.hero {
-  /* Hero styles now in index.module.css */
+/*
+ * Homepage (src/pages/index.tsx adds .rmq-home to <html>): the page is dark in
+ * both colour modes, and the navbar floats over the hero until the page scrolls
+ * or the mobile menu opens.
+ */
+html.rmq-home,
+html.rmq-home body {
+  background-color: #05060b;
+}
+
+html.rmq-home .navbar {
+  border-bottom-color: transparent;
+  background: transparent !important;
+  box-shadow: none;
+  backdrop-filter: none;
+  transition:
+    background-color 280ms ease,
+    border-color 280ms ease,
+    box-shadow 280ms ease;
+}
+
+html.rmq-home[data-rmq-scrolled] .navbar,
+html.rmq-home .navbar.navbar-sidebar--show {
+  border-bottom-color: rgba(150, 166, 214, 0.14);
+  background: rgba(5, 6, 11, 0.82) !important;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.3);
+}
+
+html.rmq-home[data-rmq-scrolled] .navbar:not(.navbar-sidebar--show) {
+  backdrop-filter: blur(22px) saturate(130%);
 }
 
 /* Smooth transitions */

@@ -1,0 +1,280 @@
+/* Shared building blocks for the homepage sections. Tokens come from `.home` in pages/index.module.css. */
+
+.section {
+  position: relative;
+  padding: clamp(3.5rem, 6vw, 5.5rem) 1.5rem;
+}
+
+.container {
+  position: relative;
+  width: min(1200px, 100%);
+  margin: 0 auto;
+}
+
+/* ---------- Section heading ---------- */
+
+.heading {
+  max-width: 780px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.headingStart {
+  margin-left: 0;
+  text-align: left;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--home-amber);
+  font-family: var(--home-font-mono);
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.eyebrow::before {
+  width: 22px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, currentColor);
+  content: '';
+}
+
+.title {
+  margin: 1.1rem 0 0;
+  padding: 0;
+  border: 0;
+  color: var(--home-text);
+  font-family: var(--home-font-display);
+  font-size: clamp(1.95rem, 3.6vw, 3rem);
+  font-weight: 650;
+  line-height: 1.12;
+  letter-spacing: -0.035em;
+  text-wrap: balance;
+}
+
+.lead {
+  margin: 1.15rem 0 0;
+  color: var(--home-muted);
+  font-size: clamp(1rem, 1.25vw, 1.14rem);
+  line-height: 1.7;
+  text-wrap: pretty;
+}
+
+:global(html[lang='zh-CN']) .title {
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+:global(html[lang='zh-CN']) .eyebrow {
+  letter-spacing: 0.22em;
+}
+
+/* ---------- Buttons ---------- */
+
+.button {
+  position: relative;
+  display: inline-flex;
+  min-height: 52px;
+  align-items: center;
+  justify-content: center;
+  gap: 0.62rem;
+  overflow: hidden;
+  padding: 0 1.45rem;
+  border: 1px solid transparent;
+  border-radius: 13px;
+  font-size: 0.98rem;
+  font-weight: 700;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 220ms ease,
+    border-color 220ms ease,
+    background-color 220ms ease;
+}
+
+.button:hover {
+  text-decoration: none;
+  transform: translateY(-2px);
+}
+
+.button:active {
+  transform: translateY(0);
+}
+
+.button:focus-visible,
+.copyButton:focus-visible,
+.textLink:focus-visible {
+  outline: 2px solid var(--home-amber);
+  outline-offset: 3px;
+}
+
+.button svg {
+  flex: 0 0 auto;
+  font-size: 1.12rem;
+}
+
+.buttonPrimary {
+  border-color: #ffa25c;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.2), transparent 52%),
+    linear-gradient(135deg, #ff8f33 0%, #f0520f 100%);
+  color: #fff;
+  box-shadow:
+    0 14px 36px rgba(255, 98, 20, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.buttonPrimary::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -60%;
+  width: 46%;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.42), transparent);
+  content: '';
+  transform: skewX(-20deg);
+  transition: left 620ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.buttonPrimary:hover {
+  color: #fff;
+  box-shadow:
+    0 20px 48px rgba(255, 98, 20, 0.46),
+    inset 0 1px 0 rgba(255, 255, 255, 0.32);
+}
+
+.buttonPrimary:hover::after {
+  left: 120%;
+}
+
+.buttonPrimary svg {
+  transition: transform 220ms ease;
+}
+
+.buttonPrimary:hover svg {
+  transform: translateX(3px);
+}
+
+.buttonGhost {
+  border-color: var(--home-border-strong);
+  background: rgba(255, 255, 255, 0.045);
+  color: #e7ebf6;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(12px);
+}
+
+.buttonGhost:hover {
+  border-color: rgba(255, 255, 255, 0.34);
+  background: rgba(255, 255, 255, 0.085);
+  color: #fff;
+}
+
+.buttonCount {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: 0.15rem;
+  padding-left: 0.75rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.16);
+  color: var(--home-amber);
+  font-family: var(--home-font-mono);
+  font-size: 0.86rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.buttonCount svg {
+  font-size: 0.82rem;
+}
+
+/* ---------- Inline links ---------- */
+
+.textLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  color: var(--home-amber);
+  font-size: 0.95rem;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.textLink svg {
+  transition: transform 200ms ease;
+}
+
+.textLink:hover {
+  color: #ffd9a8;
+  text-decoration: none;
+}
+
+.textLink:hover svg {
+  transform: translateX(4px);
+}
+
+/* ---------- Copy button ---------- */
+
+.copyButton {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--home-border);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--home-muted);
+  font-size: 0.98rem;
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    border-color 160ms ease,
+    background-color 160ms ease,
+    transform 160ms ease;
+}
+
+.copyButton:hover {
+  border-color: var(--home-border-strong);
+  background: rgba(255, 255, 255, 0.09);
+  color: #fff;
+}
+
+.copyButton:active {
+  transform: scale(0.94);
+}
+
+.copyButtonDone,
+.copyButtonDone:hover {
+  border-color: rgba(52, 211, 153, 0.5);
+  background: rgba(52, 211, 153, 0.12);
+  color: var(--home-green);
+}
+
+@media (max-width: 620px) {
+  .section {
+    padding-right: 1.1rem;
+    padding-left: 1.1rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .button,
+  .button svg,
+  .buttonPrimary::after,
+  .textLink svg,
+  .copyButton {
+    transition: none;
+  }
+
+  .button:hover {
+    transform: none;
+  }
+}

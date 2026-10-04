@@ -1,0 +1,27 @@
+.reveal {
+  --reveal-delay: 0ms;
+}
+
+/* Hidden only after the homepage has hydrated; see MOTION_ATTRIBUTE. */
+:global([data-rmq-motion='on']) .reveal {
+  opacity: 0;
+  transform: translate3d(0, 28px, 0);
+  transition:
+    opacity 760ms cubic-bezier(0.16, 1, 0.3, 1) var(--reveal-delay),
+    transform 760ms cubic-bezier(0.16, 1, 0.3, 1) var(--reveal-delay);
+  will-change: opacity, transform;
+}
+
+:global([data-rmq-motion='on']) .reveal.revealIn {
+  opacity: 1;
+  transform: none;
+  will-change: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :global([data-rmq-motion='on']) .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}

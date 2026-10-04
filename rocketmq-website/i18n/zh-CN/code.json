@@ -35,44 +35,8 @@
   "Supports multiple platforms including Linux, Windows, and macOS. Convenient deployment across different environments with consistent performance and behavior.": {
     "message": "支持包括 Linux、Windows 和 macOS 在内的多种平台。在不同环境中便捷部署，具有一致的性能和行为。"
   },
-  "homepage.features.rust.title": {
-    "message": "Rust 语言优势"
-  },
-  "homepage.features.rust.badge": {
-    "message": "内存安全核心"
-  },
-  "homepage.features.rust.description": {
-    "message": "RocketMQ-Rust 利用 Rust 的所有权模型和零成本抽象实现 Broker、客户端、远程通信和存储，在保持安全性的同时提供可预期的性能。"
-  },
-  "homepage.features.async.title": {
-    "message": "异步非阻塞设计"
-  },
-  "homepage.features.async.badge": {
-    "message": "Tokio 异步 I/O"
-  },
-  "homepage.features.async.description": {
-    "message": "Producer、Consumer、Remoting 和 Broker 服务围绕异步 I/O 设计，让高并发消息流量不会阻塞工作线程。"
-  },
-  "homepage.features.crossPlatform.title": {
-    "message": "跨平台支持"
-  },
-  "homepage.features.crossPlatform.badge": {
-    "message": "Cargo 就绪"
-  },
-  "homepage.features.crossPlatform.description": {
-    "message": "可在 Linux、Windows 和 macOS 上运行和开发 RocketMQ-Rust，配合 Cargo、示例和文档融入 Rust 生态。"
-  },
-  "homepage.hero.subtitle": {
-    "message": "// 高性能 & 更快 & 更安全"
-  },
-  "homepage.hero.description": {
-    "message": "RocketMQ-Rust 将 Apache RocketMQ 成熟的消息模型带到 Rust：Producer 发送消息到 Broker，NameServer 提供路由，CommitLog 持久化数据，Consumer 通过异步、类型安全的 API 处理消息。"
-  },
   "homepage.hero.getStarted": {
     "message": "开始使用"
-  },
-  "homepage.hero.github": {
-    "message": "GitHub"
   },
   "homepage.announcement.title": {
     "message": "浏览 RocketMQ-Rust 发行历史"
@@ -638,90 +602,6 @@
     "message": "标签",
     "description": "The title of the tag list page"
   },
-  "homepage.features.eyebrow": {
-    "message": "ROCKETMQ-RUST 核心能力"
-  },
-  "homepage.features.title": {
-    "message": "Apache RocketMQ 消息架构的 Rust 实现"
-  },
-  "homepage.motion.title": {
-    "message": "Rust 中的 RocketMQ 消息流"
-  },
-  "homepage.motion.nameserver.title": {
-    "message": "NameServer 路由"
-  },
-  "homepage.motion.nameserver.detail": {
-    "message": "Producer 和 Consumer 在发送或拉取消息前，通过 NameServer 解析 Broker 路由。"
-  },
-  "homepage.motion.broker.title": {
-    "message": "Broker 存储"
-  },
-  "homepage.motion.broker.detail": {
-    "message": "消息写入 CommitLog，并分发到消费队列，支撑可靠投递。"
-  },
-  "homepage.motion.producer.title": {
-    "message": "Producer API"
-  },
-  "homepage.motion.producer.detail": {
-    "message": "客户端 API 支持 Topic 消息、队列选择、批量发送和事务消息流程。"
-  },
-  "homepage.motion.consumer.title": {
-    "message": "Consumer 投递"
-  },
-  "homepage.motion.consumer.detail": {
-    "message": "Consumer 以 Push 或 Pull 模式处理消息，并通过 Offset 维护消费进度。"
-  },
-  "homepage.hero.pill": {
-    "message": "APACHE ROCKETMQ 架构 - RUST 实现 - 异步运行时"
-  },
-  "homepage.hero.subheadline": {
-    "message": "使用 Rust 构建的高性能分布式消息中间件"
-  },
-  "homepage.hero.motionSpec": {
-    "message": "架构流程"
-  },
-  "homepage.hero.stage.route": {
-    "message": "路由查找"
-  },
-  "homepage.hero.stage.produce": {
-    "message": "Producer 发送"
-  },
-  "homepage.hero.stage.append": {
-    "message": "Broker 写入"
-  },
-  "homepage.hero.stage.commitlog": {
-    "message": "CommitLog 刷盘"
-  },
-  "homepage.hero.stage.consume": {
-    "message": "Consumer 拉取"
-  },
-  "homepage.hero.stage.offset": {
-    "message": "Offset 提交"
-  },
-  "homepage.hero.status.nameserver.title": {
-    "message": "NameServer"
-  },
-  "homepage.hero.status.nameserver.detail": {
-    "message": "路由发现"
-  },
-  "homepage.hero.status.broker.title": {
-    "message": "Broker"
-  },
-  "homepage.hero.status.broker.detail": {
-    "message": "写入与分发"
-  },
-  "homepage.hero.status.storage.title": {
-    "message": "CommitLog"
-  },
-  "homepage.hero.status.storage.detail": {
-    "message": "持久化存储"
-  },
-  "homepage.hero.status.client.title": {
-    "message": "Rust Client"
-  },
-  "homepage.hero.status.client.detail": {
-    "message": "生产与消费"
-  },
   "docs.development.notice": {
     "message": "本文档面向 RocketMQ-Rust 1.0.0 开发版。搭建时请使用与源码或实际产物匹配的说明。"
   },
@@ -730,5 +610,461 @@
   },
   "docs.development.dismiss": {
     "message": "关闭开发文档提示"
+  },
+  "homepage.meta.description": {
+    "message": "RocketMQ-Rust 是由社区构建的 Apache RocketMQ Rust 实现：提供 NameServer、Broker、Proxy、Controller 与异步客户端，兼具内存安全与非阻塞 I/O。"
+  },
+  "homepage.hero.release.label": {
+    "message": "v{version} 已发布至 crates.io"
+  },
+  "homepage.hero.release.action": {
+    "message": "发布说明"
+  },
+  "homepage.hero.title.lead": {
+    "message": "分布式消息，"
+  },
+  "homepage.hero.title.accent": {
+    "message": "以 Rust 重铸。"
+  },
+  "homepage.hero.lead": {
+    "message": "RocketMQ-Rust 是由社区构建的 Apache RocketMQ Rust 实现：NameServer、Broker、Proxy、Controller 与异步客户端一应俱全，内存安全、全程非阻塞，并支持 RocketMQ Remoting 与 gRPC 协议。"
+  },
+  "homepage.hero.rotator.prefix": {
+    "message": "原生支持"
+  },
+  "homepage.hero.star": {
+    "message": "在 GitHub 点亮 Star"
+  },
+  "homepage.hero.scroll": {
+    "message": "向下探索"
+  },
+  "homepage.hero.chip.online": {
+    "message": "在线"
+  },
+  "homepage.hero.chip.waiting": {
+    "message": "等待中"
+  },
+  "homepage.hero.chip.messages": {
+    "message": "已发送消息"
+  },
+  "homepage.hero.terminal.label": {
+    "message": "终端演示：依次启动 NameServer 与 Broker，再使用 Rust 客户端向 TopicTest 发送消息。"
+  },
+  "homepage.pattern.ordered": {
+    "message": "顺序消息"
+  },
+  "homepage.pattern.delayed": {
+    "message": "延迟消息"
+  },
+  "homepage.pattern.transactional": {
+    "message": "事务消息"
+  },
+  "homepage.pattern.batched": {
+    "message": "批量消息"
+  },
+  "homepage.pattern.requestReply": {
+    "message": "请求-应答消息"
+  },
+  "homepage.copy.label": {
+    "message": "复制到剪贴板"
+  },
+  "homepage.copy.done": {
+    "message": "已复制"
+  },
+  "homepage.marquee.label": {
+    "message": "能力与技术栈"
+  },
+  "homepage.marquee.ordered": {
+    "message": "顺序消息"
+  },
+  "homepage.marquee.delayed": {
+    "message": "延迟投递"
+  },
+  "homepage.marquee.transactional": {
+    "message": "事务消息"
+  },
+  "homepage.marquee.batch": {
+    "message": "批量发送"
+  },
+  "homepage.marquee.requestReply": {
+    "message": "请求-应答"
+  },
+  "homepage.marquee.push": {
+    "message": "Push 消费"
+  },
+  "homepage.marquee.litePull": {
+    "message": "LitePull 消费"
+  },
+  "homepage.marquee.pop": {
+    "message": "POP 消费"
+  },
+  "homepage.marquee.filter": {
+    "message": "Tag 与 SQL92 过滤"
+  },
+  "homepage.marquee.acl": {
+    "message": "ACL 授权"
+  },
+  "homepage.marquee.tls": {
+    "message": "TLS 传输"
+  },
+  "homepage.marquee.raft": {
+    "message": "Raft Controller"
+  },
+  "homepage.marquee.grpc": {
+    "message": "gRPC Proxy"
+  },
+  "homepage.marquee.tiered": {
+    "message": "分层存储"
+  },
+  "homepage.stats.label": {
+    "message": "项目概览"
+  },
+  "homepage.stats.release.label": {
+    "message": "稳定版本"
+  },
+  "homepage.stats.release.detail": {
+    "message": "已发布至 crates.io"
+  },
+  "homepage.stats.crates.label": {
+    "message": "工作区 Crate"
+  },
+  "homepage.stats.crates.detail": {
+    "message": "从协议到存储，同一个仓库"
+  },
+  "homepage.stats.gc.label": {
+    "message": "GC 停顿"
+  },
+  "homepage.stats.gc.detail": {
+    "message": "Rust 无需垃圾回收即可释放内存"
+  },
+  "homepage.stats.stars.label": {
+    "message": "GitHub Star"
+  },
+  "homepage.stats.stars.detail": {
+    "message": "欢迎为仓库点亮 Star"
+  },
+  "homepage.arch.eyebrow": {
+    "message": "动态架构"
+  },
+  "homepage.arch.title": {
+    "message": "跟随一条消息，从生产到消费"
+  },
+  "homepage.arch.lead": {
+    "message": "路由发现、发送、持久化、复制与投递：RocketMQ 模型的每一跳，都以异步 Rust 实现。"
+  },
+  "homepage.arch.diagram.label": {
+    "message": "集群示意图：Producer、NameServer、包含主从节点的 Broker 组、Consumer、Controller 与 Proxy。高亮的链路对应当前选中的步骤。"
+  },
+  "homepage.arch.group": {
+    "message": "BROKER 组"
+  },
+  "homepage.arch.node.namesrv": {
+    "message": "路由注册中心 · :9876"
+  },
+  "homepage.arch.node.producer": {
+    "message": "异步 Rust 客户端"
+  },
+  "homepage.arch.node.consumer": {
+    "message": "消费者组"
+  },
+  "homepage.arch.node.controller": {
+    "message": "Raft 仲裁"
+  },
+  "homepage.arch.node.proxy": {
+    "message": "gRPC 接入 · :8081"
+  },
+  "homepage.arch.node.slave": {
+    "message": "HA 副本"
+  },
+  "homepage.arch.badge.master": {
+    "message": "主节点"
+  },
+  "homepage.arch.badge.slave": {
+    "message": "从节点"
+  },
+  "homepage.arch.badge.offline": {
+    "message": "已下线"
+  },
+  "homepage.arch.legend.control": {
+    "message": "控制面"
+  },
+  "homepage.arch.legend.produce": {
+    "message": "生产"
+  },
+  "homepage.arch.legend.store": {
+    "message": "存储与复制"
+  },
+  "homepage.arch.legend.consume": {
+    "message": "消费"
+  },
+  "homepage.arch.pause": {
+    "message": "暂停演示"
+  },
+  "homepage.arch.play": {
+    "message": "播放演示"
+  },
+  "homepage.arch.link": {
+    "message": "架构总览"
+  },
+  "homepage.arch.step.register.title": {
+    "message": "注册"
+  },
+  "homepage.arch.step.register.detail": {
+    "message": "Broker 向 NameServer 注册 Topic，并通过心跳保持路由表最新。"
+  },
+  "homepage.arch.step.discover.title": {
+    "message": "发现"
+  },
+  "homepage.arch.step.discover.detail": {
+    "message": "Producer 与 Consumer 向 NameServer 查询 Topic 路由，随后直连对应的 Broker。"
+  },
+  "homepage.arch.step.send.title": {
+    "message": "发送"
+  },
+  "homepage.arch.step.send.detail": {
+    "message": "Producer 选定队列后异步发送，既可直接使用 Remoting，也可通过 Proxy 走 gRPC。"
+  },
+  "homepage.arch.step.persist.title": {
+    "message": "持久化"
+  },
+  "homepage.arch.step.persist.detail": {
+    "message": "Broker 将消息追加到 CommitLog，构建 ConsumeQueue 与索引，并复制到从节点。"
+  },
+  "homepage.arch.step.consume.title": {
+    "message": "消费"
+  },
+  "homepage.arch.step.consume.detail": {
+    "message": "Consumer 通过 Push、LitePull 或 POP 获取消息，随后提交位点或确认回执。"
+  },
+  "homepage.arch.step.failover.title": {
+    "message": "故障切换"
+  },
+  "homepage.arch.step.failover.detail": {
+    "message": "主节点宕机时，基于 Raft 的 Controller 会从同步副本中选举出新的主节点。"
+  },
+  "homepage.why.eyebrow": {
+    "message": "为什么选择 RocketMQ-Rust"
+  },
+  "homepage.why.title": {
+    "message": "为核心链路精心打造"
+  },
+  "homepage.why.lead": {
+    "message": "你熟悉的 RocketMQ 模型，用一门能把整类运行时故障变成编译错误的语言重新构建。"
+  },
+  "homepage.why.safety.title": {
+    "message": "无需垃圾回收的内存安全"
+  },
+  "homepage.why.safety.text": {
+    "message": "所有权与借用机制在编译期排除数据竞争与释放后使用。没有 GC，消息链路上也就没有 Stop-The-World 停顿。"
+  },
+  "homepage.why.safety.verdict": {
+    "message": "由编译器拦截，而不是在生产环境暴露"
+  },
+  "homepage.why.async.title": {
+    "message": "从 Socket 到磁盘全程异步"
+  },
+  "homepage.why.async.text": {
+    "message": "基于 Tokio 构建。网络、请求处理与后台服务均为非阻塞，运行时归属明确，关闭过程有序。"
+  },
+  "homepage.why.protocol.title": {
+    "message": "原生支持 RocketMQ 协议"
+  },
+  "homepage.why.protocol.text": {
+    "message": "实现了 Remoting 协议与 gRPC 消息 API，Rust 与 Java 的客户端和服务端可在文档明确的边界内互通。"
+  },
+  "homepage.why.storage.title": {
+    "message": "可插拔的存储引擎"
+  },
+  "homepage.why.storage.text": {
+    "message": "追加写入的 CommitLog 搭配 ConsumeQueue 与索引文件，另有 RocksDB 后端，以及突破本地磁盘容量的分层存储。"
+  },
+  "homepage.why.patterns.title": {
+    "message": "覆盖各类消息模式"
+  },
+  "homepage.why.patterns.text": {
+    "message": "支持顺序、延迟、事务、批量与请求-应答消息，可通过 Push、LitePull 或 POP 消费。"
+  },
+  "homepage.why.ha.title": {
+    "message": "基于 Raft 的高可用"
+  },
+  "homepage.why.ha.text": {
+    "message": "基于 Raft 的 Controller 负责协调各 Broker 组的主节点选举与同步副本。"
+  },
+  "homepage.why.security.title": {
+    "message": "内建安全能力"
+  },
+  "homepage.why.security.text": {
+    "message": "认证、ACL 授权与 TLS 共同守护客户端与管理端的访问。"
+  },
+  "homepage.why.observability.title": {
+    "message": "为可观测而设计"
+  },
+  "homepage.why.observability.text": {
+    "message": "提供 Prometheus 指标，以及基于 OTLP 的 OpenTelemetry 链路与日志，通过可选的构建特性按需启用。"
+  },
+  "homepage.code.eyebrow": {
+    "message": "开发体验"
+  },
+  "homepage.code.title": {
+    "message": "地道的 Rust API"
+  },
+  "homepage.code.lead": {
+    "message": "Builder、带类型的返回值与显式的生命周期。没有隐藏线程，也没有意外。"
+  },
+  "homepage.code.tabs.label": {
+    "message": "代码示例"
+  },
+  "homepage.code.producer.builder.title": {
+    "message": "流畅且带类型的 Builder"
+  },
+  "homepage.code.producer.builder.text": {
+    "message": "生产者组、NameServer 地址与超时时间都通过 Builder 调用配置，并运行在由你掌控的运行时之上。"
+  },
+  "homepage.code.producer.message.title": {
+    "message": "经过校验的消息"
+  },
+  "homepage.code.producer.message.text": {
+    "message": "消息在构建时即完成校验，早于任何网络传输。"
+  },
+  "homepage.code.producer.result.title": {
+    "message": "必须处理的返回值"
+  },
+  "homepage.code.producer.result.text": {
+    "message": "每次发送都会返回带类型的结果，其中包含发送状态、消息 ID 与队列位点。"
+  },
+  "homepage.code.consumer.setup.title": {
+    "message": "显式的配置"
+  },
+  "homepage.code.consumer.setup.text": {
+    "message": "消费者组、起始位点与提交方式，在调用处一目了然。"
+  },
+  "homepage.code.consumer.loop.title": {
+    "message": "由你掌控消费循环"
+  },
+  "homepage.code.consumer.loop.text": {
+    "message": "LitePull 按你的节奏批量交付消息；需要回调或回执时，还有 Push 与 POP 可选。"
+  },
+  "homepage.code.consumer.commit.title": {
+    "message": "进度由你决定"
+  },
+  "homepage.code.consumer.commit.text": {
+    "message": "只有在业务处理成功之后，才提交消费位点。"
+  },
+  "homepage.code.manifest.crates.title": {
+    "message": "已发布至 crates.io"
+  },
+  "homepage.code.manifest.crates.text": {
+    "message": "客户端、模型、运行时与可观测性 Crate 以同一版本号统一发布。"
+  },
+  "homepage.code.manifest.tokio.title": {
+    "message": "基于 Tokio"
+  },
+  "homepage.code.manifest.tokio.text": {
+    "message": "端到端异步，可与你已在使用的宏、信号与定时器协同工作。"
+  },
+  "homepage.code.link.producer": {
+    "message": "Producer 指南"
+  },
+  "homepage.code.link.consumer": {
+    "message": "Consumer 指南"
+  },
+  "homepage.code.link.api": {
+    "message": "Rust API 参考"
+  },
+  "homepage.eco.eyebrow": {
+    "message": "生态"
+  },
+  "homepage.eco.title": {
+    "message": "一个工作区，一整套消息平台"
+  },
+  "homepage.eco.lead": {
+    "message": "服务、类库与运维工具在同一个仓库中协同演进。"
+  },
+  "homepage.eco.services.title": {
+    "message": "核心服务"
+  },
+  "homepage.eco.services.text": {
+    "message": "NameServer、Broker、Proxy 与 Controller：RocketMQ 集群中可独立部署的运行时。"
+  },
+  "homepage.eco.services.link": {
+    "message": "架构总览"
+  },
+  "homepage.eco.libraries.title": {
+    "message": "可复用的 Crate"
+  },
+  "homepage.eco.libraries.text": {
+    "message": "客户端 SDK、协议、传输、存储引擎、运行时与认证，均可从 crates.io 单独引入使用。"
+  },
+  "homepage.eco.libraries.link": {
+    "message": "模块地图"
+  },
+  "homepage.eco.operations.title": {
+    "message": "运维与 AI"
+  },
+  "homepage.eco.operations.text": {
+    "message": "Admin CLI 与 TUI、Web 与桌面 Dashboard、MCP 服务以及 AI SRE 工作流。"
+  },
+  "homepage.eco.operations.link": {
+    "message": "生态指南"
+  },
+  "homepage.start.eyebrow": {
+    "message": "快速开始"
+  },
+  "homepage.start.title": {
+    "message": "从克隆仓库到第一条消息"
+  },
+  "homepage.start.lead": {
+    "message": "四个步骤，从源码拉起本地集群，并发出你的第一批消息。"
+  },
+  "homepage.start.shell.label": {
+    "message": "命令行环境"
+  },
+  "homepage.start.clone.title": {
+    "message": "克隆并构建"
+  },
+  "homepage.start.clone.text": {
+    "message": "获取工作区源码，使用固定的 Rust 1.95 工具链完成构建。"
+  },
+  "homepage.start.namesrv.title": {
+    "message": "启动 NameServer"
+  },
+  "homepage.start.namesrv.text": {
+    "message": "Broker 与客户端的路由注册中心，默认监听 127.0.0.1:9876。"
+  },
+  "homepage.start.broker.title": {
+    "message": "启动 Broker"
+  },
+  "homepage.start.broker.text": {
+    "message": "为 Broker 指定存放数据的主目录，并让它连接 NameServer。"
+  },
+  "homepage.start.client.title": {
+    "message": "发送与消费"
+  },
+  "homepage.start.client.text": {
+    "message": "先启动消费者，再在另一个终端中运行生产者。"
+  },
+  "homepage.start.link.guide": {
+    "message": "完整的首条消息教程"
+  },
+  "homepage.start.link.install": {
+    "message": "安装方式"
+  },
+  "homepage.cta.title": {
+    "message": "与我们一起构建下一代消息系统"
+  },
+  "homepage.cta.lead": {
+    "message": "RocketMQ-Rust 在开源社区中公开演进。欢迎为仓库点亮 Star、参与讨论，或者认领一个 good first issue。"
+  },
+  "homepage.cta.discussions": {
+    "message": "参与讨论"
+  },
+  "homepage.cta.contribute": {
+    "message": "贡献指南"
+  },
+  "homepage.cta.issues": {
+    "message": "浏览 good first issue"
+  },
+  "homepage.cta.disclaimer": {
+    "message": "RocketMQ-Rust 是独立的社区项目，并非 Apache 软件基金会的官方发行版。Apache RocketMQ 是 Apache 软件基金会的商标。"
   }
 }
