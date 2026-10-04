@@ -51,10 +51,10 @@ use super::index::NotificationIndexReserveRejection;
 use super::index::NotificationIndexSnapshot;
 use super::index::NotificationMatchCriteria;
 use super::index::NotificationScanCursor;
+use super::service::NotificationContinuationDecision;
 use super::service::NotificationContinuationOperationalError;
-use super::service::NotificationContinuationOutcome;
 use super::service::NotificationContinuationRejection;
-use super::service::NotificationDeferredPrepareOutcome;
+use super::service::NotificationDeferredPreparationStatus;
 use super::service::NotificationDeferredPrepareRejectionKind;
 use super::service::NotificationDeferredService;
 use super::service::NotificationRequestData;
@@ -101,8 +101,8 @@ macro_rules! expect_reserved {
 macro_rules! expect_continued {
     ($result:expr, $message:literal) => {
         match $result {
-            Ok(NotificationContinuationOutcome::Continued(continuation)) => continuation,
-            Ok(NotificationContinuationOutcome::Rejected(rejection)) => {
+            Ok(NotificationContinuationDecision::Ready(continuation)) => continuation,
+            Ok(NotificationContinuationDecision::Rejected(rejection)) => {
                 panic!("{}: {rejection:?}", $message)
             }
             Err(error) => panic!("{}: {error:?}", $message),
@@ -113,8 +113,8 @@ macro_rules! expect_continued {
 macro_rules! expect_prepared {
     ($result:expr, $message:literal) => {
         match $result {
-            Ok(NotificationDeferredPrepareOutcome::Prepared(prepared)) => *prepared,
-            Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => {
+            Ok(NotificationDeferredPreparationStatus::Prepared(prepared)) => *prepared,
+            Ok(NotificationDeferredPreparationStatus::Rejected(rejection)) => {
                 panic!("{}: {:?}", $message, rejection.kind())
             }
             Err(error) => panic!("{}: {error:?}", $message),
@@ -360,8 +360,8 @@ fn notification_deferred_prepare_failures_release_index_and_wait_capacity() {
         0,
         monotonic,
     ) {
-        Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => rejection,
-        Ok(NotificationDeferredPrepareOutcome::Prepared(_)) | Err(_) => {
+        Ok(NotificationDeferredPreparationStatus::Rejected(rejection)) => rejection,
+        Ok(NotificationDeferredPreparationStatus::Prepared(_)) | Err(_) => {
             panic!("invalid signed deadline stays pre-take")
         }
     };
@@ -400,8 +400,8 @@ fn notification_deferred_continuation_has_independent_count_and_bytes_admission(
     );
     assert_eq!(deferred_service.snapshot().active_continuations(), 1);
     let second = match deferred_service.admit_continuation(arrival, NotificationScanCursor::for_test(1)) {
-        Ok(NotificationContinuationOutcome::Rejected(rejection)) => rejection,
-        Ok(NotificationContinuationOutcome::Continued(_)) | Err(_) => {
+        Ok(NotificationContinuationDecision::Rejected(rejection)) => rejection,
+        Ok(NotificationContinuationDecision::Ready(_)) | Err(_) => {
             panic!("second continuation exceeds the count cap")
         }
     };
@@ -417,8 +417,8 @@ fn notification_deferred_continuation_has_independent_count_and_bytes_admission(
         NotificationArrivalView::new(&large_topic, 0),
         NotificationScanCursor::for_test(1),
     ) {
-        Ok(NotificationContinuationOutcome::Rejected(rejection)) => rejection,
-        Ok(NotificationContinuationOutcome::Continued(_)) | Err(_) => {
+        Ok(NotificationContinuationDecision::Rejected(rejection)) => rejection,
+        Ok(NotificationContinuationDecision::Ready(_)) | Err(_) => {
             panic!("arrival payload exceeds continuation byte capacity")
         }
     };
@@ -467,8 +467,8 @@ fn notification_deferred_continuation_charges_fixed_cursor_and_property_storage_
     let arrival = NotificationArrivalView::new(&topic, 0).with_filter_metadata(None, 0, None, Some(&properties));
     let constrained = service(1, 1, 1, 4096);
     let error = match constrained.admit_continuation(arrival, NotificationScanCursor::for_test(64)) {
-        Ok(NotificationContinuationOutcome::Rejected(rejection)) => rejection,
-        Ok(NotificationContinuationOutcome::Continued(_)) | Err(_) => {
+        Ok(NotificationContinuationDecision::Rejected(rejection)) => rejection,
+        Ok(NotificationContinuationDecision::Ready(_)) | Err(_) => {
             panic!("fixed owners, cursor backing, buckets, and short properties exceed the byte cap")
         }
     };

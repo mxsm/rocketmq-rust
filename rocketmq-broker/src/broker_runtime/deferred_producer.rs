@@ -37,8 +37,8 @@ use crate::deferred_generation_handoff::RoutePermit;
 use crate::lite::lite_event_dispatcher::DeferredEventObserver;
 use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
 use crate::long_polling::notification_deferred::index::NotificationArrivalView;
+use crate::long_polling::notification_deferred::service::NotificationArrivalLatchStatus;
 use crate::long_polling::notification_deferred::service::NotificationDeferredService;
-use crate::long_polling::notification_deferred::service::NotificationPendingArrivalOutcome;
 use crate::long_polling::pending_arrival_latch::PendingArrivalInsertOutcome;
 use crate::long_polling::pop_deferred::index::PopArrivalView;
 use crate::long_polling::pop_deferred::index::PopSelectionOrder;
@@ -363,8 +363,8 @@ where
             .notification
             .latch_arrival(arrival, self.notification.arrival_cursor(arrival))
         {
-            Ok(NotificationPendingArrivalOutcome::Latched) => self.produce_pending_notification_arrivals(),
-            Ok(NotificationPendingArrivalOutcome::Rejected(_)) => {}
+            Ok(NotificationArrivalLatchStatus::Latched) => self.produce_pending_notification_arrivals(),
+            Ok(NotificationArrivalLatchStatus::Rejected(_)) => {}
             Err(error) => warn!(?error, "failed to retain deferred Notification arrival replay"),
         }
     }

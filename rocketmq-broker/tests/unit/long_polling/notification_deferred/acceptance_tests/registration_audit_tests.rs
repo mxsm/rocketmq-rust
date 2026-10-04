@@ -23,10 +23,10 @@ use rocketmq_transport::api::TransportSecurity;
 use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
 use super::*;
-use crate::long_polling::notification_deferred::service::NotificationDeferredPrepareOutcome;
+use crate::long_polling::notification_deferred::service::NotificationDeferredPreparationStatus;
 use crate::long_polling::notification_deferred::service::NotificationDeferredPrepareRejectionKind;
-use crate::long_polling::notification_deferred::service::NotificationDeferredRegisterOutcome;
 use crate::long_polling::notification_deferred::service::NotificationDeferredRegisterRejectionKind;
+use crate::long_polling::notification_deferred::service::NotificationDeferredRegistrationStatus;
 use crate::long_polling::notification_deferred::service::NotificationRegisterFault;
 use crate::long_polling::notification_deferred::service::PreparedNotificationRegistration;
 
@@ -86,8 +86,8 @@ impl RequestProcessor for ProvenanceProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         if let Some(prepared) = self.state.lock().prepared.take() {
             let rejection = match self.service.register(prepared, request) {
-                Ok(NotificationDeferredRegisterOutcome::Rejected(rejection)) => rejection,
-                Ok(NotificationDeferredRegisterOutcome::Registered(_)) | Err(_) => {
+                Ok(NotificationDeferredRegistrationStatus::Rejected(rejection)) => rejection,
+                Ok(NotificationDeferredRegistrationStatus::Registered(_)) | Err(_) => {
                     panic!("a prepared Notification proof cannot move to another request")
                 }
             };
@@ -101,8 +101,8 @@ impl RequestProcessor for ProvenanceProcessor {
             .service
             .prepare(request, None, None, NotificationRetainedEstimate::default())
         {
-            Ok(NotificationDeferredPrepareOutcome::Prepared(prepared)) => *prepared,
-            Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => {
+            Ok(NotificationDeferredPreparationStatus::Prepared(prepared)) => *prepared,
+            Ok(NotificationDeferredPreparationStatus::Rejected(rejection)) => {
                 return Err(crate::broker_error::invalid_argument(format!("{:?}", rejection.kind())));
             }
             Err(error) => return Err(crate::broker_error::invalid_argument(error.to_string())),
@@ -124,8 +124,8 @@ impl RequestProcessor for EmbeddedOriginProcessor {
             .service
             .prepare(request, None, None, NotificationRetainedEstimate::default())
         {
-            Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => rejection,
-            Ok(NotificationDeferredPrepareOutcome::Prepared(_)) | Err(_) => {
+            Ok(NotificationDeferredPreparationStatus::Rejected(rejection)) => rejection,
+            Ok(NotificationDeferredPreparationStatus::Prepared(_)) | Err(_) => {
                 panic!("embedded Notification must fail before allocating deferred resources")
             }
         };
@@ -155,11 +155,11 @@ impl RequestProcessor for CapacityProcessor {
             .service
             .prepare(request, None, None, NotificationRetainedEstimate::default())
         {
-            Ok(NotificationDeferredPrepareOutcome::Prepared(prepared)) => {
+            Ok(NotificationDeferredPreparationStatus::Prepared(prepared)) => {
                 self.held.lock().push(*prepared);
                 false
             }
-            Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => {
+            Ok(NotificationDeferredPreparationStatus::Rejected(rejection)) => {
                 self.observed.lock().push(rejection.kind());
                 true
             }
@@ -188,16 +188,16 @@ impl RequestProcessor for PostTakeFaultProcessor {
             .service
             .prepare(request, None, None, NotificationRetainedEstimate::default())
         {
-            Ok(NotificationDeferredPrepareOutcome::Prepared(prepared)) => *prepared,
-            Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => {
+            Ok(NotificationDeferredPreparationStatus::Prepared(prepared)) => *prepared,
+            Ok(NotificationDeferredPreparationStatus::Rejected(rejection)) => {
                 return Err(crate::broker_error::invalid_argument(format!("{:?}", rejection.kind())));
             }
             Err(error) => return Err(crate::broker_error::invalid_argument(error.to_string())),
         };
         self.service.force_register_fault(self.fault);
         let rejection = match self.service.register(prepared, request) {
-            Ok(NotificationDeferredRegisterOutcome::Rejected(rejection)) => rejection,
-            Ok(NotificationDeferredRegisterOutcome::Registered(_)) | Err(_) => {
+            Ok(NotificationDeferredRegistrationStatus::Rejected(rejection)) => rejection,
+            Ok(NotificationDeferredRegistrationStatus::Registered(_)) | Err(_) => {
                 panic!("injected post-take Notification fault must fail registration")
             }
         };
@@ -218,8 +218,8 @@ impl RequestProcessor for OneWayProcessor {
             .service
             .prepare(request, None, None, NotificationRetainedEstimate::default())
         {
-            Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => rejection,
-            Ok(NotificationDeferredPrepareOutcome::Prepared(_)) | Err(_) => {
+            Ok(NotificationDeferredPreparationStatus::Rejected(rejection)) => rejection,
+            Ok(NotificationDeferredPreparationStatus::Prepared(_)) | Err(_) => {
                 panic!("one-way Notification must fail before deferred allocation")
             }
         };

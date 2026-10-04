@@ -20,8 +20,8 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 
+use super::NotificationContinuationDecision;
 use super::NotificationContinuationOperationalError;
-use super::NotificationContinuationOutcome;
 use super::NotificationContinuationRejection;
 use crate::long_polling::notification_deferred::index::NotificationArrivalView;
 use crate::long_polling::notification_deferred::index::NotificationScanCursor;
@@ -163,10 +163,10 @@ impl NotificationPendingArrival {
         cursor: NotificationScanCursor,
         remaining_conflicts: usize,
         max_conflicts: usize,
-    ) -> Result<NotificationContinuationOutcome<Self>, NotificationContinuationOperationalError> {
+    ) -> Result<NotificationContinuationDecision<Self>, NotificationContinuationOperationalError> {
         let retained_bytes = OwnedNotificationArrival::retained_bytes(arrival, &cursor)?;
         let owned = OwnedNotificationArrival::try_from_view(arrival)?;
-        Ok(NotificationContinuationOutcome::Continued(Self {
+        Ok(NotificationContinuationDecision::Ready(Self {
             owned,
             cursor,
             remaining_conflicts,
@@ -229,12 +229,12 @@ impl ContinuationAdmission {
     pub(super) fn reserve(
         self: &Arc<Self>,
         bytes: usize,
-    ) -> Result<NotificationContinuationOutcome<ContinuationPermit>, NotificationContinuationOperationalError> {
+    ) -> Result<NotificationContinuationDecision<ContinuationPermit>, NotificationContinuationOperationalError> {
         let count = self.count.fetch_add(1, Ordering::AcqRel);
         if count >= self.max_count {
             self.count.fetch_sub(1, Ordering::AcqRel);
             self.rejected.fetch_add(1, Ordering::Relaxed);
-            return Ok(NotificationContinuationOutcome::Rejected(
+            return Ok(NotificationContinuationDecision::Rejected(
                 NotificationContinuationRejection::CountFull,
             ));
         }
@@ -248,7 +248,7 @@ impl ContinuationAdmission {
             if next > self.max_bytes {
                 self.count.fetch_sub(1, Ordering::AcqRel);
                 self.rejected.fetch_add(1, Ordering::Relaxed);
-                return Ok(NotificationContinuationOutcome::Rejected(
+                return Ok(NotificationContinuationDecision::Rejected(
                     NotificationContinuationRejection::BytesFull,
                 ));
             }
@@ -260,7 +260,7 @@ impl ContinuationAdmission {
                 Err(observed) => current = observed,
             }
         }
-        Ok(NotificationContinuationOutcome::Continued(ContinuationPermit {
+        Ok(NotificationContinuationDecision::Ready(ContinuationPermit {
             admission: Arc::clone(self),
             bytes,
         }))
