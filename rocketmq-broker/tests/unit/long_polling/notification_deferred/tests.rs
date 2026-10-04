@@ -46,7 +46,7 @@ use super::index::NotificationCriteriaIndex;
 use super::index::NotificationCriteriaKey;
 use super::index::NotificationCriteriaLimits;
 use super::index::NotificationIndexOperationalError;
-use super::index::NotificationIndexReserveOutcome;
+use super::index::NotificationIndexReservationStatus;
 use super::index::NotificationIndexReserveRejection;
 use super::index::NotificationIndexSnapshot;
 use super::index::NotificationMatchCriteria;
@@ -89,8 +89,8 @@ fn expect_deadline_rejection(
 macro_rules! expect_reserved {
     ($result:expr, $message:literal) => {
         match $result {
-            Ok(NotificationIndexReserveOutcome::Reserved(reservation)) => reservation,
-            Ok(NotificationIndexReserveOutcome::Rejected(rejection)) => {
+            Ok(NotificationIndexReservationStatus::Reserved(reservation)) => reservation,
+            Ok(NotificationIndexReservationStatus::Rejected(rejection)) => {
                 panic!("{}: {rejection:?}", $message)
             }
             Err(error) => panic!("{}: {error:?}", $message),
@@ -231,8 +231,8 @@ fn notification_deferred_index_uses_legacy_plus_one_per_key_and_hint_is_not_a_ke
         Arc::clone(&criteria),
     );
     let full = match index.reserve(key("group-a", 0)) {
-        Ok(NotificationIndexReserveOutcome::Rejected(rejection)) => rejection,
-        Ok(NotificationIndexReserveOutcome::Reserved(_)) | Err(_) => {
+        Ok(NotificationIndexReservationStatus::Rejected(rejection)) => rejection,
+        Ok(NotificationIndexReservationStatus::Reserved(_)) | Err(_) => {
             panic!("third entry exceeds pop_polling_size + 1")
         }
     };
@@ -245,8 +245,8 @@ fn notification_deferred_index_uses_legacy_plus_one_per_key_and_hint_is_not_a_ke
     let fourth =
         expect_reserved!(index.reserve(key("group-c", 0)), "fourth global entry").publish(4, deadline, criteria);
     let global = match index.reserve(key("group-d", 0)) {
-        Ok(NotificationIndexReserveOutcome::Rejected(rejection)) => rejection,
-        Ok(NotificationIndexReserveOutcome::Reserved(_)) | Err(_) => {
+        Ok(NotificationIndexReservationStatus::Rejected(rejection)) => rejection,
+        Ok(NotificationIndexReservationStatus::Reserved(_)) | Err(_) => {
             panic!("fifth entry exceeds the global live+reserved cap")
         }
     };

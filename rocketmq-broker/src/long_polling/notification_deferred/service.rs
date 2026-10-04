@@ -74,7 +74,7 @@ use super::index::NotificationCriteriaIndex;
 use super::index::NotificationCriteriaKey;
 use super::index::NotificationCriteriaLimits;
 use super::index::NotificationIndexOperationalError;
-use super::index::NotificationIndexReserveOutcome;
+use super::index::NotificationIndexReservationStatus;
 use super::index::NotificationIndexReserveRejection;
 use super::index::NotificationIndexSnapshot;
 use super::index::NotificationMatchCriteria;
@@ -277,8 +277,8 @@ impl NotificationDeferredService {
             .reserve_at(key, monotonic_now)
             .map_err(NotificationDeferredPrepareFailure::Index)?
         {
-            NotificationIndexReserveOutcome::Reserved(reservation) => reservation,
-            NotificationIndexReserveOutcome::Rejected(rejection) => {
+            NotificationIndexReservationStatus::Reserved(reservation) => reservation,
+            NotificationIndexReservationStatus::Rejected(rejection) => {
                 return Ok(NotificationDeferredPrepareOutcome::Rejected(
                     NotificationDeferredPrepareRejection::IndexCapacity(rejection),
                 ));
