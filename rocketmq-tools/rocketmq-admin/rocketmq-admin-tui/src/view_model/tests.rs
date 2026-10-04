@@ -117,6 +117,46 @@ use super::KeyValueViewModel;
 use super::OperationSummaryViewModel;
 use super::TableViewModel;
 
+/// Flattens a result to plain text so assertions can look for content regardless of layout.
+trait TextBody {
+    fn text_body(&self) -> String;
+}
+
+impl TextBody for CommandResultViewModel {
+    fn text_body(&self) -> String {
+        match self {
+            Self::Table(table) => {
+                let mut lines = Vec::new();
+                lines.push(table.headers.join(" | "));
+                lines.extend(table.rows.iter().map(|row| row.join(" | ")));
+                lines.join("\n")
+            }
+            Self::KeyValue(key_values) => key_values
+                .rows
+                .iter()
+                .map(|(key, value)| format!("{key}: {value}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            Self::Json { body, .. } | Self::Text { body, .. } => body.clone(),
+            Self::OperationSummary(summary) => {
+                let mut lines = vec![
+                    format!("success: {}", summary.success_count),
+                    format!("failed: {}", summary.failure_count),
+                ];
+                if !summary.targets.is_empty() {
+                    lines.push("targets:".to_string());
+                    lines.extend(summary.targets.iter().map(|target| format!("  {target}")));
+                }
+                if !summary.errors.is_empty() {
+                    lines.push("errors:".to_string());
+                    lines.extend(summary.errors.iter().map(|error| format!("  {error}")));
+                }
+                lines.join("\n")
+            }
+        }
+    }
+}
+
 #[test]
 fn result_view_models_render_text_bodies() {
     let table = CommandResultViewModel::Table(TableViewModel {
@@ -140,49 +180,6 @@ fn result_view_models_render_text_bodies() {
         errors: vec!["failed".to_string()],
     });
     assert!(summary.text_body().contains("topic-a"));
-}
-
-#[test]
-fn table_viewport_slices_columns_by_horizontal_scroll() {
-    let table = TableViewModel {
-        title: "table".to_string(),
-        headers: vec![
-            "cluster".to_string(),
-            "broker".to_string(),
-            "addr".to_string(),
-            "status".to_string(),
-        ],
-        rows: vec![vec![
-            "cluster-a".to_string(),
-            "broker-a".to_string(),
-            "127.0.0.1:10911".to_string(),
-            "online".to_string(),
-        ]],
-    };
-
-    let viewport = table.viewport(1, 18);
-
-    assert!(viewport.hidden_left);
-    assert!(viewport.hidden_right);
-    assert_eq!(viewport.headers, vec!["broker"]);
-    assert_eq!(viewport.rows[0], vec!["broker-a"]);
-    assert_eq!(viewport.widths.len(), 1);
-}
-
-#[test]
-fn table_viewport_clamps_out_of_range_scroll_to_last_column() {
-    let table = TableViewModel {
-        title: "table".to_string(),
-        headers: vec!["a".to_string(), "b".to_string()],
-        rows: vec![vec!["1".to_string(), "2".to_string()]],
-    };
-
-    let viewport = table.viewport(99, 80);
-
-    assert!(viewport.hidden_left);
-    assert!(!viewport.hidden_right);
-    assert_eq!(viewport.headers, vec!["b"]);
-    assert_eq!(viewport.rows[0], vec!["2"]);
 }
 
 #[test]

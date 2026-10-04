@@ -14,6 +14,8 @@
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::time::Duration;
+use std::time::Instant;
 
 use crate::commands::command_catalog;
 use crate::commands::ArgKind;
@@ -21,6 +23,12 @@ use crate::commands::ArgSpec;
 use crate::commands::CommandCategory;
 use crate::commands::CommandSpec;
 use crate::commands::RiskLevel;
+use crate::motion::ease_out_cubic;
+use crate::motion::progress;
+use crate::motion::Tracked;
+use crate::motion::FRAMES_PER_SECOND;
+use crate::result_view::ResultTone;
+use crate::result_view::ResultView;
 use crate::view_model::CommandResultViewModel;
 use rocketmq_error::Result as CanonicalResult;
 
@@ -40,10 +48,98 @@ impl FocusArea {
             Self::Namesrv => "NameServer",
             Self::Search => "Search",
             Self::CommandTree => "Commands",
-            Self::Args => "Args",
+            Self::Args => "Parameters",
             Self::Result => "Result",
         }
     }
+
+    /// Returns the pane that contains this focus area.
+    pub fn pane(self) -> Pane {
+        match self {
+            Self::Namesrv => Pane::Header,
+            Self::Search | Self::CommandTree => Pane::Sidebar,
+            Self::Args => Pane::Command,
+            Self::Result => Pane::Result,
+        }
+    }
+}
+
+/// Screen region that owns one or more focus areas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pane {
+    Header,
+    Sidebar,
+    Command,
+    Result,
+}
+
+/// Modal layer drawn above the panes. At most one is open at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overlay {
+    None,
+    Help,
+    Confirm,
+    Detail,
+}
+
+/// Text input that receives typed characters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputTarget {
+    Namesrv,
+    Search,
+    /// Argument of the selected command, by position.
+    Arg(usize),
+    Confirm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToastLevel {
+    Info,
+    Success,
+    Warning,
+    Error,
+}
+
+/// Transient notification shown above the key bar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Toast {
+    pub level: ToastLevel,
+    pub message: String,
+    /// Animation tick at which the toast was raised.
+    pub created_at: u64,
+}
+
+impl Toast {
+    pub const LIFETIME_TICKS: u64 = 4 * FRAMES_PER_SECOND;
+}
+
+/// Every column of one result row, shown in the detail overlay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowDetail {
+    pub title: String,
+    pub fields: Vec<(String, String)>,
+}
+
+/// How soon the screen needs another frame when no input arrives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FramePace {
+    /// Nothing on screen depends on time: the next frame can wait for an event.
+    Still,
+    /// Only slow, decorative effects or a running command are on screen.
+    Ambient,
+    /// A transition is playing, or something changed that has not been drawn yet.
+    Full,
+}
+
+/// Execution state without its payload, for change tracking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionPhase {
+    Idle,
+    Confirming,
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,6 +178,18 @@ impl CommandExecutionState {
             Self::Succeeded { command_id, .. } => format!("succeeded {command_id}"),
             Self::Failed { command_id, .. } => format!("failed {command_id}"),
             Self::Cancelled { command_id, .. } => format!("cancelled {command_id}"),
+        }
+    }
+
+    /// Returns the state without its payload.
+    pub fn phase(&self) -> ExecutionPhase {
+        match self {
+            Self::Idle => ExecutionPhase::Idle,
+            Self::Confirming { .. } => ExecutionPhase::Confirming,
+            Self::Running { .. } => ExecutionPhase::Running,
+            Self::Succeeded { .. } => ExecutionPhase::Succeeded,
+            Self::Failed { .. } => ExecutionPhase::Failed,
+            Self::Cancelled { .. } => ExecutionPhase::Cancelled,
         }
     }
 
@@ -174,50 +282,25 @@ impl CommandFormState {
         command.args.get(self.focused_arg)
     }
 
-    /// Moves focus to the next argument without passing the final argument.
-    pub fn focus_next_arg(&mut self, command: &CommandSpec) {
-        if !command.args.is_empty() {
-            self.focused_arg = (self.focused_arg + 1).min(command.args.len() - 1);
-        }
+    /// Moves focus to the argument at `index`, clamped to the last argument.
+    pub fn focus_arg(&mut self, command: &CommandSpec, index: usize) {
+        self.focused_arg = index.min(command.args.len().saturating_sub(1));
     }
 
-    /// Moves focus to the previous argument with saturation at the first.
-    pub fn focus_previous_arg(&mut self) {
-        self.focused_arg = self.focused_arg.saturating_sub(1);
+    /// Returns the position of the first argument that failed validation.
+    pub fn first_invalid_arg(&self, command: &CommandSpec) -> Option<usize> {
+        command
+            .args
+            .iter()
+            .position(|arg| self.validation_errors.contains_key(arg.name))
     }
 
-    /// Appends a character to the focused text-compatible argument.
-    pub fn append_to_current(&mut self, command: &CommandSpec, value: char) {
-        let Some(arg) = self.current_arg(command) else {
-            return;
-        };
-        if matches!(arg.kind, ArgKind::Bool { .. } | ArgKind::Enum { .. }) {
-            return;
-        }
-        self.values.entry(arg.name.to_string()).or_default().push(value);
-        self.dirty = true;
-        self.validation_errors.remove(arg.name);
-    }
-
-    /// Removes the last character from the focused argument.
-    pub fn backspace_current(&mut self, command: &CommandSpec) {
-        let Some(arg) = self.current_arg(command) else {
-            return;
-        };
-        if let Some(value) = self.values.get_mut(arg.name) {
-            value.pop();
-            self.dirty = true;
-            self.validation_errors.remove(arg.name);
-        }
-    }
-
-    /// Toggles a focused Boolean argument or inserts a space into a text argument.
+    /// Toggles the focused argument when it is a Boolean.
     pub fn toggle_bool_current(&mut self, command: &CommandSpec) {
         let Some(arg) = self.current_arg(command) else {
             return;
         };
         if !matches!(arg.kind, ArgKind::Bool { .. }) {
-            self.append_to_current(command, ' ');
             return;
         }
         let current = self.bool_value(arg.name).unwrap_or(false);
@@ -454,6 +537,106 @@ impl CommandFormState {
     }
 }
 
+/// Animation clock plus the change log the renderer derives transitions from.
+///
+/// [`AppState::advance_animation`] observes the state once per frame, so no code
+/// that mutates the state has to know that a transition exists.
+#[derive(Debug)]
+pub struct Motion {
+    tick: u64,
+    enabled: bool,
+    last_activity: u64,
+    /// Tick of the most recent change that starts a transition.
+    last_change: u64,
+    pane: Tracked<Pane>,
+    tree_item: Tracked<Option<CommandTreeItem>>,
+    command: Tracked<usize>,
+    phase: Tracked<(ExecutionPhase, Option<u64>)>,
+    overlay: Tracked<Overlay>,
+    invalid_at: Option<u64>,
+}
+
+impl Motion {
+    /// Ambient effects stop after this long without input so an idle screen is static.
+    const IDLE_AFTER_TICKS: u64 = 20 * FRAMES_PER_SECOND;
+    /// Length of the fade that ends ambient effects.
+    const IDLE_FADE_TICKS: u64 = FRAMES_PER_SECOND;
+    /// Longest transition a change may start. Once it has passed, only ambient
+    /// effects are left, and those do not need every frame.
+    pub const TRANSITION_TICKS: u64 = 40;
+
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Returns whether a transition started by the latest change may still be playing.
+    fn in_transition(&self) -> bool {
+        self.enabled && self.tick.saturating_sub(self.last_change) < Self::TRANSITION_TICKS
+    }
+
+    /// Returns the strength, in `0.0..=1.0`, of continuously running decorative effects.
+    ///
+    /// The strength fades to zero once the application has been idle for a while.
+    pub fn ambient(&self) -> f32 {
+        if !self.enabled {
+            return 0.0;
+        }
+        let idle = self.tick.saturating_sub(self.last_activity);
+        1.0 - progress(
+            idle,
+            Self::IDLE_AFTER_TICKS - Self::IDLE_FADE_TICKS,
+            Self::IDLE_FADE_TICKS,
+        )
+    }
+
+    /// Returns the eased progress of a transition, already complete when motion is off.
+    pub fn transition(&self, started: u64, duration: u64) -> f32 {
+        debug_assert!(
+            duration <= Self::TRANSITION_TICKS,
+            "the frame pace assumes shorter transitions"
+        );
+        if self.enabled {
+            ease_out_cubic(progress(self.tick, started, duration))
+        } else {
+            1.0
+        }
+    }
+
+    /// Returns whether a transition of `duration` ticks that began at `started` is still playing.
+    pub fn is_playing(&self, started: u64, duration: u64) -> bool {
+        debug_assert!(
+            duration <= Self::TRANSITION_TICKS,
+            "the frame pace assumes shorter transitions"
+        );
+        self.enabled && self.tick.saturating_sub(started) < duration
+    }
+
+    pub fn pane(&self) -> Tracked<Pane> {
+        self.pane
+    }
+
+    pub fn tree_item(&self) -> Tracked<Option<CommandTreeItem>> {
+        self.tree_item
+    }
+
+    pub fn command(&self) -> Tracked<usize> {
+        self.command
+    }
+
+    pub fn phase(&self) -> Tracked<(ExecutionPhase, Option<u64>)> {
+        self.phase
+    }
+
+    pub fn overlay(&self) -> Tracked<Overlay> {
+        self.overlay
+    }
+
+    /// Returns the tick of the most recent rejected submission.
+    pub fn invalid_at(&self) -> Option<u64> {
+        self.invalid_at
+    }
+}
+
 #[derive(Debug)]
 pub struct AppState {
     commands: Vec<CommandSpec>,
@@ -465,18 +648,35 @@ pub struct AppState {
     pub search: String,
     pub form: CommandFormState,
     pub execution: CommandExecutionState,
-    pub result: Option<CommandResultViewModel>,
     pub last_error: Option<String>,
     pub progress_message: Option<String>,
     pub show_help: bool,
     pub confirm_input: String,
-    pub result_scroll: u16,
-    pub result_horizontal_scroll: u16,
-    animation_tick: u64,
+    /// Scroll offset of the open overlay.
+    pub overlay_scroll: usize,
+    /// Whether the result pane covers the whole workspace.
+    pub result_zoom: bool,
+    result: Option<ResultView>,
+    detail: Option<RowDetail>,
+    toast: Option<Toast>,
+    /// Edited forms of commands that are not selected, restored on return.
+    form_memory: BTreeMap<&'static str, CommandFormState>,
+    /// Cursor of the input it was last moved in; other inputs keep theirs at the end.
+    cursor: Option<(InputTarget, usize)>,
+    /// NameServer address to restore when the edit is abandoned.
+    namesrv_before_edit: Option<String>,
+    mouse_capture: bool,
+    quit_armed_at: Option<u64>,
+    run_started_at: Option<Instant>,
+    last_run: Option<Duration>,
+    motion: Motion,
     next_execution_id: u64,
 }
 
 impl AppState {
+    /// A second Esc within this window quits the application.
+    const QUIT_ARM_TICKS: u64 = 2 * FRAMES_PER_SECOND;
+
     /// Creates application state from the static command catalog.
     ///
     /// # Panics
@@ -485,27 +685,49 @@ impl AppState {
     pub fn new(namesrv_addr: Option<&str>) -> Self {
         let commands = command_catalog();
         let form = CommandFormState::for_command(&commands[0]);
+        let focus = FocusArea::CommandTree;
         let mut state = Self {
             commands,
             selected_command_index: 0,
             tree_cursor: 0,
             collapsed_categories: BTreeSet::new(),
-            focus: FocusArea::CommandTree,
+            focus,
             namesrv_addr: namesrv_addr.unwrap_or_default().to_string(),
             search: String::new(),
             form,
             execution: CommandExecutionState::Idle,
-            result: None,
             last_error: None,
             progress_message: None,
             show_help: false,
             confirm_input: String::new(),
-            result_scroll: 0,
-            result_horizontal_scroll: 0,
-            animation_tick: 0,
+            overlay_scroll: 0,
+            result_zoom: false,
+            result: None,
+            detail: None,
+            toast: None,
+            form_memory: BTreeMap::new(),
+            cursor: None,
+            namesrv_before_edit: None,
+            mouse_capture: true,
+            quit_armed_at: None,
+            run_started_at: None,
+            last_run: None,
+            motion: Motion {
+                tick: 0,
+                enabled: true,
+                last_activity: 0,
+                last_change: 0,
+                pane: Tracked::new(focus.pane()),
+                tree_item: Tracked::new(None),
+                command: Tracked::new(0),
+                phase: Tracked::new((ExecutionPhase::Idle, None)),
+                overlay: Tracked::new(Overlay::None),
+                invalid_at: None,
+            },
             next_execution_id: 1,
         };
         state.align_tree_cursor_to_selected_command();
+        state.motion.tree_item = Tracked::new(state.focused_tree_item());
         state
     }
 
@@ -526,12 +748,285 @@ impl AppState {
 
     /// Returns the current animation tick.
     pub fn animation_tick(&self) -> u64 {
-        self.animation_tick
+        self.motion.tick
     }
 
-    /// Advances the animation tick with wrapping arithmetic.
+    /// Returns the animation clock and change log.
+    pub fn motion(&self) -> &Motion {
+        &self.motion
+    }
+
+    /// Advances the animation tick and records what changed since the last frame.
     pub fn advance_animation(&mut self) {
-        self.animation_tick = self.animation_tick.wrapping_add(1);
+        let tick = self.motion.tick.wrapping_add(1);
+        let tree_item = self.focused_tree_item();
+        let overlay = self.overlay();
+        let motion = &mut self.motion;
+        motion.tick = tick;
+        let mut changed = motion.pane.observe(self.focus.pane(), tick);
+        changed |= motion.tree_item.observe(tree_item, tick);
+        changed |= motion.command.observe(self.selected_command_index, tick);
+        changed |= motion
+            .phase
+            .observe((self.execution.phase(), self.execution.execution_id()), tick);
+        changed |= motion.overlay.observe(overlay, tick);
+        if matches!(self.execution, CommandExecutionState::Running { .. }) {
+            // A running command is activity even when the operator is only watching.
+            motion.last_activity = tick;
+        }
+
+        if self
+            .toast
+            .as_ref()
+            .is_some_and(|toast| tick.saturating_sub(toast.created_at) >= Toast::LIFETIME_TICKS)
+        {
+            self.toast = None;
+            changed = true;
+        }
+        if self
+            .quit_armed_at
+            .is_some_and(|armed_at| tick.saturating_sub(armed_at) >= Self::QUIT_ARM_TICKS)
+        {
+            self.quit_armed_at = None;
+        }
+        if changed {
+            self.motion.last_change = tick;
+        }
+    }
+
+    /// Returns how soon the screen needs another frame when no input arrives.
+    ///
+    /// An idle screen is not redrawn at all, so it costs neither terminal output nor
+    /// rendering time.
+    pub fn frame_pace(&self) -> FramePace {
+        let motion = &self.motion;
+        if motion.last_change == motion.tick || motion.in_transition() {
+            FramePace::Full
+        } else if matches!(self.execution, CommandExecutionState::Running { .. })
+            || self.toast.is_some()
+            || motion.ambient() > 0.0
+        {
+            FramePace::Ambient
+        } else {
+            FramePace::Still
+        }
+    }
+
+    /// Records user input so ambient effects keep playing.
+    pub fn touch(&mut self) {
+        self.motion.last_activity = self.motion.tick;
+    }
+
+    /// Switches animations on or off and returns the new setting.
+    pub fn toggle_motion(&mut self) -> bool {
+        self.motion.enabled = !self.motion.enabled;
+        self.motion.enabled
+    }
+
+    /// Marks the current submission as rejected so the offending fields flash.
+    pub fn flag_invalid(&mut self) {
+        self.motion.invalid_at = Some(self.motion.tick);
+        self.motion.last_change = self.motion.tick;
+    }
+
+    /// Returns whether the terminal reports mouse events to the application.
+    pub fn mouse_capture(&self) -> bool {
+        self.mouse_capture
+    }
+
+    pub fn set_mouse_capture(&mut self, enabled: bool) {
+        self.mouse_capture = enabled;
+    }
+
+    /// Arms the quit shortcut, returning `true` when it was already armed.
+    pub fn arm_quit(&mut self) -> bool {
+        if self.quit_armed_at.is_some() {
+            return true;
+        }
+        self.quit_armed_at = Some(self.motion.tick);
+        false
+    }
+
+    /// Raises a notification, replacing the current one.
+    pub fn notify(&mut self, level: ToastLevel, message: impl Into<String>) {
+        self.toast = Some(Toast {
+            level,
+            message: message.into(),
+            created_at: self.motion.tick,
+        });
+        self.motion.last_change = self.motion.tick;
+    }
+
+    pub fn toast(&self) -> Option<&Toast> {
+        self.toast.as_ref()
+    }
+
+    /// Returns the modal layer that currently owns keyboard and mouse input.
+    pub fn overlay(&self) -> Overlay {
+        if self.show_help {
+            Overlay::Help
+        } else if matches!(self.execution, CommandExecutionState::Confirming { .. }) {
+            Overlay::Confirm
+        } else if self.detail.is_some() {
+            Overlay::Detail
+        } else {
+            Overlay::None
+        }
+    }
+
+    /// Moves focus, discarding per-focus transient state.
+    pub fn set_focus(&mut self, focus: FocusArea) {
+        if self.focus == focus {
+            return;
+        }
+        self.namesrv_before_edit = (focus == FocusArea::Namesrv).then(|| self.namesrv_addr.clone());
+        if focus != FocusArea::Result {
+            self.result_zoom = false;
+        }
+        self.cursor = None;
+        self.focus = focus;
+    }
+
+    /// Takes the NameServer address that was in effect when its input gained focus.
+    pub fn take_namesrv_before_edit(&mut self) -> Option<String> {
+        self.namesrv_before_edit.take()
+    }
+
+    /// Returns the input that typed characters go to, if any.
+    pub fn active_input(&self) -> Option<InputTarget> {
+        match self.overlay() {
+            Overlay::Confirm => return Some(InputTarget::Confirm),
+            Overlay::Help | Overlay::Detail => return None,
+            Overlay::None => {}
+        }
+        match self.focus {
+            FocusArea::Namesrv => Some(InputTarget::Namesrv),
+            FocusArea::Search => Some(InputTarget::Search),
+            FocusArea::Args => {
+                let arg = self.form.current_arg(self.selected_command())?;
+                arg.kind
+                    .choices()
+                    .is_none()
+                    .then_some(InputTarget::Arg(self.form.focused_arg()))
+            }
+            FocusArea::CommandTree | FocusArea::Result => None,
+        }
+    }
+
+    /// Returns the text held by `target`.
+    pub fn input_value(&self, target: InputTarget) -> &str {
+        match target {
+            InputTarget::Namesrv => &self.namesrv_addr,
+            InputTarget::Search => &self.search,
+            InputTarget::Confirm => &self.confirm_input,
+            InputTarget::Arg(index) => self
+                .selected_command()
+                .args
+                .get(index)
+                .and_then(|arg| self.form.raw_value(arg.name))
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Returns the cursor of `target` as a character index within its text.
+    pub fn input_cursor(&self, target: InputTarget) -> usize {
+        let length = self.input_value(target).chars().count();
+        match self.cursor {
+            Some((owner, position)) if owner == target => position.min(length),
+            _ => length,
+        }
+    }
+
+    pub fn set_input_cursor(&mut self, target: InputTarget, position: usize) {
+        self.cursor = Some((target, position));
+    }
+
+    /// Moves parameter focus by `delta` fields.
+    pub fn move_arg_focus(&mut self, delta: isize) {
+        let focused = self.form.focused_arg();
+        let target = if delta.is_negative() {
+            focused.saturating_sub(delta.unsigned_abs())
+        } else {
+            focused.saturating_add(delta.unsigned_abs())
+        };
+        self.focus_arg(target);
+    }
+
+    /// Moves parameter focus to the field at `index`, clamped to the last field.
+    pub fn focus_arg(&mut self, index: usize) {
+        let command = &self.commands[self.selected_command_index];
+        self.form.focus_arg(command, index);
+        self.cursor = None;
+    }
+
+    pub fn result(&self) -> Option<&ResultView> {
+        self.result.as_ref()
+    }
+
+    pub fn result_mut(&mut self) -> Option<&mut ResultView> {
+        self.result.as_mut()
+    }
+
+    /// Replaces the displayed result with a freshly prepared one.
+    pub fn set_result(&mut self, result: CommandResultViewModel, tone: ResultTone) {
+        self.detail = None;
+        self.result = Some(ResultView::new(result, tone));
+    }
+
+    pub fn clear_result(&mut self) {
+        self.detail = None;
+        self.result = None;
+    }
+
+    pub fn detail(&self) -> Option<&RowDetail> {
+        self.detail.as_ref()
+    }
+
+    /// Opens the detail overlay for the selected result row, if the result is tabular.
+    pub fn open_detail(&mut self) -> bool {
+        let Some(result) = &self.result else {
+            return false;
+        };
+        let Some(fields) = result.selected_fields() else {
+            return false;
+        };
+        self.detail = Some(RowDetail {
+            title: format!("{} · row {}", result.title(), result.cursor() + 1),
+            fields,
+        });
+        self.overlay_scroll = 0;
+        true
+    }
+
+    pub fn close_detail(&mut self) {
+        self.detail = None;
+        self.overlay_scroll = 0;
+    }
+
+    /// Starts timing a command execution.
+    pub fn mark_run_started(&mut self) {
+        self.run_started_at = Some(Instant::now());
+        self.last_run = None;
+    }
+
+    /// Stops timing the running command and keeps its duration.
+    pub fn mark_run_finished(&mut self) {
+        if let Some(started_at) = self.run_started_at.take() {
+            self.last_run = Some(started_at.elapsed());
+        }
+    }
+
+    /// Forgets the timing of the last run, for an execution that never started.
+    pub fn clear_run_timing(&mut self) {
+        self.run_started_at = None;
+        self.last_run = None;
+    }
+
+    /// Returns how long the running command has taken, or how long the last one took.
+    pub fn run_duration(&self) -> Option<Duration> {
+        self.run_started_at
+            .map(|started_at| started_at.elapsed())
+            .or(self.last_run)
     }
 
     /// Returns catalog indices for commands visible under the current filter.
@@ -585,14 +1080,29 @@ impl AppState {
         self.collapsed_categories.contains(&category)
     }
 
-    /// Moves the tree cursor to the next visible item.
-    pub fn select_next_tree_item(&mut self) {
-        self.move_tree_cursor(1);
+    /// Moves the tree cursor by `delta` visible items, stopping at either end.
+    pub fn move_tree_cursor(&mut self, delta: isize) {
+        let target = if delta.is_negative() {
+            self.tree_cursor.saturating_sub(delta.unsigned_abs())
+        } else {
+            self.tree_cursor.saturating_add(delta.unsigned_abs())
+        };
+        self.set_tree_cursor(target);
     }
 
-    /// Moves the tree cursor to the previous visible item.
-    pub fn select_previous_tree_item(&mut self) {
-        self.move_tree_cursor(-1);
+    /// Moves the tree cursor to a visible position and selects a command found there.
+    pub fn set_tree_cursor(&mut self, position: usize) {
+        let visible = self.visible_tree_items();
+        if visible.is_empty() {
+            self.tree_cursor = 0;
+            return;
+        }
+
+        let position = position.min(visible.len() - 1);
+        self.tree_cursor = position;
+        if let CommandTreeItem::Command(index) = visible[position] {
+            self.select_command_index(index);
+        }
     }
 
     /// Toggles the collapsed state of the focused category.
@@ -603,14 +1113,14 @@ impl AppState {
         if !self.collapsed_categories.insert(category) {
             self.collapsed_categories.remove(&category);
         }
-        self.ensure_tree_cursor_valid();
+        self.move_tree_cursor_to_category(category);
     }
 
     /// Collapses the category containing the focused tree item.
     pub fn collapse_focused_tree_category(&mut self) {
         if let Some(category) = self.focused_tree_category() {
             self.collapsed_categories.insert(category);
-            self.ensure_tree_cursor_valid();
+            self.move_tree_cursor_to_category(category);
         }
     }
 
@@ -618,8 +1128,25 @@ impl AppState {
     pub fn expand_focused_tree_category(&mut self) {
         if let Some(category) = self.focused_tree_category() {
             self.collapsed_categories.remove(&category);
-            self.ensure_tree_cursor_valid();
+            self.move_tree_cursor_to_category(category);
         }
+    }
+
+    /// Collapses every category and leaves the cursor on the focused one.
+    pub fn collapse_all_categories(&mut self) {
+        let focused = self.focused_tree_category();
+        self.collapsed_categories = self.commands.iter().map(|command| command.category).collect();
+        match focused {
+            Some(category) => self.move_tree_cursor_to_category(category),
+            None => self.ensure_tree_cursor_valid(),
+        }
+    }
+
+    /// Expands every category and returns the cursor to the selected command.
+    pub fn expand_all_categories(&mut self) {
+        self.collapsed_categories.clear();
+        self.ensure_tree_cursor_valid();
+        self.align_tree_cursor_to_selected_command();
     }
 
     /// Returns the category containing the focused tree item.
@@ -628,14 +1155,6 @@ impl AppState {
             CommandTreeItem::Category(category) => Some(category),
             CommandTreeItem::Command(index) => Some(self.commands[index].category),
         }
-    }
-
-    /// Returns the selected command's position among visible commands.
-    pub fn selected_visible_position(&self) -> Option<usize> {
-        self.commands.get(self.selected_command_index)?;
-        self.visible_command_indices()
-            .into_iter()
-            .position(|index| index == self.selected_command_index)
     }
 
     /// Allocates the next local execution identifier.
@@ -661,7 +1180,10 @@ impl AppState {
 
     /// Restores the selected command's form to its catalog defaults.
     pub fn reset_form_for_selected_command(&mut self) {
-        self.form = CommandFormState::for_command(self.selected_command());
+        let command = &self.commands[self.selected_command_index];
+        self.form_memory.remove(command.id);
+        self.form = CommandFormState::for_command(command);
+        self.cursor = None;
     }
 
     /// Validates the selected command's current form.
@@ -682,31 +1204,19 @@ impl AppState {
         })
     }
 
-    fn move_tree_cursor(&mut self, delta: isize) {
-        let visible = self.visible_tree_items();
-        if visible.is_empty() {
-            self.tree_cursor = 0;
-            return;
-        }
-
-        let next = if delta.is_negative() {
-            self.tree_cursor.saturating_sub(delta.unsigned_abs())
-        } else {
-            (self.tree_cursor + delta as usize).min(visible.len() - 1)
-        };
-        self.tree_cursor = next;
-
-        if let CommandTreeItem::Command(index) = visible[next] {
-            self.select_command_index(index);
-        }
-    }
-
     fn select_command_index(&mut self, index: usize) {
         if self.selected_command_index != index {
+            let previous_id = self.commands[self.selected_command_index].id;
+            let restored = self
+                .form_memory
+                .remove(self.commands[index].id)
+                .unwrap_or_else(|| CommandFormState::for_command(&self.commands[index]));
+            let edited = std::mem::replace(&mut self.form, restored);
+            if edited.dirty() {
+                self.form_memory.insert(previous_id, edited);
+            }
             self.selected_command_index = index;
-            self.reset_form_for_selected_command();
-            self.result_scroll = 0;
-            self.result_horizontal_scroll = 0;
+            self.cursor = None;
         }
         self.align_tree_cursor_to_selected_command();
     }
@@ -716,7 +1226,9 @@ impl AppState {
         if visible.is_empty() {
             return;
         }
-        if !visible.contains(&self.selected_command_index) {
+        if visible.contains(&self.selected_command_index) {
+            self.align_tree_cursor_to_selected_command();
+        } else {
             self.select_command_index(visible[0]);
         }
     }
@@ -727,6 +1239,17 @@ impl AppState {
             self.tree_cursor = 0;
         } else {
             self.tree_cursor = self.tree_cursor.min(visible_len - 1);
+        }
+    }
+
+    fn move_tree_cursor_to_category(&mut self, category: CommandCategory) {
+        match self
+            .visible_tree_items()
+            .into_iter()
+            .position(|item| item == CommandTreeItem::Category(category))
+        {
+            Some(position) => self.tree_cursor = position,
+            None => self.ensure_tree_cursor_valid(),
         }
     }
 
@@ -772,9 +1295,22 @@ fn parse_key_value_map(value: &str) -> Result<BTreeMap<String, String>, String> 
 #[cfg(test)]
 mod tests {
     use super::AppState;
+    use super::CommandExecutionState;
     use super::CommandFormState;
     use super::CommandTreeItem;
+    use super::ExecutionPhase;
+    use super::FocusArea;
+    use super::FramePace;
+    use super::InputTarget;
+    use super::Motion;
+    use super::Overlay;
+    use super::Pane;
+    use super::Toast;
+    use super::ToastLevel;
     use crate::commands::command_catalog;
+    use crate::motion::FRAMES_PER_SECOND;
+    use crate::result_view::ResultTone;
+    use crate::view_model::CommandResultViewModel;
 
     #[test]
     fn form_validates_required_number_enum_map_and_timestamp_fields() {
@@ -863,7 +1399,7 @@ mod tests {
         let mut state = AppState::new(None);
         let original = state.selected_command().id;
 
-        state.select_next_tree_item();
+        state.move_tree_cursor(1);
 
         assert_ne!(state.selected_command().id, original);
         assert!(matches!(
@@ -910,5 +1446,354 @@ mod tests {
         assert_eq!(state.selected_command().id, "message.decode_id");
 
         assert!(state.confirmation_prompt().is_none());
+    }
+
+    #[test]
+    fn motion_records_when_observed_values_change() {
+        let mut state = AppState::new(None);
+        for _ in 0..5 {
+            state.advance_animation();
+        }
+        assert_eq!(state.motion().pane().changed_at(), 0);
+
+        state.focus = FocusArea::Args;
+        state.execution = CommandExecutionState::Running {
+            execution_id: 3,
+            command_id: "topic.list".to_string(),
+        };
+        state.advance_animation();
+
+        let motion = state.motion();
+        assert_eq!(motion.pane().current(), Pane::Command);
+        assert_eq!(motion.pane().previous(), Pane::Sidebar);
+        assert_eq!(motion.pane().changed_at(), 6);
+        assert_eq!(motion.phase().current(), (ExecutionPhase::Running, Some(3)));
+        assert_eq!(motion.phase().changed_at(), 6);
+        assert_eq!(motion.command().changed_at(), 0, "the selection did not change");
+        assert!(motion.is_playing(6, 4));
+        assert!(motion.transition(6, 4) < 1.0);
+    }
+
+    #[test]
+    fn moving_within_a_pane_is_not_a_pane_change() {
+        let mut state = AppState::new(None);
+        state.advance_animation();
+
+        state.focus = FocusArea::Search;
+        state.advance_animation();
+
+        assert_eq!(state.motion().pane().changed_at(), 0);
+    }
+
+    #[test]
+    fn switching_motion_off_completes_every_transition() {
+        let mut state = AppState::new(None);
+        state.advance_animation();
+        assert!(state.motion().transition(1, 10) < 1.0);
+        assert!(state.motion().ambient() > 0.0);
+
+        assert!(!state.toggle_motion());
+
+        assert_eq!(state.motion().transition(1, 10), 1.0);
+        assert!(!state.motion().is_playing(1, 10));
+        assert_eq!(state.motion().ambient(), 0.0);
+    }
+
+    #[test]
+    fn ambient_effects_fade_out_when_idle_and_stay_on_while_a_command_runs() {
+        let mut state = AppState::new(None);
+        for _ in 0..(21 * FRAMES_PER_SECOND) {
+            state.advance_animation();
+        }
+        assert_eq!(state.motion().ambient(), 0.0);
+
+        state.touch();
+        assert_eq!(state.motion().ambient(), 1.0);
+
+        state.execution = CommandExecutionState::Running {
+            execution_id: 1,
+            command_id: "consumer.start_monitoring".to_string(),
+        };
+        for _ in 0..(40 * FRAMES_PER_SECOND) {
+            state.advance_animation();
+        }
+        assert_eq!(state.motion().ambient(), 1.0);
+    }
+
+    #[test]
+    fn a_toast_expires_and_a_newer_one_replaces_it() {
+        let mut state = AppState::new(None);
+        state.notify(ToastLevel::Info, "first");
+        state.notify(ToastLevel::Error, "second");
+        assert_eq!(state.toast().unwrap().message, "second");
+        assert_eq!(state.toast().unwrap().level, ToastLevel::Error);
+
+        for _ in 0..Toast::LIFETIME_TICKS - 1 {
+            state.advance_animation();
+        }
+        assert!(state.toast().is_some());
+        state.advance_animation();
+        assert!(state.toast().is_none());
+    }
+
+    #[test]
+    fn overlays_take_input_in_a_fixed_order() {
+        let mut state = AppState::new(None);
+        assert_eq!(state.overlay(), Overlay::None);
+        assert_eq!(state.active_input(), None);
+
+        state.execution = CommandExecutionState::Confirming {
+            execution_id: 1,
+            command_id: "topic.delete".to_string(),
+            expected: "TopicA".to_string(),
+        };
+        assert_eq!(state.overlay(), Overlay::Confirm);
+        assert_eq!(state.active_input(), Some(InputTarget::Confirm));
+
+        state.show_help = true;
+        assert_eq!(state.overlay(), Overlay::Help);
+        assert_eq!(state.active_input(), None);
+    }
+
+    #[test]
+    fn each_input_keeps_its_own_cursor() {
+        let mut state = AppState::new(Some("127.0.0.1:9876"));
+        state.search = "topic".to_string();
+
+        assert_eq!(
+            state.input_cursor(InputTarget::Search),
+            5,
+            "an untouched input ends with its cursor"
+        );
+        state.set_input_cursor(InputTarget::Search, 2);
+        assert_eq!(state.input_cursor(InputTarget::Search), 2);
+        assert_eq!(state.input_cursor(InputTarget::Namesrv), 14);
+
+        state.search = "t".to_string();
+        assert_eq!(
+            state.input_cursor(InputTarget::Search),
+            1,
+            "the cursor never passes the text"
+        );
+
+        state.set_focus(FocusArea::Search);
+        assert_eq!(state.input_cursor(InputTarget::Search), 1);
+        state.set_input_cursor(InputTarget::Search, 0);
+        state.set_focus(FocusArea::CommandTree);
+        assert_eq!(
+            state.input_cursor(InputTarget::Search),
+            1,
+            "leaving an input resets its cursor"
+        );
+    }
+
+    #[test]
+    fn only_typed_parameters_are_text_inputs() {
+        let mut state = AppState::new(None);
+        state.set_search("topic.update".to_string());
+        state.focus = FocusArea::Args;
+
+        assert_eq!(state.active_input(), Some(InputTarget::Arg(0)));
+        state.focus_arg(1);
+        assert_eq!(state.active_input(), None, "an enumeration is chosen, not typed");
+        state.move_arg_focus(1);
+        assert_eq!(state.active_input(), Some(InputTarget::Arg(2)));
+        state.move_arg_focus(99);
+        assert_eq!(state.form.focused_arg(), 8);
+        state.move_arg_focus(-99);
+        assert_eq!(state.form.focused_arg(), 0);
+
+        state.form.set_value("topic", "TopicA".to_string());
+        assert_eq!(state.input_value(InputTarget::Arg(0)), "TopicA");
+        assert_eq!(state.input_value(InputTarget::Arg(99)), "");
+    }
+
+    #[test]
+    fn focusing_the_nameserver_field_remembers_the_address_to_restore() {
+        let mut state = AppState::new(Some("127.0.0.1:9876"));
+
+        state.set_focus(FocusArea::Namesrv);
+        state.namesrv_addr.push('0');
+        assert_eq!(state.take_namesrv_before_edit().as_deref(), Some("127.0.0.1:9876"));
+        assert_eq!(state.take_namesrv_before_edit(), None);
+
+        state.set_focus(FocusArea::CommandTree);
+        state.set_focus(FocusArea::Namesrv);
+        state.set_focus(FocusArea::Search);
+        assert_eq!(
+            state.take_namesrv_before_edit(),
+            None,
+            "leaving the field keeps the edit"
+        );
+    }
+
+    #[test]
+    fn leaving_the_result_pane_ends_the_zoom() {
+        let mut state = AppState::new(None);
+        state.set_focus(FocusArea::Result);
+        state.result_zoom = true;
+
+        state.set_focus(FocusArea::Result);
+        assert!(state.result_zoom);
+        state.set_focus(FocusArea::Args);
+        assert!(!state.result_zoom);
+    }
+
+    #[test]
+    fn edited_forms_are_remembered_per_command() {
+        let mut state = AppState::new(None);
+        state.set_search("topic.route".to_string());
+        state.form.set_value("topic", "TopicA".to_string());
+
+        state.set_search("topic.status".to_string());
+        assert_eq!(state.selected_command().id, "topic.status");
+        assert_eq!(state.form.raw_value("topic"), Some(""));
+        assert!(!state.form.dirty());
+
+        state.set_search("topic.route".to_string());
+        assert_eq!(state.form.raw_value("topic"), Some("TopicA"));
+        assert_eq!(state.form.command_id(), "topic.route");
+
+        state.reset_form_for_selected_command();
+        assert_eq!(state.form.raw_value("topic"), Some(""));
+    }
+
+    #[test]
+    fn folding_a_group_leaves_the_cursor_on_its_heading() {
+        let mut state = AppState::new(None);
+        state.move_tree_cursor(3);
+        let category = state.selected_command().category;
+
+        state.collapse_focused_tree_category();
+        assert_eq!(state.focused_tree_item(), Some(CommandTreeItem::Category(category)));
+
+        state.toggle_focused_tree_category();
+        assert!(!state.is_category_collapsed(category));
+        assert_eq!(state.focused_tree_item(), Some(CommandTreeItem::Category(category)));
+
+        state.set_tree_cursor(usize::MAX);
+        assert_eq!(state.tree_cursor(), state.visible_tree_items().len() - 1);
+        assert_eq!(
+            state.focused_tree_item(),
+            Some(CommandTreeItem::Command(state.selected_command_index()))
+        );
+    }
+
+    #[test]
+    fn row_details_exist_only_for_tabular_results() {
+        let mut state = AppState::new(None);
+        assert!(!state.open_detail());
+
+        state.set_result(
+            CommandResultViewModel::Text {
+                title: "Topics".to_string(),
+                body: "TopicA".to_string(),
+            },
+            ResultTone::Normal,
+        );
+        assert!(!state.open_detail());
+
+        state.set_result(
+            CommandResultViewModel::KeyValue(crate::view_model::KeyValueViewModel {
+                title: "Config".to_string(),
+                rows: vec![("brokerName".to_string(), "broker-a".to_string())],
+            }),
+            ResultTone::Normal,
+        );
+        state.overlay_scroll = 9;
+        assert!(state.open_detail());
+        assert_eq!(state.overlay(), Overlay::Detail);
+        assert_eq!(state.overlay_scroll, 0);
+        let detail = state.detail().unwrap();
+        assert_eq!(detail.title, "Config · row 1");
+        assert_eq!(
+            detail.fields,
+            vec![
+                ("Key".to_string(), "brokerName".to_string()),
+                ("Value".to_string(), "broker-a".to_string()),
+            ]
+        );
+
+        state.clear_result();
+        assert_eq!(state.overlay(), Overlay::None, "details do not outlive their result");
+    }
+
+    #[test]
+    fn the_quit_shortcut_arms_once_and_expires() {
+        let mut state = AppState::new(None);
+
+        assert!(!state.arm_quit());
+        assert!(state.arm_quit());
+        for _ in 0..AppState::QUIT_ARM_TICKS {
+            state.advance_animation();
+        }
+        assert!(!state.arm_quit());
+    }
+
+    #[test]
+    fn the_frame_pace_drops_as_the_screen_settles() {
+        let mut state = AppState::new(None);
+        state.advance_animation();
+        assert_eq!(state.frame_pace(), FramePace::Full, "the intro is a transition");
+
+        for _ in 0..Motion::TRANSITION_TICKS {
+            state.advance_animation();
+        }
+        assert_eq!(state.frame_pace(), FramePace::Ambient);
+
+        for _ in 0..(21 * FRAMES_PER_SECOND) {
+            state.advance_animation();
+        }
+        assert_eq!(state.frame_pace(), FramePace::Still, "an idle screen is not redrawn");
+
+        state.focus = FocusArea::Args;
+        state.advance_animation();
+        assert_eq!(state.frame_pace(), FramePace::Full);
+    }
+
+    #[test]
+    fn a_running_command_and_a_toast_keep_frames_coming_without_motion() {
+        let mut state = AppState::new(None);
+        state.toggle_motion();
+        for _ in 0..3 {
+            state.advance_animation();
+        }
+        assert_eq!(state.frame_pace(), FramePace::Still);
+
+        state.execution = CommandExecutionState::Running {
+            execution_id: 1,
+            command_id: "topic.list".to_string(),
+        };
+        state.advance_animation();
+        assert_eq!(state.frame_pace(), FramePace::Full, "a change is drawn at once");
+        state.advance_animation();
+        assert_eq!(
+            state.frame_pace(),
+            FramePace::Ambient,
+            "the elapsed time keeps counting"
+        );
+
+        state.execution = CommandExecutionState::Idle;
+        state.advance_animation();
+        state.advance_animation();
+        assert_eq!(state.frame_pace(), FramePace::Still);
+
+        state.notify(ToastLevel::Info, "saved");
+        assert_eq!(state.frame_pace(), FramePace::Full);
+        state.advance_animation();
+        assert_eq!(state.frame_pace(), FramePace::Ambient);
+        for _ in 0..Toast::LIFETIME_TICKS - 2 {
+            state.advance_animation();
+        }
+        assert!(state.toast().is_some());
+        state.advance_animation();
+        assert!(state.toast().is_none());
+        assert_eq!(
+            state.frame_pace(),
+            FramePace::Full,
+            "the frame that removes the toast is drawn"
+        );
+        state.advance_animation();
+        assert_eq!(state.frame_pace(), FramePace::Still);
     }
 }

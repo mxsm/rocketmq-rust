@@ -24,22 +24,24 @@ TUI 负责交互、状态、布局和渲染。核心管理请求、校验、RPC 
 
 ## 预览
 
-![rocketmq-admin-tui preview](../../../resources/rocketmq-cli-ui.png)
+![rocketmq-admin-tui preview](../../../resources/rocketmq-admin-tui.png)
 
 ## 核心能力
 
-- 可搜索的命令树，并按 RocketMQ 管理域分组。
-- 五个焦点区域：NameServer、Search、Commands、Parameters、Result。
-- 键盘优先工作流，带上下文快捷键提示和内置帮助浮层。
-- 类型化参数模型，支持 string、optional string、number、boolean、enum、key/value map 和毫秒时间戳。
-- 命令执行前执行表单级校验。
+- 可搜索的命令树，按 RocketMQ 管理域分组，每条命令带风险标记，分组可折叠。
+- 五个焦点区域：NameServer、Search、Commands、Parameters、Result。底部按键栏始终列出当前焦点区域的按键，`F1` 打开完整的按键说明。
+- 键盘与鼠标并用：每个操作都有按键；点击可聚焦面板、选择命令、切换选项或按下 Run，滚轮滚动指针所在的区域。`F2` 把鼠标交还给终端，用于选择文本。
+- 类型化参数模型，支持 string、optional string、number、boolean、enum、key/value map 和毫秒时间戳。文本框支持光标处编辑，选项用方向键或 `Space` 切换，凭据类参数以掩码显示，每条命令会记住自己的表单。
+- 命令执行前执行表单级校验，焦点会落到第一个不合法的字段上。
 - 基于风险等级的执行模型：
   - safe 命令直接执行；
   - mutating 命令需要输入 `confirm`；
   - dangerous 命令在可用时需要输入目标值。
-- 后台命令与 UI 事件循环运行在应用的 Tokio `LocalSet` 上；进程持有 `RuntimeOwner`，每次命令在应用的客户端作用域下使用独立的客户端运行时。取消命令会停止操作，TUI 随后等待任务结束并关闭其连接和后台任务；退出时也会等待清理完成。取消不会撤销 Broker 或 NameServer 已接受的请求。
+- 主线程只负责绘制界面和读取输入。每条命令作为进程所持有运行时（`RuntimeOwner`）的一个任务，运行在栈大小按管理调用链配置的工作线程上，并在应用的客户端作用域下使用独立的客户端运行时。取消命令会停止操作，随后该任务关闭这条命令的连接和后台任务，再上报结果；退出时也会等待清理完成。取消不会撤销 Broker 或 NameServer 已接受的请求。
 - 长时间工作流支持进度更新，例如 monitoring 和 message pull。
-- 支持以 table、key/value、JSON、text、operation summary 渲染结构化结果，并支持纵向和横向滚动。
+- 支持以 table、key/value、JSON、text、operation summary 渲染结构化结果。表格带行光标、按列横向滚动、数字列右对齐，任意一行都可以打开详情查看全部列；文档可折行或平移，JSON 与调试输出带语法着色。`z` 放大结果面板。
+- 用动效表达状态：焦点、命令和结果的变化带过渡动画，运行中的命令有流动的高亮，执行结果以对应颜色闪现。装饰性动效在空闲时自动淡出，空闲的界面完全不重绘，`F3` 可关闭动效。
+- 适配终端：24 位真彩色并可回退到 256 色，宽度不足 96 列时一次只显示一个面板，小于 48x12 时给出可读的提示。
 - 边界测试确保 `rocketmq-admin-tui -> rocketmq-admin-core`，并拒绝依赖 CLI adapter。
 
 ## 快速开始
@@ -52,22 +54,25 @@ cargo run -p rocketmq-admin-tui
 
 TUI 启动时不强制要求 NameServer 地址。执行需要访问集群的命令前，可在 NameServer 焦点区域设置地址。
 
-常用按键：
+常用按键（单字母按键只在文本框之外生效，在文本框内它们会被当作输入）：
 
 | 按键 | 行为 |
 |---|---|
 | `Tab` / `Shift+Tab` | 在 NameServer、Search、Commands、Parameters、Result 之间移动焦点。 |
-| `n` | 在非参数编辑状态下聚焦 NameServer 输入。 |
-| `/` 或 `s` | 在非参数编辑状态下聚焦命令搜索。 |
-| `j` / `k` 或方向键 | 移动命令、参数或结果行。 |
-| `Left` / `Right` | 折叠命令组、切换 enum 参数或横向滚动结果列。 |
-| `Space` | 切换 boolean 参数。 |
-| `Enter` | 提交输入、选择命令、执行或确认。 |
-| `Ctrl+R` | 重新执行当前命令。 |
+| `/` 或 `Ctrl+F` | 搜索命令。`Ctrl+F` 在文本框内输入时同样可用。 |
+| `n` / `p` / `r` | 跳到 NameServer 输入框、参数表单或结果。 |
+| 方向键或 `j` / `k` | 移动命令、字段或结果行。`PgUp`、`PgDn`、`Home`、`End` 移动得更远。 |
+| `Left` / `Right` | 折叠命令组、切换选项或横向滚动结果列。 |
+| `Space` | 切换 boolean 或 enum 参数。 |
+| `Enter` | 打开命令、在表单中执行、确认，或完整查看一行结果。 |
+| `Ctrl+R` 或 `F5` | 在任意位置执行当前命令。 |
+| `Esc` | 取消运行中的命令，否则返回上一层。在命令列表中再按一次退出。 |
+| `Ctrl+C` | 取消运行中的命令；没有命令在运行时退出。 |
 | `Ctrl+L` | 清空当前结果。 |
-| `?` | 打开或关闭帮助。 |
-| `Esc` | 关闭帮助、取消本地等待中的任务或退出。 |
-| `q` | 退出或关闭帮助。 |
+| `z` / `w` | 放大结果面板；切换长行的折行。 |
+| `F1` 或 `?` | 打开或关闭帮助。 |
+| `F2` / `F3` | 开关鼠标捕获或动效。 |
+| `q` 或 `Ctrl+Q` | 退出。 |
 
 ## 命令覆盖
 
@@ -95,17 +100,20 @@ TUI 启动时不强制要求 NameServer 地址。执行需要访问集群的命�
 
 ## 运行模型
 
-`RocketmqTuiApp` 持有事件循环。它以 30 FPS tick，读取 crossterm 事件，应用内部 action，并渲染当前 `AppState`。
+`RocketmqTuiApp` 在主线程上持有事件循环。它每秒 tick 30 次，读取 crossterm 事件，应用内部 action，并绘制当前 `AppState`。只有到期的帧才会被绘制：过渡动画期间每个 tick 都绘制；只有环境动效或运行中的命令时隔一个 tick 绘制一次；空闲的界面完全不绘制，因此不会向终端写入任何内容。
 
 命令执行与 UI 处理解耦：
 
 1. 选中的 `CommandSpec` 定义参数、结果视图类型和风险等级。
 2. `CommandFormState` 校验用户输入的表单值。
-3. `execute_command_with_progress` 根据 command ID 分发。
-4. `TuiAdminFacade` 将表单值转换为 `rocketmq-admin-core` request DTO。
-5. core service 执行管理操作。
-6. `CommandResultViewModel` 将结构化结果转换成适合 TUI 渲染的 table、JSON、text、key/value 或 summary。
-7. 已取消本地任务的迟到结果会通过 execution ID 被忽略。
+3. `execute_command_with_progress` 根据 command ID 分发，并返回一个 `Send` future。
+4. 该 future 作为应用客户端作用域的 `TaskGroup` 任务运行在运行时的工作线程上，主线程从不轮询它。
+5. `TuiAdminFacade` 将表单值转换为 `rocketmq-admin-core` request DTO。
+6. core service 执行管理操作。
+7. `CommandResultViewModel` 将结构化结果转换成适合 TUI 渲染的 table、JSON、text、key/value 或 summary。
+8. 已取消任务的迟到结果会通过 execution ID 被忽略。
+
+运行时线程以 16 MiB 的栈创建。命令所等待的 admin、client、transport 调用链在未优化的 Windows 构建中大约需要 1.3 MiB 的栈，超过该平台主线程 1 MiB 的栈。让命令不在主线程上运行，它们的栈预算才是运行时的配置项，而不是平台的默认值。
 
 ## 边界约定
 
@@ -124,10 +132,17 @@ TUI 启动时不强制要求 NameServer 地址。执行需要访问集群的命�
 ```text
 rocketmq-admin-tui/
 ├── src/
-│   ├── main.rs                 # Terminal 初始化和 app 启动
-│   ├── rocketmq_tui_app.rs     # 事件循环、action 处理、后台任务
-│   ├── state.rs                # App state、form state、校验、focus model
-│   ├── ui.rs                   # Ratatui layout 和 rendering
+│   ├── main.rs                 # 运行时所有权和 app 启动
+│   ├── rocketmq_tui_app.rs     # 事件循环、action 处理、命令任务、帧节奏
+│   ├── rocketmq_tui_app/       # 键盘、鼠标和粘贴处理
+│   ├── state.rs                # App state、form state、校验、focus model、动效时钟
+│   ├── motion.rs               # 基于 tick 的动画基础设施
+│   ├── result_view.rs          # 预处理后的结果：表格、文档、视口、折行
+│   ├── terminal.rs             # 终端模式和同步帧输出
+│   ├── text.rs                 # 显示宽度、截断和折行
+│   ├── text_input.rs           # 文本输入的行编辑
+│   ├── ui.rs                   # 帧布局、点击区域映射和渲染入口
+│   ├── ui/                     # 面板绘制、主题、动效和组件
 │   ├── action.rs               # 内部 action message
 │   ├── event.rs                # 键盘辅助函数
 │   ├── admin_facade.rs         # TUI 到 admin-core 的 facade

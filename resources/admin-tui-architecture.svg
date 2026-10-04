@@ -77,12 +77,12 @@
 
   <rect x="405" y="320" width="210" height="90" class="box accent-violet"/>
   <text x="425" y="346" class="label">Command Catalog</text>
-  <text x="425" y="368" class="small">102 commands, 18 domains</text>
+  <text x="425" y="368" class="small">100 commands, 17 domains</text>
   <text x="425" y="389" class="small">args, risk, result kind</text>
 
   <rect x="665" y="320" width="210" height="90" class="box accent-amber"/>
   <text x="685" y="346" class="label">Executor</text>
-  <text x="685" y="368" class="small">spawn_blocking runtime</text>
+  <text x="685" y="368" class="small">runtime worker tasks</text>
   <text x="685" y="389" class="small">progress updates, cancellation</text>
 
   <rect x="405" y="442" width="210" height="90" class="box accent-rose"/>
