@@ -194,7 +194,7 @@ impl EscapeBridgePolicyState {
     }
 }
 
-struct SharedAppendOutcome {
+struct SharedStoreAppendReport {
     result: PutMessageResult,
     appended_watermark: i64,
     durable_watermark: i64,
@@ -219,20 +219,20 @@ impl SharedStoreAppendPort {
     async fn put_message(
         &self,
         message: MessageExtBrokerInner,
-    ) -> Result<SharedAppendOutcome, MessageStoreUnavailable> {
+    ) -> Result<SharedStoreAppendReport, MessageStoreUnavailable> {
         let store = self.store()?;
         let result = store.put_message_shared(message).await;
-        Ok(SharedAppendOutcome {
+        Ok(SharedStoreAppendReport {
             result,
             appended_watermark: store.get_max_phy_offset(),
             durable_watermark: store.get_flushed_where(),
         })
     }
 
-    async fn put_messages(&self, batch: MessageExtBatch) -> Result<SharedAppendOutcome, MessageStoreUnavailable> {
+    async fn put_messages(&self, batch: MessageExtBatch) -> Result<SharedStoreAppendReport, MessageStoreUnavailable> {
         let store = self.store()?;
         let result = store.put_messages_shared(batch).await;
-        Ok(SharedAppendOutcome {
+        Ok(SharedStoreAppendReport {
             result,
             appended_watermark: store.get_max_phy_offset(),
             durable_watermark: store.get_flushed_where(),

@@ -83,7 +83,7 @@ pub(crate) struct ClientSessionRetirement {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ClientSessionRetirementOutcome {
+pub(crate) enum ClientSessionRetirementStatus {
     Graceful,
     Forced,
     AlreadyGone,
@@ -94,17 +94,17 @@ impl ClientSessionRetirement {
         self.close.session_id()
     }
 
-    pub(crate) async fn retire(&self, reason: SessionCloseReason) -> ClientSessionRetirementOutcome {
+    pub(crate) async fn retire(&self, reason: SessionCloseReason) -> ClientSessionRetirementStatus {
         if self.close.close(reason).await.is_ok() {
-            return ClientSessionRetirementOutcome::Graceful;
+            return ClientSessionRetirementStatus::Graceful;
         }
         self.registry
             .upgrade()
-            .map_or(ClientSessionRetirementOutcome::AlreadyGone, |registry| {
+            .map_or(ClientSessionRetirementStatus::AlreadyGone, |registry| {
                 if registry.close_now(self.session_id()) {
-                    ClientSessionRetirementOutcome::Forced
+                    ClientSessionRetirementStatus::Forced
                 } else {
-                    ClientSessionRetirementOutcome::AlreadyGone
+                    ClientSessionRetirementStatus::AlreadyGone
                 }
             })
     }

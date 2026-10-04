@@ -442,7 +442,7 @@ where
         .map_err(|error| crate::broker_error::io(std::io::Error::other(error)))?
 }
 
-enum MessageStoreShutdownOutcome {
+enum MessageStoreShutdownStatus {
     Absent,
     Completed(MessageStoreShutdownReport),
     Failed(StoreError),

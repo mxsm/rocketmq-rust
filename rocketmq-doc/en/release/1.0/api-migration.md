@@ -57,6 +57,13 @@ variants, registration ownership, identity and history checks, reconciliation
 fences, and retained read-only receipts are unchanged. No old-name aliases or
 additional public registration API are provided.
 
+### Metadata write status names
+
+Update `MetadataIoDurabilityOutcome` to `MetadataWriteDurabilityStatus` and
+`MetadataIoCommitAdmissionOutcome` to `MetadataWriteCompletionStatus`.
+Durability, completion classifications, conflict handling, and reconciliation
+behavior are unchanged. No compatibility aliases are provided.
+
 ### Request-header derive migration
 
 The historical V1 implementation of `rocketmq_macros::RequestHeaderCodec` and

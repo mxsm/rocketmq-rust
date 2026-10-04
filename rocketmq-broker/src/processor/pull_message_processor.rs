@@ -1141,7 +1141,7 @@ where
                                             && cold_data_cg_ctr_service
                                                 .short_suspend_active_read()
                                                 .await
-                                                == crate::coldctr::cold_data_cg_ctr_service::ColdDataShortSuspendOutcome::QueueFull
+                                                == crate::coldctr::cold_data_cg_ctr_service::ColdReadThrottleStatus::QueueFull
                                         {
                                             return pull_command(
                                                 response

@@ -81,8 +81,8 @@ use super::index::PullScanCursor;
 
 mod continuation;
 
+use crate::long_polling::pending_arrival_latch::PendingArrivalAdmissionStatus;
 use crate::long_polling::pending_arrival_latch::PendingArrivalInsertOperationalError;
-use crate::long_polling::pending_arrival_latch::PendingArrivalInsertOutcome;
 use crate::long_polling::pending_arrival_latch::PendingArrivalInsertRejection;
 use crate::long_polling::pending_arrival_latch::PendingArrivalLatch;
 use crate::long_polling::pending_arrival_latch::PendingArrivalReservation;
@@ -721,14 +721,14 @@ impl PullDeferredService {
         );
         let pending = PullPendingArrival::arrival(arrival, cursor).map_err(PullPendingArrivalError::Continuation)?;
         match self.pending_arrivals.insert(key, pending) {
-            Ok(PendingArrivalInsertOutcome::Inserted) => Ok(PullPendingArrivalOutcome::Latched),
-            Ok(PendingArrivalInsertOutcome::Rejected(PendingArrivalInsertRejection::Closed)) => {
+            Ok(PendingArrivalAdmissionStatus::Accepted) => Ok(PullPendingArrivalOutcome::Latched),
+            Ok(PendingArrivalAdmissionStatus::Rejected(PendingArrivalInsertRejection::Closed)) => {
                 Ok(PullPendingArrivalOutcome::Rejected(PullPendingArrivalRejection::Closed))
             }
-            Ok(PendingArrivalInsertOutcome::Rejected(PendingArrivalInsertRejection::CountFull)) => Ok(
+            Ok(PendingArrivalAdmissionStatus::Rejected(PendingArrivalInsertRejection::CountFull)) => Ok(
                 PullPendingArrivalOutcome::Rejected(PullPendingArrivalRejection::CountFull),
             ),
-            Ok(PendingArrivalInsertOutcome::Rejected(PendingArrivalInsertRejection::BytesFull)) => Ok(
+            Ok(PendingArrivalAdmissionStatus::Rejected(PendingArrivalInsertRejection::BytesFull)) => Ok(
                 PullPendingArrivalOutcome::Rejected(PullPendingArrivalRejection::BytesFull),
             ),
             Err(error) => Err(PullPendingArrivalError::Latch(error)),
@@ -744,14 +744,14 @@ impl PullDeferredService {
             return Ok(PullPendingArrivalOutcome::Latched);
         }
         match self.pending_arrivals.insert(key, PullPendingArrival::forced(cursor)) {
-            Ok(PendingArrivalInsertOutcome::Inserted) => Ok(PullPendingArrivalOutcome::Latched),
-            Ok(PendingArrivalInsertOutcome::Rejected(PendingArrivalInsertRejection::Closed)) => {
+            Ok(PendingArrivalAdmissionStatus::Accepted) => Ok(PullPendingArrivalOutcome::Latched),
+            Ok(PendingArrivalAdmissionStatus::Rejected(PendingArrivalInsertRejection::Closed)) => {
                 Ok(PullPendingArrivalOutcome::Rejected(PullPendingArrivalRejection::Closed))
             }
-            Ok(PendingArrivalInsertOutcome::Rejected(PendingArrivalInsertRejection::CountFull)) => Ok(
+            Ok(PendingArrivalAdmissionStatus::Rejected(PendingArrivalInsertRejection::CountFull)) => Ok(
                 PullPendingArrivalOutcome::Rejected(PullPendingArrivalRejection::CountFull),
             ),
-            Ok(PendingArrivalInsertOutcome::Rejected(PendingArrivalInsertRejection::BytesFull)) => Ok(
+            Ok(PendingArrivalAdmissionStatus::Rejected(PendingArrivalInsertRejection::BytesFull)) => Ok(
                 PullPendingArrivalOutcome::Rejected(PullPendingArrivalRejection::BytesFull),
             ),
             Err(error) => Err(PullPendingArrivalError::Latch(error)),
@@ -767,9 +767,9 @@ impl PullDeferredService {
         topic: &CheetahString,
         queue_id: i32,
         logical_offset: i64,
-    ) -> Result<PendingArrivalInsertOutcome, PendingArrivalInsertOperationalError> {
+    ) -> Result<PendingArrivalAdmissionStatus, PendingArrivalInsertOperationalError> {
         if logical_offset <= 0 {
-            return Ok(PendingArrivalInsertOutcome::Inserted);
+            return Ok(PendingArrivalAdmissionStatus::Accepted);
         }
         self.latch_queue_offset_range(topic, queue_id, logical_offset - 1, logical_offset - 1)
     }
@@ -779,9 +779,9 @@ impl PullDeferredService {
         topic: &CheetahString,
         queue_id: i32,
         max_offset: i64,
-    ) -> Result<PendingArrivalInsertOutcome, PendingArrivalInsertOperationalError> {
+    ) -> Result<PendingArrivalAdmissionStatus, PendingArrivalInsertOperationalError> {
         if max_offset <= 0 {
-            return Ok(PendingArrivalInsertOutcome::Inserted);
+            return Ok(PendingArrivalAdmissionStatus::Accepted);
         }
         self.latch_queue_offset_range(topic, queue_id, 0, max_offset - 1)
     }
@@ -792,10 +792,10 @@ impl PullDeferredService {
         queue_id: i32,
         first: i64,
         last: i64,
-    ) -> Result<PendingArrivalInsertOutcome, PendingArrivalInsertOperationalError> {
+    ) -> Result<PendingArrivalAdmissionStatus, PendingArrivalInsertOperationalError> {
         let key = PullCriteriaKey::new(topic.clone(), queue_id);
         if !self.index.has_target(&key) {
-            return Ok(PendingArrivalInsertOutcome::Inserted);
+            return Ok(PendingArrivalAdmissionStatus::Accepted);
         }
         self.pending_offsets
             .retain_targets(|target| self.index.has_target(target));

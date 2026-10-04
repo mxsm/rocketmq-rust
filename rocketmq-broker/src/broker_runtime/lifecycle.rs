@@ -501,20 +501,20 @@ impl BrokerRuntime {
             .as_ref()
             .is_some_and(|owner| Arc::strong_count(owner) > 1);
         let message_store_outcome = if self.composition.state.message_store.is_none() {
-            MessageStoreShutdownOutcome::Absent
+            MessageStoreShutdownStatus::Absent
         } else if store_owner_is_shared {
-            MessageStoreShutdownOutcome::TimedOut
+            MessageStoreShutdownStatus::TimedOut
         } else if let Some(message_store) = self.composition.state.message_store_mut() {
             match await_shutdown_deadline(deadline, BrokerStorePort::shutdown_gracefully(message_store)).await {
-                Ok(Ok(report)) => MessageStoreShutdownOutcome::Completed(report),
-                Ok(Err(error)) => MessageStoreShutdownOutcome::Failed(error),
-                Err(_elapsed) => MessageStoreShutdownOutcome::TimedOut,
+                Ok(Ok(report)) => MessageStoreShutdownStatus::Completed(report),
+                Ok(Err(error)) => MessageStoreShutdownStatus::Failed(error),
+                Err(_elapsed) => MessageStoreShutdownStatus::TimedOut,
             }
         } else {
-            MessageStoreShutdownOutcome::TimedOut
+            MessageStoreShutdownStatus::TimedOut
         };
         let message_store_shutdown_completed =
-            matches!(&message_store_outcome, MessageStoreShutdownOutcome::Completed(_));
+            matches!(&message_store_outcome, MessageStoreShutdownStatus::Completed(_));
         record_message_store_shutdown_outcome(
             &mut shutdown_report,
             &progress,
