@@ -65,8 +65,8 @@ use rocketmq_transport::api::TransportError;
 
 use super::deadline::NotificationWaitDeadline;
 use super::deadline::NotificationWaitDeadlineOperationalError;
-use super::deadline::NotificationWaitDeadlineOutcome;
 use super::deadline::NotificationWaitDeadlineRejection;
+use super::deadline::NotificationWaitDecision;
 use super::index::NotificationArrivalView;
 use super::index::NotificationCandidateReservation;
 use super::index::NotificationCandidateSelection;
@@ -246,8 +246,8 @@ impl NotificationDeferredService {
             wall_now,
             monotonic_now,
         ) {
-            Ok(NotificationWaitDeadlineOutcome::Pending(deadline)) => deadline,
-            Ok(NotificationWaitDeadlineOutcome::Rejected(rejection)) => {
+            Ok(NotificationWaitDecision::Pending(deadline)) => deadline,
+            Ok(NotificationWaitDecision::Rejected(rejection)) => {
                 return Ok(NotificationDeferredPrepareOutcome::Rejected(
                     NotificationDeferredPrepareRejection::Deadline(rejection),
                 ));
