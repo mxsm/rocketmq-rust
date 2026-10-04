@@ -92,15 +92,15 @@ where
         self: &Arc<Self>,
         key: K,
         value: V,
-    ) -> Result<PendingArrivalInsertOutcome, PendingArrivalInsertOperationalError> {
+    ) -> Result<PendingArrivalAdmissionStatus, PendingArrivalInsertOperationalError> {
         if self.closed.load(Ordering::Acquire) {
-            return Ok(PendingArrivalInsertOutcome::Rejected(
+            return Ok(PendingArrivalAdmissionStatus::Rejected(
                 PendingArrivalInsertRejection::Closed,
             ));
         }
         let mut state = self.state.lock();
         if state.closed {
-            return Ok(PendingArrivalInsertOutcome::Rejected(
+            return Ok(PendingArrivalAdmissionStatus::Rejected(
                 PendingArrivalInsertRejection::Closed,
             ));
         }
@@ -120,11 +120,11 @@ where
                 entry.charged_bytes = retained;
                 state.bytes = state.bytes.saturating_sub(previous).saturating_add(retained);
             }
-            return Ok(PendingArrivalInsertOutcome::Inserted);
+            return Ok(PendingArrivalAdmissionStatus::Accepted);
         }
         if state.entries.len() >= self.limits.max_count {
             state.rejected = state.rejected.saturating_add(1);
-            return Ok(PendingArrivalInsertOutcome::Rejected(
+            return Ok(PendingArrivalAdmissionStatus::Rejected(
                 PendingArrivalInsertRejection::CountFull,
             ));
         }
@@ -135,7 +135,7 @@ where
         };
         if next_bytes > self.limits.max_bytes {
             state.rejected = state.rejected.saturating_add(1);
-            return Ok(PendingArrivalInsertOutcome::Rejected(
+            return Ok(PendingArrivalAdmissionStatus::Rejected(
                 PendingArrivalInsertRejection::BytesFull,
             ));
         }
@@ -153,7 +153,7 @@ where
                 dirty: false,
             },
         );
-        Ok(PendingArrivalInsertOutcome::Inserted)
+        Ok(PendingArrivalAdmissionStatus::Accepted)
     }
 
     pub(crate) fn reserve_batch(self: &Arc<Self>, limit: usize) -> Vec<PendingArrivalReservation<K, V>> {
@@ -415,8 +415,8 @@ pub(crate) enum PendingArrivalInsertRejection {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PendingArrivalInsertOutcome {
-    Inserted,
+pub(crate) enum PendingArrivalAdmissionStatus {
+    Accepted,
     Rejected(PendingArrivalInsertRejection),
 }
 
@@ -505,7 +505,7 @@ where
         &self,
         key: K,
         offset: i64,
-    ) -> Result<PendingArrivalInsertOutcome, PendingArrivalInsertOperationalError> {
+    ) -> Result<PendingArrivalAdmissionStatus, PendingArrivalInsertOperationalError> {
         self.merge_range(key, offset, offset)
     }
 
@@ -514,25 +514,25 @@ where
         key: K,
         first: i64,
         last: i64,
-    ) -> Result<PendingArrivalInsertOutcome, PendingArrivalInsertOperationalError> {
+    ) -> Result<PendingArrivalAdmissionStatus, PendingArrivalInsertOperationalError> {
         if self.closed.load(Ordering::Acquire) {
-            return Ok(PendingArrivalInsertOutcome::Rejected(
+            return Ok(PendingArrivalAdmissionStatus::Rejected(
                 PendingArrivalInsertRejection::Closed,
             ));
         }
         let mut state = self.state.lock();
         if state.closed {
-            return Ok(PendingArrivalInsertOutcome::Rejected(
+            return Ok(PendingArrivalAdmissionStatus::Rejected(
                 PendingArrivalInsertRejection::Closed,
             ));
         }
         if let Some(entry) = state.entries.get_mut(&key) {
             entry.range.include_range(first.min(last), first.max(last));
-            return Ok(PendingArrivalInsertOutcome::Inserted);
+            return Ok(PendingArrivalAdmissionStatus::Accepted);
         }
         if state.entries.len() >= self.max_count {
             state.rejected = state.rejected.saturating_add(1);
-            return Ok(PendingArrivalInsertOutcome::Rejected(
+            return Ok(PendingArrivalAdmissionStatus::Rejected(
                 PendingArrivalInsertRejection::CountFull,
             ));
         }
@@ -546,7 +546,7 @@ where
         };
         if bytes > self.max_bytes {
             state.rejected = state.rejected.saturating_add(1);
-            return Ok(PendingArrivalInsertOutcome::Rejected(
+            return Ok(PendingArrivalAdmissionStatus::Rejected(
                 PendingArrivalInsertRejection::BytesFull,
             ));
         }
@@ -566,7 +566,7 @@ where
                 active: false,
             },
         );
-        Ok(PendingArrivalInsertOutcome::Inserted)
+        Ok(PendingArrivalAdmissionStatus::Accepted)
     }
 
     pub(crate) fn reserve_batch(self: &Arc<Self>, limit: usize) -> Vec<PendingOffsetRangeReservation<K>> {
@@ -723,12 +723,12 @@ mod tests {
     use super::*;
 
     fn expect_inserted(
-        result: Result<PendingArrivalInsertOutcome, PendingArrivalInsertOperationalError>,
+        result: Result<PendingArrivalAdmissionStatus, PendingArrivalInsertOperationalError>,
         message: &str,
     ) {
         assert_eq!(
             result.unwrap_or_else(|error| panic!("{message}: {error}")),
-            PendingArrivalInsertOutcome::Inserted
+            PendingArrivalAdmissionStatus::Accepted
         );
     }
 
@@ -782,7 +782,7 @@ mod tests {
         assert!(
             matches!(
                 latch.merge(TestTarget(5), 2),
-                Ok(PendingArrivalInsertOutcome::Rejected(
+                Ok(PendingArrivalAdmissionStatus::Rejected(
                     PendingArrivalInsertRejection::CountFull
                 ))
             ),

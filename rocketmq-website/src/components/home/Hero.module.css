@@ -1,0 +1,614 @@
+.hero {
+  position: relative;
+  display: flex;
+  /* Fill the first screen, but let the next section peek in on very tall viewports. */
+  min-height: min(100svh, 62rem);
+  align-items: center;
+  /* Slide under the transparent navbar so the backdrop reaches the top of the page. */
+  margin-top: calc(var(--home-nav-height) * -1);
+  overflow: hidden;
+  padding: calc(var(--home-nav-height) + clamp(2.5rem, 6vh, 5rem)) 1.5rem clamp(5rem, 11vh, 7.5rem);
+  isolation: isolate;
+}
+
+/* ---------- Backdrop ---------- */
+
+.backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.aurora {
+  position: absolute;
+  border-radius: 50%;
+  will-change: transform;
+}
+
+.auroraOrange {
+  top: -22%;
+  left: -14%;
+  width: min(62vw, 900px);
+  aspect-ratio: 1;
+  background: radial-gradient(closest-side, rgba(255, 106, 26, 0.3), rgba(255, 106, 26, 0.08) 55%, transparent);
+  animation: auroraDrift 19s ease-in-out infinite alternate;
+}
+
+.auroraViolet {
+  top: -12%;
+  right: -16%;
+  width: min(66vw, 980px);
+  aspect-ratio: 1;
+  background: radial-gradient(closest-side, rgba(124, 82, 255, 0.32), rgba(124, 82, 255, 0.08) 55%, transparent);
+  animation: auroraDrift 24s ease-in-out -6s infinite alternate-reverse;
+}
+
+.auroraCyan {
+  right: 12%;
+  bottom: -38%;
+  width: min(54vw, 760px);
+  aspect-ratio: 1;
+  background: radial-gradient(closest-side, rgba(34, 200, 238, 0.2), rgba(34, 200, 238, 0.05) 55%, transparent);
+  animation: auroraDrift 28s ease-in-out -11s infinite alternate;
+}
+
+.dotGrid {
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(170, 186, 235, 0.16) 1px, transparent 1.4px);
+  background-size: 30px 30px;
+  mask-image: radial-gradient(ellipse 72% 62% at 50% 38%, #000 18%, transparent 78%);
+}
+
+.canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* Keep the mesh quiet behind the headline and let it fade into the next section. */
+  mask-image:
+    linear-gradient(to bottom, #000 62%, transparent 97%),
+    linear-gradient(100deg, rgba(0, 0, 0, 0.42) 0%, rgba(0, 0, 0, 0.52) 34%, #000 62%);
+  mask-composite: intersect;
+  animation: fadeIn 1400ms ease-out both;
+}
+
+.spotlight {
+  position: absolute;
+  top: -340px;
+  left: -340px;
+  width: 680px;
+  height: 680px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(255, 150, 80, 0.13), rgba(150, 110, 255, 0.06) 56%, transparent);
+  opacity: 0;
+  transform: translate3d(var(--spot-x, 50vw), var(--spot-y, 40vh), 0);
+  transition:
+    opacity 500ms ease,
+    transform 180ms ease-out;
+}
+
+.hero:hover .spotlight {
+  opacity: 1;
+}
+
+.fade {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 26%;
+  background: linear-gradient(to bottom, transparent, var(--home-bg));
+}
+
+/* ---------- Layout ---------- */
+
+.inner {
+  display: grid;
+  width: min(1260px, 100%);
+  grid-template-columns: minmax(0, 1.04fr) minmax(0, 0.96fr);
+  align-items: center;
+  gap: clamp(2.5rem, 5.5vw, 5.5rem);
+  margin: 0 auto;
+}
+
+.copy {
+  min-width: 0;
+}
+
+/* Entrance: plain CSS so it plays on first paint, before hydration. */
+.copy > * {
+  animation: rise 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: calc(120ms + var(--order, 0) * 90ms);
+}
+
+/* ---------- Release pill ---------- */
+
+.release {
+  position: relative;
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 0.65rem;
+  overflow: hidden;
+  padding: 0.32rem 0.36rem 0.32rem 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.045);
+  color: #d9deec;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.3;
+  text-decoration: none;
+  backdrop-filter: blur(12px);
+  transition:
+    border-color 200ms ease,
+    background-color 200ms ease;
+}
+
+.release::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -40%;
+  width: 34%;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.16), transparent);
+  content: '';
+  transform: skewX(-20deg);
+  animation: sheen 5.5s ease-in-out 1.8s infinite;
+}
+
+.release:hover {
+  border-color: rgba(255, 170, 110, 0.5);
+  background: rgba(255, 255, 255, 0.075);
+  color: #fff;
+  text-decoration: none;
+}
+
+.releaseDot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--home-green);
+  box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6);
+  animation: ping 2.2s ease-out infinite;
+}
+
+.releaseAction {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.24rem 0.62rem;
+  border-radius: 999px;
+  background: rgba(255, 122, 38, 0.16);
+  color: #ffbd8a;
+  font-size: 0.76rem;
+}
+
+.releaseAction svg {
+  transition: transform 200ms ease;
+}
+
+.release:hover .releaseAction svg {
+  transform: translateX(3px);
+}
+
+/* ---------- Headline ---------- */
+
+.title {
+  margin: 1.7rem 0 0;
+  padding: 0;
+  border: 0;
+  color: var(--home-text);
+  font-family: var(--home-font-display);
+  font-size: clamp(2.6rem, 5.5vw, 4.7rem);
+  font-weight: 700;
+  line-height: 1.04;
+  letter-spacing: -0.045em;
+}
+
+.titleLead {
+  display: block;
+  text-shadow: 0 8px 46px rgba(170, 190, 255, 0.16);
+}
+
+.titleAccent {
+  display: block;
+  /* Room for descenders, which background-clip would otherwise shave off. */
+  padding-bottom: 0.14em;
+  background: linear-gradient(100deg, #ffd596 0%, #ff9238 20%, #ff5a1f 40%, #f2468c 64%, #9a6dff 86%, #6fd3ff 100%);
+  background-clip: text;
+  background-size: 220% 100%;
+  color: transparent;
+  animation: gradientPan 8s ease-in-out infinite alternate;
+  -webkit-text-fill-color: transparent;
+}
+
+:global(html[lang='zh-CN']) .title {
+  font-size: clamp(2.5rem, 5.2vw, 4.4rem);
+  line-height: 1.16;
+  letter-spacing: -0.015em;
+}
+
+.lead {
+  max-width: 600px;
+  margin: 1.5rem 0 0;
+  color: var(--home-muted);
+  font-size: clamp(1.02rem, 1.3vw, 1.16rem);
+  line-height: 1.72;
+  text-wrap: pretty;
+}
+
+/* ---------- Rotating words ---------- */
+
+.rotator {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.5rem;
+  margin: 1.15rem 0 0;
+  color: #cfd5e6;
+  font-family: var(--home-font-mono);
+  font-size: 0.9rem;
+}
+
+.rotatorMark {
+  color: var(--home-orange);
+}
+
+.words {
+  display: inline-grid;
+  height: 1.5em;
+  overflow: hidden;
+  line-height: 1.5;
+}
+
+/* Every word shares one grid cell; the staggered keyframes show one at a time. */
+.words > span {
+  grid-area: 1 / 1;
+  color: var(--home-amber);
+  font-weight: 600;
+  opacity: 0;
+  white-space: nowrap;
+  animation: wordCycle 12s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+  animation-delay: calc(var(--word) * 2.4s);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---------- Actions ---------- */
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+  margin-top: 2.1rem;
+}
+
+.install {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1.1rem;
+  padding: 0.5rem 0.55rem 0.5rem 0.95rem;
+  border: 1px dashed rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+  background: rgba(8, 10, 18, 0.55);
+  font-family: var(--home-font-mono);
+  font-size: 0.86rem;
+  backdrop-filter: blur(10px);
+}
+
+.installPrompt {
+  color: var(--home-orange);
+  font-weight: 700;
+}
+
+.installCommand {
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #d5dbea;
+  font-family: inherit;
+  font-size: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- Visual ---------- */
+
+.visual {
+  min-width: 0;
+  /* Room for the status chips that float outside the terminal frame. */
+  padding: 2.7rem 2.4rem 2.5rem 2.2rem;
+  perspective: 1500px;
+  animation: visualIn 1100ms cubic-bezier(0.16, 1, 0.3, 1) 260ms both;
+}
+
+.visualFloat {
+  transform-style: preserve-3d;
+  animation: float 9s ease-in-out infinite;
+}
+
+/* ---------- Scroll cue ---------- */
+
+.scrollCue {
+  position: absolute;
+  bottom: 1.6rem;
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--home-faint);
+  font-family: var(--home-font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-decoration: none;
+  text-transform: uppercase;
+  transform: translateX(-50%);
+  animation: fadeIn 1200ms ease-out 1400ms both;
+}
+
+.scrollCue:hover {
+  color: #c4cbdd;
+  text-decoration: none;
+}
+
+.scrollTrack {
+  position: relative;
+  width: 18px;
+  height: 28px;
+  border: 1.5px solid currentColor;
+  border-radius: 10px;
+}
+
+.scrollDot {
+  position: absolute;
+  top: 5px;
+  left: 50%;
+  width: 3px;
+  height: 6px;
+  margin-left: -1.5px;
+  border-radius: 2px;
+  background: var(--home-amber);
+  animation: scrollNudge 1.8s ease-in-out infinite;
+}
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 1180px) {
+  .inner {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 0.92fr);
+    gap: 2.5rem;
+  }
+}
+
+@media (max-width: 996px) {
+  .hero {
+    min-height: auto;
+    padding-bottom: 4rem;
+  }
+
+  .inner {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3.2rem;
+  }
+
+  .copy {
+    max-width: 680px;
+  }
+
+  .visual {
+    width: min(640px, 100%);
+    padding: 0;
+    perspective: none;
+  }
+
+  .visualFloat {
+    animation: none;
+  }
+
+  .canvas {
+    mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.5) 0%, rgba(0, 0, 0, 0.7) 60%, transparent 97%);
+    mask-composite: add;
+  }
+
+  .scrollCue {
+    display: none;
+  }
+}
+
+@media (max-width: 620px) {
+  .hero {
+    padding-right: 1.1rem;
+    padding-left: 1.1rem;
+  }
+
+  .title {
+    font-size: clamp(2.3rem, 11.4vw, 3.1rem);
+  }
+
+  .actions > a {
+    flex: 1 1 100%;
+  }
+
+  .install {
+    display: flex;
+  }
+
+  .installCommand {
+    flex: 1;
+  }
+}
+
+@media (max-height: 760px) {
+  .scrollCue {
+    display: none;
+  }
+}
+
+/* ---------- Keyframes ---------- */
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 26px, 0);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes visualIn {
+  from {
+    opacity: 0;
+    transform: translate3d(40px, 26px, 0) scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes float {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+
+  50% {
+    transform: translate3d(0, -12px, 0);
+  }
+}
+
+@keyframes auroraDrift {
+  from {
+    transform: translate3d(-4%, -3%, 0) scale(1);
+  }
+
+  to {
+    transform: translate3d(6%, 5%, 0) scale(1.12);
+  }
+}
+
+@keyframes gradientPan {
+  from {
+    background-position: 0% 50%;
+  }
+
+  to {
+    background-position: 100% 50%;
+  }
+}
+
+@keyframes sheen {
+  0%,
+  62% {
+    left: -40%;
+  }
+
+  100% {
+    left: 130%;
+  }
+}
+
+@keyframes ping {
+  0% {
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6);
+  }
+
+  70%,
+  100% {
+    box-shadow: 0 0 0 9px rgba(52, 211, 153, 0);
+  }
+}
+
+/* Each word owns a fifth of the cycle; the exit overlaps the next word's entrance. */
+@keyframes wordCycle {
+  0% {
+    opacity: 0;
+    transform: translateY(70%);
+  }
+
+  3%,
+  19% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  22%,
+  100% {
+    opacity: 0;
+    transform: translateY(-70%);
+  }
+}
+
+@keyframes scrollNudge {
+  0% {
+    opacity: 0;
+    transform: translateY(0);
+  }
+
+  30% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora,
+  .canvas,
+  .copy > *,
+  .release::after,
+  .releaseDot,
+  .titleAccent,
+  .visual,
+  .visualFloat,
+  .scrollCue,
+  .scrollDot {
+    animation: none;
+  }
+
+  .spotlight {
+    display: none;
+  }
+
+  /* Without the cycle, show a single word. */
+  .words > span {
+    animation: none;
+  }
+
+  .words > span:first-child {
+    opacity: 1;
+  }
+}

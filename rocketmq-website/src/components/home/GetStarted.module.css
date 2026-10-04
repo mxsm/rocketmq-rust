@@ -1,0 +1,263 @@
+.section {
+  border-top: 1px solid var(--home-border);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.016), transparent 40%);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  align-items: start;
+  gap: clamp(2rem, 5vw, 5rem);
+}
+
+.intro {
+  position: sticky;
+  top: calc(var(--home-nav-height) + 2.5rem);
+  min-width: 0;
+}
+
+/* ---------- Shell switch ---------- */
+
+.shells {
+  display: inline-flex;
+  gap: 0.2rem;
+  margin-top: 1.8rem;
+  padding: 0.24rem;
+  border: 1px solid var(--home-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.shell {
+  padding: 0.42rem 1rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--home-muted);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    background-color 200ms ease,
+    color 200ms ease;
+}
+
+.shell:hover {
+  color: #fff;
+}
+
+.shell:focus-visible {
+  outline: 2px solid var(--home-amber);
+  outline-offset: 2px;
+}
+
+.shellActive,
+.shellActive:hover {
+  background: linear-gradient(135deg, rgba(255, 143, 51, 0.9), rgba(240, 82, 15, 0.9));
+  color: #fff;
+  box-shadow: 0 6px 18px rgba(255, 98, 20, 0.3);
+}
+
+.links {
+  display: grid;
+  justify-items: start;
+  gap: 0.7rem;
+  margin-top: 1.6rem;
+}
+
+/* ---------- Timeline ---------- */
+
+.steps {
+  --progress: 0;
+  --marker: 38px;
+
+  position: relative;
+  display: grid;
+  min-width: 0;
+  gap: 1.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Rail and its scroll-driven fill, centred on the markers. */
+.steps::before,
+.steps::after {
+  position: absolute;
+  top: calc(var(--marker) / 2);
+  bottom: calc(var(--marker) / 2);
+  left: calc(var(--marker) / 2 - 1px);
+  width: 2px;
+  border-radius: 2px;
+  content: '';
+}
+
+.steps::before {
+  background: var(--home-border);
+}
+
+.steps::after {
+  background: linear-gradient(to bottom, var(--home-amber), var(--home-orange) 45%, #f2468c 75%, var(--home-violet));
+  box-shadow: 0 0 14px rgba(255, 122, 38, 0.5);
+  transform: scaleY(var(--progress));
+  transform-origin: 50% 0;
+  transition: transform 160ms linear;
+}
+
+.step {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  grid-template-columns: var(--marker) minmax(0, 1fr);
+  align-items: start;
+  gap: 1.2rem;
+}
+
+.marker {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  width: var(--marker);
+  height: var(--marker);
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--home-border-strong);
+  border-radius: 50%;
+  background: var(--home-surface-solid);
+  color: var(--home-faint);
+  font-family: var(--home-font-mono);
+  font-size: 0.85rem;
+  font-weight: 700;
+  transition:
+    border-color 320ms ease,
+    box-shadow 320ms ease,
+    color 320ms ease;
+}
+
+.step[data-reached] .marker {
+  border-color: var(--home-orange);
+  box-shadow:
+    0 0 0 5px rgba(255, 122, 38, 0.12),
+    0 0 22px rgba(255, 122, 38, 0.36);
+  color: var(--home-amber);
+}
+
+.stepCard {
+  min-width: 0;
+  padding: 1.3rem 1.4rem 1.4rem;
+  border: 1px solid var(--home-border);
+  border-radius: 20px;
+  background: var(--home-surface);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.stepTitle {
+  margin: 0;
+  color: var(--home-text);
+  font-family: var(--home-font-display);
+  font-size: 1.14rem;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+.stepText {
+  margin: 0.4rem 0 0;
+  color: var(--home-muted);
+  font-size: 0.93rem;
+  line-height: 1.62;
+}
+
+/* ---------- Command block ---------- */
+
+.command {
+  position: relative;
+  margin-top: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 13px;
+  background: rgba(4, 6, 12, 0.72);
+}
+
+.commandBody {
+  margin: 0;
+  overflow: visible;
+  padding: 0.85rem 3.2rem 0.85rem 1rem;
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  color: #d5dbea;
+  font-family: var(--home-font-mono);
+  font-size: 0.8rem;
+  line-height: 1.85;
+}
+
+/* Long commands wrap under themselves; the copy button always yields the original lines. */
+.commandLine {
+  display: flex;
+  gap: 0.7rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.prompt {
+  flex: 0 0 auto;
+  color: var(--home-faint);
+  user-select: none;
+}
+
+.program {
+  color: var(--home-amber);
+}
+
+.flag {
+  color: var(--home-cyan);
+}
+
+.value {
+  color: #c3e88d;
+}
+
+.commandCopy {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+}
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 996px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .intro {
+    position: static;
+  }
+}
+
+@media (max-width: 620px) {
+  .steps {
+    --marker: 30px;
+  }
+
+  .step {
+    gap: 0.8rem;
+  }
+
+  .stepCard {
+    padding: 1.1rem 1rem 1.15rem;
+    border-radius: 16px;
+  }
+
+  .commandBody {
+    font-size: 0.72rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .steps::after,
+  .marker,
+  .shell {
+    transition: none;
+  }
+}

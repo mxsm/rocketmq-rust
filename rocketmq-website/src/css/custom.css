@@ -9,7 +9,7 @@
  * Infima variables and Docusaurus custom CSS variables.
  */
 
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Sora:wght@500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=Sora:wght@500;600;700&display=swap');
 
 :root {
   --ifm-color-primary: #a855f7;
@@ -25,23 +25,57 @@
   --ifm-color-secondary-darker: #0e7490;
   --ifm-color-secondary-darkest: #164e63;
 
-  --ifm-code-font-size: 95%;
-
-  --ifm-font-family-base: 'Manrope', system-ui, -apple-system, sans-serif;
-  --ifm-heading-font-family: 'Sora', 'Manrope', sans-serif;
+  /* The system CJK fonts are named so Chinese text does not fall through to a serif face. */
+  --ifm-font-family-base:
+    'Manrope', system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --ifm-font-family-monospace:
+    'JetBrains Mono', ui-monospace, 'SFMono-Regular', 'Menlo', 'Consolas', 'Liberation Mono', monospace;
+  --ifm-heading-font-family: 'Sora', 'Manrope', system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --ifm-heading-font-weight: 700;
   --ifm-global-border-radius: 12px;
   --ifm-heading-margin-top: 2rem;
   --ifm-heading-margin-bottom: 1rem;
 
-  /* Homepage background for light mode */
-  --homepage-bg: #f8f5ff;
+  /* Matches the fixed .navbar height below, so sticky offsets and anchor scrolling line up. */
+  --ifm-navbar-height: 4.5rem;
+
+  /*
+   * Reading surface. The --rmq-* tokens are shared by the article styles in
+   * content.css; every text colour here clears 4.5:1 on its background.
+   */
+  --ifm-color-content: #2a2f3c;
+  --ifm-color-content-secondary: #5a6373;
+  --ifm-heading-color: #12151d;
+  --ifm-link-color: #7c3aed;
+  --ifm-link-hover-color: #6d28d9;
+  --ifm-code-font-size: 0.875em;
+  --ifm-code-background: #f0f1f7;
+  --ifm-toc-border-color: var(--rmq-border);
+  --ifm-table-border-color: var(--rmq-border);
+
+  --rmq-text-muted: #5a6373;
+  --rmq-border: #e3e6ee;
+  --rmq-border-strong: #cfd4e0;
+  --rmq-surface: #f6f7fb;
+  --rmq-surface-hover: #f0f2f8;
+  --rmq-accent-soft: rgba(124, 58, 237, 0.08);
+  --rmq-link-underline: rgba(124, 58, 237, 0.34);
+  --rmq-scrollbar: rgba(92, 102, 122, 0.34);
+  --rmq-scrollbar-hover: rgba(92, 102, 122, 0.58);
+
+  /* Mermaid shapes and connectors; applied by src/mermaid/diagramTheme.ts. */
+  --rmq-diagram-node: #ffffff;
+  --rmq-diagram-node-border: #9d85e8;
+  --rmq-diagram-line: #7d879d;
 }
 
-/* Dark mode overrides */
-[data-theme='dark'] {
-  --ifm-background-color: #0f172a;
-  --ifm-background-surface-color: #1e293b;
+/*
+ * Dark mode overrides. The `html` prefix is required: Infima declares its dark
+ * palette under html[data-theme='dark'], which outranks a bare attribute selector.
+ */
+html[data-theme='dark'] {
+  --ifm-background-color: #0b0f1a;
+  --ifm-background-surface-color: #111726;
   --ifm-color-primary: #c084fc;
   --ifm-color-primary-dark: #d8b4fe;
   --ifm-color-primary-darker: #e9d5ff;
@@ -50,19 +84,29 @@
   --ifm-color-primary-lighter: #9333ea;
   --ifm-color-primary-lightest: #7e22ce;
 
-  --ifm-card-background-color: #1e293b;
-  --ifm-table-stripe-background: #334155;
-
-  /* Homepage background for dark mode */
-  --homepage-bg: #07030f;
-
-  --ifm-code-background: #1e293b;
-  --ifm-menu-color-active: #c084fc;
-  --ifm-menu-color-background-active: #1e293b;
-  --ifm-toc-border-color: #334155;
-  --ifm-tabs-border-color: #334155;
+  --ifm-color-content: #d0d6e4;
+  --ifm-color-content-secondary: #99a3b9;
+  --ifm-heading-color: #f2f4fa;
+  --ifm-link-color: #c9a9ff;
+  --ifm-link-hover-color: #dcc7ff;
+  --ifm-card-background-color: #111726;
+  --ifm-code-background: rgba(152, 114, 255, 0.14);
+  --ifm-tabs-border-color: var(--rmq-border);
   --ifm-border-color: rgba(168, 85, 247, 0.2);
-  --ifm-table-border-color: #334155;
+
+  --rmq-text-muted: #99a3b9;
+  --rmq-border: rgba(148, 163, 214, 0.16);
+  --rmq-border-strong: rgba(148, 163, 214, 0.3);
+  --rmq-surface: #111726;
+  --rmq-surface-hover: rgba(148, 163, 214, 0.07);
+  --rmq-accent-soft: rgba(152, 114, 255, 0.13);
+  --rmq-link-underline: rgba(201, 169, 255, 0.4);
+  --rmq-scrollbar: rgba(148, 163, 214, 0.26);
+  --rmq-scrollbar-hover: rgba(148, 163, 214, 0.5);
+
+  --rmq-diagram-node: #1a2135;
+  --rmq-diagram-node-border: #7468c9;
+  --rmq-diagram-line: #7985ad;
 }
 
 /* Navbar logo customization */
@@ -85,7 +129,21 @@
   border-bottom: 1px solid rgba(102, 132, 190, 0.16);
   background: rgba(2, 7, 17, 0.9) !important;
   box-shadow: 0 10px 34px rgba(0, 0, 0, 0.18);
+  /* The bar is dark in both colour modes; its icon buttons inherit this foreground. */
+  color: #b7c0d3;
+}
+
+/*
+ * The blur lives on a layer behind the bar's content rather than on the bar. A
+ * backdrop filter on the bar itself would make it the containing block of the
+ * fixed mobile menu inside it and clip that menu to the bar's height.
+ */
+.navbar::before {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
   backdrop-filter: blur(22px) saturate(130%);
+  content: '';
 }
 
 .navbar__inner {
@@ -95,9 +153,35 @@
   margin: 0 auto;
 }
 
-/* Custom hero gradient - removed to use module CSS */
-.hero {
-  /* Hero styles now in index.module.css */
+/*
+ * Homepage (src/pages/index.tsx adds .rmq-home to <html>): the page is dark in
+ * both colour modes, and the navbar floats over the hero until the page scrolls
+ * or the mobile menu opens.
+ */
+html.rmq-home,
+html.rmq-home body {
+  background-color: #05060b;
+}
+
+html.rmq-home .navbar {
+  border-bottom-color: transparent;
+  background: transparent !important;
+  box-shadow: none;
+  transition:
+    background-color 280ms ease,
+    border-color 280ms ease,
+    box-shadow 280ms ease;
+}
+
+html.rmq-home:not([data-rmq-scrolled]) .navbar::before {
+  backdrop-filter: none;
+}
+
+html.rmq-home[data-rmq-scrolled] .navbar,
+html.rmq-home .navbar.navbar-sidebar--show {
+  border-bottom-color: rgba(150, 166, 214, 0.14);
+  background: rgba(5, 6, 11, 0.82) !important;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.3);
 }
 
 /* Smooth transitions */
@@ -105,36 +189,55 @@
   transition: background-color 0.2s ease, color 0.2s ease;
 }
 
-/* Better scrollbar */
+/* Scrollbars stay neutral so they do not compete with the content beside them. */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--ifm-background-surface-color);
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--ifm-color-primary);
-  border-radius: 5px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-color: var(--rmq-scrollbar);
+  background-clip: content-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--ifm-color-primary-dark);
+  background-color: var(--rmq-scrollbar-hover);
 }
 
-/* Better code blocks */
-.theme-code-block {
-  border-radius: var(--ifm-global-border-radius);
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+/*
+ * Firefox only has the standard properties. They are kept away from engines that
+ * style ::-webkit-scrollbar, because setting them there replaces the rules above
+ * with the platform scrollbar and its arrow buttons.
+ */
+@supports not selector(::-webkit-scrollbar) {
+  html {
+    scrollbar-color: var(--rmq-scrollbar) transparent;
+  }
 }
 
-/* Improved table styling */
-markdown > table {
-  border-radius: var(--ifm-global-border-radius);
-  overflow: hidden;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+/*
+ * Infima marks the sidebar and code blocks with .thin-scrollbar and styles that
+ * class separately. Its colours come from these variables; its scrollbar-width
+ * is undone for the reason above. `html` raises the reset over Infima's rule,
+ * which sits in a media query and therefore lands last in the production bundle.
+ */
+.thin-scrollbar {
+  --ifm-scrollbar-size: 6px;
+  --ifm-scrollbar-track-background-color: transparent;
+  --ifm-scrollbar-thumb-background-color: var(--rmq-scrollbar);
+  --ifm-scrollbar-thumb-hover-background-color: var(--rmq-scrollbar-hover);
+}
+
+@supports selector(::-webkit-scrollbar) {
+  html .thin-scrollbar {
+    scrollbar-width: auto;
+  }
 }
 
 /* Better cards */
@@ -213,15 +316,33 @@ markdown > table {
   display: none;
 }
 
+/* Controls on the bar keep one look in both colour modes, because the bar itself does. */
+.navbar .DocSearch-Button {
+  border: 1px solid rgba(109, 141, 200, 0.18);
+  border-radius: 9px;
+  background: rgba(10, 20, 40, 0.72);
+  color: #b7c0d3;
+}
+
+.navbar .DocSearch-Button:hover {
+  border-color: rgba(152, 114, 255, 0.5);
+  color: #ffffff;
+}
+
+.navbar .DocSearch-Button .DocSearch-Search-Icon {
+  color: currentColor;
+}
+
+.navbar [class*='toggleButton']:hover {
+  background: rgba(148, 163, 214, 0.14);
+}
+
 @media (min-width: 997px) {
   .navbar .DocSearch-Button {
     width: 40px;
     height: 40px;
     padding: 0;
     justify-content: center;
-    border: 1px solid rgba(109, 141, 200, 0.18);
-    border-radius: 9px;
-    background: rgba(10, 20, 40, 0.72);
   }
 
   .navbar .DocSearch-Button-Placeholder,
@@ -254,17 +375,22 @@ markdown > table {
   }
 }
 
+/* The mobile menu is dark in both colour modes, so it carries the dark menu values itself. */
 .navbar-sidebar {
+  --ifm-menu-color: #c7d0e3;
+  --ifm-menu-color-active: #c9a9ff;
+  --ifm-menu-color-background-active: rgba(152, 114, 255, 0.13);
+  --ifm-menu-color-background-hover: rgba(148, 163, 214, 0.07);
+  --ifm-menu-link-sublist-icon-filter: invert(100%) sepia(94%) saturate(17%) hue-rotate(223deg) brightness(104%)
+    contrast(98%);
+
   background: #050b17;
+  color: #c7d0e3;
 }
 
 .navbar-sidebar__brand {
   border-bottom: 1px solid rgba(102, 132, 190, 0.16);
   background: #020711;
-}
-
-.navbar-sidebar .menu__link {
-  color: #c7d0e3;
 }
 
 /* Better footer */
@@ -278,56 +404,7 @@ html {
   scroll-behavior: smooth;
 }
 
-/* Better heading styles */
-h1, h2, h3, h4, h5, h6 {
-  color: var(--ifm-heading-color);
-  font-weight: var(--ifm-heading-font-weight);
-  line-height: 1.25;
-}
-
-h1 {
-  font-size: 2.5rem;
-  margin-bottom: 1.5rem;
-}
-
-h2 {
-  font-size: 2rem;
-  margin-bottom: 1.25rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px solid var(--ifm-border-color);
-}
-
-h3 {
-  font-size: 1.5rem;
-  margin-bottom: 1rem;
-}
-
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-
-::-webkit-scrollbar-track {
-  background: var(--ifm-background-surface-color);
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--ifm-color-primary);
-  border-radius: 5px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--ifm-color-primary-dark);
-}
-
-/* Mermaid diagram styling */
-.mermaid {
-  background: var(--ifm-background-surface-color);
-  border-radius: var(--ifm-global-border-radius);
-  padding: 1rem;
-  margin: 1.5rem 0;
-}
+/* Headings, links, code, tables and diagrams inside articles are styled in content.css. */
 
 /* API reference styling */
 .api-reference {
@@ -338,12 +415,6 @@ h3 {
   margin: 1rem 0;
 }
 
-/* Warning and notice boxes */
-.admonition {
-  border-radius: var(--ifm-global-border-radius);
-  margin: 1.5rem 0;
-}
-
 /* Tabs styling */
 .tabs {
   margin: 1.5rem 0;
@@ -351,27 +422,6 @@ h3 {
 
 .tab-item {
   border-radius: var(--ifm-global-border-radius);
-}
-
-/* Code inline styling */
-code {
-  padding: 0.2em 0.4em;
-  margin: 0;
-  font-size: 85%;
-  background-color: var(--ifm-code-background);
-  border-radius: 6px;
-}
-
-/* Links */
-a {
-  color: var(--ifm-color-primary);
-  text-decoration: none;
-  transition: color 0.2s ease;
-}
-
-a:hover {
-  color: var(--ifm-color-primary-dark);
-  text-decoration: underline;
 }
 
 /* Print styles */
@@ -386,21 +436,6 @@ a:hover {
   main {
     margin: 0;
     padding: 0;
-  }
-}
-
-/* Responsive adjustments */
-@media (max-width: 996px) {
-  h1 {
-    font-size: 2rem;
-  }
-
-  h2 {
-    font-size: 1.5rem;
-  }
-
-  h3 {
-    font-size: 1.25rem;
   }
 }
 

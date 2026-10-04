@@ -65,8 +65,8 @@ use rocketmq_transport::api::TransportError;
 
 use super::deadline::NotificationWaitDeadline;
 use super::deadline::NotificationWaitDeadlineOperationalError;
-use super::deadline::NotificationWaitDeadlineOutcome;
 use super::deadline::NotificationWaitDeadlineRejection;
+use super::deadline::NotificationWaitDecision;
 use super::index::NotificationArrivalView;
 use super::index::NotificationCandidateReservation;
 use super::index::NotificationCandidateSelection;
@@ -74,13 +74,13 @@ use super::index::NotificationCriteriaIndex;
 use super::index::NotificationCriteriaKey;
 use super::index::NotificationCriteriaLimits;
 use super::index::NotificationIndexOperationalError;
-use super::index::NotificationIndexReserveOutcome;
+use super::index::NotificationIndexReservationStatus;
 use super::index::NotificationIndexReserveRejection;
 use super::index::NotificationIndexSnapshot;
 use super::index::NotificationMatchCriteria;
 use super::index::NotificationScanCursor;
+use crate::long_polling::pending_arrival_latch::PendingArrivalAdmissionStatus;
 use crate::long_polling::pending_arrival_latch::PendingArrivalInsertOperationalError;
-use crate::long_polling::pending_arrival_latch::PendingArrivalInsertOutcome;
 use crate::long_polling::pending_arrival_latch::PendingArrivalInsertRejection;
 use crate::long_polling::pending_arrival_latch::PendingArrivalLatch;
 use crate::long_polling::pending_arrival_latch::PendingArrivalReservation;
@@ -246,8 +246,8 @@ impl NotificationDeferredService {
             wall_now,
             monotonic_now,
         ) {
-            Ok(NotificationWaitDeadlineOutcome::Pending(deadline)) => deadline,
-            Ok(NotificationWaitDeadlineOutcome::Rejected(rejection)) => {
+            Ok(NotificationWaitDecision::Pending(deadline)) => deadline,
+            Ok(NotificationWaitDecision::Rejected(rejection)) => {
                 return Ok(NotificationDeferredPrepareOutcome::Rejected(
                     NotificationDeferredPrepareRejection::Deadline(rejection),
                 ));
@@ -277,8 +277,8 @@ impl NotificationDeferredService {
             .reserve_at(key, monotonic_now)
             .map_err(NotificationDeferredPrepareFailure::Index)?
         {
-            NotificationIndexReserveOutcome::Reserved(reservation) => reservation,
-            NotificationIndexReserveOutcome::Rejected(rejection) => {
+            NotificationIndexReservationStatus::Reserved(reservation) => reservation,
+            NotificationIndexReservationStatus::Rejected(rejection) => {
                 return Ok(NotificationDeferredPrepareOutcome::Rejected(
                     NotificationDeferredPrepareRejection::IndexCapacity(rejection),
                 ));
@@ -609,8 +609,8 @@ impl NotificationDeferredService {
                 }
             };
         match self.pending_arrivals.insert(key, pending) {
-            Ok(PendingArrivalInsertOutcome::Inserted) => Ok(NotificationPendingArrivalOutcome::Latched),
-            Ok(PendingArrivalInsertOutcome::Rejected(rejection)) => Ok(NotificationPendingArrivalOutcome::Rejected(
+            Ok(PendingArrivalAdmissionStatus::Accepted) => Ok(NotificationPendingArrivalOutcome::Latched),
+            Ok(PendingArrivalAdmissionStatus::Rejected(rejection)) => Ok(NotificationPendingArrivalOutcome::Rejected(
                 NotificationPendingArrivalRejection::Latch(rejection),
             )),
             Err(error) => Err(NotificationPendingArrivalOperationalError::Latch(error)),
@@ -626,9 +626,9 @@ impl NotificationDeferredService {
         topic: &CheetahString,
         queue_id: i32,
         logical_offset: i64,
-    ) -> Result<PendingArrivalInsertOutcome, PendingArrivalInsertOperationalError> {
+    ) -> Result<PendingArrivalAdmissionStatus, PendingArrivalInsertOperationalError> {
         if logical_offset <= 0 || !self.index.has_arrival_target(topic, queue_id) {
-            return Ok(PendingArrivalInsertOutcome::Inserted);
+            return Ok(PendingArrivalAdmissionStatus::Accepted);
         }
         self.pending_offsets
             .retain_targets(|target| self.index.has_arrival_target(target.topic(), target.queue_id()));

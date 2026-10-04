@@ -57,6 +57,13 @@ variants, registration ownership, identity and history checks, reconciliation
 fences, and retained read-only receipts are unchanged. No old-name aliases or
 additional public registration API are provided.
 
+### Metadata write status names
+
+Update `MetadataIoDurabilityOutcome` to `MetadataWriteDurabilityStatus` and
+`MetadataIoCommitAdmissionOutcome` to `MetadataWriteCompletionStatus`.
+Durability, completion classifications, conflict handling, and reconciliation
+behavior are unchanged. No compatibility aliases are provided.
+
 ### Request-header derive migration
 
 The historical V1 implementation of `rocketmq_macros::RequestHeaderCodec` and
@@ -322,6 +329,19 @@ wrapper under the old name is provided. `try_destroy`, the variants
 (`NamespaceRemoved`, `CleanupPending`, `DeleteFailed`) and their fields are
 unchanged, and `NamespaceRemoved` still does not claim the mapping or file
 owners have been dropped.
+
+### Credential change decision
+
+`CredentialAuditOutcome` is now `CredentialChangeDecision`, because the type
+records the decision about a credential-management change before any new state
+is published, not the result of the audit sink. The `Authorized` variant is now
+`Approved`; `Rejected` is unchanged. `CredentialAuditEvent::outcome()` is now
+`CredentialAuditEvent::decision()`. This is an `approved-break`: external
+callers must replace the old names in imports, type references, matches, and
+accessor calls, for example `rocketmq_auth::CredentialChangeDecision`. No alias
+or wrapper under the old names is provided. Audit actions, event fields other
+than the renamed one, and the audit-before-publication ordering are unchanged
+([#11117](https://github.com/mxsm/rocketmq-rust/issues/11117)).
 
 ### Typed filter compilation
 

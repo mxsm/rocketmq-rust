@@ -48,8 +48,15 @@ pub enum RegisterState {
     Registered,
 }
 
+/// Reports a processed controller role update from the replica manager.
+///
+/// Carries the resulting master and sync-state-set information together with
+/// the follow-up actions the broker should take. `role` is `None` for an
+/// update without a role transition, for example when an old epoch is
+/// ignored; the report then still reflects the installed master and
+/// sync-state-set state.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RoleChangeOutcome {
+pub struct BrokerRoleChangeReport {
     pub role: Option<BrokerReplicaRole>,
     pub sync_state_set_changed: bool,
     pub master_broker_id: Option<u64>,
@@ -96,7 +103,7 @@ pub struct ControllerHeartbeatState {
     pub epoch: Option<i32>,
 }
 
-impl RoleChangeOutcome {
+impl BrokerRoleChangeReport {
     pub fn target_broker_role(&self) -> Option<BrokerRole> {
         match self.role {
             Some(BrokerReplicaRole::Master) => Some(BrokerRole::SyncMaster),
@@ -572,7 +579,7 @@ impl ReplicasManager {
         new_master_epoch: Option<i32>,
         sync_state_set_epoch: Option<i32>,
         sync_state_set: Option<&HashSet<i64>>,
-    ) -> Result<RoleChangeOutcome> {
+    ) -> Result<BrokerRoleChangeReport> {
         if let Some(controller_leader_address) = controller_leader_address {
             self.set_controller_leader_address(controller_leader_address);
         }
@@ -596,7 +603,7 @@ impl ReplicasManager {
 
         if let Some(current_authority) = self.write_authority {
             if requested_authority.master_epoch() < current_authority.master_epoch() {
-                return Ok(self.outcome(None, false));
+                return Ok(self.role_change_report(None, false));
             }
             if requested_authority.master_epoch() == current_authority.master_epoch()
                 && requested_authority != current_authority
@@ -649,7 +656,7 @@ impl ReplicasManager {
                 self.sync_state_set_epoch = next_sync_state_set_epoch;
                 self.sync_state_set = next_sync_state_set;
             }
-            return Ok(self.outcome(None, sync_state_set_changed));
+            return Ok(self.role_change_report(None, sync_state_set_changed));
         }
 
         let (role, master_address) = if master_broker_id == self.broker_controller_id {
@@ -682,12 +689,16 @@ impl ReplicasManager {
             self.sync_state_set_epoch()
         );
 
-        Ok(self.outcome(Some(role), sync_state_set_changed))
+        Ok(self.role_change_report(Some(role), sync_state_set_changed))
     }
 
-    fn outcome(&self, role: Option<BrokerReplicaRole>, sync_state_set_changed: bool) -> RoleChangeOutcome {
+    fn role_change_report(
+        &self,
+        role: Option<BrokerReplicaRole>,
+        sync_state_set_changed: bool,
+    ) -> BrokerRoleChangeReport {
         let should_start_special_service = self.master_broker_id == Some(self.broker_controller_id);
-        RoleChangeOutcome {
+        BrokerRoleChangeReport {
             role,
             sync_state_set_changed,
             master_broker_id: self.master_broker_id,

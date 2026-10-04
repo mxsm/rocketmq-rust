@@ -2989,11 +2989,11 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use metadata_io::MetadataIoCommitAdmissionOutcome",
-          "identity": "rocketmq-runtime/src/lib.rs:pub use metadata_io::MetadataIoCommitAdmissionOutcome",
+          "declaration": "pub use metadata_io::MetadataWriteCompletionStatus",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use metadata_io::MetadataWriteCompletionStatus",
           "owner": "runtime",
           "path": "rocketmq-runtime/src/lib.rs",
-          "rationale": "metadata commit admission, completion, and durability evidence",
+          "rationale": "metadata write completion status and durability evidence",
           "removal_condition": "retain while the stable entry point remains supported"
         },
         {
@@ -3025,11 +3025,11 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use metadata_io::MetadataIoDurabilityOutcome",
-          "identity": "rocketmq-runtime/src/lib.rs:pub use metadata_io::MetadataIoDurabilityOutcome",
+          "declaration": "pub use metadata_io::MetadataWriteDurabilityStatus",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use metadata_io::MetadataWriteDurabilityStatus",
           "owner": "runtime",
           "path": "rocketmq-runtime/src/lib.rs",
-          "rationale": "source-free metadata durability result",
+          "rationale": "metadata write durability status",
           "removal_condition": "retain while metadata durability is a public outcome"
         },
         {

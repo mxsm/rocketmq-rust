@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **refactor(dashboard):** Consolidate Web backend SQL migrations into one initial file per database while preserving existing migration versions and data; start future migration filenames at `0002_*.sql` ([#11113](https://github.com/mxsm/rocketmq-rust/issues/11113)).
 - **refactor(runtime):** Renamed `MetadataIoAdmissionOutcome` to `MetadataWriteSubmissionStatus` in the public API.
+- **refactor(auth):** Renamed `CredentialAuditOutcome` to `CredentialChangeDecision`, its `Authorized` variant to `Approved`, and `CredentialAuditEvent::outcome()` to `decision()` in the public API ([#11117](https://github.com/mxsm/rocketmq-rust/issues/11117)).
 
 ### Security
 
@@ -95,8 +96,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **refactor(runtime):** Rename `OperationOutcome` to `OperationTaskExitReason` and `OperationOutcomeObserver` to `OperationTaskExitObserver`; callers must update imports and observer implementations because no compatibility aliases are retained ([#11085](https://github.com/mxsm/rocketmq-rust/issues/11085)).
 - **refactor(runtime):** Prefer `OperationDrainStatus` for bounded operation task-draining results and remove the `OperationWaitOutcome` compatibility name; callers must update imports and type references ([#11066](https://github.com/mxsm/rocketmq-rust/issues/11066), [#11103](https://github.com/mxsm/rocketmq-rust/issues/11103)).
-- **refactor(runtime):** Prefer `OperationDrainStatus` for bounded operation task-draining results while retaining `OperationWaitOutcome` as a source-compatible name ([#11066](https://github.com/mxsm/rocketmq-rust/issues/11066)).
 - **refactor(runtime):** Rename `MetadataTargetRetirementOutcome` to `MetadataTargetRetirementStatus` and the crate-private registration result to `MetadataTargetRegistrationStatus`; registry ownership, identity checks, and retirement behavior are unchanged ([#11099](https://github.com/mxsm/rocketmq-rust/issues/11099)).
+- **refactor(runtime):** Rename `MetadataIoDurabilityOutcome` to `MetadataWriteDurabilityStatus` and `MetadataIoCommitAdmissionOutcome` to `MetadataWriteCompletionStatus`; variants, persistence behavior, and reconciliation semantics are unchanged ([#11098](https://github.com/mxsm/rocketmq-rust/issues/11098)).
 - **refactor(runtime):** Rename `MetadataIoCommitOutcome` to `MetadataWritePersistenceStatus` (breaking), exported as `rocketmq_runtime::MetadataWritePersistenceStatus`. External callers must update imports and type references; no compatibility alias is provided. Variants, persistence, and reconciliation behavior are unchanged ([#11088](https://github.com/mxsm/rocketmq-rust/issues/11088)).
 - **refactor(runtime):** Rename `ScheduledTaskRegistrationOutcome` to `ScheduledTaskRegistrationStatus` (breaking), exported as `rocketmq_runtime::ScheduledTaskRegistrationStatus`. External callers must update imports and type references; no compatibility alias is provided. Variants and scheduling behavior are unchanged ([#11089](https://github.com/mxsm/rocketmq-rust/issues/11089)).
 - **refactor(runtime):** Rename `PermitRebindOutcome` to `PermitBudgetTransferStatus` (breaking), exported as `rocketmq_runtime::PermitBudgetTransferStatus` and `rocketmq_runtime::resource_budget::PermitBudgetTransferStatus`. External callers must update imports and type references; no compatibility alias is provided. Variants and `try_rebind` behavior are unchanged ([#11067](https://github.com/mxsm/rocketmq-rust/issues/11067)).
@@ -140,6 +141,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - **transport:** Remove deprecated `ClientMetadata::broker_addr_table`; use owned snapshots and controlled address updates instead.
+- **transport:** Remove deprecated `Connection::connection_is_ok`; use `is_healthy()` or `state()` instead.
 - **namesrv:** Remove the unused `RouteManagerConfig` compatibility DTO; use `NamesrvConfig` for runtime configuration.
 - **broker:** Remove the no-op `BrokerOuterAPI::refresh_metadata` method and its periodic task (breaking); remove calls to this method.
 - **protocol:** Remove deprecated `RemotingCommand` response and custom-header compatibility aliases; use the explicit and fallible APIs instead.
