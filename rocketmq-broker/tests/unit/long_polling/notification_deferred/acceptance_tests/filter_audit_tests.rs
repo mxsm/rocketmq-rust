@@ -114,8 +114,8 @@ async fn notification_deferred_miss_prefix_beyond_callback_batch_continuation_cl
     assert_eq!(service.snapshot().admission().waiting_count(), 2);
 
     let continuation = match service.admit_continuation(arrival, cursor) {
-        Ok(NotificationContinuationOutcome::Continued(continuation)) => continuation,
-        Ok(NotificationContinuationOutcome::Rejected(rejection)) => {
+        Ok(NotificationContinuationDecision::Ready(continuation)) => continuation,
+        Ok(NotificationContinuationDecision::Rejected(rejection)) => {
             panic!("admit miss-prefix continuation: {rejection:?}")
         }
         Err(error) => panic!("admit miss-prefix continuation: {error:?}"),

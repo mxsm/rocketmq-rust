@@ -59,11 +59,11 @@ use tokio::sync::oneshot;
 
 use super::index::NotificationArrivalView;
 use super::index::NotificationCriteriaLimits;
-use super::service::NotificationContinuationOutcome;
+use super::service::NotificationContinuationDecision;
+use super::service::NotificationDeferredPreparationStatus;
 use super::service::NotificationDeferredPrepareFailure;
-use super::service::NotificationDeferredPrepareOutcome;
 use super::service::NotificationDeferredRegisterFailure;
-use super::service::NotificationDeferredRegisterOutcome;
+use super::service::NotificationDeferredRegistrationStatus;
 use super::service::NotificationDeferredService;
 use super::service::NotificationRetainedEstimate;
 use super::service::PreparedNotificationRegistration;
@@ -123,11 +123,11 @@ struct Registration {
 }
 
 fn prepared_or_test_error(
-    result: Result<NotificationDeferredPrepareOutcome, NotificationDeferredPrepareFailure>,
+    result: Result<NotificationDeferredPreparationStatus, NotificationDeferredPrepareFailure>,
 ) -> crate::broker_error::BrokerResult<PreparedNotificationRegistration> {
     match result {
-        Ok(NotificationDeferredPrepareOutcome::Prepared(prepared)) => Ok(*prepared),
-        Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => {
+        Ok(NotificationDeferredPreparationStatus::Prepared(prepared)) => Ok(*prepared),
+        Ok(NotificationDeferredPreparationStatus::Rejected(rejection)) => {
             Err(crate::broker_error::invalid_argument(format!("{:?}", rejection.kind())))
         }
         Err(error) => Err(crate::broker_error::invalid_argument(error.to_string())),
@@ -135,11 +135,11 @@ fn prepared_or_test_error(
 }
 
 fn registration_or_test_error(
-    result: Result<NotificationDeferredRegisterOutcome, NotificationDeferredRegisterFailure>,
+    result: Result<NotificationDeferredRegistrationStatus, NotificationDeferredRegisterFailure>,
 ) -> crate::broker_error::BrokerResult<rocketmq_transport::api::DeferredRegistration> {
     match result {
-        Ok(NotificationDeferredRegisterOutcome::Registered(registration)) => Ok(*registration),
-        Ok(NotificationDeferredRegisterOutcome::Rejected(rejection)) => {
+        Ok(NotificationDeferredRegistrationStatus::Registered(registration)) => Ok(*registration),
+        Ok(NotificationDeferredRegistrationStatus::Rejected(rejection)) => {
             Err(crate::broker_error::invalid_argument(format!("{:?}", rejection.kind())))
         }
         Err(error) => Err(crate::broker_error::invalid_argument(error.to_string())),
@@ -605,8 +605,8 @@ async fn notification_deferred_newest_first_bounded_batch_continuation_advances_
     );
 
     let continuation = match service.admit_continuation(arrival, cursor) {
-        Ok(NotificationContinuationOutcome::Continued(continuation)) => continuation,
-        Ok(NotificationContinuationOutcome::Rejected(rejection)) => {
+        Ok(NotificationContinuationDecision::Ready(continuation)) => continuation,
+        Ok(NotificationContinuationDecision::Rejected(rejection)) => {
             panic!("admit bounded continuation: {rejection:?}")
         }
         Err(error) => panic!("admit bounded continuation: {error:?}"),

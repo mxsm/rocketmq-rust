@@ -28,12 +28,12 @@ use rocketmq_transport::api::ResponseAction;
 use super::core::NotificationCoreOutcome;
 use super::response::compose_notification_response;
 use super::NotificationProcessor;
+use crate::long_polling::notification_deferred::service::NotificationDeferredPreparationStatus;
 use crate::long_polling::notification_deferred::service::NotificationDeferredPrepareFailure;
-use crate::long_polling::notification_deferred::service::NotificationDeferredPrepareOutcome;
 use crate::long_polling::notification_deferred::service::NotificationDeferredPrepareRejection;
 use crate::long_polling::notification_deferred::service::NotificationDeferredRegisterFailure;
-use crate::long_polling::notification_deferred::service::NotificationDeferredRegisterOutcome;
 use crate::long_polling::notification_deferred::service::NotificationDeferredRegisterRejection;
+use crate::long_polling::notification_deferred::service::NotificationDeferredRegistrationStatus;
 use crate::long_polling::notification_deferred::service::NotificationRetainedEstimate;
 use crate::processor::response_assembly::BrokerResponseParts;
 
@@ -117,17 +117,17 @@ where
                     .unwrap_or((None, None));
                 let prepared =
                     match service.prepare(request, subscription, filter, NotificationRetainedEstimate::default()) {
-                        Ok(NotificationDeferredPrepareOutcome::Prepared(prepared)) => *prepared,
-                        Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => {
+                        Ok(NotificationDeferredPreparationStatus::Prepared(prepared)) => *prepared,
+                        Ok(NotificationDeferredPreparationStatus::Rejected(rejection)) => {
                             return self.prepare_rejection_outcome(rejection);
                         }
                         Err(failure) => return self.prepare_failure_outcome(failure),
                     };
                 match service.register(prepared, request) {
-                    Ok(NotificationDeferredRegisterOutcome::Registered(registration)) => {
+                    Ok(NotificationDeferredRegistrationStatus::Registered(registration)) => {
                         Ok(ResponseAction::Deferred(*registration))
                     }
-                    Ok(NotificationDeferredRegisterOutcome::Rejected(rejection)) => {
+                    Ok(NotificationDeferredRegistrationStatus::Rejected(rejection)) => {
                         self.register_rejection_outcome(*rejection)
                     }
                     Err(failure) => self.register_failure_outcome(failure),
