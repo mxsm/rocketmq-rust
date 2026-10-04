@@ -44,7 +44,7 @@ use crate::broker_runtime::BrokerMessageStore;
 use crate::broker_runtime::BrokerRuntime;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::long_polling::notification_deferred::deadline::NotificationWaitDeadline;
-use crate::long_polling::notification_deferred::deadline::NotificationWaitDeadlineOutcome;
+use crate::long_polling::notification_deferred::deadline::NotificationWaitDecision;
 use crate::long_polling::notification_deferred::index::NotificationMatchCriteria;
 use crate::long_polling::notification_deferred::service::NotificationRequestData;
 use crate::long_polling::notification_deferred::service::ResumeNotification;
@@ -169,8 +169,8 @@ fn resume_request() -> ResumeNotification {
     let deadline = match NotificationWaitDeadline::checked(now, 60_000, now, tokio::time::Instant::now())
         .expect("live Notification test deadline must not overflow")
     {
-        NotificationWaitDeadlineOutcome::Pending(deadline) => deadline,
-        NotificationWaitDeadlineOutcome::Rejected(rejection) => {
+        NotificationWaitDecision::Pending(deadline) => deadline,
+        NotificationWaitDecision::Rejected(rejection) => {
             panic!("live Notification test deadline was rejected: {rejection:?}")
         }
     };
