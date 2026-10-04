@@ -1,0 +1,381 @@
+.section {
+  overflow: hidden;
+}
+
+/* One accent per ring, shared with the matching group card. */
+.services {
+  --group: var(--home-orange);
+  --group-soft: rgba(255, 122, 38, 0.12);
+  --group-line: rgba(255, 122, 38, 0.42);
+}
+
+.libraries {
+  --group: var(--home-violet);
+  --group-soft: rgba(152, 114, 255, 0.12);
+  --group-line: rgba(152, 114, 255, 0.42);
+}
+
+.operations {
+  --group: var(--home-cyan);
+  --group-soft: rgba(66, 208, 240, 0.1);
+  --group-line: rgba(66, 208, 240, 0.4);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  align-items: center;
+  gap: clamp(2rem, 5vw, 4.5rem);
+  margin-top: clamp(2.4rem, 5vw, 4rem);
+}
+
+/* ---------- Orbit ---------- */
+
+.stage {
+  min-width: 0;
+  /* Labels on the outer ring overhang the circle. */
+  padding: 2rem 0;
+}
+
+.orbit {
+  /* One revolution of the labels. */
+  --orbit-period: 96s;
+
+  position: relative;
+  width: min(520px, calc(100% - 7rem));
+  margin: 0 auto;
+  aspect-ratio: 1;
+}
+
+.sweep {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, rgba(255, 140, 70, 0.16), transparent 24%);
+  mask-image: radial-gradient(closest-side, #000 60%, transparent 100%);
+  animation: spin 9s linear infinite;
+}
+
+.ring {
+  position: absolute;
+  inset: 0;
+  transition: opacity 320ms ease;
+}
+
+.orbitFocused .ring:not(.ringActive) {
+  opacity: 0.26;
+}
+
+.track {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: calc(var(--radius) * 2);
+  aspect-ratio: 1;
+  border: 1px dashed var(--group-line);
+  border-radius: 50%;
+  opacity: 0.6;
+  transform: translate(-50%, -50%);
+}
+
+/* Duration and direction are set inline, per ring. */
+.cometLayer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  animation: spin linear infinite;
+}
+
+.comet {
+  position: absolute;
+  top: 50%;
+  left: calc(50% + var(--radius));
+  width: 7px;
+  height: 7px;
+  margin: -3.5px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow:
+    0 0 10px 2px var(--group),
+    0 0 26px 6px var(--group-line);
+}
+
+.spin {
+  position: absolute;
+  inset: 0;
+  animation: spin var(--orbit-period) linear infinite;
+}
+
+.slot {
+  position: absolute;
+  transform: translate(-50%, -50%);
+}
+
+/* Counter-rotates against .spin so labels stay upright. */
+.chip {
+  display: block;
+  padding: 0.36em 0.8em;
+  border: 1px solid var(--group-line);
+  border-radius: 999px;
+  background: rgba(10, 13, 24, 0.94);
+  box-shadow:
+    0 10px 26px rgba(0, 0, 0, 0.4),
+    inset 0 0 14px var(--group-soft);
+  color: #e3e8f4;
+  /*
+   * Tracks the diagram width (the diagram is 100vw - 10rem wide below its 520px
+   * cap), so label spacing stays proportional on narrow screens.
+   */
+  font-size: clamp(0.62rem, calc((100vw - 10rem) * 0.024), 0.78rem);
+  font-weight: 650;
+  white-space: nowrap;
+  animation: spin var(--orbit-period) linear infinite reverse;
+}
+
+.orbit:hover .spin,
+.orbit:hover .chip {
+  animation-play-state: paused;
+}
+
+.core {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  width: 24%;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1;
+  border: 1px solid rgba(255, 150, 80, 0.4);
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 35%, #1a1420, #0a0c15 70%);
+  box-shadow:
+    0 0 60px rgba(255, 110, 30, 0.34),
+    inset 0 0 26px rgba(255, 110, 30, 0.16);
+  transform: translate(-50%, -50%);
+}
+
+.core img {
+  position: relative;
+  width: 74%;
+  height: auto;
+  filter: drop-shadow(0 6px 18px rgba(255, 110, 30, 0.5));
+  animation: hover 5s ease-in-out infinite;
+}
+
+.corePulse {
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(255, 150, 80, 0.5);
+  border-radius: 50%;
+  animation: pulse 3.6s ease-out infinite;
+}
+
+.corePulse + .corePulse {
+  animation-delay: 1.8s;
+}
+
+/* ---------- Group cards ---------- */
+
+.groups {
+  display: grid;
+  min-width: 0;
+  gap: 0.9rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.groups > li {
+  min-width: 0;
+}
+
+.group {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+  padding: 1.3rem 1.4rem 1.25rem 1.6rem;
+  border: 1px solid var(--home-border);
+  border-radius: 20px;
+  background: var(--home-surface);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition:
+    border-color 260ms ease,
+    background-color 260ms ease,
+    transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.group::before {
+  position: absolute;
+  top: 18%;
+  bottom: 18%;
+  left: 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--group);
+  box-shadow: 0 0 16px var(--group);
+  content: '';
+  opacity: 0.55;
+  transition: opacity 260ms ease;
+}
+
+.groupActive {
+  border-color: var(--group-line);
+  background: linear-gradient(100deg, var(--group-soft), transparent 70%), var(--home-surface);
+  transform: translateX(6px);
+}
+
+.groupActive::before {
+  opacity: 1;
+}
+
+.groupTitle {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0;
+  color: var(--home-text);
+  font-family: var(--home-font-display);
+  font-size: 1.14rem;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+.groupDot {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--group);
+  box-shadow: 0 0 12px var(--group);
+}
+
+.groupText {
+  margin: 0.5rem 0 0;
+  color: var(--home-muted);
+  font-size: 0.93rem;
+  line-height: 1.62;
+}
+
+.members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.8rem 0 0.9rem;
+  padding: 0;
+  list-style: none;
+}
+
+.members li {
+  padding: 0.16rem 0.56rem;
+  border: 1px solid var(--home-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  color: #aab3c8;
+  font-family: var(--home-font-mono);
+  font-size: 0.68rem;
+}
+
+/* ---------- Responsive ---------- */
+
+/* Below this width a side-by-side diagram would be too small for its labels. */
+@media (max-width: 1279px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1.5rem;
+  }
+
+  .groups {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .groupActive {
+    transform: translateY(-4px);
+  }
+}
+
+@media (max-width: 860px) {
+  .groups {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .groupActive {
+    transform: none;
+  }
+}
+
+/* Too small for labels: the rings keep their members as glowing dots; the cards below name them. */
+@media (max-width: 560px) {
+  .stage {
+    padding: 0.5rem 0;
+  }
+
+  .orbit {
+    width: min(320px, calc(100% - 3rem));
+  }
+
+  .chip {
+    width: 11px;
+    height: 11px;
+    padding: 0;
+    border: 0;
+    background: var(--group);
+    box-shadow: 0 0 12px var(--group);
+  }
+
+  .chip span {
+    display: none;
+  }
+}
+
+/* ---------- Keyframes ---------- */
+
+@keyframes spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@keyframes pulse {
+  from {
+    opacity: 0.8;
+    transform: scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: scale(2.1);
+  }
+}
+
+@keyframes hover {
+  0%,
+  100% {
+    transform: translateY(2%);
+  }
+
+  50% {
+    transform: translateY(-4%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sweep,
+  .spin,
+  .cometLayer,
+  .chip,
+  .core img,
+  .corePulse {
+    animation: none;
+  }
+
+  .comet,
+  .corePulse {
+    display: none;
+  }
+
+  .ring,
+  .group {
+    transition: none;
+  }
+}

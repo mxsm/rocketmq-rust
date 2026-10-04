@@ -1,165 +1,66 @@
-/**
- * CSS files with the .module.css suffix will be treated as CSS modules
- * and scoped locally.
+/*
+ * Homepage shell. The page is dark in both colour modes, so the tokens below are
+ * self-contained instead of following [data-theme]; every section under
+ * components/home reads them.
  */
 
-.heroBanner {
-  padding: 6rem 0 4rem;
+.home {
+  /* Matches the fixed .navbar height in css/custom.css. */
+  --home-nav-height: 72px;
+
+  --home-bg: #05060b;
+  --home-surface: rgba(15, 19, 33, 0.72);
+  --home-surface-solid: #0c0f1b;
+  --home-border: rgba(150, 166, 214, 0.14);
+  --home-border-strong: rgba(150, 166, 214, 0.28);
+  --home-text: #f4f6fb;
+  --home-muted: #9ba4b9;
+  /* Lightest tone that still clears 4.5:1 on the page background. */
+  --home-faint: #7a849c;
+
+  --home-orange: #ff7a26;
+  --home-amber: #ffb86b;
+  --home-violet: #9872ff;
+  --home-cyan: #42d0f0;
+  --home-green: #34d399;
+  --home-rose: #fb7185;
+
+  --home-font-display: 'Sora', 'Manrope', system-ui, sans-serif;
+  --home-font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', 'Menlo', 'Consolas', monospace;
+
+  /* Keep Infima-driven elements readable when the site is in light mode. */
+  --ifm-font-color-base: var(--home-text);
+  --ifm-heading-color: var(--home-text);
+  --ifm-link-color: var(--home-amber);
+  --ifm-link-hover-color: #ffd9a8;
+  --ifm-code-background: transparent;
+
   position: relative;
-  overflow: hidden;
-  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-  color: white;
+  overflow-x: clip;
+  background: var(--home-bg);
+  color: var(--home-text);
+  color-scheme: dark;
 }
 
-@media screen and (max-width: 996px) {
-  .heroBanner {
-    padding: 4rem 0 2rem;
-  }
+/* Reading progress, pinned above the navbar. */
+.progress {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: calc(var(--ifm-z-index-fixed) + 1);
+  height: 2px;
+  background: linear-gradient(90deg, var(--home-amber), var(--home-orange) 35%, #f2468c 68%, var(--home-violet));
+  pointer-events: none;
+  transform: scaleX(0);
+  transform-origin: 0 50%;
 }
 
-.heroContent {
-  display: flex;
-  align-items: center;
-  gap: 4rem;
+.main {
+  position: relative;
 }
 
-@media screen and (max-width: 996px) {
-  .heroContent {
-    flex-direction: column;
-    gap: 2rem;
-    text-align: center;
-  }
-}
-
-.heroLeft {
-  flex: 1;
-  max-width: 600px;
-}
-
-.heroRight {
-  flex: 1;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-
-@media screen and (max-width: 996px) {
-  .heroRight {
-    order: -1;
-  }
-}
-
-.hero__title {
-  color: white;
-  font-size: 3.5rem;
-  font-weight: 700;
-  line-height: 1.2;
-  margin-bottom: 1.5rem;
-  letter-spacing: -0.02em;
-}
-
-@media screen and (max-width: 996px) {
-  .hero__title {
-    font-size: 2.5rem;
-  }
-}
-
-.highlight {
-  background: linear-gradient(135deg, #00bfa5 0%, #00bcd4 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-.highlight2 {
-  background: linear-gradient(135deg, #4caf50 0%, #8bc34a 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-.hero__subtitle {
-  color: rgba(255, 255, 255, 0.85);
-  font-size: 1.25rem;
-  line-height: 1.6;
-  margin-bottom: 2rem;
-  font-weight: 400;
-}
-
-@media screen and (max-width: 996px) {
-  .hero__subtitle {
-    font-size: 1.1rem;
-  }
-}
-
-.buttons {
-  display: flex;
-  gap: 1rem;
-  flex-wrap: wrap;
-}
-
-.buttonPrimary {
-  background: linear-gradient(135deg, #4caf50 0%, #66bb6a 100%);
-  color: white;
-  border: none;
-  padding: 0.75rem 2rem;
-  font-size: 1.1rem;
-  font-weight: 600;
-  border-radius: 8px;
-  transition: all 0.3s ease;
-  box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
-}
-
-.buttonPrimary:hover {
-  background: linear-gradient(135deg, #43a047 0%, #5cb860 100%);
-  box-shadow: 0 6px 16px rgba(76, 175, 80, 0.4);
-  transform: translateY(-2px);
-  color: white;
-}
-
-.buttonSecondary {
-  background: linear-gradient(135deg, #00bcd4 0%, #26c6da 100%);
-  color: white;
-  border: none;
-  padding: 0.75rem 2rem;
-  font-size: 1.1rem;
-  font-weight: 600;
-  border-radius: 8px;
-  transition: all 0.3s ease;
-  box-shadow: 0 4px 12px rgba(0, 188, 212, 0.3);
-}
-
-.buttonSecondary:hover {
-  background: linear-gradient(135deg, #00acc1 0%, #00bcd4 100%);
-  box-shadow: 0 6px 16px rgba(0, 188, 212, 0.4);
-  transform: translateY(-2px);
-  color: white;
-}
-
-.heroIllustration {
-  width: 300px;
-  height: 300px;
-  animation: float 6s ease-in-out infinite;
-}
-
-@keyframes float {
-  0%, 100% {
-    transform: translateY(0px);
-  }
-  50% {
-    transform: translateY(-20px);
-  }
-}
-
-@media screen and (max-width: 996px) {
-  .heroIllustration {
-    width: 200px;
-    height: 200px;
-  }
-}
-
-.heroIllustration svg {
-  width: 100%;
-  height: 100%;
-  filter: drop-shadow(0 10px 30px rgba(37, 99, 235, 0.3));
+/* Anchor targets clear the sticky navbar. */
+.main > section {
+  scroll-margin-top: var(--home-nav-height);
 }
