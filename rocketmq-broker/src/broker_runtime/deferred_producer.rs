@@ -39,7 +39,7 @@ use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
 use crate::long_polling::notification_deferred::index::NotificationArrivalView;
 use crate::long_polling::notification_deferred::service::NotificationDeferredService;
 use crate::long_polling::notification_deferred::service::NotificationPendingArrivalOutcome;
-use crate::long_polling::pending_arrival_latch::PendingArrivalInsertOutcome;
+use crate::long_polling::pending_arrival_latch::PendingArrivalAdmissionStatus;
 use crate::long_polling::pop_deferred::index::PopArrivalView;
 use crate::long_polling::pop_deferred::index::PopSelectionOrder;
 use crate::long_polling::pop_deferred::service::PopDeferredService;
@@ -284,8 +284,8 @@ where
             return;
         };
         match self.pull.latch_offset(topic, queue_id, logic_offset) {
-            Ok(PendingArrivalInsertOutcome::Inserted) => self.produce_pending_pull_offsets(),
-            Ok(PendingArrivalInsertOutcome::Rejected(_)) => {}
+            Ok(PendingArrivalAdmissionStatus::Accepted) => self.produce_pending_pull_offsets(),
+            Ok(PendingArrivalAdmissionStatus::Rejected(_)) => {}
             Err(error) => warn!(?error, "failed to retain deferred Pull arrival replay"),
         }
         drop(route);
@@ -334,8 +334,8 @@ where
         _properties: Option<&HashMap<CheetahString, CheetahString>>,
     ) {
         match self.pop.latch_offset(topic, queue_id, logic_offset) {
-            Ok(PendingArrivalInsertOutcome::Inserted) => self.produce_pending_pop_offsets(),
-            Ok(PendingArrivalInsertOutcome::Rejected(_)) => {}
+            Ok(PendingArrivalAdmissionStatus::Accepted) => self.produce_pending_pop_offsets(),
+            Ok(PendingArrivalAdmissionStatus::Rejected(_)) => {}
             Err(error) => warn!(?error, "failed to retain deferred POP offset replay"),
         }
     }
@@ -384,8 +384,8 @@ where
         _properties: Option<&HashMap<CheetahString, CheetahString>>,
     ) {
         match self.notification.latch_offset(topic, queue_id, logic_offset) {
-            Ok(PendingArrivalInsertOutcome::Inserted) => self.produce_pending_notification_offsets(),
-            Ok(PendingArrivalInsertOutcome::Rejected(_)) => {}
+            Ok(PendingArrivalAdmissionStatus::Accepted) => self.produce_pending_notification_offsets(),
+            Ok(PendingArrivalAdmissionStatus::Rejected(_)) => {}
             Err(error) => warn!(?error, "failed to retain deferred Notification offset replay"),
         }
     }
@@ -456,10 +456,10 @@ where
                 .pull
                 .latch_max_offset_range(key.topic(), key.queue_id(), max_offset)
             {
-                Ok(PendingArrivalInsertOutcome::Inserted) => {
+                Ok(PendingArrivalAdmissionStatus::Accepted) => {
                     self.produce_pending_pull_offsets();
                 }
-                Ok(PendingArrivalInsertOutcome::Rejected(_)) => {}
+                Ok(PendingArrivalAdmissionStatus::Rejected(_)) => {}
                 Err(error) => warn!(?error, "failed to retain deferred Pull short-poll replay"),
             }
         }
