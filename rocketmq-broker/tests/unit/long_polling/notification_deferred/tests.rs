@@ -38,8 +38,8 @@ use rocketmq_transport::api::DeferredWaitLimits;
 
 use super::deadline::NotificationWaitDeadline;
 use super::deadline::NotificationWaitDeadlineOperationalError;
-use super::deadline::NotificationWaitDeadlineOutcome;
 use super::deadline::NotificationWaitDeadlineRejectionReason;
+use super::deadline::NotificationWaitDecision;
 use super::index::NotificationArrivalView;
 use super::index::NotificationCandidateSelection;
 use super::index::NotificationCriteriaIndex;
@@ -65,11 +65,11 @@ fn nonzero(value: usize) -> NonZeroUsize {
 }
 
 fn expect_deadline(
-    result: Result<NotificationWaitDeadlineOutcome, NotificationWaitDeadlineOperationalError>,
+    result: Result<NotificationWaitDecision, NotificationWaitDeadlineOperationalError>,
 ) -> NotificationWaitDeadline {
     match result {
-        Ok(NotificationWaitDeadlineOutcome::Pending(deadline)) => deadline,
-        Ok(NotificationWaitDeadlineOutcome::Rejected(rejection)) => {
+        Ok(NotificationWaitDecision::Pending(deadline)) => deadline,
+        Ok(NotificationWaitDecision::Rejected(rejection)) => {
             panic!("expected pending Notification deadline, got {:?}", rejection.reason())
         }
         Err(error) => panic!("expected pending Notification deadline: {error}"),
@@ -77,11 +77,11 @@ fn expect_deadline(
 }
 
 fn expect_deadline_rejection(
-    result: Result<NotificationWaitDeadlineOutcome, NotificationWaitDeadlineOperationalError>,
+    result: Result<NotificationWaitDecision, NotificationWaitDeadlineOperationalError>,
 ) -> NotificationWaitDeadlineRejectionReason {
     match result {
-        Ok(NotificationWaitDeadlineOutcome::Rejected(rejection)) => rejection.reason(),
-        Ok(NotificationWaitDeadlineOutcome::Pending(_)) => panic!("expected rejected Notification deadline"),
+        Ok(NotificationWaitDecision::Rejected(rejection)) => rejection.reason(),
+        Ok(NotificationWaitDecision::Pending(_)) => panic!("expected rejected Notification deadline"),
         Err(error) => panic!("expected rejected Notification deadline: {error}"),
     }
 }
