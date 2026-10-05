@@ -120,7 +120,7 @@ enum ScheduleStopStage {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ScheduleStopOutcome {
+enum ScheduleStopStatus {
     Completed,
     TimedOut { generation: u64, stage: ScheduleStopStage },
 }
@@ -688,8 +688,8 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
     pub(crate) async fn shutdown_until(&self, deadline: ShutdownDeadline) -> Result<()> {
         let timeout_ms = u64::try_from(deadline.remaining().as_millis()).unwrap_or(u64::MAX);
         match self.stop_until(true, deadline).await? {
-            ScheduleStopOutcome::Completed => Ok(()),
-            ScheduleStopOutcome::TimedOut { generation, stage } => {
+            ScheduleStopStatus::Completed => Ok(()),
+            ScheduleStopStatus::TimedOut { generation, stage } => {
                 warn!(
                     generation,
                     ?stage,
@@ -706,7 +706,7 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
     pub async fn stop(&self) -> Result<bool> {
         self.stop_inner(false)
             .await
-            .map(|outcome| outcome == ScheduleStopOutcome::Completed)
+            .map(|outcome| outcome == ScheduleStopStatus::Completed)
     }
 
     pub(crate) async fn stop_checked(&self) -> Result<()> {
@@ -720,7 +720,7 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
         }
     }
 
-    async fn stop_inner(&self, finalize: bool) -> Result<ScheduleStopOutcome> {
+    async fn stop_inner(&self, finalize: bool) -> Result<ScheduleStopStatus> {
         self.stop_until(
             finalize,
             ShutdownDeadline::after(Duration::from_millis(WAIT_FOR_SHUTDOWN)),
@@ -728,22 +728,22 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
         .await
     }
 
-    async fn stop_until(&self, finalize: bool, deadline: ShutdownDeadline) -> Result<ScheduleStopOutcome> {
+    async fn stop_until(&self, finalize: bool, deadline: ShutdownDeadline) -> Result<ScheduleStopStatus> {
         let at = tokio::time::Instant::from_std(deadline.instant());
         let Ok(mut lifecycle) = tokio::time::timeout_at(at, self.lifecycle.lock()).await else {
-            return Ok(ScheduleStopOutcome::TimedOut {
+            return Ok(ScheduleStopStatus::TimedOut {
                 generation: self.active_generation.load(Ordering::Acquire),
                 stage: ScheduleStopStage::Lifecycle,
             });
         };
         if lifecycle.finalized {
-            return Ok(ScheduleStopOutcome::Completed);
+            return Ok(ScheduleStopStatus::Completed);
         }
 
         lifecycle.stopping = true;
         lifecycle.finalize_requested |= finalize;
         let generation = lifecycle.run.as_ref().map_or(0, |run| run.generation);
-        let timed_out = |stage| ScheduleStopOutcome::TimedOut { generation, stage };
+        let timed_out = |stage| ScheduleStopStatus::TimedOut { generation, stage };
         self.started.store(false, Ordering::Release);
         self.active_generation.store(0, Ordering::Release);
 
@@ -799,7 +799,7 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
             finalized = lifecycle.finalized,
             "ScheduleMessageService stopped after final offset persistence"
         );
-        Ok(ScheduleStopOutcome::Completed)
+        Ok(ScheduleStopStatus::Completed)
     }
 
     pub fn is_started(&self) -> bool {
@@ -2391,7 +2391,7 @@ mod tests {
             assert!(entered.is_ok_and(|result| result.is_ok()));
             assert_eq!(
                 outcome.unwrap(),
-                ScheduleStopOutcome::TimedOut {
+                ScheduleStopStatus::TimedOut {
                     generation,
                     stage: if final_write {
                         ScheduleStopStage::FinalPersist
@@ -2402,7 +2402,7 @@ mod tests {
             );
             assert!(retained);
             assert!(restarted.is_err());
-            assert_eq!(completed.unwrap(), ScheduleStopOutcome::Completed);
+            assert_eq!(completed.unwrap(), ScheduleStopStatus::Completed);
             assert_eq!(service.task_count(), 0);
 
             ScheduleMessageService::start_persist_task_for_probe(service.clone(), Duration::from_secs(60))
