@@ -26,7 +26,7 @@ use crate::long_polling::pop_lite_deferred::deadline::PopLiteWaitDeadlineOutcome
 use crate::long_polling::pop_lite_deferred::index::PopLiteCriteriaIndex;
 use crate::long_polling::pop_lite_deferred::index::PopLiteIndexLimits;
 use crate::long_polling::pop_lite_deferred::index::PopLiteIndexOperationalError;
-use crate::long_polling::pop_lite_deferred::index::PopLiteIndexReserveOutcome;
+use crate::long_polling::pop_lite_deferred::index::PopLiteIndexReservationStatus;
 use crate::long_polling::pop_lite_deferred::index::PopLiteIndexReserveRejection;
 
 fn nonzero(value: usize) -> NonZeroUsize {
@@ -36,8 +36,8 @@ fn nonzero(value: usize) -> NonZeroUsize {
 macro_rules! expect_reserved {
     ($result:expr, $message:literal) => {
         match $result {
-            Ok(PopLiteIndexReserveOutcome::Reserved(reservation)) => reservation,
-            Ok(PopLiteIndexReserveOutcome::Rejected(rejection)) => panic!("{}: {rejection:?}", $message),
+            Ok(PopLiteIndexReservationStatus::Reserved(reservation)) => reservation,
+            Ok(PopLiteIndexReservationStatus::Rejected(rejection)) => panic!("{}: {rejection:?}", $message),
             Err(error) => panic!("{}: {error:?}", $message),
         }
     };
@@ -86,15 +86,15 @@ fn pop_lite_deferred_index_maps_global_client_and_per_client_capacities() {
 
     assert_eq!(
         match index.reserve(client_a, base) {
-            Ok(PopLiteIndexReserveOutcome::Rejected(rejection)) => rejection,
-            Ok(PopLiteIndexReserveOutcome::Reserved(_)) | Err(_) => panic!("per-client full"),
+            Ok(PopLiteIndexReservationStatus::Rejected(rejection)) => rejection,
+            Ok(PopLiteIndexReservationStatus::Reserved(_)) | Err(_) => panic!("per-client full"),
         },
         PopLiteIndexReserveRejection::PerClient
     );
     assert_eq!(
         match index.reserve(client_b, base) {
-            Ok(PopLiteIndexReserveOutcome::Rejected(rejection)) => rejection,
-            Ok(PopLiteIndexReserveOutcome::Reserved(_)) | Err(_) => panic!("distinct client full"),
+            Ok(PopLiteIndexReservationStatus::Rejected(rejection)) => rejection,
+            Ok(PopLiteIndexReservationStatus::Reserved(_)) | Err(_) => panic!("distinct client full"),
         },
         PopLiteIndexReserveRejection::Client
     );
