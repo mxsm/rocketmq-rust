@@ -26,7 +26,7 @@ use rocketmq_store::MessageFilter;
 
 use super::deadline::PullWaitDeadline;
 use super::deadline::PullWaitDeadlineErrorKind;
-use super::deadline::PullWaitDeadlineOutcome;
+use super::deadline::PullWaitDecision;
 use super::index::PullArrivalView;
 use super::index::PullCriteriaIndex;
 use super::index::PullCriteriaKey;
@@ -103,8 +103,8 @@ fn pull_deadline_preserves_inclusive_legacy_boundary() {
     )
     .expect("one millisecond remains")
     {
-        PullWaitDeadlineOutcome::Pending(deadline) => deadline,
-        PullWaitDeadlineOutcome::AlreadyExpired => panic!("one millisecond must remain"),
+        PullWaitDecision::Pending(deadline) => deadline,
+        PullWaitDecision::AlreadyExpired => panic!("one millisecond must remain"),
     };
     assert_eq!(before.protocol_end_millis(), 1_100);
     assert_eq!(before.protocol_at(), suspend_monotonic + Duration::from_millis(100));
@@ -117,7 +117,7 @@ fn pull_deadline_preserves_inclusive_legacy_boundary() {
         suspend_monotonic + Duration::from_millis(99),
     )
     .expect("equal wall boundary is a normal outcome");
-    assert_eq!(equal, PullWaitDeadlineOutcome::AlreadyExpired);
+    assert_eq!(equal, PullWaitDecision::AlreadyExpired);
     let monotonic_equal = PullWaitDeadline::checked(
         1_000,
         suspend_monotonic,
@@ -126,10 +126,10 @@ fn pull_deadline_preserves_inclusive_legacy_boundary() {
         suspend_monotonic + Duration::from_millis(100),
     )
     .expect("equal monotonic boundary is a normal outcome");
-    assert_eq!(monotonic_equal, PullWaitDeadlineOutcome::AlreadyExpired);
+    assert_eq!(monotonic_equal, PullWaitDecision::AlreadyExpired);
     let zero = PullWaitDeadline::checked(1_000, suspend_monotonic, 0, 1_000, suspend_monotonic)
         .expect("zero timeout is a normal immediate outcome");
-    assert_eq!(zero, PullWaitDeadlineOutcome::AlreadyExpired);
+    assert_eq!(zero, PullWaitDecision::AlreadyExpired);
 }
 
 #[test]

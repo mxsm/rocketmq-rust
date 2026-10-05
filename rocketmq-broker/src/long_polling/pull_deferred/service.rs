@@ -64,7 +64,7 @@ use super::data::PullMatchCriteria;
 use super::data::PullRequestData;
 use super::deadline::PullWaitDeadline;
 use super::deadline::PullWaitDeadlineError;
-use super::deadline::PullWaitDeadlineOutcome;
+use super::deadline::PullWaitDecision;
 use super::index::PullArrivalView;
 use super::index::PullCandidateBatch;
 use super::index::PullCandidateReservation;
@@ -479,8 +479,8 @@ impl PullDeferredService {
             wall_now,
             monotonic_now,
         ) {
-            Ok(PullWaitDeadlineOutcome::Pending(deadline)) => deadline,
-            Ok(PullWaitDeadlineOutcome::AlreadyExpired) => {
+            Ok(PullWaitDecision::Pending(deadline)) => deadline,
+            Ok(PullWaitDecision::AlreadyExpired) => {
                 return Ok(PullDeferredPrepareOutcome::Rejected(
                     PullDeferredPrepareRejection::DeadlineElapsed(candidate),
                 ));
