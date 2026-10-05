@@ -75,7 +75,7 @@ use super::index::PullIndexLease;
 use super::index::PullIndexOperationalError;
 use super::index::PullIndexRejection;
 use super::index::PullIndexReservation;
-use super::index::PullIndexReserveOutcome;
+use super::index::PullIndexReservationStatus;
 use super::index::PullIndexSnapshot;
 use super::index::PullScanCursor;
 
@@ -494,8 +494,8 @@ impl PullDeferredService {
         };
         let key = PullCriteriaKey::from_criteria(&candidate.criteria);
         let reservation = match self.index.reserve(key) {
-            Ok(PullIndexReserveOutcome::Reserved(reservation)) => reservation,
-            Ok(PullIndexReserveOutcome::Rejected(rejection)) => {
+            Ok(PullIndexReservationStatus::Reserved(reservation)) => reservation,
+            Ok(PullIndexReservationStatus::Rejected(rejection)) => {
                 return Ok(PullDeferredPrepareOutcome::Rejected(
                     PullDeferredPrepareRejection::Index { rejection, candidate },
                 ));
