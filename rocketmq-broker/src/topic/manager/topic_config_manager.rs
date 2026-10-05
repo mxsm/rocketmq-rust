@@ -84,7 +84,7 @@ pub(crate) enum TopicConfigCasError {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum TopicConfigCasOutcome {
+pub(crate) enum TopicConfigCompareAndSetStatus {
     Applied(TopicConfigUpdate),
     TopicNotFound,
     VersionConflict { expected_version: u64, actual_version: u64 },
@@ -736,19 +736,19 @@ impl TopicConfigManager {
         write_queue_nums: Option<u32>,
         order: Option<bool>,
         state_machine_version: i64,
-    ) -> Result<TopicConfigCasOutcome, TopicConfigCasError> {
+    ) -> Result<TopicConfigCompareAndSetStatus, TopicConfigCasError> {
         let mut data_version = self.metadata_transition.lock();
         let Some(current) = self
             .topic_config_table
             .get(topic)
             .map(|entry| entry.value().as_ref().clone())
         else {
-            return Ok(TopicConfigCasOutcome::TopicNotFound);
+            return Ok(TopicConfigCompareAndSetStatus::TopicNotFound);
         };
         let counter = data_version.counter();
         let actual_version = u64::try_from(counter).map_err(|_| TopicConfigCasError::VersionUnavailable)?;
         if actual_version != expected_version {
-            return Ok(TopicConfigCasOutcome::VersionConflict {
+            return Ok(TopicConfigCompareAndSetStatus::VersionConflict {
                 expected_version,
                 actual_version,
             });
@@ -768,14 +768,14 @@ impl TopicConfigManager {
             replacement.order = value;
         }
         if replacement == current {
-            return Ok(TopicConfigCasOutcome::NoChange);
+            return Ok(TopicConfigCompareAndSetStatus::NoChange);
         }
 
         let topic_config = Arc::new(replacement);
         self.topic_config_table.insert(topic.clone(), topic_config.clone());
         data_version.next_version_with(state_machine_version);
         self.rebuild_topic_config_snapshot_locked();
-        Ok(TopicConfigCasOutcome::Applied(TopicConfigUpdate {
+        Ok(TopicConfigCompareAndSetStatus::Applied(TopicConfigUpdate {
             topic_config,
             data_version: data_version.clone(),
             changed: true,
@@ -789,7 +789,7 @@ impl TopicConfigManager {
         expected_state: ExpectedState,
         mut replacement: TopicConfig,
         state_machine_version: i64,
-    ) -> Result<TopicConfigCasOutcome, TopicConfigCasError> {
+    ) -> Result<TopicConfigCompareAndSetStatus, TopicConfigCasError> {
         let mut data_version = self.metadata_transition.lock();
         let counter = data_version.counter();
         let actual_version = u64::try_from(counter).map_err(|_| TopicConfigCasError::VersionUnavailable)?;
@@ -802,7 +802,7 @@ impl TopicConfigManager {
             ExpectedState::Present { version } => current.is_some() && version == actual_version,
         };
         if !matches {
-            return Ok(TopicConfigCasOutcome::StateConflict {
+            return Ok(TopicConfigCompareAndSetStatus::StateConflict {
                 actual_version: current.as_ref().map(|_| actual_version),
             });
         }
@@ -821,7 +821,7 @@ impl TopicConfigManager {
         }
         self.apply_topic_attributes_locked(&mut replacement);
         if current.as_ref() == Some(&replacement) {
-            return Ok(TopicConfigCasOutcome::Applied(TopicConfigUpdate {
+            return Ok(TopicConfigCompareAndSetStatus::Applied(TopicConfigUpdate {
                 topic_config: Arc::new(replacement),
                 data_version: data_version.clone(),
                 changed: false,
@@ -834,7 +834,7 @@ impl TopicConfigManager {
         let version = u64::try_from(data_version.counter()).map_err(|_| TopicConfigCasError::VersionUnavailable)?;
         self.supervised_dirty_topics.insert(topic.clone(), version);
         self.rebuild_topic_config_snapshot_locked();
-        Ok(TopicConfigCasOutcome::Applied(TopicConfigUpdate {
+        Ok(TopicConfigCompareAndSetStatus::Applied(TopicConfigUpdate {
             topic_config,
             data_version: data_version.clone(),
             changed: true,
@@ -1490,7 +1490,7 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::topic::manager::topic_config_manager::TopicConfigCasError;
-    use crate::topic::manager::topic_config_manager::TopicConfigCasOutcome;
+    use crate::topic::manager::topic_config_manager::TopicConfigCompareAndSetStatus;
     use crate::topic::manager::topic_config_manager::TopicConfigManager;
     use crate::topic::manager::topic_config_manager::TopicConfigUpdate;
 
@@ -1509,9 +1509,9 @@ mod tests {
         (temp_dir, manager)
     }
 
-    fn expect_applied(outcome: TopicConfigCasOutcome) -> TopicConfigUpdate {
+    fn expect_applied(outcome: TopicConfigCompareAndSetStatus) -> TopicConfigUpdate {
         match outcome {
-            TopicConfigCasOutcome::Applied(update) => update,
+            TopicConfigCompareAndSetStatus::Applied(update) => update,
             other => panic!("expected applied Topic CAS outcome, got {other:?}"),
         }
     }
@@ -1785,7 +1785,7 @@ mod tests {
             .expect("stale version is a closed CAS outcome");
         assert!(matches!(
             stale,
-            TopicConfigCasOutcome::VersionConflict {
+            TopicConfigCompareAndSetStatus::VersionConflict {
                 expected_version: observed_expected,
                 actual_version,
             } if observed_expected == expected_version && actual_version == updated_version
@@ -1810,7 +1810,7 @@ mod tests {
             manager
                 .update_topic_config_if_version(&missing, 0, Some(2), None, None, 0)
                 .expect("missing topic is a closed CAS outcome"),
-            TopicConfigCasOutcome::TopicNotFound
+            TopicConfigCompareAndSetStatus::TopicNotFound
         ));
 
         let topic = CheetahString::from_static_str("NoEffectCasTopic");
@@ -1820,7 +1820,7 @@ mod tests {
             manager
                 .update_topic_config_if_version(&topic, version, Some(4), None, None, 0)
                 .expect("no-effect patch is a closed CAS outcome"),
-            TopicConfigCasOutcome::NoChange
+            TopicConfigCompareAndSetStatus::NoChange
         ));
         assert_eq!(manager.data_version().counter(), created.data_version.counter());
     }
@@ -1865,7 +1865,7 @@ mod tests {
                     0,
                 )
                 .expect("state conflict is a closed CAS outcome"),
-            TopicConfigCasOutcome::StateConflict {
+            TopicConfigCompareAndSetStatus::StateConflict {
                 actual_version: Some(actual_version),
             } if actual_version == created_version
         ));
@@ -1912,7 +1912,7 @@ mod tests {
                     0,
                 )
                 .expect("state conflict is a closed CAS outcome"),
-            TopicConfigCasOutcome::StateConflict {
+            TopicConfigCompareAndSetStatus::StateConflict {
                 actual_version: Some(actual_version),
             } if actual_version == created_version + 1
         ));
@@ -2018,14 +2018,14 @@ mod tests {
             assert_eq!(
                 results
                     .iter()
-                    .filter(|result| matches!(result, Ok(TopicConfigCasOutcome::Applied(_))))
+                    .filter(|result| matches!(result, Ok(TopicConfigCompareAndSetStatus::Applied(_))))
                     .count(),
                 1
             );
             assert_eq!(
                 results
                     .iter()
-                    .filter(|result| matches!(result, Ok(TopicConfigCasOutcome::StateConflict { .. })))
+                    .filter(|result| matches!(result, Ok(TopicConfigCompareAndSetStatus::StateConflict { .. })))
                     .count(),
                 1
             );
