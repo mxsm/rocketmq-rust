@@ -26,8 +26,8 @@ impl RequestProcessor for AfterTakeCloseProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let prepared = prepared_or_test_error(self.service.prepare(request, PopLiteRetainedEstimate::default()))?;
         let rejection = match self.service.register(prepared, request) {
-            Ok(PopLiteDeferredRegisterOutcome::Rejected(rejection)) => rejection,
-            Ok(PopLiteDeferredRegisterOutcome::Registered(_)) | Err(_) => {
+            Ok(PopLiteDeferredRegistrationStatus::Rejected(rejection)) => rejection,
+            Ok(PopLiteDeferredRegistrationStatus::Registered(_)) | Err(_) => {
                 panic!("the service closes after responder transfer")
             }
         };
@@ -94,8 +94,8 @@ struct OneWayProbeProcessor {
 impl RequestProcessor for OneWayProbeProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let rejection = match self.service.prepare(request, PopLiteRetainedEstimate::default()) {
-            Ok(PopLiteDeferredPrepareOutcome::Rejected(rejection)) => rejection,
-            Ok(PopLiteDeferredPrepareOutcome::Prepared(_)) | Err(_) => {
+            Ok(PopLiteDeferredPreparationStatus::Rejected(rejection)) => rejection,
+            Ok(PopLiteDeferredPreparationStatus::Prepared(_)) | Err(_) => {
                 panic!("one-way PopLite must fail before allocating deferred resources")
             }
         };

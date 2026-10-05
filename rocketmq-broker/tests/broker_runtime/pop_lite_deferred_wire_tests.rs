@@ -40,8 +40,8 @@ use tokio::sync::oneshot;
 
 use super::*;
 use crate::long_polling::pop_lite_deferred::index::PopLiteIndexLimits;
-use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredPrepareOutcome;
-use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredRegisterOutcome;
+use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredPreparationStatus;
+use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredRegistrationStatus;
 use crate::long_polling::pop_lite_deferred::prepare::PopLiteRetainedEstimate;
 use crate::long_polling::pop_lite_deferred::service::PopLiteDeferredService;
 
@@ -95,8 +95,8 @@ struct RegisteringProcessor {
 impl RequestProcessor for RegisteringProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let prepared = match self.service.prepare(request, PopLiteRetainedEstimate::default()) {
-            Ok(PopLiteDeferredPrepareOutcome::Prepared(prepared)) => *prepared,
-            Ok(PopLiteDeferredPrepareOutcome::Rejected(_)) => {
+            Ok(PopLiteDeferredPreparationStatus::Prepared(prepared)) => *prepared,
+            Ok(PopLiteDeferredPreparationStatus::Rejected(_)) => {
                 return Err(crate::broker_error::from_shared(Arc::new(CanonicalError::new(
                     &CORE_ARGUMENT_INVALID,
                 ))));
@@ -109,8 +109,8 @@ impl RequestProcessor for RegisteringProcessor {
             }
         };
         let registration = match self.service.register(prepared, request) {
-            Ok(PopLiteDeferredRegisterOutcome::Registered(registration)) => *registration,
-            Ok(PopLiteDeferredRegisterOutcome::Rejected(_)) => {
+            Ok(PopLiteDeferredRegistrationStatus::Registered(registration)) => *registration,
+            Ok(PopLiteDeferredRegistrationStatus::Rejected(_)) => {
                 return Err(crate::broker_error::from_shared(Arc::new(CanonicalError::new(
                     &CORE_ARGUMENT_INVALID,
                 ))));

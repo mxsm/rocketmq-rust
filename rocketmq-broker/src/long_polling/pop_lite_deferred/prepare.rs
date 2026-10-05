@@ -112,21 +112,21 @@ impl PopLiteDeferredService {
         &self,
         request: &RemotingRequest,
         retained: PopLiteRetainedEstimate,
-    ) -> Result<PopLiteDeferredPrepareOutcome, PopLiteDeferredPrepareFailure> {
+    ) -> Result<PopLiteDeferredPreparationStatus, PopLiteDeferredPrepareFailure> {
         if self.closed.load(Ordering::Acquire) {
-            return Ok(PopLiteDeferredPrepareOutcome::Rejected(
+            return Ok(PopLiteDeferredPreparationStatus::Rejected(
                 PopLiteDeferredPrepareRejection::ServiceClosed,
             ));
         }
         if request.command().is_oneway_rpc() {
-            return Ok(PopLiteDeferredPrepareOutcome::Rejected(
+            return Ok(PopLiteDeferredPreparationStatus::Rejected(
                 PopLiteDeferredPrepareRejection::OneWay,
             ));
         }
         match request.origin() {
             RequestOrigin::Network { .. } => {}
             _ => {
-                return Ok(PopLiteDeferredPrepareOutcome::Rejected(
+                return Ok(PopLiteDeferredPreparationStatus::Rejected(
                     PopLiteDeferredPrepareRejection::EmbeddedOrigin,
                 ));
             }
@@ -139,7 +139,7 @@ impl PopLiteDeferredService {
             .decode_command_custom_header::<PopLiteMessageRequestHeader>()
             .map_err(PopLiteDeferredPrepareFailure::Header)?;
         if !header_is_valid(&header) {
-            return Ok(PopLiteDeferredPrepareOutcome::Rejected(
+            return Ok(PopLiteDeferredPreparationStatus::Rejected(
                 PopLiteDeferredPrepareRejection::InvalidHeader,
             ));
         }
@@ -154,7 +154,7 @@ impl PopLiteDeferredService {
         ) {
             Ok(PopLiteWaitDeadlineOutcome::Pending(deadline)) => deadline,
             Ok(PopLiteWaitDeadlineOutcome::Rejected(rejection)) => {
-                return Ok(PopLiteDeferredPrepareOutcome::Rejected(
+                return Ok(PopLiteDeferredPreparationStatus::Rejected(
                     PopLiteDeferredPrepareRejection::Deadline(rejection),
                 ));
             }
@@ -183,7 +183,7 @@ impl PopLiteDeferredService {
         {
             PopLiteIndexReserveOutcome::Reserved(reservation) => reservation,
             PopLiteIndexReserveOutcome::Rejected(rejection) => {
-                return Ok(PopLiteDeferredPrepareOutcome::Rejected(
+                return Ok(PopLiteDeferredPreparationStatus::Rejected(
                     PopLiteDeferredPrepareRejection::IndexCapacity(rejection),
                 ));
             }
@@ -191,7 +191,7 @@ impl PopLiteDeferredService {
         let permit = match self.admission.try_reserve(retained_size) {
             DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
             outcome => {
-                return Ok(PopLiteDeferredPrepareOutcome::Rejected(
+                return Ok(PopLiteDeferredPreparationStatus::Rejected(
                     PopLiteDeferredPrepareRejection::Admission(outcome),
                 ));
             }
@@ -206,25 +206,25 @@ impl PopLiteDeferredService {
         };
         if self.closed.load(Ordering::Acquire) {
             drop(prepared);
-            return Ok(PopLiteDeferredPrepareOutcome::Rejected(
+            return Ok(PopLiteDeferredPreparationStatus::Rejected(
                 PopLiteDeferredPrepareRejection::ServiceClosed,
             ));
         }
-        Ok(PopLiteDeferredPrepareOutcome::Prepared(Box::new(prepared)))
+        Ok(PopLiteDeferredPreparationStatus::Prepared(Box::new(prepared)))
     }
 
     pub(crate) fn register(
         &self,
         prepared: PreparedPopLiteRegistration,
         request: &mut RemotingRequest,
-    ) -> Result<PopLiteDeferredRegisterOutcome, PopLiteDeferredRegisterFailure> {
+    ) -> Result<PopLiteDeferredRegistrationStatus, PopLiteDeferredRegisterFailure> {
         if !prepared.provenance.matches(request) {
-            return Ok(PopLiteDeferredRegisterOutcome::Rejected(Box::new(
+            return Ok(PopLiteDeferredRegistrationStatus::Rejected(Box::new(
                 PopLiteDeferredRegisterRejection::ProvenanceMismatch,
             )));
         }
         if self.closed.load(Ordering::Acquire) {
-            return Ok(PopLiteDeferredRegisterOutcome::Rejected(Box::new(
+            return Ok(PopLiteDeferredRegistrationStatus::Rejected(Box::new(
                 PopLiteDeferredRegisterRejection::ServiceClosed,
             )));
         }
@@ -232,7 +232,7 @@ impl PopLiteDeferredService {
         let responder = match request.take_deferred_responder() {
             DeferredResponderOutcome::Taken(responder) => responder,
             outcome => {
-                return Ok(PopLiteDeferredRegisterOutcome::Rejected(Box::new(
+                return Ok(PopLiteDeferredRegistrationStatus::Rejected(Box::new(
                     PopLiteDeferredRegisterRejection::Responder(outcome),
                 )));
             }
@@ -241,7 +241,7 @@ impl PopLiteDeferredService {
         self.wait_register_after_take_hook();
         if self.closed.load(Ordering::Acquire) {
             drop(responder);
-            return Ok(PopLiteDeferredRegisterOutcome::Rejected(Box::new(
+            return Ok(PopLiteDeferredRegistrationStatus::Rejected(Box::new(
                 PopLiteDeferredRegisterRejection::ServiceClosedAfterTake,
             )));
         }
@@ -265,7 +265,7 @@ impl PopLiteDeferredService {
         match parts.try_with_expiry(protocol_at, self.expiry_margins) {
             Ok(DeferredExpiryOutcome::Attached) => {}
             Ok(outcome) => {
-                return Ok(PopLiteDeferredRegisterOutcome::Rejected(Box::new(
+                return Ok(PopLiteDeferredRegistrationStatus::Rejected(Box::new(
                     PopLiteDeferredRegisterRejection::Expiry { outcome, parts },
                 )));
             }
@@ -283,7 +283,7 @@ impl PopLiteDeferredService {
             DeferredRegistryOutcome::Registered(registration) => registration,
             DeferredRegistryOutcome::DuplicateRequest(recovery) => {
                 release_deferred_registry_recovery(recovery);
-                return Ok(PopLiteDeferredRegisterOutcome::Rejected(Box::new(
+                return Ok(PopLiteDeferredRegistrationStatus::Rejected(Box::new(
                     PopLiteDeferredRegisterRejection::DuplicateRequest,
                 )));
             }
@@ -292,17 +292,17 @@ impl PopLiteDeferredService {
                 return Err(PopLiteDeferredRegisterFailure::IdentityExhausted);
             }
             DeferredRegistryOutcome::ParentCancelled => {
-                return Ok(PopLiteDeferredRegisterOutcome::Rejected(Box::new(
+                return Ok(PopLiteDeferredRegistrationStatus::Rejected(Box::new(
                     PopLiteDeferredRegisterRejection::ParentCancelled,
                 )));
             }
             DeferredRegistryOutcome::SessionClosed => {
-                return Ok(PopLiteDeferredRegisterOutcome::Rejected(Box::new(
+                return Ok(PopLiteDeferredRegistrationStatus::Rejected(Box::new(
                     PopLiteDeferredRegisterRejection::SessionClosed,
                 )));
             }
             DeferredRegistryOutcome::DeadlineExpired => {
-                return Ok(PopLiteDeferredRegisterOutcome::Rejected(Box::new(
+                return Ok(PopLiteDeferredRegistrationStatus::Rejected(Box::new(
                     PopLiteDeferredRegisterRejection::DeadlineExpired,
                 )));
             }
@@ -321,7 +321,7 @@ impl PopLiteDeferredService {
         };
         drop(_observation);
         self.observe_pending_event(&client_id);
-        Ok(PopLiteDeferredRegisterOutcome::Registered(Box::new(registration)))
+        Ok(PopLiteDeferredRegistrationStatus::Registered(Box::new(registration)))
     }
 }
 
@@ -365,7 +365,7 @@ impl PopLiteDeferredPrepareRejection {
 }
 
 #[must_use]
-pub(crate) enum PopLiteDeferredPrepareOutcome {
+pub(crate) enum PopLiteDeferredPreparationStatus {
     Prepared(Box<PreparedPopLiteRegistration>),
     Rejected(PopLiteDeferredPrepareRejection),
 }
@@ -446,7 +446,7 @@ impl PopLiteDeferredRegisterRejection {
 }
 
 #[must_use]
-pub(crate) enum PopLiteDeferredRegisterOutcome {
+pub(crate) enum PopLiteDeferredRegistrationStatus {
     Registered(Box<DeferredRegistration>),
     Rejected(Box<PopLiteDeferredRegisterRejection>),
 }

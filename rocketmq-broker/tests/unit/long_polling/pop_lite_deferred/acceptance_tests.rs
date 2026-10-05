@@ -57,10 +57,10 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 use super::index::PopLiteIndexLimits;
+use super::prepare::PopLiteDeferredPreparationStatus;
 use super::prepare::PopLiteDeferredPrepareFailure;
-use super::prepare::PopLiteDeferredPrepareOutcome;
 use super::prepare::PopLiteDeferredRegisterFailure;
-use super::prepare::PopLiteDeferredRegisterOutcome;
+use super::prepare::PopLiteDeferredRegistrationStatus;
 use super::prepare::PopLiteRetainedEstimate;
 use super::prepare::PreparedPopLiteRegistration;
 use super::service::PopLiteDeferredService;
@@ -203,11 +203,11 @@ struct DeferredTestProcessor {
 }
 
 fn prepared_or_test_error(
-    result: Result<PopLiteDeferredPrepareOutcome, PopLiteDeferredPrepareFailure>,
+    result: Result<PopLiteDeferredPreparationStatus, PopLiteDeferredPrepareFailure>,
 ) -> crate::broker_error::BrokerResult<PreparedPopLiteRegistration> {
     match result {
-        Ok(PopLiteDeferredPrepareOutcome::Prepared(prepared)) => Ok(*prepared),
-        Ok(PopLiteDeferredPrepareOutcome::Rejected(rejection)) => {
+        Ok(PopLiteDeferredPreparationStatus::Prepared(prepared)) => Ok(*prepared),
+        Ok(PopLiteDeferredPreparationStatus::Rejected(rejection)) => {
             Err(crate::broker_error::invalid_argument(format!("{:?}", rejection.kind())))
         }
         Err(error) => Err(crate::broker_error::invalid_argument(error.to_string())),
@@ -215,11 +215,11 @@ fn prepared_or_test_error(
 }
 
 fn registration_or_test_error(
-    result: Result<PopLiteDeferredRegisterOutcome, PopLiteDeferredRegisterFailure>,
+    result: Result<PopLiteDeferredRegistrationStatus, PopLiteDeferredRegisterFailure>,
 ) -> crate::broker_error::BrokerResult<rocketmq_transport::api::DeferredRegistration> {
     match result {
-        Ok(PopLiteDeferredRegisterOutcome::Registered(registration)) => Ok(*registration),
-        Ok(PopLiteDeferredRegisterOutcome::Rejected(rejection)) => {
+        Ok(PopLiteDeferredRegistrationStatus::Registered(registration)) => Ok(*registration),
+        Ok(PopLiteDeferredRegistrationStatus::Rejected(rejection)) => {
             Err(crate::broker_error::invalid_argument(format!("{:?}", rejection.kind())))
         }
         Err(error) => Err(crate::broker_error::invalid_argument(error.to_string())),

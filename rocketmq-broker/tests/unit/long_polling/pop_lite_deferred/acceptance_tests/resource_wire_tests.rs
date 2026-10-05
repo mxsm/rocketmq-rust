@@ -90,11 +90,11 @@ struct CapacityWireProcessor {
 impl RequestProcessor for CapacityWireProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         match self.service.prepare(request, PopLiteRetainedEstimate::default()) {
-            Ok(PopLiteDeferredPrepareOutcome::Prepared(prepared)) => {
+            Ok(PopLiteDeferredPreparationStatus::Prepared(prepared)) => {
                 self.held.lock().push(*prepared);
                 held_reply()
             }
-            Ok(PopLiteDeferredPrepareOutcome::Rejected(rejection)) => {
+            Ok(PopLiteDeferredPreparationStatus::Rejected(rejection)) => {
                 self.failures.lock().push(capacity_failure(rejection));
                 polling_full_reply(request)
             }
