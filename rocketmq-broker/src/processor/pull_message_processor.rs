@@ -852,17 +852,19 @@ where
                     suspension.timing,
                     PullRetainedEstimate::default(),
                 ) {
-                    Ok(crate::long_polling::pull_deferred::PullDeferredPrepareOutcome::Prepared(prepared)) => prepared,
-                    Ok(crate::long_polling::pull_deferred::PullDeferredPrepareOutcome::Rejected(rejection)) => {
+                    Ok(crate::long_polling::pull_deferred::PullDeferredPreparationStatus::Prepared(prepared)) => {
+                        prepared
+                    }
+                    Ok(crate::long_polling::pull_deferred::PullDeferredPreparationStatus::Rejected(rejection)) => {
                         return Ok(ResponseAction::Reply(rejection.into_fallback()))
                     }
                     Err(error) => return Ok(ResponseAction::Reply(error.into_fallback())),
                 };
                 match service.register(prepared, request) {
-                    Ok(crate::long_polling::pull_deferred::PullDeferredRegisterOutcome::Registered(registration)) => {
-                        Ok(ResponseAction::Deferred(*registration))
-                    }
-                    Ok(crate::long_polling::pull_deferred::PullDeferredRegisterOutcome::Rejected(rejection)) => {
+                    Ok(crate::long_polling::pull_deferred::PullDeferredRegistrationStatus::Registered(
+                        registration,
+                    )) => Ok(ResponseAction::Deferred(*registration)),
+                    Ok(crate::long_polling::pull_deferred::PullDeferredRegistrationStatus::Rejected(rejection)) => {
                         match (*rejection).into_pre_take_fallback() {
                             Ok(fallback) => Ok(ResponseAction::Reply(fallback)),
                             Err(rejection) => self.register_deferred_pull_rejection_outcome(

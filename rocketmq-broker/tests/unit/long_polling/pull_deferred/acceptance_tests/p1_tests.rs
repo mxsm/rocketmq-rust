@@ -20,7 +20,7 @@ fn prepared(
     request: &RemotingRequest,
     timing: PullSuspendTiming,
     retained: PullRetainedEstimate,
-) -> Result<PullDeferredPrepareOutcome, super::PullDeferredPrepareError> {
+) -> Result<PullDeferredPreparationStatus, super::PullDeferredPrepareError> {
     let header = request
         .command()
         .decode_command_custom_header::<PullMessageRequestHeader>()
@@ -55,8 +55,8 @@ impl RequestProcessor for ProvenanceProcessor {
         let prior = self.state.lock().prepared.take();
         if let Some(prior) = prior {
             let rejection = match self.service.register(prior, request) {
-                Ok(PullDeferredRegisterOutcome::Rejected(rejection)) => *rejection,
-                Ok(PullDeferredRegisterOutcome::Registered(_)) | Err(_) => {
+                Ok(PullDeferredRegistrationStatus::Rejected(rejection)) => *rejection,
+                Ok(PullDeferredRegistrationStatus::Registered(_)) | Err(_) => {
                     panic!("prepared Pull proof is bound to its original request/session")
                 }
             };
@@ -98,8 +98,8 @@ impl RequestProcessor for ProvenanceProcessor {
         )
         .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))?
         {
-            PullDeferredPrepareOutcome::Prepared(prepared) => prepared,
-            PullDeferredPrepareOutcome::Rejected(_) => {
+            PullDeferredPreparationStatus::Prepared(prepared) => prepared,
+            PullDeferredPreparationStatus::Rejected(_) => {
                 return Err(crate::broker_error::invalid_argument(
                     "unexpected Pull preparation rejection",
                 ));
@@ -180,11 +180,11 @@ impl RequestProcessor for PreTakeProbeProcessor {
             PullSuspendTiming::new(current_millis(), tokio::time::Instant::now(), timeout),
             self.retained,
         ) {
-            Ok(PullDeferredPrepareOutcome::Prepared(prepared)) => {
+            Ok(PullDeferredPreparationStatus::Prepared(prepared)) => {
                 self.held.lock().push(prepared);
                 success_reply()
             }
-            Ok(PullDeferredPrepareOutcome::Rejected(rejection)) => {
+            Ok(PullDeferredPreparationStatus::Rejected(rejection)) => {
                 self.observed.lock().push(rejection.kind());
                 Ok(ResponseAction::Reply(rejection.into_fallback()))
             }

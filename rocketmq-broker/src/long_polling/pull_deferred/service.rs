@@ -450,7 +450,7 @@ impl PullDeferredService {
         fallback: RemotingResponse,
         timing: PullSuspendTiming,
         retained: PullRetainedEstimate,
-    ) -> Result<PullDeferredPrepareOutcome, PullDeferredPrepareError> {
+    ) -> Result<PullDeferredPreparationStatus, PullDeferredPrepareError> {
         let candidate = PullSuspensionCandidate::from_request(request, criteria, fallback, timing, retained)
             .map_err(PullDeferredPrepareError::Build)?;
         self.prepare_candidate_at(candidate, current_millis(), tokio::time::Instant::now())
@@ -461,9 +461,9 @@ impl PullDeferredService {
         candidate: PullSuspensionCandidate,
         wall_now: u64,
         monotonic_now: tokio::time::Instant,
-    ) -> Result<PullDeferredPrepareOutcome, PullDeferredPrepareError> {
+    ) -> Result<PullDeferredPreparationStatus, PullDeferredPrepareError> {
         if self.closed.load(Ordering::Acquire) {
-            return Ok(PullDeferredPrepareOutcome::Rejected(
+            return Ok(PullDeferredPreparationStatus::Rejected(
                 PullDeferredPrepareRejection::ServiceClosed(candidate),
             ));
         }
@@ -481,7 +481,7 @@ impl PullDeferredService {
         ) {
             Ok(PullWaitDeadlineOutcome::Pending(deadline)) => deadline,
             Ok(PullWaitDeadlineOutcome::AlreadyExpired) => {
-                return Ok(PullDeferredPrepareOutcome::Rejected(
+                return Ok(PullDeferredPreparationStatus::Rejected(
                     PullDeferredPrepareRejection::DeadlineElapsed(candidate),
                 ));
             }
@@ -496,7 +496,7 @@ impl PullDeferredService {
         let reservation = match self.index.reserve(key) {
             Ok(PullIndexReserveOutcome::Reserved(reservation)) => reservation,
             Ok(PullIndexReserveOutcome::Rejected(rejection)) => {
-                return Ok(PullDeferredPrepareOutcome::Rejected(
+                return Ok(PullDeferredPreparationStatus::Rejected(
                     PullDeferredPrepareRejection::Index { rejection, candidate },
                 ));
             }
@@ -527,7 +527,7 @@ impl PullDeferredService {
             DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
             outcome => {
                 drop(reservation);
-                return Ok(PullDeferredPrepareOutcome::Rejected(
+                return Ok(PullDeferredPreparationStatus::Rejected(
                     PullDeferredPrepareRejection::Admission { outcome, candidate },
                 ));
             }
@@ -539,20 +539,20 @@ impl PullDeferredService {
             permit,
         };
         if self.closed.load(Ordering::Acquire) {
-            return Ok(PullDeferredPrepareOutcome::Rejected(
+            return Ok(PullDeferredPreparationStatus::Rejected(
                 PullDeferredPrepareRejection::ServiceClosed(prepared.into_candidate()),
             ));
         }
-        Ok(PullDeferredPrepareOutcome::Prepared(prepared))
+        Ok(PullDeferredPreparationStatus::Prepared(prepared))
     }
 
     pub(crate) fn register(
         &self,
         prepared: PreparedPullRegistration,
         request: &mut RemotingRequest,
-    ) -> Result<PullDeferredRegisterOutcome, PullDeferredRegisterError> {
+    ) -> Result<PullDeferredRegistrationStatus, PullDeferredRegisterError> {
         if !prepared.candidate.provenance.matches(request) {
-            return Ok(PullDeferredRegisterOutcome::Rejected(Box::new(
+            return Ok(PullDeferredRegistrationStatus::Rejected(Box::new(
                 PullDeferredRegisterRejection::PreTake {
                     kind: PullDeferredRegisterRejectionKind::ProvenanceMismatch,
                     prepared: Box::new(prepared),
@@ -561,7 +561,7 @@ impl PullDeferredService {
             )));
         }
         if self.closed.load(Ordering::Acquire) {
-            return Ok(PullDeferredRegisterOutcome::Rejected(Box::new(
+            return Ok(PullDeferredRegistrationStatus::Rejected(Box::new(
                 PullDeferredRegisterRejection::PreTake {
                     kind: PullDeferredRegisterRejectionKind::ServiceClosed,
                     prepared: Box::new(prepared),
@@ -572,7 +572,7 @@ impl PullDeferredService {
         let responder = match request.take_deferred_responder() {
             DeferredResponderOutcome::Taken(responder) => responder,
             outcome => {
-                return Ok(PullDeferredRegisterOutcome::Rejected(Box::new(
+                return Ok(PullDeferredRegistrationStatus::Rejected(Box::new(
                     PullDeferredRegisterRejection::PreTake {
                         kind: PullDeferredRegisterRejectionKind::Responder,
                         prepared: Box::new(prepared),
@@ -599,7 +599,7 @@ impl PullDeferredService {
         match parts.try_with_expiry(deadline.protocol_at(), self.expiry_margins) {
             Ok(DeferredExpiryOutcome::Attached) => {}
             Ok(outcome) => {
-                return Ok(PullDeferredRegisterOutcome::Rejected(Box::new(
+                return Ok(PullDeferredRegistrationStatus::Rejected(Box::new(
                     PullDeferredRegisterRejection::Expiry {
                         outcome: Box::new(outcome),
                         parts: Box::new(parts),
@@ -619,11 +619,11 @@ impl PullDeferredService {
             Ok::<_, Infallible>(ResumePull::new(request, criteria, deadline, lease))
         }) {
             DeferredRegistryOutcome::Registered(registration) => {
-                Ok(PullDeferredRegisterOutcome::Registered(Box::new(registration)))
+                Ok(PullDeferredRegistrationStatus::Registered(Box::new(registration)))
             }
             DeferredRegistryOutcome::DuplicateRequest(recovery) => {
                 release_deferred_registry_recovery(recovery);
-                Ok(PullDeferredRegisterOutcome::Rejected(Box::new(
+                Ok(PullDeferredRegistrationStatus::Rejected(Box::new(
                     PullDeferredRegisterRejection::RegistryRejected,
                 )))
             }
@@ -633,7 +633,7 @@ impl PullDeferredService {
             }
             DeferredRegistryOutcome::ParentCancelled
             | DeferredRegistryOutcome::SessionClosed
-            | DeferredRegistryOutcome::DeadlineExpired => Ok(PullDeferredRegisterOutcome::Rejected(Box::new(
+            | DeferredRegistryOutcome::DeadlineExpired => Ok(PullDeferredRegistrationStatus::Rejected(Box::new(
                 PullDeferredRegisterRejection::RegistryRejected,
             ))),
             DeferredRegistryOutcome::BuilderRejected { error, parts } => {
@@ -714,23 +714,23 @@ impl PullDeferredService {
         &self,
         arrival: PullArrivalView<'_>,
         cursor: PullScanCursor,
-    ) -> Result<PullPendingArrivalOutcome, PullPendingArrivalError> {
+    ) -> Result<PullArrivalLatchStatus, PullPendingArrivalError> {
         let key = PullPendingArrivalKey::Arrival(
             self.pending_arrival_sequence.fetch_add(1, Ordering::Relaxed),
             PullCriteriaKey::new(arrival.topic().clone(), arrival.queue_id()),
         );
         let pending = PullPendingArrival::arrival(arrival, cursor).map_err(PullPendingArrivalError::Continuation)?;
         match self.pending_arrivals.insert(key, pending) {
-            Ok(PendingArrivalAdmissionStatus::Accepted) => Ok(PullPendingArrivalOutcome::Latched),
+            Ok(PendingArrivalAdmissionStatus::Accepted) => Ok(PullArrivalLatchStatus::Latched),
             Ok(PendingArrivalAdmissionStatus::Rejected(PendingArrivalInsertRejection::Closed)) => {
-                Ok(PullPendingArrivalOutcome::Rejected(PullPendingArrivalRejection::Closed))
+                Ok(PullArrivalLatchStatus::Rejected(PullPendingArrivalRejection::Closed))
             }
-            Ok(PendingArrivalAdmissionStatus::Rejected(PendingArrivalInsertRejection::CountFull)) => Ok(
-                PullPendingArrivalOutcome::Rejected(PullPendingArrivalRejection::CountFull),
-            ),
-            Ok(PendingArrivalAdmissionStatus::Rejected(PendingArrivalInsertRejection::BytesFull)) => Ok(
-                PullPendingArrivalOutcome::Rejected(PullPendingArrivalRejection::BytesFull),
-            ),
+            Ok(PendingArrivalAdmissionStatus::Rejected(PendingArrivalInsertRejection::CountFull)) => {
+                Ok(PullArrivalLatchStatus::Rejected(PullPendingArrivalRejection::CountFull))
+            }
+            Ok(PendingArrivalAdmissionStatus::Rejected(PendingArrivalInsertRejection::BytesFull)) => {
+                Ok(PullArrivalLatchStatus::Rejected(PullPendingArrivalRejection::BytesFull))
+            }
             Err(error) => Err(PullPendingArrivalError::Latch(error)),
         }
     }
@@ -738,22 +738,22 @@ impl PullDeferredService {
     pub(crate) fn latch_forced(
         &self,
         cursor: PullScanCursor,
-    ) -> Result<PullPendingArrivalOutcome, PullPendingArrivalError> {
+    ) -> Result<PullArrivalLatchStatus, PullPendingArrivalError> {
         let key = PullPendingArrivalKey::Forced;
         if self.pending_arrivals.coalesce_existing(&key) {
-            return Ok(PullPendingArrivalOutcome::Latched);
+            return Ok(PullArrivalLatchStatus::Latched);
         }
         match self.pending_arrivals.insert(key, PullPendingArrival::forced(cursor)) {
-            Ok(PendingArrivalAdmissionStatus::Accepted) => Ok(PullPendingArrivalOutcome::Latched),
+            Ok(PendingArrivalAdmissionStatus::Accepted) => Ok(PullArrivalLatchStatus::Latched),
             Ok(PendingArrivalAdmissionStatus::Rejected(PendingArrivalInsertRejection::Closed)) => {
-                Ok(PullPendingArrivalOutcome::Rejected(PullPendingArrivalRejection::Closed))
+                Ok(PullArrivalLatchStatus::Rejected(PullPendingArrivalRejection::Closed))
             }
-            Ok(PendingArrivalAdmissionStatus::Rejected(PendingArrivalInsertRejection::CountFull)) => Ok(
-                PullPendingArrivalOutcome::Rejected(PullPendingArrivalRejection::CountFull),
-            ),
-            Ok(PendingArrivalAdmissionStatus::Rejected(PendingArrivalInsertRejection::BytesFull)) => Ok(
-                PullPendingArrivalOutcome::Rejected(PullPendingArrivalRejection::BytesFull),
-            ),
+            Ok(PendingArrivalAdmissionStatus::Rejected(PendingArrivalInsertRejection::CountFull)) => {
+                Ok(PullArrivalLatchStatus::Rejected(PullPendingArrivalRejection::CountFull))
+            }
+            Ok(PendingArrivalAdmissionStatus::Rejected(PendingArrivalInsertRejection::BytesFull)) => {
+                Ok(PullArrivalLatchStatus::Rejected(PullPendingArrivalRejection::BytesFull))
+            }
             Err(error) => Err(PullPendingArrivalError::Latch(error)),
         }
     }
@@ -1129,7 +1129,7 @@ const fn combined_budget(left: usize, right: usize) -> usize {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PullPendingArrivalOutcome {
+pub(crate) enum PullArrivalLatchStatus {
     Latched,
     Rejected(PullPendingArrivalRejection),
 }
@@ -1311,7 +1311,7 @@ pub(crate) enum PullDeferredPrepareErrorKind {
 }
 
 #[must_use]
-pub(crate) enum PullDeferredPrepareOutcome {
+pub(crate) enum PullDeferredPreparationStatus {
     Prepared(PreparedPullRegistration),
     Rejected(PullDeferredPrepareRejection),
 }
@@ -1437,7 +1437,7 @@ pub(crate) enum PullDeferredRegisterErrorKind {
 }
 
 #[must_use]
-pub(crate) enum PullDeferredRegisterOutcome {
+pub(crate) enum PullDeferredRegistrationStatus {
     Registered(Box<DeferredRegistration>),
     Rejected(Box<PullDeferredRegisterRejection>),
 }
