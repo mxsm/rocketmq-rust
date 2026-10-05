@@ -54,7 +54,7 @@ use tracing::info;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 use crate::broker::metadata_reconciliation::MetadataWriteConclusion;
-use crate::topic::manager::topic_config_coordinator::outcome_result;
+use crate::topic::manager::topic_config_coordinator::topic_config_command_result;
 
 use super::AdminRequestMetadata;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
@@ -225,7 +225,7 @@ impl TopicRequestHandler {
         broker_config_request_handler
             .persist_and_register_topic_updates(vec![update.topic_config], update.data_version)
             .await
-            .and_then(outcome_result)?;
+            .and_then(topic_config_command_result)?;
 
         Ok(Some(RemotingCommand::create_success_response_command()))
     }
@@ -391,7 +391,7 @@ impl TopicRequestHandler {
         broker_config_request_handler
             .persist_and_register_topic_updates(vec![update.topic_config], update.data_version)
             .await
-            .and_then(outcome_result)?;
+            .and_then(topic_config_command_result)?;
 
         Ok(Some(
             RemotingCommand::create_success_response_command_with_header(UpdateTopicConfigCasResponseHeader {
@@ -693,7 +693,7 @@ impl TopicRequestHandler {
         broker_config_request_handler
             .persist_and_register_topic_updates(vec![update.topic_config], update.data_version)
             .await
-            .and_then(outcome_result)?;
+            .and_then(topic_config_command_result)?;
 
         Ok(Some(RemotingCommand::create_success_response_command()))
     }
