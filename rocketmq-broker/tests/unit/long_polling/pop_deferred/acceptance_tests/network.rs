@@ -59,8 +59,8 @@ use tokio::sync::Notify;
 
 use super::super::*;
 use crate::long_polling::pop_deferred::index::PopArrivalView;
+use crate::long_polling::pop_deferred::service::PopArrivalLatchStatus;
 use crate::long_polling::pop_deferred::service::PopDeferredWakeupObserver;
-use crate::long_polling::pop_deferred::service::PopPendingArrivalOutcome;
 
 const SENTINEL_CODE: i32 = 98_281;
 const ORDERING_KEY: u64 = 9_828;
@@ -215,8 +215,8 @@ impl RequestProcessor for DeferredTestProcessor {
             .map_err(|error| {
                 crate::broker_error::from_shared(Arc::new(CanonicalError::caused_by(&CORE_ARGUMENT_INVALID, error)))
             })? {
-            PopDeferredPrepareOutcome::Prepared(prepared) => *prepared,
-            PopDeferredPrepareOutcome::Rejected(_) => {
+            PopDeferredPreparationStatus::Prepared(prepared) => *prepared,
+            PopDeferredPreparationStatus::Rejected(_) => {
                 return Err(crate::broker_error::invalid_argument(
                     "unexpected POP preparation rejection",
                 ));
@@ -225,8 +225,8 @@ impl RequestProcessor for DeferredTestProcessor {
         let registration = match self.service.register(prepared, request).map_err(|error| {
             crate::broker_error::from_shared(Arc::new(CanonicalError::caused_by(&CORE_ARGUMENT_INVALID, error)))
         })? {
-            PopDeferredRegisterOutcome::Registered(registration) => *registration,
-            PopDeferredRegisterOutcome::Rejected(_) => {
+            PopDeferredRegistrationStatus::Registered(registration) => *registration,
+            PopDeferredRegistrationStatus::Rejected(_) => {
                 return Err(crate::broker_error::invalid_argument(
                     "unexpected POP registration rejection",
                 ));
@@ -450,7 +450,7 @@ async fn prepared_arrival_and_timeout_reexecute_then_write_one_bound_frame() {
         ));
         assert_eq!(
             completion.await.expect("POP wake completion"),
-            crate::long_polling::pop_deferred::service::PopWakeupOutcome::ProcessingCompleted
+            crate::long_polling::pop_deferred::service::PopWakeupCompletionStatus::ProcessingCompleted
         );
 
         let response = client
@@ -496,7 +496,7 @@ async fn legacy_route_rearms_a_real_waiter_for_the_next_tick_without_a_new_arriv
     let topic = CheetahString::from_static_str("TopicA");
     assert!(matches!(
         service.latch_arrival(&topic, 0, None, 0, None, None, service.fanout_cursor()),
-        Ok(PopPendingArrivalOutcome::Latched)
+        Ok(PopArrivalLatchStatus::Latched)
     ));
     let mut first_tick = service
         .pending_arrival_reservations()
@@ -865,7 +865,7 @@ async fn duplicate_claim_and_session_close_never_execute_or_write() {
     observer.complete_claim_result(&Ok(duplicate));
     assert_eq!(
         completion.await.expect("duplicate wake completion"),
-        crate::long_polling::pop_deferred::service::PopWakeupOutcome::AlreadyCompleted
+        crate::long_polling::pop_deferred::service::PopWakeupCompletionStatus::AlreadyCompleted
     );
     drop(first);
     assert_released(&service);

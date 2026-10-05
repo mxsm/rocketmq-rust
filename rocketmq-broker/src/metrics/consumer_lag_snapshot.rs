@@ -26,7 +26,7 @@ use tokio::time::Instant;
 use tracing::warn;
 
 use crate::client::manager::consumer_manager::ConsumerManager;
-use crate::long_polling::pop_deferred::service::PopWakeupOutcome;
+use crate::long_polling::pop_deferred::service::PopWakeupCompletionStatus;
 use crate::offset::manager::consumer_offset_manager::ConsumerLagAdjustment;
 use crate::offset::manager::consumer_offset_manager::ConsumerLagAdjustments;
 use crate::offset::manager::consumer_offset_manager::ConsumerLagObservation;
@@ -154,7 +154,7 @@ async fn await_pop_refreshes(
     let mut failed = HashSet::new();
     for (topic_group, outcome) in join_all(completions).await {
         match outcome {
-            Ok(Ok(PopWakeupOutcome::ProcessingCompleted)) => {}
+            Ok(Ok(PopWakeupCompletionStatus::ProcessingCompleted)) => {}
             Ok(Ok(other)) => {
                 warn!(?other, topic_group = %topic_group, "POP lag refresh wake-up did not complete");
                 failed.insert(topic_group);
@@ -182,7 +182,7 @@ mod tests {
     use crate::client::consumer_group_event::ConsumerGroupEvent;
     use crate::client::consumer_ids_change_listener::ConsumerIdsChangeListener;
     use crate::client::manager::consumer_manager::ConsumerManager;
-    use crate::long_polling::pop_deferred::service::PopWakeupOutcome;
+    use crate::long_polling::pop_deferred::service::PopWakeupCompletionStatus;
     use cheetah_string::CheetahString;
     use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
     use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
@@ -223,11 +223,11 @@ mod tests {
     async fn pop_refresh_wait_is_bounded_and_marks_non_success_outcomes_failed() {
         let (success_tx, success_rx) = tokio::sync::oneshot::channel();
         success_tx
-            .send(PopWakeupOutcome::ProcessingCompleted)
+            .send(PopWakeupCompletionStatus::ProcessingCompleted)
             .expect("send success completion");
         let (failed_tx, failed_rx) = tokio::sync::oneshot::channel();
         failed_tx
-            .send(PopWakeupOutcome::ProcessingFailed)
+            .send(PopWakeupCompletionStatus::ProcessingFailed)
             .expect("send failure completion");
         let (timeout_tx, timeout_rx) = tokio::sync::oneshot::channel();
 
