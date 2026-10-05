@@ -236,7 +236,7 @@ use crate::slave::slave_synchronize::SlaveTimerStoreCapability;
 use crate::subscription::lite_subscription_registry::LiteSubscriptionRegistry;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManagerConfig;
-use crate::topic::manager::topic_config_coordinator::outcome_result;
+use crate::topic::manager::topic_config_coordinator::topic_config_command_result;
 use crate::topic::manager::topic_config_coordinator::TopicConfigCoordinator;
 use crate::topic::manager::topic_config_coordinator::TopicConfigCoordinatorShutdownReport;
 use crate::topic::manager::topic_config_coordinator::TopicRegistrationAction;
@@ -320,8 +320,11 @@ where
             (false, Some(registration)) => coordinator
                 .persist_and_register_wait(registration)
                 .await
-                .and_then(outcome_result),
-            (false, None) => coordinator.persist_and_wait().await.and_then(outcome_result),
+                .and_then(topic_config_command_result),
+            (false, None) => coordinator
+                .persist_and_wait()
+                .await
+                .and_then(topic_config_command_result),
         };
         if let Err(error) = result {
             warn!(?error, "failed to coordinate topic create persistence and registration");
