@@ -33,7 +33,7 @@ pub(crate) use index::PopCriteriaLimits;
 #[cfg(test)]
 pub(crate) use index::PopIndexRejection;
 #[cfg(test)]
-pub(crate) use index::PopIndexReserveOutcome;
+pub(crate) use index::PopIndexReservationStatus;
 #[cfg(test)]
 pub(crate) use index::PopIndexSnapshot;
 #[cfg(test)]

@@ -117,14 +117,17 @@ where
     }
 
     /// Reserves index capacity before a deferred responder is taken.
-    pub(crate) fn reserve(&self, key: PopCriteriaKey) -> Result<PopIndexReserveOutcome<I>, PopIndexOperationalError> {
+    pub(crate) fn reserve(
+        &self,
+        key: PopCriteriaKey,
+    ) -> Result<PopIndexReservationStatus<I>, PopIndexOperationalError> {
         let mut state = self.inner.state.lock();
         let total = state
             .live
             .checked_add(state.reserved)
             .ok_or_else(|| PopIndexOperationalError::new(PopIndexOperationalErrorKind::AccountingOverflow))?;
         if total >= self.inner.limits.max_entries.get() {
-            return Ok(PopIndexReserveOutcome::Rejected(PopIndexRejection::GlobalCapacity));
+            return Ok(PopIndexReservationStatus::Rejected(PopIndexRejection::GlobalCapacity));
         }
         let next_sequence = state
             .next_sequence
@@ -141,7 +144,7 @@ where
             0
         };
         if occupied >= self.inner.limits.max_entries_per_key.get() {
-            return Ok(PopIndexReserveOutcome::Rejected(PopIndexRejection::BucketCapacity));
+            return Ok(PopIndexReservationStatus::Rejected(PopIndexRejection::BucketCapacity));
         }
 
         let fanout_key = PopTopicQueueKey::from_criteria(&key);
@@ -234,7 +237,7 @@ where
         state.reserved += 1;
         let sequence = next_sequence - 1;
         drop(state);
-        Ok(PopIndexReserveOutcome::Reserved(PopIndexReservation {
+        Ok(PopIndexReservationStatus::Reserved(PopIndexReservation {
             inner: Some(Arc::clone(&self.inner)),
             key: Some(key),
             fanout_key: Some(fanout_key),
@@ -1068,13 +1071,13 @@ impl PopIndexSnapshot {
 }
 
 #[must_use]
-pub(crate) enum PopIndexReserveOutcome<I> {
+pub(crate) enum PopIndexReservationStatus<I> {
     Reserved(PopIndexReservation<I>),
     Rejected(PopIndexRejection),
 }
 
 #[cfg(test)]
-impl<I> PopIndexReserveOutcome<I>
+impl<I> PopIndexReservationStatus<I>
 where
     I: Copy + Eq,
 {
