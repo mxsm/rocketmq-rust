@@ -63,7 +63,7 @@ pub(super) struct PopInitialSuspend {
     pub(super) rest_num: i64,
 }
 
-pub(super) enum PopInitialOutcome {
+pub(super) enum PopInitialRequestDecision {
     Reply(BrokerResponseParts),
     Suspend(Box<PopInitialSuspend>),
 }
@@ -106,8 +106,8 @@ where
         };
         let outcome = self.execute_pop_initial(request.command_mut(), effective_peer).await?;
         match outcome {
-            PopInitialOutcome::Reply(parts) => parts.into_response_action(),
-            PopInitialOutcome::Suspend(suspension) => {
+            PopInitialRequestDecision::Reply(parts) => parts.into_response_action(),
+            PopInitialRequestDecision::Suspend(suspension) => {
                 let suspension = *suspension;
                 let Some(service) = self.pop_deferred_service.get() else {
                     return self.reply_with_code(
@@ -144,7 +144,7 @@ where
         &self,
         request: &mut RemotingCommand,
         effective_peer: SocketAddr,
-    ) -> crate::broker_error::BrokerResult<PopInitialOutcome> {
+    ) -> crate::broker_error::BrokerResult<PopInitialRequestDecision> {
         normalize_born_time(request);
         let opaque = request.opaque();
         let request_header = match request.decode_command_custom_header::<PopMessageRequestHeader>() {
@@ -367,9 +367,9 @@ where
             ))
             .await?
         {
-            PopStoreReadOutcome::Found(parts) => Ok(PopInitialOutcome::Reply(parts)),
+            PopStoreReadOutcome::Found(parts) => Ok(PopInitialRequestDecision::Reply(parts)),
             PopStoreReadOutcome::Empty { head, rest_num } => {
-                Ok(PopInitialOutcome::Suspend(Box::new(PopInitialSuspend {
+                Ok(PopInitialRequestDecision::Suspend(Box::new(PopInitialSuspend {
                     request_header,
                     subscription_data,
                     message_filter,
@@ -484,16 +484,16 @@ where
         opaque: i32,
         code: ResponseCode,
         remark: impl Into<CheetahString>,
-    ) -> crate::broker_error::BrokerResult<PopInitialOutcome> {
+    ) -> crate::broker_error::BrokerResult<PopInitialRequestDecision> {
         let command = self
             .context
             .command_factory
             .create_response_command_with_code_remark(code, remark)
             .set_opaque(opaque);
-        Ok(PopInitialOutcome::Reply(BrokerResponseParts::command(command)?))
+        Ok(PopInitialRequestDecision::Reply(BrokerResponseParts::command(command)?))
     }
 
-    fn initial_invalid_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<PopInitialOutcome> {
+    fn initial_invalid_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<PopInitialRequestDecision> {
         let command = remoting_error_response(
             PublicErrorView::descriptor_only(&rocketmq_error::CORE_ARGUMENT_INVALID),
             RemotingErrorTarget::Reply {
@@ -501,10 +501,10 @@ where
                 opaque,
             },
         );
-        Ok(PopInitialOutcome::Reply(BrokerResponseParts::command(command)?))
+        Ok(PopInitialRequestDecision::Reply(BrokerResponseParts::command(command)?))
     }
 
-    fn initial_permission_denied(&self, opaque: i32) -> crate::broker_error::BrokerResult<PopInitialOutcome> {
+    fn initial_permission_denied(&self, opaque: i32) -> crate::broker_error::BrokerResult<PopInitialRequestDecision> {
         let command = remoting_error_response(
             PublicErrorView::descriptor_only(&rocketmq_error::AUTH_PERMISSION_DENIED),
             RemotingErrorTarget::Reply {
@@ -512,10 +512,10 @@ where
                 opaque,
             },
         );
-        Ok(PopInitialOutcome::Reply(BrokerResponseParts::command(command)?))
+        Ok(PopInitialRequestDecision::Reply(BrokerResponseParts::command(command)?))
     }
 
-    fn initial_internal_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<PopInitialOutcome> {
+    fn initial_internal_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<PopInitialRequestDecision> {
         let command = remoting_error_response(
             PublicErrorView::descriptor_only(&rocketmq_error::CORE_INTERNAL_FAILURE),
             RemotingErrorTarget::Reply {
@@ -523,7 +523,7 @@ where
                 opaque,
             },
         );
-        Ok(PopInitialOutcome::Reply(BrokerResponseParts::command(command)?))
+        Ok(PopInitialRequestDecision::Reply(BrokerResponseParts::command(command)?))
     }
 
     fn reply_with_code(
