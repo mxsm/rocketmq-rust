@@ -16,15 +16,13 @@ use std::time::Duration;
 
 use crate::long_polling::pop_lite_deferred::deadline::PopLiteWaitDeadline;
 use crate::long_polling::pop_lite_deferred::deadline::PopLiteWaitDeadlineOperationalError;
-use crate::long_polling::pop_lite_deferred::deadline::PopLiteWaitDeadlineOutcome;
 use crate::long_polling::pop_lite_deferred::deadline::PopLiteWaitDeadlineRejectionReason;
+use crate::long_polling::pop_lite_deferred::deadline::PopLiteWaitDecision;
 
-fn expect_deadline(
-    result: Result<PopLiteWaitDeadlineOutcome, PopLiteWaitDeadlineOperationalError>,
-) -> PopLiteWaitDeadline {
+fn expect_deadline(result: Result<PopLiteWaitDecision, PopLiteWaitDeadlineOperationalError>) -> PopLiteWaitDeadline {
     match result {
-        Ok(PopLiteWaitDeadlineOutcome::Pending(deadline)) => deadline,
-        Ok(PopLiteWaitDeadlineOutcome::Rejected(rejection)) => {
+        Ok(PopLiteWaitDecision::Pending(deadline)) => deadline,
+        Ok(PopLiteWaitDecision::Rejected(rejection)) => {
             panic!("expected pending PopLite deadline, got {:?}", rejection.reason())
         }
         Err(error) => panic!("expected pending PopLite deadline: {error}"),
@@ -32,11 +30,11 @@ fn expect_deadline(
 }
 
 fn expect_deadline_rejection(
-    result: Result<PopLiteWaitDeadlineOutcome, PopLiteWaitDeadlineOperationalError>,
+    result: Result<PopLiteWaitDecision, PopLiteWaitDeadlineOperationalError>,
 ) -> PopLiteWaitDeadlineRejectionReason {
     match result {
-        Ok(PopLiteWaitDeadlineOutcome::Rejected(rejection)) => rejection.reason(),
-        Ok(PopLiteWaitDeadlineOutcome::Pending(_)) => panic!("expected rejected PopLite deadline"),
+        Ok(PopLiteWaitDecision::Rejected(rejection)) => rejection.reason(),
+        Ok(PopLiteWaitDecision::Pending(_)) => panic!("expected rejected PopLite deadline"),
         Err(error) => panic!("expected rejected PopLite deadline: {error}"),
     }
 }

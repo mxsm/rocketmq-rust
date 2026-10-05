@@ -42,8 +42,8 @@ use super::data::PopLiteRequestData;
 use super::data::ResumePopLite;
 use super::deadline::PopLiteWaitDeadline;
 use super::deadline::PopLiteWaitDeadlineOperationalError;
-use super::deadline::PopLiteWaitDeadlineOutcome;
 use super::deadline::PopLiteWaitDeadlineRejection;
+use super::deadline::PopLiteWaitDecision;
 use super::index::PopLiteCriteriaIndex;
 use super::index::PopLiteIndexOperationalError;
 use super::index::PopLiteIndexReservation;
@@ -152,8 +152,8 @@ impl PopLiteDeferredService {
             monotonic_now,
             self.max_age,
         ) {
-            Ok(PopLiteWaitDeadlineOutcome::Pending(deadline)) => deadline,
-            Ok(PopLiteWaitDeadlineOutcome::Rejected(rejection)) => {
+            Ok(PopLiteWaitDecision::Pending(deadline)) => deadline,
+            Ok(PopLiteWaitDecision::Rejected(rejection)) => {
                 return Ok(PopLiteDeferredPrepareOutcome::Rejected(
                     PopLiteDeferredPrepareRejection::Deadline(rejection),
                 ));
