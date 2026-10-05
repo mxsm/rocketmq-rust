@@ -25,8 +25,8 @@ impl RequestProcessor for ExpiryAttachmentFaultProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let prepared = prepared_or_test_error(self.service.prepare(request, PopLiteRetainedEstimate::default()))?;
         let rejection = match self.service.register(prepared, request) {
-            Ok(PopLiteDeferredRegisterOutcome::Rejected(rejection)) => rejection,
-            Ok(PopLiteDeferredRegisterOutcome::Registered(_)) | Err(_) => {
+            Ok(PopLiteDeferredRegistrationStatus::Rejected(rejection)) => rejection,
+            Ok(PopLiteDeferredRegistrationStatus::Registered(_)) | Err(_) => {
                 panic!("the injected post-take expiry attachment must fail closed")
             }
         };

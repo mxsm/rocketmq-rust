@@ -53,8 +53,8 @@ impl RequestProcessor for ProvenanceProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         if let Some(prepared) = self.state.lock().prepared.take() {
             let rejection = match self.service.register(prepared, request) {
-                Ok(PopLiteDeferredRegisterOutcome::Rejected(rejection)) => rejection,
-                Ok(PopLiteDeferredRegisterOutcome::Registered(_)) | Err(_) => {
+                Ok(PopLiteDeferredRegistrationStatus::Rejected(rejection)) => rejection,
+                Ok(PopLiteDeferredRegistrationStatus::Registered(_)) | Err(_) => {
                     panic!("a prepared PopLite proof cannot move to another request")
                 }
             };
@@ -79,8 +79,8 @@ struct EmbeddedOriginProcessor {
 impl RequestProcessor for EmbeddedOriginProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let rejection = match self.service.prepare(request, PopLiteRetainedEstimate::default()) {
-            Ok(PopLiteDeferredPrepareOutcome::Rejected(rejection)) => rejection,
-            Ok(PopLiteDeferredPrepareOutcome::Prepared(_)) | Err(_) => {
+            Ok(PopLiteDeferredPreparationStatus::Rejected(rejection)) => rejection,
+            Ok(PopLiteDeferredPreparationStatus::Prepared(_)) | Err(_) => {
                 panic!("embedded PopLite must fail before allocating deferred resources")
             }
         };
@@ -192,8 +192,8 @@ struct CapacityProbeProcessor {
 impl RequestProcessor for CapacityProbeProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         match self.service.prepare(request, PopLiteRetainedEstimate::default()) {
-            Ok(PopLiteDeferredPrepareOutcome::Prepared(prepared)) => self.held.lock().push(*prepared),
-            Ok(PopLiteDeferredPrepareOutcome::Rejected(rejection)) => {
+            Ok(PopLiteDeferredPreparationStatus::Prepared(prepared)) => self.held.lock().push(*prepared),
+            Ok(PopLiteDeferredPreparationStatus::Rejected(rejection)) => {
                 self.observed.lock().push(rejection.kind());
             }
             Err(error) => return Err(crate::broker_error::invalid_argument(error.to_string())),

@@ -28,12 +28,12 @@ use rocketmq_transport::api::ResponseAction;
 use super::core::PopLiteCoreResult;
 use super::response::PopLiteResponseKind;
 use super::PopLiteMessageProcessor;
+use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredPreparationStatus;
 use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredPrepareFailure;
-use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredPrepareOutcome;
 use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredPrepareRejection;
 use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredRegisterFailure;
-use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredRegisterOutcome;
 use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredRegisterRejection;
+use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredRegistrationStatus;
 use crate::long_polling::pop_lite_deferred::prepare::PopLiteRetainedEstimate;
 use crate::processor::response_assembly::BrokerResponseParts;
 
@@ -103,15 +103,17 @@ where
             );
         };
         let prepared = match service.prepare(request, PopLiteRetainedEstimate::default()) {
-            Ok(PopLiteDeferredPrepareOutcome::Prepared(prepared)) => *prepared,
-            Ok(PopLiteDeferredPrepareOutcome::Rejected(rejection)) => {
+            Ok(PopLiteDeferredPreparationStatus::Prepared(prepared)) => *prepared,
+            Ok(PopLiteDeferredPreparationStatus::Rejected(rejection)) => {
                 return self.prepare_rejection_outcome(&request_header, rejection);
             }
             Err(failure) => return self.prepare_failure_outcome(&request_header, failure),
         };
         match service.register(prepared, request) {
-            Ok(PopLiteDeferredRegisterOutcome::Registered(registration)) => Ok(ResponseAction::Deferred(*registration)),
-            Ok(PopLiteDeferredRegisterOutcome::Rejected(rejection)) => {
+            Ok(PopLiteDeferredRegistrationStatus::Registered(registration)) => {
+                Ok(ResponseAction::Deferred(*registration))
+            }
+            Ok(PopLiteDeferredRegistrationStatus::Rejected(rejection)) => {
                 self.register_rejection_outcome(&request_header, *rejection)
             }
             Err(failure) => self.register_failure_outcome(failure),
