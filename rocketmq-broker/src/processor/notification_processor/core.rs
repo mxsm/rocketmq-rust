@@ -39,7 +39,7 @@ pub(super) struct NotificationCoreReady {
     pub(super) filter_contract: Option<NotificationFilterContract>,
 }
 
-pub(super) enum NotificationCoreOutcome {
+pub(super) enum NotificationCoreDecision {
     Reply(RemotingCommand),
     Ready(NotificationCoreReady),
 }
@@ -55,7 +55,7 @@ where
         effective_peer: SocketAddr,
         opaque: i32,
         frozen_filter: Option<NotificationFilterContract>,
-    ) -> crate::broker_error::BrokerResult<NotificationCoreOutcome> {
+    ) -> crate::broker_error::BrokerResult<NotificationCoreDecision> {
         let mut response = self
             .context
             .command_factory
@@ -83,7 +83,7 @@ where
                 request_header.topic,
                 FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
             ));
-            return Ok(NotificationCoreOutcome::Reply(response));
+            return Ok(NotificationCoreDecision::Reply(response));
         };
 
         if !PermName::is_readable(topic_config.perm) {
@@ -117,7 +117,7 @@ where
                 request_header.consumer_group,
                 FAQUrl::suggest_todo(FAQUrl::SUBSCRIPTION_GROUP_NOT_EXIST)
             ));
-            return Ok(NotificationCoreOutcome::Reply(response));
+            return Ok(NotificationCoreDecision::Reply(response));
         };
 
         if !subscription_group_config.consume_enable() {
@@ -141,7 +141,7 @@ where
                     );
                     response.set_code_ref(ResponseCode::SubscriptionParseFailed);
                     response.set_remark_mut("parse the consumer's subscription failed");
-                    return Ok(NotificationCoreOutcome::Reply(response));
+                    return Ok(NotificationCoreDecision::Reply(response));
                 }
             },
         };
@@ -191,7 +191,7 @@ where
             }
         }
 
-        Ok(NotificationCoreOutcome::Ready(NotificationCoreReady {
+        Ok(NotificationCoreDecision::Ready(NotificationCoreReady {
             has_msg,
             filter_contract,
         }))

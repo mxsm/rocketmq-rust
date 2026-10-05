@@ -3635,6 +3635,7 @@ async fn rocksdb_message_store_clean_expired_consumer_queue_triggers_background_
     });
     let broker_config = Arc::new(StoreRuntimeConfig::default());
     let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
+    let service_context = rocksdb_service_context("rocksdb-message-store-clean-expired-test");
     let mut message_store = RocksDBMessageStore::try_new(
         message_store_config,
         rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
@@ -3643,7 +3644,7 @@ async fn rocksdb_message_store_clean_expired_consumer_queue_triggers_background_
         topic_table,
         None,
         false,
-        rocksdb_service_context("rocksdb-message-store-clean-expired-test"),
+        service_context.clone(),
     )
     .expect("rocksdb message store should open")
     .expect("test Timer Store configuration is valid");
@@ -3654,15 +3655,30 @@ async fn rocksdb_message_store_clean_expired_consumer_queue_triggers_background_
 
     message_store.clean_expired_consumer_queue();
 
-    for _ in 0..50 {
-        if rocksdb_store.manual_compaction_count() > before {
-            message_store.close_rocksdb();
-            return;
+    // Keep I/O admission open while compaction queues behind other tests. The
+    // timeout is a watchdog; completion does not depend on a fixed sleep window.
+    let completed = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while rocksdb_store.manual_compaction_count() == before {
+            tokio::task::yield_now().await;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
+    })
+    .await;
+    let report = service_context
+        .task_group()
+        .shutdown(std::time::Duration::from_secs(30))
+        .await;
     message_store.close_rocksdb();
-    panic!("RocksDB clean expired should trigger a background manual compaction");
+    assert!(
+        completed.is_ok(),
+        "RocksDB clean expired should complete background compaction: {:?}",
+        rocksdb_store.metrics()
+    );
+    assert!(report.is_healthy(), "compaction tasks should drain cleanly: {report:?}");
+    assert_eq!(
+        rocksdb_store.manual_compaction_count(),
+        before + 1,
+        "RocksDB clean expired should complete one background manual compaction"
+    );
 }
 
 fn test_config(temp_dir: &TempDir) -> RocksDbConfig {
