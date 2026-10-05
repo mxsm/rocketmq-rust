@@ -1,134 +1,528 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="884" viewBox="0 0 1280 884" role="img" aria-labelledby="title desc">
   <title id="title">rocketmq-admin-tui architecture</title>
-  <desc id="desc">Architecture diagram showing the RocketMQ Admin TUI event loop, state model, command catalog, facade, admin-core integration, and terminal rendering.</desc>
+  <desc id="desc">The main thread runs the event loop, input handling, state, renderer and terminal modes of the RocketMQ admin TUI. Every command runs as a TaskGroup task on a runtime worker, which polls the executor, TuiAdminFacade, rocketmq-admin-core and rocketmq-client call graph against the NameServer, Broker and Controller, and reports progress and its outcome back over channels. Where motion is allowed, a looping animation follows one command from the key press to the frame that shows its result.</desc>
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#f8fafc"/>
-      <stop offset="1" stop-color="#eef2f7"/>
-    </linearGradient>
-    <linearGradient id="tui" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#f0f9ff"/>
-      <stop offset="1" stop-color="#ecfdf5"/>
-    </linearGradient>
-    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
-      <feDropShadow dx="0" dy="8" stdDeviation="9" flood-color="#0f172a" flood-opacity="0.12"/>
-    </filter>
-    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
+    <marker id="head-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M 0 0.8 L 10 5 L 0 9.2 z" class="head-flow"/>
+    </marker>
+    <marker id="head-chan" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M 0 0.8 L 10 5 L 0 9.2 z" class="head-chan"/>
     </marker>
     <style>
-      text { font-family: "Segoe UI", Arial, sans-serif; fill: #0f172a; }
-      .title { font-size: 34px; font-weight: 700; }
-      .subtitle { font-size: 15px; fill: #475569; }
-      .section-title { font-size: 17px; font-weight: 700; }
-      .label { font-size: 14px; font-weight: 600; }
-      .small { font-size: 12px; fill: #475569; }
-      .tiny { font-size: 11px; fill: #64748b; }
-      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.2; rx: 14; filter: url(#shadow); }
-      .tui-panel { fill: url(#tui); stroke: #38bdf8; stroke-width: 1.4; rx: 16; filter: url(#shadow); }
-      .box { fill: #ffffff; stroke: #94a3b8; stroke-width: 1; rx: 10; }
-      .accent-blue { fill: #eff6ff; stroke: #60a5fa; }
-      .accent-green { fill: #ecfdf5; stroke: #34d399; }
-      .accent-amber { fill: #fffbeb; stroke: #f59e0b; }
-      .accent-rose { fill: #fff1f2; stroke: #fb7185; }
-      .accent-violet { fill: #f5f3ff; stroke: #8b5cf6; }
-      .arrow { stroke: #334155; stroke-width: 2; fill: none; marker-end: url(#arrow); }
-      .arrow-light { stroke: #64748b; stroke-width: 1.6; fill: none; marker-end: url(#arrow); stroke-dasharray: 6 5; }
+      text { font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif; fill: #0f172a; }
+      .canvas { fill: #f6f8fb; }
+      .lane, .card { fill: #ffffff; stroke: #d6dce6; stroke-width: 1.25; }
+      .lane-main { fill: #fbf9ff; stroke: #c4b2fa; stroke-width: 1.5; }
+      .lane-work { fill: #f3fbfd; stroke: #93d5e2; stroke-width: 1.5; }
+      .title { font-size: 26px; font-weight: 700; }
+      .subtitle { font-size: 14px; fill: #475569; }
+      .lane-title { font-size: 15.5px; font-weight: 700; }
+      .lane-sub { font-size: 12.5px; fill: #475569; }
+      .node-title { font-size: 14px; font-weight: 700; }
+      .body { font-size: 12.5px; fill: #475569; }
+      .strong { font-size: 12.5px; font-weight: 700; }
+      .tag { font-family: "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 11px; fill: #64748b; }
+      .tag-box { fill: #f1f5f9; stroke: #d6dce6; stroke-width: 1; }
+      .node { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.25; }
+      .violet { fill: #f4f0ff; stroke: #8b5cf6; }
+      .cyan { fill: #ecfdff; stroke: #06b6d4; }
+      .green { fill: #ecfdf5; stroke: #10b981; }
+      .amber { fill: #fffbeb; stroke: #f59e0b; }
+      .rose { fill: #fff1f3; stroke: #f43f5e; }
+      .slate { fill: #f8fafc; stroke: #94a3b8; }
+      .chip { fill: #ffffff; stroke: #c4b2fa; stroke-width: 1; }
+      .chip-text { font-size: 12px; fill: #334155; }
+      .flow { stroke: #334155; stroke-width: 1.75; fill: none; }
+      .chan { stroke: #0e7490; stroke-width: 1.75; fill: none; stroke-dasharray: 6 4; }
+      .head-flow { fill: #334155; }
+      .head-chan { fill: #0e7490; }
+      .label { font-size: 11.5px; fill: #475569; }
+      .pill { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1; }
+      .footer { font-size: 12.5px; fill: #475569; }
+      .stat { font-size: 20px; font-weight: 700; fill: #7c3aed; }
+      .rule { stroke: #e2e8f0; stroke-width: 1; }
+      .mod { fill: #ffffff; stroke: #d6dce6; stroke-width: 1; }
+      .mod-name { font-family: "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 11px; fill: #334155; }
+      .mod-desc { font-size: 11px; fill: #64748b; }
+      .term { fill: #0b0f1a; stroke: #334155; stroke-width: 1.25; }
+      .term-pane { fill: none; stroke: #2e3a56; stroke-width: 1; }
+      .term-focus { fill: none; stroke: #c084fc; stroke-width: 1.25; }
+      .term-row { fill: #263147; }
+      .term-pick { fill: #6d4bc0; }
+      .term-key { fill: #1c2640; }
+      .term-dot { fill: #475569; }
+      .term-rule { stroke: #7c5cd6; stroke-width: 1; }
+      .term-text { font-size: 10.5px; fill: #9aa7c0; }
+      .term-brand { font-size: 10.5px; font-weight: 700; fill: #c084fc; }
+      /* Motion. It follows one command: .out is input and command, .in is results and frames.
+         An animation named after an arrow moves a dot along it by shifting the single dash
+         of a copy of its path; the offsets stay positive because older WebKit drops a stroke
+         with a negative one. An animation named after a box, ending in -out or -in, lights
+         the ring around it. All of the story runs on one clock (.k). Every moving part rests
+         invisible, and nothing plays outside the reduced-motion guard below, so without
+         motion this is the plain diagram. */
+      .out { stroke: #7c3aed; }
+      .in { stroke: #0891b2; }
+      .motion path { fill: none; stroke-linecap: round; stroke-dasharray: 0.1 3999.9; opacity: 0; }
+      .motion .glow { stroke-width: 18; stroke-opacity: 0.2; }
+      .motion .core { stroke-width: 8; }
+      .motion .halo { opacity: 0; }
+      .motion .halo rect { fill: none; }
+      .motion .ring { stroke-width: 2; }
+      .motion .soft { stroke-width: 9; stroke-opacity: 0.2; }
+      .dot { fill: none; stroke-width: 8; stroke-linecap: round; }
+      .moving { opacity: 0; }
+      .chip-on { fill: #ddd6fe; stroke: #8b5cf6; stroke-width: 1; opacity: 0; }
+      .chip-in { fill: #cffafe; stroke: #0891b2; }
+      .term-run { fill: #67e8f9; }
+      .term-run, .term-live, .term-prog { opacity: 0; }
+      .term-sweep { fill: none; stroke: #67e8f9; stroke-width: 1.5; stroke-linecap: round; stroke-dasharray: 26 400; }
+      .term-prog { fill: #22d3ee; }
+      @media (prefers-color-scheme: dark) {
+        text { fill: #e6eaf2; }
+        .canvas { fill: #0b0f1a; }
+        .lane, .card { fill: #111726; stroke: #263147; }
+        .lane-main { fill: #151229; stroke: #5b46a8; }
+        .lane-work { fill: #0c1b24; stroke: #1f6b7a; }
+        .subtitle, .lane-sub, .body, .label, .footer { fill: #a7b1c5; }
+        .tag { fill: #93a0b8; }
+        .tag-box { fill: #1a2233; stroke: #2b3550; }
+        .node { fill: #161d2e; stroke: #3a4763; }
+        .violet { fill: #231b40; stroke: #a78bfa; }
+        .cyan { fill: #0e2a33; stroke: #22d3ee; }
+        .green { fill: #0f2a20; stroke: #34d399; }
+        .amber { fill: #2d2310; stroke: #fbbf24; }
+        .rose { fill: #301722; stroke: #fb7185; }
+        .slate { fill: #172033; stroke: #64748b; }
+        .chip { fill: #1b1533; stroke: #5b46a8; }
+        .chip-text { fill: #d5dbe8; }
+        .flow { stroke: #cbd5e1; }
+        .chan { stroke: #67e8f9; }
+        .head-flow { fill: #cbd5e1; }
+        .head-chan { fill: #67e8f9; }
+        .pill { fill: #161d2e; stroke: #3a4763; }
+        .stat { fill: #c4b5fd; }
+        .rule { stroke: #263147; }
+        .mod { fill: #161d2e; stroke: #2b3550; }
+        .mod-name { fill: #d5dbe8; }
+        .mod-desc { fill: #93a0b8; }
+        .term { stroke: #3a4763; }
+        .out { stroke: #c4b5fd; }
+        .in { stroke: #67e8f9; }
+        .chip-on { fill: #3b2d73; stroke: #a78bfa; }
+        .chip-in { fill: #155e75; stroke: #67e8f9; }
+      }
+      @media (prefers-reduced-motion: no-preference) {
+        .k { animation-duration: 15s; animation-timing-function: linear; animation-iteration-count: infinite; }
+        .moving { opacity: 1; }
+        .b-tick { animation: b-tick 1s linear infinite; }
+        .b-sweep { animation: b-sweep 1.4s linear infinite; }
+        .k-events { animation-name: k-events; }
+        .k-loop-input { animation-name: k-loop-input; }
+        .k-input-state { animation-name: k-input-state; }
+        .k-input-gate { animation-name: k-input-gate; }
+        .k-catalog-gate { animation-name: k-catalog-gate; }
+        .k-state-render { animation-name: k-state-render; }
+        .k-render-term { animation-name: k-render-term; }
+        .k-term-screen { animation-name: k-term-screen; }
+        .k-spawn { animation-name: k-spawn; }
+        .k-task-exec { animation-name: k-task-exec; }
+        .k-exec-core { animation-name: k-exec-core; }
+        .k-core-client { animation-name: k-core-client; }
+        .k-client-namesrv { animation-name: k-client-namesrv; }
+        .k-client-broker { animation-name: k-client-broker; }
+        .k-channel { animation-name: k-channel; }
+        .k-loop-state { animation-name: k-loop-state; }
+        .k-hit-map { animation-name: k-hit-map; }
+        .k-operator-out { animation-name: k-operator-out; }
+        .k-loop-out { animation-name: k-loop-out; }
+        .k-loop-in { animation-name: k-loop-in; }
+        .k-input-out { animation-name: k-input-out; }
+        .k-input-in { animation-name: k-input-in; }
+        .k-catalog-out { animation-name: k-catalog-out; }
+        .k-state-out { animation-name: k-state-out; }
+        .k-state-in { animation-name: k-state-in; }
+        .k-gate-out { animation-name: k-gate-out; }
+        .k-renderer-in { animation-name: k-renderer-in; }
+        .k-terminal-in { animation-name: k-terminal-in; }
+        .k-screen-in { animation-name: k-screen-in; }
+        .k-task-out { animation-name: k-task-out; }
+        .k-task-in { animation-name: k-task-in; }
+        .k-executor-out { animation-name: k-executor-out; }
+        .k-executor-in { animation-name: k-executor-in; }
+        .k-core-out { animation-name: k-core-out; }
+        .k-core-in { animation-name: k-core-in; }
+        .k-client-out { animation-name: k-client-out; }
+        .k-client-in { animation-name: k-client-in; }
+        .k-namesrv-out { animation-name: k-namesrv-out; }
+        .k-namesrv-in { animation-name: k-namesrv-in; }
+        .k-broker-out { animation-name: k-broker-out; }
+        .k-broker-in { animation-name: k-broker-in; }
+        .k-pace-in { animation-name: k-pace-in; }
+        .k-chip-events { animation-name: k-chip-events; }
+        .k-chip-progress { animation-name: k-chip-progress; }
+        .k-chip-outcomes { animation-name: k-chip-outcomes; }
+        .k-march { animation-name: k-march; }
+        .k-pace-full { animation-name: k-pace-full; }
+        .k-pace-ambient { animation-name: k-pace-ambient; }
+        .k-pace-still { animation-name: k-pace-still; }
+        .k-ready { animation-name: k-ready; }
+        .k-live { animation-name: k-live; }
+        .k-prog { animation-name: k-prog; }
+        .k-row0 { animation-name: k-row0; }
+        .k-row1 { animation-name: k-row1; }
+        .k-row2 { animation-name: k-row2; }
+        .k-row3 { animation-name: k-row3; }
+        .k-row4 { animation-name: k-row4; }
+      }
+      @keyframes b-tick { 0%, 45%, 100% { opacity: 0; } 12% { opacity: 0.7; } }
+      @keyframes b-sweep { from { stroke-dashoffset: 452px; } to { stroke-dashoffset: 278px; } }
+      @keyframes k-events { 0% { stroke-dashoffset: 4000px; opacity: 0; } 4% { stroke-dashoffset: 4000px; opacity: 0; animation-timing-function: ease-in-out; } 4.47%, 6.53% { opacity: 1; } 7%, 100% { stroke-dashoffset: 3945px; opacity: 0; } }
+      @keyframes k-loop-input { 0% { stroke-dashoffset: 4000px; opacity: 0; } 7.67% { stroke-dashoffset: 4000px; opacity: 0; animation-timing-function: ease-in-out; } 8.13%, 10% { opacity: 1; } 10.47%, 100% { stroke-dashoffset: 3961px; opacity: 0; } }
+      @keyframes k-input-state { 0% { stroke-dashoffset: 4000px; opacity: 0; } 11.13% { stroke-dashoffset: 4000px; opacity: 0; animation-timing-function: ease-in-out; } 11.6%, 13.47% { opacity: 1; } 13.93%, 100% { stroke-dashoffset: 3969px; opacity: 0; } }
+      @keyframes k-input-gate { 0% { stroke-dashoffset: 4000px; opacity: 0; } 11.13% { stroke-dashoffset: 4000px; opacity: 0; animation-timing-function: ease-in-out; } 11.6%, 13.47% { opacity: 1; } 13.93%, 100% { stroke-dashoffset: 3961px; opacity: 0; } }
+      @keyframes k-catalog-gate { 0% { stroke-dashoffset: 4000px; opacity: 0; } 11.13% { stroke-dashoffset: 4000px; opacity: 0; animation-timing-function: ease-in-out; } 11.6%, 13.47% { opacity: 1; } 13.93%, 100% { stroke-dashoffset: 3961px; opacity: 0; } }
+      @keyframes k-state-render { 0% { stroke-dashoffset: 4000px; opacity: 0; } 14.6%, 48.47%, 66.47% { stroke-dashoffset: 4000px; opacity: 0; animation-timing-function: ease-in-out; } 15.07%, 16.93%, 48.93%, 50.8%, 66.93%, 68.8% { opacity: 1; } 17.4%, 51.27%, 69.27%, 100% { stroke-dashoffset: 3961px; opacity: 0; } }
+      @keyframes k-render-term { 0% { stroke-dashoffset: 4000px; opacity: 0; } 18.07%, 51.93%, 69.93% { stroke-dashoffset: 4000px; opacity: 0; animation-timing-function: ease-in-out; } 18.53%, 20.4%, 52.4%, 54.27%, 70.4%, 72.27% { opacity: 1; } 20.87%, 54.73%, 72.73%, 100% { stroke-dashoffset: 3961px; opacity: 0; } }
+      @keyframes k-term-screen { 0% { stroke-dashoffset: 4000px; opacity: 0; } 21.53%, 55.4%, 73.4% { stroke-dashoffset: 4000px; opacity: 0; animation-timing-function: ease-in-out; } 22%, 24.07%, 55.87%, 57.93%, 73.87%, 75.93% { opacity: 1; } 24.53%, 58.4%, 76.4%, 100% { stroke-dashoffset: 3945px; opacity: 0; } }
+      @keyframes k-spawn { 0% { stroke-dashoffset: 4000px; opacity: 0; } 15% { stroke-dashoffset: 4000px; opacity: 0; animation-timing-function: ease-in-out; } 15.47%, 17.87% { opacity: 1; } 18.33%, 100% { stroke-dashoffset: 3945px; opacity: 0; } }
+      @keyframes k-task-exec { 0% { stroke-dashoffset: 4000px; opacity: 0; } 19% { stroke-dashoffset: 4000px; opacity: 0; animation-timing-function: ease-in-out; } 19.47%, 21.2% { opacity: 1; } 21.67%, 100% { stroke-dashoffset: 3983px; opacity: 0; } }
+      @keyframes k-exec-core { 0% { stroke-dashoffset: 4000px; opacity: 0; } 22.33% { stroke-dashoffset: 4000px; opacity: 0; animation-timing-function: ease-in-out; } 22.8%, 24.53% { opacity: 1; } 25%, 100% { stroke-dashoffset: 3983px; opacity: 0; } }
+      @keyframes k-core-client { 0% { stroke-dashoffset: 4000px; opacity: 0; } 25.67% { stroke-dashoffset: 4000px; opacity: 0; animation-timing-function: ease-in-out; } 26.13%, 27.87% { opacity: 1; } 28.33%, 100% { stroke-dashoffset: 3983px; opacity: 0; } }
+      @keyframes k-client-namesrv { 0% { stroke-dashoffset: 4000px; opacity: 0; } 29% { stroke-dashoffset: 4000px; opacity: 0; animation-timing-function: ease-in-out; } 29.47%, 33.2% { opacity: 1; } 33.67%, 100% { stroke-dashoffset: 3815px; opacity: 0; } }
+      @keyframes k-client-broker { 0% { stroke-dashoffset: 4000px; opacity: 0; } 36.67% { stroke-dashoffset: 4000px; opacity: 0; animation-timing-function: ease-in-out; } 37.13%, 40.2% { opacity: 1; } 40.67%, 100% { stroke-dashoffset: 3883px; opacity: 0; } }
+      @keyframes k-channel { 0% { stroke-dashoffset: 4000px; opacity: 0; } 36.33%, 54.33% { stroke-dashoffset: 4000px; opacity: 0; animation-timing-function: ease-in-out; } 36.8%, 43.87%, 54.8%, 61.87% { opacity: 1; } 44.33%, 62.33%, 100% { stroke-dashoffset: 3485px; opacity: 0; } }
+      @keyframes k-loop-state { 0% { stroke-dashoffset: 4000px; opacity: 0; } 45%, 63% { stroke-dashoffset: 4000px; opacity: 0; animation-timing-function: ease-in-out; } 45.47%, 47.33%, 63.47%, 65.33% { opacity: 1; } 47.8%, 65.8%, 100% { stroke-dashoffset: 3961px; opacity: 0; } }
+      @keyframes k-hit-map { 0% { stroke-dashoffset: 4000px; opacity: 0; } 69.93% { stroke-dashoffset: 4000px; opacity: 0; animation-timing-function: ease-in-out; } 70.4%, 73.47% { opacity: 1; } 73.93%, 100% { stroke-dashoffset: 3881px; opacity: 0; } }
+      @keyframes k-operator-out { 0%, 1.67%, 9%, 100% { opacity: 0; } 2.6%, 6% { opacity: 1; } }
+      @keyframes k-loop-out { 0%, 7%, 13%, 100% { opacity: 0; } 7.93%, 10% { opacity: 1; } }
+      @keyframes k-loop-in { 0%, 44.33%, 50.33%, 62.33%, 68.33%, 100% { opacity: 0; } 45.27%, 47.33%, 63.27%, 65.33% { opacity: 1; } }
+      @keyframes k-input-out { 0%, 10.47%, 16.8%, 100% { opacity: 0; } 11.4%, 13.8% { opacity: 1; } }
+      @keyframes k-input-in { 0%, 73.93%, 78.93%, 100% { opacity: 0; } 74.87%, 75.93% { opacity: 1; } }
+      @keyframes k-catalog-out { 0%, 10.47%, 17.6%, 100% { opacity: 0; } 11.4%, 14.6% { opacity: 1; } }
+      @keyframes k-state-out { 0%, 13.93%, 19.93%, 100% { opacity: 0; } 14.87%, 16.93% { opacity: 1; } }
+      @keyframes k-state-in { 0%, 47.8%, 53.8%, 65.8%, 71.8%, 100% { opacity: 0; } 48.73%, 50.8%, 66.73%, 68.8% { opacity: 1; } }
+      @keyframes k-gate-out { 0%, 13.93%, 20.67%, 100% { opacity: 0; } 14.87%, 17.67% { opacity: 1; } }
+      @keyframes k-renderer-in { 0%, 17.4%, 23.4%, 51.27%, 57.27%, 69.27%, 76.27%, 100% { opacity: 0; } 18.33%, 20.4%, 52.2%, 54.27%, 70.2%, 73.27% { opacity: 1; } }
+      @keyframes k-terminal-in { 0%, 20.87%, 26.87%, 54.73%, 60.73%, 72.73%, 78.73%, 100% { opacity: 0; } 21.8%, 23.87%, 55.67%, 57.73%, 73.67%, 75.73% { opacity: 1; } }
+      @keyframes k-screen-in { 0%, 24.53%, 30.2%, 58.4%, 64.07%, 76.4%, 84.07%, 100% { opacity: 0; } 25.47%, 27.2%, 59.33%, 61.07%, 77.33%, 81.07% { opacity: 1; } }
+      @keyframes k-task-out { 0%, 18.33%, 53.33%, 100% { opacity: 0; } 19.27% { opacity: 1; } 22.6%, 50.33% { opacity: 0.55; } }
+      @keyframes k-task-in { 0%, 50.33%, 58.67%, 100% { opacity: 0; } 51.27%, 55.67% { opacity: 1; } }
+      @keyframes k-executor-out { 0%, 21.67%, 51.67%, 100% { opacity: 0; } 22.6% { opacity: 1; } 25.93%, 48.67% { opacity: 0.55; } }
+      @keyframes k-executor-in { 0%, 48.67%, 54%, 100% { opacity: 0; } 49.6%, 51% { opacity: 1; } }
+      @keyframes k-core-out { 0%, 25%, 50%, 100% { opacity: 0; } 25.93% { opacity: 1; } 29.27%, 47% { opacity: 0.55; } }
+      @keyframes k-core-in { 0%, 47%, 52.33%, 100% { opacity: 0; } 47.93%, 49.33% { opacity: 1; } }
+      @keyframes k-client-out { 0%, 28.33%, 48.33%, 100% { opacity: 0; } 29.27% { opacity: 1; } 32.6%, 45.33% { opacity: 0.55; } }
+      @keyframes k-client-in { 0%, 45.33%, 50.67%, 100% { opacity: 0; } 46.27%, 47.67% { opacity: 1; } }
+      @keyframes k-namesrv-out { 0%, 33.67%, 39%, 100% { opacity: 0; } 34.6%, 36% { opacity: 1; } }
+      @keyframes k-namesrv-in { 0%, 36%, 41.67%, 100% { opacity: 0; } 36.93%, 38.67% { opacity: 1; } }
+      @keyframes k-broker-out { 0%, 40.67%, 46.67%, 100% { opacity: 0; } 41.6%, 43.67% { opacity: 1; } }
+      @keyframes k-broker-in { 0%, 43.67%, 49.33%, 100% { opacity: 0; } 44.6%, 46.33% { opacity: 1; } }
+      @keyframes k-pace-in { 0%, 15.13%, 19.6%, 49%, 53.47%, 67%, 71.47%, 100% { opacity: 0; } 16.07%, 16.6%, 49.93%, 50.47%, 67.93%, 68.47% { opacity: 1; } }
+      @keyframes k-chip-events { 0%, 7%, 13.33%, 100% { opacity: 0; } 7.93%, 10.33% { opacity: 1; } }
+      @keyframes k-chip-progress { 0%, 44.33%, 50.67%, 100% { opacity: 0; } 45.27%, 47.67% { opacity: 1; } }
+      @keyframes k-chip-outcomes { 0%, 62.33%, 68.67%, 100% { opacity: 0; } 63.27%, 65.67% { opacity: 1; } }
+      @keyframes k-march { 0%, 18.33% { stroke-dashoffset: 130px; } 62.33%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-pace-full { 0%, 13.93%, 27.2%, 65.8%, 83.07%, 100% { fill-opacity: 0.38; } 15.27%, 25.87%, 67.13%, 81.73% { fill-opacity: 1; } }
+      @keyframes k-pace-ambient { 0%, 25.87%, 67.13%, 100% { fill-opacity: 0.38; } 27.2%, 65.8% { fill-opacity: 1; } }
+      @keyframes k-pace-still { 0%, 13.93%, 83.07%, 100% { fill-opacity: 1; } 15.27%, 81.73% { fill-opacity: 0.38; } }
+      @keyframes k-ready { 0%, 24.53%, 78.4%, 100% { opacity: 1; } 25.33%, 77.2% { opacity: 0; } }
+      @keyframes k-live { 0%, 25.33%, 77.2%, 100% { opacity: 0; } 26.53%, 76.4% { opacity: 1; } }
+      @keyframes k-prog { 0%, 58.4%, 77.4%, 100% { opacity: 0; } 59.73%, 76.4% { opacity: 1; } }
+      @keyframes k-row0 { 0%, 24.53%, 77.73%, 100% { opacity: 1; } 26.2%, 76.4% { opacity: 0.16; } }
+      @keyframes k-row1 { 0%, 24.53%, 78.6%, 100% { opacity: 1; } 26.2%, 77.27% { opacity: 0.16; } }
+      @keyframes k-row2 { 0%, 24.53%, 79.47%, 100% { opacity: 1; } 26.2%, 78.13% { opacity: 0.16; } }
+      @keyframes k-row3 { 0%, 24.53%, 80.33%, 100% { opacity: 1; } 26.2%, 79% { opacity: 0.16; } }
+      @keyframes k-row4 { 0%, 24.53%, 81.2%, 100% { opacity: 1; } 26.2%, 79.87% { opacity: 0.16; } }
     </style>
   </defs>
+  <rect width="1280" height="884" class="canvas"/>
 
-  <rect width="1280" height="720" fill="url(#bg)"/>
+  <!-- Title -->
+  <text x="32" y="48" class="title">rocketmq-admin-tui</text>
+  <text x="33" y="74" class="subtitle">Terminal administration for RocketMQ Rust. The main thread draws and reads input; every command runs as a runtime task.</text>
 
-  <text x="52" y="58" class="title">rocketmq-admin-tui</text>
-  <text x="54" y="86" class="subtitle">Keyboard-driven RocketMQ administration panel backed by rocketmq-admin-core</text>
+  <!-- What the two moving colors stand for; shown only where the motion plays -->
+  <g class="moving">
+    <path d="M 1139 70 h 0.1" class="dot in"/>
+    <text x="1150" y="74" class="label">results and frames</text>
+    <path d="M 997 70 h 0.1" class="dot out"/>
+    <text x="1008" y="74" class="label">input and command</text>
+  </g>
 
-  <rect x="50" y="120" width="260" height="462" class="panel"/>
-  <text x="78" y="156" class="section-title">Terminal User</text>
-  <text x="78" y="181" class="small">Interactive terminal session</text>
+  <!-- Lanes -->
+  <rect x="28" y="104" width="196" height="704" rx="16" class="lane"/>
+  <text x="48" y="134" class="lane-title">Terminal</text>
+  <text x="48" y="154" class="lane-sub">the operator's session</text>
+  <rect x="244" y="104" width="508" height="704" rx="16" class="lane-main"/>
+  <rect x="671.8" y="120" width="62.2" height="19" rx="9.5" class="tag-box"/>
+  <text x="702.9" y="133.5" class="tag" text-anchor="middle">main.rs</text>
+  <text x="264" y="134" class="lane-title">Main thread</text>
+  <text x="264" y="154" class="lane-sub">draws the interface and reads input; never polls a command</text>
+  <rect x="772" y="104" width="300" height="704" rx="16" class="lane-work"/>
+  <rect x="958.8" y="120" width="95.2" height="19" rx="9.5" class="tag-box"/>
+  <text x="1006.4" y="133.5" class="tag" text-anchor="middle">RuntimeOwner</text>
+  <text x="792" y="134" class="lane-title">Runtime workers</text>
+  <text x="792" y="154" class="lane-sub">one TaskGroup task per command</text>
+  <rect x="1092" y="104" width="160" height="396" rx="16" class="card"/>
+  <text x="1112" y="134" class="lane-title">Legend</text>
+  <rect x="1092" y="520" width="160" height="288" rx="16" class="lane"/>
+  <text x="1112" y="550" class="lane-title">Cluster</text>
+  <text x="1112" y="570" class="lane-sub">remote processes</text>
 
-  <rect x="78" y="216" width="204" height="58" class="box accent-blue"/>
-  <text x="96" y="241" class="label">Keyboard Events</text>
-  <text x="96" y="262" class="small">Tab, search, arrows, Enter</text>
+  <!-- Terminal: what goes in and what comes out -->
+  <rect x="44" y="184" width="164" height="92" rx="10" class="node slate"/>
+  <text x="58" y="209" class="node-title">Operator input</text>
+  <text x="58" y="230" class="body">keys, clicks, wheel,</text>
+  <text x="58" y="247" class="body">pasted text</text>
+  <text x="46" y="294" class="label">read through crossterm's</text>
+  <text x="46" y="309" class="label">event stream</text>
+  <text x="46" y="436" class="strong">Alternate screen</text>
+  <rect x="44" y="448" width="164" height="224" rx="8" class="term"/>
+  <circle cx="56" cy="458" r="2.5" class="term-dot"/>
+  <circle cx="65" cy="458" r="2.5" class="term-dot"/>
+  <circle cx="74" cy="458" r="2.5" class="term-dot"/>
+  <text x="54" y="480" class="term-brand">RocketMQ</text>
+  <text x="198" y="480" class="term-text k k-ready" text-anchor="end">ready</text>
+  <text x="198" y="480" class="term-text term-run k k-live" text-anchor="end">running</text>
+  <path d="M 52 488 H 200" class="term-rule"/>
+  <g class="term-live k k-live"><path d="M 52 488 H 200" class="term-sweep b-sweep"/></g>
+  <rect x="52" y="496" width="68" height="150" rx="4" class="term-pane"/>
+  <text x="58" y="511" class="term-text">Commands</text>
+  <rect x="58" y="522" width="40" height="6" rx="3" class="term-row"/>
+  <rect x="58" y="535" width="34" height="6" rx="3" class="term-row"/>
+  <rect x="58" y="548" width="44" height="6" rx="3" class="term-pick"/>
+  <rect x="58" y="561" width="30" height="6" rx="3" class="term-row"/>
+  <rect x="58" y="574" width="38" height="6" rx="3" class="term-row"/>
+  <rect x="58" y="587" width="26" height="6" rx="3" class="term-row"/>
+  <rect x="124" y="496" width="76" height="56" rx="4" class="term-pane"/>
+  <text x="130" y="511" class="term-text">Parameters</text>
+  <rect x="130" y="522" width="54" height="6" rx="3" class="term-row"/>
+  <rect x="130" y="535" width="42" height="6" rx="3" class="term-row"/>
+  <rect x="124" y="556" width="76" height="90" rx="4" class="term-focus"/>
+  <text x="130" y="571" class="term-text">Result</text>
+  <rect x="130" y="582" width="62" height="6" rx="3" class="term-row k k-row0"/>
+  <rect x="130" y="594" width="54" height="6" rx="3" class="term-pick k k-row1"/>
+  <rect x="130" y="606" width="62" height="6" rx="3" class="term-row k k-row2"/>
+  <rect x="130" y="618" width="46" height="6" rx="3" class="term-row k k-row3"/>
+  <rect x="130" y="630" width="58" height="6" rx="3" class="term-row k k-row4"/>
+  <rect x="130" y="582" width="30" height="6" rx="3" class="term-prog k k-prog"/>
+  <rect x="52" y="653" width="30" height="10" rx="3" class="term-key"/>
+  <rect x="87" y="653" width="24" height="10" rx="3" class="term-key"/>
+  <rect x="116" y="653" width="34" height="10" rx="3" class="term-key"/>
+  <rect x="155" y="653" width="22" height="10" rx="3" class="term-key"/>
+  <text x="46" y="690" class="label">one synchronized</text>
+  <text x="46" y="705" class="label">update per frame</text>
 
-  <rect x="78" y="300" width="204" height="58" class="box accent-green"/>
-  <text x="96" y="325" class="label">NameServer Input</text>
-  <text x="96" y="346" class="small">Set cluster endpoint in UI</text>
+  <!-- Main thread: event loop, input, state, renderer, terminal -->
+  <rect x="264" y="184" width="468" height="92" rx="10" class="node violet"/>
+  <rect x="611.6" y="195" width="108.4" height="19" rx="9.5" class="tag-box"/>
+  <text x="665.8" y="208.5" class="tag" text-anchor="middle">RocketmqTuiApp</text>
+  <text x="278" y="209" class="node-title">Event loop</text>
+  <text x="278" y="230" class="body">one select! over four sources; draws only the frames that are due</text>
+  <rect x="278" y="242" width="73" height="22" rx="11" class="chip"/>
+  <rect x="278" y="242" width="73" height="22" rx="11" class="chip-on b-tick"/>
+  <text x="314.5" y="257" class="chip-text" text-anchor="middle">tick · 30/s</text>
+  <rect x="359" y="242" width="105" height="22" rx="11" class="chip"/>
+  <rect x="359" y="242" width="105" height="22" rx="11" class="chip-on k k-chip-events"/>
+  <text x="411.5" y="257" class="chip-text" text-anchor="middle">terminal events</text>
+  <rect x="472" y="242" width="108" height="22" rx="11" class="chip"/>
+  <rect x="472" y="242" width="108" height="22" rx="11" class="chip-on chip-in k k-chip-progress"/>
+  <text x="526" y="257" class="chip-text" text-anchor="middle">progress queue</text>
+  <rect x="588" y="242" width="75" height="22" rx="11" class="chip"/>
+  <rect x="588" y="242" width="75" height="22" rx="11" class="chip-on chip-in k k-chip-outcomes"/>
+  <text x="625.5" y="257" class="chip-text" text-anchor="middle">outcomes</text>
+  <rect x="264" y="316" width="218" height="92" rx="10" class="node green"/>
+  <rect x="401.2" y="327" width="68.8" height="19" rx="9.5" class="tag-box"/>
+  <text x="435.6" y="340.5" class="tag" text-anchor="middle">state.rs</text>
+  <text x="278" y="341" class="node-title">State</text>
+  <text x="278" y="362" class="body">focus, search, command tree,</text>
+  <text x="278" y="379" class="body">a form per command, execution,</text>
+  <text x="278" y="396" class="body">result view, toasts, motion log</text>
+  <rect x="514" y="316" width="218" height="92" rx="10" class="node cyan"/>
+  <rect x="651.2" y="327" width="68.8" height="19" rx="9.5" class="tag-box"/>
+  <text x="685.6" y="340.5" class="tag" text-anchor="middle">input.rs</text>
+  <text x="528" y="341" class="node-title">Input</text>
+  <text x="528" y="362" class="body">overlay → global keys →</text>
+  <text x="528" y="379" class="body">text editing → navigation;</text>
+  <text x="528" y="396" class="body">mouse resolved by the hit map</text>
+  <rect x="264" y="448" width="218" height="92" rx="10" class="node violet"/>
+  <rect x="434.2" y="459" width="35.8" height="19" rx="9.5" class="tag-box"/>
+  <text x="452.1" y="472.5" class="tag" text-anchor="middle">ui/</text>
+  <text x="278" y="473" class="node-title">Renderer</text>
+  <text x="278" y="494" class="body">panes → effects → overlays;</text>
+  <text x="278" y="511" class="body">registers the hit map;</text>
+  <text x="278" y="528" class="body">24-bit color, 256 fallback</text>
+  <rect x="514" y="448" width="218" height="92" rx="10" class="node rose"/>
+  <text x="528" y="473" class="node-title">Run gate</text>
+  <text x="528" y="494" class="body">validates the form; safe runs,</text>
+  <text x="528" y="511" class="body">mutating: type confirm,</text>
+  <text x="528" y="528" class="body">dangerous: type the target</text>
+  <rect x="264" y="580" width="218" height="92" rx="10" class="node slate"/>
+  <rect x="381.4" y="591" width="88.6" height="19" rx="9.5" class="tag-box"/>
+  <text x="425.7" y="604.5" class="tag" text-anchor="middle">terminal.rs</text>
+  <text x="278" y="605" class="node-title">Terminal</text>
+  <text x="278" y="626" class="body">raw mode, alternate screen,</text>
+  <text x="278" y="643" class="body">mouse capture, paste,</text>
+  <text x="278" y="660" class="body">synchronized frames</text>
+  <rect x="514" y="580" width="218" height="92" rx="10" class="node amber"/>
+  <rect x="638" y="591" width="82" height="19" rx="9.5" class="tag-box"/>
+  <text x="679" y="604.5" class="tag" text-anchor="middle">catalog.rs</text>
+  <text x="528" y="605" class="node-title">Catalog</text>
+  <text x="528" y="626" class="body">100 commands, 17 domains;</text>
+  <text x="528" y="643" class="body">typed arguments, risk level,</text>
+  <text x="528" y="660" class="body">result kind</text>
 
-  <rect x="78" y="384" width="204" height="58" class="box accent-amber"/>
-  <text x="96" y="409" class="label">Safety Confirmation</text>
-  <text x="96" y="430" class="small">confirm or target value</text>
+  <!-- Supporting modules -->
+  <text x="266" y="712" class="label">supporting modules</text>
+  <rect x="264" y="722" width="111" height="44" rx="8" class="mod"/>
+  <text x="274" y="740" class="mod-name">result_view.rs</text>
+  <text x="274" y="756" class="mod-desc">grids, documents</text>
+  <rect x="383" y="722" width="111" height="44" rx="8" class="mod"/>
+  <text x="393" y="740" class="mod-name">motion.rs</text>
+  <text x="393" y="756" class="mod-desc">tick transitions</text>
+  <rect x="502" y="722" width="111" height="44" rx="8" class="mod"/>
+  <text x="512" y="740" class="mod-name">text_input.rs</text>
+  <text x="512" y="756" class="mod-desc">line editing</text>
+  <rect x="621" y="722" width="111" height="44" rx="8" class="mod"/>
+  <text x="631" y="740" class="mod-name">text.rs</text>
+  <text x="631" y="756" class="mod-desc">width, wrapping</text>
 
-  <rect x="78" y="500" width="204" height="44" class="box accent-violet"/>
-  <text x="96" y="528" class="label">Ratatui Screen</text>
+  <!-- Runtime workers: the command task and the call graph it polls -->
+  <text x="790" y="262" class="strong">back to the main thread</text>
+  <text x="790" y="284" class="body">progress: bounded queue of 128,</text>
+  <text x="790" y="301" class="body">coalesced when it is full</text>
+  <text x="790" y="324" class="body">outcome: one oneshot per command;</text>
+  <text x="790" y="341" class="body">late results ignored by execution id</text>
+  <rect x="788" y="448" width="268" height="92" rx="10" class="node cyan"/>
+  <rect x="968.6" y="459" width="75.4" height="19" rx="9.5" class="tag-box"/>
+  <text x="1006.3" y="472.5" class="tag" text-anchor="middle">TaskGroup</text>
+  <text x="802" y="473" class="node-title">Command task</text>
+  <text x="802" y="494" class="body">polls the command; a dropped handle</text>
+  <text x="802" y="511" class="body">stops it, and a panic is contained;</text>
+  <text x="802" y="528" class="body">drains its client scope, then reports</text>
+  <rect x="788" y="558" width="268" height="91" rx="10" class="node slate"/>
+  <text x="802" y="583" class="node-title">Executor → TuiAdminFacade</text>
+  <text x="802" y="604" class="body">Send future selected by command id;</text>
+  <text x="802" y="621" class="body">request builders, async operations;</text>
+  <text x="802" y="638" class="body">results become view models</text>
+  <rect x="788" y="667" width="268" height="56" rx="10" class="node green"/>
+  <text x="802" y="692" class="node-title">rocketmq-admin-core</text>
+  <text x="802" y="713" class="body">DTOs, services, typed results</text>
+  <rect x="788" y="741" width="268" height="56" rx="10" class="node slate"/>
+  <text x="802" y="766" class="node-title">rocketmq-client</text>
+  <text x="802" y="787" class="body">sessions over rocketmq-transport</text>
 
-  <rect x="370" y="112" width="560" height="512" class="tui-panel"/>
-  <text x="404" y="148" class="section-title">TUI Runtime</text>
-  <text x="404" y="173" class="small">Event loop, state, command forms, background execution, and result rendering</text>
+  <!-- Cluster -->
+  <rect x="1106" y="605" width="132" height="56" rx="10" class="node amber"/>
+  <text x="1120" y="630" class="node-title">NameServer</text>
+  <text x="1120" y="651" class="body">routes, config</text>
+  <rect x="1106" y="673" width="132" height="56" rx="10" class="node amber"/>
+  <text x="1120" y="698" class="node-title">Broker</text>
+  <text x="1120" y="719" class="body">topics, offsets</text>
+  <rect x="1106" y="741" width="132" height="56" rx="10" class="node amber"/>
+  <text x="1120" y="766" class="node-title">Controller</text>
+  <text x="1120" y="787" class="body">leader election</text>
 
-  <rect x="405" y="206" width="210" height="82" class="box accent-blue"/>
-  <text x="425" y="232" class="label">RocketmqTuiApp</text>
-  <text x="425" y="254" class="small">30 FPS tick loop</text>
-  <text x="425" y="274" class="small">EventStream + action channel</text>
+  <!-- Legend and budgets -->
+  <path d="M 1108 162 H 1142" class="flow" marker-end="url(#head-flow)"/>
+  <text x="1152" y="166" class="body">call or data</text>
+  <path d="M 1108 190 H 1142" class="chan" marker-end="url(#head-chan)"/>
+  <text x="1152" y="194" class="body">channel to the</text>
+  <text x="1152" y="210" class="body">main thread</text>
+  <rect x="1108" y="224" width="62.2" height="19" rx="9.5" class="tag-box"/>
+  <text x="1139.1" y="237.5" class="tag" text-anchor="middle">file.rs</text>
+  <text x="1180.2" y="238" class="body">source</text>
+  <path d="M 1108 262 H 1236" class="rule"/>
+  <text x="1108" y="292" class="stat">30 / s</text>
+  <text x="1108" y="311" class="label">ticks; a frame is</text>
+  <text x="1108" y="326" class="label">drawn only when due</text>
+  <text x="1108" y="366" class="stat">128</text>
+  <text x="1108" y="385" class="label">queued progress</text>
+  <text x="1108" y="400" class="label">updates</text>
+  <text x="1108" y="440" class="stat">16 MiB</text>
+  <text x="1108" y="459" class="label">stack of a runtime</text>
+  <text x="1108" y="474" class="label">thread</text>
 
-  <rect x="665" y="206" width="210" height="82" class="box accent-green"/>
-  <text x="685" y="232" class="label">AppState</text>
-  <text x="685" y="254" class="small">focus, search, execution</text>
-  <text x="685" y="274" class="small">form validation and scroll</text>
+  <!-- Arrows -->
+  <path d="M 208 230 H 263" class="flow" marker-end="url(#head-flow)"/>
+  <text x="236" y="222" class="label" text-anchor="middle">events</text>
+  <path d="M 373 276 V 315" class="flow" marker-end="url(#head-flow)"/>
+  <text x="383" y="300" class="label">ticks · progress · outcomes</text>
+  <path d="M 623 276 V 315" class="flow" marker-end="url(#head-flow)"/>
+  <text x="633" y="300" class="label">terminal events</text>
+  <path d="M 514 362 H 483" class="flow" marker-end="url(#head-flow)"/>
+  <path d="M 373 408 V 447" class="flow" marker-end="url(#head-flow)"/>
+  <g class="motion"><g class="in"><path d="M 373 408 V 447" class="glow k k-state-render"/><path d="M 373 408 V 447" class="core k k-state-render"/></g></g>
+  <rect x="280.5" y="417" width="185" height="22" rx="11" class="pill"/>
+  <text x="373" y="432" class="label" text-anchor="middle">frame pace: <tspan class="k k-pace-full">full</tspan> · <tspan class="k k-pace-ambient">ambient</tspan> · <tspan class="k k-pace-still">still</tspan></text>
+  <path d="M 623 408 V 447" class="flow" marker-end="url(#head-flow)"/>
+  <text x="633" y="432" class="label">run request</text>
+  <path d="M 482 470 H 498 V 382 H 513" class="flow" marker-end="url(#head-flow)"/>
+  <text x="505" y="432" class="label">hit map</text>
+  <path d="M 373 540 V 579" class="flow" marker-end="url(#head-flow)"/>
+  <text x="383" y="564" class="label">frame</text>
+  <path d="M 623 580 V 541" class="flow" marker-end="url(#head-flow)"/>
+  <text x="633" y="564" class="label">command spec</text>
+  <path d="M 264 626 H 209" class="flow" marker-end="url(#head-flow)"/>
+  <text x="236" y="618" class="label" text-anchor="middle">frames</text>
+  <path d="M 732 494 H 787" class="flow" marker-end="url(#head-flow)"/>
+  <text x="760" y="486" class="label" text-anchor="middle">spawn</text>
+  <path d="M 1030 448 V 230 H 733" class="chan k k-march" marker-end="url(#head-chan)"/>
+  <path d="M 922 540 V 557" class="flow" marker-end="url(#head-flow)"/>
+  <path d="M 922 649 V 666" class="flow" marker-end="url(#head-flow)"/>
+  <path d="M 922 723 V 740" class="flow" marker-end="url(#head-flow)"/>
+  <path d="M 1056 769 H 1082 V 633" class="flow"/>
+  <path d="M 1082 633 H 1105" class="flow" marker-end="url(#head-flow)"/>
+  <path d="M 1082 701 H 1105" class="flow" marker-end="url(#head-flow)"/>
+  <path d="M 1082 769 H 1105" class="flow" marker-end="url(#head-flow)"/>
 
-  <rect x="405" y="320" width="210" height="90" class="box accent-violet"/>
-  <text x="425" y="346" class="label">Command Catalog</text>
-  <text x="425" y="368" class="small">100 commands, 17 domains</text>
-  <text x="425" y="389" class="small">args, risk, result kind</text>
+  <!-- Boundary -->
+  <rect x="28" y="828" width="1224" height="36" rx="12" class="card"/>
+  <text x="48" y="851" class="footer">Boundary: rocketmq-admin-tui depends on rocketmq-admin-core and never on rocketmq-admin-cli; tests/no_cli_dependency.rs enforces it.</text>
 
-  <rect x="665" y="320" width="210" height="90" class="box accent-amber"/>
-  <text x="685" y="346" class="label">Executor</text>
-  <text x="685" y="368" class="small">runtime worker tasks</text>
-  <text x="685" y="389" class="small">progress updates, cancellation</text>
-
-  <rect x="405" y="442" width="210" height="90" class="box accent-rose"/>
-  <text x="425" y="468" class="label">TuiAdminFacade</text>
-  <text x="425" y="490" class="small">DTO builders and async ops</text>
-  <text x="425" y="511" class="small">no CLI dependency</text>
-
-  <rect x="665" y="442" width="210" height="90" class="box accent-green"/>
-  <text x="685" y="468" class="label">Result View Models</text>
-  <text x="685" y="490" class="small">table, JSON, text, summary</text>
-  <text x="685" y="511" class="small">viewport and scrolling</text>
-
-  <path d="M 615 247 L 665 247" class="arrow"/>
-  <path d="M 770 288 L 770 320" class="arrow"/>
-  <path d="M 665 365 L 615 365" class="arrow"/>
-  <path d="M 510 410 L 510 442" class="arrow"/>
-  <path d="M 615 487 L 665 487" class="arrow"/>
-  <path d="M 665 520 C 610 584 470 584 430 532" class="arrow-light"/>
-
-  <rect x="988" y="120" width="240" height="462" class="panel"/>
-  <text x="1016" y="156" class="section-title">Admin Backend</text>
-  <text x="1016" y="181" class="small">Reusable core and RocketMQ cluster</text>
-
-  <rect x="1016" y="216" width="184" height="64" class="box accent-green"/>
-  <text x="1034" y="241" class="label">admin-core</text>
-  <text x="1034" y="263" class="small">request DTOs and services</text>
-
-  <rect x="1016" y="310" width="184" height="64" class="box accent-blue"/>
-  <text x="1034" y="335" class="label">RocketMQ RPC</text>
-  <text x="1034" y="357" class="small">client and remoting APIs</text>
-
-  <rect x="1016" y="404" width="184" height="64" class="box accent-amber"/>
-  <text x="1034" y="429" class="label">Export / Local Ops</text>
-  <text x="1034" y="451" class="small">files, RocksDB metadata</text>
-
-  <rect x="1016" y="506" width="184" height="42" class="box accent-violet"/>
-  <text x="1034" y="532" class="label">RocketMQ Cluster</text>
-
-  <path d="M 310 245 C 334 245 346 245 370 245" class="arrow"/>
-  <path d="M 310 329 C 334 329 346 247 370 247" class="arrow-light"/>
-  <path d="M 310 413 C 334 413 346 365 370 365" class="arrow"/>
-  <path d="M 665 487 C 568 548 412 552 310 522" class="arrow-light"/>
-  <path d="M 875 487 C 930 487 955 248 1016 248" class="arrow"/>
-  <path d="M 1200 342 C 1230 380 1230 488 1200 527" class="arrow"/>
-  <path d="M 1016 436 C 950 436 922 508 875 508" class="arrow-light"/>
-
-  <rect x="142" y="642" width="996" height="44" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
-  <text x="168" y="670" class="small">Flow: terminal event -> action -> AppState and form validation -> command executor -> TuiAdminFacade -> admin-core -> result view model -> Ratatui renderer</text>
+  <!-- Motion: one command, from the key press to the frame that shows its result -->
+  <g class="motion">
+    <g class="halo out k k-operator-out"><rect x="41.5" y="181.5" width="169" height="97" rx="12.5" class="soft"/><rect x="41.5" y="181.5" width="169" height="97" rx="12.5" class="ring"/></g>
+    <g class="halo out k k-loop-out"><rect x="261.5" y="181.5" width="473" height="97" rx="12.5" class="soft"/><rect x="261.5" y="181.5" width="473" height="97" rx="12.5" class="ring"/></g>
+    <g class="halo in k k-loop-in"><rect x="261.5" y="181.5" width="473" height="97" rx="12.5" class="soft"/><rect x="261.5" y="181.5" width="473" height="97" rx="12.5" class="ring"/></g>
+    <g class="halo out k k-input-out"><rect x="511.5" y="313.5" width="223" height="97" rx="12.5" class="soft"/><rect x="511.5" y="313.5" width="223" height="97" rx="12.5" class="ring"/></g>
+    <g class="halo in k k-input-in"><rect x="511.5" y="313.5" width="223" height="97" rx="12.5" class="soft"/><rect x="511.5" y="313.5" width="223" height="97" rx="12.5" class="ring"/></g>
+    <g class="halo out k k-catalog-out"><rect x="511.5" y="577.5" width="223" height="97" rx="12.5" class="soft"/><rect x="511.5" y="577.5" width="223" height="97" rx="12.5" class="ring"/></g>
+    <g class="halo out k k-state-out"><rect x="261.5" y="313.5" width="223" height="97" rx="12.5" class="soft"/><rect x="261.5" y="313.5" width="223" height="97" rx="12.5" class="ring"/></g>
+    <g class="halo in k k-state-in"><rect x="261.5" y="313.5" width="223" height="97" rx="12.5" class="soft"/><rect x="261.5" y="313.5" width="223" height="97" rx="12.5" class="ring"/></g>
+    <g class="halo out k k-gate-out"><rect x="511.5" y="445.5" width="223" height="97" rx="12.5" class="soft"/><rect x="511.5" y="445.5" width="223" height="97" rx="12.5" class="ring"/></g>
+    <g class="halo in k k-renderer-in"><rect x="261.5" y="445.5" width="223" height="97" rx="12.5" class="soft"/><rect x="261.5" y="445.5" width="223" height="97" rx="12.5" class="ring"/></g>
+    <g class="halo in k k-terminal-in"><rect x="261.5" y="577.5" width="223" height="97" rx="12.5" class="soft"/><rect x="261.5" y="577.5" width="223" height="97" rx="12.5" class="ring"/></g>
+    <g class="halo in k k-screen-in"><rect x="41.5" y="445.5" width="169" height="229" rx="10.5" class="soft"/><rect x="41.5" y="445.5" width="169" height="229" rx="10.5" class="ring"/></g>
+    <g class="halo out k k-task-out"><rect x="785.5" y="445.5" width="273" height="97" rx="12.5" class="soft"/><rect x="785.5" y="445.5" width="273" height="97" rx="12.5" class="ring"/></g>
+    <g class="halo in k k-task-in"><rect x="785.5" y="445.5" width="273" height="97" rx="12.5" class="soft"/><rect x="785.5" y="445.5" width="273" height="97" rx="12.5" class="ring"/></g>
+    <g class="halo out k k-executor-out"><rect x="785.5" y="555.5" width="273" height="96" rx="12.5" class="soft"/><rect x="785.5" y="555.5" width="273" height="96" rx="12.5" class="ring"/></g>
+    <g class="halo in k k-executor-in"><rect x="785.5" y="555.5" width="273" height="96" rx="12.5" class="soft"/><rect x="785.5" y="555.5" width="273" height="96" rx="12.5" class="ring"/></g>
+    <g class="halo out k k-core-out"><rect x="785.5" y="664.5" width="273" height="61" rx="12.5" class="soft"/><rect x="785.5" y="664.5" width="273" height="61" rx="12.5" class="ring"/></g>
+    <g class="halo in k k-core-in"><rect x="785.5" y="664.5" width="273" height="61" rx="12.5" class="soft"/><rect x="785.5" y="664.5" width="273" height="61" rx="12.5" class="ring"/></g>
+    <g class="halo out k k-client-out"><rect x="785.5" y="738.5" width="273" height="61" rx="12.5" class="soft"/><rect x="785.5" y="738.5" width="273" height="61" rx="12.5" class="ring"/></g>
+    <g class="halo in k k-client-in"><rect x="785.5" y="738.5" width="273" height="61" rx="12.5" class="soft"/><rect x="785.5" y="738.5" width="273" height="61" rx="12.5" class="ring"/></g>
+    <g class="halo out k k-namesrv-out"><rect x="1103.5" y="602.5" width="137" height="61" rx="12.5" class="soft"/><rect x="1103.5" y="602.5" width="137" height="61" rx="12.5" class="ring"/></g>
+    <g class="halo in k k-namesrv-in"><rect x="1103.5" y="602.5" width="137" height="61" rx="12.5" class="soft"/><rect x="1103.5" y="602.5" width="137" height="61" rx="12.5" class="ring"/></g>
+    <g class="halo out k k-broker-out"><rect x="1103.5" y="670.5" width="137" height="61" rx="12.5" class="soft"/><rect x="1103.5" y="670.5" width="137" height="61" rx="12.5" class="ring"/></g>
+    <g class="halo in k k-broker-in"><rect x="1103.5" y="670.5" width="137" height="61" rx="12.5" class="soft"/><rect x="1103.5" y="670.5" width="137" height="61" rx="12.5" class="ring"/></g>
+    <g class="halo in k k-pace-in"><rect x="278" y="414.5" width="190" height="27" rx="13.5" class="soft"/><rect x="278" y="414.5" width="190" height="27" rx="13.5" class="ring"/></g>
+    <g class="out"><path d="M 208 230 H 263" class="glow k k-events"/><path d="M 208 230 H 263" class="core k k-events"/></g>
+    <g class="out"><path d="M 623 276 V 315" class="glow k k-loop-input"/><path d="M 623 276 V 315" class="core k k-loop-input"/></g>
+    <g class="out"><path d="M 514 362 H 483" class="glow k k-input-state"/><path d="M 514 362 H 483" class="core k k-input-state"/></g>
+    <g class="out"><path d="M 623 408 V 447" class="glow k k-input-gate"/><path d="M 623 408 V 447" class="core k k-input-gate"/></g>
+    <g class="out"><path d="M 623 580 V 541" class="glow k k-catalog-gate"/><path d="M 623 580 V 541" class="core k k-catalog-gate"/></g>
+    <g class="in"><path d="M 373 540 V 579" class="glow k k-render-term"/><path d="M 373 540 V 579" class="core k k-render-term"/></g>
+    <g class="in"><path d="M 264 626 H 209" class="glow k k-term-screen"/><path d="M 264 626 H 209" class="core k k-term-screen"/></g>
+    <g class="out"><path d="M 732 494 H 787" class="glow k k-spawn"/><path d="M 732 494 H 787" class="core k k-spawn"/></g>
+    <g class="out"><path d="M 922 540 V 557" class="glow k k-task-exec"/><path d="M 922 540 V 557" class="core k k-task-exec"/></g>
+    <g class="out"><path d="M 922 649 V 666" class="glow k k-exec-core"/><path d="M 922 649 V 666" class="core k k-exec-core"/></g>
+    <g class="out"><path d="M 922 723 V 740" class="glow k k-core-client"/><path d="M 922 723 V 740" class="core k k-core-client"/></g>
+    <g class="out"><path d="M 1056 769 H 1082 V 633 H 1105" class="glow k k-client-namesrv"/><path d="M 1056 769 H 1082 V 633 H 1105" class="core k k-client-namesrv"/></g>
+    <g class="out"><path d="M 1056 769 H 1082 V 701 H 1105" class="glow k k-client-broker"/><path d="M 1056 769 H 1082 V 701 H 1105" class="core k k-client-broker"/></g>
+    <g class="in"><path d="M 1030 448 V 230 H 733" class="glow k k-channel"/><path d="M 1030 448 V 230 H 733" class="core k k-channel"/></g>
+    <g class="in"><path d="M 373 276 V 315" class="glow k k-loop-state"/><path d="M 373 276 V 315" class="core k k-loop-state"/></g>
+    <g class="in"><path d="M 482 470 H 498 V 382 H 513" class="glow k k-hit-map"/><path d="M 482 470 H 498 V 382 H 513" class="core k k-hit-map"/></g>
+  </g>
 </svg>
