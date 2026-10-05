@@ -48,7 +48,7 @@
     "typescript": "5.9.3",
     "typescript-eslint": "^8.71.0",
     "vite": "^8.3.1",
-    "vitest": "^5.0.2"
+    "vitest": "^5.0.3"
   },
   "overrides": {
     "@redocly/openapi-core": {
