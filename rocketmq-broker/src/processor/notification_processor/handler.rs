@@ -25,7 +25,7 @@ use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
 use rocketmq_transport::api::ResponseAction;
 
-use super::core::NotificationCoreOutcome;
+use super::core::NotificationCoreDecision;
 use super::response::compose_notification_response;
 use super::NotificationProcessor;
 use crate::long_polling::notification_deferred::service::NotificationDeferredPreparationStatus;
@@ -97,14 +97,14 @@ where
             Err(error) => return command_outcome(self.notification_error_response(&error, opaque)),
         };
         match outcome {
-            NotificationCoreOutcome::Reply(response) => command_outcome(response),
-            NotificationCoreOutcome::Ready(ready) if ready.has_msg => command_outcome(compose_notification_response(
+            NotificationCoreDecision::Reply(response) => command_outcome(response),
+            NotificationCoreDecision::Ready(ready) if ready.has_msg => command_outcome(compose_notification_response(
                 &self.context.command_factory,
                 true,
                 false,
                 opaque,
             )),
-            NotificationCoreOutcome::Ready(ready) => {
+            NotificationCoreDecision::Ready(ready) => {
                 let Some(service) = self.notification_deferred_service.get() else {
                     return self.reply_with_code(
                         ResponseCode::ServiceNotAvailable,
