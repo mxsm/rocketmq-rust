@@ -28,7 +28,7 @@ use rocketmq_store::CqExtUnit;
 use rocketmq_store::MessageFilter;
 
 use super::*;
-use crate::long_polling::pop_deferred::deadline::LongPollingDeadlineOutcome;
+use crate::long_polling::pop_deferred::deadline::PopWaitDecision;
 
 fn nonzero(value: usize) -> NonZeroUsize {
     NonZeroUsize::new(value).expect("test value is non-zero")
@@ -52,8 +52,8 @@ fn arrival(group: &str, queue_id: i32) -> PopArrival {
 
 fn deadline(base: tokio::time::Instant, millis: u64) -> LongPollingDeadline {
     match LongPollingDeadline::checked(0, millis + 49, 0, base).expect("test deadline") {
-        LongPollingDeadlineOutcome::Pending(deadline) => deadline,
-        LongPollingDeadlineOutcome::Immediate => panic!("test deadline must remain pending"),
+        PopWaitDecision::Pending(deadline) => deadline,
+        PopWaitDecision::Immediate => panic!("test deadline must remain pending"),
     }
 }
 
@@ -396,7 +396,7 @@ fn reserve_next_matching_prevents_millisecond_boundary_time_inversion() {
 
     // First waiter arrives
     let monotonic_1 = tokio::time::Instant::now();
-    let LongPollingDeadlineOutcome::Pending(deadline_1) =
+    let PopWaitDecision::Pending(deadline_1) =
         LongPollingDeadline::checked(born_time, poll_time, 1000, monotonic_1).unwrap()
     else {
         panic!("expected pending deadline");
@@ -410,7 +410,7 @@ fn reserve_next_matching_prevents_millisecond_boundary_time_inversion() {
 
     // Second waiter arrives slightly later, crossing the millisecond wall-clock boundary
     let monotonic_2 = monotonic_1 + std::time::Duration::from_micros(500);
-    let LongPollingDeadlineOutcome::Pending(deadline_2) =
+    let PopWaitDecision::Pending(deadline_2) =
         LongPollingDeadline::checked(born_time, poll_time, 1001, monotonic_2).unwrap()
     else {
         panic!("expected pending deadline");
