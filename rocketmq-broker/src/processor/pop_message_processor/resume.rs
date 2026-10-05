@@ -94,7 +94,7 @@ impl<'a> PopStoreReadRequest<'a> {
 }
 
 /// Store reread result before the initial legacy path decides whether to suspend.
-pub(super) enum PopStoreReadOutcome {
+pub(super) enum PopStoreReadResult {
     Found(BrokerResponseParts),
     Empty { head: RemotingCommand, rest_num: i64 },
 }
@@ -181,8 +181,8 @@ where
             ))
             .await?
         {
-            PopStoreReadOutcome::Found(parts) => parts.into_remoting_response(),
-            PopStoreReadOutcome::Empty { mut head, .. } => {
+            PopStoreReadResult::Found(parts) => parts.into_remoting_response(),
+            PopStoreReadResult::Empty { mut head, .. } => {
                 head.set_code_ref(ResponseCode::PollingTimeout);
                 BrokerResponseParts::command(head)?.into_remoting_response()
             }
@@ -192,7 +192,7 @@ where
     pub(super) async fn read_pop_store(
         &self,
         request: PopStoreReadRequest<'_>,
-    ) -> crate::broker_error::BrokerResult<PopStoreReadOutcome> {
+    ) -> crate::broker_error::BrokerResult<PopStoreReadResult> {
         let PopStoreReadRequest {
             request_header,
             topic_config,
@@ -330,7 +330,7 @@ where
         if get_message_result.message_mapped_list().is_empty() {
             get_message_result.set_status(Some(GetMessageStatus::NoMessageInQueue));
             head.set_remark_mut(GetMessageStatus::NoMessageInQueue.to_string());
-            return Ok(PopStoreReadOutcome::Empty { head, rest_num });
+            return Ok(PopStoreReadResult::Empty { head, rest_num });
         }
 
         get_message_result.set_status(Some(GetMessageStatus::Found));
@@ -375,7 +375,7 @@ where
         } else {
             pop_segmented_response_parts(head, take_pop_body_segments(get_message_result))?
         };
-        Ok(PopStoreReadOutcome::Found(parts))
+        Ok(PopStoreReadResult::Found(parts))
     }
 }
 

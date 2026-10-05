@@ -41,8 +41,8 @@ use tracing::error;
 use tracing::warn;
 
 use super::resume::PopCallerHost;
-use super::resume::PopStoreReadOutcome;
 use super::resume::PopStoreReadRequest;
+use super::resume::PopStoreReadResult;
 use super::PopMessageProcessor;
 use super::BORN_TIME;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
@@ -367,8 +367,8 @@ where
             ))
             .await?
         {
-            PopStoreReadOutcome::Found(parts) => Ok(PopInitialOutcome::Reply(parts)),
-            PopStoreReadOutcome::Empty { head, rest_num } => {
+            PopStoreReadResult::Found(parts) => Ok(PopInitialOutcome::Reply(parts)),
+            PopStoreReadResult::Empty { head, rest_num } => {
                 Ok(PopInitialOutcome::Suspend(Box::new(PopInitialSuspend {
                     request_header,
                     subscription_data,
