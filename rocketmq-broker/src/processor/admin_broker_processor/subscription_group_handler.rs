@@ -44,7 +44,7 @@ use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 
 use super::AdminRequestMetadata;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigCasError;
-use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigCasOutcome;
+use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigCompareAndSetStatus;
 
 const POP_PROFILE_PERSISTENCE_UNAVAILABLE_REMARK: &str = "POP consumer profile persistence is unavailable";
 
@@ -207,7 +207,7 @@ impl SubscriptionGroupHandler {
                 retry_queue_nums,
                 consume_timeout_minutes,
             ) {
-            Ok(SubscriptionGroupConfigCasOutcome::Applied(update)) => update,
+            Ok(SubscriptionGroupConfigCompareAndSetStatus::Applied(update)) => update,
             Err(SubscriptionGroupConfigCasError::InvalidGroupName) => {
                 return Ok(Some(
                     response
@@ -215,14 +215,14 @@ impl SubscriptionGroupHandler {
                         .set_remark("The specified group is invalid."),
                 ));
             }
-            Ok(SubscriptionGroupConfigCasOutcome::GroupNotFound) => {
+            Ok(SubscriptionGroupConfigCompareAndSetStatus::GroupNotFound) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::SubscriptionGroupNotExist)
                         .set_remark("Subscription Group configuration does not exist on this Broker"),
                 ));
             }
-            Ok(SubscriptionGroupConfigCasOutcome::VersionConflict {
+            Ok(SubscriptionGroupConfigCompareAndSetStatus::VersionConflict {
                 expected_version,
                 actual_version,
             }) => {
@@ -238,7 +238,7 @@ impl SubscriptionGroupHandler {
                         )),
                 ));
             }
-            Ok(SubscriptionGroupConfigCasOutcome::NoChange) => {
+            Ok(SubscriptionGroupConfigCompareAndSetStatus::NoChange) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::InvalidParameter)
@@ -264,7 +264,7 @@ impl SubscriptionGroupHandler {
                         .set_remark("Subscription Group configuration version is exhausted"),
                 ));
             }
-            Ok(SubscriptionGroupConfigCasOutcome::StateConflict { .. })
+            Ok(SubscriptionGroupConfigCompareAndSetStatus::StateConflict { .. })
             | Err(SubscriptionGroupConfigCasError::PersistenceDirty { .. }) => {
                 return Ok(Some(
                     response
@@ -360,8 +360,8 @@ impl SubscriptionGroupHandler {
             .subscription_group_manager()
             .replace_subscription_group_config_if_state(&header.group, body.expected_state, config)
         {
-            Ok(SubscriptionGroupConfigCasOutcome::Applied(update)) => update,
-            Ok(SubscriptionGroupConfigCasOutcome::StateConflict { actual_version }) => {
+            Ok(SubscriptionGroupConfigCompareAndSetStatus::Applied(update)) => update,
+            Ok(SubscriptionGroupConfigCompareAndSetStatus::StateConflict { actual_version }) => {
                 let state = actual_version.map_or(ExpectedState::Absent, |version| ExpectedState::Present { version });
                 return Ok(Some(
                     response.set_code(ResponseCode::InvalidParameter).set_body(
@@ -390,7 +390,7 @@ impl SubscriptionGroupHandler {
                     ),
                 ));
             }
-            Ok(SubscriptionGroupConfigCasOutcome::NoChange) => {
+            Ok(SubscriptionGroupConfigCompareAndSetStatus::NoChange) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::InvalidParameter)
@@ -398,8 +398,8 @@ impl SubscriptionGroupHandler {
                 ));
             }
             Ok(
-                SubscriptionGroupConfigCasOutcome::GroupNotFound
-                | SubscriptionGroupConfigCasOutcome::VersionConflict { .. },
+                SubscriptionGroupConfigCompareAndSetStatus::GroupNotFound
+                | SubscriptionGroupConfigCompareAndSetStatus::VersionConflict { .. },
             )
             | Err(
                 SubscriptionGroupConfigCasError::InvalidGroupName

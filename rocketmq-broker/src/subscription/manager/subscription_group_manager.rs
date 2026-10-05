@@ -84,7 +84,7 @@ pub(crate) enum SubscriptionGroupConfigCasError {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum SubscriptionGroupConfigCasOutcome {
+pub(crate) enum SubscriptionGroupConfigCompareAndSetStatus {
     Applied(SubscriptionGroupConfigUpdate),
     GroupNotFound,
     VersionConflict { expected_version: u64, actual_version: u64 },
@@ -882,11 +882,11 @@ impl SubscriptionGroupManager {
         retry_max_times: Option<u32>,
         retry_queue_nums: Option<u32>,
         consume_timeout_minutes: Option<u32>,
-    ) -> Result<SubscriptionGroupConfigCasOutcome, SubscriptionGroupConfigCasError> {
+    ) -> Result<SubscriptionGroupConfigCompareAndSetStatus, SubscriptionGroupConfigCasError> {
         validate_subscription_group_name(group.as_str())
             .map_err(|_| SubscriptionGroupConfigCasError::InvalidGroupName)?;
         if retry_max_times.is_none() && retry_queue_nums.is_none() && consume_timeout_minutes.is_none() {
-            return Ok(SubscriptionGroupConfigCasOutcome::NoChange);
+            return Ok(SubscriptionGroupConfigCompareAndSetStatus::NoChange);
         }
         if retry_max_times.is_some_and(|value| !(1..=16).contains(&value))
             || retry_queue_nums.is_some_and(|value| !(1..=8).contains(&value))
@@ -897,13 +897,13 @@ impl SubscriptionGroupManager {
 
         let _transition = self.metadata_transition.lock();
         let Some(current) = self.find_subscription_group_config_inner(group) else {
-            return Ok(SubscriptionGroupConfigCasOutcome::GroupNotFound);
+            return Ok(SubscriptionGroupConfigCompareAndSetStatus::GroupNotFound);
         };
         let mut data_version = self.data_version.write();
         let counter = data_version.counter();
         let actual_version = u64::try_from(counter).map_err(|_| SubscriptionGroupConfigCasError::VersionUnavailable)?;
         if actual_version != expected_version {
-            return Ok(SubscriptionGroupConfigCasOutcome::VersionConflict {
+            return Ok(SubscriptionGroupConfigCompareAndSetStatus::VersionConflict {
                 expected_version,
                 actual_version,
             });
@@ -926,7 +926,7 @@ impl SubscriptionGroupManager {
         let changes_consume_timeout =
             consume_timeout_minutes.is_some_and(|value| value != current.consume_timeout_minute());
         if !changes_retry_max_times && !changes_retry_queue_nums && !changes_consume_timeout {
-            return Ok(SubscriptionGroupConfigCasOutcome::NoChange);
+            return Ok(SubscriptionGroupConfigCompareAndSetStatus::NoChange);
         }
 
         let mut replacement = current.as_ref().clone();
@@ -951,7 +951,7 @@ impl SubscriptionGroupManager {
         drop(data_version);
         drop(_transition);
         self.persist_after_mutation("cas-update");
-        Ok(SubscriptionGroupConfigCasOutcome::Applied(update))
+        Ok(SubscriptionGroupConfigCompareAndSetStatus::Applied(update))
     }
 
     /// Atomically creates or fully replaces one supervised Subscription Group state.
@@ -960,7 +960,7 @@ impl SubscriptionGroupManager {
         group: &CheetahString,
         expected_state: ExpectedState,
         mut replacement: SubscriptionGroupConfig,
-    ) -> Result<SubscriptionGroupConfigCasOutcome, SubscriptionGroupConfigCasError> {
+    ) -> Result<SubscriptionGroupConfigCompareAndSetStatus, SubscriptionGroupConfigCasError> {
         validate_subscription_group_name(group.as_str())
             .map_err(|_| SubscriptionGroupConfigCasError::InvalidGroupName)?;
         replacement.set_group_name(group.clone());
@@ -975,7 +975,7 @@ impl SubscriptionGroupManager {
             ExpectedState::Present { version } => current.is_some() && version == actual_version,
         };
         if !matches {
-            return Ok(SubscriptionGroupConfigCasOutcome::StateConflict {
+            return Ok(SubscriptionGroupConfigCompareAndSetStatus::StateConflict {
                 actual_version: current.as_ref().map(|_| actual_version),
             });
         }
@@ -996,7 +996,7 @@ impl SubscriptionGroupManager {
             .as_deref()
             .is_some_and(|current| supervised_group_configs_equal(current, &replacement))
         {
-            return Ok(SubscriptionGroupConfigCasOutcome::Applied(
+            return Ok(SubscriptionGroupConfigCompareAndSetStatus::Applied(
                 SubscriptionGroupConfigUpdate {
                     config: Arc::new(replacement),
                     data_version: data_version.clone(),
@@ -1017,7 +1017,7 @@ impl SubscriptionGroupManager {
         };
         drop(data_version);
         drop(transition);
-        Ok(SubscriptionGroupConfigCasOutcome::Applied(update))
+        Ok(SubscriptionGroupConfigCompareAndSetStatus::Applied(update))
     }
 
     /// Releases the per-group marker only for a conclusion known to be durable.
@@ -1711,9 +1711,9 @@ mod tests {
         crate::broker::metadata_reconciliation::MetadataWriteConclusion::unconfirmed_for_test()
     }
 
-    fn expect_applied(outcome: SubscriptionGroupConfigCasOutcome) -> SubscriptionGroupConfigUpdate {
+    fn expect_applied(outcome: SubscriptionGroupConfigCompareAndSetStatus) -> SubscriptionGroupConfigUpdate {
         match outcome {
-            SubscriptionGroupConfigCasOutcome::Applied(update) => update,
+            SubscriptionGroupConfigCompareAndSetStatus::Applied(update) => update,
             other => panic!("expected applied Subscription Group CAS outcome, got {other:?}"),
         }
     }
@@ -2003,7 +2003,7 @@ mod tests {
             manager
                 .update_subscription_group_config_if_version(&missing, 0, Some(8), None, None)
                 .expect("missing Subscription Group is a closed CAS outcome"),
-            SubscriptionGroupConfigCasOutcome::GroupNotFound
+            SubscriptionGroupConfigCompareAndSetStatus::GroupNotFound
         ));
         let mut config = SubscriptionGroupConfig::new(group.clone());
         config.set_consume_enable(false);
@@ -2035,7 +2035,7 @@ mod tests {
             manager
                 .update_subscription_group_config_if_version(&group, version, Some(7), None, None)
                 .expect("stale version is a closed CAS outcome"),
-            SubscriptionGroupConfigCasOutcome::VersionConflict {
+            SubscriptionGroupConfigCompareAndSetStatus::VersionConflict {
                 expected_version,
                 actual_version,
             } if expected_version == version && actual_version == committed_version
@@ -2044,7 +2044,7 @@ mod tests {
             manager
                 .update_subscription_group_config_if_version(&group, committed_version, Some(8), Some(4), Some(30),)
                 .expect("no-op patch is a closed CAS outcome"),
-            SubscriptionGroupConfigCasOutcome::NoChange
+            SubscriptionGroupConfigCompareAndSetStatus::NoChange
         ));
         assert_eq!(
             manager
@@ -2128,7 +2128,7 @@ mod tests {
                     SubscriptionGroupConfig::new(group.clone()),
                 )
                 .expect("state conflict is a closed CAS outcome"),
-            SubscriptionGroupConfigCasOutcome::StateConflict {
+            SubscriptionGroupConfigCompareAndSetStatus::StateConflict {
                 actual_version: Some(actual_version),
             } if actual_version == version
         ));
@@ -2173,7 +2173,7 @@ mod tests {
                     SubscriptionGroupConfig::new(group.clone()),
                 )
                 .expect("state conflict is a closed CAS outcome"),
-            SubscriptionGroupConfigCasOutcome::StateConflict {
+            SubscriptionGroupConfigCompareAndSetStatus::StateConflict {
                 actual_version: Some(actual_version),
             } if actual_version == version + 1
         ));
