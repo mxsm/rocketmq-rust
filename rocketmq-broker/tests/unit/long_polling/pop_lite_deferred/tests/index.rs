@@ -22,7 +22,7 @@ use cheetah_string::CheetahString;
 use crate::config::broker_config::BrokerConfig;
 use crate::long_polling::pop_lite_deferred::data::PopLiteDeferredPolicy;
 use crate::long_polling::pop_lite_deferred::deadline::PopLiteWaitDeadline;
-use crate::long_polling::pop_lite_deferred::deadline::PopLiteWaitDeadlineOutcome;
+use crate::long_polling::pop_lite_deferred::deadline::PopLiteWaitDecision;
 use crate::long_polling::pop_lite_deferred::index::PopLiteCriteriaIndex;
 use crate::long_polling::pop_lite_deferred::index::PopLiteIndexLimits;
 use crate::long_polling::pop_lite_deferred::index::PopLiteIndexOperationalError;
@@ -47,8 +47,8 @@ fn deadline(base: tokio::time::Instant, end_millis: i64) -> PopLiteWaitDeadline 
     match PopLiteWaitDeadline::checked(0, end_millis + 49, 0, base, Duration::from_secs(300))
         .expect("test deadline should not overflow")
     {
-        PopLiteWaitDeadlineOutcome::Pending(deadline) => deadline,
-        PopLiteWaitDeadlineOutcome::Rejected(_) => panic!("test deadline should be pending"),
+        PopLiteWaitDecision::Pending(deadline) => deadline,
+        PopLiteWaitDecision::Rejected(_) => panic!("test deadline should be pending"),
     }
 }
 
