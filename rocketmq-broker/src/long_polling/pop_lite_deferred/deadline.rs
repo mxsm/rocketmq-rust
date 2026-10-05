@@ -34,14 +34,14 @@ impl PopLiteWaitDeadline {
         admission_wall_now: u64,
         monotonic_now: tokio::time::Instant,
         max_age: Duration,
-    ) -> Result<PopLiteWaitDeadlineOutcome, PopLiteWaitDeadlineOperationalError> {
+    ) -> Result<PopLiteWaitDecision, PopLiteWaitDeadlineOperationalError> {
         if born_time < 0 {
-            return Ok(PopLiteWaitDeadlineOutcome::Rejected(PopLiteWaitDeadlineRejection::new(
+            return Ok(PopLiteWaitDecision::Rejected(PopLiteWaitDeadlineRejection::new(
                 PopLiteWaitDeadlineRejectionReason::NegativeBornTime,
             )));
         }
         if poll_time <= 0 {
-            return Ok(PopLiteWaitDeadlineOutcome::Rejected(PopLiteWaitDeadlineRejection::new(
+            return Ok(PopLiteWaitDecision::Rejected(PopLiteWaitDeadlineRejection::new(
                 PopLiteWaitDeadlineRejectionReason::NonPositivePollTime,
             )));
         }
@@ -55,7 +55,7 @@ impl PopLiteWaitDeadline {
         let effective_end_millis = requested_end.min(cap_end);
         let cutoff = effective_end_millis.saturating_sub(EARLY_WAKE_MILLIS);
         if admission_wall_now > cutoff {
-            return Ok(PopLiteWaitDeadlineOutcome::Rejected(PopLiteWaitDeadlineRejection::new(
+            return Ok(PopLiteWaitDecision::Rejected(PopLiteWaitDeadlineRejection::new(
                 PopLiteWaitDeadlineRejectionReason::AlreadyExpired,
             )));
         }
@@ -69,7 +69,7 @@ impl PopLiteWaitDeadline {
         let protocol_at = monotonic_now
             .checked_add(Duration::from_millis(remaining_millis))
             .ok_or(PopLiteWaitDeadlineOperationalError::Monotonic)?;
-        Ok(PopLiteWaitDeadlineOutcome::Pending(Self {
+        Ok(PopLiteWaitDecision::Pending(Self {
             effective_end_millis,
             protocol_millis,
             protocol_at,
@@ -91,7 +91,7 @@ impl PopLiteWaitDeadline {
 
 #[derive(Debug)]
 #[must_use]
-pub(crate) enum PopLiteWaitDeadlineOutcome {
+pub(crate) enum PopLiteWaitDecision {
     Pending(PopLiteWaitDeadline),
     Rejected(PopLiteWaitDeadlineRejection),
 }

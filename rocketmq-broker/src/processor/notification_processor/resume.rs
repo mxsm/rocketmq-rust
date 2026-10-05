@@ -17,7 +17,7 @@ use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_transport::api::DeferredWakeReason;
 use rocketmq_transport::api::RemotingResponse;
 
-use super::core::NotificationCoreOutcome;
+use super::core::NotificationCoreDecision;
 use super::NotificationFilterContract;
 use super::NotificationProcessor;
 use crate::long_polling::notification_deferred::service::ResumeNotification;
@@ -66,8 +66,8 @@ where
             Err(error) => return Ok(self.notification_error_response(&error, 0)),
         };
         match outcome {
-            NotificationCoreOutcome::Reply(command) => Ok(command),
-            NotificationCoreOutcome::Ready(ready) => Ok(super::response::compose_notification_response(
+            NotificationCoreDecision::Reply(command) => Ok(command),
+            NotificationCoreDecision::Ready(ready) => Ok(super::response::compose_notification_response(
                 &self.context.command_factory,
                 ready.has_msg,
                 false,

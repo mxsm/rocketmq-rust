@@ -93,7 +93,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         &self,
         topic_config_list: Vec<Arc<TopicConfig>>,
         data_version: DataVersion,
-    ) -> crate::broker_error::BrokerResult<crate::topic::manager::topic_config_coordinator::TopicConfigCommandOutcome>
+    ) -> crate::broker_error::BrokerResult<crate::topic::manager::topic_config_coordinator::TopicConfigCommandReport>
     {
         let runtime = self.broker_runtime_inner.clone();
         let single_topic_registration = runtime.broker_config().enable_single_topic_register;

@@ -42,12 +42,12 @@ use super::data::PopLiteRequestData;
 use super::data::ResumePopLite;
 use super::deadline::PopLiteWaitDeadline;
 use super::deadline::PopLiteWaitDeadlineOperationalError;
-use super::deadline::PopLiteWaitDeadlineOutcome;
 use super::deadline::PopLiteWaitDeadlineRejection;
+use super::deadline::PopLiteWaitDecision;
 use super::index::PopLiteCriteriaIndex;
 use super::index::PopLiteIndexOperationalError;
 use super::index::PopLiteIndexReservation;
-use super::index::PopLiteIndexReserveOutcome;
+use super::index::PopLiteIndexReservationStatus;
 use super::index::PopLiteIndexReserveRejection;
 use super::service::ObservationGuard;
 use super::service::ObservationKind;
@@ -152,8 +152,8 @@ impl PopLiteDeferredService {
             monotonic_now,
             self.max_age,
         ) {
-            Ok(PopLiteWaitDeadlineOutcome::Pending(deadline)) => deadline,
-            Ok(PopLiteWaitDeadlineOutcome::Rejected(rejection)) => {
+            Ok(PopLiteWaitDecision::Pending(deadline)) => deadline,
+            Ok(PopLiteWaitDecision::Rejected(rejection)) => {
                 return Ok(PopLiteDeferredPreparationStatus::Rejected(
                     PopLiteDeferredPrepareRejection::Deadline(rejection),
                 ));
@@ -181,8 +181,8 @@ impl PopLiteDeferredService {
             .reserve(request.client_id().clone(), monotonic_now)
             .map_err(PopLiteDeferredPrepareFailure::Index)?
         {
-            PopLiteIndexReserveOutcome::Reserved(reservation) => reservation,
-            PopLiteIndexReserveOutcome::Rejected(rejection) => {
+            PopLiteIndexReservationStatus::Reserved(reservation) => reservation,
+            PopLiteIndexReservationStatus::Rejected(rejection) => {
                 return Ok(PopLiteDeferredPreparationStatus::Rejected(
                     PopLiteDeferredPrepareRejection::IndexCapacity(rejection),
                 ));

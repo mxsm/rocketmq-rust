@@ -87,7 +87,7 @@ const MAX_CONCURRENT_OP_WRITES: usize = 32;
 /// Budget for [`TransactionalMessageService::close`], which has no caller deadline.
 const TRANSACTION_CLOSE_TIMEOUT: Duration = Duration::from_secs(30);
 
-type TransactionReadOutcome = ReadOutcome<MessageExt>;
+type TransactionMessageReadResult = ReadOutcome<MessageExt>;
 
 fn is_no_new_message(status: GetStatus) -> bool {
     matches!(
@@ -613,7 +613,7 @@ where
         remove_map: &mut HashMap<i64, i64>,
         op_msg_map: &mut HashMap<i64, HashSet<i64>>,
         done_op_offset: &mut Vec<i64>,
-        mut pull_result: Option<TransactionReadOutcome>,
+        mut pull_result: Option<TransactionMessageReadResult>,
         mut listener: Listener,
     ) -> Result<()> {
         let mut get_message_null_count = 1;
@@ -1087,7 +1087,12 @@ where
     }
 
     /// Pull half message
-    async fn pull_half_msg(&self, mq: &MessageQueue, offset: i64, nums: i32) -> Result<Option<TransactionReadOutcome>> {
+    async fn pull_half_msg(
+        &self,
+        mq: &MessageQueue,
+        offset: i64,
+        nums: i32,
+    ) -> Result<Option<TransactionMessageReadResult>> {
         self.transactional_message_bridge
             .get_half_message(mq.queue_id(), offset, nums)
             .await
@@ -1138,7 +1143,7 @@ where
         mini_offset: i64,
         op_msg_map: &mut HashMap<i64, HashSet<i64>>,
         done_op_offset: &mut Vec<i64>,
-    ) -> Result<Option<TransactionReadOutcome>> {
+    ) -> Result<Option<TransactionMessageReadResult>> {
         let pull_result = self.pull_op_msg(op_queue, pull_offset_of_op, OP_MSG_PULL_NUMS).await?;
 
         let Some(pull_result) = pull_result else {
@@ -1230,7 +1235,12 @@ where
     }
 
     /// Pull operation message
-    async fn pull_op_msg(&self, mq: &MessageQueue, offset: i64, nums: i32) -> Result<Option<TransactionReadOutcome>> {
+    async fn pull_op_msg(
+        &self,
+        mq: &MessageQueue,
+        offset: i64,
+        nums: i32,
+    ) -> Result<Option<TransactionMessageReadResult>> {
         self.transactional_message_bridge
             .get_op_message(mq.queue_id(), offset, nums)
             .await
@@ -1808,7 +1818,7 @@ mod tests {
 
         assert!(source.contains(") -> Result<()>"));
         assert!(source.contains(") -> Result<GetResult>"));
-        assert!(source.contains(") -> Result<Option<TransactionReadOutcome>>"));
+        assert!(source.contains(") -> Result<Option<TransactionMessageReadResult>>"));
         assert!(!source.contains(concat!("Box<dyn std::error::", "SharedError")));
     }
 

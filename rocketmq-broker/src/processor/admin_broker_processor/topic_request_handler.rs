@@ -54,13 +54,13 @@ use tracing::info;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 use crate::broker::metadata_reconciliation::MetadataWriteConclusion;
-use crate::topic::manager::topic_config_coordinator::outcome_result;
+use crate::topic::manager::topic_config_coordinator::topic_config_command_result;
 
 use super::AdminRequestMetadata;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
 use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
 use crate::topic::manager::topic_config_manager::TopicConfigCasError;
-use crate::topic::manager::topic_config_manager::TopicConfigCasOutcome;
+use crate::topic::manager::topic_config_manager::TopicConfigCompareAndSetStatus;
 
 fn decode_topic_queue_mapping_detail(body: &[u8]) -> Result<TopicQueueMappingDetail, String> {
     match serde_json::from_slice::<TopicQueueMappingDetail>(body) {
@@ -225,7 +225,7 @@ impl TopicRequestHandler {
         broker_config_request_handler
             .persist_and_register_topic_updates(vec![update.topic_config], update.data_version)
             .await
-            .and_then(outcome_result)?;
+            .and_then(topic_config_command_result)?;
 
         Ok(Some(RemotingCommand::create_success_response_command()))
     }
@@ -321,15 +321,15 @@ impl TopicRequestHandler {
                 request_header.order,
                 broker_runtime_inner.topic_config_state_machine_version(),
             ) {
-            Ok(TopicConfigCasOutcome::Applied(update)) => update,
-            Ok(TopicConfigCasOutcome::TopicNotFound) => {
+            Ok(TopicConfigCompareAndSetStatus::Applied(update)) => update,
+            Ok(TopicConfigCompareAndSetStatus::TopicNotFound) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::TopicNotExist)
                         .set_remark("Topic configuration does not exist on this Broker"),
                 ));
             }
-            Ok(TopicConfigCasOutcome::VersionConflict {
+            Ok(TopicConfigCompareAndSetStatus::VersionConflict {
                 expected_version,
                 actual_version,
             }) => {
@@ -345,7 +345,7 @@ impl TopicRequestHandler {
                         )),
                 ));
             }
-            Ok(TopicConfigCasOutcome::NoChange) => {
+            Ok(TopicConfigCompareAndSetStatus::NoChange) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::InvalidParameter)
@@ -366,7 +366,8 @@ impl TopicRequestHandler {
                         .set_remark("Topic configuration version is exhausted"),
                 ));
             }
-            Ok(TopicConfigCasOutcome::StateConflict { .. }) | Err(TopicConfigCasError::PersistenceDirty { .. }) => {
+            Ok(TopicConfigCompareAndSetStatus::StateConflict { .. })
+            | Err(TopicConfigCasError::PersistenceDirty { .. }) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::SystemError)
@@ -390,7 +391,7 @@ impl TopicRequestHandler {
         broker_config_request_handler
             .persist_and_register_topic_updates(vec![update.topic_config], update.data_version)
             .await
-            .and_then(outcome_result)?;
+            .and_then(topic_config_command_result)?;
 
         Ok(Some(
             RemotingCommand::create_success_response_command_with_header(UpdateTopicConfigCasResponseHeader {
@@ -486,8 +487,8 @@ impl TopicRequestHandler {
             replacement,
             runtime.topic_config_state_machine_version(),
         ) {
-            Ok(TopicConfigCasOutcome::Applied(update)) => update,
-            Ok(TopicConfigCasOutcome::StateConflict { actual_version }) => {
+            Ok(TopicConfigCompareAndSetStatus::Applied(update)) => update,
+            Ok(TopicConfigCompareAndSetStatus::StateConflict { actual_version }) => {
                 let state = actual_version.map_or(ExpectedState::Absent, |version| ExpectedState::Present { version });
                 return Ok(Some(
                     response.set_code(ResponseCode::InvalidParameter).set_body(
@@ -516,14 +517,16 @@ impl TopicRequestHandler {
                     ),
                 ));
             }
-            Ok(TopicConfigCasOutcome::NoChange) => {
+            Ok(TopicConfigCompareAndSetStatus::NoChange) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::InvalidParameter)
                         .set_remark("Topic state replacement has no effect"),
                 ));
             }
-            Ok(TopicConfigCasOutcome::TopicNotFound | TopicConfigCasOutcome::VersionConflict { .. })
+            Ok(
+                TopicConfigCompareAndSetStatus::TopicNotFound | TopicConfigCompareAndSetStatus::VersionConflict { .. },
+            )
             | Err(TopicConfigCasError::VersionUnavailable | TopicConfigCasError::VersionExhausted) => {
                 return Ok(Some(
                     response
@@ -690,7 +693,7 @@ impl TopicRequestHandler {
         broker_config_request_handler
             .persist_and_register_topic_updates(vec![update.topic_config], update.data_version)
             .await
-            .and_then(outcome_result)?;
+            .and_then(topic_config_command_result)?;
 
         Ok(Some(RemotingCommand::create_success_response_command()))
     }
