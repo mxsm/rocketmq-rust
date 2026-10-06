@@ -383,8 +383,8 @@ fn prepared_registration_owns_index_and_wait_capacity_until_drop() {
         )
         .expect("prepare before responder transfer")
     {
-        PopDeferredPrepareOutcome::Prepared(prepared) => prepared,
-        PopDeferredPrepareOutcome::Rejected(_) => panic!("live request must be prepared"),
+        PopDeferredPreparationStatus::Prepared(prepared) => prepared,
+        PopDeferredPreparationStatus::Rejected(_) => panic!("live request must be prepared"),
     };
     assert!(prepared.retained_bytes() > 0);
     assert_eq!(
@@ -411,8 +411,8 @@ fn shutdown_rejects_prepare_before_reserving_business_or_wait_capacity() {
         10_100,
         tokio::time::Instant::now(),
     ) {
-        Ok(PopDeferredPrepareOutcome::Rejected(rejection)) => rejection,
-        Ok(PopDeferredPrepareOutcome::Prepared(_)) => panic!("closed service must reject preparation"),
+        Ok(PopDeferredPreparationStatus::Rejected(rejection)) => rejection,
+        Ok(PopDeferredPreparationStatus::Prepared(_)) => panic!("closed service must reject preparation"),
         Err(_) => panic!("closed service is a source-free rejection"),
     };
     assert_eq!(rejection.kind(), PopDeferredPrepareRejectionKind::ServiceClosed);

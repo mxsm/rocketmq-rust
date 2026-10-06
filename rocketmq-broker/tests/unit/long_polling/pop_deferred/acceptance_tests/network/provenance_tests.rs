@@ -23,8 +23,8 @@ use rocketmq_transport::api::TransportSecurity;
 use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
 use super::*;
-use crate::long_polling::pop_deferred::service::PopDeferredRegisterOutcome;
 use crate::long_polling::pop_deferred::service::PopDeferredRegisterRejectionKind;
+use crate::long_polling::pop_deferred::service::PopDeferredRegistrationStatus;
 use crate::long_polling::pop_deferred::service::PreparedPopRegistration;
 
 fn success_reply() -> crate::broker_error::BrokerResult<ResponseAction> {
@@ -54,8 +54,8 @@ impl RequestProcessor for ProvenanceProbeProcessor {
         };
         if let Some(prepared) = prepared {
             let rejection = match self.service.register(prepared, request) {
-                Ok(PopDeferredRegisterOutcome::Rejected(rejection)) => *rejection,
-                Ok(PopDeferredRegisterOutcome::Registered(_)) | Err(_) => {
+                Ok(PopDeferredRegistrationStatus::Rejected(rejection)) => *rejection,
+                Ok(PopDeferredRegistrationStatus::Registered(_)) | Err(_) => {
                     panic!("a prepared proof cannot be paired with another request")
                 }
             };
@@ -69,8 +69,8 @@ impl RequestProcessor for ProvenanceProbeProcessor {
             .map_err(|error| {
                 crate::broker_error::from_shared(Arc::new(CanonicalError::caused_by(&CORE_ARGUMENT_INVALID, error)))
             })? {
-            PopDeferredPrepareOutcome::Prepared(prepared) => *prepared,
-            PopDeferredPrepareOutcome::Rejected(_) => {
+            PopDeferredPreparationStatus::Prepared(prepared) => *prepared,
+            PopDeferredPreparationStatus::Rejected(_) => {
                 return Err(crate::broker_error::invalid_argument(
                     "unexpected POP preparation rejection",
                 ));

@@ -42,9 +42,9 @@ use crate::long_polling::notification_deferred::service::NotificationDeferredSer
 use crate::long_polling::pending_arrival_latch::PendingArrivalAdmissionStatus;
 use crate::long_polling::pop_deferred::index::PopArrivalView;
 use crate::long_polling::pop_deferred::index::PopSelectionOrder;
+use crate::long_polling::pop_deferred::service::PopArrivalLatchStatus;
 use crate::long_polling::pop_deferred::service::PopDeferredService;
 use crate::long_polling::pop_deferred::service::PopDeferredWakeupObserver;
-use crate::long_polling::pop_deferred::service::PopPendingArrivalOutcome;
 use crate::long_polling::pop_deferred::service::PopWakeupCompletion;
 use crate::long_polling::pop_lite_deferred::service::PopLiteDeferredService;
 use crate::long_polling::pop_lite_deferred::service::PopLiteReplayObservation;
@@ -313,8 +313,8 @@ where
             properties,
             self.pop.fanout_cursor(),
         ) {
-            Ok(PopPendingArrivalOutcome::Latched) => self.produce_pending_pop_arrivals(),
-            Ok(PopPendingArrivalOutcome::Rejected(_)) => {}
+            Ok(PopArrivalLatchStatus::Latched) => self.produce_pending_pop_arrivals(),
+            Ok(PopArrivalLatchStatus::Rejected(_)) => {}
             Err(error) => warn!(?error, "failed to retain deferred POP arrival replay"),
         }
     }

@@ -47,8 +47,8 @@ use crate::broker_runtime::BrokerMessageStore;
 use crate::broker_runtime::BrokerRuntime;
 use crate::config::broker_config::BrokerConfig;
 use crate::deferred_generation_handoff::DeferredGenerationTarget;
-use crate::long_polling::pop_deferred::service::PopDeferredPrepareOutcome;
-use crate::long_polling::pop_deferred::service::PopDeferredRegisterOutcome;
+use crate::long_polling::pop_deferred::service::PopDeferredPreparationStatus;
+use crate::long_polling::pop_deferred::service::PopDeferredRegistrationStatus;
 use crate::long_polling::pop_deferred::service::PopDeferredService;
 use crate::long_polling::pop_deferred::service::PopRetainedEstimate;
 use crate::processor::notification_processor::NotificationProcessor;
@@ -84,15 +84,15 @@ impl RequestProcessor for PopLeaf {
             Some(Arc::clone(&self.filter)),
             PopRetainedEstimate::default(),
         ) {
-            Ok(PopDeferredPrepareOutcome::Prepared(prepared)) => *prepared,
-            Ok(PopDeferredPrepareOutcome::Rejected(rejection)) => {
+            Ok(PopDeferredPreparationStatus::Prepared(prepared)) => *prepared,
+            Ok(PopDeferredPreparationStatus::Rejected(rejection)) => {
                 panic!("POP frozen-filter preparation was rejected: {:?}", rejection.kind())
             }
             Err(error) => panic!("POP frozen-filter preparation failed: {:?}", error.kind()),
         };
         let registration = match self.service.register(prepared, request) {
-            Ok(PopDeferredRegisterOutcome::Registered(registration)) => *registration,
-            Ok(PopDeferredRegisterOutcome::Rejected(rejection)) => {
+            Ok(PopDeferredRegistrationStatus::Registered(registration)) => *registration,
+            Ok(PopDeferredRegistrationStatus::Rejected(rejection)) => {
                 panic!("POP frozen-filter registration was rejected: {:?}", rejection.kind())
             }
             Err(error) => panic!("POP frozen-filter registration failed: {:?}", error.kind()),

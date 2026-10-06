@@ -61,8 +61,8 @@ use tracing::warn;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
 use crate::long_polling::pop_deferred::index::PopFanoutCursor;
+use crate::long_polling::pop_deferred::service::PopArrivalLatchStatus;
 use crate::long_polling::pop_deferred::service::PopDeferredService;
-use crate::long_polling::pop_deferred::service::PopPendingArrivalOutcome;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
 use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
@@ -242,7 +242,7 @@ impl<MS: BrokerReadWriteStore> AckMessagePopCapability<MS> {
                 None,
                 PopFanoutCursor::new(),
             ),
-            Ok(PopPendingArrivalOutcome::Latched)
+            Ok(PopArrivalLatchStatus::Latched)
         )
     }
 }

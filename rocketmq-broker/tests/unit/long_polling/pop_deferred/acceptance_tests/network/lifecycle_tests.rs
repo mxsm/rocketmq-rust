@@ -80,10 +80,10 @@ fn index_and_wait_admission_reject_before_responder_transfer_and_release_every_r
         )
         .expect("first index reservation")
     {
-        PopDeferredPrepareOutcome::Prepared(prepared) => prepared,
-        PopDeferredPrepareOutcome::Rejected(_) => panic!("first request must be prepared"),
+        PopDeferredPreparationStatus::Prepared(prepared) => prepared,
+        PopDeferredPreparationStatus::Rejected(_) => panic!("first request must be prepared"),
     };
-    let Ok(PopDeferredPrepareOutcome::Rejected(index_rejection)) = index_limited.prepare_at(
+    let Ok(PopDeferredPreparationStatus::Rejected(index_rejection)) = index_limited.prepare_at(
         preflight_test_data("TopicB", "127.0.0.1:2"),
         None,
         None,
@@ -110,10 +110,10 @@ fn index_and_wait_admission_reject_before_responder_transfer_and_release_every_r
         )
         .expect("first wait permit")
     {
-        PopDeferredPrepareOutcome::Prepared(prepared) => prepared,
-        PopDeferredPrepareOutcome::Rejected(_) => panic!("first request must be prepared"),
+        PopDeferredPreparationStatus::Prepared(prepared) => prepared,
+        PopDeferredPreparationStatus::Rejected(_) => panic!("first request must be prepared"),
     };
-    let Ok(PopDeferredPrepareOutcome::Rejected(admission_rejection)) = admission_limited.prepare_at(
+    let Ok(PopDeferredPreparationStatus::Rejected(admission_rejection)) = admission_limited.prepare_at(
         preflight_test_data("TopicB", "127.0.0.1:4"),
         None,
         None,
@@ -231,7 +231,7 @@ async fn shutdown_terminalizes_active_waiter_emits_no_frame_and_cannot_reopen() 
         rocketmq_transport::api::DeferredRegistryShutdownOutcome::Completed(_)
     ));
     assert_released(&service);
-    let Ok(PopDeferredPrepareOutcome::Rejected(reopen)) = service.prepare_at(
+    let Ok(PopDeferredPreparationStatus::Rejected(reopen)) = service.prepare_at(
         preflight_test_data("TopicB", "127.0.0.1:5"),
         None,
         None,

@@ -46,12 +46,12 @@ use super::resume::PopStoreReadResult;
 use super::PopMessageProcessor;
 use super::BORN_TIME;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
+use crate::long_polling::pop_deferred::service::PopDeferredPreparationStatus;
 use crate::long_polling::pop_deferred::service::PopDeferredPrepareError;
-use crate::long_polling::pop_deferred::service::PopDeferredPrepareOutcome;
 use crate::long_polling::pop_deferred::service::PopDeferredPrepareRejection;
 use crate::long_polling::pop_deferred::service::PopDeferredRegisterError;
-use crate::long_polling::pop_deferred::service::PopDeferredRegisterOutcome;
 use crate::long_polling::pop_deferred::service::PopDeferredRegisterRejection;
+use crate::long_polling::pop_deferred::service::PopDeferredRegistrationStatus;
 use crate::long_polling::pop_deferred::service::PopRetainedEstimate;
 use crate::processor::response_assembly::BrokerResponseParts;
 
@@ -121,17 +121,17 @@ where
                     suspension.message_filter,
                     PopRetainedEstimate::default(),
                 ) {
-                    Ok(PopDeferredPrepareOutcome::Prepared(prepared)) => prepared,
-                    Ok(PopDeferredPrepareOutcome::Rejected(rejection)) => {
+                    Ok(PopDeferredPreparationStatus::Prepared(prepared)) => prepared,
+                    Ok(PopDeferredPreparationStatus::Rejected(rejection)) => {
                         return self.prepare_rejection_outcome(suspension.head, rejection);
                     }
                     Err(error) => return self.prepare_error_outcome(suspension.head, error),
                 };
                 match service.register(*prepared, request) {
-                    Ok(PopDeferredRegisterOutcome::Registered(registration)) => {
+                    Ok(PopDeferredRegistrationStatus::Registered(registration)) => {
                         Ok(ResponseAction::Deferred(*registration))
                     }
-                    Ok(PopDeferredRegisterOutcome::Rejected(rejection)) => {
+                    Ok(PopDeferredRegistrationStatus::Rejected(rejection)) => {
                         self.register_rejection_outcome(suspension.head, *rejection)
                     }
                     Err(error) => self.register_error_outcome(suspension.head, error),
