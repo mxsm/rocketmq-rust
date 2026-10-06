@@ -30,7 +30,7 @@ the `bootstrap::Builder` API for tests and service composition.
 
 ## Architecture
 
-![rocketmq-namesrv architecture](../resources/namesrv-architecture.svg)
+![rocketmq-namesrv architecture](../resources/rocketmq-namesrv-architecture.svg)
 
 `KVConfigManager` persists namespace config, `BrokerHousekeepingService` reacts
 to channel events, scheduled tasks scan inactive brokers, and optional

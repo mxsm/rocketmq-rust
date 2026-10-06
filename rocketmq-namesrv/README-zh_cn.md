@@ -26,7 +26,7 @@ topic route metadata、broker member group、写权限、KV 配置、运行时�
 
 ## 架构
 
-![rocketmq-namesrv 架构](../resources/namesrv-architecture.svg)
+![rocketmq-namesrv 架构](../resources/rocketmq-namesrv-architecture.svg)
 
 `KVConfigManager` 负责 namespace config 持久化，`BrokerHousekeepingService` 响应 channel event，定时任务扫描 inactive
 broker；只有同时启用 `embedded-controller` Cargo feature 和 `enableControllerInNamesrv` 运行时配置时，
