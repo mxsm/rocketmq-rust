@@ -1,0 +1,774 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="962" viewBox="0 0 1400 962" role="img" aria-labelledby="title desc">
+  <title id="title">RocketMQ-Rust architecture</title>
+  <desc id="desc">Producers send to broker clusters and consumers receive from them; both look routes up in the NameServer cluster, where every Broker registers and sends heartbeats. gRPC clients enter through the Proxy, which runs in cluster mode or embeds a Broker in local mode. Each broker name is a master and a replica with synchronous or asynchronous HA replication, and an optional OpenRaft Controller cluster, standalone or embedded in the NameServer, elects a new master when one fails. Inside each Broker, rocketmq-store writes through a local engine by default, with optional RocksDB and tiered engines. Admin CLI, TUI, dashboards and MCP servers reach the cluster through rocketmq-admin-core and the client SDK, off the message path. Shared crates provide the model, protocol, transport, runtime, security, error, observability, filter and macro foundations. Where motion is allowed, a looping tour plays seven steps: register, route lookup, send, store and replicate, consume, fail over and operate.</desc>
+  <defs>
+    <linearGradient id="card" x1="0" y1="0" x2="0.36" y2="1">
+      <stop offset="0" stop-color="#121728" stop-opacity="0.86"/>
+      <stop offset="1" stop-color="#080a13" stop-opacity="0.94"/>
+    </linearGradient>
+    <pattern id="dots" width="26" height="26" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" fill="#aabaeb" fill-opacity="0.1"/>
+    </pattern>
+    <radialGradient id="glow-violet" cx="0.04" cy="0.08" r="0.62">
+      <stop offset="0" stop-color="#9872ff" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#9872ff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow-orange" cx="1" cy="1" r="0.5">
+      <stop offset="0" stop-color="#ff7a26" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#ff7a26" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="progress" x1="577.2" y1="0" x2="1376" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff7a26"/>
+      <stop offset="0.5" stop-color="#f2468c"/>
+      <stop offset="1" stop-color="#9872ff"/>
+    </linearGradient>
+    <style>
+      text { font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif; }
+      .tc { color: #9872ff; }
+      .tp { color: #ff7a26; }
+      .ts { color: #34d399; }
+      .tm { color: #42d0f0; }
+      .to { color: #ffb86b; }
+      .page { fill: #05060b; }
+      .card { fill: url(#card); stroke: rgba(150, 166, 214, 0.16); stroke-width: 1; }
+      .dots { fill: url(#dots); }
+      .panel { fill: #0c0f1b; fill-opacity: 0.86; stroke: rgba(150, 166, 214, 0.16); stroke-width: 1; }
+      .ti { font-size: 26px; font-weight: 700; letter-spacing: -0.4px; fill: #f4f6fb; }
+      .le { font-size: 13.5px; fill: #9ba4b9; }
+      .grp { fill: rgba(255, 255, 255, 0.014); stroke: rgba(150, 166, 214, 0.24); stroke-width: 1.2; stroke-dasharray: 5 7; }
+      .clu { fill: rgba(255, 255, 255, 0.018); stroke: rgba(150, 166, 214, 0.2); stroke-width: 1; }
+      .gt { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 10.5px; font-weight: 600; letter-spacing: 1.68px; fill: #7a849c; }
+      .r { fill: none; stroke: rgba(150, 166, 214, 0.26); stroke-width: 1.6; stroke-linecap: round; }
+      .rt { fill: none; stroke: currentColor; stroke-opacity: 0.8; stroke-width: 1.6; stroke-linecap: round; }
+      .d { stroke-dasharray: 5 7; }
+      .rg { fill: none; stroke: currentColor; stroke-opacity: 0.18; stroke-width: 9; stroke-linecap: round; }
+      .rh { fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; }
+      .pk path { fill: none; stroke: currentColor; stroke-linecap: round; }
+      .p3 { stroke-width: 26; stroke-opacity: 0.07; }
+      .p2 { stroke-width: 18; stroke-opacity: 0.2; }
+      .p1 { stroke-width: 12; stroke-opacity: 0.6; }
+      .pk .p0 { stroke: #ffffff; stroke-width: 8.4; }
+      .lb { font-size: 11px; fill: #8791a8; }
+      .lt { fill: currentColor; }
+      .nb { fill: #0d111e; fill-opacity: 0.94; stroke: rgba(150, 166, 214, 0.26); stroke-width: 1.2; }
+      .op { stroke-dasharray: 6 6; }
+      .nt { font-size: 16px; font-weight: 700; fill: #f1f4fb; }
+      .ns { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 11px; fill: #8791a8; }
+      .nn { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 10px; fill: #7a849c; }
+      .mt { font-size: 13px; font-weight: 700; fill: #eef1f8; }
+      .gl rect { fill: none; stroke: currentColor; }
+      .g1 { stroke-width: 4; stroke-opacity: 0.14; }
+      .g2 { stroke-width: 9; stroke-opacity: 0.1; }
+      .g3 { stroke-width: 16; stroke-opacity: 0.07; }
+      .g4 { stroke-width: 24; stroke-opacity: 0.05; }
+      .g5 { stroke-width: 34; stroke-opacity: 0.03; }
+      .nr { fill: none; stroke: currentColor; stroke-width: 1.6; }
+      .bd rect { fill: rgba(52, 211, 153, 0.13); stroke: rgba(52, 211, 153, 0.45); stroke-width: 1; }
+      .bd text { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 9px; font-weight: 700; letter-spacing: 0.7px; fill: #34d399; text-anchor: middle; }
+      .bd.gy rect { fill: rgba(150, 166, 214, 0.1); stroke: rgba(150, 166, 214, 0.34); }
+      .bd.gy text { fill: #9ba4b9; }
+      .bd.rs rect { fill: rgba(251, 113, 133, 0.14); stroke: rgba(251, 113, 133, 0.55); }
+      .bd.rs text { fill: #fb7185; }
+      .bd.vi rect { fill: rgba(152, 114, 255, 0.12); stroke: rgba(152, 114, 255, 0.42); }
+      .bd.vi text { fill: #b9a2ff; }
+      .bd.or rect { fill: rgba(255, 122, 38, 0.12); stroke: rgba(255, 122, 38, 0.42); }
+      .bd.or text { fill: #ff9a5c; }
+      .sv { fill: rgba(150, 166, 214, 0.08); stroke: rgba(150, 166, 214, 0.42); stroke-width: 1.1; }
+      .svl { fill: none; stroke: rgba(150, 166, 214, 0.5); stroke-width: 1.4; stroke-linecap: round; }
+      .svd { fill: #9872ff; fill-opacity: 0.5; }
+      .svv { fill: #d9ccff; }
+      .ql { fill: none; stroke: rgba(152, 114, 255, 0.5); stroke-width: 1.2; stroke-dasharray: 3 4; }
+      .bk { fill: rgba(150, 166, 214, 0.17); }
+      .bf { fill: #34d399; }
+      .br { fill: #fb7185; fill-opacity: 0.3; }
+      .dn { fill: #fb7185; fill-opacity: 0.06; stroke: #fb7185; stroke-width: 1.4; stroke-dasharray: 6 6; }
+      .pm { fill: #34d399; fill-opacity: 0.07; stroke: #34d399; stroke-width: 1.6; }
+      .cb { fill: #0d111e; fill-opacity: 0.94; stroke: rgba(150, 166, 214, 0.24); stroke-width: 1.1; }
+      .ct { font-size: 12.5px; font-weight: 700; fill: #eef1f8; }
+      .cs { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 10px; fill: #7a849c; }
+      .rn { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 11px; fill: #dfe5f3; }
+      .rd { font-size: 11px; fill: #9ba4b9; }
+      .ro { fill: none; stroke: currentColor; stroke-width: 1.3; stroke-dasharray: 4 5; }
+      .lg { font-size: 11.5px; fill: #9ba4b9; }
+      .ll { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+      .lo { fill: none; stroke: rgba(150, 166, 214, 0.5); stroke-width: 1.2; stroke-dasharray: 4 4; }
+      .sh { fill: rgba(255, 255, 255, 0.055); stroke: rgba(150, 166, 214, 0.28); stroke-width: 1; }
+      .sc { fill: rgba(150, 166, 214, 0.05); stroke: rgba(150, 166, 214, 0.16); stroke-width: 1; }
+      .si { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 11.5px; font-weight: 600; fill: #7a849c; }
+      .sa { fill: #ffb86b; }
+      .st { font-size: 12.5px; font-weight: 700; fill: #e8ecf6; }
+      .sp { fill: none; stroke: url(#progress); stroke-width: 2; stroke-linecap: round; }
+      .fb { fill: rgba(150, 166, 214, 0.07); stroke: rgba(150, 166, 214, 0.22); stroke-width: 1; }
+      .fc { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 11.5px; fill: #c9d0e2; text-anchor: middle; }
+      .fn { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 10.5px; fill: #7a849c; }
+      /* Motion. Classes that start with k- name the animations; all of them share one clock
+         (.k), and each is assigned only inside the reduced-motion guard below. What shows
+         only while a step is in effect rests invisible: glows, bright links, packets, lit
+         labels, the fail-over overlays and the mark of the step in effect. */
+      .gl, .nr, .a, .o { opacity: 0; }
+      .k-f-register { stroke-dasharray: 0.1 37.90; }
+      .k-f-route-proxy { stroke-dasharray: 0.1 4999.9; }
+      .k-f-route-producer { stroke-dasharray: 0.1 4999.9; }
+      .k-f-route-consumer { stroke-dasharray: 0.1 4999.9; }
+      .k-f-grpc { stroke-dasharray: 0.1 25.90; }
+      .k-f-proxy-broker { stroke-dasharray: 0.1 85.67; }
+      .k-f-send { stroke-dasharray: 0.1 27.23; }
+      .k-f-store { stroke-dasharray: 0.1 29.90; }
+      .k-f-deliver { stroke-dasharray: 0.1 27.23; }
+      .k-f-ack { stroke-dasharray: 0.1 81.90; }
+      .k-f-control { stroke-dasharray: 0.1 37.90; }
+      .k-f-ops-cli { stroke-dasharray: 0.1 185.67; }
+      .k-f-ops-dashboard { stroke-dasharray: 0.1 85.36; }
+      .k-f-ops-mcp { stroke-dasharray: 0.1 31.90; }
+      .k-f-ops-control { stroke-dasharray: 0.1 67.28; }
+      .k-f-ops-client { stroke-dasharray: 0.1 19.90; }
+      .k-f-ops-namesrv { stroke-dasharray: 0.1 110.40; }
+      .k-f-ops-cluster-a { stroke-dasharray: 0.1 19.90; }
+      .k-f-ops-cluster-b { stroke-dasharray: 0.1 19.90; }
+      .k-f-replicate-a1 { stroke-dasharray: 0.1 25.90; }
+      .k-f-replicate-a2 { stroke-dasharray: 0.1 25.90; }
+      .k-f-replicate-b1 { stroke-dasharray: 0.1 25.90; }
+      .k-f-replicate-b2 { stroke-dasharray: 0.1 25.90; }
+      @media (prefers-reduced-motion: no-preference) {
+        .k { animation-duration: 32s; animation-timing-function: linear; animation-iteration-count: infinite; }
+        .k-r1 { animation-name: k-r1; }
+        .k-s1 { animation-name: k-s1; }
+        .k-p1 { animation-name: k-p1; }
+        .k-r2 { animation-name: k-r2; }
+        .k-s2 { animation-name: k-s2; }
+        .k-p2 { animation-name: k-p2; }
+        .k-r3 { animation-name: k-r3; }
+        .k-s3 { animation-name: k-s3; }
+        .k-p3 { animation-name: k-p3; }
+        .k-r4 { animation-name: k-r4; }
+        .k-s4 { animation-name: k-s4; }
+        .k-p4 { animation-name: k-p4; }
+        .k-r5 { animation-name: k-r5; }
+        .k-s5 { animation-name: k-s5; }
+        .k-p5 { animation-name: k-p5; }
+        .k-r6 { animation-name: k-r6; }
+        .k-s6 { animation-name: k-s6; }
+        .k-p6 { animation-name: k-p6; }
+        .k-r7 { animation-name: k-r7; }
+        .k-s7 { animation-name: k-s7; }
+        .k-p7 { animation-name: k-p7; }
+        .k-s1357 { animation-name: k-s1357; }
+        .k-off { animation-name: k-off; }
+        .k-x4 { animation-name: k-x4; }
+        .k-x5 { animation-name: k-x5; }
+        .k-x6 { animation-name: k-x6; }
+        .k-x7 { animation-name: k-x7; }
+        .k-d4 { animation-name: k-d4; }
+        .k-d5 { animation-name: k-d5; }
+        .k-d6 { animation-name: k-d6; }
+        .k-d7 { animation-name: k-d7; }
+        .k-n3 { animation-name: k-n3; }
+        .k-s23 { animation-name: k-s23; }
+        .k-n23 { animation-name: k-n23; }
+        .k-s127 { animation-name: k-s127; }
+        .k-n127 { animation-name: k-n127; }
+        .k-n6 { animation-name: k-n6; }
+        .k-s25 { animation-name: k-s25; }
+        .k-n25 { animation-name: k-n25; }
+        .k-n13457 { animation-name: k-n13457; }
+        .k-nm { animation-name: k-nm; }
+        .k-n134567 { animation-name: k-n134567; }
+        .k-s46 { animation-name: k-s46; }
+        .k-n4 { animation-name: k-n4; }
+        .k-n7 { animation-name: k-n7; }
+        .k-f-register { animation-name: k-f-register; }
+        .k-f-route-proxy { animation-name: k-f-route-proxy; }
+        .k-f-route-producer { animation-name: k-f-route-producer; }
+        .k-f-route-consumer { animation-name: k-f-route-consumer; }
+        .k-f-grpc { animation-name: k-f-grpc; }
+        .k-f-proxy-broker { animation-name: k-f-proxy-broker; }
+        .k-f-send { animation-name: k-f-send; }
+        .k-f-store { animation-name: k-f-store; }
+        .k-f-deliver { animation-name: k-f-deliver; }
+        .k-f-ack { animation-name: k-f-ack; }
+        .k-f-control { animation-name: k-f-control; }
+        .k-f-ops-cli { animation-name: k-f-ops-cli; }
+        .k-f-ops-dashboard { animation-name: k-f-ops-dashboard; }
+        .k-f-ops-mcp { animation-name: k-f-ops-mcp; }
+        .k-f-ops-control { animation-name: k-f-ops-control; }
+        .k-f-ops-client { animation-name: k-f-ops-client; }
+        .k-f-ops-namesrv { animation-name: k-f-ops-namesrv; }
+        .k-f-ops-cluster-a { animation-name: k-f-ops-cluster-a; }
+        .k-f-ops-cluster-b { animation-name: k-f-ops-cluster-b; }
+        .k-f-replicate-a1 { animation-name: k-f-replicate-a1; }
+        .k-f-replicate-a2 { animation-name: k-f-replicate-a2; }
+        .k-f-replicate-b1 { animation-name: k-f-replicate-b1; }
+        .k-f-replicate-b2 { animation-name: k-f-replicate-b2; }
+        .k-bm0 { animation-name: k-bm0; }
+        .k-bm1 { animation-name: k-bm1; }
+        .k-bm2 { animation-name: k-bm2; }
+        .k-bm3 { animation-name: k-bm3; }
+        .k-bm4 { animation-name: k-bm4; }
+        .k-bm5 { animation-name: k-bm5; }
+        .k-bm6 { animation-name: k-bm6; }
+        .k-bm7 { animation-name: k-bm7; }
+        .k-bs0 { animation-name: k-bs0; }
+        .k-bs1 { animation-name: k-bs1; }
+        .k-bs2 { animation-name: k-bs2; }
+        .k-bs3 { animation-name: k-bs3; }
+        .k-bs4 { animation-name: k-bs4; }
+        .k-bs5 { animation-name: k-bs5; }
+        .k-bs6 { animation-name: k-bs6; }
+        .k-bs7 { animation-name: k-bs7; }
+        .k-e1 { animation-name: k-e1; }
+        .k-e2 { animation-name: k-e2; }
+        .k-fs { animation-name: k-fs; }
+        .k-fp { animation-name: k-fp; }
+        .k-fb { animation-name: k-fb; }
+        .k-blink { animation-name: k-blink; }
+        .k-v0 { animation-name: k-v0; }
+        .k-v1 { animation-name: k-v1; }
+        .k-v2 { animation-name: k-v2; }
+      }
+      @keyframes k-r1 { 0%, 11.812%, 100% { opacity: 1; } 13.125%, 24.938%, 26.25%, 38.063%, 39.375%, 52.437%, 53.75%, 65.562%, 66.875%, 84.312%, 85.625%, 98.688% { opacity: 0.55; } }
+      @keyframes k-s1 { 0%, 11.812%, 100% { opacity: 1; } 13.125%, 24.938%, 26.25%, 38.063%, 39.375%, 52.437%, 53.75%, 65.562%, 66.875%, 84.312%, 85.625%, 98.688% { opacity: 0; } }
+      @keyframes k-p1 { 0% { stroke-dashoffset: 73.4px; opacity: 0; } 0.781%, 12.344% { opacity: 1; } 13.125%, 100% { stroke-dashoffset: 0px; opacity: 0; } }
+      @keyframes k-r2 { 0%, 11.812%, 26.25%, 38.063%, 39.375%, 52.437%, 53.75%, 65.562%, 66.875%, 84.312%, 85.625%, 98.688%, 100% { opacity: 0.55; } 13.125%, 24.938% { opacity: 1; } }
+      @keyframes k-s2 { 0%, 11.812%, 26.25%, 38.063%, 39.375%, 52.437%, 53.75%, 65.562%, 66.875%, 84.312%, 85.625%, 98.688%, 100% { opacity: 0; } 13.125%, 24.938% { opacity: 1; } }
+      @keyframes k-p2 { 0%, 13.125% { stroke-dashoffset: 105.4px; opacity: 0; } 13.906%, 25.469% { opacity: 1; } 26.25%, 100% { stroke-dashoffset: 0px; opacity: 0; } }
+      @keyframes k-r3 { 0%, 11.812%, 13.125%, 24.938%, 39.375%, 52.437%, 53.75%, 65.562%, 66.875%, 84.312%, 85.625%, 98.688%, 100% { opacity: 0.55; } 26.25%, 38.063% { opacity: 1; } }
+      @keyframes k-s3 { 0%, 11.812%, 13.125%, 24.938%, 39.375%, 52.437%, 53.75%, 65.562%, 66.875%, 84.312%, 85.625%, 98.688%, 100% { opacity: 0; } 26.25%, 38.063% { opacity: 1; } }
+      @keyframes k-p3 { 0%, 26.25% { stroke-dashoffset: 54.4px; opacity: 0; } 27.031%, 38.594% { opacity: 1; } 39.375%, 100% { stroke-dashoffset: 0px; opacity: 0; } }
+      @keyframes k-r4 { 0%, 11.812%, 13.125%, 24.938%, 26.25%, 38.063%, 53.75%, 65.562%, 66.875%, 84.312%, 85.625%, 98.688%, 100% { opacity: 0.55; } 39.375%, 52.437% { opacity: 1; } }
+      @keyframes k-s4 { 0%, 11.812%, 13.125%, 24.938%, 26.25%, 38.063%, 53.75%, 65.562%, 66.875%, 84.312%, 85.625%, 98.688%, 100% { opacity: 0; } 39.375%, 52.437% { opacity: 1; } }
+      @keyframes k-p4 { 0%, 39.375% { stroke-dashoffset: 120.4px; opacity: 0; } 40.156%, 52.969% { opacity: 1; } 53.75%, 100% { stroke-dashoffset: 0px; opacity: 0; } }
+      @keyframes k-r5 { 0%, 11.812%, 13.125%, 24.938%, 26.25%, 38.063%, 39.375%, 52.437%, 66.875%, 84.312%, 85.625%, 98.688%, 100% { opacity: 0.55; } 53.75%, 65.562% { opacity: 1; } }
+      @keyframes k-s5 { 0%, 11.812%, 13.125%, 24.938%, 26.25%, 38.063%, 39.375%, 52.437%, 66.875%, 84.312%, 85.625%, 98.688%, 100% { opacity: 0; } 53.75%, 65.562% { opacity: 1; } }
+      @keyframes k-p5 { 0%, 53.75% { stroke-dashoffset: 81.4px; opacity: 0; } 54.531%, 66.094% { opacity: 1; } 66.875%, 100% { stroke-dashoffset: 0px; opacity: 0; } }
+      @keyframes k-r6 { 0%, 11.812%, 13.125%, 24.938%, 26.25%, 38.063%, 39.375%, 52.437%, 53.75%, 65.562%, 85.625%, 98.688%, 100% { opacity: 0.55; } 66.875%, 84.312% { opacity: 1; } }
+      @keyframes k-s6 { 0%, 11.812%, 13.125%, 24.938%, 26.25%, 38.063%, 39.375%, 52.437%, 53.75%, 65.562%, 85.625%, 98.688%, 100% { opacity: 0; } 66.875%, 84.312% { opacity: 1; } }
+      @keyframes k-p6 { 0%, 66.875% { stroke-dashoffset: 76.4px; opacity: 0; } 67.656%, 84.844% { opacity: 1; } 85.625%, 100% { stroke-dashoffset: 0px; opacity: 0; } }
+      @keyframes k-r7 { 0%, 11.812%, 13.125%, 24.938%, 26.25%, 38.063%, 39.375%, 52.437%, 53.75%, 65.562%, 66.875%, 84.312%, 100% { opacity: 0.55; } 85.625%, 98.688% { opacity: 1; } }
+      @keyframes k-s7 { 0%, 11.812%, 13.125%, 24.938%, 26.25%, 38.063%, 39.375%, 52.437%, 53.75%, 65.562%, 66.875%, 84.312%, 100% { opacity: 0; } 85.625%, 98.688% { opacity: 1; } }
+      @keyframes k-p7 { 0%, 85.625% { stroke-dashoffset: 71.4px; opacity: 0; } 86.406%, 99.219% { opacity: 1; } 100% { stroke-dashoffset: 0px; opacity: 0; } }
+      @keyframes k-s1357 { 0%, 11.812%, 26.25%, 38.063%, 53.75%, 65.562%, 85.625%, 98.688%, 100% { opacity: 1; } 13.125%, 24.938%, 39.375%, 52.437%, 66.875%, 84.312% { opacity: 0; } }
+      @keyframes k-off { 0%, 100% { opacity: 0; } }
+      @keyframes k-x4 { 0%, 11.812%, 13.125%, 24.938%, 26.25%, 38.063%, 53.75%, 65.562%, 66.875%, 84.312%, 85.625%, 98.688%, 100% { opacity: 1; } 39.375%, 52.437% { opacity: 0; } }
+      @keyframes k-x5 { 0%, 11.812%, 13.125%, 24.938%, 26.25%, 38.063%, 39.375%, 52.437%, 66.875%, 84.312%, 85.625%, 98.688%, 100% { opacity: 1; } 53.75%, 65.562% { opacity: 0; } }
+      @keyframes k-x6 { 0%, 11.812%, 13.125%, 24.938%, 26.25%, 38.063%, 39.375%, 52.437%, 53.75%, 65.562%, 85.625%, 98.688%, 100% { opacity: 1; } 66.875%, 84.312% { opacity: 0; } }
+      @keyframes k-x7 { 0%, 11.812%, 13.125%, 24.938%, 26.25%, 38.063%, 39.375%, 52.437%, 53.75%, 65.562%, 66.875%, 84.312%, 100% { opacity: 1; } 85.625%, 98.688% { opacity: 0; } }
+      @keyframes k-d4 { 0%, 38.063% { stroke-dashoffset: 120px; } 53.75%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-d5 { 0%, 52.437% { stroke-dashoffset: 120px; } 66.875%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-d6 { 0%, 65.562% { stroke-dashoffset: 144px; } 85.625%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-d7 { 0%, 84.312% { stroke-dashoffset: 120px; } 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-n3 { 0%, 11.812%, 13.125%, 24.938%, 39.375%, 52.437%, 53.75%, 65.562%, 66.875%, 84.312%, 85.625%, 98.688%, 100% { opacity: 0.62; } 26.25%, 38.063% { opacity: 1; } }
+      @keyframes k-s23 { 0%, 11.812%, 39.375%, 52.437%, 53.75%, 65.562%, 66.875%, 84.312%, 85.625%, 98.688%, 100% { opacity: 0; } 13.125%, 24.938%, 26.25%, 38.063% { opacity: 1; } }
+      @keyframes k-n23 { 0%, 11.812%, 39.375%, 52.437%, 53.75%, 65.562%, 66.875%, 84.312%, 85.625%, 98.688%, 100% { opacity: 0.62; } 13.125%, 24.938%, 26.25%, 38.063% { opacity: 1; } }
+      @keyframes k-s127 { 0%, 11.812%, 13.125%, 24.938%, 85.625%, 98.688%, 100% { opacity: 1; } 26.25%, 38.063%, 39.375%, 52.437%, 53.75%, 65.562%, 66.875%, 84.312% { opacity: 0; } }
+      @keyframes k-n127 { 0%, 11.812%, 13.125%, 24.938%, 85.625%, 98.688%, 100% { opacity: 1; } 26.25%, 38.063%, 39.375%, 52.437%, 53.75%, 65.562%, 66.875%, 84.312% { opacity: 0.62; } }
+      @keyframes k-n6 { 0%, 11.812%, 13.125%, 24.938%, 26.25%, 38.063%, 39.375%, 52.437%, 53.75%, 65.562%, 85.625%, 98.688%, 100% { opacity: 0.62; } 66.875%, 84.312% { opacity: 1; } }
+      @keyframes k-s25 { 0%, 11.812%, 26.25%, 38.063%, 39.375%, 52.437%, 66.875%, 84.312%, 85.625%, 98.688%, 100% { opacity: 0; } 13.125%, 24.938%, 53.75%, 65.562% { opacity: 1; } }
+      @keyframes k-n25 { 0%, 11.812%, 26.25%, 38.063%, 39.375%, 52.437%, 66.875%, 84.312%, 85.625%, 98.688%, 100% { opacity: 0.62; } 13.125%, 24.938%, 53.75%, 65.562% { opacity: 1; } }
+      @keyframes k-n13457 { 0%, 11.812%, 26.25%, 38.063%, 39.375%, 52.437%, 53.75%, 65.562%, 85.625%, 98.688%, 100% { opacity: 1; } 13.125%, 24.938%, 66.875%, 84.312% { opacity: 0.62; } }
+      @keyframes k-nm { 0%, 11.812%, 26.25%, 38.063%, 39.375%, 52.437%, 53.75%, 65.562%, 85.625%, 98.688%, 100% { opacity: 1; } 13.125%, 24.938% { opacity: 0.62; } 66.875%, 84.312% { opacity: 0.86; } }
+      @keyframes k-n134567 { 0%, 11.812%, 26.25%, 38.063%, 39.375%, 52.437%, 53.75%, 65.562%, 66.875%, 84.312%, 85.625%, 98.688%, 100% { opacity: 1; } 13.125%, 24.938% { opacity: 0.62; } }
+      @keyframes k-s46 { 0%, 11.812%, 13.125%, 24.938%, 26.25%, 38.063%, 53.75%, 65.562%, 85.625%, 98.688%, 100% { opacity: 0; } 39.375%, 52.437%, 66.875%, 84.312% { opacity: 1; } }
+      @keyframes k-n4 { 0%, 11.812%, 13.125%, 24.938%, 26.25%, 38.063%, 53.75%, 65.562%, 66.875%, 84.312%, 85.625%, 98.688%, 100% { opacity: 0.62; } 39.375%, 52.437% { opacity: 1; } }
+      @keyframes k-n7 { 0%, 11.812%, 13.125%, 24.938%, 26.25%, 38.063%, 39.375%, 52.437%, 53.75%, 65.562%, 66.875%, 84.312%, 100% { opacity: 0.62; } 85.625%, 98.688% { opacity: 1; } }
+      @keyframes k-f-register { 0%, 100% { stroke-dashoffset: 241.82px; } 13.125%, 98.675% { stroke-dashoffset: 0px; } 98.688% { stroke-dashoffset: 266px; } }
+      @keyframes k-f-route-proxy { 0%, 11.812%, 19.031%, 26.25%, 100% { stroke-dashoffset: 5000.00px; } 15.422%, 22.641% { stroke-dashoffset: 4746.39px; } }
+      @keyframes k-f-route-producer { 0%, 11.812%, 19.031%, 26.25%, 100% { stroke-dashoffset: 5000.00px; } 15.422%, 22.641% { stroke-dashoffset: 4574.89px; } }
+      @keyframes k-f-route-consumer { 0%, 11.812%, 19.031%, 26.25%, 100% { stroke-dashoffset: 5000.00px; } 15.422%, 22.641% { stroke-dashoffset: 4497.12px; } }
+      @keyframes k-f-grpc { 0%, 24.938% { stroke-dashoffset: 156px; } 39.375%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-proxy-broker { 0%, 24.938% { stroke-dashoffset: 514.63px; } 39.375%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-send { 0%, 24.938% { stroke-dashoffset: 355.33px; } 39.375%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-store { 0%, 38.063% { stroke-dashoffset: 180px; } 53.75%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-deliver { 0%, 52.437% { stroke-dashoffset: 355.33px; } 66.875%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-ack { 0%, 52.437% { stroke-dashoffset: 246px; } 66.875%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-control { 0%, 65.562% { stroke-dashoffset: 342px; } 85.625%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-ops-cli { 0%, 84.312% { stroke-dashoffset: 743.09px; } 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-ops-dashboard { 0%, 84.312% { stroke-dashoffset: 427.32px; } 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-ops-mcp { 0%, 84.312% { stroke-dashoffset: 192px; } 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-ops-control { 0%, 84.312% { stroke-dashoffset: 336.92px; } 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-ops-client { 0%, 84.312% { stroke-dashoffset: 140px; } 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-ops-namesrv { 0%, 84.312% { stroke-dashoffset: 663px; } 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-ops-cluster-a { 0%, 84.312% { stroke-dashoffset: 120px; } 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-ops-cluster-b { 0%, 84.312% { stroke-dashoffset: 120px; } 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-replicate-a1 { 0%, 38.063% { stroke-dashoffset: 156px; } 53.75%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-replicate-a2 { 0%, 38.063% { stroke-dashoffset: 156px; } 53.75%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-replicate-b1 { 0%, 38.063% { stroke-dashoffset: 156px; } 53.75%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-replicate-b2 { 0%, 38.063% { stroke-dashoffset: 156px; } 53.75%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-bm0 { 0%, 40.625%, 46.875%, 47.5%, 53.75%, 100% { opacity: 0; } 41.094%, 45.938%, 47.969%, 52.813% { opacity: 1; } }
+      @keyframes k-bm1 { 0%, 41%, 46.875%, 47.875%, 53.75%, 100% { opacity: 0; } 41.469%, 45.938%, 48.344%, 52.813% { opacity: 1; } }
+      @keyframes k-bm2 { 0%, 41.375%, 46.875%, 48.25%, 53.75%, 100% { opacity: 0; } 41.844%, 45.938%, 48.719%, 52.813% { opacity: 1; } }
+      @keyframes k-bm3 { 0%, 41.75%, 46.875%, 48.625%, 53.75%, 100% { opacity: 0; } 42.219%, 45.938%, 49.094%, 52.813% { opacity: 1; } }
+      @keyframes k-bm4 { 0%, 42.125%, 46.875%, 49%, 53.75%, 100% { opacity: 0; } 42.594%, 45.938%, 49.469%, 52.813% { opacity: 1; } }
+      @keyframes k-bm5 { 0%, 42.5%, 46.875%, 49.375%, 53.75%, 100% { opacity: 0; } 42.969%, 45.938%, 49.844%, 52.813% { opacity: 1; } }
+      @keyframes k-bm6 { 0%, 42.875%, 46.875%, 49.75%, 53.75%, 100% { opacity: 0; } 43.344%, 45.938%, 50.219%, 52.813% { opacity: 1; } }
+      @keyframes k-bm7 { 0%, 43.25%, 46.875%, 50.125%, 53.75%, 100% { opacity: 0; } 43.719%, 45.938%, 50.594%, 52.813% { opacity: 1; } }
+      @keyframes k-bs0 { 0%, 42.25%, 48.5%, 49.125%, 53.75%, 100% { opacity: 0; } 42.719%, 47.562%, 49.594%, 52.813% { opacity: 1; } }
+      @keyframes k-bs1 { 0%, 42.625%, 48.5%, 49.5%, 53.75%, 100% { opacity: 0; } 43.094%, 47.562%, 49.969%, 52.813% { opacity: 1; } }
+      @keyframes k-bs2 { 0%, 43%, 48.5%, 49.875%, 53.75%, 100% { opacity: 0; } 43.469%, 47.562%, 50.344%, 52.813% { opacity: 1; } }
+      @keyframes k-bs3 { 0%, 43.375%, 48.5%, 50.25%, 53.75%, 100% { opacity: 0; } 43.844%, 47.562%, 50.719%, 52.813% { opacity: 1; } }
+      @keyframes k-bs4 { 0%, 43.75%, 48.5%, 50.625%, 53.75%, 100% { opacity: 0; } 44.219%, 47.562%, 51.094%, 52.813% { opacity: 1; } }
+      @keyframes k-bs5 { 0%, 44.125%, 48.5%, 51%, 53.75%, 100% { opacity: 0; } 44.594%, 47.562%, 51.469%, 52.813% { opacity: 1; } }
+      @keyframes k-bs6 { 0%, 44.5%, 48.5%, 51.375%, 53.75%, 100% { opacity: 0; } 44.969%, 47.562%, 51.844%, 52.813% { opacity: 1; } }
+      @keyframes k-bs7 { 0%, 44.875%, 48.5%, 51.75%, 53.75%, 100% { opacity: 0; } 45.344%, 47.562%, 52.219%, 52.813% { opacity: 1; } }
+      @keyframes k-e1 { 0%, 44.063%, 48.438%, 100% { opacity: 0; } 44.844%, 47.188% { opacity: 1; } }
+      @keyframes k-e2 { 0%, 47.188%, 51.562%, 100% { opacity: 0; } 47.969%, 50.313% { opacity: 1; } }
+      @keyframes k-fs { 0%, 74.375%, 85.625%, 100% { opacity: 1; } 75.375%, 84.688% { opacity: 0; } }
+      @keyframes k-fp { 0%, 75%, 85.625%, 100% { opacity: 0; } 76.312%, 84.688% { opacity: 1; } }
+      @keyframes k-fb { 0%, 74.688%, 85.625%, 100% { opacity: 0; } 76.875%, 84.312% { opacity: 1; } }
+      @keyframes k-blink { 0%, 66.875%, 68.278%, 69.687%, 71.091%, 72.5%, 73.903%, 75.312%, 76.716%, 78.125%, 79.528%, 80.937%, 82.341%, 83.75%, 85.153% { opacity: 1; } 68.281%, 69.684%, 71.094%, 72.497%, 73.906%, 75.309%, 76.719%, 78.122%, 79.531%, 80.934%, 82.344%, 83.747%, 85.156%, 85.625%, 100% { opacity: 0.35; } }
+      @keyframes k-v0 { 0%, 65.562%, 66.875%, 70.312%, 73.75%, 77.188%, 80.625%, 84.063%, 100% { opacity: 0; } 68.594%, 72.031%, 75.469%, 78.906%, 82.344% { opacity: 1; } }
+      @keyframes k-v1 { 0%, 65.562%, 67.438%, 70.875%, 74.312%, 77.75%, 81.188%, 84.625%, 100% { opacity: 0; } 69.156%, 72.594%, 76.031%, 79.469%, 82.906% { opacity: 1; } }
+      @keyframes k-v2 { 0%, 65.562%, 68%, 71.438%, 74.875%, 78.312%, 81.75%, 85.188%, 100% { opacity: 0; } 69.719%, 73.156%, 76.594%, 80.031%, 83.469% { opacity: 1; } }
+    </style>
+  </defs>
+  <rect width="1400" height="962" rx="28" class="page"/>
+  <rect width="1400" height="962" rx="28" fill="url(#glow-violet)"/>
+  <rect width="1400" height="962" rx="28" fill="url(#glow-orange)"/>
+
+  <!-- Heading -->
+  <text x="40" y="58" class="ti">RocketMQ-Rust Architecture</text>
+  <text x="40" y="82" class="le">Logical topology; deployment counts are illustrative.</text>
+
+  <!-- The tour: the step in effect is marked, and its bar fills while it plays -->
+  <g class="k k-r1">
+    <rect x="577.2" y="40" width="97.4" height="34" rx="12" class="sc"/>
+    <rect x="577.2" y="40" width="97.4" height="34" rx="12" class="sh o k k-s1"/>
+    <text x="589.2" y="61.5" class="si">01</text>
+    <text x="589.2" y="61.5" class="si sa o k k-s1">01</text>
+    <text x="611.6" y="61.5" class="st">Register</text>
+    <path d="M 589.2 73 H 662.6" class="sp o k k-p1" stroke-dasharray="73.4 73.4"/>
+  </g>
+  <g class="k k-r2">
+    <rect x="682.6" y="40" width="129.4" height="34" rx="12" class="sc"/>
+    <rect x="682.6" y="40" width="129.4" height="34" rx="12" class="sh o k k-s2"/>
+    <text x="694.6" y="61.5" class="si">02</text>
+    <text x="694.6" y="61.5" class="si sa o k k-s2">02</text>
+    <text x="717" y="61.5" class="st">Route lookup</text>
+    <path d="M 694.6 73 H 800" class="sp o k k-p2" stroke-dasharray="105.4 105.4"/>
+  </g>
+  <g class="k k-r3">
+    <rect x="820" y="40" width="78.4" height="34" rx="12" class="sc"/>
+    <rect x="820" y="40" width="78.4" height="34" rx="12" class="sh o k k-s3"/>
+    <text x="832" y="61.5" class="si">03</text>
+    <text x="832" y="61.5" class="si sa o k k-s3">03</text>
+    <text x="854.4" y="61.5" class="st">Send</text>
+    <path d="M 832 73 H 886.4" class="sp o k k-p3" stroke-dasharray="54.4 54.4"/>
+  </g>
+  <g class="k k-r4">
+    <rect x="906.4" y="40" width="144.4" height="34" rx="12" class="sc"/>
+    <rect x="906.4" y="40" width="144.4" height="34" rx="12" class="sh o k k-s4"/>
+    <text x="918.4" y="61.5" class="si">04</text>
+    <text x="918.4" y="61.5" class="si sa o k k-s4">04</text>
+    <text x="940.8" y="61.5" class="st">Store · replicate</text>
+    <path d="M 918.4 73 H 1038.8" class="sp o k k-p4" stroke-dasharray="120.4 120.4"/>
+  </g>
+  <g class="k k-r5">
+    <rect x="1058.8" y="40" width="105.4" height="34" rx="12" class="sc"/>
+    <rect x="1058.8" y="40" width="105.4" height="34" rx="12" class="sh o k k-s5"/>
+    <text x="1070.8" y="61.5" class="si">05</text>
+    <text x="1070.8" y="61.5" class="si sa o k k-s5">05</text>
+    <text x="1093.2" y="61.5" class="st">Consume</text>
+    <path d="M 1070.8 73 H 1152.2" class="sp o k k-p5" stroke-dasharray="81.4 81.4"/>
+  </g>
+  <g class="k k-r6">
+    <rect x="1172.2" y="40" width="100.4" height="34" rx="12" class="sc"/>
+    <rect x="1172.2" y="40" width="100.4" height="34" rx="12" class="sh o k k-s6"/>
+    <text x="1184.2" y="61.5" class="si">06</text>
+    <text x="1184.2" y="61.5" class="si sa o k k-s6">06</text>
+    <text x="1206.6" y="61.5" class="st">Fail over</text>
+    <path d="M 1184.2 73 H 1260.6" class="sp o k k-p6" stroke-dasharray="76.4 76.4"/>
+  </g>
+  <g class="k k-r7">
+    <rect x="1280.6" y="40" width="95.4" height="34" rx="12" class="sc"/>
+    <rect x="1280.6" y="40" width="95.4" height="34" rx="12" class="sh o k k-s7"/>
+    <text x="1292.6" y="61.5" class="si">07</text>
+    <text x="1292.6" y="61.5" class="si sa o k k-s7">07</text>
+    <text x="1315" y="61.5" class="st">Operate</text>
+    <path d="M 1292.6 73 H 1364" class="sp o k k-p7" stroke-dasharray="71.4 71.4"/>
+  </g>
+
+  <!-- Card -->
+  <rect x="24" y="104" width="1352" height="834" rx="24" class="card"/>
+  <rect x="24" y="104" width="1352" height="834" rx="24" class="dots"/>
+
+  <!-- Outlines: the broker clusters and the two panels under them -->
+  <g class="ts gl k k-s1357"><rect x="330" y="340" width="740" height="290" rx="24" class="g5"/><rect x="330" y="340" width="740" height="290" rx="24" class="g4"/><rect x="330" y="340" width="740" height="290" rx="24" class="g3"/><rect x="330" y="340" width="740" height="290" rx="24" class="g2"/><rect x="330" y="340" width="740" height="290" rx="24" class="g1"/></g>
+  <rect x="330" y="340" width="740" height="290" rx="24" class="grp"/>
+  <rect x="330" y="340" width="740" height="290" rx="24" class="ts nr k k-s1357"/>
+  <text x="346" y="364" class="gt">BROKER CLUSTERS</text>
+  <text x="1054" y="364" class="nn" text-anchor="end">HA replication · sync / async</text>
+  <rect x="346" y="378" width="334" height="200" rx="18" class="clu"/>
+  <text x="362" y="400" class="gt">CLUSTER A</text>
+  <rect x="720" y="378" width="334" height="200" rx="18" class="clu"/>
+  <text x="736" y="400" class="gt">CLUSTER B</text>
+  <text x="346" y="607" class="lb">Topics · Offsets · Filtering · Transactions · Timer · POP</text>
+  <rect x="48" y="660" width="470" height="164" rx="20" class="grp"/>
+  <text x="68" y="686" class="gt">INSIDE EACH BROKER · STORAGE</text>
+  <text x="502" y="686" class="nn" text-anchor="end">rocketmq-store · StorePorts</text>
+  <rect x="536" y="660" width="520" height="164" rx="20" class="grp"/>
+  <text x="552" y="686" class="gt">OPERATIONS &amp; AI</text>
+  <text x="1040" y="686" class="nn" text-anchor="end">separate processes · off the message path</text>
+
+  <!-- Links -->
+  <path d="M 640 340 V 264" class="r"/>
+  <g class="tc"><path d="M 640 340 V 264" class="rt k k-off"/></g>
+  <g class="tc a k k-s1"><path d="M 640 340 V 264" class="rg"/><path d="M 640 340 V 264" class="rh"/></g>
+  <path d="M 248 222 C 330 222 410 196 500 196" class="r"/>
+  <g class="tc"><path d="M 248 222 C 330 222 410 196 500 196" class="rt k k-off"/></g>
+  <g class="tc a k k-s2"><path d="M 248 222 C 330 222 410 196 500 196" class="rg"/><path d="M 248 222 C 330 222 410 196 500 196" class="rh"/></g>
+  <path d="M 148 410 V 374 C 148 340 200 330 262 326 C 380 318 430 250 500 240" class="r"/>
+  <g class="tc"><path d="M 148 410 V 374 C 148 340 200 330 262 326 C 380 318 430 250 500 240" class="rt k k-off"/></g>
+  <g class="tc a k k-s2"><path d="M 148 410 V 374 C 148 340 200 330 262 326 C 380 318 430 250 500 240" class="rg"/><path d="M 148 410 V 374 C 148 340 200 330 262 326 C 380 318 430 250 500 240" class="rh"/></g>
+  <path d="M 1252 410 V 342 Q 1252 312 1222 312 H 960 Q 930 312 930 282 V 256 Q 930 226 904 226 H 900" class="r"/>
+  <g class="tc"><path d="M 1252 410 V 342 Q 1252 312 1222 312 H 960 Q 930 312 930 282 V 256 Q 930 226 904 226 H 900" class="rt k k-off"/></g>
+  <g class="tc a k k-s2"><path d="M 1252 410 V 342 Q 1252 312 1222 312 H 960 Q 930 312 930 282 V 256 Q 930 226 904 226 H 900" class="rg"/><path d="M 1252 410 V 342 Q 1252 312 1222 312 H 960 Q 930 312 930 282 V 256 Q 930 226 904 226 H 900" class="rh"/></g>
+  <path d="M 148 170 V 196" class="r"/>
+  <g class="tp"><path d="M 148 170 V 196" class="rt k k-off"/></g>
+  <g class="tp a k k-s3"><path d="M 148 170 V 196" class="rg"/><path d="M 148 170 V 196" class="rh"/></g>
+  <path d="M 248 280 C 320 280 392 290 392 340" class="r"/>
+  <g class="tp"><path d="M 248 280 C 320 280 392 290 392 340" class="rt k k-off"/></g>
+  <g class="tp a k k-s3"><path d="M 248 280 C 320 280 392 290 392 340" class="rg"/><path d="M 248 280 C 320 280 392 290 392 340" class="rh"/></g>
+  <path d="M 248 448 H 330" class="r"/>
+  <g class="tp"><path d="M 248 448 H 330" class="rt k k-off"/></g>
+  <g class="tp a k k-s3"><path d="M 248 448 H 330" class="rg"/><path d="M 248 448 H 330" class="rh"/></g>
+  <path d="M 440 630 V 660" class="r d k k-x4"/>
+  <g class="ts"><path d="M 440 630 V 660" class="rt d k k-off"/></g>
+  <g class="ts a k k-s4"><path d="M 440 630 V 660" class="rg"/><path d="M 440 630 V 660" class="rh d k k-d4"/></g>
+  <path d="M 1070 442 H 1152" class="r"/>
+  <g class="tm"><path d="M 1070 442 H 1152" class="rt k k-off"/></g>
+  <g class="tm a k k-s5"><path d="M 1070 442 H 1152" class="rg"/><path d="M 1070 442 H 1152" class="rh"/></g>
+  <path d="M 1152 468 H 1070" class="r d k k-x5"/>
+  <g class="tm"><path d="M 1152 468 H 1070" class="rt d k k-off"/></g>
+  <g class="tm a k k-s5"><path d="M 1152 468 H 1070" class="rg"/><path d="M 1152 468 H 1070" class="rh d k k-d5"/></g>
+  <path d="M 1040 264 V 340" class="r d k k-x6"/>
+  <g class="tc"><path d="M 1040 264 V 340" class="rt d k k-off"/></g>
+  <g class="tc a k k-s6"><path d="M 1040 264 V 340" class="rg"/><path d="M 1040 264 V 340" class="rh d k k-d6"/></g>
+  <path d="M 611 774 C 611 756 790 762 790 742" class="r"/>
+  <g class="to"><path d="M 611 774 C 611 756 790 762 790 742" class="rt k k-off"/></g>
+  <g class="to a k k-s7"><path d="M 611 774 C 611 756 790 762 790 742" class="rg"/><path d="M 611 774 C 611 756 790 762 790 742" class="rh"/></g>
+  <path d="M 745 774 C 745 758 820 760 820 742" class="r"/>
+  <g class="to"><path d="M 745 774 C 745 758 820 760 820 742" class="rt k k-off"/></g>
+  <g class="to a k k-s7"><path d="M 745 774 C 745 758 820 760 820 742" class="rg"/><path d="M 745 774 C 745 758 820 760 820 742" class="rh"/></g>
+  <path d="M 872 774 V 742" class="r"/>
+  <g class="to"><path d="M 872 774 V 742" class="rt k k-off"/></g>
+  <g class="to a k k-s7"><path d="M 872 774 V 742" class="rg"/><path d="M 872 774 V 742" class="rh"/></g>
+  <path d="M 985 774 C 985 758 930 760 930 742" class="r"/>
+  <g class="to"><path d="M 985 774 C 985 758 930 760 930 742" class="rt k k-off"/></g>
+  <g class="to a k k-s7"><path d="M 985 774 C 985 758 930 760 930 742" class="rg"/><path d="M 985 774 C 985 758 930 760 930 742" class="rh"/></g>
+  <path d="M 770 724 H 750" class="r"/>
+  <g class="to"><path d="M 770 724 H 750" class="rt k k-off"/></g>
+  <g class="to a k k-s7"><path d="M 770 724 H 750" class="rg"/><path d="M 770 724 H 750" class="rh"/></g>
+  <path d="M 700 706 V 264" class="r d k k-x7"/>
+  <g class="to"><path d="M 700 706 V 264" class="rt d k k-off"/></g>
+  <g class="to a k k-s7"><path d="M 700 706 V 264" class="rg"/><path d="M 700 706 V 264" class="rh d k k-d7"/></g>
+  <path d="M 700 548 H 680" class="r d k k-x7"/>
+  <g class="to"><path d="M 700 548 H 680" class="rt d k k-off"/></g>
+  <g class="to a k k-s7"><path d="M 700 548 H 680" class="rg"/><path d="M 700 548 H 680" class="rh d k k-d7"/></g>
+  <path d="M 700 548 H 720" class="r d k k-x7"/>
+  <g class="to"><path d="M 700 548 H 720" class="rt d k k-off"/></g>
+  <g class="to a k k-s7"><path d="M 700 548 H 720" class="rg"/><path d="M 700 548 H 720" class="rh d k k-d7"/></g>
+  <path d="M 434 474 V 500" class="r d k k-x4"/>
+  <g class="ts"><path d="M 434 474 V 500" class="rt d k k-off"/></g>
+  <g class="ts a k k-s4"><path d="M 434 474 V 500" class="rg"/><path d="M 434 474 V 500" class="rh d k k-d4"/></g>
+  <path d="M 592 474 V 500" class="r d k k-x4"/>
+  <g class="ts"><path d="M 592 474 V 500" class="rt d k k-off"/></g>
+  <g class="ts a k k-s4"><path d="M 592 474 V 500" class="rg"/><path d="M 592 474 V 500" class="rh d k k-d4"/></g>
+  <path d="M 808 474 V 500" class="r d k k-x4"/>
+  <g class="ts"><path d="M 808 474 V 500" class="rt d k k-off"/></g>
+  <g class="ts a k k-s4"><path d="M 808 474 V 500" class="rg"/><path d="M 808 474 V 500" class="rh d k k-d4"/></g>
+  <path d="M 966 474 V 500" class="r d k k-x4"/>
+  <g class="ts"><path d="M 966 474 V 500" class="rt d k k-off"/></g>
+  <g class="ts a k k-s4"><path d="M 966 474 V 500" class="rg"/><path d="M 966 474 V 500" class="rh d k k-d4"/></g>
+
+  <!-- What the links carry -->
+  <text x="366" y="198" class="lb" text-anchor="middle">Route lookup</text>
+  <g class="tc"><text x="366" y="198" class="lb lt o k k-s2" text-anchor="middle">Route lookup</text></g>
+  <text x="158" y="388" class="lb">Route lookup</text>
+  <g class="tc"><text x="158" y="388" class="lb lt o k k-s2">Route lookup</text></g>
+  <text x="1242" y="372" class="lb" text-anchor="end">Route lookup</text>
+  <g class="tc"><text x="1242" y="372" class="lb lt o k k-s2" text-anchor="end">Route lookup</text></g>
+  <text x="630" y="308" class="lb" text-anchor="end">Register / Heartbeat</text>
+  <g class="tc"><text x="630" y="308" class="lb lt o k k-s1" text-anchor="end">Register / Heartbeat</text></g>
+  <text x="289" y="434" class="lb" text-anchor="middle">Send</text>
+  <g class="tp"><text x="289" y="434" class="lb lt o k k-s3" text-anchor="middle">Send</text></g>
+  <text x="1111" y="428" class="lb" text-anchor="middle">Messages</text>
+  <g class="tm"><text x="1111" y="428" class="lb lt o k k-s5" text-anchor="middle">Messages</text></g>
+  <text x="1111" y="486" class="lb" text-anchor="middle">Pull · ACK</text>
+  <g class="tm"><text x="1111" y="486" class="lb lt o k k-s5" text-anchor="middle">Pull · ACK</text></g>
+  <text x="1111" y="500" class="lb" text-anchor="middle">Offset</text>
+  <g class="tm"><text x="1111" y="500" class="lb lt o k k-s5" text-anchor="middle">Offset</text></g>
+  <text x="1052" y="294" class="lb">Heartbeat / Role control</text>
+  <g class="tc"><text x="1052" y="294" class="lb lt o k k-s6">Heartbeat / Role control</text></g>
+
+  <!-- Top row: gRPC clients and the Proxy, the NameServer cluster, the Controller cluster -->
+  <g class="tp gl k k-s3"><rect x="48" y="132" width="200" height="38" rx="11" class="g3"/><rect x="48" y="132" width="200" height="38" rx="11" class="g2"/><rect x="48" y="132" width="200" height="38" rx="11" class="g1"/></g>
+  <g class="k k-n3" transform="translate(48 132)">
+    <rect class="cb" width="200" height="38" rx="11"/>
+    <text class="ct" x="10" y="17">gRPC clients</text>
+    <text class="cs" x="10" y="30">RocketMQ gRPC SDKs</text>
+  </g>
+  <rect x="48" y="132" width="200" height="38" rx="11" class="tp nr k k-s3"/>
+  <g class="tp gl k k-s23"><rect x="48" y="196" width="200" height="114" rx="16" class="g5"/><rect x="48" y="196" width="200" height="114" rx="16" class="g4"/><rect x="48" y="196" width="200" height="114" rx="16" class="g3"/><rect x="48" y="196" width="200" height="114" rx="16" class="g2"/><rect x="48" y="196" width="200" height="114" rx="16" class="g1"/></g>
+  <g class="k k-n23" transform="translate(48 196)">
+    <rect class="nb" width="200" height="114" rx="16"/>
+    <text class="nt" x="18" y="31">Proxy</text>
+    <text class="ns" x="18" y="51">gRPC v2 MessagingService</text>
+    <g class="bd or" transform="translate(140 13)"><rect width="46" height="18" rx="9"/><text x="23" y="12.6">:8081</text></g>
+    <text class="nn" x="18" y="71">proxy-core</text>
+    <text class="nn" x="18" y="85">proxy-cluster</text>
+    <text class="nn" x="18" y="99">proxy-local</text>
+  </g>
+  <rect x="48" y="196" width="200" height="114" rx="16" class="tp nr k k-s23"/>
+  <g class="tc gl k k-s127"><rect x="500" y="140" width="400" height="124" rx="16" class="g5"/><rect x="500" y="140" width="400" height="124" rx="16" class="g4"/><rect x="500" y="140" width="400" height="124" rx="16" class="g3"/><rect x="500" y="140" width="400" height="124" rx="16" class="g2"/><rect x="500" y="140" width="400" height="124" rx="16" class="g1"/></g>
+  <g class="k k-n127" transform="translate(500 140)">
+    <rect class="nb" width="400" height="124" rx="16"/>
+    <text class="nt" x="18" y="31">NameServer cluster</text>
+    <text class="ns" x="18" y="51">route discovery · broker registration</text>
+    <g class="bd vi" transform="translate(336 13)"><rect width="46" height="18" rx="9"/><text x="23" y="12.6">:9876</text></g>
+    <rect x="97" y="70" width="26" height="34" rx="5" class="sv"/><path d="M 103 79 H 117 M 103 85 H 117" class="svl"/><circle cx="110" cy="95" r="2.4" class="svd"/><rect x="187" y="70" width="26" height="34" rx="5" class="sv"/><path d="M 193 79 H 207 M 193 85 H 207" class="svl"/><circle cx="200" cy="95" r="2.4" class="svd"/><rect x="277" y="70" width="26" height="34" rx="5" class="sv"/><path d="M 283 79 H 297 M 283 85 H 297" class="svl"/><circle cx="290" cy="95" r="2.4" class="svd"/>
+  </g>
+  <rect x="500" y="140" width="400" height="124" rx="16" class="tc nr k k-s127"/>
+  <g class="tc gl k k-s6"><rect x="1012" y="132" width="340" height="132" rx="16" class="g5"/><rect x="1012" y="132" width="340" height="132" rx="16" class="g4"/><rect x="1012" y="132" width="340" height="132" rx="16" class="g3"/><rect x="1012" y="132" width="340" height="132" rx="16" class="g2"/><rect x="1012" y="132" width="340" height="132" rx="16" class="g1"/></g>
+  <g class="k k-n6" transform="translate(1012 132)">
+    <rect class="nb op" width="340" height="132" rx="16"/>
+    <text class="nt" x="18" y="31">Controller cluster</text>
+    <text class="ns" x="18" y="51">OpenRaft · master election · replica metadata</text>
+    <g class="bd gy" transform="translate(262 13)"><rect width="62" height="18" rx="9"/><text x="31" y="12.6">OPTIONAL</text></g>
+    <path d="M 103 84 H 157 M 183 84 H 237" class="ql"/>
+    <rect x="77" y="67" width="26" height="34" rx="5" class="sv"/><path d="M 83 76 H 97 M 83 82 H 97" class="svl"/><circle cx="90" cy="92" r="2.4" class="svd"/><circle cx="90" cy="92" r="2.9" class="svv o k k-v0"/><rect x="157" y="67" width="26" height="34" rx="5" class="sv"/><path d="M 163 76 H 177 M 163 82 H 177" class="svl"/><circle cx="170" cy="92" r="2.4" class="svd"/><circle cx="170" cy="92" r="2.9" class="svv o k k-v1"/><rect x="237" y="67" width="26" height="34" rx="5" class="sv"/><path d="M 243 76 H 257 M 243 82 H 257" class="svl"/><circle cx="250" cy="92" r="2.4" class="svd"/><circle cx="250" cy="92" r="2.9" class="svv o k k-v2"/>
+    <text class="nn" x="18" y="121">standalone or embedded in NameServer</text>
+  </g>
+  <rect x="1012" y="132" width="340" height="132" rx="16" class="tc nr k k-s6"/>
+
+  <!-- Left: producers, and the local mode that embeds a Broker in the Proxy -->
+  <g class="tp gl k k-s23"><rect x="48" y="410" width="200" height="92" rx="16" class="g5"/><rect x="48" y="410" width="200" height="92" rx="16" class="g4"/><rect x="48" y="410" width="200" height="92" rx="16" class="g3"/><rect x="48" y="410" width="200" height="92" rx="16" class="g2"/><rect x="48" y="410" width="200" height="92" rx="16" class="g1"/></g>
+  <g class="k k-n23" transform="translate(48 410)">
+    <rect class="nb" width="200" height="92" rx="16"/>
+    <text class="nt" x="18" y="31">Producers</text>
+    <text class="ns" x="18" y="51">Rust / remoting SDK</text>
+    <text class="nn" x="18" y="74">batch · ordered · txn</text>
+  </g>
+  <rect x="48" y="410" width="200" height="92" rx="16" class="tp nr k k-s23"/>
+  <g transform="translate(48 530)">
+    <rect class="nb op" width="200" height="60" rx="14"/>
+    <text class="ct" x="16" y="26">Local mode</text>
+    <text class="cs" x="16" y="43">embedded Broker</text>
+  </g>
+
+  <!-- Right: consumers -->
+  <g class="tm gl k k-s25"><rect x="1152" y="410" width="200" height="92" rx="16" class="g5"/><rect x="1152" y="410" width="200" height="92" rx="16" class="g4"/><rect x="1152" y="410" width="200" height="92" rx="16" class="g3"/><rect x="1152" y="410" width="200" height="92" rx="16" class="g2"/><rect x="1152" y="410" width="200" height="92" rx="16" class="g1"/></g>
+  <g class="k k-n25" transform="translate(1152 410)">
+    <rect class="nb" width="200" height="92" rx="16"/>
+    <text class="nt" x="18" y="31">Consumers</text>
+    <text class="ns" x="18" y="51">consumer groups</text>
+    <text class="nn" x="18" y="74">Push · Pull · POP</text>
+  </g>
+  <rect x="1152" y="410" width="200" height="92" rx="16" class="tm nr k k-s25"/>
+
+  <!-- Broker clusters: every broker name is a master and its replica -->
+  <g class="ts gl k k-s4"><rect x="362" y="412" width="144" height="62" rx="12" class="g3"/><rect x="362" y="412" width="144" height="62" rx="12" class="g2"/><rect x="362" y="412" width="144" height="62" rx="12" class="g1"/></g>
+  <g class="k k-n13457" transform="translate(362 412)">
+    <rect class="cb" width="144" height="62" rx="12"/>
+    <text class="mt" x="12" y="24">broker-a</text>
+    <g class="bd" transform="translate(82 9)"><rect width="54" height="18" rx="9"/><text x="27" y="12.6">MASTER</text></g>
+    <rect x="12" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="12" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm0"/><rect x="27" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="27" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm1"/><rect x="42" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="42" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm2"/><rect x="57" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="57" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm3"/><rect x="72" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="72" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm4"/><rect x="87" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="87" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm5"/><rect x="102" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="102" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm6"/><rect x="117" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="117" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm7"/>
+  </g>
+  <rect x="362" y="412" width="144" height="62" rx="12" class="ts nr k k-s4"/>
+  <g class="ts gl k k-s4"><rect x="362" y="500" width="144" height="62" rx="12" class="g3"/><rect x="362" y="500" width="144" height="62" rx="12" class="g2"/><rect x="362" y="500" width="144" height="62" rx="12" class="g1"/></g>
+  <g class="k k-n13457" transform="translate(362 500)">
+    <rect class="cb" width="144" height="62" rx="12"/>
+    <text class="mt" x="12" y="24">broker-a</text>
+    <g class="bd gy" transform="translate(76 9)"><rect width="60" height="18" rx="9"/><text x="30" y="12.6">REPLICA</text></g>
+    <rect x="12" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="12" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs0"/><rect x="27" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="27" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs1"/><rect x="42" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="42" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs2"/><rect x="57" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="57" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs3"/><rect x="72" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="72" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs4"/><rect x="87" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="87" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs5"/><rect x="102" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="102" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs6"/><rect x="117" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="117" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs7"/>
+  </g>
+  <rect x="362" y="500" width="144" height="62" rx="12" class="ts nr k k-s4"/>
+  <g class="ts gl k k-s4"><rect x="520" y="412" width="144" height="62" rx="12" class="g3"/><rect x="520" y="412" width="144" height="62" rx="12" class="g2"/><rect x="520" y="412" width="144" height="62" rx="12" class="g1"/></g>
+  <g class="k k-n13457" transform="translate(520 412)">
+    <rect class="cb" width="144" height="62" rx="12"/>
+    <text class="mt" x="12" y="24">broker-b</text>
+    <g class="bd" transform="translate(82 9)"><rect width="54" height="18" rx="9"/><text x="27" y="12.6">MASTER</text></g>
+    <rect x="12" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="12" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm0"/><rect x="27" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="27" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm1"/><rect x="42" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="42" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm2"/><rect x="57" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="57" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm3"/><rect x="72" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="72" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm4"/><rect x="87" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="87" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm5"/><rect x="102" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="102" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm6"/><rect x="117" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="117" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm7"/>
+  </g>
+  <rect x="520" y="412" width="144" height="62" rx="12" class="ts nr k k-s4"/>
+  <g class="ts gl k k-s4"><rect x="520" y="500" width="144" height="62" rx="12" class="g3"/><rect x="520" y="500" width="144" height="62" rx="12" class="g2"/><rect x="520" y="500" width="144" height="62" rx="12" class="g1"/></g>
+  <g class="k k-n13457" transform="translate(520 500)">
+    <rect class="cb" width="144" height="62" rx="12"/>
+    <text class="mt" x="12" y="24">broker-b</text>
+    <g class="bd gy" transform="translate(76 9)"><rect width="60" height="18" rx="9"/><text x="30" y="12.6">REPLICA</text></g>
+    <rect x="12" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="12" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs0"/><rect x="27" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="27" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs1"/><rect x="42" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="42" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs2"/><rect x="57" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="57" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs3"/><rect x="72" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="72" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs4"/><rect x="87" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="87" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs5"/><rect x="102" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="102" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs6"/><rect x="117" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="117" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs7"/>
+  </g>
+  <rect x="520" y="500" width="144" height="62" rx="12" class="ts nr k k-s4"/>
+  <g class="ts gl k k-s4"><rect x="736" y="412" width="144" height="62" rx="12" class="g3"/><rect x="736" y="412" width="144" height="62" rx="12" class="g2"/><rect x="736" y="412" width="144" height="62" rx="12" class="g1"/></g>
+  <g class="k k-n13457" transform="translate(736 412)">
+    <rect class="cb" width="144" height="62" rx="12"/>
+    <text class="mt" x="12" y="24">broker-a</text>
+    <g class="bd" transform="translate(82 9)"><rect width="54" height="18" rx="9"/><text x="27" y="12.6">MASTER</text></g>
+    <rect x="12" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="12" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm0"/><rect x="27" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="27" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm1"/><rect x="42" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="42" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm2"/><rect x="57" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="57" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm3"/><rect x="72" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="72" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm4"/><rect x="87" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="87" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm5"/><rect x="102" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="102" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm6"/><rect x="117" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="117" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm7"/>
+  </g>
+  <rect x="736" y="412" width="144" height="62" rx="12" class="ts nr k k-s4"/>
+  <g class="ts gl k k-s4"><rect x="736" y="500" width="144" height="62" rx="12" class="g3"/><rect x="736" y="500" width="144" height="62" rx="12" class="g2"/><rect x="736" y="500" width="144" height="62" rx="12" class="g1"/></g>
+  <g class="k k-n13457" transform="translate(736 500)">
+    <rect class="cb" width="144" height="62" rx="12"/>
+    <text class="mt" x="12" y="24">broker-a</text>
+    <g class="bd gy" transform="translate(76 9)"><rect width="60" height="18" rx="9"/><text x="30" y="12.6">REPLICA</text></g>
+    <rect x="12" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="12" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs0"/><rect x="27" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="27" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs1"/><rect x="42" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="42" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs2"/><rect x="57" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="57" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs3"/><rect x="72" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="72" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs4"/><rect x="87" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="87" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs5"/><rect x="102" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="102" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs6"/><rect x="117" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="117" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs7"/>
+  </g>
+  <rect x="736" y="500" width="144" height="62" rx="12" class="ts nr k k-s4"/>
+  <g class="ts gl k k-s4"><rect x="894" y="412" width="144" height="62" rx="12" class="g3"/><rect x="894" y="412" width="144" height="62" rx="12" class="g2"/><rect x="894" y="412" width="144" height="62" rx="12" class="g1"/></g>
+  <g class="k k-nm" transform="translate(894 412)">
+    <rect class="cb" width="144" height="62" rx="12"/>
+    <text class="mt" x="12" y="24">broker-b</text>
+    <g class="bd k k-x6" transform="translate(82 9)"><rect width="54" height="18" rx="9"/><text x="27" y="12.6">MASTER</text></g>
+    <g class="o k k-s6"><g class="bd rs" transform="translate(78 9)"><rect width="58" height="18" rx="9"/><text class="k k-blink" x="29" y="12.6">OFFLINE</text></g></g>
+    <rect x="12" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="12" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm0"/><rect x="12" y="37" width="10" height="12" rx="2.5" class="br o k k-s6"/><rect x="27" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="27" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm1"/><rect x="27" y="37" width="10" height="12" rx="2.5" class="br o k k-s6"/><rect x="42" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="42" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm2"/><rect x="42" y="37" width="10" height="12" rx="2.5" class="br o k k-s6"/><rect x="57" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="57" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm3"/><rect x="57" y="37" width="10" height="12" rx="2.5" class="br o k k-s6"/><rect x="72" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="72" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm4"/><rect x="72" y="37" width="10" height="12" rx="2.5" class="br o k k-s6"/><rect x="87" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="87" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm5"/><rect x="87" y="37" width="10" height="12" rx="2.5" class="br o k k-s6"/><rect x="102" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="102" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm6"/><rect x="102" y="37" width="10" height="12" rx="2.5" class="br o k k-s6"/><rect x="117" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="117" y="37" width="10" height="12" rx="2.5" class="bf o k k-bm7"/><rect x="117" y="37" width="10" height="12" rx="2.5" class="br o k k-s6"/>
+  </g>
+  <rect x="894" y="412" width="144" height="62" rx="12" class="ts nr k k-s4"/>
+  <rect x="894" y="412" width="144" height="62" rx="12" class="dn o k k-s6"/>
+  <g class="ts gl k k-s46"><rect x="894" y="500" width="144" height="62" rx="12" class="g3"/><rect x="894" y="500" width="144" height="62" rx="12" class="g2"/><rect x="894" y="500" width="144" height="62" rx="12" class="g1"/></g>
+  <g class="k k-n134567" transform="translate(894 500)">
+    <rect class="cb" width="144" height="62" rx="12"/>
+    <text class="mt" x="12" y="24">broker-b</text>
+    <g class="bd gy k k-fs" transform="translate(76 9)"><rect width="60" height="18" rx="9"/><text x="30" y="12.6">REPLICA</text></g>
+    <g class="bd o k k-fp" transform="translate(82 9)"><rect width="54" height="18" rx="9"/><text x="27" y="12.6">MASTER</text></g>
+    <rect x="12" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="12" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs0"/><rect x="27" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="27" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs1"/><rect x="42" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="42" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs2"/><rect x="57" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="57" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs3"/><rect x="72" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="72" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs4"/><rect x="87" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="87" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs5"/><rect x="102" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="102" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs6"/><rect x="117" y="37" width="10" height="12" rx="2.5" class="bk"/><rect x="117" y="37" width="10" height="12" rx="2.5" class="bf o k k-bs7"/>
+  </g>
+  <rect x="894" y="500" width="144" height="62" rx="12" class="ts nr k k-s46"/>
+  <rect x="894" y="500" width="144" height="62" rx="12" class="pm o k k-fb"/>
+
+  <!-- Inside each Broker: the storage engines -->
+  <g class="ts gl k k-s4"><rect x="62" y="698" width="442" height="28" rx="10" class="g3"/><rect x="62" y="698" width="442" height="28" rx="10" class="g2"/><rect x="62" y="698" width="442" height="28" rx="10" class="g1"/></g>
+  <g class="k k-n4" transform="translate(62 698)">
+    <rect class="cb" width="442" height="28" rx="10"/>
+    <text class="rn" x="12" y="18">store-local</text>
+    <g class="bd" transform="translate(112 5)"><rect width="64" height="18" rx="9"/><text x="32" y="12.6">DEFAULT</text></g>
+    <text class="rd" x="188" y="18">CommitLog · ConsumeQueue · Index</text>
+  </g>
+  <rect x="62" y="698" width="442" height="28" rx="10" class="ts nr k k-s4"/>
+  <g class="k k-n4" transform="translate(62 730)">
+    <rect class="cb" width="442" height="28" rx="10"/>
+    <text class="rn" x="12" y="18">store-rocksdb</text>
+    <g class="bd gy" transform="translate(112 5)"><rect width="64" height="18" rx="9"/><text x="32" y="12.6">OPTIONAL</text></g>
+    <text class="rd" x="188" y="18">CQ · index · timer · transaction metadata</text>
+  </g>
+  <rect x="62" y="730" width="442" height="28" rx="10" class="ts ro o k k-e1"/>
+  <g class="k k-n4" transform="translate(62 762)">
+    <rect class="cb" width="442" height="28" rx="10"/>
+    <text class="rn" x="12" y="18">tieredstore</text>
+    <g class="bd gy" transform="translate(112 5)"><rect width="64" height="18" rx="9"/><text x="32" y="12.6">OPTIONAL</text></g>
+    <text class="rd" x="188" y="18">POSIX and memory providers</text>
+  </g>
+  <rect x="62" y="762" width="442" height="28" rx="10" class="ts ro o k k-e2"/>
+  <text x="64" y="811" class="nn">RocksDB mode keeps the local CommitLog</text>
+
+  <!-- Operations and AI: tools, admin-core, the client SDK -->
+  <g class="to gl k k-s7"><rect x="650" y="706" width="100" height="36" rx="11" class="g3"/><rect x="650" y="706" width="100" height="36" rx="11" class="g2"/><rect x="650" y="706" width="100" height="36" rx="11" class="g1"/></g>
+  <g class="k k-n7" transform="translate(650 706)">
+    <rect class="cb" width="100" height="36" rx="11"/>
+    <text class="ct" x="10" y="16">Client SDK</text>
+    <text class="cs" x="10" y="29">remoting</text>
+  </g>
+  <rect x="650" y="706" width="100" height="36" rx="11" class="to nr k k-s7"/>
+  <g class="to gl k k-s7"><rect x="770" y="706" width="180" height="36" rx="11" class="g3"/><rect x="770" y="706" width="180" height="36" rx="11" class="g2"/><rect x="770" y="706" width="180" height="36" rx="11" class="g1"/></g>
+  <g class="k k-n7" transform="translate(770 706)">
+    <rect class="cb" width="180" height="36" rx="11"/>
+    <text class="ct" x="10" y="16">admin-core</text>
+    <text class="cs" x="10" y="29">rocketmq-admin-core</text>
+  </g>
+  <rect x="770" y="706" width="180" height="36" rx="11" class="to nr k k-s7"/>
+  <g class="to gl k k-s7"><rect x="552" y="774" width="118" height="40" rx="11" class="g3"/><rect x="552" y="774" width="118" height="40" rx="11" class="g2"/><rect x="552" y="774" width="118" height="40" rx="11" class="g1"/></g>
+  <g class="k k-n7" transform="translate(552 774)">
+    <rect class="cb" width="118" height="40" rx="11"/>
+    <text class="ct" x="10" y="18">Admin CLI · TUI</text>
+    <text class="cs" x="10" y="31">terminal tools</text>
+  </g>
+  <rect x="552" y="774" width="118" height="40" rx="11" class="to nr k k-s7"/>
+  <g class="to gl k k-s7"><rect x="676" y="774" width="138" height="40" rx="11" class="g3"/><rect x="676" y="774" width="138" height="40" rx="11" class="g2"/><rect x="676" y="774" width="138" height="40" rx="11" class="g1"/></g>
+  <g class="k k-n7" transform="translate(676 774)">
+    <rect class="cb" width="138" height="40" rx="11"/>
+    <text class="ct" x="10" y="18">Dashboards</text>
+    <text class="cs" x="10" y="31">Web · Tauri · GPUI</text>
+  </g>
+  <rect x="676" y="774" width="138" height="40" rx="11" class="to nr k k-s7"/>
+  <g class="to gl k k-s7"><rect x="820" y="774" width="104" height="40" rx="11" class="g3"/><rect x="820" y="774" width="104" height="40" rx="11" class="g2"/><rect x="820" y="774" width="104" height="40" rx="11" class="g1"/></g>
+  <g class="k k-n7" transform="translate(820 774)">
+    <rect class="cb" width="104" height="40" rx="11"/>
+    <text class="ct" x="10" y="18">AI SRE · MCP</text>
+    <text class="cs" x="10" y="31">read-only</text>
+  </g>
+  <rect x="820" y="774" width="104" height="40" rx="11" class="to nr k k-s7"/>
+  <g class="to gl k k-s7"><rect x="930" y="774" width="110" height="40" rx="11" class="g3"/><rect x="930" y="774" width="110" height="40" rx="11" class="g2"/><rect x="930" y="774" width="110" height="40" rx="11" class="g1"/></g>
+  <g class="k k-n7" transform="translate(930 774)">
+    <rect class="cb" width="110" height="40" rx="11"/>
+    <text class="ct" x="10" y="18">MCP control</text>
+    <text class="cs" x="10" y="31">opt-in writes</text>
+  </g>
+  <rect x="930" y="774" width="110" height="40" rx="11" class="to nr k k-s7"/>
+
+  <!-- Packets -->
+  <g class="tc pk a k k-s1"><path d="M 640 340 V 264" class="p3 k k-f-register"/><path d="M 640 340 V 264" class="p2 k k-f-register"/><path d="M 640 340 V 264" class="p1 k k-f-register"/><path d="M 640 340 V 264" class="p0 k k-f-register"/></g>
+  <g class="tc pk a k k-s2"><path d="M 248 222 C 330 222 410 196 500 196" class="p3 k k-f-route-proxy"/><path d="M 248 222 C 330 222 410 196 500 196" class="p2 k k-f-route-proxy"/><path d="M 248 222 C 330 222 410 196 500 196" class="p1 k k-f-route-proxy"/><path d="M 248 222 C 330 222 410 196 500 196" class="p0 k k-f-route-proxy"/></g>
+  <g class="tc pk a k k-s2"><path d="M 148 410 V 374 C 148 340 200 330 262 326 C 380 318 430 250 500 240" class="p3 k k-f-route-producer"/><path d="M 148 410 V 374 C 148 340 200 330 262 326 C 380 318 430 250 500 240" class="p2 k k-f-route-producer"/><path d="M 148 410 V 374 C 148 340 200 330 262 326 C 380 318 430 250 500 240" class="p1 k k-f-route-producer"/><path d="M 148 410 V 374 C 148 340 200 330 262 326 C 380 318 430 250 500 240" class="p0 k k-f-route-producer"/></g>
+  <g class="tc pk a k k-s2"><path d="M 1252 410 V 342 Q 1252 312 1222 312 H 960 Q 930 312 930 282 V 256 Q 930 226 904 226 H 900" class="p3 k k-f-route-consumer"/><path d="M 1252 410 V 342 Q 1252 312 1222 312 H 960 Q 930 312 930 282 V 256 Q 930 226 904 226 H 900" class="p2 k k-f-route-consumer"/><path d="M 1252 410 V 342 Q 1252 312 1222 312 H 960 Q 930 312 930 282 V 256 Q 930 226 904 226 H 900" class="p1 k k-f-route-consumer"/><path d="M 1252 410 V 342 Q 1252 312 1222 312 H 960 Q 930 312 930 282 V 256 Q 930 226 904 226 H 900" class="p0 k k-f-route-consumer"/></g>
+  <g class="tp pk a k k-s3"><path d="M 148 170 V 196" class="p3 k k-f-grpc"/><path d="M 148 170 V 196" class="p2 k k-f-grpc"/><path d="M 148 170 V 196" class="p1 k k-f-grpc"/><path d="M 148 170 V 196" class="p0 k k-f-grpc"/></g>
+  <g class="tp pk a k k-s3"><path d="M 248 280 C 320 280 392 290 392 340" class="p3 k k-f-proxy-broker"/><path d="M 248 280 C 320 280 392 290 392 340" class="p2 k k-f-proxy-broker"/><path d="M 248 280 C 320 280 392 290 392 340" class="p1 k k-f-proxy-broker"/><path d="M 248 280 C 320 280 392 290 392 340" class="p0 k k-f-proxy-broker"/></g>
+  <g class="tp pk a k k-s3"><path d="M 248 448 H 330" class="p3 k k-f-send"/><path d="M 248 448 H 330" class="p2 k k-f-send"/><path d="M 248 448 H 330" class="p1 k k-f-send"/><path d="M 248 448 H 330" class="p0 k k-f-send"/></g>
+  <g class="ts pk a k k-s4"><path d="M 440 630 V 660" class="p3 k k-f-store"/><path d="M 440 630 V 660" class="p2 k k-f-store"/><path d="M 440 630 V 660" class="p1 k k-f-store"/><path d="M 440 630 V 660" class="p0 k k-f-store"/></g>
+  <g class="tm pk a k k-s5"><path d="M 1070 442 H 1152" class="p3 k k-f-deliver"/><path d="M 1070 442 H 1152" class="p2 k k-f-deliver"/><path d="M 1070 442 H 1152" class="p1 k k-f-deliver"/><path d="M 1070 442 H 1152" class="p0 k k-f-deliver"/></g>
+  <g class="tm pk a k k-s5"><path d="M 1152 468 H 1070" class="p3 k k-f-ack"/><path d="M 1152 468 H 1070" class="p2 k k-f-ack"/><path d="M 1152 468 H 1070" class="p1 k k-f-ack"/><path d="M 1152 468 H 1070" class="p0 k k-f-ack"/></g>
+  <g class="tc pk a k k-s6"><path d="M 1040 264 V 340" class="p3 k k-f-control"/><path d="M 1040 264 V 340" class="p2 k k-f-control"/><path d="M 1040 264 V 340" class="p1 k k-f-control"/><path d="M 1040 264 V 340" class="p0 k k-f-control"/></g>
+  <g class="to pk a k k-s7"><path d="M 611 774 C 611 756 790 762 790 742" class="p3 k k-f-ops-cli"/><path d="M 611 774 C 611 756 790 762 790 742" class="p2 k k-f-ops-cli"/><path d="M 611 774 C 611 756 790 762 790 742" class="p1 k k-f-ops-cli"/><path d="M 611 774 C 611 756 790 762 790 742" class="p0 k k-f-ops-cli"/></g>
+  <g class="to pk a k k-s7"><path d="M 745 774 C 745 758 820 760 820 742" class="p3 k k-f-ops-dashboard"/><path d="M 745 774 C 745 758 820 760 820 742" class="p2 k k-f-ops-dashboard"/><path d="M 745 774 C 745 758 820 760 820 742" class="p1 k k-f-ops-dashboard"/><path d="M 745 774 C 745 758 820 760 820 742" class="p0 k k-f-ops-dashboard"/></g>
+  <g class="to pk a k k-s7"><path d="M 872 774 V 742" class="p3 k k-f-ops-mcp"/><path d="M 872 774 V 742" class="p2 k k-f-ops-mcp"/><path d="M 872 774 V 742" class="p1 k k-f-ops-mcp"/><path d="M 872 774 V 742" class="p0 k k-f-ops-mcp"/></g>
+  <g class="to pk a k k-s7"><path d="M 985 774 C 985 758 930 760 930 742" class="p3 k k-f-ops-control"/><path d="M 985 774 C 985 758 930 760 930 742" class="p2 k k-f-ops-control"/><path d="M 985 774 C 985 758 930 760 930 742" class="p1 k k-f-ops-control"/><path d="M 985 774 C 985 758 930 760 930 742" class="p0 k k-f-ops-control"/></g>
+  <g class="to pk a k k-s7"><path d="M 770 724 H 750" class="p3 k k-f-ops-client"/><path d="M 770 724 H 750" class="p2 k k-f-ops-client"/><path d="M 770 724 H 750" class="p1 k k-f-ops-client"/><path d="M 770 724 H 750" class="p0 k k-f-ops-client"/></g>
+  <g class="to pk a k k-s7"><path d="M 700 706 V 264" class="p3 k k-f-ops-namesrv"/><path d="M 700 706 V 264" class="p2 k k-f-ops-namesrv"/><path d="M 700 706 V 264" class="p1 k k-f-ops-namesrv"/><path d="M 700 706 V 264" class="p0 k k-f-ops-namesrv"/></g>
+  <g class="to pk a k k-s7"><path d="M 700 548 H 680" class="p3 k k-f-ops-cluster-a"/><path d="M 700 548 H 680" class="p2 k k-f-ops-cluster-a"/><path d="M 700 548 H 680" class="p1 k k-f-ops-cluster-a"/><path d="M 700 548 H 680" class="p0 k k-f-ops-cluster-a"/></g>
+  <g class="to pk a k k-s7"><path d="M 700 548 H 720" class="p3 k k-f-ops-cluster-b"/><path d="M 700 548 H 720" class="p2 k k-f-ops-cluster-b"/><path d="M 700 548 H 720" class="p1 k k-f-ops-cluster-b"/><path d="M 700 548 H 720" class="p0 k k-f-ops-cluster-b"/></g>
+  <g class="ts pk a k k-s4"><path d="M 434 474 V 500" class="p3 k k-f-replicate-a1"/><path d="M 434 474 V 500" class="p2 k k-f-replicate-a1"/><path d="M 434 474 V 500" class="p1 k k-f-replicate-a1"/><path d="M 434 474 V 500" class="p0 k k-f-replicate-a1"/></g>
+  <g class="ts pk a k k-s4"><path d="M 592 474 V 500" class="p3 k k-f-replicate-a2"/><path d="M 592 474 V 500" class="p2 k k-f-replicate-a2"/><path d="M 592 474 V 500" class="p1 k k-f-replicate-a2"/><path d="M 592 474 V 500" class="p0 k k-f-replicate-a2"/></g>
+  <g class="ts pk a k k-s4"><path d="M 808 474 V 500" class="p3 k k-f-replicate-b1"/><path d="M 808 474 V 500" class="p2 k k-f-replicate-b1"/><path d="M 808 474 V 500" class="p1 k k-f-replicate-b1"/><path d="M 808 474 V 500" class="p0 k k-f-replicate-b1"/></g>
+  <g class="ts pk a k k-s4"><path d="M 966 474 V 500" class="p3 k k-f-replicate-b2"/><path d="M 966 474 V 500" class="p2 k k-f-replicate-b2"/><path d="M 966 474 V 500" class="p1 k k-f-replicate-b2"/><path d="M 966 474 V 500" class="p0 k k-f-replicate-b2"/></g>
+
+  <!-- Legend -->
+  <rect x="1074" y="660" width="278" height="164" rx="20" class="panel"/>
+  <text x="1092" y="686" class="gt">LEGEND</text>
+  <g class="tp"><path d="M 1092 704 H 1128" class="ll"/></g>
+  <text x="1140" y="708" class="lg">Send</text>
+  <g class="tm"><path d="M 1092 722 H 1128" class="ll"/></g>
+  <text x="1140" y="726" class="lg">Deliver, pull and acknowledge</text>
+  <g class="tc"><path d="M 1092 740 H 1128" class="ll"/></g>
+  <text x="1140" y="744" class="lg">Routing and registration</text>
+  <g class="tc"><path d="M 1092 758 H 1128" class="ll d"/></g>
+  <text x="1140" y="762" class="lg">Controller</text>
+  <g class="ts"><path d="M 1092 776 H 1128" class="ll d"/></g>
+  <text x="1140" y="780" class="lg">HA replication, storage</text>
+  <g class="to"><path d="M 1092 794 H 1128" class="ll d"/></g>
+  <text x="1140" y="798" class="lg">Operations</text>
+  <rect x="1092" y="806" width="36" height="12" rx="4" class="lo"/>
+  <text x="1140" y="816" class="lg">Optional</text>
+
+  <!-- Shared foundations -->
+  <rect x="48" y="842" width="1304" height="72" rx="20" class="panel"/>
+  <text x="68" y="873" class="gt">SHARED RUST FOUNDATIONS</text>
+  <text x="68" y="893" class="fn">libraries · crate prefix rocketmq-</text>
+  <rect x="328" y="855" width="62.5" height="24" rx="12" class="fb"/>
+  <text x="359.25" y="871" class="fc">model</text>
+  <rect x="398.5" y="855" width="85.6" height="24" rx="12" class="fb"/>
+  <text x="441.3" y="871" class="fc">protocol</text>
+  <rect x="492.1" y="855" width="93.3" height="24" rx="12" class="fb"/>
+  <text x="538.75" y="871" class="fc">transport</text>
+  <rect x="593.4" y="855" width="77.9" height="24" rx="12" class="fb"/>
+  <text x="632.35" y="871" class="fc">runtime</text>
+  <rect x="679.3" y="855" width="116.4" height="24" rx="12" class="fb"/>
+  <text x="737.5" y="871" class="fc">security-api</text>
+  <rect x="803.7" y="855" width="54.8" height="24" rx="12" class="fb"/>
+  <text x="831.1" y="871" class="fc">auth</text>
+  <rect x="866.5" y="855" width="62.5" height="24" rx="12" class="fb"/>
+  <text x="897.75" y="871" class="fc">error</text>
+  <rect x="937" y="855" width="124.1" height="24" rx="12" class="fb"/>
+  <text x="999.05" y="871" class="fc">observability</text>
+  <rect x="1069.1" y="855" width="70.2" height="24" rx="12" class="fb"/>
+  <text x="1104.2" y="871" class="fc">filter</text>
+  <rect x="1147.3" y="855" width="70.2" height="24" rx="12" class="fb"/>
+  <text x="1182.4" y="871" class="fc">macros</text>
+  <text x="328" y="899" class="fn">Owned tasks and shutdown · Typed errors · ACL / TLS · Metrics / Logs / Traces</text>
+</svg>
