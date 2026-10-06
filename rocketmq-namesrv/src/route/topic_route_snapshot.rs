@@ -107,8 +107,8 @@ impl TopicRouteView {
 
 /// Serializes source-table mutations and atomically publishes their derived views.
 ///
-/// The gate is always acquired before existing broker/topic segmented locks. Route
-/// readers never acquire it; they load one immutable per-topic snapshot instead.
+/// The gate serializes source-table mutations and publication. Route readers never
+/// acquire it; they load one immutable per-topic snapshot instead.
 pub(crate) struct RouteMutationCoordinator {
     mutation_gate: Mutex<()>,
     snapshots: DashMap<RouteTopicName, Arc<ArcSwapOption<TopicRouteSnapshot>>>,

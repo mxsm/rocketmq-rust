@@ -12,14 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(deprecated, reason = "this benchmark retains the legacy lock model as a comparison")]
-
 //! Performance benchmarks for RouteInfoManager concurrency models
 //!
-//! This benchmark compares three different concurrency approaches:
+//! This benchmark compares two different concurrency approaches:
 //! 1. **Global RwLock**: Single lock for all operations (like Java version)
 //! 2. **Sharded DashMap**: No external coordinator (DashMap manages shard locks)
-//! 3. **Segmented Locks**: DashMap + segment-level locks (hybrid approach)
 //!
 //! ## Benchmark Scenarios
 //!
@@ -42,7 +39,6 @@ use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use parking_lot::RwLock;
-use rocketmq_namesrv::route::segmented_lock::SegmentedLock;
 use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 
@@ -142,43 +138,6 @@ impl LockFreeModel {
     }
 
     fn write_broker(&self, broker_name: String, broker_data: BrokerData) {
-        self.brokers.insert(broker_name, broker_data);
-    }
-}
-
-// ============================================================================
-// Concurrency Model 3: Segmented Locks + DashMap (our approach)
-// ============================================================================
-
-struct SegmentedLockModel {
-    topics: DashMap<String, Vec<QueueData>>,
-    brokers: DashMap<String, BrokerData>,
-    topic_locks: SegmentedLock,
-    broker_locks: SegmentedLock,
-}
-
-impl SegmentedLockModel {
-    fn new() -> Self {
-        Self {
-            topics: DashMap::new(),
-            brokers: DashMap::new(),
-            topic_locks: SegmentedLock::new(),
-            broker_locks: SegmentedLock::new(),
-        }
-    }
-
-    fn read_topic(&self, topic: &str) -> Option<Vec<QueueData>> {
-        let _lock = self.topic_locks.read_lock(&topic);
-        self.topics.get(topic).map(|v| v.clone())
-    }
-
-    fn insert_topic(&self, topic: String, queue_data: QueueData) {
-        let _lock = self.topic_locks.write_lock(&topic);
-        self.topics.insert(topic, vec![queue_data]);
-    }
-
-    fn write_broker(&self, broker_name: String, broker_data: BrokerData) {
-        let _lock = self.broker_locks.write_lock(&broker_name);
         self.brokers.insert(broker_name, broker_data);
     }
 }
@@ -366,7 +325,6 @@ fn main() {
     // Initialize models with some data
     let global_lock = Arc::new(GlobalLockModel::new());
     let lock_free = Arc::new(LockFreeModel::new());
-    let segmented = Arc::new(SegmentedLockModel::new());
 
     // Pre-populate with some topics
     for i in 0..10 {
@@ -375,8 +333,7 @@ fn main() {
         let queue_data = create_queue_data(&broker_name);
 
         global_lock.insert_topic(topic.clone(), queue_data.clone());
-        lock_free.insert_topic(topic.clone(), queue_data.clone());
-        segmented.insert_topic(topic, queue_data);
+        lock_free.insert_topic(topic, queue_data);
     }
 
     // ========================================================================
@@ -411,19 +368,6 @@ fn main() {
     }
     println!();
 
-    for &num_threads in &thread_counts {
-        let model = Arc::clone(&segmented);
-        bench_concurrent_reads(
-            "Segmented Locks ",
-            move |topic| {
-                model.read_topic(topic);
-            },
-            num_threads,
-            duration,
-        );
-    }
-    println!();
-
     // ========================================================================
     // Benchmark 2: Concurrent Writes
     // ========================================================================
@@ -447,19 +391,6 @@ fn main() {
         let model = Arc::clone(&lock_free);
         bench_concurrent_writes(
             "Sharded DashMap",
-            move |name, data| {
-                model.write_broker(name, data);
-            },
-            num_threads,
-            duration,
-        );
-    }
-    println!();
-
-    for &num_threads in &thread_counts {
-        let model = Arc::clone(&segmented);
-        bench_concurrent_writes(
-            "Segmented Locks ",
             move |name, data| {
                 model.write_broker(name, data);
             },
@@ -508,22 +439,6 @@ fn main() {
         );
     }
     println!();
-
-    for &num_threads in &thread_counts {
-        let model = Arc::clone(&segmented);
-        let model_write = Arc::clone(&segmented);
-        bench_mixed_workload(
-            "Segmented Locks ",
-            move |topic| {
-                model.read_topic(topic);
-            },
-            move |name, data| {
-                model_write.write_broker(name, data);
-            },
-            num_threads,
-            duration,
-        );
-    }
 
     println!("\n=================================================================");
     println!("Benchmark Complete");

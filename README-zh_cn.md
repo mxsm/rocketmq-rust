@@ -55,7 +55,7 @@
 ## 🏗️ 架构
 
 <p align="center">
-  <img src="resources/architecture.png" alt="RocketMQ-Rust 架构" width="80%"/>
+  <img src="resources/rocketmq-rust-architecture.svg" alt="RocketMQ-Rust 架构" width="100%"/>
 </p>
 
 RocketMQ-Rust 实现了分布式架构，包含以下核心组件：

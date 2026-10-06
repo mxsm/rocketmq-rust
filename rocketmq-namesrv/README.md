@@ -8,7 +8,8 @@ RocketMQ NameServer implementation for [RocketMQ-Rust](../README.md).
 RocketMQ brokers, clients, and admin tools. It tracks broker liveness, topic
 route metadata, broker membership, write permissions, KV configuration,
 runtime configuration, and optional embedded controller integration. The
-canonical route manager is built around concurrent tables and segmented locks.
+canonical route manager is built around concurrent tables and a serialized
+mutation coordinator.
 
 This crate can run as the `rocketmq-namesrv-rust` binary or be embedded through
 the `bootstrap::Builder` API for tests and service composition.
@@ -252,12 +253,12 @@ shutdown future.
 | [`src/processor/default_request_processor.rs`](src/processor/default_request_processor.rs) | Broker, topic, KV, permission, and runtime config request handling. |
 | [`src/processor/client_request_processor.rs`](src/processor/client_request_processor.rs) | Client topic-route lookup path. |
 | [`src/processor/cluster_test_request_processor.rs`](src/processor/cluster_test_request_processor.rs) | Cluster-test route lookup with product environment fallback. |
-| [`src/route`](src/route) | Route managers, segmented locks, route table implementations, unregister service, and zone route hook. |
+| [`src/route`](src/route) | Route managers, route table implementations, unregister service, and zone route hook. |
 | [`src/route/tables`](src/route/tables) | Concurrent tables for topic queues, brokers, clusters, live brokers, filter servers, and topic queue mapping. |
 | [`src/kvconfig`](src/kvconfig) | KV config manager and persistence. |
 | [`../rocketmq-observability/src/metrics/namesrv.rs`](../rocketmq-observability/src/metrics/namesrv.rs) | Low-cardinality NameServer metrics shared by OpenTelemetry and Prometheus exporters. |
 | [`tests`](tests) | Network-level and route-table integration coverage. |
-| [`benches`](benches) | Route manager, concurrency, lock, and topic-table hot-path benchmarks. |
+| [`benches`](benches) | Route manager, concurrency, and topic-table hot-path benchmarks. |
 
 ## Feature Flags
 
@@ -300,7 +301,6 @@ Run focused benchmarks from the workspace root:
 ```bash
 cargo bench -p rocketmq-namesrv --bench route_manager_benchmark
 cargo bench -p rocketmq-namesrv --bench route_concurrency_bench
-cargo bench -p rocketmq-namesrv --bench async_segmented_lock_bench
 cargo bench -p rocketmq-namesrv --bench topic_table_hot_path_bench
 ```
 

@@ -64,7 +64,7 @@ use super::data::PullMatchCriteria;
 use super::data::PullRequestData;
 use super::deadline::PullWaitDeadline;
 use super::deadline::PullWaitDeadlineError;
-use super::deadline::PullWaitDeadlineOutcome;
+use super::deadline::PullWaitDecision;
 use super::index::PullArrivalView;
 use super::index::PullCandidateBatch;
 use super::index::PullCandidateReservation;
@@ -75,7 +75,7 @@ use super::index::PullIndexLease;
 use super::index::PullIndexOperationalError;
 use super::index::PullIndexRejection;
 use super::index::PullIndexReservation;
-use super::index::PullIndexReserveOutcome;
+use super::index::PullIndexReservationStatus;
 use super::index::PullIndexSnapshot;
 use super::index::PullScanCursor;
 
@@ -91,8 +91,8 @@ use crate::long_polling::pending_arrival_latch::PendingOffsetRangeReservation;
 use crate::long_polling::pending_arrival_latch::PendingOffsetTarget;
 pub(crate) use continuation::PullArrivalContinuation;
 use continuation::PullContinuationAdmission;
+pub(crate) use continuation::PullContinuationAdmissionStatus;
 pub(crate) use continuation::PullContinuationError;
-pub(crate) use continuation::PullContinuationOutcome;
 use continuation::PullContinuationPermit;
 use continuation::PullPendingArrival;
 use continuation::PullPendingArrivalKey;
@@ -479,8 +479,8 @@ impl PullDeferredService {
             wall_now,
             monotonic_now,
         ) {
-            Ok(PullWaitDeadlineOutcome::Pending(deadline)) => deadline,
-            Ok(PullWaitDeadlineOutcome::AlreadyExpired) => {
+            Ok(PullWaitDecision::Pending(deadline)) => deadline,
+            Ok(PullWaitDecision::AlreadyExpired) => {
                 return Ok(PullDeferredPreparationStatus::Rejected(
                     PullDeferredPrepareRejection::DeadlineElapsed(candidate),
                 ));
@@ -494,8 +494,8 @@ impl PullDeferredService {
         };
         let key = PullCriteriaKey::from_criteria(&candidate.criteria);
         let reservation = match self.index.reserve(key) {
-            Ok(PullIndexReserveOutcome::Reserved(reservation)) => reservation,
-            Ok(PullIndexReserveOutcome::Rejected(rejection)) => {
+            Ok(PullIndexReservationStatus::Reserved(reservation)) => reservation,
+            Ok(PullIndexReservationStatus::Rejected(rejection)) => {
                 return Ok(PullDeferredPreparationStatus::Rejected(
                     PullDeferredPrepareRejection::Index { rejection, candidate },
                 ));
@@ -692,14 +692,14 @@ impl PullDeferredService {
         &self,
         arrival: PullArrivalView<'_>,
         cursor: PullScanCursor,
-    ) -> Result<PullContinuationOutcome, PullContinuationError> {
+    ) -> Result<PullContinuationAdmissionStatus, PullContinuationError> {
         PullArrivalContinuation::arrival(&self.continuation_admission, arrival, cursor)
     }
 
     pub(crate) fn admit_forced_continuation(
         &self,
         cursor: PullScanCursor,
-    ) -> Result<PullContinuationOutcome, PullContinuationError> {
+    ) -> Result<PullContinuationAdmissionStatus, PullContinuationError> {
         PullArrivalContinuation::forced(&self.continuation_admission, cursor)
     }
 
@@ -808,13 +808,13 @@ impl PullDeferredService {
             .into_iter()
             .filter_map(
                 |reservation| match self.continuation_admission.reserve(reservation.retained_bytes()) {
-                    Ok(continuation::PullContinuationReserveOutcome::Reserved(permit)) => {
+                    Ok(continuation::PullContinuationReservationStatus::Reserved(permit)) => {
                         Some(PullPendingOffsetReservation {
                             reservation,
                             _permit: permit,
                         })
                     }
-                    Ok(continuation::PullContinuationReserveOutcome::Rejected(_)) | Err(_) => None,
+                    Ok(continuation::PullContinuationReservationStatus::Rejected(_)) | Err(_) => None,
                 },
             )
             .collect()
