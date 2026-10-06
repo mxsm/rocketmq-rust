@@ -18,7 +18,6 @@ separate wrappers to enumerate tests, collect prototype reports, or compare hist
 
 | Task | Entry point |
 | --- | --- |
-| Understand PR and integration checks | [CI validation policy](../rocketmq-doc/en/ci-validation-policy.md) |
 | Inspect which root CI checks a path selects | `python scripts/ci_scope.py --paths <changed-path> ...` |
 | Check project instruction routing | [PowerShell](check-agents-routing.ps1) or [Bash](check-agents-routing.sh) |
 | Refresh the generated validation index | `python scripts/architecture_documentation_guard.py --write` |

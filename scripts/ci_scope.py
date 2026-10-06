@@ -84,9 +84,7 @@ def classify(paths: list[str], members: tuple[str, ...], *, full: bool = False) 
             or path.startswith(".github/workflows/")
             or path in {"Cargo.toml", "package.json", "scripts/ci_scope.py",
                         "scripts/tests/test_ci_scope.py", "scripts/tests/test_agents_routing.py",
-                        "scripts/check-agents-routing.ps1", "scripts/check-agents-routing.sh",
-                        "rocketmq-doc/en/agents-routing-validation-adr.md",
-                        "rocketmq-doc/en/agent-validation-reference.md"}
+                        "scripts/check-agents-routing.ps1", "scripts/check-agents-routing.sh"}
             for path in paths
         ),
     }

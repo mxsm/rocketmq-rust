@@ -129,7 +129,8 @@ $requiredRoutePaths = @(
     "rocketmq-website/"
 )
 
-# Check routing structure, not wording or complete command profiles.
+# Check routing structure, not wording or complete command profiles. Dependency/feature audits are
+# separate integration checks; do not invoke Cargo metadata here.
 foreach ($routePath in $requiredRoutePaths) {
     Assert-TextContains -Text $rootAgentsText -Needle $routePath -Context "Root AGENTS.md"
     $agentsFile = $routePath + "AGENTS.md"
@@ -180,16 +181,6 @@ $requiredWorkflows = @(
 foreach ($workflow in $requiredWorkflows) {
     if (-not (Test-Path -LiteralPath (Join-Path $script:RepoRoot $workflow) -PathType Leaf)) {
         Add-Failure "Missing required workflow: $workflow"
-    }
-}
-
-# Dependency/feature audits are separate integration checks; do not invoke Cargo metadata here.
-foreach ($document in @(
-    "rocketmq-doc/en/agents-routing-validation-adr.md",
-    "rocketmq-doc/en/agent-validation-reference.md"
-)) {
-    if (-not (Test-Path -LiteralPath (Join-Path $script:RepoRoot $document) -PathType Leaf)) {
-        Add-Failure "Missing validation reference: $document"
     }
 }
 
