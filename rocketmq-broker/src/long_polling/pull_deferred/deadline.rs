@@ -31,7 +31,7 @@ impl PullWaitDeadline {
         effective_timeout_millis: u64,
         wall_now_millis: u64,
         monotonic_now: tokio::time::Instant,
-    ) -> Result<PullWaitDeadlineOutcome, PullWaitDeadlineError> {
+    ) -> Result<PullWaitDecision, PullWaitDeadlineError> {
         let protocol_end_millis = suspend_wall_millis
             .checked_add(effective_timeout_millis)
             .ok_or_else(|| PullWaitDeadlineError::new(PullWaitDeadlineErrorKind::ProtocolOverflow))?;
@@ -39,9 +39,9 @@ impl PullWaitDeadline {
             .checked_add(Duration::from_millis(effective_timeout_millis))
             .ok_or_else(|| PullWaitDeadlineError::new(PullWaitDeadlineErrorKind::MonotonicOverflow))?;
         if wall_now_millis >= protocol_end_millis || monotonic_now >= protocol_at {
-            return Ok(PullWaitDeadlineOutcome::AlreadyExpired);
+            return Ok(PullWaitDecision::AlreadyExpired);
         }
-        Ok(PullWaitDeadlineOutcome::Pending(Self {
+        Ok(PullWaitDecision::Pending(Self {
             protocol_end_millis,
             protocol_at,
         }))
@@ -60,7 +60,7 @@ impl PullWaitDeadline {
 
 #[must_use]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PullWaitDeadlineOutcome {
+pub(crate) enum PullWaitDecision {
     Pending(PullWaitDeadline),
     AlreadyExpired,
 }
