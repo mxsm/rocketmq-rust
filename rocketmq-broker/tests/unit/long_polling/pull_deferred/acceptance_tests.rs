@@ -69,11 +69,11 @@ use super::index::PullCriteriaLimits;
 use super::index::PullIndexSnapshot;
 use super::index::PullScanCursor;
 use super::service::PreparedPullRegistration;
+use super::service::PullDeferredPreparationStatus;
 use super::service::PullDeferredPrepareError;
-use super::service::PullDeferredPrepareOutcome;
 use super::service::PullDeferredPrepareRejectionKind;
-use super::service::PullDeferredRegisterOutcome;
 use super::service::PullDeferredRegisterRejectionKind;
+use super::service::PullDeferredRegistrationStatus;
 use super::service::PullDeferredService;
 use super::service::PullRetainedEstimate;
 use super::service::PullSuspendTiming;
@@ -364,8 +364,8 @@ impl RequestProcessor for PullDeferredTestProcessor {
             .map_err(|error| {
                 crate::broker_error::from_shared(Arc::new(CanonicalError::caused_by(&CORE_ARGUMENT_INVALID, error)))
             })? {
-            PullDeferredPrepareOutcome::Prepared(prepared) => prepared,
-            PullDeferredPrepareOutcome::Rejected(_) => {
+            PullDeferredPreparationStatus::Prepared(prepared) => prepared,
+            PullDeferredPreparationStatus::Rejected(_) => {
                 return Err(crate::broker_error::invalid_argument(
                     "unexpected Pull preparation rejection",
                 ));
@@ -374,8 +374,8 @@ impl RequestProcessor for PullDeferredTestProcessor {
         let registration = match self.service.register(prepared, request).map_err(|error| {
             crate::broker_error::from_shared(Arc::new(CanonicalError::caused_by(&CORE_ARGUMENT_INVALID, error)))
         })? {
-            PullDeferredRegisterOutcome::Registered(registration) => *registration,
-            PullDeferredRegisterOutcome::Rejected(_) => {
+            PullDeferredRegistrationStatus::Registered(registration) => *registration,
+            PullDeferredRegistrationStatus::Rejected(_) => {
                 return Err(crate::broker_error::invalid_argument(
                     "unexpected Pull registration rejection",
                 ));
