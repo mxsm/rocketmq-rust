@@ -32,7 +32,7 @@ use super::index::PullCriteriaIndex;
 use super::index::PullCriteriaKey;
 use super::index::PullCriteriaLimits;
 use super::index::PullIndexRejection;
-use super::index::PullIndexReserveOutcome;
+use super::index::PullIndexReservationStatus;
 use super::index::PullIndexSnapshot;
 use super::index::PullScanCursor;
 use super::service::PullSuspendTiming;
@@ -180,13 +180,13 @@ fn index_reservations_enforce_global_and_per_key_capacity() {
     let first = index.reserve(key()).expect("first reservation");
     assert!(matches!(
         index.reserve(key()),
-        Ok(PullIndexReserveOutcome::Rejected(PullIndexRejection::BucketCapacity))
+        Ok(PullIndexReservationStatus::Rejected(PullIndexRejection::BucketCapacity))
     ));
     let second_key = PullCriteriaKey::new(CheetahString::from_static_str("TopicB"), 3);
     let second = index.reserve(second_key.clone()).expect("second reservation");
     assert!(matches!(
         index.reserve(second_key),
-        Ok(PullIndexReserveOutcome::Rejected(PullIndexRejection::GlobalCapacity))
+        Ok(PullIndexReservationStatus::Rejected(PullIndexRejection::GlobalCapacity))
     ));
     assert_eq!(index.snapshot().reserved(), 2);
     drop((first, second));
