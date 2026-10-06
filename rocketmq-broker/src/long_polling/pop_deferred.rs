@@ -21,7 +21,7 @@ pub(crate) use deadline::LongPollingDeadline;
 #[cfg(test)]
 pub(crate) use deadline::LongPollingDeadlineErrorKind;
 #[cfg(test)]
-pub(crate) use deadline::LongPollingDeadlineOutcome;
+pub(crate) use deadline::PopWaitDecision;
 #[cfg(test)]
 pub(crate) use index::PopArrival;
 #[cfg(test)]
@@ -33,7 +33,7 @@ pub(crate) use index::PopCriteriaLimits;
 #[cfg(test)]
 pub(crate) use index::PopIndexRejection;
 #[cfg(test)]
-pub(crate) use index::PopIndexReserveOutcome;
+pub(crate) use index::PopIndexReservationStatus;
 #[cfg(test)]
 pub(crate) use index::PopIndexSnapshot;
 #[cfg(test)]

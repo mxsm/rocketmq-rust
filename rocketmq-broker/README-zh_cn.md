@@ -21,7 +21,7 @@
 
 ## 架构
 
-![Broker 配置、生命周期、请求分发与存储架构](../resources/broker-runtime-architecture.png)
+![Broker 配置、生命周期、请求分发与存储架构](../resources/rocketmq-broker-architecture.svg)
 
 二进制程序将配置解析为 `ValidatedBrokerConfig`，并将运行时和遥测句柄交给 `Builder`。
 `BrokerBootstrap` 按 `Configured`、`Initialized`、`Running` 顺序推进状态；启动失败时回滚已完成的启动工作。

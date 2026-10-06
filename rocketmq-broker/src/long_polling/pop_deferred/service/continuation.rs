@@ -154,7 +154,7 @@ pub(crate) struct PopArrivalContinuation {
 }
 
 #[must_use]
-pub(crate) enum PopContinuationOutcome {
+pub(crate) enum PopContinuationAdmissionStatus {
     Admitted(PopArrivalContinuation),
     Rejected(PopContinuationRejection),
 }
@@ -173,7 +173,7 @@ impl PopArrivalContinuation {
         filter_bitmap: Option<&[u8]>,
         properties: Option<&HashMap<CheetahString, CheetahString>>,
         cursor: PopFanoutCursor,
-    ) -> Result<PopContinuationOutcome, PopContinuationError> {
+    ) -> Result<PopContinuationAdmissionStatus, PopContinuationError> {
         let pending = PopPendingArrival::new(
             topic,
             queue_id,
@@ -185,11 +185,13 @@ impl PopArrivalContinuation {
         )?;
         let retained_bytes = pending.retained_bytes();
         match admission.reserve(retained_bytes)? {
-            PopContinuationReserveOutcome::Reserved(permit) => Ok(PopContinuationOutcome::Admitted(Self {
+            PopContinuationReservationStatus::Reserved(permit) => Ok(PopContinuationAdmissionStatus::Admitted(Self {
                 pending,
                 _permit: permit,
             })),
-            PopContinuationReserveOutcome::Rejected(rejection) => Ok(PopContinuationOutcome::Rejected(rejection)),
+            PopContinuationReservationStatus::Rejected(rejection) => {
+                Ok(PopContinuationAdmissionStatus::Rejected(rejection))
+            }
         }
     }
 
@@ -224,11 +226,11 @@ impl PopContinuationAdmission {
     pub(super) fn reserve(
         self: &Arc<Self>,
         bytes: usize,
-    ) -> Result<PopContinuationReserveOutcome, PopContinuationError> {
+    ) -> Result<PopContinuationReservationStatus, PopContinuationError> {
         let count = self.count.fetch_add(1, Ordering::AcqRel);
         if count >= self.max_count {
             self.reject_count();
-            return Ok(PopContinuationReserveOutcome::Rejected(
+            return Ok(PopContinuationReservationStatus::Rejected(
                 PopContinuationRejection::CountFull,
             ));
         }
@@ -240,7 +242,7 @@ impl PopContinuationAdmission {
             };
             if next > self.max_bytes {
                 self.reject_count();
-                return Ok(PopContinuationReserveOutcome::Rejected(
+                return Ok(PopContinuationReservationStatus::Rejected(
                     PopContinuationRejection::BytesFull,
                 ));
             }
@@ -252,7 +254,7 @@ impl PopContinuationAdmission {
                 Err(observed) => current = observed,
             }
         }
-        Ok(PopContinuationReserveOutcome::Reserved(PopContinuationPermit {
+        Ok(PopContinuationReservationStatus::Reserved(PopContinuationPermit {
             admission: Arc::clone(self),
             bytes,
         }))
@@ -277,7 +279,7 @@ pub(super) struct PopContinuationPermit {
     bytes: usize,
 }
 
-pub(super) enum PopContinuationReserveOutcome {
+pub(super) enum PopContinuationReservationStatus {
     Reserved(PopContinuationPermit),
     Rejected(PopContinuationRejection),
 }

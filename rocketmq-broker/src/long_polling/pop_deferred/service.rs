@@ -77,7 +77,7 @@ use crate::long_polling::pending_arrival_latch::PendingOffsetTarget;
 
 use super::deadline::LongPollingDeadline;
 use super::deadline::LongPollingDeadlineError;
-use super::deadline::LongPollingDeadlineOutcome;
+use super::deadline::PopWaitDecision;
 use super::index::PopArrival;
 use super::index::PopArrivalView;
 use super::index::PopCandidateReservation;
@@ -90,7 +90,7 @@ use super::index::PopIndexLease;
 use super::index::PopIndexOperationalError;
 use super::index::PopIndexRejection;
 use super::index::PopIndexReservation;
-use super::index::PopIndexReserveOutcome;
+use super::index::PopIndexReservationStatus;
 use super::index::PopIndexSnapshot;
 use super::index::PopMatchCriteria;
 use super::index::PopSelectionOrder;
@@ -99,8 +99,8 @@ mod continuation;
 
 pub(crate) use continuation::PopArrivalContinuation;
 use continuation::PopContinuationAdmission;
+pub(crate) use continuation::PopContinuationAdmissionStatus;
 pub(crate) use continuation::PopContinuationError;
-pub(crate) use continuation::PopContinuationOutcome;
 use continuation::PopContinuationPermit;
 use continuation::PopPendingArrival;
 use continuation::PopPendingArrivalKey;
@@ -479,8 +479,8 @@ impl PopDeferredService {
         )
         .map_err(PopDeferredPrepareError::Deadline)?
         {
-            LongPollingDeadlineOutcome::Pending(deadline) => deadline,
-            LongPollingDeadlineOutcome::Immediate => {
+            PopWaitDecision::Pending(deadline) => deadline,
+            PopWaitDecision::Immediate => {
                 return Ok(PopDeferredPreparationStatus::Rejected(
                     PopDeferredPrepareRejection::DeadlineElapsed,
                 ));
@@ -488,8 +488,8 @@ impl PopDeferredService {
         };
         let key = PopCriteriaKey::from_parts(request.topic(), request.consumer_group(), request.queue_id());
         let reservation = match self.index.reserve(key) {
-            Ok(PopIndexReserveOutcome::Reserved(reservation)) => reservation,
-            Ok(PopIndexReserveOutcome::Rejected(rejection)) => {
+            Ok(PopIndexReservationStatus::Reserved(reservation)) => reservation,
+            Ok(PopIndexReservationStatus::Rejected(rejection)) => {
                 return Ok(PopDeferredPreparationStatus::Rejected(
                     PopDeferredPrepareRejection::Index(rejection),
                 ));
@@ -878,7 +878,7 @@ impl PopDeferredService {
         filter_bitmap: Option<&[u8]>,
         properties: Option<&std::collections::HashMap<CheetahString, CheetahString>>,
         cursor: PopFanoutCursor,
-    ) -> Result<PopContinuationOutcome, PopContinuationError> {
+    ) -> Result<PopContinuationAdmissionStatus, PopContinuationError> {
         PopArrivalContinuation::try_admit(
             &self.continuation_admission,
             topic,
@@ -981,13 +981,13 @@ impl PopDeferredService {
             .into_iter()
             .filter_map(
                 |reservation| match self.continuation_admission.reserve(reservation.retained_bytes()) {
-                    Ok(continuation::PopContinuationReserveOutcome::Reserved(permit)) => {
+                    Ok(continuation::PopContinuationReservationStatus::Reserved(permit)) => {
                         Some(PopPendingOffsetReservation {
                             reservation,
                             _permit: permit,
                         })
                     }
-                    Ok(continuation::PopContinuationReserveOutcome::Rejected(_)) | Err(_) => None,
+                    Ok(continuation::PopContinuationReservationStatus::Rejected(_)) | Err(_) => None,
                 },
             )
             .collect()
