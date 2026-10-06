@@ -77,7 +77,7 @@ use crate::long_polling::pending_arrival_latch::PendingOffsetTarget;
 
 use super::deadline::LongPollingDeadline;
 use super::deadline::LongPollingDeadlineError;
-use super::deadline::LongPollingDeadlineOutcome;
+use super::deadline::PopWaitDecision;
 use super::index::PopArrival;
 use super::index::PopArrivalView;
 use super::index::PopCandidateReservation;
@@ -479,8 +479,8 @@ impl PopDeferredService {
         )
         .map_err(PopDeferredPrepareError::Deadline)?
         {
-            LongPollingDeadlineOutcome::Pending(deadline) => deadline,
-            LongPollingDeadlineOutcome::Immediate => {
+            PopWaitDecision::Pending(deadline) => deadline,
+            PopWaitDecision::Immediate => {
                 return Ok(PopDeferredPrepareOutcome::Rejected(
                     PopDeferredPrepareRejection::DeadlineElapsed,
                 ));

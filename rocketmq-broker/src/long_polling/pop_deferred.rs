@@ -21,7 +21,7 @@ pub(crate) use deadline::LongPollingDeadline;
 #[cfg(test)]
 pub(crate) use deadline::LongPollingDeadlineErrorKind;
 #[cfg(test)]
-pub(crate) use deadline::LongPollingDeadlineOutcome;
+pub(crate) use deadline::PopWaitDecision;
 #[cfg(test)]
 pub(crate) use index::PopArrival;
 #[cfg(test)]

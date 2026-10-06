@@ -36,16 +36,16 @@ impl LongPollingDeadline {
         poll_time: u64,
         wall_now: u64,
         monotonic_now: tokio::time::Instant,
-    ) -> Result<LongPollingDeadlineOutcome, LongPollingDeadlineError> {
+    ) -> Result<PopWaitDecision, LongPollingDeadlineError> {
         if poll_time == 0 {
-            return Ok(LongPollingDeadlineOutcome::Immediate);
+            return Ok(PopWaitDecision::Immediate);
         }
         let expires = born_time
             .checked_add(poll_time)
             .ok_or_else(|| LongPollingDeadlineError::new(LongPollingDeadlineErrorKind::ProtocolOverflow))?;
         let legacy_threshold = expires.saturating_sub(EARLY_WAKE_MILLIS);
         if wall_now > legacy_threshold {
-            return Ok(LongPollingDeadlineOutcome::Immediate);
+            return Ok(PopWaitDecision::Immediate);
         }
         let remaining_millis = legacy_threshold
             .checked_sub(wall_now)
@@ -57,7 +57,7 @@ impl LongPollingDeadline {
         let protocol_at = monotonic_now
             .checked_add(Duration::from_millis(remaining_millis))
             .ok_or_else(|| LongPollingDeadlineError::new(LongPollingDeadlineErrorKind::MonotonicOverflow))?;
-        Ok(LongPollingDeadlineOutcome::Pending(Self {
+        Ok(PopWaitDecision::Pending(Self {
             protocol_millis,
             protocol_at,
         }))
@@ -76,7 +76,7 @@ impl LongPollingDeadline {
 
 #[must_use]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum LongPollingDeadlineOutcome {
+pub(crate) enum PopWaitDecision {
     Pending(LongPollingDeadline),
     Immediate,
 }
