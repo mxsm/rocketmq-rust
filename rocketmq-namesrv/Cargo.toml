@@ -68,7 +68,6 @@ config.workspace      = true
 dirs.workspace        = true
 parking_lot.workspace = true
 dashmap               = { version = "6.2.1", features = ["serde"] }
-hashbrown             = "0.17"
 futures.workspace     = true
 bytes.workspace       = true
 moka                   = { version = "0.12", features = ["sync"] }
@@ -93,10 +92,6 @@ harness = false
 
 [[bench]]
 name    = "route_concurrency_bench"
-harness = false
-
-[[bench]]
-name    = "async_segmented_lock_bench"
 harness = false
 
 [[bench]]
