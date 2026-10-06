@@ -91,8 +91,8 @@ use crate::long_polling::pending_arrival_latch::PendingOffsetRangeReservation;
 use crate::long_polling::pending_arrival_latch::PendingOffsetTarget;
 pub(crate) use continuation::PullArrivalContinuation;
 use continuation::PullContinuationAdmission;
+pub(crate) use continuation::PullContinuationAdmissionStatus;
 pub(crate) use continuation::PullContinuationError;
-pub(crate) use continuation::PullContinuationOutcome;
 use continuation::PullContinuationPermit;
 use continuation::PullPendingArrival;
 use continuation::PullPendingArrivalKey;
@@ -692,14 +692,14 @@ impl PullDeferredService {
         &self,
         arrival: PullArrivalView<'_>,
         cursor: PullScanCursor,
-    ) -> Result<PullContinuationOutcome, PullContinuationError> {
+    ) -> Result<PullContinuationAdmissionStatus, PullContinuationError> {
         PullArrivalContinuation::arrival(&self.continuation_admission, arrival, cursor)
     }
 
     pub(crate) fn admit_forced_continuation(
         &self,
         cursor: PullScanCursor,
-    ) -> Result<PullContinuationOutcome, PullContinuationError> {
+    ) -> Result<PullContinuationAdmissionStatus, PullContinuationError> {
         PullArrivalContinuation::forced(&self.continuation_admission, cursor)
     }
 
@@ -808,13 +808,13 @@ impl PullDeferredService {
             .into_iter()
             .filter_map(
                 |reservation| match self.continuation_admission.reserve(reservation.retained_bytes()) {
-                    Ok(continuation::PullContinuationReserveOutcome::Reserved(permit)) => {
+                    Ok(continuation::PullContinuationReservationStatus::Reserved(permit)) => {
                         Some(PullPendingOffsetReservation {
                             reservation,
                             _permit: permit,
                         })
                     }
-                    Ok(continuation::PullContinuationReserveOutcome::Rejected(_)) | Err(_) => None,
+                    Ok(continuation::PullContinuationReservationStatus::Rejected(_)) | Err(_) => None,
                 },
             )
             .collect()
