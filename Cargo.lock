@@ -4487,7 +4487,6 @@ dependencies = [
  "dashmap",
  "dirs",
  "futures",
- "hashbrown 0.17.1",
  "moka",
  "parking_lot",
  "rocketmq-auth",
