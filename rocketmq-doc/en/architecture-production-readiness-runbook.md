@@ -203,10 +203,9 @@ mistaken for a pass.
 
 ## Evidence execution boundary
 
-Pull requests use the affected checks described in the
-[CI validation policy](ci-validation-policy.md). Record the relevant command results
-in the PR; no separate candidate JSON, fixed commit, fingerprint, or empty
-historical-failure ledger is required for routine development.
+Pull requests use the checks selected for their changed paths. Record the relevant
+command results in the PR; no separate candidate JSON, fixed commit, fingerprint, or
+empty historical-failure ledger is required for routine development.
 
 The historical accepted code/system record is
 [d88a973131ce4f57d01a65def8ecb7944a45ba21](architecture-candidates/2026-08-01-d88a97313.md),

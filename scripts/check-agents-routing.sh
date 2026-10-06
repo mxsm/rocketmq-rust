@@ -93,7 +93,8 @@ REQUIRED_ROUTE_PATHS=(
   "rocketmq-website/"
 )
 
-# Check routing structure, not wording or complete command profiles.
+# Check routing structure, not wording or complete command profiles. Dependency/feature audits are
+# separate integration checks; do not invoke Cargo metadata here.
 for route_path in "${REQUIRED_ROUTE_PATHS[@]}"; do
   assert_text_contains "$ROOT_AGENTS_TEXT" "$route_path" "Root AGENTS.md"
   agents_file="${route_path}AGENTS.md"
@@ -143,15 +144,6 @@ REQUIRED_WORKFLOWS=(
 for workflow in "${REQUIRED_WORKFLOWS[@]}"; do
   if [[ ! -f "$ROOT/$workflow" ]]; then
     add_failure "Missing required workflow: $workflow"
-  fi
-done
-
-# Dependency/feature audits are separate integration checks; do not invoke Cargo metadata here.
-for document in \
-  "rocketmq-doc/en/agents-routing-validation-adr.md" \
-  "rocketmq-doc/en/agent-validation-reference.md"; do
-  if [[ ! -f "$ROOT/$document" ]]; then
-    add_failure "Missing validation reference: $document"
   fi
 done
 

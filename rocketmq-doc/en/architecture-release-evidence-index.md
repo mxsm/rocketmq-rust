@@ -11,8 +11,8 @@ commit SHA; this document does not claim that a scheduled or release run succeed
 - Formal Rust toolchain and MSRV: `1.95.0`.
 - Root workspace packages: 28.
 - Full integration checks: `cargo fmt --all -- --check`, workspace Clippy, all-feature tests, and
-  `cargo doc --workspace --no-deps --all-features`. Routine PR work is selected by changed paths;
-  see the [CI validation policy](ci-validation-policy.md) for feature and platform routing.
+  `cargo doc --workspace --no-deps --all-features`. Routine PR work is selected by changed paths
+  through `scripts/ci_scope.py`.
 
 | Package | Workspace path |
 |---|---|

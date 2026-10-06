@@ -70,8 +70,6 @@ class AgentsRoutingTests(unittest.TestCase):
         for workflow in (ROOT / ".github/workflows").iterdir():
             if workflow.suffix in {".yml", ".yaml"}:
                 self.write(f".github/workflows/{workflow.name}", "name: fixture\n")
-        for document in ("agents-routing-validation-adr.md", "agent-validation-reference.md"):
-            self.write(f"rocketmq-doc/en/{document}", "# Select checks by impact\n")
         self.write(
             "scripts/standalone_workspace_trigger_guard.py",
             "from pathlib import Path\n"
