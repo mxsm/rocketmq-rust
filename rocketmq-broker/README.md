@@ -23,7 +23,7 @@ This list does not imply complete Java broker feature parity.
 
 ## Architecture
 
-![Broker configuration, lifecycle, request dispatch, and storage architecture](../resources/broker-runtime-architecture.png)
+![Broker configuration, lifecycle, request dispatch, and storage architecture](../resources/rocketmq-broker-architecture.svg)
 
 The binary resolves configuration into `ValidatedBrokerConfig` and passes runtime and telemetry handles to `Builder`.
 `BrokerBootstrap` advances through `Configured`, `Initialized`, and `Running` states. Startup failures trigger rollback
