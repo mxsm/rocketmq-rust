@@ -90,7 +90,7 @@ use super::index::PopIndexLease;
 use super::index::PopIndexOperationalError;
 use super::index::PopIndexRejection;
 use super::index::PopIndexReservation;
-use super::index::PopIndexReserveOutcome;
+use super::index::PopIndexReservationStatus;
 use super::index::PopIndexSnapshot;
 use super::index::PopMatchCriteria;
 use super::index::PopSelectionOrder;
@@ -488,8 +488,8 @@ impl PopDeferredService {
         };
         let key = PopCriteriaKey::from_parts(request.topic(), request.consumer_group(), request.queue_id());
         let reservation = match self.index.reserve(key) {
-            Ok(PopIndexReserveOutcome::Reserved(reservation)) => reservation,
-            Ok(PopIndexReserveOutcome::Rejected(rejection)) => {
+            Ok(PopIndexReservationStatus::Reserved(reservation)) => reservation,
+            Ok(PopIndexReservationStatus::Rejected(rejection)) => {
                 return Ok(PopDeferredPrepareOutcome::Rejected(PopDeferredPrepareRejection::Index(
                     rejection,
                 )));

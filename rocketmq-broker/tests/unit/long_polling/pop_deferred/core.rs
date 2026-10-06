@@ -232,12 +232,12 @@ fn index_reservations_enforce_both_limits_and_drop_to_zero() {
     let first = index.reserve(first_key.clone()).expect("first reservation");
     assert!(matches!(
         index.reserve(first_key),
-        Ok(PopIndexReserveOutcome::Rejected(PopIndexRejection::BucketCapacity))
+        Ok(PopIndexReservationStatus::Rejected(PopIndexRejection::BucketCapacity))
     ));
     let second = index.reserve(second_key.clone()).expect("second reservation");
     assert!(matches!(
         index.reserve(second_key),
-        Ok(PopIndexReserveOutcome::Rejected(PopIndexRejection::GlobalCapacity))
+        Ok(PopIndexReservationStatus::Rejected(PopIndexRejection::GlobalCapacity))
     ));
     assert_eq!(index.snapshot().reserved(), 2);
     drop((first, second));
