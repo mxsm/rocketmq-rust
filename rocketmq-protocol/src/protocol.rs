@@ -12,21 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
-use bytes::BytesMut;
-use cheetah_string::CheetahString;
 use serde::ser::SerializeStruct;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::Serializer;
-
-use self::rocketmq_serializable::RocketMQSerializable;
 
 pub mod admin;
 pub mod bodies;
@@ -246,23 +241,6 @@ impl<T: serde::de::DeserializeOwned> RemotingDeserializable for T {
     fn decode(bytes: &[u8]) -> rocketmq_error::Result<Self::Output> {
         serde_json::from_slice(bytes).map_err(|error| crate::error::serialization_source("deserialize", "JSON", error))
     }
-}
-
-/// Legacy handwritten fast-header codec surface.
-///
-/// Production encoding uses
-/// [`command_custom_header::CommandCustomHeader::encode_capability`] and
-/// [`command_custom_header::CommandCustomHeader::encode_direct_binary`].
-#[deprecated(note = "use CommandCustomHeader typed map/direct-binary APIs")]
-pub trait FastCodesHeader {
-    fn write_if_not_null(out: &mut BytesMut, key: &str, value: &str) {
-        if !value.is_empty() {
-            RocketMQSerializable::write_str(out, true, key);
-            RocketMQSerializable::write_str(out, false, value);
-        }
-    }
-    fn encode_fast(&mut self, out: &mut BytesMut);
-    fn decode_fast(&mut self, fields: &HashMap<CheetahString, CheetahString>);
 }
 
 #[repr(u8)]
