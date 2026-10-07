@@ -887,7 +887,7 @@ pub use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
 pub use crate::consumer::listener::message_listener_concurrently::ArcMessageListenerConcurrently;
 pub use crate::consumer::listener::message_listener_orderly::ArcMessageListenerOrderly;
 pub use crate::consumer::notify_result::NotifyResult;
-pub use crate::consumer::pull_result::PullOutcome;
+pub use crate::consumer::pull_result::PullResponse;
 pub use crate::consumer::AbstractAllocateMessageQueueStrategy;
 pub use crate::consumer::AckCallback;
 pub use crate::consumer::AckCallbackFn;
