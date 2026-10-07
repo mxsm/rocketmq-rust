@@ -23,6 +23,75 @@ use super::HeaderValue;
 use super::ProtocolContractViolation;
 use crate::protocol::command_custom_header::HeaderMap;
 
+/// A canonical wire key together with the encodings a sink would otherwise
+/// rebuild on every write.
+///
+/// Derive output creates one constant per field. Both encodings are checked
+/// against the key when that constant is evaluated, so a sink can append them
+/// without inspecting the key again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HeaderFieldKey {
+    name: &'static str,
+    binary: &'static [u8],
+    json: &'static [u8],
+}
+
+impl HeaderFieldKey {
+    /// Creates a key from its prepared encodings.
+    ///
+    /// `binary` is the big-endian `u16` key length followed by the key bytes.
+    /// `json` is the quoted key followed by `:` when the key needs no JSON
+    /// escaping, and empty otherwise.
+    ///
+    /// # Panics
+    ///
+    /// Panics when an encoding does not describe `name`. Generated codecs
+    /// evaluate this in a constant, which turns a mismatch into a compile error.
+    #[doc(hidden)]
+    pub const fn new(name: &'static str, binary: &'static [u8], json: &'static [u8]) -> Self {
+        let key = name.as_bytes();
+        assert!(
+            key.len() <= u16::MAX as usize,
+            "wire key does not fit the ROCKETMQ key length"
+        );
+        assert!(binary.len() == key.len() + 2, "binary key has the wrong length");
+        let length = (key.len() as u16).to_be_bytes();
+        assert!(
+            binary[0] == length[0] && binary[1] == length[1],
+            "binary key has the wrong length prefix"
+        );
+        let mut index = 0;
+        while index < key.len() {
+            assert!(binary[index + 2] == key[index], "binary key does not contain the key");
+            index += 1;
+        }
+        if !json.is_empty() {
+            assert!(json.len() == key.len() + 3, "JSON key has the wrong length");
+            assert!(
+                json[0] == b'"' && json[key.len() + 1] == b'"' && json[key.len() + 2] == b':',
+                "JSON key is not a quoted member name"
+            );
+            let mut index = 0;
+            while index < key.len() {
+                let byte = key[index];
+                assert!(
+                    byte >= 0x20 && byte != b'"' && byte != b'\\',
+                    "JSON key requires escaping"
+                );
+                assert!(json[index + 1] == byte, "JSON key does not contain the key");
+                index += 1;
+            }
+        }
+        Self { name, binary, json }
+    }
+
+    /// Returns the canonical wire key.
+    #[inline]
+    pub const fn name(&self) -> &'static str {
+        self.name
+    }
+}
+
 /// A statically dispatched destination for typed header fields.
 ///
 /// This trait is sealed. Protocol-owned implementations preserve identical
@@ -44,6 +113,25 @@ pub trait EncodeSink: Sealed {
         value: &V,
         context: HeaderFieldContext,
     ) -> Result<(), ProtocolContractViolation>;
+
+    /// Writes one canonical field identified by a prepared key.
+    ///
+    /// The output is identical to [`Self::write`] with [`HeaderFieldKey::name`].
+    /// Sinks override this method to append the prepared encoding directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same classified errors as [`Self::write`].
+    #[doc(hidden)]
+    #[inline]
+    fn write_field<V: HeaderValue>(
+        &mut self,
+        key: HeaderFieldKey,
+        value: &V,
+        context: HeaderFieldContext,
+    ) -> Result<(), ProtocolContractViolation> {
+        self.write(key.name, value, context)
+    }
 }
 
 /// An [`EncodeSink`] that appends typed fields directly to a [`HeaderMap`].
@@ -126,6 +214,26 @@ impl EncodeSink for JsonSink<'_> {
         value.write_json_string(self.out);
         Ok(())
     }
+
+    #[inline]
+    fn write_field<V: HeaderValue>(
+        &mut self,
+        key: HeaderFieldKey,
+        value: &V,
+        context: HeaderFieldContext,
+    ) -> Result<(), ProtocolContractViolation> {
+        if key.json.is_empty() {
+            return self.write(key.name, value, context);
+        }
+        if self.first {
+            self.first = false;
+        } else {
+            self.out.extend_from_slice(b",");
+        }
+        self.out.extend_from_slice(key.json);
+        value.write_json_string(self.out);
+        Ok(())
+    }
 }
 
 /// An [`EncodeSink`] that writes canonical extension fields directly to a
@@ -192,15 +300,109 @@ impl EncodeSink for BinarySink<'_> {
         self.out[value_len_offset..value_len_offset + 4].copy_from_slice(&actual_value_len.to_be_bytes());
         Ok(())
     }
+
+    #[inline]
+    fn write_field<V: HeaderValue>(
+        &mut self,
+        key: HeaderFieldKey,
+        value: &V,
+        context: HeaderFieldContext,
+    ) -> Result<(), ProtocolContractViolation> {
+        if value.write_binary_pair(self.out, key.binary) {
+            Ok(())
+        } else {
+            Err(ProtocolContractViolation::ValueLengthOverflow {
+                header: context.header,
+                key: context.key,
+            })
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_model::boundary_type::BoundaryType;
+
     use super::*;
     use crate::protocol::header_codec::HeaderValueKind;
 
     const CONTEXT: HeaderFieldContext =
         HeaderFieldContext::new("ExampleHeader", "topic", HeaderValueKind::String, None);
+    const TOPIC: HeaderFieldKey = HeaderFieldKey::new("topic", b"\x00\x05topic", b"\"topic\":");
+
+    fn json_fields(write: impl FnOnce(&mut JsonSink<'_>)) -> BytesMut {
+        let mut out = BytesMut::new();
+        let mut sink = JsonSink::new(&mut out);
+        write(&mut sink);
+        sink.finish();
+        out
+    }
+
+    fn assert_prepared_key_matches_plain_key<V: HeaderValue>(value: &V) {
+        let mut plain = BytesMut::from(&b"prefix"[..]);
+        BinarySink::new(&mut plain).write("topic", value, CONTEXT).unwrap();
+        let mut prepared = BytesMut::from(&b"prefix"[..]);
+        BinarySink::new(&mut prepared)
+            .write_field(TOPIC, value, CONTEXT)
+            .unwrap();
+        assert_eq!(prepared, plain);
+
+        assert_eq!(
+            json_fields(|sink| sink.write_field(TOPIC, value, CONTEXT).unwrap()),
+            json_fields(|sink| sink.write("topic", value, CONTEXT).unwrap())
+        );
+        assert_eq!(
+            json_fields(|sink| {
+                sink.write("first", &true, CONTEXT).unwrap();
+                sink.write_field(TOPIC, value, CONTEXT).unwrap();
+            }),
+            json_fields(|sink| {
+                sink.write("first", &true, CONTEXT).unwrap();
+                sink.write("topic", value, CONTEXT).unwrap();
+            })
+        );
+
+        let mut plain = HeaderMap::new();
+        MapSink::new(&mut plain).write("topic", value, CONTEXT).unwrap();
+        let mut prepared = HeaderMap::new();
+        MapSink::new(&mut prepared).write_field(TOPIC, value, CONTEXT).unwrap();
+        assert_eq!(prepared, plain);
+    }
+
+    #[test]
+    fn prepared_keys_write_the_same_output_as_plain_keys() {
+        assert_prepared_key_matches_plain_key(&CheetahString::from("主题\"\\\n"));
+        assert_prepared_key_matches_plain_key(&String::new());
+        assert_prepared_key_matches_plain_key(&i32::MIN);
+        assert_prepared_key_matches_plain_key(&i64::MAX);
+        assert_prepared_key_matches_plain_key(&0_u32);
+        assert_prepared_key_matches_plain_key(&u64::MAX);
+        assert_prepared_key_matches_plain_key(&false);
+        assert_prepared_key_matches_plain_key(&BoundaryType::Upper);
+    }
+
+    #[test]
+    fn prepared_key_that_needs_json_escaping_is_escaped_by_the_sink() {
+        const QUOTED: HeaderFieldKey = HeaderFieldKey::new("a\"b", b"\x00\x03a\"b", b"");
+
+        assert_eq!(QUOTED.name(), "a\"b");
+        assert_eq!(
+            json_fields(|sink| sink.write_field(QUOTED, &7_i32, CONTEXT).unwrap()),
+            json_fields(|sink| sink.write("a\"b", &7_i32, CONTEXT).unwrap())
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "binary key has the wrong length prefix")]
+    fn prepared_key_rejects_a_binary_encoding_with_another_length() {
+        let _ = HeaderFieldKey::new("topic", b"\x00\x04topic", b"");
+    }
+
+    #[test]
+    #[should_panic(expected = "JSON key requires escaping")]
+    fn prepared_key_rejects_an_unescaped_json_member_name() {
+        let _ = HeaderFieldKey::new("a\"b", b"\x00\x03a\"b", b"\"a\"b\":");
+    }
 
     #[test]
     fn writes_into_existing_map_without_an_intermediate_map() {

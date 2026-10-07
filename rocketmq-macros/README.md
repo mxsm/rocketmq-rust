@@ -165,6 +165,11 @@ is present; otherwise it returns `None`. A present nested field still triggers a
 Non-optional flattened fields always decode and cannot use `presence = "any"`. Flattening cannot be combined
 with scalar keys, aliases, missing/default policies, `alias_conflict`, `java_type`, or `range`.
 
+A header without generic parameters decodes itself and every generated flattened child from one pass over the
+field source: each layer still sees every field, so results do not depend on the number of passes. A header
+with generic parameters, and any hand-written `HeaderCodec` used as a flattened child, reads the source once
+per layer instead.
+
 ### Validation and errors
 
 Prefer `HeaderCodec::encode_into`, `HeaderCodec::decode_from_map` / `decode_from_source`, or

@@ -24,6 +24,7 @@ use serde::Deserialize;
 use serde::Deserializer;
 
 use super::private::FieldSourceSealed;
+use super::text_runs::TextRuns;
 use super::HeaderFieldSource;
 use crate::HeaderMap;
 
@@ -94,6 +95,7 @@ impl JsonHeaderFields {
             payload: &self.payload,
             cursor: 0,
             encoding: self.encoding,
+            text: TextRuns::new(&self.payload),
         }
     }
 }
@@ -253,6 +255,7 @@ struct JsonHeaderFieldIter<'a> {
     payload: &'a [u8],
     cursor: usize,
     encoding: JsonFieldEncoding,
+    text: TextRuns<'a>,
 }
 
 impl<'a> JsonHeaderFieldIter<'a> {
@@ -273,7 +276,11 @@ impl<'a> JsonHeaderFieldIter<'a> {
 
     #[inline]
     fn read_utf8(&mut self, length: usize) -> Option<&'a str> {
-        std::str::from_utf8(self.take(length)?).ok()
+        let start = self.cursor;
+        let end = start.checked_add(length)?;
+        let text = self.text.text(start, end)?;
+        self.cursor = end;
+        Some(text)
     }
 
     #[inline]
@@ -293,7 +300,7 @@ impl<'a> JsonHeaderFieldIter<'a> {
         let start = self.cursor;
         let relative_end = memchr(b'"', self.payload.get(start..)?)?;
         let end = start.checked_add(relative_end)?;
-        let value = std::str::from_utf8(self.payload.get(start..end)?).ok()?;
+        let value = self.text.text(start, end)?;
         self.cursor = end.checked_add(1)?;
         Some(value)
     }
@@ -347,10 +354,9 @@ impl<'a> JsonHeaderFieldIter<'a> {
         self.cursor = self.cursor.checked_add(value_length)?;
         let value_end = self.cursor;
         self.cursor = self.cursor.checked_add(1)?;
-        Some((
-            std::str::from_utf8(self.payload.get(key_start..key_end)?).ok()?,
-            std::str::from_utf8(self.payload.get(value_start..value_end)?).ok()?,
-        ))
+        let key = self.text.text(key_start, key_end)?;
+        let value = self.text.text(value_start, value_end)?;
+        Some((key, value))
     }
 
     #[inline(always)]
@@ -404,6 +410,27 @@ mod tests {
 
         for fields in fields {
             assert_eq!(fields.iter().collect::<Vec<_>>(), vec![("key", "value")]);
+        }
+    }
+
+    #[test]
+    fn multibyte_and_empty_text_survive_every_internal_encoding() {
+        let key = "主题";
+        let value = "RocketMQ-🚀";
+        let mut length_prefixed = Vec::new();
+        for text in [key, value, "next", ""] {
+            length_prefixed.extend_from_slice(&(text.len() as u32).to_be_bytes());
+            length_prefixed.extend_from_slice(text.as_bytes());
+        }
+        let object = format!("\"{key}\":\"{value}\",\"next\":\"\"");
+        let fields = [
+            JsonHeaderFields::from_length_prefixed(length_prefixed, 2),
+            JsonHeaderFields::from_unescaped_object(Bytes::from(format!(" {object} ")), 2),
+            JsonHeaderFields::from_canonical_unescaped_object(Bytes::from(object), 2),
+        ];
+
+        for fields in fields {
+            assert_eq!(fields.iter().collect::<Vec<_>>(), vec![(key, value), ("next", "")]);
         }
     }
 

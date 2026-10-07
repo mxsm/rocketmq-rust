@@ -114,6 +114,23 @@ pub trait HeaderValue: Sealed + Sized {
         out.extend_from_slice(b"\"");
     }
 
+    /// Appends one ROCKETMQ extension-field pair whose key is already encoded in `key_prefix`.
+    ///
+    /// The pair is `key_prefix`, the big-endian signed 32-bit value length, and
+    /// the bytes of [`Self::write_ascii`]. Returns `false` without writing when
+    /// the value does not fit that length.
+    #[doc(hidden)]
+    #[inline]
+    fn write_binary_pair(&self, out: &mut BytesMut, key_prefix: &[u8]) -> bool {
+        let Ok(length) = i32::try_from(self.encoded_len()) else {
+            return false;
+        };
+        out.extend_from_slice(key_prefix);
+        out.extend_from_slice(&length.to_be_bytes());
+        self.write_ascii(out);
+        true
+    }
+
     /// Decodes a complete map value according to the field context.
     ///
     /// # Errors
@@ -175,6 +192,20 @@ fn unsigned_decimal_len(value: u64) -> usize {
     }
 }
 
+/// Appends a pair whose value text is already available, so its length is
+/// written once instead of being patched after the value.
+#[inline]
+fn put_binary_pair(out: &mut BytesMut, key_prefix: &[u8], value: &[u8]) -> bool {
+    let Ok(length) = i32::try_from(value.len()) else {
+        return false;
+    };
+    out.reserve(key_prefix.len() + 4 + value.len());
+    out.extend_from_slice(key_prefix);
+    out.extend_from_slice(&length.to_be_bytes());
+    out.extend_from_slice(value);
+    true
+}
+
 impl Sealed for CheetahString {}
 
 impl HeaderValue for CheetahString {
@@ -199,6 +230,11 @@ impl HeaderValue for CheetahString {
     #[inline]
     fn write_json_string(&self, out: &mut BytesMut) {
         write_json_string(out, self.as_str());
+    }
+
+    #[inline]
+    fn write_binary_pair(&self, out: &mut BytesMut, key_prefix: &[u8]) -> bool {
+        put_binary_pair(out, key_prefix, self.as_bytes())
     }
 
     #[inline]
@@ -234,6 +270,11 @@ impl HeaderValue for String {
     }
 
     #[inline]
+    fn write_binary_pair(&self, out: &mut BytesMut, key_prefix: &[u8]) -> bool {
+        put_binary_pair(out, key_prefix, self.as_bytes())
+    }
+
+    #[inline]
     fn decode(raw: &str, _context: HeaderFieldContext) -> Result<Self, ProtocolContractViolation> {
         Ok(raw.to_owned())
     }
@@ -262,6 +303,11 @@ impl HeaderValue for bool {
     #[inline]
     fn write_ascii(&self, out: &mut BytesMut) {
         out.extend_from_slice(if *self { b"true" } else { b"false" });
+    }
+
+    #[inline]
+    fn write_binary_pair(&self, out: &mut BytesMut, key_prefix: &[u8]) -> bool {
+        put_binary_pair(out, key_prefix, if *self { b"true" } else { b"false" })
     }
 
     #[inline]
@@ -302,6 +348,12 @@ macro_rules! impl_signed_header_value {
             }
 
             #[inline]
+            fn write_binary_pair(&self, out: &mut BytesMut, key_prefix: &[u8]) -> bool {
+                let mut buffer = itoa::Buffer::new();
+                put_binary_pair(out, key_prefix, buffer.format(*self).as_bytes())
+            }
+
+            #[inline]
             fn decode(raw: &str, context: HeaderFieldContext) -> Result<Self, ProtocolContractViolation> {
                 raw.parse::<$ty>().map_err(|_| invalid_value(context))
             }
@@ -332,6 +384,12 @@ macro_rules! impl_unsigned_header_value {
             fn write_ascii(&self, out: &mut BytesMut) {
                 let mut buffer = itoa::Buffer::new();
                 out.extend_from_slice(buffer.format(*self).as_bytes());
+            }
+
+            #[inline]
+            fn write_binary_pair(&self, out: &mut BytesMut, key_prefix: &[u8]) -> bool {
+                let mut buffer = itoa::Buffer::new();
+                put_binary_pair(out, key_prefix, buffer.format(*self).as_bytes())
             }
 
             #[inline]
@@ -377,6 +435,18 @@ impl HeaderValue for BoundaryType {
             BoundaryType::Lower => b"LOWER",
             BoundaryType::Upper => b"UPPER",
         });
+    }
+
+    #[inline]
+    fn write_binary_pair(&self, out: &mut BytesMut, key_prefix: &[u8]) -> bool {
+        put_binary_pair(
+            out,
+            key_prefix,
+            match self {
+                BoundaryType::Lower => b"LOWER",
+                BoundaryType::Upper => b"UPPER",
+            },
+        )
     }
 
     #[inline]

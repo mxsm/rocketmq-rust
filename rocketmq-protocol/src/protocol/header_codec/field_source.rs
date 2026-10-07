@@ -16,6 +16,7 @@ use bytes::Bytes;
 use cheetah_string::CheetahString;
 
 use super::private::FieldSourceSealed;
+use super::text_runs::TextRuns;
 use crate::HeaderMap;
 
 const KEY_LENGTH_BYTES: usize = 2;
@@ -96,24 +97,33 @@ impl BinaryHeaderFields {
         BinaryHeaderFieldIter {
             payload: &self.payload,
             cursor: 0,
+            text: TextRuns::new(&self.payload),
         }
     }
 
     fn validate(payload: &[u8]) -> rocketmq_error::Result<usize> {
         let mut cursor = 0usize;
         let mut entry_count = 0usize;
+        let mut text = TextRuns::new(payload);
         while cursor < payload.len() {
             let key_length = Self::read_u16(payload, &mut cursor)?;
             if key_length == 0 {
                 return Err(malformed_binary_fields("extension-field key is empty"));
             }
-            Self::read_utf8(payload, &mut cursor, key_length, "truncated extension-field key")?;
+            Self::read_utf8(
+                &mut text,
+                payload,
+                &mut cursor,
+                key_length,
+                "truncated extension-field key",
+            )?;
 
             let value_length = Self::read_i32(payload, &mut cursor)?;
             if value_length < 0 {
                 return Err(malformed_binary_fields("extension-field value length is negative"));
             }
             let value = Self::read_utf8(
+                &mut text,
                 payload,
                 &mut cursor,
                 value_length as usize,
@@ -146,13 +156,16 @@ impl BinaryHeaderFields {
 
     #[inline(never)]
     fn read_utf8<'a>(
+        text: &mut TextRuns<'a>,
         payload: &'a [u8],
         cursor: &mut usize,
         length: usize,
         truncated_reason: &'static str,
     ) -> rocketmq_error::Result<&'a str> {
-        let bytes = Self::take(payload, cursor, length, truncated_reason)?;
-        std::str::from_utf8(bytes).map_err(|_| malformed_binary_fields("extension-field text is not valid UTF-8"))
+        let start = *cursor;
+        Self::take(payload, cursor, length, truncated_reason)?;
+        text.text(start, *cursor)
+            .ok_or_else(|| malformed_binary_fields("extension-field text is not valid UTF-8"))
     }
 
     fn take<'a>(
@@ -193,6 +206,7 @@ impl HeaderFieldSource for BinaryHeaderFields {
 struct BinaryHeaderFieldIter<'a> {
     payload: &'a [u8],
     cursor: usize,
+    text: TextRuns<'a>,
 }
 
 impl<'a> BinaryHeaderFieldIter<'a> {
@@ -219,7 +233,11 @@ impl<'a> BinaryHeaderFieldIter<'a> {
 
     #[inline]
     fn read_utf8(&mut self, length: usize) -> Option<&'a str> {
-        std::str::from_utf8(self.take(length)?).ok()
+        let start = self.cursor;
+        let end = start.checked_add(length)?;
+        let text = self.text.text(start, end)?;
+        self.cursor = end;
+        Some(text)
     }
 }
 
@@ -298,6 +316,125 @@ mod tests {
 
         for payload in invalid_payloads {
             assert!(BinaryHeaderFields::new(payload).is_err());
+        }
+    }
+
+    /// Deterministic generator so every run checks the same payloads.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+
+        fn below(&mut self, bound: usize) -> usize {
+            (self.next() % bound as u64) as usize
+        }
+
+        fn text(&mut self, bytes: usize) -> String {
+            const ALPHABET: [&str; 6] = ["a", "Z", "7", "é", "主", "🚀"];
+            // Mostly ASCII, as on the wire, with an occasional multibyte character.
+            let ascii_only = self.below(4) != 0;
+            let mut text = String::new();
+            while text.len() < bytes {
+                let choice = if ascii_only { self.below(3) } else { self.below(6) };
+                text.push_str(ALPHABET[choice]);
+            }
+            text
+        }
+    }
+
+    /// Reads fields by validating each key and value on its own, stopping at the first malformed entry.
+    fn reference_fields(payload: &[u8], reject_empty_keys: bool) -> (Vec<(String, String)>, bool) {
+        fn read<'a>(payload: &'a [u8], cursor: &mut usize, length: usize) -> Option<&'a [u8]> {
+            let bytes = payload.get(*cursor..cursor.checked_add(length)?)?;
+            *cursor += length;
+            Some(bytes)
+        }
+        fn entry<'a>(payload: &'a [u8], cursor: &mut usize, reject_empty_keys: bool) -> Option<(&'a str, &'a str)> {
+            let key_length = u16::from_be_bytes(read(payload, cursor, 2)?.try_into().ok()?) as usize;
+            if reject_empty_keys && key_length == 0 {
+                return None;
+            }
+            let key = std::str::from_utf8(read(payload, cursor, key_length)?).ok()?;
+            let value_length = i32::from_be_bytes(read(payload, cursor, 4)?.try_into().ok()?);
+            let value = std::str::from_utf8(read(payload, cursor, usize::try_from(value_length).ok()?)?).ok()?;
+            Some((key, value))
+        }
+
+        let mut cursor = 0;
+        let mut fields = Vec::new();
+        while cursor < payload.len() {
+            let Some((key, value)) = entry(payload, &mut cursor, reject_empty_keys) else {
+                return (fields, false);
+            };
+            if !value.is_empty() {
+                fields.push((key.to_owned(), value.to_owned()));
+            }
+        }
+        (fields, true)
+    }
+
+    fn owned(fields: &BinaryHeaderFields) -> Vec<(String, String)> {
+        fields
+            .iter()
+            .map(|(key, value)| (key.to_owned(), value.to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn run_based_text_matches_per_field_validation_for_valid_and_corrupted_payloads() {
+        // Value lengths around 128 and 256 put bytes >= 0x80 into the length prefix.
+        const VALUE_BYTES: [usize; 12] = [0, 1, 2, 9, 30, 127, 128, 129, 200, 255, 256, 300];
+        let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+
+        for _ in 0..3000 {
+            let mut payload = BytesMut::new();
+            for _ in 0..rng.below(9) {
+                let key_bytes = 1 + rng.below(20);
+                let key = rng.text(key_bytes);
+                let value_bytes = VALUE_BYTES[rng.below(VALUE_BYTES.len())];
+                let value = rng.text(value_bytes);
+                entry(&mut payload, key.as_bytes(), value.as_bytes());
+            }
+            let payload = payload.freeze();
+
+            let (expected, complete) = reference_fields(&payload, true);
+            assert!(complete);
+            let fields = BinaryHeaderFields::new(payload.clone()).expect("generated payload is valid");
+            assert_eq!(fields.len(), expected.len());
+            assert_eq!(owned(&fields), expected);
+
+            if payload.is_empty() {
+                continue;
+            }
+            for _ in 0..3 {
+                let mut corrupted = payload.to_vec();
+                for _ in 0..1 + rng.below(3) {
+                    let index = rng.below(corrupted.len());
+                    corrupted[index] = rng.next() as u8;
+                }
+                let corrupted = Bytes::from(corrupted);
+
+                let (expected, complete) = reference_fields(&corrupted, true);
+                match BinaryHeaderFields::new(corrupted.clone()) {
+                    Ok(fields) => {
+                        assert!(complete);
+                        assert_eq!(owned(&fields), expected);
+                    }
+                    Err(_) => assert!(!complete),
+                }
+
+                // The iterator alone must stop exactly where per-field validation stops.
+                let unchecked = BinaryHeaderFields {
+                    payload: corrupted.clone(),
+                    entry_count: 0,
+                };
+                assert_eq!(owned(&unchecked), reference_fields(&corrupted, false).0);
+            }
         }
     }
 
