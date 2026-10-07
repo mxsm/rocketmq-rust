@@ -14,19 +14,19 @@
 
 use super::*;
 #[cfg(feature = "admin-mutation")]
-use crate::admin::BrokerConfigPatchOutcome;
+use crate::admin::BrokerConfigPatchResult;
 #[cfg(feature = "admin-mutation")]
 use crate::admin::MutationTopicConfigVersioned;
 #[cfg(feature = "admin-mutation")]
 use crate::admin::SubscriptionGroupConfigPatch;
 #[cfg(feature = "admin-mutation")]
-use crate::admin::SubscriptionGroupConfigPatchOutcome;
+use crate::admin::SubscriptionGroupConfigPatchResult;
 #[cfg(feature = "admin-read")]
 use crate::admin::SubscriptionGroupConfigVersioned;
 #[cfg(feature = "admin-mutation")]
 use crate::admin::TopicConfigPatch;
 #[cfg(feature = "admin-mutation")]
-use crate::admin::TopicConfigPatchOutcome;
+use crate::admin::TopicConfigPatchResult;
 #[cfg(feature = "admin-read")]
 use crate::admin::TopicConfigVersioned;
 use rocketmq_protocol::protocol::header::get_broker_config_response_header::GetBrokerConfigResponseHeader;
@@ -121,10 +121,10 @@ fn subscription_group_config_versioned_from_response(
 }
 
 #[cfg(feature = "admin-mutation")]
-fn topic_config_patch_outcome_from_response(
+fn topic_config_patch_result_from_response(
     response: &RemotingCommand,
     expected_version: u64,
-) -> ClientResult<TopicConfigPatchOutcome> {
+) -> ClientResult<TopicConfigPatchResult> {
     match ResponseCode::from(response.code()) {
         ResponseCode::Success => {
             let header = response
@@ -145,14 +145,14 @@ fn topic_config_patch_outcome_from_response(
                     ),
                 ));
             }
-            Ok(TopicConfigPatchOutcome::Applied {
+            Ok(TopicConfigPatchResult::Applied {
                 previous_version: expected_version,
                 version: header.topic_version,
             })
         }
         ResponseCode::InvalidParameter => {
             if let Ok(header) = response.decode_command_custom_header::<UpdateTopicConfigCasResponseHeader>() {
-                return Ok(TopicConfigPatchOutcome::VersionConflict {
+                return Ok(TopicConfigPatchResult::VersionConflict {
                     expected_version,
                     actual_version: header.topic_version,
                 });
@@ -170,10 +170,10 @@ fn topic_config_patch_outcome_from_response(
 }
 
 #[cfg(feature = "admin-mutation")]
-fn subscription_group_config_patch_outcome_from_response(
+fn subscription_group_config_patch_result_from_response(
     response: &RemotingCommand,
     expected_version: u64,
-) -> ClientResult<SubscriptionGroupConfigPatchOutcome> {
+) -> ClientResult<SubscriptionGroupConfigPatchResult> {
     match ResponseCode::from(response.code()) {
         ResponseCode::Success => {
             let header = response
@@ -196,7 +196,7 @@ fn subscription_group_config_patch_outcome_from_response(
                     ),
                 ));
             }
-            Ok(SubscriptionGroupConfigPatchOutcome::Applied {
+            Ok(SubscriptionGroupConfigPatchResult::Applied {
                 previous_version: expected_version,
                 version: header.subscription_group_version,
             })
@@ -205,7 +205,7 @@ fn subscription_group_config_patch_outcome_from_response(
             if let Ok(header) =
                 response.decode_command_custom_header::<UpdateSubscriptionGroupConfigCasResponseHeader>()
             {
-                return Ok(SubscriptionGroupConfigPatchOutcome::VersionConflict {
+                return Ok(SubscriptionGroupConfigPatchResult::VersionConflict {
                     expected_version,
                     actual_version: header.subscription_group_version,
                 });
@@ -318,7 +318,7 @@ impl MQClientAPIImpl {
         expected_generation: u64,
         properties: HashMap<CheetahString, CheetahString>,
         timeout_millis: u64,
-    ) -> ClientResult<BrokerConfigPatchOutcome> {
+    ) -> ClientResult<BrokerConfigPatchResult> {
         if expected_generation == 0 {
             return Err(ClientError::illegal_argument(
                 "expected broker config generation must be greater than zero",
@@ -387,14 +387,14 @@ impl MQClientAPIImpl {
                         ),
                     ));
                 }
-                Ok(BrokerConfigPatchOutcome::Applied {
+                Ok(BrokerConfigPatchResult::Applied {
                     previous_generation: expected_generation,
                     generation: header.config_generation,
                 })
             }
             ResponseCode::InvalidParameter => {
                 if let Ok(header) = response.decode_command_custom_header::<UpdateBrokerConfigResponseHeader>() {
-                    return Ok(BrokerConfigPatchOutcome::GenerationConflict {
+                    return Ok(BrokerConfigPatchResult::GenerationConflict {
                         expected_generation,
                         actual_generation: header.config_generation,
                     });
@@ -419,7 +419,7 @@ impl MQClientAPIImpl {
         expected_version: u64,
         patch: TopicConfigPatch,
         timeout_millis: u64,
-    ) -> ClientResult<TopicConfigPatchOutcome> {
+    ) -> ClientResult<TopicConfigPatchResult> {
         if patch.is_empty() {
             return Err(ClientError::illegal_argument(
                 "version-checked Topic config patch must not be empty",
@@ -476,7 +476,7 @@ impl MQClientAPIImpl {
             }
             Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
-        topic_config_patch_outcome_from_response(&response, expected_version)
+        topic_config_patch_result_from_response(&response, expected_version)
     }
 
     #[cfg(feature = "admin-mutation")]
@@ -487,7 +487,7 @@ impl MQClientAPIImpl {
         expected_version: u64,
         patch: SubscriptionGroupConfigPatch,
         timeout_millis: u64,
-    ) -> ClientResult<SubscriptionGroupConfigPatchOutcome> {
+    ) -> ClientResult<SubscriptionGroupConfigPatchResult> {
         if patch.is_empty() {
             return Err(ClientError::illegal_argument(
                 "version-checked Subscription Group config patch must not be empty",
@@ -554,7 +554,7 @@ impl MQClientAPIImpl {
             }
             Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
-        subscription_group_config_patch_outcome_from_response(&response, expected_version)
+        subscription_group_config_patch_result_from_response(&response, expected_version)
     }
 
     pub(crate) async fn get_broker_config_snapshot(
@@ -731,8 +731,8 @@ mod tests {
             });
         applied.make_custom_header_to_net();
         assert_eq!(
-            topic_config_patch_outcome_from_response(&applied, 9).expect("applied outcome"),
-            TopicConfigPatchOutcome::Applied {
+            topic_config_patch_result_from_response(&applied, 9).expect("applied outcome"),
+            TopicConfigPatchResult::Applied {
                 previous_version: 9,
                 version: 10,
             }
@@ -744,8 +744,8 @@ mod tests {
         );
         conflict.make_custom_header_to_net();
         assert_eq!(
-            topic_config_patch_outcome_from_response(&conflict, 9).expect("conflict outcome"),
-            TopicConfigPatchOutcome::VersionConflict {
+            topic_config_patch_result_from_response(&conflict, 9).expect("conflict outcome"),
+            TopicConfigPatchResult::VersionConflict {
                 expected_version: 9,
                 actual_version: 11,
             }
@@ -762,8 +762,8 @@ mod tests {
         );
         applied.make_custom_header_to_net();
         assert_eq!(
-            subscription_group_config_patch_outcome_from_response(&applied, 9).expect("applied outcome"),
-            SubscriptionGroupConfigPatchOutcome::Applied {
+            subscription_group_config_patch_result_from_response(&applied, 9).expect("applied outcome"),
+            SubscriptionGroupConfigPatchResult::Applied {
                 previous_version: 9,
                 version: 10,
             }
@@ -777,8 +777,8 @@ mod tests {
         );
         conflict.make_custom_header_to_net();
         assert_eq!(
-            subscription_group_config_patch_outcome_from_response(&conflict, 9).expect("conflict outcome"),
-            SubscriptionGroupConfigPatchOutcome::VersionConflict {
+            subscription_group_config_patch_result_from_response(&conflict, 9).expect("conflict outcome"),
+            SubscriptionGroupConfigPatchResult::VersionConflict {
                 expected_version: 9,
                 actual_version: 11,
             }
