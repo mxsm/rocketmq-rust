@@ -46,8 +46,14 @@ pub(crate) struct OnewayEnvelope {
     pub(crate) send: OnewaySend,
 }
 
+/// Whether a one-way send envelope is admitted into the bounded local egress queue.
+///
+/// Admission is decided locally: [`Accepted`](Self::Accepted) means the envelope holds a queue
+/// slot and its resource permit, while delivery, failure and cancellation are accounted later
+/// by the egress workers. An accepted envelope is therefore not a broker acknowledgement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum OnewayAdmissionOutcome {
+pub(crate) enum OnewayAdmissionDecision {
+    /// The envelope entered the local egress queue.
     Accepted,
     Rejected(OnewayAdmissionRejection),
 }
@@ -150,7 +156,7 @@ impl BoundedEgress {
         retained_bytes: usize,
         deadline: RequestDeadline,
         build: F,
-    ) -> ClientResult<OnewayAdmissionOutcome>
+    ) -> ClientResult<OnewayAdmissionDecision>
     where
         F: FnOnce() -> ClientResult<OnewayEnvelope>,
     {
@@ -178,7 +184,7 @@ impl BoundedEgress {
         self.metrics.accepted.fetch_add(1, Ordering::Relaxed);
         self.client_metrics.record_oneway_egress_event("accepted");
         self.record_state();
-        Ok(OnewayAdmissionOutcome::Accepted)
+        Ok(OnewayAdmissionDecision::Accepted)
     }
 
     pub(crate) fn close(&self) {
@@ -215,11 +221,11 @@ impl BoundedEgress {
         );
     }
 
-    fn reject(&self, rejection: OnewayAdmissionRejection) -> OnewayAdmissionOutcome {
+    fn reject(&self, rejection: OnewayAdmissionRejection) -> OnewayAdmissionDecision {
         self.metrics.rejected.fetch_add(1, Ordering::Relaxed);
         self.client_metrics.record_oneway_egress_event("rejected");
         self.record_state();
-        OnewayAdmissionOutcome::Rejected(rejection)
+        OnewayAdmissionDecision::Rejected(rejection)
     }
 }
 
@@ -340,7 +346,7 @@ mod tests {
 
         assert_eq!(
             result.expect("capacity is a normal rejection"),
-            OnewayAdmissionOutcome::Rejected(OnewayAdmissionRejection::Capacity)
+            OnewayAdmissionDecision::Rejected(OnewayAdmissionRejection::Capacity)
         );
         assert_eq!(built.load(Ordering::Relaxed), 0);
         assert_eq!(egress.snapshot().rejected, 1);
@@ -356,7 +362,7 @@ mod tests {
         });
         assert_eq!(
             closed.expect("closed admission is a normal rejection"),
-            OnewayAdmissionOutcome::Rejected(OnewayAdmissionRejection::Closed)
+            OnewayAdmissionDecision::Rejected(OnewayAdmissionRejection::Closed)
         );
         assert_eq!(egress.snapshot().rejected, 1);
 
@@ -366,7 +372,7 @@ mod tests {
         });
         assert_eq!(
             expired.expect("expired admission is a normal rejection"),
-            OnewayAdmissionOutcome::Rejected(OnewayAdmissionRejection::DeadlineExpired)
+            OnewayAdmissionDecision::Rejected(OnewayAdmissionRejection::DeadlineExpired)
         );
         assert_eq!(open.snapshot().rejected, 1);
     }
