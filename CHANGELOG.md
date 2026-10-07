@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(namesrv):** Renamed the private NameServer KV `MutationOutcome` to `KvMutationEffect` ([#11251](https://github.com/mxsm/rocketmq-rust/issues/11251)).
 - **refactor(client):** Renamed the public Client admin mutation result and report types without compatibility aliases ([#11227](https://github.com/mxsm/rocketmq-rust/issues/11227)).
 - **refactor(dashboard):** Consolidate Web backend SQL migrations into one initial file per database while preserving existing migration versions and data; start future migration filenames at `0002_*.sql` ([#11113](https://github.com/mxsm/rocketmq-rust/issues/11113)).
 - **refactor(runtime):** Renamed `MetadataIoAdmissionOutcome` to `MetadataWriteSubmissionStatus` in the public API.

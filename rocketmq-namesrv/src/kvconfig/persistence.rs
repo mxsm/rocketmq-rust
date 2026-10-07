@@ -461,7 +461,7 @@ async fn run_worker(
     inner.finished.notify_waiters();
 }
 
-struct MutationOutcome {
+struct KvMutationEffect {
     changed_entries: usize,
     namespace: Option<Namespace>,
 }
@@ -478,7 +478,7 @@ async fn process_batch(
     let mut candidate = snapshot_table(config_table);
     let mut touched_namespaces = HashSet::new();
     let mut force_persist = false;
-    let mut outcomes = Vec::with_capacity(batch.len());
+    let mut effects = Vec::with_capacity(batch.len());
     let mut max_generation = 0;
     let mut deadline = batch[0].deadline;
 
@@ -488,16 +488,16 @@ async fn process_batch(
             deadline = command.deadline;
         }
         force_persist |= matches!(command.mutation, KvMutation::Persist);
-        let outcome = apply_mutation(&mut candidate, &command.mutation);
-        if outcome.changed_entries > 0 {
-            if let Some(namespace) = &outcome.namespace {
+        let effect = apply_mutation(&mut candidate, &command.mutation);
+        if effect.changed_entries > 0 {
+            if let Some(namespace) = &effect.namespace {
                 touched_namespaces.insert(namespace.clone());
             }
         }
-        outcomes.push(outcome);
+        effects.push(effect);
     }
 
-    let changed = outcomes.iter().any(|outcome| outcome.changed_entries > 0);
+    let changed = effects.iter().any(|effect| effect.changed_entries > 0);
     if changed || force_persist {
         let persist_started = std::time::Instant::now();
         let bytes = match serialize_candidate(&candidate) {
@@ -581,12 +581,12 @@ async fn process_batch(
     inner.durable_generation.store(max_generation, Ordering::Release);
     inner.applied_generation.store(max_generation, Ordering::Release);
 
-    for (command, outcome) in batch.into_iter().zip(outcomes) {
+    for (command, effect) in batch.into_iter().zip(effects) {
         let receipt = KvCommitReceipt {
             requested_generation: command.requested_generation,
             durable_generation: max_generation,
             applied_generation: max_generation,
-            changed_entries: outcome.changed_entries,
+            changed_entries: effect.changed_entries,
         };
         let _ = command.completion.send(Ok(receipt));
         finish_command(inner, command.estimated_bytes);
@@ -637,7 +637,7 @@ fn serialize_candidate(candidate: &HashMap<Namespace, ConfigMap>) -> NameServerR
         .map_err(|error| crate::namesrv_error::serialization("encode-kv-config", "json", error))
 }
 
-fn apply_mutation(candidate: &mut HashMap<Namespace, ConfigMap>, mutation: &KvMutation) -> MutationOutcome {
+fn apply_mutation(candidate: &mut HashMap<Namespace, ConfigMap>, mutation: &KvMutation) -> KvMutationEffect {
     match mutation {
         KvMutation::Put { namespace, key, value } => {
             let values = candidate.entry(namespace.clone()).or_default();
@@ -645,7 +645,7 @@ fn apply_mutation(candidate: &mut HashMap<Namespace, ConfigMap>, mutation: &KvMu
             if changed > 0 {
                 values.insert(key.clone(), value.clone());
             }
-            MutationOutcome {
+            KvMutationEffect {
                 changed_entries: changed,
                 namespace: Some(namespace.clone()),
             }
@@ -655,7 +655,7 @@ fn apply_mutation(candidate: &mut HashMap<Namespace, ConfigMap>, mutation: &KvMu
                 .get_mut(namespace)
                 .and_then(|values| values.remove(key))
                 .is_some() as usize;
-            MutationOutcome {
+            KvMutationEffect {
                 changed_entries: changed,
                 namespace: Some(namespace.clone()),
             }
@@ -669,7 +669,7 @@ fn apply_mutation(candidate: &mut HashMap<Namespace, ConfigMap>, mutation: &KvMu
                     changed += 1;
                 }
             }
-            MutationOutcome {
+            KvMutationEffect {
                 changed_entries: changed,
                 namespace: Some(namespace.clone()),
             }
@@ -681,16 +681,16 @@ fn apply_mutation(candidate: &mut HashMap<Namespace, ConfigMap>, mutation: &KvMu
                     changed += usize::from(current.remove(key).is_some());
                 }
             }
-            MutationOutcome {
+            KvMutationEffect {
                 changed_entries: changed,
                 namespace: Some(namespace.clone()),
             }
         }
-        KvMutation::DeleteNamespace { namespace } => MutationOutcome {
+        KvMutation::DeleteNamespace { namespace } => KvMutationEffect {
             changed_entries: candidate.remove(namespace).map_or(0, |values| values.len()),
             namespace: Some(namespace.clone()),
         },
-        KvMutation::Persist => MutationOutcome {
+        KvMutation::Persist => KvMutationEffect {
             changed_entries: 0,
             namespace: None,
         },
