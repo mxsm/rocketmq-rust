@@ -42,7 +42,7 @@ const NOTIFY_FANOUT: usize = 16;
 const ROUTE_REFRESH_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum TopicRouteApplyOutcome {
+pub(super) enum TopicRouteApplyStatus {
     Applied,
     Unchanged,
     Stale,
@@ -98,7 +98,7 @@ impl RouteUpdateCoordinator {
         topic: &CheetahString,
         topic_route_data: &mut TopicRouteData,
         request_version: u64,
-    ) -> TopicRouteApplyOutcome {
+    ) -> TopicRouteApplyStatus {
         let deadline = tokio::time::Instant::now() + ROUTE_REFRESH_TIMEOUT;
         let snapshot = self.snapshot(topic);
         let changed = self.compute_changed(topic, topic_route_data, &snapshot, deadline).await;
@@ -114,18 +114,18 @@ impl RouteUpdateCoordinator {
                  currentVersion: {}",
                 topic, request_version, current_version
             );
-            return TopicRouteApplyOutcome::Stale;
+            return TopicRouteApplyStatus::Stale;
         }
 
         let Some(plan) = plan else {
             drop(commit_guard);
-            return TopicRouteApplyOutcome::Unchanged;
+            return TopicRouteApplyStatus::Unchanged;
         };
         self.commit(topic, snapshot.old_route.as_ref(), &plan, current_version);
         drop(commit_guard);
 
         self.notify(topic, &snapshot, &plan, deadline).await;
-        TopicRouteApplyOutcome::Applied
+        TopicRouteApplyStatus::Applied
     }
 
     fn snapshot(&self, topic: &CheetahString) -> RouteUpdateSnapshot {
