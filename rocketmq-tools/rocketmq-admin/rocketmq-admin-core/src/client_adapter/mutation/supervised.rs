@@ -149,7 +149,7 @@ impl SupervisedMutationAdmin for MutationAdminSession {
                     )
                     .await
                 {
-                    Ok(ClientBrokerConfigPatchOutcome::Applied { generation, .. }) => {
+                    Ok(ClientBrokerConfigPatchResult::Applied { generation, .. }) => {
                         outcome.targets.push(MetadataMutationTargetOutcome {
                             broker_name: broker_name.clone(),
                             expected_state: ExpectedState::Present {
@@ -164,7 +164,7 @@ impl SupervisedMutationAdmin for MutationAdminSession {
                             retryable: false,
                         });
                     }
-                    Ok(ClientBrokerConfigPatchOutcome::GenerationConflict { actual_generation, .. }) => {
+                    Ok(ClientBrokerConfigPatchResult::GenerationConflict { actual_generation, .. }) => {
                         outcome.targets.push(MetadataMutationTargetOutcome {
                             broker_name: broker_name.clone(),
                             expected_state: ExpectedState::Present {
@@ -852,7 +852,7 @@ async fn execute_broker_config_patch_verified_with_admin<A: MQAdminMutationExt +
             .patch_broker_config_if_generation(broker_addr.as_str().into(), before.generation, properties.clone())
             .await
         {
-            Ok(ClientBrokerConfigPatchOutcome::Applied { .. }) => {
+            Ok(ClientBrokerConfigPatchResult::Applied { .. }) => {
                 match admin.broker_mutation_config_state(broker_addr.as_str().into()).await {
                     Ok(observed) => {
                         let observed = map_client_broker_state(observed);
@@ -886,7 +886,7 @@ async fn execute_broker_config_patch_verified_with_admin<A: MQAdminMutationExt +
                     }),
                 }
             }
-            Ok(ClientBrokerConfigPatchOutcome::GenerationConflict { .. }) => {
+            Ok(ClientBrokerConfigPatchResult::GenerationConflict { .. }) => {
                 outcome.targets.push(BrokerMutationConfigTargetOutcome {
                     broker_name: broker_name.clone(),
                     before: *before,
@@ -1844,12 +1844,12 @@ mod tests {
             broker_addr: CheetahString,
             expected_generation: u64,
             properties: HashMap<CheetahString, CheetahString>,
-        ) -> rocketmq_client_rust::ClientResult<ClientBrokerConfigPatchOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<ClientBrokerConfigPatchResult> {
             self.record_endpoint("broker_write", &broker_addr);
             self.broker_writes.fetch_add(1, Ordering::SeqCst);
             let mut state = self.broker_state.lock().expect("broker state");
             if self.broker_conflict.load(Ordering::SeqCst) || state.generation != expected_generation {
-                return Ok(ClientBrokerConfigPatchOutcome::GenerationConflict {
+                return Ok(ClientBrokerConfigPatchResult::GenerationConflict {
                     expected_generation,
                     actual_generation: state.generation,
                 });
@@ -1875,7 +1875,7 @@ mod tests {
             }
             let previous_generation = state.generation;
             state.generation += 1;
-            Ok(ClientBrokerConfigPatchOutcome::Applied {
+            Ok(ClientBrokerConfigPatchResult::Applied {
                 previous_generation,
                 generation: state.generation,
             })
@@ -1887,7 +1887,7 @@ mod tests {
             _topic: CheetahString,
             _expected_version: u64,
             _patch: ClientTopicConfigPatch,
-        ) -> rocketmq_client_rust::ClientResult<ClientTopicConfigPatchOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<ClientTopicConfigPatchResult> {
             unsupported()
         }
 
@@ -1897,7 +1897,7 @@ mod tests {
             _group: CheetahString,
             _expected_version: u64,
             _patch: ClientSubscriptionGroupConfigPatch,
-        ) -> rocketmq_client_rust::ClientResult<ClientSubscriptionGroupConfigPatchOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<ClientSubscriptionGroupConfigPatchResult> {
             unsupported()
         }
 
@@ -2101,10 +2101,10 @@ mod tests {
             queue_id: i32,
             _expected_offset: i64,
             new_offset: i64,
-        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::ConditionalConsumerOffsetOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::ConsumerOffsetCasResult> {
             self.reset_calls.fetch_add(1, Ordering::SeqCst);
             self.offsets.lock().expect("offsets").insert(queue_id, new_offset);
-            Ok(rocketmq_client_rust::ConditionalConsumerOffsetOutcome {
+            Ok(rocketmq_client_rust::ConsumerOffsetCasResult {
                 applied: true,
                 actual_offset: new_offset,
             })
@@ -2145,11 +2145,11 @@ mod tests {
             _topic: CheetahString,
             expected_state: ClientExpectedState,
             replacement: ClientTopicConfig,
-        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::MutationStateCasOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::MetadataCasReport> {
             self.topic_writes.fetch_add(1, Ordering::SeqCst);
             let mut current = self.topic_state.lock().expect("topic state");
             if self.topic_dirty.load(Ordering::SeqCst) {
-                return Ok(rocketmq_client_rust::MutationStateCasOutcome {
+                return Ok(rocketmq_client_rust::MetadataCasReport {
                     applied: false,
                     changed: false,
                     state: current.state,
@@ -2157,7 +2157,7 @@ mod tests {
                 });
             }
             if current.state != expected_state {
-                return Ok(rocketmq_client_rust::MutationStateCasOutcome {
+                return Ok(rocketmq_client_rust::MetadataCasReport {
                     applied: false,
                     changed: false,
                     state: current.state,
@@ -2194,7 +2194,7 @@ mod tests {
             {
                 *self.order_config.lock().expect("order config") = Some(order);
             }
-            Ok(rocketmq_client_rust::MutationStateCasOutcome {
+            Ok(rocketmq_client_rust::MetadataCasReport {
                 applied: true,
                 changed,
                 state: current.state,
@@ -2218,11 +2218,11 @@ mod tests {
             _group: CheetahString,
             expected_state: ClientExpectedState,
             replacement: ClientSubscriptionGroupConfig,
-        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::MutationStateCasOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::MetadataCasReport> {
             self.group_writes.fetch_add(1, Ordering::SeqCst);
             let mut current = self.group_state.lock().expect("group state");
             if self.group_dirty.load(Ordering::SeqCst) {
-                return Ok(rocketmq_client_rust::MutationStateCasOutcome {
+                return Ok(rocketmq_client_rust::MetadataCasReport {
                     applied: false,
                     changed: false,
                     state: current.state,
@@ -2230,7 +2230,7 @@ mod tests {
                 });
             }
             if current.state != expected_state {
-                return Ok(rocketmq_client_rust::MutationStateCasOutcome {
+                return Ok(rocketmq_client_rust::MetadataCasReport {
                     applied: false,
                     changed: false,
                     state: current.state,
@@ -2257,7 +2257,7 @@ mod tests {
             ) {
                 self.group_dirty.store(true, Ordering::SeqCst);
             }
-            Ok(rocketmq_client_rust::MutationStateCasOutcome {
+            Ok(rocketmq_client_rust::MetadataCasReport {
                 applied: true,
                 changed,
                 state: current.state,
@@ -2300,11 +2300,11 @@ mod tests {
             _consumer_group: CheetahString,
             expected: ClientExpectedMessageRequestMode,
             replacement: ClientMessageRequestMode,
-        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::MutationMessageRequestModeOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::MessageRequestModeCasReport> {
             self.request_mode_writes.fetch_add(1, Ordering::SeqCst);
             let mut current = self.request_mode.lock().expect("request mode");
             if self.request_mode_dirty.load(Ordering::SeqCst) {
-                return Ok(rocketmq_client_rust::MutationMessageRequestModeOutcome {
+                return Ok(rocketmq_client_rust::MessageRequestModeCasReport {
                     applied: false,
                     changed: false,
                     current: *current,
@@ -2317,7 +2317,7 @@ mod tests {
                 _ => false,
             };
             if !matches {
-                return Ok(rocketmq_client_rust::MutationMessageRequestModeOutcome {
+                return Ok(rocketmq_client_rust::MessageRequestModeCasReport {
                     applied: false,
                     changed: false,
                     current: *current,
@@ -2337,7 +2337,7 @@ mod tests {
             ) {
                 self.request_mode_dirty.store(true, Ordering::SeqCst);
             }
-            Ok(rocketmq_client_rust::MutationMessageRequestModeOutcome {
+            Ok(rocketmq_client_rust::MessageRequestModeCasReport {
                 applied: true,
                 changed,
                 current: *current,
@@ -2353,7 +2353,7 @@ mod tests {
             expected: ClientExpectedMessageRequestMode,
             replacement: ClientMessageRequestMode,
             timeout_millis: u64,
-        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::MutationMessageRequestModeOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::MessageRequestModeCasReport> {
             self.request_mode_timeouts
                 .lock()
                 .expect("request mode timeouts")
