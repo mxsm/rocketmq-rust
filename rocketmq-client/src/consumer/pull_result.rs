@@ -15,11 +15,8 @@
 use crate::consumer::pull_status::PullStatus;
 use rocketmq_model::common::message::message_ext::MessageExt;
 
-/// Owned, runtime-neutral pull result used across crate boundaries.
-pub type PullOutcome = rocketmq_model::result::PullOutcome<MessageExt>;
-
-/// Compatibility name for the now-infallible owned pull result adapter.
-pub type PullOutcomeAdapterError = std::convert::Infallible;
+/// Immutable, runtime-neutral pull response with status, offsets, and optional owned messages.
+pub type PullResponse = rocketmq_model::result::PullOutcome<MessageExt>;
 
 pub struct PullResult {
     pub(crate) pull_status: PullStatus,
@@ -77,7 +74,7 @@ impl PullResult {
     }
 }
 
-impl From<&PullResult> for PullOutcome {
+impl From<&PullResult> for PullResponse {
     fn from(value: &PullResult) -> Self {
         let messages = value.msg_found_list.clone();
         Self::new(
@@ -90,8 +87,8 @@ impl From<&PullResult> for PullOutcome {
     }
 }
 
-impl From<PullOutcome> for PullResult {
-    fn from(value: PullOutcome) -> Self {
+impl From<PullResponse> for PullResult {
+    fn from(value: PullResponse) -> Self {
         let pull_status = value.pull_status();
         let next_begin_offset = value.next_begin_offset();
         let min_offset = value.min_offset();
@@ -137,7 +134,7 @@ mod tests {
         second.set_queue_offset(11);
         let result = PullResult::new(PullStatus::Found, 12, 1, 20, Some(vec![first, second]));
 
-        let round_trip = PullResult::from(PullOutcome::from(&result));
+        let round_trip = PullResult::from(PullResponse::from(&result));
 
         let offsets = round_trip
             .msg_found_list()

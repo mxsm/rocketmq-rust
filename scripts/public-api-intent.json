@@ -706,8 +706,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::consumer::pull_result::PullOutcome",
-          "identity": "rocketmq-client/src/lib.rs:pub use crate::consumer::pull_result::PullOutcome",
+          "declaration": "pub use crate::consumer::pull_result::PullResponse",
+          "identity": "rocketmq-client/src/lib.rs:pub use crate::consumer::pull_result::PullResponse",
           "owner": "client",
           "path": "rocketmq-client/src/lib.rs",
           "rationale": "deliberate root entry point",
