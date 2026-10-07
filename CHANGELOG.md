@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(client):** Renamed the public Client admin mutation result and report types without compatibility aliases ([#11227](https://github.com/mxsm/rocketmq-rust/issues/11227)).
 - **refactor(dashboard):** Consolidate Web backend SQL migrations into one initial file per database while preserving existing migration versions and data; start future migration filenames at `0002_*.sql` ([#11113](https://github.com/mxsm/rocketmq-rust/issues/11113)).
 - **refactor(runtime):** Renamed `MetadataIoAdmissionOutcome` to `MetadataWriteSubmissionStatus` in the public API.
 - **refactor(client):** Renamed the `rocketmq-client-rust` alias `PullOutcome` to `PullResponse` and removed the unused `PullOutcomeAdapterError` alias in the public API ([#11229](https://github.com/mxsm/rocketmq-rust/issues/11229)).
