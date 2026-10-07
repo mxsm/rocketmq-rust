@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **refactor(client):** Renamed the `rocketmq-client-rust` alias `PullOutcome` to `PullResponse` and removed the unused `PullOutcomeAdapterError` alias in the public API ([#11229](https://github.com/mxsm/rocketmq-rust/issues/11229)).
 - **refactor(client):** Renamed the internal producer batching type `AddOutcome` to `BatchAppendReceipt` and documented that it only confirms local accumulation, not broker acceptance ([#11230](https://github.com/mxsm/rocketmq-rust/issues/11230)).
 - **refactor(auth):** Renamed `CredentialAuditOutcome` to `CredentialChangeDecision`, its `Authorized` variant to `Approved`, and `CredentialAuditEvent::outcome()` to `decision()` in the public API ([#11117](https://github.com/mxsm/rocketmq-rust/issues/11117)).
+- **perf(protocol):** Generated request header codecs decode flattened headers from one pass over the extension fields, write direct binary and JSON fields through keys prepared at compile time, and validate retained extension-field text in runs instead of once per key and value. Encoded bytes and decode results are unchanged ([#11244](https://github.com/mxsm/rocketmq-rust/issues/11244)).
 
 ### Security
 

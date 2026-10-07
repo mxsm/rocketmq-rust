@@ -40,6 +40,16 @@ pub trait HeaderCodec: Sized {
     const LOCAL_FLATTEN_SPECS: &'static [HeaderFlattenSpec];
     /// Whether direct binary generation was requested for the schema.
     const FAST_ENABLED: bool;
+    /// Whether [`Self::decode_from_slots`] reads values recorded by [`Self::collect_slot`].
+    ///
+    /// Generated codecs set this so a header and its flattened children decode
+    /// from one pass over the source. The default keeps manually implemented
+    /// codecs on their own [`Self::decode_from_source`] scan.
+    #[doc(hidden)]
+    const SUPPORTS_SLOT_DECODE: bool = false;
+    /// Number of borrowed value slots used by this header and its flattened children.
+    #[doc(hidden)]
+    const SLOT_COUNT: usize = 0;
 
     /// Validates this header layer before it writes to a wire destination.
     ///
@@ -74,6 +84,31 @@ pub trait HeaderCodec: Sized {
     fn decode_from_source(source: &dyn HeaderFieldSource) -> Result<Self, ProtocolContractViolation> {
         let map = source.to_header_map();
         Self::decode_from_map(&map)
+    }
+
+    /// Records one visited field when its key belongs to this schema or a flattened child.
+    ///
+    /// `slots` must hold [`Self::SLOT_COUNT`] entries. A later value for the
+    /// same key replaces the earlier one, matching repeated source scans.
+    #[doc(hidden)]
+    #[inline]
+    fn collect_slot<'a>(_slots: &mut [Option<&'a str>], _key: &str, _value: &'a str) {}
+
+    /// Builds the header from slots filled by [`Self::collect_slot`] during one scan of `source`.
+    ///
+    /// Codecs without slot support ignore `slots` and scan `source` themselves,
+    /// so a generated parent can flatten them without changing their behavior.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same classified failures as [`Self::decode_from_source`].
+    #[doc(hidden)]
+    #[inline]
+    fn decode_from_slots(
+        _slots: &[Option<&str>],
+        source: &dyn HeaderFieldSource,
+    ) -> Result<Self, ProtocolContractViolation> {
+        Self::decode_from_source(source)
     }
 
     /// Returns whether this header or any flattened child owns a present key.
@@ -119,5 +154,282 @@ pub trait HeaderCodec: Sized {
     #[inline]
     fn contains_wire_key(key: &str) -> bool {
         Self::resolve_wire_key(key).is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use cheetah_string::CheetahString;
+    use rocketmq_macros::RequestHeaderCodec;
+
+    use super::*;
+    use crate::protocol::header_codec::private::FieldSourceSealed;
+    use crate::protocol::header_codec::AliasConflictPolicy;
+    use crate::protocol::header_codec::DynamicCollisionPolicy;
+    use crate::protocol::header_codec::HeaderFieldContext;
+    use crate::protocol::header_codec::HeaderValueKind;
+
+    /// Counts how often a decoder walks the extension fields.
+    struct CountingSource<'m> {
+        fields: &'m HeaderMap,
+        scans: Cell<usize>,
+    }
+
+    impl<'m> CountingSource<'m> {
+        fn new(fields: &'m HeaderMap) -> Self {
+            Self {
+                fields,
+                scans: Cell::new(0),
+            }
+        }
+    }
+
+    impl FieldSourceSealed for CountingSource<'_> {}
+
+    impl HeaderFieldSource for CountingSource<'_> {
+        fn visit_fields_while<'a>(&'a self, visitor: &mut dyn FnMut(&'a str, &'a str) -> bool) {
+            self.scans.set(self.scans.get() + 1);
+            self.fields.visit_fields_while(visitor);
+        }
+
+        fn to_header_map(&self) -> HeaderMap {
+            self.fields.clone()
+        }
+    }
+
+    #[derive(Debug, PartialEq, RequestHeaderCodec)]
+    #[header(type_id = "rocketmq_protocol::tests::SlotLeaf")]
+    struct SlotLeaf {
+        #[header(key = "leaf", alias = "legacyLeaf", alias_conflict = "prefer_canonical")]
+        leaf: Option<CheetahString>,
+        shared: Option<i32>,
+    }
+
+    #[derive(Debug, PartialEq, RequestHeaderCodec)]
+    #[header(type_id = "rocketmq_protocol::tests::SlotMiddle")]
+    struct SlotMiddle {
+        middle: Option<bool>,
+        #[header(flatten, presence = "any")]
+        leaf: Option<SlotLeaf>,
+    }
+
+    #[derive(Debug, PartialEq, RequestHeaderCodec)]
+    #[header(type_id = "rocketmq_protocol::tests::SlotRoot")]
+    struct SlotRoot {
+        #[header(required)]
+        id: i32,
+        shared: Option<i32>,
+        #[header(flatten, presence = "always")]
+        middle: Option<SlotMiddle>,
+    }
+
+    /// A codec written by hand, which therefore has no slot support.
+    #[derive(Debug, PartialEq)]
+    struct ManualChild {
+        token: Option<CheetahString>,
+    }
+
+    impl ManualChild {
+        const TOKEN: HeaderFieldContext = HeaderFieldContext::new(
+            "rocketmq_protocol::tests::ManualChild",
+            "token",
+            HeaderValueKind::String,
+            None,
+        );
+    }
+
+    impl HeaderCodec for ManualChild {
+        const TYPE_ID: &'static str = "rocketmq_protocol::tests::ManualChild";
+        const HEADER_NAME: &'static str = "ManualChild";
+        const JAVA_CLASS: Option<&'static str> = None;
+        const FIELD_COUNT_HINT: usize = 1;
+        const LOCAL_FIELD_SPECS: &'static [HeaderFieldSpec] = &[];
+        const LOCAL_FLATTEN_SPECS: &'static [HeaderFlattenSpec] = &[];
+        const FAST_ENABLED: bool = false;
+
+        fn validate_for_wire(&self) -> Result<(), ProtocolContractViolation> {
+            Ok(())
+        }
+
+        fn encode_into<S: EncodeSink>(&self, sink: &mut S) -> Result<(), ProtocolContractViolation> {
+            if let Some(token) = &self.token {
+                sink.write("token", token, Self::TOKEN)?;
+            }
+            Ok(())
+        }
+
+        fn decode_from_map(map: &HeaderMap) -> Result<Self, ProtocolContractViolation> {
+            Ok(Self {
+                token: map.get("token").cloned(),
+            })
+        }
+
+        fn contains_any_field(map: &HeaderMap) -> bool {
+            map.contains_key("token")
+        }
+
+        fn encoded_len_hint(&self) -> usize {
+            0
+        }
+
+        fn visit_field_specs(_visitor: &mut dyn FnMut(&HeaderFieldSpec)) {}
+
+        fn visit_flatten_specs(_visitor: &mut dyn FnMut(&HeaderFlattenSpec)) {}
+
+        fn resolve_wire_key(key: &str) -> Option<ResolvedHeaderKey> {
+            (key == "token").then_some(ResolvedHeaderKey {
+                header: Self::HEADER_NAME,
+                owner_type_id: Self::TYPE_ID,
+                canonical: "token",
+                precedence: 0,
+                alias_conflict: AliasConflictPolicy::Error,
+                dynamic_collision: DynamicCollisionPolicy::ErrorOnDifferentValue,
+            })
+        }
+    }
+
+    #[derive(Debug, PartialEq, RequestHeaderCodec)]
+    #[header(type_id = "rocketmq_protocol::tests::ManualParent")]
+    struct ManualParent {
+        #[header(required)]
+        id: i32,
+        #[header(flatten, presence = "any")]
+        child: Option<ManualChild>,
+    }
+
+    fn fields(entries: &[(&str, &str)]) -> HeaderMap {
+        entries
+            .iter()
+            .map(|(key, value)| (CheetahString::from_slice(key), CheetahString::from_slice(value)))
+            .collect()
+    }
+
+    #[test]
+    fn flattened_generated_headers_decode_from_one_source_scan() {
+        const {
+            assert!(<SlotRoot as HeaderCodec>::SUPPORTS_SLOT_DECODE);
+            assert!(<SlotLeaf as HeaderCodec>::SLOT_COUNT == 3);
+            assert!(<SlotMiddle as HeaderCodec>::SLOT_COUNT == 4);
+            assert!(<SlotRoot as HeaderCodec>::SLOT_COUNT == 6);
+        }
+        let fields = fields(&[
+            ("id", "7"),
+            ("middle", "true"),
+            ("legacyLeaf", "leaf-a"),
+            ("unrelated", "ignored"),
+        ]);
+        let source = CountingSource::new(&fields);
+
+        let decoded = SlotRoot::decode_from_source(&source).unwrap();
+
+        assert_eq!(source.scans.get(), 1);
+        assert_eq!(
+            decoded,
+            SlotRoot {
+                id: 7,
+                shared: None,
+                middle: Some(SlotMiddle {
+                    middle: Some(true),
+                    leaf: Some(SlotLeaf {
+                        leaf: Some("leaf-a".into()),
+                        shared: None,
+                    }),
+                }),
+            }
+        );
+        assert_eq!(decoded, SlotRoot::decode_from_map(&fields).unwrap());
+    }
+
+    #[test]
+    fn single_scan_keeps_presence_alias_and_shared_key_semantics() {
+        let absent_leaf = fields(&[("id", "7")]);
+        let source = CountingSource::new(&absent_leaf);
+        let decoded = SlotRoot::decode_from_source(&source).unwrap();
+        assert_eq!(source.scans.get(), 1);
+        assert_eq!(
+            decoded.middle,
+            Some(SlotMiddle {
+                middle: None,
+                leaf: None,
+            })
+        );
+
+        // A key declared by two layers reaches both, as it did with one scan per layer.
+        let shared = fields(&[
+            ("id", "7"),
+            ("shared", "3"),
+            ("leaf", "canonical"),
+            ("legacyLeaf", "legacy"),
+        ]);
+        let decoded = SlotRoot::decode_from_source(&shared).unwrap();
+        assert_eq!(decoded.shared, Some(3));
+        let leaf = decoded.middle.and_then(|middle| middle.leaf).unwrap();
+        assert_eq!(leaf.shared, Some(3));
+        assert_eq!(leaf.leaf.as_deref(), Some("canonical"));
+
+        let invalid = fields(&[("id", "7"), ("shared", "not-a-number")]);
+        assert!(matches!(
+            SlotRoot::decode_from_source(&invalid),
+            Err(ProtocolContractViolation::InvalidValue {
+                header: "rocketmq_protocol::tests::SlotRoot",
+                key: "shared",
+                ..
+            })
+        ));
+        let missing = fields(&[("shared", "3")]);
+        assert!(matches!(
+            SlotRoot::decode_from_source(&missing),
+            Err(ProtocolContractViolation::Missing { key: "id", .. })
+        ));
+    }
+
+    #[test]
+    fn slots_keep_the_last_value_and_reject_a_foreign_layout() {
+        let mut slots = [None; <SlotLeaf as HeaderCodec>::SLOT_COUNT];
+        SlotLeaf::collect_slot(&mut slots, "leaf", "first");
+        SlotLeaf::collect_slot(&mut slots, "leaf", "last");
+        SlotLeaf::collect_slot(&mut slots, "other", "ignored");
+        let empty = HeaderMap::new();
+        let decoded = SlotLeaf::decode_from_slots(&slots, &empty).unwrap();
+        assert_eq!(decoded.leaf.as_deref(), Some("last"));
+
+        // Slots sized for another schema are ignored in favor of a fresh scan.
+        let fields = fields(&[("id", "7"), ("middle", "false")]);
+        let source = CountingSource::new(&fields);
+        let mut foreign = [None; 2];
+        SlotRoot::collect_slot(&mut foreign, "id", "9");
+        assert_eq!(foreign, [None; 2]);
+        let decoded = SlotRoot::decode_from_slots(&foreign, &source).unwrap();
+        assert_eq!(source.scans.get(), 1);
+        assert_eq!(decoded.id, 7);
+        assert_eq!(decoded.middle.and_then(|middle| middle.middle), Some(false));
+    }
+
+    #[test]
+    fn handwritten_codecs_stay_flattenable_through_their_own_decoder() {
+        const {
+            assert!(!<ManualChild as HeaderCodec>::SUPPORTS_SLOT_DECODE);
+            assert!(<ManualChild as HeaderCodec>::SLOT_COUNT == 0);
+            assert!(<ManualParent as HeaderCodec>::SLOT_COUNT == 1);
+        }
+        let present = fields(&[("id", "7"), ("token", "secret")]);
+        let source = CountingSource::new(&present);
+        let decoded = ManualParent::decode_from_source(&source).unwrap();
+        assert_eq!(
+            decoded,
+            ManualParent {
+                id: 7,
+                child: Some(ManualChild {
+                    token: Some("secret".into()),
+                }),
+            }
+        );
+        // One scan for the generated layer and one presence probe for the handwritten child.
+        assert_eq!(source.scans.get(), 2);
+
+        let absent = fields(&[("id", "7")]);
+        assert_eq!(ManualParent::decode_from_source(&absent).unwrap().child, None);
     }
 }
