@@ -1722,19 +1722,10 @@ struct MessageAccumulation {
     completion_notify: Arc<tokio::sync::Notify>,
 }
 
-/// Receipt for a message appended to a local [`MessageAccumulation`] batch.
-///
-/// It only confirms that the message was accepted into the in-memory batch.
-/// It says nothing about broker acceptance or persistence: the batch still
-/// has to be flushed and sent, and the send result is reported separately
-/// through the batch completion path.
 #[derive(Clone)]
 struct BatchAppendReceipt {
-    /// Position of the message within the batch.
     index: usize,
-    /// Whether the batch reached its flush threshold with this message.
     should_flush: bool,
-    /// Completion notification handle shared with the batch.
     notify: Arc<tokio::sync::Notify>,
 }
 

@@ -85,15 +85,6 @@ impl NotificationWaitDeadline {
     }
 }
 
-/// Outcome of evaluating whether a Notification request may wait.
-///
-/// A normal, well-formed timing request resolves to either `Pending` (the
-/// request may wait against a frozen protocol deadline) or `Rejected` (the
-/// request carries invalid or already-expired timing). This is distinct from
-/// [`NotificationWaitDeadlineOperationalError`], which signals that the
-/// deadline computation itself could not complete (protocol or monotonic
-/// overflow). `Pending` only reflects the timing decision; it does not imply
-/// that transport responder ownership has been acquired.
 #[derive(Debug)]
 #[must_use]
 pub(crate) enum NotificationWaitDecision {

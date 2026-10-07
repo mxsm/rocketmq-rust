@@ -699,8 +699,6 @@ struct ScheduledRunGuard {
     outcome: ScheduledRunExitReason,
 }
 
-// Classifies how a reserved scheduled run settled: normal completion, timeout,
-// panic, cancellation, or rejection before the run's future was first polled.
 #[derive(Clone, Copy)]
 enum ScheduledRunExitReason {
     Completed,

@@ -48,13 +48,7 @@ pub enum RegisterState {
     Registered,
 }
 
-/// Reports a processed controller role update from the replica manager.
-///
-/// Carries the resulting master and sync-state-set information together with
-/// the follow-up actions the broker should take. `role` is `None` for an
-/// update without a role transition, for example when an old epoch is
-/// ignored; the report then still reflects the installed master and
-/// sync-state-set state.
+/// When `role` is `None`, the report still contains the installed master and sync-state-set state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrokerRoleChangeReport {
     pub role: Option<BrokerReplicaRole>,

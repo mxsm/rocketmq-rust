@@ -18,9 +18,8 @@ use super::MappedFileAdmissionState;
 
 /// Status of one attempt to remove a mapped-file path from the filesystem namespace.
 ///
-/// The attempt can succeed, stay pending while cleanup waits for outstanding references, or fail
-/// with an I/O error. This type deliberately separates a live-reference deferral from a filesystem
-/// failure. `NamespaceRemoved` does not claim that mmap or file owners have been physically
+/// This type deliberately separates a live-reference deferral from a filesystem failure.
+/// `NamespaceRemoved` does not claim that mmap or file owners have been physically
 /// dropped; that remains owner-lifetime driven.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[must_use]
