@@ -14,18 +14,18 @@
 
 use super::supervised_mutation_decode::{
     bounded_consume_stats_from_response, client_group_config, client_request_mode, client_topic_config,
-    conditional_offset_outcome_from_response, request_mode_cas_outcome_from_response, state_cas_outcome_from_response,
+    consumer_offset_cas_result_from_response, metadata_cas_report_from_response, request_mode_cas_report_from_response,
     supervised_consume_stats_from_response, wire_expected_state, wire_request_mode,
 };
 use super::versioned_config::mutation_topic_config_versioned_from_response;
 use super::*;
 use crate::admin::BrokerMutationConfigState as ClientBrokerMutationConfigState;
-use crate::admin::ConditionalConsumerOffsetOutcome;
+use crate::admin::ConsumerOffsetCasResult;
+use crate::admin::MessageRequestModeCasReport;
+use crate::admin::MetadataCasReport;
 use crate::admin::MutationExpectedMessageRequestMode;
 use crate::admin::MutationExpectedState;
 use crate::admin::MutationMessageRequestMode;
-use crate::admin::MutationMessageRequestModeOutcome;
-use crate::admin::MutationStateCasOutcome;
 use crate::admin::MutationSubscriptionGroupConfig;
 use crate::admin::MutationSubscriptionGroupConfigState;
 use crate::admin::MutationTopicConfig;
@@ -169,7 +169,7 @@ impl MQClientAPIImpl {
         expected_state: MutationExpectedState,
         replacement: MutationTopicConfig,
         timeout_millis: u64,
-    ) -> ClientResult<MutationStateCasOutcome> {
+    ) -> ClientResult<MetadataCasReport> {
         if !(1..=128).contains(&replacement.read_queue_nums)
             || !(1..=128).contains(&replacement.write_queue_nums)
             || !(1..=7).contains(&replacement.perm)
@@ -219,7 +219,7 @@ impl MQClientAPIImpl {
             }
             Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
-        state_cas_outcome_from_response(&response, expected_state)
+        metadata_cas_report_from_response(&response, expected_state)
     }
 
     #[cfg(feature = "admin-mutation")]
@@ -297,7 +297,7 @@ impl MQClientAPIImpl {
         expected_state: MutationExpectedState,
         replacement: MutationSubscriptionGroupConfig,
         timeout_millis: u64,
-    ) -> ClientResult<MutationStateCasOutcome> {
+    ) -> ClientResult<MetadataCasReport> {
         if replacement.retry_queue_nums < 0
             || replacement.retry_max_times < -1
             || replacement.consume_timeout_minute <= 0
@@ -354,7 +354,7 @@ impl MQClientAPIImpl {
             }
             Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
-        state_cas_outcome_from_response(&response, expected_state)
+        metadata_cas_report_from_response(&response, expected_state)
     }
 
     #[cfg(feature = "admin-mutation")]
@@ -420,7 +420,7 @@ impl MQClientAPIImpl {
         expected_offset: i64,
         new_offset: i64,
         timeout_millis: u64,
-    ) -> ClientResult<ConditionalConsumerOffsetOutcome> {
+    ) -> ClientResult<ConsumerOffsetCasResult> {
         if queue_id < 0 || expected_offset < -1 || new_offset < 0 {
             return Err(ClientError::illegal_argument(
                 "conditional consumer offset fields are outside the closed bounds",
@@ -457,7 +457,7 @@ impl MQClientAPIImpl {
             }
             Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
-        conditional_offset_outcome_from_response(&response, expected_offset, new_offset)
+        consumer_offset_cas_result_from_response(&response, expected_offset, new_offset)
     }
 
     #[cfg(feature = "admin-mutation")]
@@ -529,7 +529,7 @@ impl MQClientAPIImpl {
         expected: MutationExpectedMessageRequestMode,
         replacement: MutationMessageRequestMode,
         timeout_millis: u64,
-    ) -> ClientResult<MutationMessageRequestModeOutcome> {
+    ) -> ClientResult<MessageRequestModeCasReport> {
         let expected_state = match expected {
             MutationExpectedMessageRequestMode::Absent => ExpectedMessageRequestMode::Absent,
             MutationExpectedMessageRequestMode::Present(value) => {
@@ -572,6 +572,6 @@ impl MQClientAPIImpl {
             }
             Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
-        request_mode_cas_outcome_from_response(&response, expected, replacement)
+        request_mode_cas_report_from_response(&response, expected, replacement)
     }
 }

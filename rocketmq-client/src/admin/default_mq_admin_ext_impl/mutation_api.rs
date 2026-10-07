@@ -56,27 +56,27 @@ use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 
-use crate::admin::mq_admin_mutation_ext::BrokerConfigPatchOutcome;
+use crate::admin::mq_admin_mutation_ext::BrokerConfigPatchResult;
 use crate::admin::mq_admin_mutation_ext::BrokerMutationConfigState;
-use crate::admin::mq_admin_mutation_ext::ConditionalConsumerOffsetOutcome;
+use crate::admin::mq_admin_mutation_ext::ConsumerOffsetCasResult;
+use crate::admin::mq_admin_mutation_ext::ConsumerOffsetMutationReport;
+use crate::admin::mq_admin_mutation_ext::ConsumerOffsetTargetReport;
 use crate::admin::mq_admin_mutation_ext::MQAdminMutationExt;
+use crate::admin::mq_admin_mutation_ext::MessageRequestModeCasReport;
+use crate::admin::mq_admin_mutation_ext::MetadataCasReport;
 use crate::admin::mq_admin_mutation_ext::MutationConsumerOffsetPreview;
 use crate::admin::mq_admin_mutation_ext::MutationExpectedMessageRequestMode;
 use crate::admin::mq_admin_mutation_ext::MutationExpectedState;
 use crate::admin::mq_admin_mutation_ext::MutationMessageRequestMode;
-use crate::admin::mq_admin_mutation_ext::MutationMessageRequestModeOutcome;
-use crate::admin::mq_admin_mutation_ext::MutationStateCasOutcome;
 use crate::admin::mq_admin_mutation_ext::MutationSubscriptionGroupConfig;
 use crate::admin::mq_admin_mutation_ext::MutationSubscriptionGroupConfigState;
 use crate::admin::mq_admin_mutation_ext::MutationTopicConfig;
 use crate::admin::mq_admin_mutation_ext::MutationTopicConfigState;
 use crate::admin::mq_admin_mutation_ext::SubscriptionGroupConfigPatch;
-use crate::admin::mq_admin_mutation_ext::SubscriptionGroupConfigPatchOutcome;
+use crate::admin::mq_admin_mutation_ext::SubscriptionGroupConfigPatchResult;
 use crate::admin::mq_admin_mutation_ext::TopicConfigPatch;
-use crate::admin::mq_admin_mutation_ext::TopicConfigPatchOutcome;
+use crate::admin::mq_admin_mutation_ext::TopicConfigPatchResult;
 use crate::admin::mq_admin_mutation_ext::TopicOffsetMutationFailureCode;
-use crate::admin::mq_admin_mutation_ext::TopicOffsetMutationOutcome;
-use crate::admin::mq_admin_mutation_ext::TopicOffsetMutationTargetOutcome;
 
 use super::DefaultMQAdminExtImpl;
 use super::NAMESPACE_ORDER_TOPIC_CONFIG;
@@ -130,8 +130,8 @@ fn merge_order_conf_entries(existing: &str, value: &str) -> String {
         .join(";")
 }
 
-fn offset_failure(broker_name: &str, queue_id: Option<i32>, error: &ClientError) -> TopicOffsetMutationTargetOutcome {
-    TopicOffsetMutationTargetOutcome {
+fn offset_failure(broker_name: &str, queue_id: Option<i32>, error: &ClientError) -> ConsumerOffsetTargetReport {
+    ConsumerOffsetTargetReport {
         broker_name: broker_name.to_owned(),
         queue_id,
         applied: false,
@@ -147,8 +147,8 @@ fn offset_failure(broker_name: &str, queue_id: Option<i32>, error: &ClientError)
     }
 }
 
-fn invalid_offset(broker_name: &str, queue_id: i32) -> TopicOffsetMutationTargetOutcome {
-    TopicOffsetMutationTargetOutcome {
+fn invalid_offset(broker_name: &str, queue_id: i32) -> ConsumerOffsetTargetReport {
+    ConsumerOffsetTargetReport {
         broker_name: broker_name.to_owned(),
         queue_id: Some(queue_id),
         applied: false,
@@ -158,8 +158,8 @@ fn invalid_offset(broker_name: &str, queue_id: i32) -> TopicOffsetMutationTarget
     }
 }
 
-fn applied_offset(broker_name: &str, queue_id: i32, offset: u64) -> TopicOffsetMutationTargetOutcome {
-    TopicOffsetMutationTargetOutcome {
+fn applied_offset(broker_name: &str, queue_id: i32, offset: u64) -> ConsumerOffsetTargetReport {
+    ConsumerOffsetTargetReport {
         broker_name: broker_name.to_owned(),
         queue_id: Some(queue_id),
         applied: true,
@@ -335,7 +335,7 @@ impl DefaultMQAdminExtImpl {
         topic: CheetahString,
         timestamp: i64,
         force: bool,
-    ) -> Vec<TopicOffsetMutationTargetOutcome> {
+    ) -> Vec<ConsumerOffsetTargetReport> {
         let broker_name = queue_data.broker_name().to_string();
         let api = match self.mq_client_api() {
             Ok(api) => api,
@@ -431,7 +431,7 @@ impl DefaultMQAdminExtImpl {
         consumer_group: CheetahString,
         timestamp: i64,
         force: bool,
-    ) -> crate::ClientResult<TopicOffsetMutationOutcome> {
+    ) -> crate::ClientResult<ConsumerOffsetMutationReport> {
         let topic_route = MQAdminMutationExt::mutation_topic_route(self, topic.clone()).await?;
         let timeout = self.remoting_timeout_millis()?;
         let api = self.mq_client_api()?;
@@ -448,7 +448,7 @@ impl DefaultMQAdminExtImpl {
                 }
                 let broker_name = broker.broker_name().to_string();
                 let Some(master_addr) = broker.broker_addrs().get(&mix_all::MASTER_ID) else {
-                    targets.push(TopicOffsetMutationTargetOutcome {
+                    targets.push(ConsumerOffsetTargetReport {
                         broker_name,
                         queue_id: None,
                         applied: false,
@@ -501,7 +501,7 @@ impl DefaultMQAdminExtImpl {
                                 .await,
                             );
                         } else {
-                            targets.push(TopicOffsetMutationTargetOutcome {
+                            targets.push(ConsumerOffsetTargetReport {
                                 broker_name,
                                 queue_id: None,
                                 applied: false,
@@ -515,7 +515,7 @@ impl DefaultMQAdminExtImpl {
                 }
             }
         }
-        Ok(TopicOffsetMutationOutcome { targets })
+        Ok(ConsumerOffsetMutationReport { targets })
     }
 }
 
@@ -568,7 +568,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         broker_addr: CheetahString,
         expected_generation: u64,
         properties: HashMap<CheetahString, CheetahString>,
-    ) -> crate::ClientResult<BrokerConfigPatchOutcome> {
+    ) -> crate::ClientResult<BrokerConfigPatchResult> {
         self.mq_client_api()?
             .update_broker_config_if_generation(
                 &broker_addr,
@@ -585,7 +585,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         topic: CheetahString,
         expected_version: u64,
         patch: TopicConfigPatch,
-    ) -> crate::ClientResult<TopicConfigPatchOutcome> {
+    ) -> crate::ClientResult<TopicConfigPatchResult> {
         self.mq_client_api()?
             .update_topic_config_if_version(
                 &broker_addr,
@@ -623,7 +623,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         topic: CheetahString,
         expected_state: MutationExpectedState,
         replacement: MutationTopicConfig,
-    ) -> crate::ClientResult<MutationStateCasOutcome> {
+    ) -> crate::ClientResult<MetadataCasReport> {
         self.mq_client_api()?
             .replace_topic_config_if_state(
                 &broker_addr,
@@ -641,7 +641,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         group: CheetahString,
         expected_version: u64,
         patch: SubscriptionGroupConfigPatch,
-    ) -> crate::ClientResult<SubscriptionGroupConfigPatchOutcome> {
+    ) -> crate::ClientResult<SubscriptionGroupConfigPatchResult> {
         self.mq_client_api()?
             .update_subscription_group_config_if_version(
                 &broker_addr,
@@ -669,7 +669,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         group: CheetahString,
         expected_state: MutationExpectedState,
         replacement: MutationSubscriptionGroupConfig,
-    ) -> crate::ClientResult<MutationStateCasOutcome> {
+    ) -> crate::ClientResult<MetadataCasReport> {
         self.mq_client_api()?
             .replace_subscription_group_config_if_state(
                 &broker_addr,
@@ -698,7 +698,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         queue_id: i32,
         expected_offset: i64,
         new_offset: i64,
-    ) -> crate::ClientResult<ConditionalConsumerOffsetOutcome> {
+    ) -> crate::ClientResult<ConsumerOffsetCasResult> {
         self.mq_client_api()?
             .reset_consumer_offset_if_current(
                 &broker_addr,
@@ -866,7 +866,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         consumer_group: CheetahString,
         expected: MutationExpectedMessageRequestMode,
         replacement: MutationMessageRequestMode,
-    ) -> crate::ClientResult<MutationMessageRequestModeOutcome> {
+    ) -> crate::ClientResult<MessageRequestModeCasReport> {
         self.mq_client_api()?
             .replace_message_request_mode_if_current(
                 &broker_addr,
@@ -887,7 +887,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         expected: MutationExpectedMessageRequestMode,
         replacement: MutationMessageRequestMode,
         timeout_millis: u64,
-    ) -> crate::ClientResult<MutationMessageRequestModeOutcome> {
+    ) -> crate::ClientResult<MessageRequestModeCasReport> {
         if timeout_millis == 0 || timeout_millis > 24_000 {
             return Err(ClientError::illegal_argument(
                 "request-mode timeoutMillis must be between 1 and 24000",
@@ -1031,7 +1031,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         consumer_group: CheetahString,
         timestamp: u64,
         force: bool,
-    ) -> crate::ClientResult<TopicOffsetMutationOutcome> {
+    ) -> crate::ClientResult<ConsumerOffsetMutationReport> {
         let timestamp = timestamp_to_java_long("resetOffsetByTimestampDetailed", timestamp)?;
         self.mutation_offset_detailed(cluster_name, topic, consumer_group, timestamp, force)
             .await
@@ -1129,7 +1129,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         topic: CheetahString,
         consumer_group: CheetahString,
         force: bool,
-    ) -> crate::ClientResult<TopicOffsetMutationOutcome> {
+    ) -> crate::ClientResult<ConsumerOffsetMutationReport> {
         self.mutation_offset_detailed(cluster_name, topic, consumer_group, -1, force)
             .await
     }

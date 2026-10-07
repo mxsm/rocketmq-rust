@@ -23,7 +23,7 @@ use std::ops::DerefMut;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::BrokerConfigPatchOutcome as ClientBrokerConfigPatchOutcome;
+use rocketmq_client_rust::BrokerConfigPatchResult as ClientBrokerConfigPatchResult;
 use rocketmq_client_rust::BrokerMutationConfigState as ClientBrokerMutationConfigState;
 use rocketmq_client_rust::MQAdminMutationExt;
 use rocketmq_client_rust::MutationExpectedMessageRequestMode as ClientExpectedMessageRequestMode;
@@ -34,9 +34,9 @@ use rocketmq_client_rust::MutationSubscriptionGroupConfig as ClientSubscriptionG
 use rocketmq_client_rust::MutationTopicConfig as ClientTopicConfig;
 use rocketmq_client_rust::MutationTopicMessageType as ClientTopicMessageType;
 use rocketmq_client_rust::SubscriptionGroupConfigPatch as ClientSubscriptionGroupConfigPatch;
-use rocketmq_client_rust::SubscriptionGroupConfigPatchOutcome as ClientSubscriptionGroupConfigPatchOutcome;
+use rocketmq_client_rust::SubscriptionGroupConfigPatchResult as ClientSubscriptionGroupConfigPatchResult;
 use rocketmq_client_rust::TopicConfigPatch as ClientTopicConfigPatch;
-use rocketmq_client_rust::TopicConfigPatchOutcome as ClientTopicConfigPatchOutcome;
+use rocketmq_client_rust::TopicConfigPatchResult as ClientTopicConfigPatchResult;
 use rocketmq_client_rust::TopicOffsetMutationFailureCode as ClientTopicOffsetMutationFailureCode;
 use rocketmq_error::Error as CanonicalError;
 use rocketmq_model::common::message::message_ext::MessageExt;
@@ -270,14 +270,14 @@ impl TopicMutationAdmin for MutationAdminSession {
                 .await
                 .map_err(|error| backend_error("patch_topic_config_if_version", error))?;
             Ok(match outcome {
-                ClientTopicConfigPatchOutcome::Applied {
+                ClientTopicConfigPatchResult::Applied {
                     previous_version,
                     version,
                 } => PatchTopicConfigOutcome::Applied {
                     previous_version,
                     version,
                 },
-                ClientTopicConfigPatchOutcome::VersionConflict {
+                ClientTopicConfigPatchResult::VersionConflict {
                     expected_version,
                     actual_version,
                 } => PatchTopicConfigOutcome::VersionConflict {
@@ -644,7 +644,7 @@ impl TopicOffsetMutationAdmin for MutationAdminSession {
                 )
                 .await
                 .map_err(|error| backend_error("reset_consumer_offset_detailed", error))?;
-            Ok(map_offset_outcome(outcome))
+            Ok(map_consumer_offset_report(outcome))
         })
     }
 
@@ -668,7 +668,7 @@ impl TopicOffsetMutationAdmin for MutationAdminSession {
                 )
                 .await
                 .map_err(|error| backend_error("skip_accumulated_message_detailed", error))?;
-            Ok(map_offset_outcome(outcome))
+            Ok(map_consumer_offset_report(outcome))
         })
     }
 }
@@ -875,14 +875,14 @@ impl ConsumerMutationAdmin for MutationAdminSession {
                 .await
                 .map_err(|error| backend_error("patch_subscription_group_config_if_version", error))?;
             Ok(match outcome {
-                ClientSubscriptionGroupConfigPatchOutcome::Applied {
+                ClientSubscriptionGroupConfigPatchResult::Applied {
                     previous_version,
                     version,
                 } => consumer::PatchSubscriptionGroupConfigOutcome::Applied {
                     previous_version,
                     version,
                 },
-                ClientSubscriptionGroupConfigPatchOutcome::VersionConflict {
+                ClientSubscriptionGroupConfigPatchResult::VersionConflict {
                     expected_version,
                     actual_version,
                 } => consumer::PatchSubscriptionGroupConfigOutcome::VersionConflict {
@@ -1593,14 +1593,14 @@ impl BrokerMutationAdmin for MutationAdminSession {
                 .await
                 .map_err(|error| backend_error("patch_broker_config_if_generation", error))?;
             Ok(match outcome {
-                ClientBrokerConfigPatchOutcome::Applied {
+                ClientBrokerConfigPatchResult::Applied {
                     previous_generation,
                     generation,
                 } => PatchBrokerConfigOutcome::Applied {
                     previous_generation,
                     generation,
                 },
-                ClientBrokerConfigPatchOutcome::GenerationConflict {
+                ClientBrokerConfigPatchResult::GenerationConflict {
                     expected_generation,
                     actual_generation,
                 } => PatchBrokerConfigOutcome::GenerationConflict {
@@ -1970,7 +1970,9 @@ fn topic_route_is_absent(route: Option<&TopicRouteData>) -> bool {
     route.is_none_or(|route| route.broker_datas.is_empty() && route.queue_datas.is_empty())
 }
 
-fn map_offset_outcome(outcome: rocketmq_client_rust::TopicOffsetMutationOutcome) -> TopicOffsetMutationOutcome {
+fn map_consumer_offset_report(
+    outcome: rocketmq_client_rust::ConsumerOffsetMutationReport,
+) -> TopicOffsetMutationOutcome {
     TopicOffsetMutationOutcome {
         targets: outcome
             .targets
@@ -2166,9 +2168,9 @@ mod tests {
 
     #[test]
     fn detailed_offset_mapping_retains_applied_and_failed_targets_without_backend_text() {
-        let outcome = map_offset_outcome(rocketmq_client_rust::TopicOffsetMutationOutcome {
+        let outcome = map_consumer_offset_report(rocketmq_client_rust::ConsumerOffsetMutationReport {
             targets: vec![
-                rocketmq_client_rust::TopicOffsetMutationTargetOutcome {
+                rocketmq_client_rust::ConsumerOffsetTargetReport {
                     broker_name: "broker-a".into(),
                     queue_id: Some(0),
                     applied: true,
@@ -2176,7 +2178,7 @@ mod tests {
                     failure: None,
                     retryable: false,
                 },
-                rocketmq_client_rust::TopicOffsetMutationTargetOutcome {
+                rocketmq_client_rust::ConsumerOffsetTargetReport {
                     broker_name: "broker-a".into(),
                     queue_id: Some(1),
                     applied: false,

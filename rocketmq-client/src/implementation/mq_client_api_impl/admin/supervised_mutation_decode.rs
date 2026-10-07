@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use super::*;
-use crate::admin::ConditionalConsumerOffsetOutcome;
+use crate::admin::ConsumerOffsetCasResult;
+use crate::admin::MessageRequestModeCasReport;
+use crate::admin::MetadataCasReport;
 use crate::admin::MutationExpectedMessageRequestMode;
 use crate::admin::MutationExpectedState;
 use crate::admin::MutationMessageRequestMode;
-use crate::admin::MutationMessageRequestModeOutcome;
 use crate::admin::MutationPersistenceState as ClientMutationPersistenceState;
-use crate::admin::MutationStateCasOutcome;
 use crate::admin::MutationSubscriptionGroupConfig;
 use crate::admin::MutationTopicConfig;
 use crate::admin::MutationTopicMessageType;
@@ -168,10 +168,10 @@ pub(super) fn client_group_config(config: &SubscriptionGroupConfig) -> MutationS
 }
 
 #[cfg(feature = "admin-mutation")]
-pub(super) fn state_cas_outcome_from_response(
+pub(super) fn metadata_cas_report_from_response(
     response: &RemotingCommand,
     expected: MutationExpectedState,
-) -> ClientResult<MutationStateCasOutcome> {
+) -> ClientResult<MetadataCasReport> {
     let response_code = ResponseCode::from(response.code());
     if !matches!(
         response_code,
@@ -253,7 +253,7 @@ pub(super) fn state_cas_outcome_from_response(
             "state CAS response code and body disagree",
         ));
     }
-    Ok(MutationStateCasOutcome {
+    Ok(MetadataCasReport {
         applied: outcome.applied,
         changed: outcome.changed,
         state: client_expected_state(outcome.state),
@@ -267,11 +267,11 @@ pub(super) fn state_cas_outcome_from_response(
 }
 
 #[cfg(feature = "admin-mutation")]
-pub(super) fn request_mode_cas_outcome_from_response(
+pub(super) fn request_mode_cas_report_from_response(
     response: &RemotingCommand,
     expected: MutationExpectedMessageRequestMode,
     replacement: MutationMessageRequestMode,
-) -> ClientResult<MutationMessageRequestModeOutcome> {
+) -> ClientResult<MessageRequestModeCasReport> {
     let response_code = ResponseCode::from(response.code());
     if !matches!(
         response_code,
@@ -329,7 +329,7 @@ pub(super) fn request_mode_cas_outcome_from_response(
             "request-mode CAS response code and body disagree",
         ));
     }
-    Ok(MutationMessageRequestModeOutcome {
+    Ok(MessageRequestModeCasReport {
         applied: outcome.applied,
         changed: outcome.changed,
         current,
@@ -343,11 +343,11 @@ pub(super) fn request_mode_cas_outcome_from_response(
 }
 
 #[cfg(feature = "admin-mutation")]
-pub(super) fn conditional_offset_outcome_from_response(
+pub(super) fn consumer_offset_cas_result_from_response(
     response: &RemotingCommand,
     expected_offset: i64,
     new_offset: i64,
-) -> ClientResult<ConditionalConsumerOffsetOutcome> {
+) -> ClientResult<ConsumerOffsetCasResult> {
     if expected_offset < -1 || new_offset < 0 {
         return Err(ClientError::illegal_argument(
             "conditional consumer offset fields are outside the closed bounds",
@@ -384,7 +384,7 @@ pub(super) fn conditional_offset_outcome_from_response(
             ));
         }
     };
-    Ok(ConditionalConsumerOffsetOutcome { applied, actual_offset })
+    Ok(ConsumerOffsetCasResult { applied, actual_offset })
 }
 
 #[cfg(feature = "admin-mutation")]
