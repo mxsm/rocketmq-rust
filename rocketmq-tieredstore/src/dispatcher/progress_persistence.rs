@@ -14,13 +14,16 @@
 
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use rocketmq_runtime::TaskGroup;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreOperation;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
 use super::progress::TieredRetryEntry;
+use crate::runtime::PersistenceOperation;
 
 const PROGRESS_MAGIC: [u8; 8] = *b"RMQTPRG\0";
 const PROGRESS_VERSION: u16 = 1;
@@ -35,14 +38,16 @@ pub(crate) struct PersistedTieredProgress {
 
 pub(crate) struct TieredProgressPersistence {
     path: PathBuf,
-    persist_lock: tokio::sync::Mutex<()>,
+    persist_lock: Arc<tokio::sync::Mutex<()>>,
+    persistence: PersistenceOperation,
 }
 
 impl TieredProgressPersistence {
-    pub(crate) fn new(root: PathBuf) -> Self {
+    pub(crate) fn new(root: PathBuf, task_group: TaskGroup) -> Self {
         Self {
             path: root.join("config").join("tieredDispatchProgress.bin"),
-            persist_lock: tokio::sync::Mutex::new(()),
+            persist_lock: Arc::new(tokio::sync::Mutex::new(())),
+            persistence: PersistenceOperation::new(task_group),
         }
     }
 
@@ -56,33 +61,42 @@ impl TieredProgressPersistence {
     }
 
     pub(crate) async fn persist(&self, progress: &PersistedTieredProgress) -> Result<(), StoreError> {
-        let _guard = self.persist_lock.lock().await;
-        let parent = self
-            .path
-            .parent()
-            .ok_or_else(|| crate::error::internal_failure(StoreOperation::AppendDerived))?;
-        fs::create_dir_all(parent)
-            .await
-            .map_err(|error| write_failed(parent, error))?;
         let encoded = encode(progress)?;
-        let temporary = self.path.with_extension("bin.tmp");
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&temporary)
+        let path = self.path.clone();
+        let persist_lock = self.persist_lock.clone();
+        self.persistence
+            .run(async move {
+                let _guard = persist_lock.lock().await;
+                let parent = path
+                    .parent()
+                    .ok_or_else(|| crate::error::internal_failure(StoreOperation::AppendDerived))?;
+                fs::create_dir_all(parent)
+                    .await
+                    .map_err(|error| write_failed(parent, error))?;
+                let temporary = path.with_extension("bin.tmp");
+                let mut file = fs::OpenOptions::new()
+                    .create(true)
+                    .truncate(true)
+                    .write(true)
+                    .open(&temporary)
+                    .await
+                    .map_err(|error| write_failed(&temporary, error))?;
+                file.write_all(&encoded)
+                    .await
+                    .map_err(|error| write_failed(&temporary, error))?;
+                file.sync_all().await.map_err(|error| write_failed(&temporary, error))?;
+                drop(file);
+                fs::rename(&temporary, &path)
+                    .await
+                    .map_err(|error| write_failed(&path, error))?;
+                sync_parent_directory(parent).await?;
+                Ok(())
+            })
             .await
-            .map_err(|error| write_failed(&temporary, error))?;
-        file.write_all(&encoded)
-            .await
-            .map_err(|error| write_failed(&temporary, error))?;
-        file.sync_all().await.map_err(|error| write_failed(&temporary, error))?;
-        drop(file);
-        fs::rename(&temporary, &self.path)
-            .await
-            .map_err(|error| write_failed(&self.path, error))?;
-        sync_parent_directory(parent).await?;
-        Ok(())
+    }
+
+    pub(crate) async fn drain(&self) -> Result<(), StoreError> {
+        self.persistence.drain().await
     }
 
     pub(crate) async fn destroy(&self) -> Result<(), StoreError> {

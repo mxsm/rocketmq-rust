@@ -131,7 +131,11 @@ where
             .min(u32::MAX as usize) as u32;
         let pending_bytes = Arc::new(Semaphore::new(pending_byte_capacity as usize));
         let progress_health = Arc::new(RwLock::new(TieredDispatchHealth::initial()));
-        let progress = Arc::new(TieredProgressTracker::new(&config, progress_health.clone()));
+        let progress = Arc::new(TieredProgressTracker::new(
+            &config,
+            progress_health.clone(),
+            parent_task_group.clone(),
+        ));
         Self {
             config,
             flat_file_store,
@@ -190,6 +194,12 @@ where
     }
 
     pub async fn shutdown_with_report(&self) -> Result<ShutdownReport, StoreError> {
+        let result = self.stop_tasks().await;
+        self.progress.drain_pending_writes().await?;
+        result
+    }
+
+    async fn stop_tasks(&self) -> Result<ShutdownReport, StoreError> {
         self.shutdown.cancel();
         let _drained_permits = tokio::time::timeout(
             std::time::Duration::from_secs(5),
