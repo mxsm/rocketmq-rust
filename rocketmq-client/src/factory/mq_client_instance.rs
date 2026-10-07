@@ -98,7 +98,7 @@ use crate::consumer::pull_result::PullResult;
 use crate::consumer::pull_status::PullStatus;
 use crate::factory::client_tables::*;
 use crate::factory::route_update::RouteUpdateCoordinator;
-use crate::factory::route_update::TopicRouteApplyOutcome;
+use crate::factory::route_update::TopicRouteApplyStatus;
 use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::implementation::find_broker_result::FindBrokerResult;
@@ -1288,7 +1288,7 @@ impl MQClientInstance {
             self.record_topic_route_refresh_finish(
                 TopicRouteRefreshKind::RouteMiss,
                 started,
-                TopicRouteApplyOutcome::Unchanged,
+                TopicRouteApplyStatus::Unchanged,
             );
             return Err(RetryInput::BusinessError(ClientError::not_started()));
         };
@@ -1370,7 +1370,7 @@ impl MQClientInstance {
         self.record_topic_route_refresh_finish(
             TopicRouteRefreshKind::RouteMiss,
             started,
-            TopicRouteApplyOutcome::Unchanged,
+            TopicRouteApplyStatus::Unchanged,
         );
     }
 
@@ -1388,13 +1388,13 @@ impl MQClientInstance {
             .await;
         self.record_topic_route_refresh_finish(TopicRouteRefreshKind::RouteMiss, started, outcome);
         match outcome {
-            TopicRouteApplyOutcome::Applied => self.route_refresh_state.metrics.record_success(),
-            TopicRouteApplyOutcome::Unchanged | TopicRouteApplyOutcome::Stale => {
+            TopicRouteApplyStatus::Applied => self.route_refresh_state.metrics.record_success(),
+            TopicRouteApplyStatus::Unchanged | TopicRouteApplyStatus::Stale => {
                 self.route_refresh_state.metrics.record_skip()
             }
         }
 
-        if matches!(outcome, TopicRouteApplyOutcome::Stale) {
+        if matches!(outcome, TopicRouteApplyStatus::Stale) {
             let current_route = self
                 .topic_route_table
                 .get(topic)
@@ -1426,7 +1426,7 @@ impl MQClientInstance {
                 "updateTopicRouteInfoFromNameServer skipped because mq_client_api_impl is None, Topic: {}. [{}]",
                 topic, self.client_id
             );
-            self.record_topic_route_refresh_finish(refresh_kind, started, TopicRouteApplyOutcome::Unchanged);
+            self.record_topic_route_refresh_finish(refresh_kind, started, TopicRouteApplyStatus::Unchanged);
             self.route_refresh_state.metrics.record_failure();
             return false;
         };
@@ -1470,11 +1470,11 @@ impl MQClientInstance {
                 .await;
             self.record_topic_route_refresh_finish(refresh_kind, started, outcome);
             match outcome {
-                TopicRouteApplyOutcome::Applied => {
+                TopicRouteApplyStatus::Applied => {
                     self.route_refresh_state.metrics.record_success();
                     return true;
                 }
-                TopicRouteApplyOutcome::Unchanged | TopicRouteApplyOutcome::Stale => {
+                TopicRouteApplyStatus::Unchanged | TopicRouteApplyStatus::Stale => {
                     self.route_refresh_state.metrics.record_skip();
                     return false;
                 }
@@ -1487,7 +1487,7 @@ impl MQClientInstance {
             self.route_refresh_state.metrics.record_failure();
         }
 
-        self.record_topic_route_refresh_finish(refresh_kind, started, TopicRouteApplyOutcome::Unchanged);
+        self.record_topic_route_refresh_finish(refresh_kind, started, TopicRouteApplyStatus::Unchanged);
         false
     }
 
@@ -1540,7 +1540,7 @@ impl MQClientInstance {
         &self,
         refresh_kind: TopicRouteRefreshKind,
         started: Instant,
-        _outcome: TopicRouteApplyOutcome,
+        _outcome: TopicRouteApplyStatus,
     ) {
         if matches!(refresh_kind, TopicRouteRefreshKind::RouteMiss) {
             self.route_refresh_state
@@ -1554,7 +1554,7 @@ impl MQClientInstance {
         topic: &CheetahString,
         topic_route_data: &mut TopicRouteData,
         request_version: u64,
-    ) -> TopicRouteApplyOutcome {
+    ) -> TopicRouteApplyStatus {
         self.route_update_coordinator
             .apply_if_fresh(topic, topic_route_data, request_version)
             .await
@@ -2907,7 +2907,7 @@ pub async fn run_route_refresh_concurrent_stale_guard_probe(
         .get(&topic)
         .and_then(|entry| entry.value().order_topic_conf.clone());
     let route_version = instance.topic_route_version(&topic);
-    let stale_skipped = matches!(outcome, TopicRouteApplyOutcome::Stale);
+    let stale_skipped = matches!(outcome, TopicRouteApplyStatus::Stale);
     let kept_current_route = final_order_topic_conf
         .as_ref()
         .is_some_and(|value| value.as_str() == "broker-new:1");
@@ -3864,7 +3864,7 @@ mod tests {
 
         let outcome = instance.apply_topic_route_data_if_fresh(&topic, &mut route, 0).await;
 
-        assert_eq!(outcome, TopicRouteApplyOutcome::Applied);
+        assert_eq!(outcome, TopicRouteApplyStatus::Applied);
         assert!(!producer.is_publish_topic_need_update(&topic));
         assert!(!consumer.is_subscribe_topic_need_update(topic.as_str()).await);
         assert_eq!(instance.topic_route_version(&topic), 1);
@@ -3902,8 +3902,8 @@ mod tests {
             .apply_topic_route_data_if_fresh(&topic, &mut second_route, 1)
             .await;
 
-        assert_eq!(first_outcome, TopicRouteApplyOutcome::Applied);
-        assert_eq!(second_outcome, TopicRouteApplyOutcome::Applied);
+        assert_eq!(first_outcome, TopicRouteApplyStatus::Applied);
+        assert_eq!(second_outcome, TopicRouteApplyStatus::Applied);
         assert!(!instance.is_broker_addr_in_route_index("127.0.0.1:10911"));
         assert!(instance.is_broker_addr_in_route_index("127.0.0.2:10911"));
     }
