@@ -184,8 +184,8 @@ impl DefaultMQProducerImpl {
                             })
                         })?;
                         match admission {
-                            OnewayAdmissionOutcome::Accepted => sent_count += 1,
-                            OnewayAdmissionOutcome::Rejected(rejection) => {
+                            OnewayAdmissionDecision::Accepted => sent_count += 1,
+                            OnewayAdmissionDecision::Rejected(rejection) => {
                                 let _ = rejection;
                             }
                         }
