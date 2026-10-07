@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use parking_lot::RwLock;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_store_api::CursorAdvanceDisposition;
 use rocketmq_store_api::DerivedCheckpoint;
 use rocketmq_store_api::DerivedCursor;
@@ -239,7 +240,11 @@ pub(crate) struct TieredProgressTracker {
 }
 
 impl TieredProgressTracker {
-    pub(crate) fn new(config: &TieredStoreConfig, health: Arc<RwLock<TieredDispatchHealth>>) -> Self {
+    pub(crate) fn new(
+        config: &TieredStoreConfig,
+        health: Arc<RwLock<TieredDispatchHealth>>,
+        task_group: TaskGroup,
+    ) -> Self {
         Self {
             source_epoch: config.source_epoch,
             retry_max_entries: config.retry_ledger_max_entries.max(1),
@@ -248,7 +253,7 @@ impl TieredProgressTracker {
             retry_backoff_initial: config.retry_backoff_initial.max(Duration::from_millis(1)),
             retry_backoff_max: config.retry_backoff_max.max(config.retry_backoff_initial),
             source_wal_segment_size: config.source_wal_segment_size.max(1),
-            persistence: TieredProgressPersistence::new(config.store_path_root_dir.clone()),
+            persistence: TieredProgressPersistence::new(config.store_path_root_dir.clone(), task_group),
             state: Mutex::new(TieredProgressState::default()),
             health,
             loaded: AtomicBool::new(false),
@@ -309,6 +314,10 @@ impl TieredProgressTracker {
         self.refresh_health(&state, 0, None);
         self.loaded.store(false, Ordering::Release);
         Ok(())
+    }
+
+    pub(crate) async fn drain_pending_writes(&self) -> Result<(), StoreError> {
+        self.persistence.drain().await
     }
 
     pub(crate) const fn retry_poll_interval(&self) -> Duration {
