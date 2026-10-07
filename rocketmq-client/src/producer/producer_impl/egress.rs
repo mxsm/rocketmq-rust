@@ -46,14 +46,8 @@ pub(crate) struct OnewayEnvelope {
     pub(crate) send: OnewaySend,
 }
 
-/// Whether a one-way send envelope is admitted into the bounded local egress queue.
-///
-/// Admission is decided locally: [`Accepted`](Self::Accepted) means the envelope holds a queue
-/// slot and its resource permit, while delivery, failure and cancellation are accounted later
-/// by the egress workers. An accepted envelope is therefore not a broker acknowledgement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OnewayAdmissionDecision {
-    /// The envelope entered the local egress queue.
     Accepted,
     Rejected(OnewayAdmissionRejection),
 }
