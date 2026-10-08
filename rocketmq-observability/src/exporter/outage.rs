@@ -176,9 +176,9 @@ impl TelemetryDropReason {
     }
 }
 
-/// Result of non-blocking telemetry admission.
+/// Local queue admission without confirming collector export.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TelemetryEnqueueOutcome {
+pub enum TelemetryAdmissionDecision {
     /// The record was admitted.
     Accepted,
     /// The record was dropped for the supplied reason.
@@ -286,7 +286,7 @@ impl<T> TelemetryOutageQueue<T> {
     ///
     /// `estimated_bytes` must include the envelope and attribute payload estimate used by the
     /// owning exporter. A zero estimate is accounted as one byte so the byte budget always moves.
-    pub fn try_enqueue(&self, item: T, estimated_bytes: usize) -> TelemetryEnqueueOutcome {
+    pub fn try_enqueue(&self, item: T, estimated_bytes: usize) -> TelemetryAdmissionDecision {
         self.try_enqueue_with(item, estimated_bytes, || {})
     }
 
@@ -297,28 +297,28 @@ impl<T> TelemetryOutageQueue<T> {
     /// admission gate prevents concurrent callers from reserving resource permits in one order
     /// while reaching the SDK queue in another. Export completion may therefore release FIFO
     /// permits without freeing the byte budget of a different in-flight record.
-    fn try_enqueue_with<F>(&self, item: T, estimated_bytes: usize, forward: F) -> TelemetryEnqueueOutcome
+    fn try_enqueue_with<F>(&self, item: T, estimated_bytes: usize, forward: F) -> TelemetryAdmissionDecision
     where
         F: FnOnce(),
     {
         let estimated_bytes = estimated_bytes.max(1);
         if estimated_bytes > self.limits.max_record_bytes {
             self.record_drop(estimated_bytes);
-            return TelemetryEnqueueOutcome::Dropped(TelemetryDropReason::RecordTooLarge);
+            return TelemetryAdmissionDecision::Dropped(TelemetryDropReason::RecordTooLarge);
         }
 
         let _admission = match self.admission_gate.try_lock() {
             Ok(guard) => guard,
             Err(TryLockError::WouldBlock | TryLockError::Poisoned(_)) => {
                 self.record_drop(estimated_bytes);
-                return TelemetryEnqueueOutcome::Dropped(TelemetryDropReason::LockUnavailable);
+                return TelemetryAdmissionDecision::Dropped(TelemetryDropReason::LockUnavailable);
             }
         };
         // `begin_shutdown` closes the queue under this same gate, so a completed shutdown
         // transition must take precedence over resource-budget exhaustion.
         if self.queue.is_closed() {
             self.record_drop(estimated_bytes);
-            return TelemetryEnqueueOutcome::Dropped(TelemetryDropReason::Closed);
+            return TelemetryAdmissionDecision::Dropped(TelemetryDropReason::Closed);
         }
         let record = Queued { item, estimated_bytes };
         if let QueueEnqueueStatus::Rejected {
@@ -338,13 +338,13 @@ impl<T> TelemetryOutageQueue<T> {
                 },
             };
             self.record_drop(estimated_bytes);
-            return TelemetryEnqueueOutcome::Dropped(reason);
+            return TelemetryAdmissionDecision::Dropped(reason);
         }
 
         self.accepted_items.fetch_add(1, Ordering::Relaxed);
         self.accepted_bytes.fetch_add(estimated_bytes as u64, Ordering::Relaxed);
         forward();
-        TelemetryEnqueueOutcome::Accepted
+        TelemetryAdmissionDecision::Accepted
     }
 
     /// Removes a bounded FIFO batch for an exporter worker.
@@ -999,8 +999,8 @@ impl opentelemetry_sdk::trace::SpanProcessor for OutageBoundedBatchSpanProcessor
             .queue
             .try_enqueue_with((), estimated_bytes, || self.inner.on_end(span))
         {
-            TelemetryEnqueueOutcome::Accepted => {}
-            TelemetryEnqueueOutcome::Dropped(reason) => self.drop_reporter.record(reason, self.limits),
+            TelemetryAdmissionDecision::Accepted => {}
+            TelemetryAdmissionDecision::Dropped(reason) => self.drop_reporter.record(reason, self.limits),
         }
     }
 
@@ -1137,8 +1137,8 @@ impl opentelemetry_sdk::logs::LogProcessor for OutageBoundedBatchLogProcessor {
             .queue
             .try_enqueue_with((), estimated_bytes, || self.inner.emit(record, instrumentation))
         {
-            TelemetryEnqueueOutcome::Accepted => {}
-            TelemetryEnqueueOutcome::Dropped(reason) => self.drop_reporter.record(reason, self.limits),
+            TelemetryAdmissionDecision::Accepted => {}
+            TelemetryAdmissionDecision::Dropped(reason) => self.drop_reporter.record(reason, self.limits),
         }
     }
 
@@ -1273,11 +1273,11 @@ mod tests {
     fn queue_is_count_and_byte_bounded_and_drops_are_measurable() {
         let queue = queue();
 
-        assert_eq!(queue.try_enqueue("one", 3), TelemetryEnqueueOutcome::Accepted);
-        assert_eq!(queue.try_enqueue("two", 5), TelemetryEnqueueOutcome::Accepted);
+        assert_eq!(queue.try_enqueue("one", 3), TelemetryAdmissionDecision::Accepted);
+        assert_eq!(queue.try_enqueue("two", 5), TelemetryAdmissionDecision::Accepted);
         assert_eq!(
             queue.try_enqueue("count-full", 1),
-            TelemetryEnqueueOutcome::Dropped(TelemetryDropReason::ItemLimit)
+            TelemetryAdmissionDecision::Dropped(TelemetryDropReason::ItemLimit)
         );
 
         let snapshot = queue.snapshot();
@@ -1294,12 +1294,12 @@ mod tests {
 
         assert_eq!(
             queue.try_enqueue("oversized", 7),
-            TelemetryEnqueueOutcome::Dropped(TelemetryDropReason::RecordTooLarge)
+            TelemetryAdmissionDecision::Dropped(TelemetryDropReason::RecordTooLarge)
         );
-        assert_eq!(queue.try_enqueue("five", 5), TelemetryEnqueueOutcome::Accepted);
+        assert_eq!(queue.try_enqueue("five", 5), TelemetryAdmissionDecision::Accepted);
         assert_eq!(
             queue.try_enqueue("byte-full", 4),
-            TelemetryEnqueueOutcome::Dropped(TelemetryDropReason::ByteLimit)
+            TelemetryAdmissionDecision::Dropped(TelemetryDropReason::ByteLimit)
         );
         assert_eq!(queue.snapshot().queued_bytes, 5);
     }
@@ -1314,7 +1314,7 @@ mod tests {
 
         assert_eq!(
             queue.try_enqueue("contended", 2),
-            TelemetryEnqueueOutcome::Dropped(TelemetryDropReason::LockUnavailable)
+            TelemetryAdmissionDecision::Dropped(TelemetryDropReason::LockUnavailable)
         );
         assert_eq!(queue.dropped_items.load(Ordering::Relaxed), 1);
         assert_eq!(queue.dropped_bytes.load(Ordering::Relaxed), 2);
@@ -1344,7 +1344,7 @@ mod tests {
         let mut second_forwarded = false;
         assert_eq!(
             queue.try_enqueue_with("second", 1, || second_forwarded = true),
-            TelemetryEnqueueOutcome::Dropped(TelemetryDropReason::LockUnavailable)
+            TelemetryAdmissionDecision::Dropped(TelemetryDropReason::LockUnavailable)
         );
         assert!(!second_forwarded);
 
@@ -1353,7 +1353,7 @@ mod tests {
             .expect("test should release the first forwarding boundary");
         assert_eq!(
             first.join().expect("first admission thread should finish"),
-            TelemetryEnqueueOutcome::Accepted
+            TelemetryAdmissionDecision::Accepted
         );
         assert_eq!(queue.drain_batch(2, usize::MAX), vec!["first"]);
         assert_eq!(queue.snapshot().queued_bytes, 0);
@@ -1362,8 +1362,8 @@ mod tests {
     #[test]
     fn deferred_lookahead_retains_its_shared_resource_budget() {
         let queue = queue();
-        assert_eq!(queue.try_enqueue("one", 3), TelemetryEnqueueOutcome::Accepted);
-        assert_eq!(queue.try_enqueue("two", 5), TelemetryEnqueueOutcome::Accepted);
+        assert_eq!(queue.try_enqueue("one", 3), TelemetryAdmissionDecision::Accepted);
+        assert_eq!(queue.try_enqueue("two", 5), TelemetryAdmissionDecision::Accepted);
 
         assert_eq!(queue.drain_batch(2, 4), vec!["one"]);
         let snapshot = queue.snapshot();
@@ -1371,15 +1371,15 @@ mod tests {
         assert_eq!(snapshot.queued_bytes, 5);
         assert_eq!(
             queue.try_enqueue("over-budget", 4),
-            TelemetryEnqueueOutcome::Dropped(TelemetryDropReason::ByteLimit)
+            TelemetryAdmissionDecision::Dropped(TelemetryDropReason::ByteLimit)
         );
     }
 
     #[test]
     fn exporter_drains_fifo_batches_with_bounded_accounting() {
         let queue = queue();
-        assert_eq!(queue.try_enqueue("one", 3), TelemetryEnqueueOutcome::Accepted);
-        assert_eq!(queue.try_enqueue("two", 5), TelemetryEnqueueOutcome::Accepted);
+        assert_eq!(queue.try_enqueue("one", 3), TelemetryAdmissionDecision::Accepted);
+        assert_eq!(queue.try_enqueue("two", 5), TelemetryAdmissionDecision::Accepted);
 
         assert_eq!(queue.drain_batch(2, 4), vec!["one"]);
         assert_eq!(queue.drain_batch(2, 8), vec!["two"]);
@@ -1393,14 +1393,14 @@ mod tests {
     #[test]
     fn absolute_shutdown_deadline_reports_collector_outage() {
         let queue = queue();
-        assert_eq!(queue.try_enqueue("one", 3), TelemetryEnqueueOutcome::Accepted);
-        assert_eq!(queue.try_enqueue("two", 5), TelemetryEnqueueOutcome::Accepted);
+        assert_eq!(queue.try_enqueue("one", 3), TelemetryAdmissionDecision::Accepted);
+        assert_eq!(queue.try_enqueue("two", 5), TelemetryAdmissionDecision::Accepted);
         let deadline = Instant::now() + Duration::from_millis(10);
         queue.begin_shutdown(deadline);
 
         assert_eq!(
             queue.try_enqueue("closed", 1),
-            TelemetryEnqueueOutcome::Dropped(TelemetryDropReason::Closed)
+            TelemetryAdmissionDecision::Dropped(TelemetryDropReason::Closed)
         );
         assert!(queue.poll_shutdown(deadline - Duration::from_millis(1)).is_none());
         let report = queue
@@ -1418,7 +1418,7 @@ mod tests {
     #[test]
     fn drained_queue_finishes_before_deadline_without_timeout() {
         let queue = queue();
-        assert_eq!(queue.try_enqueue("one", 3), TelemetryEnqueueOutcome::Accepted);
+        assert_eq!(queue.try_enqueue("one", 3), TelemetryAdmissionDecision::Accepted);
         let deadline = Instant::now() + Duration::from_secs(1);
         queue.begin_shutdown(deadline);
         assert_eq!(queue.drain_batch(1, 8), vec!["one"]);

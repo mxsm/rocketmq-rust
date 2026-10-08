@@ -20,8 +20,8 @@ use std::path::PathBuf;
 
 use rocketmq_observability::metrics::catalog;
 use rocketmq_observability::semantic;
+use rocketmq_observability::TelemetryAdmissionDecision;
 use rocketmq_observability::TelemetryDropReason;
-use rocketmq_observability::TelemetryEnqueueOutcome;
 use rocketmq_observability::TelemetryOutageQueue;
 use rocketmq_observability::TelemetryQueueLimits;
 use rocketmq_observability::DEFAULT_MAX_QUEUE_BYTES;
@@ -441,10 +441,10 @@ fn collector_outage_is_bounded_measurable_and_non_blocking() {
     assert!(signals.contains_key(contract["shutdown_signal"].as_str().expect("shutdown signal")));
 
     let queue = TelemetryOutageQueue::new(TelemetryQueueLimits::new(1, 8, 8).expect("bounded test limits"));
-    assert_eq!(queue.try_enqueue("first", 4), TelemetryEnqueueOutcome::Accepted);
+    assert_eq!(queue.try_enqueue("first", 4), TelemetryAdmissionDecision::Accepted);
     assert_eq!(
         queue.try_enqueue("second", 4),
-        TelemetryEnqueueOutcome::Dropped(TelemetryDropReason::ItemLimit)
+        TelemetryAdmissionDecision::Dropped(TelemetryDropReason::ItemLimit)
     );
     let snapshot = queue.snapshot();
     assert_eq!(snapshot.queued_items, 1);
