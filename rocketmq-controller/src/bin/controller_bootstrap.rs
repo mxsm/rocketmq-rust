@@ -410,11 +410,11 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         rocketmq_runtime::RuntimeComponent::Controller,
     )
     .record_business_drain(if shutdown_request.deadline.is_expired() {
-        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::DeadlineExceeded
+        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainStatus::DeadlineExceeded
     } else if controller_result.is_ok() {
-        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::Drained
+        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainStatus::Drained
     } else {
-        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::Failed
+        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainStatus::Failed
     });
     let telemetry_report = match telemetry_flush_lease {
         Some(lease) => {

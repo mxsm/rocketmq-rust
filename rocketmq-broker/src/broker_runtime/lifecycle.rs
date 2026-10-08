@@ -105,11 +105,11 @@ impl BrokerRuntime {
                 self.record_business_drain(
                     &progress,
                     if deadline.is_expired() {
-                        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::DeadlineExceeded
+                        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainStatus::DeadlineExceeded
                     } else if report.is_healthy() {
-                        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::Drained
+                        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainStatus::Drained
                     } else {
-                        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::Failed
+                        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainStatus::Failed
                     },
                 );
                 report
@@ -117,7 +117,7 @@ impl BrokerRuntime {
             Err(elapsed) => {
                 self.record_business_drain(
                     &progress,
-                    rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::DeadlineExceeded,
+                    rocketmq_observability::metrics::runtime::RuntimeBusinessDrainStatus::DeadlineExceeded,
                 );
                 warn!(
                     elapsed_ms = elapsed.as_millis(),
@@ -826,15 +826,15 @@ impl BrokerRuntime {
             BrokerShutdownComponentReport::from_shutdown_report("service_tasks", Some(&report), started.elapsed());
         progress.complete("service_tasks");
 
-        use rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome;
-        let business_outcome = if deadline.is_expired() {
-            RuntimeBusinessDrainOutcome::DeadlineExceeded
+        use rocketmq_observability::metrics::runtime::RuntimeBusinessDrainStatus;
+        let business_status = if deadline.is_expired() {
+            RuntimeBusinessDrainStatus::DeadlineExceeded
         } else if shutdown_report.is_healthy() {
-            RuntimeBusinessDrainOutcome::Drained
+            RuntimeBusinessDrainStatus::Drained
         } else {
-            RuntimeBusinessDrainOutcome::Failed
+            RuntimeBusinessDrainStatus::Failed
         };
-        self.record_business_drain(&progress, business_outcome);
+        self.record_business_drain(&progress, business_status);
 
         let started = Instant::now();
         if let Some(guard) = self.composition.state.observability_guard.take() {
@@ -878,14 +878,14 @@ impl BrokerRuntime {
     fn record_business_drain(
         &self,
         progress: &BrokerShutdownProgress,
-        outcome: rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome,
+        status: rocketmq_observability::metrics::runtime::RuntimeBusinessDrainStatus,
     ) {
         if progress.claim_business_drain_event() {
             rocketmq_observability::metrics::runtime::RuntimeMetricsRecorder::from_handle(
                 &self.composition.state.telemetry_handle,
                 rocketmq_runtime::RuntimeComponent::Broker,
             )
-            .record_business_drain(outcome);
+            .record_business_drain(status);
         }
     }
 
