@@ -31,14 +31,15 @@ use crate::mapped_file::ManagedMappedFileQueueGeneration;
 use crate::mapped_file::MappedFile;
 use crate::mapped_file::ReconciledSegmentFile;
 
-/// Files loaded before a queue load completed or failed.
+/// Report of a mapped-file queue load: whether every candidate file was accepted, plus the files
+/// loaded before the load completed or failed.
 #[doc(hidden)]
-pub struct MappedFileQueueLoadOutcome {
+pub struct MappedFileQueueLoadReport {
     success: bool,
     mapped_files: Vec<Arc<DefaultMappedFile>>,
 }
 
-impl MappedFileQueueLoadOutcome {
+impl MappedFileQueueLoadReport {
     fn new(success: bool, mapped_files: Vec<Arc<DefaultMappedFile>>) -> Self {
         Self { success, mapped_files }
     }
@@ -49,7 +50,7 @@ impl MappedFileQueueLoadOutcome {
         self.success
     }
 
-    /// Returns files loaded before the terminal outcome.
+    /// Returns the files loaded before the load completed or failed.
     #[doc(hidden)]
     pub fn into_mapped_files(self) -> Vec<Arc<DefaultMappedFile>> {
         self.mapped_files
@@ -58,15 +59,15 @@ impl MappedFileQueueLoadOutcome {
 
 /// Discovers and loads the files in a mapped-file queue directory.
 #[doc(hidden)]
-pub fn load_mapped_file_queue_path(store_path: &str, mapped_file_size: u64) -> MappedFileQueueLoadOutcome {
+pub fn load_mapped_file_queue_path(store_path: &str, mapped_file_size: u64) -> MappedFileQueueLoadReport {
     let entries = match fs::read_dir(Path::new(store_path)) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return MappedFileQueueLoadOutcome::new(true, Vec::new());
+            return MappedFileQueueLoadReport::new(true, Vec::new());
         }
         Err(error) => {
             error!(store_path, %error, "Failed to enumerate mapped-file queue directory");
-            return MappedFileQueueLoadOutcome::new(false, Vec::new());
+            return MappedFileQueueLoadReport::new(false, Vec::new());
         }
     };
 
@@ -77,7 +78,7 @@ pub fn load_mapped_file_queue_path(store_path: &str, mapped_file_size: u64) -> M
     )
 }
 
-fn load_mapped_file_queue_entries<I>(store_path: &str, entries: I, mapped_file_size: u64) -> MappedFileQueueLoadOutcome
+fn load_mapped_file_queue_entries<I>(store_path: &str, entries: I, mapped_file_size: u64) -> MappedFileQueueLoadReport
 where
     I: IntoIterator<Item = io::Result<PathBuf>>,
 {
@@ -87,7 +88,7 @@ where
             Ok(path) => files.push(path),
             Err(error) => {
                 error!(store_path, %error, "Failed to enumerate an entry in mapped-file queue directory");
-                return MappedFileQueueLoadOutcome::new(false, Vec::new());
+                return MappedFileQueueLoadReport::new(false, Vec::new());
             }
         }
     }
@@ -96,7 +97,7 @@ where
 
 /// Loads an explicit mapped-file queue candidate list in ascending file-name order.
 #[doc(hidden)]
-pub fn load_mapped_file_queue_files(files: Vec<PathBuf>, mapped_file_size: u64) -> MappedFileQueueLoadOutcome {
+pub fn load_mapped_file_queue_files(files: Vec<PathBuf>, mapped_file_size: u64) -> MappedFileQueueLoadReport {
     load_mapped_file_queue_files_with_remover(files, mapped_file_size, |path| fs::remove_file(path))
 }
 
@@ -166,7 +167,7 @@ fn load_mapped_file_queue_files_with_remover<R>(
     mut files: Vec<PathBuf>,
     mapped_file_size: u64,
     mut remove_file: R,
-) -> MappedFileQueueLoadOutcome
+) -> MappedFileQueueLoadReport
 where
     R: FnMut(&Path) -> io::Result<()>,
 {
@@ -180,7 +181,7 @@ where
             Ok(metadata) => metadata,
             Err(error) => {
                 error!(path = %file.display(), %error, "Failed to get mapped-file queue entry metadata");
-                return MappedFileQueueLoadOutcome::new(false, Vec::new());
+                return MappedFileQueueLoadReport::new(false, Vec::new());
             }
         };
         if !metadata.file_type().is_file() {
@@ -188,7 +189,7 @@ where
                 path = %file.display(),
                 "Unknown non-file entry blocks mapped-file queue loading and was retained"
             );
-            return MappedFileQueueLoadOutcome::new(false, Vec::new());
+            return MappedFileQueueLoadReport::new(false, Vec::new());
         }
         if let Err(error) = crate::mapped_file::file::try_parse_file_from_offset(&file) {
             warn!(
@@ -196,7 +197,7 @@ where
                 %error,
                 "Unknown file identity blocks mapped-file queue loading and was retained"
             );
-            return MappedFileQueueLoadOutcome::new(false, Vec::new());
+            return MappedFileQueueLoadReport::new(false, Vec::new());
         }
         candidates.push((file, metadata));
     }
@@ -212,7 +213,7 @@ where
                         %error,
                         "Failed to delete zero-length mapped-file queue tail"
                     );
-                    return MappedFileQueueLoadOutcome::new(false, mapped_files);
+                    return MappedFileQueueLoadReport::new(false, mapped_files);
                 }
             }
             continue;
@@ -223,7 +224,7 @@ where
                 "{} length not matched message store config value, please check it manually",
                 file.display()
             );
-            return MappedFileQueueLoadOutcome::new(false, mapped_files);
+            return MappedFileQueueLoadReport::new(false, mapped_files);
         }
 
         let mapped_file = match DefaultMappedFile::try_new(
@@ -233,7 +234,7 @@ where
             Ok(mapped_file) => mapped_file,
             Err(error) => {
                 error!("Failed to load mapped file {}: {}", file.display(), error);
-                return MappedFileQueueLoadOutcome::new(false, mapped_files);
+                return MappedFileQueueLoadReport::new(false, mapped_files);
             }
         };
         mapped_file.set_wrote_position(mapped_file_size as i32);
@@ -242,7 +243,7 @@ where
         mapped_files.push(Arc::new(mapped_file));
     }
 
-    MappedFileQueueLoadOutcome::new(true, mapped_files)
+    MappedFileQueueLoadReport::new(true, mapped_files)
 }
 
 /// Creates one queue segment through the configured allocation service.
