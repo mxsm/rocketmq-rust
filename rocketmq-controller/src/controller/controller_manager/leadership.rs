@@ -218,10 +218,13 @@ impl ControllerManager {
             let broker_id = task.key.broker_id;
             let broker_name = task.key.broker_name.clone();
             let broker_addr = task.broker_addr.clone();
-            let outcome = self.broker_role_notifier.submit(task);
-            if matches!(outcome, SubmitOutcome::Full | SubmitOutcome::Closed) {
+            let status = self.broker_role_notifier.submit(task);
+            if matches!(
+                status,
+                BrokerRoleNotificationSubmissionStatus::Full | BrokerRoleNotificationSubmissionStatus::Closed
+            ) {
                 warn!(
-                    ?outcome,
+                    outcome = ?status,
                     target = %broker_addr,
                     broker_id,
                     broker = %broker_name,
