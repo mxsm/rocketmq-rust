@@ -55,7 +55,7 @@ impl MappedFileRemovalStatus {
 /// unmap/last-close, or that the path was removed from the filesystem namespace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
-pub enum MappedFileDetachOutcome {
+pub enum MappedFileDetachResult {
     /// This call detached both owner slots.
     Detached {
         /// Published mapping generation removed from the slot, when one existed.
@@ -76,7 +76,7 @@ pub enum MappedFileDetachOutcome {
     },
 }
 
-impl MappedFileDetachOutcome {
+impl MappedFileDetachResult {
     /// Returns whether both physical owner slots are detached after this result.
     #[inline]
     pub fn is_detached(self) -> bool {
