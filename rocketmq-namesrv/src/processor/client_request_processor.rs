@@ -20,7 +20,7 @@ use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_error::PublicErrorView;
 use rocketmq_model::version::RocketMqVersion;
-use rocketmq_observability::metrics::namesrv::NameServerRouteCacheOutcome;
+use rocketmq_observability::metrics::namesrv::NameServerRouteCacheEvent;
 use rocketmq_observability::metrics::namesrv::NameServerRouteStage;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -230,19 +230,19 @@ impl ClientRequestProcessor {
             let cache = self.name_server_runtime_inner.route_response_cache();
             cache.get_or_try_insert_with(key, encode).map(|outcome| {
                 if metrics.is_enabled() {
-                    let metric_outcome = match outcome.kind {
-                        RouteCacheOutcomeKind::Hit => NameServerRouteCacheOutcome::Hit,
-                        RouteCacheOutcomeKind::Miss => NameServerRouteCacheOutcome::Miss,
-                        RouteCacheOutcomeKind::Oversize => NameServerRouteCacheOutcome::Oversize,
+                    let cache_event = match outcome.kind {
+                        RouteCacheOutcomeKind::Hit => NameServerRouteCacheEvent::Hit,
+                        RouteCacheOutcomeKind::Miss => NameServerRouteCacheEvent::Miss,
+                        RouteCacheOutcomeKind::Oversize => NameServerRouteCacheEvent::Oversize,
                     };
-                    metrics.record_route_cache(metric_outcome, cache.stats().weighted_size);
+                    metrics.record_route_cache(cache_event, cache.stats().weighted_size);
                 }
                 outcome.body
             })
         } else {
             if metrics.is_enabled() {
                 metrics.record_route_cache(
-                    NameServerRouteCacheOutcome::Bypass,
+                    NameServerRouteCacheEvent::Bypass,
                     self.name_server_runtime_inner
                         .route_response_cache()
                         .stats()

@@ -19,9 +19,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use crate::metrics::namesrv::NameServerAdmissionOutcome;
+use crate::metrics::namesrv::NameServerAdmissionEvent;
 use crate::metrics::namesrv::NameServerMetrics;
-use crate::metrics::namesrv::NameServerRouteCacheOutcome;
+use crate::metrics::namesrv::NameServerRouteCacheEvent;
 use crate::metrics::namesrv::NameServerWorkloadClass;
 use crate::metrics::namesrv::NAMESRV_ROUTE_CACHE_EVENTS_TOTAL;
 use crate::metrics::namesrv::NAMESRV_ROUTE_FRESHNESS_SAMPLED_TOTAL;
@@ -220,10 +220,10 @@ fn namesrv_read_path_metrics_use_only_bounded_labels() {
     let metrics = NameServerMetrics::new(&meter);
 
     metrics.record_route_freshness_sampled();
-    metrics.record_route_cache(NameServerRouteCacheOutcome::Hit, 4096);
+    metrics.record_route_cache(NameServerRouteCacheEvent::Hit, 4096);
     metrics.record_workload_admission(
         NameServerWorkloadClass::RouteRead,
-        NameServerAdmissionOutcome::Rejected,
+        NameServerAdmissionEvent::Rejected,
         8,
         50,
     );
