@@ -37,7 +37,7 @@ observability = [
   "rocketmq-proxy-local?/observability",
   "rocketmq-transport/observability",
 ]
-otel-traces = ["rocketmq-observability/otel-traces"]
+otel-traces = ["rocketmq-observability/otel-traces", "rocketmq-transport/observability-traces"]
 otel-logs = ["rocketmq-observability/otel-logs"]
 otlp-metrics = ["observability", "rocketmq-observability/otlp-metrics"]
 otlp-traces = ["otel-traces", "rocketmq-observability/otlp-traces"]
