@@ -1169,11 +1169,13 @@ impl TransportRequestMetricsGuard {
         self.inner.complete(
             response_code,
             match body_kind {
-                ResponseBodyKind::Empty => rocketmq_observability::metrics::remoting::RequestOutcome::ReplyEmpty,
-                ResponseBodyKind::Bytes => rocketmq_observability::metrics::remoting::RequestOutcome::ReplyBytes,
-                ResponseBodyKind::Segments => rocketmq_observability::metrics::remoting::RequestOutcome::ReplySegments,
+                ResponseBodyKind::Empty => rocketmq_observability::metrics::remoting::RemotingRequestEvent::ReplyEmpty,
+                ResponseBodyKind::Bytes => rocketmq_observability::metrics::remoting::RemotingRequestEvent::ReplyBytes,
+                ResponseBodyKind::Segments => {
+                    rocketmq_observability::metrics::remoting::RemotingRequestEvent::ReplySegments
+                }
                 ResponseBodyKind::FileRegions => {
-                    rocketmq_observability::metrics::remoting::RequestOutcome::ReplyFileRegions
+                    rocketmq_observability::metrics::remoting::RemotingRequestEvent::ReplyFileRegions
                 }
             },
         );
@@ -1193,7 +1195,7 @@ impl TransportRequestMetricsGuard {
         #[cfg(feature = "observability")]
         self.inner.complete(
             response_code,
-            rocketmq_observability::metrics::remoting::RequestOutcome::DeferredResumed,
+            rocketmq_observability::metrics::remoting::RemotingRequestEvent::DeferredResumed,
         );
 
         #[cfg(not(feature = "observability"))]
@@ -1205,7 +1207,7 @@ impl TransportRequestMetricsGuard {
         #[cfg(feature = "observability")]
         self.inner.complete(
             NO_RESPONSE_CODE,
-            rocketmq_observability::metrics::remoting::RequestOutcome::ProtocolNoResponse,
+            rocketmq_observability::metrics::remoting::RemotingRequestEvent::ProtocolNoResponse,
         );
     }
 
