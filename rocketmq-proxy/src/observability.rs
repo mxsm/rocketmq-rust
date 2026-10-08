@@ -17,9 +17,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use rocketmq_auth::AuthMetricsSnapshot;
 use rocketmq_observability::metrics::proxy::ProxyMetrics as OtelProxyMetrics;
+use rocketmq_observability::metrics::proxy::ProxyRpcCompletion;
 use rocketmq_observability::metrics::proxy::ProxyRpcMetrics;
 pub use rocketmq_observability::metrics::proxy::ProxyRpcMetricsSnapshot;
-use rocketmq_observability::metrics::proxy::ProxyRpcOutcome;
 use tonic::Code as TonicCode;
 use tonic::Status as TonicStatus;
 use tracing::warn;
@@ -79,11 +79,11 @@ impl ProxyRequestOutcome {
         matches!(self, Self::Payload(status) if status.is_ok())
     }
 
-    fn rpc_metrics_outcome(&self) -> ProxyRpcOutcome {
+    fn rpc_completion(&self) -> ProxyRpcCompletion {
         match self {
-            Self::Payload(status) if status.is_ok() => ProxyRpcOutcome::Succeeded,
-            Self::Payload(_) => ProxyRpcOutcome::PayloadFailed,
-            Self::Transport { .. } => ProxyRpcOutcome::TransportFailed,
+            Self::Payload(status) if status.is_ok() => ProxyRpcCompletion::Succeeded,
+            Self::Payload(_) => ProxyRpcCompletion::PayloadFailed,
+            Self::Transport { .. } => ProxyRpcCompletion::TransportFailed,
         }
     }
 
@@ -190,7 +190,7 @@ impl ProxyMetrics {
         elapsed: std::time::Duration,
     ) {
         self.rpcs
-            .record_request_completed(rpc_name, outcome.rpc_metrics_outcome(), elapsed);
+            .record_request_completed(rpc_name, outcome.rpc_completion(), elapsed);
         self.otel
             .record_grpc_request_latency(elapsed.as_millis().clamp(0, u128::from(u64::MAX)) as u64);
     }
