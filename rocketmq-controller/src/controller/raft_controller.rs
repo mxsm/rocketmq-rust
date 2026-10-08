@@ -51,7 +51,7 @@ use crate::metrics::controller_metrics_manager::ControllerMetricsManager;
 use crate::typ::Node;
 use crate::typ::NodeId;
 use crate::ConsensusMembership;
-use crate::MembershipChangeOutcome;
+use crate::MembershipChangeReport;
 use crate::MembershipChangeRequest;
 use rocketmq_error::Result;
 
@@ -167,7 +167,7 @@ impl RaftController {
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         request: MembershipChangeRequest,
-    ) -> ControllerResult<MembershipChangeOutcome> {
+    ) -> ControllerResult<MembershipChangeReport> {
         self.inner.apply_membership_change(authorization, request).await
     }
 

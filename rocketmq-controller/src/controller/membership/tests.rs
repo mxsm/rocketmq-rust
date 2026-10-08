@@ -221,7 +221,7 @@ async fn repeated_operation_id_replays_without_second_consensus_mutation() {
         records[0].authorization_capability(),
         MaintenanceCapability::ReleaseCheckpoint
     );
-    assert_eq!(records[1].outcome(), MembershipAuditOutcome::Replayed);
+    assert_eq!(records[1].outcome(), MembershipAuditStatus::Replayed);
 }
 
 #[tokio::test]
@@ -287,7 +287,7 @@ async fn release_checkpoint_grant_is_the_temporary_membership_permission() {
     let coordinator = MembershipChangeCoordinator::new(sink.clone());
     let port = MockMembershipPort::new(BTreeSet::from([1, 2]));
 
-    let outcome = coordinator
+    let report = coordinator
         .apply(
             &port,
             &authorization(),
@@ -296,7 +296,7 @@ async fn release_checkpoint_grant_is_the_temporary_membership_permission() {
         .await
         .expect("temporary release authorization");
 
-    assert_eq!(outcome.disposition(), MembershipChangeDisposition::Applied);
+    assert_eq!(report.disposition(), MembershipChangeDisposition::Applied);
     assert_eq!(port.mutation_count(), 1);
     assert_eq!(
         sink.records.lock().expect("audit lock")[0].authorization_capability(),
@@ -403,7 +403,7 @@ async fn verification_read_failure_is_pending_and_same_request_reconciles() {
     assert_eq!(replayed.disposition(), MembershipChangeDisposition::Replayed);
     assert_eq!(port.mutation_count(), 1);
     let records = sink.records.lock().expect("audit lock");
-    assert_eq!(records[0].outcome(), MembershipAuditOutcome::Pending);
+    assert_eq!(records[0].outcome(), MembershipAuditStatus::Pending);
     assert_eq!(records[0].decision(), "verification_read_failed");
     assert_eq!(records[1].decision(), "recovered_after_uncertain_commit");
 }
@@ -436,6 +436,6 @@ async fn initial_membership_read_failure_is_rejected_and_audited() {
         .is_none());
     assert_eq!(port.mutation_count(), 0);
     let records = sink.records.lock().expect("audit lock");
-    assert_eq!(records[0].outcome(), MembershipAuditOutcome::Rejected);
+    assert_eq!(records[0].outcome(), MembershipAuditStatus::Rejected);
     assert_eq!(records[0].decision(), "membership_read_failed");
 }
