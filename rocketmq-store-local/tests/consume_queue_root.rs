@@ -54,7 +54,7 @@ fn single_dispatch_retries_until_append_succeeds() {
         },
     );
 
-    assert_eq!(outcome, ConsumeQueueDispatchOutcome::Appended { attempts: 3 });
+    assert_eq!(outcome, ConsumeQueueDispatchResult::Appended { attempts: 3 });
     assert_eq!(calls, vec![0, 1, 2]);
 }
 
@@ -71,7 +71,7 @@ fn batch_dispatch_rejects_invalid_metadata_without_calling_adapter() {
         |_| panic!("invalid batch must not reach adapter"),
     );
 
-    assert_eq!(outcome, ConsumeQueueDispatchOutcome::InvalidBatch);
+    assert_eq!(outcome, ConsumeQueueDispatchResult::InvalidBatch);
 }
 
 #[test]
@@ -82,11 +82,11 @@ fn dispatch_distinguishes_not_writeable_and_exhausted() {
     };
     assert_eq!(
         drive_consume_queue_dispatch(ConsumeQueueDispatchMode::Single, metadata, false, 30, |_| true),
-        ConsumeQueueDispatchOutcome::NotWriteable
+        ConsumeQueueDispatchResult::NotWriteable
     );
     assert_eq!(
         drive_consume_queue_dispatch(ConsumeQueueDispatchMode::Batch, metadata, true, 3, |_| false),
-        ConsumeQueueDispatchOutcome::Exhausted { attempts: 3 }
+        ConsumeQueueDispatchResult::Exhausted { attempts: 3 }
     );
 }
 
