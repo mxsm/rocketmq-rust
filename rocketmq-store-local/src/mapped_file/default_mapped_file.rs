@@ -39,7 +39,7 @@ use tracing::warn;
 use super::FlushStrategy;
 use super::MappedFile;
 use super::MappedFileAdmissionState;
-use super::MappedFileDetachOutcome;
+use super::MappedFileDetachResult;
 use super::MappedFileFailure;
 use super::MappedFileMetrics;
 use super::MappedFileRawCore;
@@ -1172,20 +1172,20 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
     ///
     /// Existing owner-bearing aliases, if any, keep their physical resources alive until their
     /// own final `Arc` drops. The result therefore reports slot detach, not forced unmap/close.
-    pub fn try_detach_physical_owners(&self) -> MappedFileDetachOutcome {
+    pub fn try_detach_physical_owners(&self) -> MappedFileDetachResult {
         match self.reference_resource.lifecycle().try_claim_physical_detach() {
             PhysicalDetachClaimResult::Claimed(claim) => {
                 let (mapping_generation, had_file_owner) = self.physical_owners.detach_owner_slots();
                 claim.complete();
-                MappedFileDetachOutcome::Detached {
+                MappedFileDetachResult::Detached {
                     mapping_generation,
                     had_file_owner,
                 }
             }
-            PhysicalDetachClaimResult::AlreadyDetached => MappedFileDetachOutcome::AlreadyDetached,
-            PhysicalDetachClaimResult::InProgress => MappedFileDetachOutcome::InProgress,
+            PhysicalDetachClaimResult::AlreadyDetached => MappedFileDetachResult::AlreadyDetached,
+            PhysicalDetachClaimResult::InProgress => MappedFileDetachResult::InProgress,
             PhysicalDetachClaimResult::Pending { state, active_leases } => {
-                MappedFileDetachOutcome::Pending { state, active_leases }
+                MappedFileDetachResult::Pending { state, active_leases }
             }
         }
     }
@@ -2560,7 +2560,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         }
 
         match self.try_detach_physical_owners() {
-            MappedFileDetachOutcome::Detached {
+            MappedFileDetachResult::Detached {
                 mapping_generation,
                 had_file_owner,
             } => {
@@ -2573,9 +2573,9 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
                 );
                 true
             }
-            MappedFileDetachOutcome::AlreadyDetached => true,
-            MappedFileDetachOutcome::InProgress => false,
-            MappedFileDetachOutcome::Pending { state, active_leases } => {
+            MappedFileDetachResult::AlreadyDetached => true,
+            MappedFileDetachResult::InProgress => false,
+            MappedFileDetachResult::Pending { state, active_leases } => {
                 error!(
                     file_name = %self.file_name,
                     current_ref,
