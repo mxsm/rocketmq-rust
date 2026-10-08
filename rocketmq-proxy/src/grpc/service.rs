@@ -523,7 +523,7 @@ where
         self.metrics
             .record_request_completed(observation.context().rpc_name(), outcome, observation.elapsed());
         if let Some((span, elapsed)) = observation.forward() {
-            rocketmq_observability::trace::proxy::record_outcome(span, proxy_span_outcome(outcome));
+            rocketmq_observability::trace::proxy::record_status(span, proxy_span_status(outcome));
             self.metrics.record_forward_completed(elapsed);
         }
         self.hooks
@@ -685,11 +685,11 @@ where
         .instrument(span.clone())
         .await;
         let outcome = match &result {
-            Ok(_) if authentication_enabled => rocketmq_observability::trace::proxy::ProxySpanOutcome::Success,
-            Ok(_) => rocketmq_observability::trace::proxy::ProxySpanOutcome::Bypassed,
-            Err(_) => rocketmq_observability::trace::proxy::ProxySpanOutcome::Denied,
+            Ok(_) if authentication_enabled => rocketmq_observability::trace::proxy::ProxySpanStatus::Success,
+            Ok(_) => rocketmq_observability::trace::proxy::ProxySpanStatus::Bypassed,
+            Err(_) => rocketmq_observability::trace::proxy::ProxySpanStatus::Denied,
         };
-        rocketmq_observability::trace::proxy::record_outcome(&span, outcome);
+        rocketmq_observability::trace::proxy::record_status(&span, outcome);
         result
     }
 
@@ -1165,14 +1165,14 @@ where
     }
 }
 
-fn proxy_span_outcome(outcome: &ProxyRequestOutcome) -> rocketmq_observability::trace::proxy::ProxySpanOutcome {
+fn proxy_span_status(outcome: &ProxyRequestOutcome) -> rocketmq_observability::trace::proxy::ProxySpanStatus {
     match outcome {
         ProxyRequestOutcome::Payload(status) if status.is_ok() => {
-            rocketmq_observability::trace::proxy::ProxySpanOutcome::Success
+            rocketmq_observability::trace::proxy::ProxySpanStatus::Success
         }
-        ProxyRequestOutcome::Payload(_) => rocketmq_observability::trace::proxy::ProxySpanOutcome::PayloadFailure,
+        ProxyRequestOutcome::Payload(_) => rocketmq_observability::trace::proxy::ProxySpanStatus::PayloadFailure,
         ProxyRequestOutcome::Transport { .. } => {
-            rocketmq_observability::trace::proxy::ProxySpanOutcome::TransportFailure
+            rocketmq_observability::trace::proxy::ProxySpanStatus::TransportFailure
         }
     }
 }
