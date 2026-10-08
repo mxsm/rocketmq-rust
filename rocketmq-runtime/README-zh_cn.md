@@ -17,6 +17,11 @@
 例如 `TaskSpawner`，不自行查找或构建独立运行时。通过这些能力提交的任务属于
 任务所有权树，并在关闭期间受到跟踪。资源预算树单独核算显式申请的资源。
 
+![rocketmq-runtime 架构](../resources/rocketmq-runtime-architecture.svg)
+
+动态架构图展示一个 `RuntimeOwner` 持有的各个部分，以及工作如何提交给它；
+下方流程图展开任务所有权树的细节。
+
 ```mermaid
 flowchart TD
     Entry["应用入口"] --> Owner["RuntimeOwner"]
