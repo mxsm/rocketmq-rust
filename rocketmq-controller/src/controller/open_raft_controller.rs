@@ -35,7 +35,7 @@ use std::time::Instant;
 use crate::config::ControllerConfigReader;
 use crate::controller::broker_heartbeat_manager::DEFAULT_BROKER_CHANNEL_EXPIRED_TIME;
 use crate::controller::membership::ConsensusMembership;
-use crate::controller::membership::MembershipChangeOutcome;
+use crate::controller::membership::MembershipChangeReport;
 use crate::controller::membership::MembershipChangeRequest;
 use crate::controller::release_snapshot::controller_snapshot_error;
 use crate::controller::release_snapshot::controller_snapshot_error_by;
@@ -794,7 +794,7 @@ impl OpenRaftController {
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         request: MembershipChangeRequest,
-    ) -> ControllerResult<MembershipChangeOutcome> {
+    ) -> ControllerResult<MembershipChangeReport> {
         let node = self.node().ok_or_else(|| not_initialized("controller.openraft"))?;
         node.apply_membership_change(authorization, request).await
     }
