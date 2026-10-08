@@ -152,9 +152,9 @@ impl<P: CheckpointPersistence> DerivedCursorOwner<P> {
     /// Returns `Ok(None)` for a deterministic cursor invariant rejection. Persistence failures are
     /// operational errors. In either case the in-memory cursor remains unchanged; an uncertain
     /// persistence outcome is resolved by reloading on restart.
-    pub fn commit(&mut self, record: DerivedRecordId) -> Result<Option<DerivedCommitOutcome>, StoreError> {
+    pub fn commit(&mut self, record: DerivedRecordId) -> Result<Option<DerivedCursorCommitResult>, StoreError> {
         match self.commit_checked(record) {
-            Ok(outcome) => Ok(Some(outcome)),
+            Ok(commit_result) => Ok(Some(commit_result)),
             Err(DerivedCursorOwnerFailure::Cursor(_)) => Ok(None),
             Err(error) => Err(owner_store_error(error)),
         }
@@ -163,9 +163,9 @@ impl<P: CheckpointPersistence> DerivedCursorOwner<P> {
     pub(super) fn commit_checked(
         &mut self,
         record: DerivedRecordId,
-    ) -> Result<DerivedCommitOutcome, DerivedCursorOwnerFailure<P::Error>> {
+    ) -> Result<DerivedCursorCommitResult, DerivedCursorOwnerFailure<P::Error>> {
         let advance = match self.cursor.prepare(record).map_err(DerivedCursorOwnerFailure::Cursor)? {
-            CursorAdvanceDisposition::AlreadyCommitted => return Ok(DerivedCommitOutcome::AlreadyCommitted),
+            CursorAdvanceDisposition::AlreadyCommitted => return Ok(DerivedCursorCommitResult::AlreadyCommitted),
             CursorAdvanceDisposition::Advance(advance) => advance,
         };
 
@@ -175,13 +175,13 @@ impl<P: CheckpointPersistence> DerivedCursorOwner<P> {
             .persist(self.engine, &checkpoint)
             .map_err(DerivedCursorOwnerFailure::persist)?;
         self.cursor = next_cursor;
-        Ok(DerivedCommitOutcome::Committed(next_cursor))
+        Ok(DerivedCursorCommitResult::Committed(next_cursor))
     }
 }
 
-/// Outcome of a durable cursor commit.
+/// Result of committing a derived engine's durable replay cursor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DerivedCommitOutcome {
+pub enum DerivedCursorCommitResult {
     AlreadyCommitted,
     Committed(DerivedCursor),
 }
