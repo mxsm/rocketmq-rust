@@ -41,13 +41,13 @@ pub enum RuntimeLifecycleState {
 
 /// Business drain evidence recorded before telemetry finalization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuntimeBusinessDrainOutcome {
+pub enum RuntimeBusinessDrainStatus {
     Drained,
     Failed,
     DeadlineExceeded,
 }
 
-impl RuntimeBusinessDrainOutcome {
+impl RuntimeBusinessDrainStatus {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Drained => "drained",
@@ -165,7 +165,7 @@ impl RuntimeMetricsRecorder {
     ///
     /// The caller emits this once at the business shutdown boundary, before
     /// consuming its telemetry guard. Deadline failure never extends that deadline.
-    pub fn record_business_drain(&self, outcome: RuntimeBusinessDrainOutcome) {
+    pub fn record_business_drain(&self, status: RuntimeBusinessDrainStatus) {
         #[cfg(feature = "otel-metrics")]
         if self.telemetry.is_active() {
             if let Some(metrics) = &self.metrics {
@@ -176,7 +176,7 @@ impl RuntimeMetricsRecorder {
                             crate::semantic::labels::COMPONENT,
                             component_name(self.component),
                         ),
-                        opentelemetry::KeyValue::new(crate::semantic::labels::OUTCOME, outcome.as_str()),
+                        opentelemetry::KeyValue::new(crate::semantic::labels::OUTCOME, status.as_str()),
                     ],
                 );
             }
@@ -184,7 +184,7 @@ impl RuntimeMetricsRecorder {
         tracing::info!(
             event = crate::semantic::events::RUNTIME_BUSINESS_DRAIN,
             component = component_name(self.component),
-            outcome = outcome.as_str(),
+            outcome = status.as_str(),
             "runtime business drain completed"
         );
     }
@@ -552,7 +552,7 @@ mod tests {
         lifecycle.request_shutdown(ShutdownReason::Internal);
         lifecycle.request_shutdown(ShutdownReason::Signal);
         assert!(runtime.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
-        recorder.record_business_drain(RuntimeBusinessDrainOutcome::Drained);
+        recorder.record_business_drain(RuntimeBusinessDrainStatus::Drained);
         let mut output = Vec::new();
         prometheus::TextEncoder::new()
             .encode(&registry.gather(), &mut output)
@@ -653,7 +653,7 @@ mod tests {
             lifecycle.mark_failed();
             lifecycle.request_shutdown(ShutdownReason::Internal);
             lifecycle.request_shutdown(ShutdownReason::Signal);
-            recorder.record_business_drain(RuntimeBusinessDrainOutcome::Failed);
+            recorder.record_business_drain(RuntimeBusinessDrainStatus::Failed);
             let families = registry.gather();
             let transitions = families
                 .iter()

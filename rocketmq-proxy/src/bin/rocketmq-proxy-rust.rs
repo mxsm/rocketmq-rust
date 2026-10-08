@@ -304,16 +304,16 @@ async fn complete_proxy_process_shutdown(
         diagnostics_sources,
     )
     .await;
-    use rocketmq_observability::metrics::runtime::{RuntimeBusinessDrainOutcome, RuntimeMetricsRecorder};
-    let outcome = if deadline.is_expired() {
-        RuntimeBusinessDrainOutcome::DeadlineExceeded
+    use rocketmq_observability::metrics::runtime::{RuntimeBusinessDrainStatus, RuntimeMetricsRecorder};
+    let business_status = if deadline.is_expired() {
+        RuntimeBusinessDrainStatus::DeadlineExceeded
     } else if primary_result.is_ok() {
-        RuntimeBusinessDrainOutcome::Drained
+        RuntimeBusinessDrainStatus::Drained
     } else {
-        RuntimeBusinessDrainOutcome::Failed
+        RuntimeBusinessDrainStatus::Failed
     };
     RuntimeMetricsRecorder::from_handle(&telemetry_guard.handle(), RuntimeComponent::Proxy)
-        .record_business_drain(outcome);
+        .record_business_drain(business_status);
     let telemetry_report = match flush_lease {
         Some(lease) => {
             telemetry_guard
