@@ -18,7 +18,7 @@ mod owner;
 mod replay;
 
 pub use owner::CheckpointPersistence;
-pub use owner::DerivedCommitOutcome;
+pub use owner::DerivedCursorCommitResult;
 pub use owner::DerivedCursorOwner;
 pub use replay::DerivedReplayApply;
 pub use replay::DerivedReplayReport;
