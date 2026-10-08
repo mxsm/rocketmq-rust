@@ -19,7 +19,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
-use rocketmq_observability::metrics::mcp::McpRateLimitOutcome;
+use rocketmq_observability::metrics::mcp::McpRateLimitDecision;
 
 use crate::guard::GuardRejection;
 
@@ -40,12 +40,12 @@ impl RateLimiter {
     ) -> Result<(), GuardRejection> {
         let key = format!("{principal_id}|{}|{operation}", cluster.unwrap_or("_"));
         if limit_per_minute == 0 {
-            rocketmq_observability::metrics::mcp::record_rate_limit(McpRateLimitOutcome::Rejected);
+            rocketmq_observability::metrics::mcp::record_rate_limit(McpRateLimitDecision::Rejected);
             return Err(GuardRejection::RateLimited);
         }
 
         let Ok(mut calls) = self.calls.lock() else {
-            rocketmq_observability::metrics::mcp::record_rate_limit(McpRateLimitOutcome::Rejected);
+            rocketmq_observability::metrics::mcp::record_rate_limit(McpRateLimitDecision::Rejected);
             return Err(GuardRejection::RateLimited);
         };
         let now = Instant::now();
@@ -59,12 +59,12 @@ impl RateLimiter {
         }
 
         if entries.len() >= limit_per_minute as usize {
-            rocketmq_observability::metrics::mcp::record_rate_limit(McpRateLimitOutcome::Rejected);
+            rocketmq_observability::metrics::mcp::record_rate_limit(McpRateLimitDecision::Rejected);
             return Err(GuardRejection::RateLimited);
         }
 
         entries.push_back(now);
-        rocketmq_observability::metrics::mcp::record_rate_limit(McpRateLimitOutcome::Accepted);
+        rocketmq_observability::metrics::mcp::record_rate_limit(McpRateLimitDecision::Accepted);
         Ok(())
     }
 }

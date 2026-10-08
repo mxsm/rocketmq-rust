@@ -51,7 +51,7 @@ use crate::tools::executor::ToolExecutor;
 use rocketmq_observability::metrics::mcp::McpFailureLabel;
 use rocketmq_observability::metrics::mcp::McpMetricsRecorder;
 use rocketmq_observability::metrics::mcp::McpOperationKind;
-use rocketmq_observability::metrics::mcp::McpOperationOutcome;
+use rocketmq_observability::metrics::mcp::McpOperationStatus;
 
 #[derive(Debug, Clone)]
 pub struct RocketmqMcpServer {
@@ -62,7 +62,7 @@ struct ResourceSpanRecorder {
     metrics: McpMetricsRecorder,
     operation: &'static str,
     started_at: Instant,
-    outcome: McpOperationOutcome,
+    status: McpOperationStatus,
     span: tracing::Span,
 }
 
@@ -72,7 +72,7 @@ impl ResourceSpanRecorder {
             metrics,
             operation,
             started_at: Instant::now(),
-            outcome: McpOperationOutcome::Failure,
+            status: McpOperationStatus::Failure,
             span: rocketmq_observability::trace::mcp::resource_span(operation),
         }
     }
@@ -82,15 +82,15 @@ impl ResourceSpanRecorder {
     }
 
     fn denied(&mut self) {
-        self.outcome = McpOperationOutcome::Denied;
+        self.status = McpOperationStatus::Denied;
     }
 
     fn observe_call_result(&mut self, result: &Result<ReadResourceResult, ErrorData>) {
-        if self.outcome != McpOperationOutcome::Denied {
-            self.outcome = if result.is_ok() {
-                McpOperationOutcome::Success
+        if self.status != McpOperationStatus::Denied {
+            self.status = if result.is_ok() {
+                McpOperationStatus::Success
             } else {
-                McpOperationOutcome::Failure
+                McpOperationStatus::Failure
             };
         }
     }
@@ -98,11 +98,11 @@ impl ResourceSpanRecorder {
 
 impl Drop for ResourceSpanRecorder {
     fn drop(&mut self) {
-        rocketmq_observability::trace::mcp::record_outcome(&self.span, self.outcome);
+        rocketmq_observability::trace::mcp::record_status(&self.span, self.status);
         self.metrics.record_operation(
             McpOperationKind::Resource,
             self.operation,
-            self.outcome,
+            self.status,
             self.started_at.elapsed(),
         );
     }
@@ -200,7 +200,7 @@ impl ServerHandler for RocketmqMcpServer {
                 Err(error) => {
                     span_recorder.denied();
                     record_resource_error("resource_access_context", McpFailureLabel::PermissionDenied);
-                    record_resource_operation("resource_access_context", McpOperationOutcome::Denied, started_at);
+                    record_resource_operation("resource_access_context", McpOperationStatus::Denied, started_at);
                     return Err(error);
                 }
             };
@@ -211,7 +211,7 @@ impl ServerHandler for RocketmqMcpServer {
                         .guard()
                         .record_resource_rejection(&access, "resource:unavailable", "invalid_resource_uri");
                     record_resource_error("invalid_resource_uri", McpFailureLabel::InvalidRequest);
-                    record_resource_operation("invalid_resource_uri", McpOperationOutcome::Failure, started_at);
+                    record_resource_operation("invalid_resource_uri", McpOperationStatus::Failure, started_at);
                     return Err(resource_unavailable(&request_id_string(&context.id)));
                 }
             };
@@ -226,7 +226,7 @@ impl ServerHandler for RocketmqMcpServer {
                 Err(error) => {
                     span_recorder.denied();
                     record_resource_error(operation, guard_failure_label(&error));
-                    record_resource_operation(operation, McpOperationOutcome::Denied, started_at);
+                    record_resource_operation(operation, McpOperationStatus::Denied, started_at);
                     return Err(resource_guard_error(error, &request_id_string(&context.id)));
                 }
             };
@@ -269,13 +269,13 @@ impl ServerHandler for RocketmqMcpServer {
                     error
                 }
             });
-            let outcome = if let Err(error) = &result {
+            let status = if let Err(error) = &result {
                 record_resource_error(operation, resource_failure_label(error));
-                McpOperationOutcome::Failure
+                McpOperationStatus::Failure
             } else {
-                McpOperationOutcome::Success
+                McpOperationStatus::Success
             };
-            record_resource_operation(operation, outcome, started_at);
+            record_resource_operation(operation, status, started_at);
             result
         }
         .instrument(span)
@@ -431,11 +431,11 @@ fn record_resource_error(operation: &'static str, failure: McpFailureLabel) {
     rocketmq_observability::metrics::mcp::record_error(McpOperationKind::Resource, operation, failure);
 }
 
-fn record_resource_operation(operation: &'static str, outcome: McpOperationOutcome, started_at: Instant) {
+fn record_resource_operation(operation: &'static str, status: McpOperationStatus, started_at: Instant) {
     rocketmq_observability::metrics::mcp::record_operation(
         McpOperationKind::Resource,
         operation,
-        outcome,
+        status,
         started_at.elapsed(),
     );
 }
