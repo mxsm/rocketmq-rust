@@ -22,6 +22,11 @@ not discover or construct an independent runtime. Tasks submitted through these
 capabilities belong to a task ownership tree that is tracked through shutdown.
 The resource-budget tree accounts for explicitly reserved resources separately.
 
+![rocketmq-runtime architecture](../resources/rocketmq-runtime-architecture.svg)
+
+The animated diagram shows what one `RuntimeOwner` holds and how work reaches
+it; the flowchart below details the task ownership tree.
+
 ```mermaid
 flowchart TD
     Entry["Application entrypoint"] --> Owner["RuntimeOwner"]

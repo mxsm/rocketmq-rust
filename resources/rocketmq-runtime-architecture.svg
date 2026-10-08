@@ -1,0 +1,1002 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1004" viewBox="0 0 1400 1004" role="img" aria-labelledby="title desc">
+  <title id="title">rocketmq-runtime architecture</title>
+  <desc id="desc">An application entrypoint such as the broker, the NameServer, the proxy or the controller fills a RuntimeConfig, lets RuntimeOwner::plan validate it and builds a RuntimeOwner, which owns one Tokio runtime, the process resources and the sealed root service context. The state of the root task group moves from Open through Closing and Closed to ShutdownCompleted. The root context derives component contexts. A component context gives library code a task spawner, child components and scheduled task groups, the three blocking lanes, and the process budget. Each component has a task group: its spawn gate admits work only while the group is open, and it registers and tracks what it admits. A task group owns service and worker tasks, operation tasks, a scheduled task group with its driver and runs, child components, critical tasks and ServiceManager loops, and its tasks are polled on the Tokio worker threads. The shared blocking lanes for storage I/O, metadata I/O and CPU work admit closures through the scope of the component, a bounded queue and one global budget, and run them on the Tokio blocking pool. The runtime resources hold the resource-budget tree, which is apart from the task tree: the detected memory limit, the process budget, child budgets that reserve along the chain of their ancestors, and permits and budgeted queues. MetadataIoActor queues metadata snapshots, which are charged to the process budget, writes them through the metadata lane and reports durable generations. ServiceLifecycle serves probes, moves from Starting through Ready and Draining to Stopped, and freezes one shutdown deadline; ShutdownReport holds the evidence of a shutdown; Diagnostics samples the tree. RuntimeContext is a harness for tests and migration that borrows a Tokio runtime. Two rows list the order in which start-up brings the parts up and shutdown takes them down. Where motion is allowed, a looping tour plays seven steps: boot, spawn, schedule, block, budget, persist and shut down.</desc>
+  <defs>
+    <linearGradient id="card" x1="0" y1="0" x2="0.36" y2="1">
+      <stop offset="0" stop-color="#121728" stop-opacity="0.86"/>
+      <stop offset="1" stop-color="#080a13" stop-opacity="0.94"/>
+    </linearGradient>
+    <pattern id="dots" width="26" height="26" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" fill="#aabaeb" fill-opacity="0.1"/>
+    </pattern>
+    <radialGradient id="glow-violet" cx="0.04" cy="0.08" r="0.62">
+      <stop offset="0" stop-color="#9872ff" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#9872ff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow-orange" cx="1" cy="1" r="0.5">
+      <stop offset="0" stop-color="#ff7a26" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#ff7a26" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="progress" x1="685.2" y1="0" x2="1376" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff7a26"/>
+      <stop offset="0.5" stop-color="#f2468c"/>
+      <stop offset="1" stop-color="#9872ff"/>
+    </linearGradient>
+    <style>
+      text { font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif; }
+      .tc { color: #9872ff; }
+      .tp { color: #ff7a26; }
+      .ts { color: #34d399; }
+      .tm { color: #42d0f0; }
+      .to { color: #ffb86b; }
+      .page { fill: #05060b; }
+      .card { fill: url(#card); stroke: rgba(150, 166, 214, 0.16); stroke-width: 1; }
+      .dots { fill: url(#dots); }
+      .panel { fill: #0c0f1b; fill-opacity: 0.86; stroke: rgba(150, 166, 214, 0.16); stroke-width: 1; }
+      .ti { font-size: 26px; font-weight: 700; letter-spacing: -0.4px; fill: #f4f6fb; }
+      .le { font-size: 13.5px; fill: #9ba4b9; }
+      .grp { fill: rgba(255, 255, 255, 0.014); stroke: rgba(150, 166, 214, 0.24); stroke-width: 1.2; stroke-dasharray: 5 7; }
+      .clu { fill: rgba(255, 255, 255, 0.018); stroke: rgba(150, 166, 214, 0.2); stroke-width: 1; }
+      .gt { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 10.5px; font-weight: 600; letter-spacing: 1.68px; fill: #7a849c; }
+      .r { fill: none; stroke: rgba(150, 166, 214, 0.26); stroke-width: 1.6; stroke-linecap: round; }
+      .rt { fill: none; stroke: currentColor; stroke-opacity: 0.8; stroke-width: 1.6; stroke-linecap: round; }
+      .d { stroke-dasharray: 5 7; }
+      .rg { fill: none; stroke: currentColor; stroke-opacity: 0.18; stroke-width: 9; stroke-linecap: round; }
+      .rh { fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; }
+      .pk path { fill: none; stroke: currentColor; stroke-linecap: round; }
+      .p3 { stroke-width: 26; stroke-opacity: 0.07; }
+      .p2 { stroke-width: 18; stroke-opacity: 0.2; }
+      .p1 { stroke-width: 12; stroke-opacity: 0.6; }
+      .pk .p0 { stroke: #ffffff; stroke-width: 8.4; }
+      .lb { font-size: 11px; fill: #8791a8; }
+      .jc { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 10px; fill: #c9d0e2; text-anchor: middle; }
+      .nb { fill: #0d111e; fill-opacity: 0.94; stroke: rgba(150, 166, 214, 0.26); stroke-width: 1.2; }
+      .op { stroke-dasharray: 6 6; }
+      .nt { font-size: 16px; font-weight: 700; fill: #f1f4fb; }
+      .ns { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 11px; fill: #8791a8; }
+      .nn { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 10px; fill: #7a849c; }
+      .gl rect { fill: none; stroke: currentColor; }
+      .g1 { stroke-width: 4; stroke-opacity: 0.14; }
+      .g2 { stroke-width: 9; stroke-opacity: 0.1; }
+      .g3 { stroke-width: 16; stroke-opacity: 0.07; }
+      .g4 { stroke-width: 24; stroke-opacity: 0.05; }
+      .g5 { stroke-width: 34; stroke-opacity: 0.03; }
+      .nr { fill: none; stroke: currentColor; stroke-width: 1.6; }
+      .bd rect { fill: rgba(52, 211, 153, 0.13); stroke: rgba(52, 211, 153, 0.45); stroke-width: 1; }
+      .bd text { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 9px; font-weight: 700; letter-spacing: 0.7px; fill: #34d399; text-anchor: middle; }
+      .bd.gy rect { fill: rgba(150, 166, 214, 0.1); stroke: rgba(150, 166, 214, 0.34); }
+      .bd.gy text { fill: #9ba4b9; }
+      .bd.vi rect { fill: rgba(152, 114, 255, 0.14); stroke: rgba(152, 114, 255, 0.5); }
+      .bd.vi text { fill: #b9a2ff; }
+      .bd.cy rect { fill: rgba(66, 208, 240, 0.13); stroke: rgba(66, 208, 240, 0.5); }
+      .bd.cy text { fill: #42d0f0; }
+      .bd.am rect { fill: rgba(255, 184, 107, 0.13); stroke: rgba(255, 184, 107, 0.5); }
+      .bd.am text { fill: #ffb86b; }
+      .cn { fill: none; stroke: rgba(150, 166, 214, 0.5); stroke-width: 1.4; stroke-linecap: round; }
+      .bk { fill: rgba(150, 166, 214, 0.17); }
+      .bv { fill: #9872ff; }
+      .bw { fill: #42d0f0; }
+      .bo { fill: #ff7a26; }
+      .bg { fill: #34d399; }
+      .cb { fill: #0d111e; fill-opacity: 0.94; stroke: rgba(150, 166, 214, 0.24); stroke-width: 1.1; }
+      .ct { font-size: 12.5px; font-weight: 700; fill: #eef1f8; }
+      .cs { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 10px; fill: #7a849c; }
+      .lg { font-size: 11.5px; fill: #9ba4b9; }
+      .ll { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+      .lo { fill: none; stroke: rgba(150, 166, 214, 0.5); stroke-width: 1.2; stroke-dasharray: 4 4; }
+      .sh { fill: rgba(255, 255, 255, 0.055); stroke: rgba(150, 166, 214, 0.28); stroke-width: 1; }
+      .sc { fill: rgba(150, 166, 214, 0.05); stroke: rgba(150, 166, 214, 0.16); stroke-width: 1; }
+      .si { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 11.5px; font-weight: 600; fill: #7a849c; }
+      .sa { fill: #ffb86b; }
+      .st { font-size: 12.5px; font-weight: 700; fill: #e8ecf6; }
+      .sp { fill: none; stroke: url(#progress); stroke-width: 2; stroke-linecap: round; }
+      .fb { fill: rgba(150, 166, 214, 0.07); stroke: rgba(150, 166, 214, 0.22); stroke-width: 1; }
+      .fn { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 10.5px; fill: #7a849c; }
+      .lt { fill: currentColor; }
+      /* Motion. Classes that start with k- name the animations; all of them share one clock
+         (.k), and each is assigned only inside the reduced-motion guard below. What shows
+         only while a step is in effect rests invisible: glows, bright links, packets, lit
+         labels, the marks of the start-up and shutdown order, the state of the root task
+         group and of the service lifecycle, the task kind, the blocks that fill, and the
+         mark of the step in effect. */
+      .gl, .nr, .a, .o { opacity: 0; }
+      .k-f-boot-chain-1 { stroke-dasharray: 0.1 27.90; }
+      .k-f-boot-chain-2 { stroke-dasharray: 0.1 27.90; }
+      .k-f-boot-chain-3 { stroke-dasharray: 0.1 27.90; }
+      .k-f-boot-owner-runtime { stroke-dasharray: 0.1 29.90; }
+      .k-f-boot-derive { stroke-dasharray: 0.1 15.90; }
+      .k-f-spawn-services { stroke-dasharray: 0.1 19.90; }
+      .k-f-spawn-ctx-group { stroke-dasharray: 0.1 27.90; }
+      .k-f-spawn-group-work { stroke-dasharray: 0.1 25.90; }
+      .k-f-spawn-work-tokio { stroke-dasharray: 0.1 29.90; }
+      .k-f-schedule-jobs { stroke-dasharray: 0.1 39.90; }
+      .k-f-schedule-ctx-group { stroke-dasharray: 0.1 27.90; }
+      .k-f-schedule-group-work { stroke-dasharray: 0.1 25.90; }
+      .k-f-schedule-work-tokio { stroke-dasharray: 0.1 14.90; }
+      .k-f-block-closures { stroke-dasharray: 0.1 4999.9; }
+      .k-f-block-ctx-lanes { stroke-dasharray: 0.1 4999.9; }
+      .k-f-block-lanes-tokio { stroke-dasharray: 0.1 4999.9; }
+      .k-f-budget-budgeted { stroke-dasharray: 0.1 19.90; }
+      .k-f-budget-ctx-resources { stroke-dasharray: 0.1 13.90; }
+      .k-f-persist-budgeted { stroke-dasharray: 0.1 4999.9; }
+      .k-f-persist-ctx-resources { stroke-dasharray: 0.1 4999.9; }
+      .k-f-persist-budget-actor { stroke-dasharray: 0.1 4999.9; }
+      .k-f-persist-actor-lane { stroke-dasharray: 0.1 4999.9; }
+      .k-f-persist-lanes-tokio { stroke-dasharray: 0.1 4999.9; }
+      .k-f-shutdown-lifecycle { stroke-dasharray: 0.1 13.90; }
+      @media (prefers-reduced-motion: no-preference) {
+        .k { animation-duration: 32s; animation-timing-function: linear; animation-iteration-count: infinite; }
+        .k-r1 { animation-name: k-r1; }
+        .k-s1 { animation-name: k-s1; }
+        .k-p1 { animation-name: k-p1; }
+        .k-r2 { animation-name: k-r2; }
+        .k-s2 { animation-name: k-s2; }
+        .k-p2 { animation-name: k-p2; }
+        .k-r3 { animation-name: k-r3; }
+        .k-s3 { animation-name: k-s3; }
+        .k-p3 { animation-name: k-p3; }
+        .k-r4 { animation-name: k-r4; }
+        .k-s4 { animation-name: k-s4; }
+        .k-p4 { animation-name: k-p4; }
+        .k-r5 { animation-name: k-r5; }
+        .k-s5 { animation-name: k-s5; }
+        .k-p5 { animation-name: k-p5; }
+        .k-r6 { animation-name: k-r6; }
+        .k-s6 { animation-name: k-s6; }
+        .k-p6 { animation-name: k-p6; }
+        .k-r7 { animation-name: k-r7; }
+        .k-s7 { animation-name: k-s7; }
+        .k-p7 { animation-name: k-p7; }
+        .k-s17 { animation-name: k-s17; }
+        .k-s56 { animation-name: k-s56; }
+        .k-off { animation-name: k-off; }
+        .k-x4 { animation-name: k-x4; }
+        .k-x56 { animation-name: k-x56; }
+        .k-d4 { animation-name: k-d4; }
+        .k-d5 { animation-name: k-d5; }
+        .k-d6 { animation-name: k-d6; }
+        .k-q7-5 { animation-name: k-q7-5; }
+        .k-n1 { animation-name: k-n1; }
+        .k-n17 { animation-name: k-n17; }
+        .k-n { animation-name: k-n; }
+        .k-n2 { animation-name: k-n2; }
+        .k-n3 { animation-name: k-n3; }
+        .k-n4 { animation-name: k-n4; }
+        .k-n56 { animation-name: k-n56; }
+        .k-n1234567 { animation-name: k-n1234567; }
+        .k-q7-1 { animation-name: k-q7-1; }
+        .k-q7-2 { animation-name: k-q7-2; }
+        .k-x23 { animation-name: k-x23; }
+        .k-n1237 { animation-name: k-n1237; }
+        .k-n127 { animation-name: k-n127; }
+        .k-n137 { animation-name: k-n137; }
+        .k-n1467 { animation-name: k-n1467; }
+        .k-n147 { animation-name: k-n147; }
+        .k-n167 { animation-name: k-n167; }
+        .k-n1567 { animation-name: k-n1567; }
+        .k-n157 { animation-name: k-n157; }
+        .k-n7 { animation-name: k-n7; }
+        .k-q1-1 { animation-name: k-q1-1; }
+        .k-q1-2 { animation-name: k-q1-2; }
+        .k-q1-3 { animation-name: k-q1-3; }
+        .k-q1-4 { animation-name: k-q1-4; }
+        .k-q1-5 { animation-name: k-q1-5; }
+        .k-q1-6 { animation-name: k-q1-6; }
+        .k-q1-7 { animation-name: k-q1-7; }
+        .k-q7-0 { animation-name: k-q7-0; }
+        .k-q7-3 { animation-name: k-q7-3; }
+        .k-q7-6 { animation-name: k-q7-6; }
+        .k-q7-7 { animation-name: k-q7-7; }
+        .k-f-boot-chain-1 { animation-name: k-f-boot-chain-1; }
+        .k-f-boot-chain-2 { animation-name: k-f-boot-chain-2; }
+        .k-f-boot-chain-3 { animation-name: k-f-boot-chain-3; }
+        .k-f-boot-owner-runtime { animation-name: k-f-boot-owner-runtime; }
+        .k-f-boot-derive { animation-name: k-f-boot-derive; }
+        .k-f-spawn-services { animation-name: k-f-spawn-services; }
+        .k-f-spawn-ctx-group { animation-name: k-f-spawn-ctx-group; }
+        .k-f-spawn-group-work { animation-name: k-f-spawn-group-work; }
+        .k-f-spawn-work-tokio { animation-name: k-f-spawn-work-tokio; }
+        .k-f-schedule-jobs { animation-name: k-f-schedule-jobs; }
+        .k-f-schedule-ctx-group { animation-name: k-f-schedule-ctx-group; }
+        .k-f-schedule-group-work { animation-name: k-f-schedule-group-work; }
+        .k-f-schedule-work-tokio { animation-name: k-f-schedule-work-tokio; }
+        .k-f-block-closures { animation-name: k-f-block-closures; }
+        .k-f-block-ctx-lanes { animation-name: k-f-block-ctx-lanes; }
+        .k-f-block-lanes-tokio { animation-name: k-f-block-lanes-tokio; }
+        .k-f-budget-budgeted { animation-name: k-f-budget-budgeted; }
+        .k-f-budget-ctx-resources { animation-name: k-f-budget-ctx-resources; }
+        .k-f-persist-budgeted { animation-name: k-f-persist-budgeted; }
+        .k-f-persist-ctx-resources { animation-name: k-f-persist-ctx-resources; }
+        .k-f-persist-budget-actor { animation-name: k-f-persist-budget-actor; }
+        .k-f-persist-actor-lane { animation-name: k-f-persist-actor-lane; }
+        .k-f-persist-lanes-tokio { animation-name: k-f-persist-lanes-tokio; }
+        .k-f-shutdown-lifecycle { animation-name: k-f-shutdown-lifecycle; }
+        .k-q1-0 { animation-name: k-q1-0; }
+        .k-q1-8 { animation-name: k-q1-8; }
+        .k-q7-4 { animation-name: k-q7-4; }
+        .k-t0 { animation-name: k-t0; }
+        .k-t1 { animation-name: k-t1; }
+        .k-t2 { animation-name: k-t2; }
+        .k-t3 { animation-name: k-t3; }
+        .k-l0 { animation-name: k-l0; }
+        .k-l1 { animation-name: k-l1; }
+        .k-l2 { animation-name: k-l2; }
+        .k-l3 { animation-name: k-l3; }
+        .k-wv0 { animation-name: k-wv0; }
+        .k-wv1 { animation-name: k-wv1; }
+        .k-wv2 { animation-name: k-wv2; }
+        .k-wv3 { animation-name: k-wv3; }
+        .k-wv4 { animation-name: k-wv4; }
+        .k-wv5 { animation-name: k-wv5; }
+        .k-ru0 { animation-name: k-ru0; }
+        .k-wy0 { animation-name: k-wy0; }
+        .k-ru1 { animation-name: k-ru1; }
+        .k-wy1 { animation-name: k-wy1; }
+        .k-rv0 { animation-name: k-rv0; }
+        .k-wy2 { animation-name: k-wy2; }
+        .k-sl0 { animation-name: k-sl0; }
+        .k-bl0 { animation-name: k-bl0; }
+        .k-sl1 { animation-name: k-sl1; }
+        .k-bl1 { animation-name: k-bl1; }
+        .k-sl2 { animation-name: k-sl2; }
+        .k-bl2 { animation-name: k-bl2; }
+        .k-sl3 { animation-name: k-sl3; }
+        .k-bl3 { animation-name: k-bl3; }
+        .k-cb0 { animation-name: k-cb0; }
+        .k-rb0 { animation-name: k-rb0; }
+        .k-cb1 { animation-name: k-cb1; }
+        .k-rb1 { animation-name: k-rb1; }
+        .k-cb2 { animation-name: k-cb2; }
+        .k-rb2 { animation-name: k-rb2; }
+        .k-cb3 { animation-name: k-cb3; }
+        .k-rb3 { animation-name: k-rb3; }
+        .k-cb4 { animation-name: k-cb4; }
+        .k-rb4 { animation-name: k-rb4; }
+        .k-cb5 { animation-name: k-cb5; }
+        .k-rb5 { animation-name: k-rb5; }
+        .k-mb0 { animation-name: k-mb0; }
+        .k-mb1 { animation-name: k-mb1; }
+        .k-ml0 { animation-name: k-ml0; }
+        .k-mp0 { animation-name: k-mp0; }
+        .k-du { animation-name: k-du; }
+      }
+      @keyframes k-r1 { 0%, 14.938%, 100% { opacity: 1; } 16.25%, 28.062%, 29.375%, 41.188%, 42.5%, 54.937%, 56.25%, 67.438%, 68.75%, 81.188%, 82.5%, 98.688% { opacity: 0.55; } }
+      @keyframes k-s1 { 0%, 14.938%, 100% { opacity: 1; } 16.25%, 28.062%, 29.375%, 41.188%, 42.5%, 54.937%, 56.25%, 67.438%, 68.75%, 81.188%, 82.5%, 98.688% { opacity: 0; } }
+      @keyframes k-p1 { 0% { stroke-dashoffset: 51.4px; opacity: 0; } 0.781%, 15.469% { opacity: 1; } 16.25%, 100% { stroke-dashoffset: 0px; opacity: 0; } }
+      @keyframes k-r2 { 0%, 14.938%, 29.375%, 41.188%, 42.5%, 54.937%, 56.25%, 67.438%, 68.75%, 81.188%, 82.5%, 98.688%, 100% { opacity: 0.55; } 16.25%, 28.062% { opacity: 1; } }
+      @keyframes k-s2 { 0%, 14.938%, 29.375%, 41.188%, 42.5%, 54.937%, 56.25%, 67.438%, 68.75%, 81.188%, 82.5%, 98.688%, 100% { opacity: 0; } 16.25%, 28.062% { opacity: 1; } }
+      @keyframes k-p2 { 0%, 16.25% { stroke-dashoffset: 64.4px; opacity: 0; } 17.031%, 28.594% { opacity: 1; } 29.375%, 100% { stroke-dashoffset: 0px; opacity: 0; } }
+      @keyframes k-r3 { 0%, 14.938%, 16.25%, 28.062%, 42.5%, 54.937%, 56.25%, 67.438%, 68.75%, 81.188%, 82.5%, 98.688%, 100% { opacity: 0.55; } 29.375%, 41.188% { opacity: 1; } }
+      @keyframes k-s3 { 0%, 14.938%, 16.25%, 28.062%, 42.5%, 54.937%, 56.25%, 67.438%, 68.75%, 81.188%, 82.5%, 98.688%, 100% { opacity: 0; } 29.375%, 41.188% { opacity: 1; } }
+      @keyframes k-p3 { 0%, 29.375% { stroke-dashoffset: 80.4px; opacity: 0; } 30.156%, 41.719% { opacity: 1; } 42.5%, 100% { stroke-dashoffset: 0px; opacity: 0; } }
+      @keyframes k-r4 { 0%, 14.938%, 16.25%, 28.062%, 29.375%, 41.188%, 56.25%, 67.438%, 68.75%, 81.188%, 82.5%, 98.688%, 100% { opacity: 0.55; } 42.5%, 54.937% { opacity: 1; } }
+      @keyframes k-s4 { 0%, 14.938%, 16.25%, 28.062%, 29.375%, 41.188%, 56.25%, 67.438%, 68.75%, 81.188%, 82.5%, 98.688%, 100% { opacity: 0; } 42.5%, 54.937% { opacity: 1; } }
+      @keyframes k-p4 { 0%, 42.5% { stroke-dashoffset: 57.4px; opacity: 0; } 43.281%, 55.469% { opacity: 1; } 56.25%, 100% { stroke-dashoffset: 0px; opacity: 0; } }
+      @keyframes k-r5 { 0%, 14.938%, 16.25%, 28.062%, 29.375%, 41.188%, 42.5%, 54.937%, 68.75%, 81.188%, 82.5%, 98.688%, 100% { opacity: 0.55; } 56.25%, 67.438% { opacity: 1; } }
+      @keyframes k-s5 { 0%, 14.938%, 16.25%, 28.062%, 29.375%, 41.188%, 42.5%, 54.937%, 68.75%, 81.188%, 82.5%, 98.688%, 100% { opacity: 0; } 56.25%, 67.438% { opacity: 1; } }
+      @keyframes k-p5 { 0%, 56.25% { stroke-dashoffset: 66.4px; opacity: 0; } 57.031%, 67.969% { opacity: 1; } 68.75%, 100% { stroke-dashoffset: 0px; opacity: 0; } }
+      @keyframes k-r6 { 0%, 14.938%, 16.25%, 28.062%, 29.375%, 41.188%, 42.5%, 54.937%, 56.25%, 67.438%, 82.5%, 98.688%, 100% { opacity: 0.55; } 68.75%, 81.188% { opacity: 1; } }
+      @keyframes k-s6 { 0%, 14.938%, 16.25%, 28.062%, 29.375%, 41.188%, 42.5%, 54.937%, 56.25%, 67.438%, 82.5%, 98.688%, 100% { opacity: 0; } 68.75%, 81.188% { opacity: 1; } }
+      @keyframes k-p6 { 0%, 68.75% { stroke-dashoffset: 65.4px; opacity: 0; } 69.531%, 81.719% { opacity: 1; } 82.5%, 100% { stroke-dashoffset: 0px; opacity: 0; } }
+      @keyframes k-r7 { 0%, 14.938%, 16.25%, 28.062%, 29.375%, 41.188%, 42.5%, 54.937%, 56.25%, 67.438%, 68.75%, 81.188%, 100% { opacity: 0.55; } 82.5%, 98.688% { opacity: 1; } }
+      @keyframes k-s7 { 0%, 14.938%, 16.25%, 28.062%, 29.375%, 41.188%, 42.5%, 54.937%, 56.25%, 67.438%, 68.75%, 81.188%, 100% { opacity: 0; } 82.5%, 98.688% { opacity: 1; } }
+      @keyframes k-p7 { 0%, 82.5% { stroke-dashoffset: 89.4px; opacity: 0; } 83.281%, 99.219% { opacity: 1; } 100% { stroke-dashoffset: 0px; opacity: 0; } }
+      @keyframes k-s17 { 0%, 14.938%, 82.5%, 98.688%, 100% { opacity: 1; } 16.25%, 28.062%, 29.375%, 41.188%, 42.5%, 54.937%, 56.25%, 67.438%, 68.75%, 81.188% { opacity: 0; } }
+      @keyframes k-s56 { 0%, 14.938%, 16.25%, 28.062%, 29.375%, 41.188%, 42.5%, 54.937%, 82.5%, 98.688%, 100% { opacity: 0; } 56.25%, 67.438%, 68.75%, 81.188% { opacity: 1; } }
+      @keyframes k-off { 0%, 100% { opacity: 0; } }
+      @keyframes k-x4 { 0%, 14.938%, 16.25%, 28.062%, 29.375%, 41.188%, 56.25%, 67.438%, 68.75%, 81.188%, 82.5%, 98.688%, 100% { opacity: 1; } 42.5%, 54.937% { opacity: 0; } }
+      @keyframes k-x56 { 0%, 14.938%, 16.25%, 28.062%, 29.375%, 41.188%, 42.5%, 54.937%, 82.5%, 98.688%, 100% { opacity: 1; } 56.25%, 67.438%, 68.75%, 81.188% { opacity: 0; } }
+      @keyframes k-d4 { 0%, 41.188% { stroke-dashoffset: 120px; } 56.25%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-d5 { 0%, 54.937% { stroke-dashoffset: 96px; } 68.75%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-d6 { 0%, 67.438% { stroke-dashoffset: 120px; } 82.5%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-q7-5 { 0%, 92.813%, 100% { opacity: 0; } 93.594%, 98.688% { opacity: 1; } }
+      @keyframes k-n1 { 0%, 14.938%, 100% { opacity: 1; } 16.25%, 28.062%, 29.375%, 41.188%, 42.5%, 54.937%, 56.25%, 67.438%, 68.75%, 81.188%, 82.5%, 98.688% { opacity: 0.62; } }
+      @keyframes k-n17 { 0%, 14.938%, 82.5%, 98.688%, 100% { opacity: 1; } 16.25%, 28.062%, 29.375%, 41.188%, 42.5%, 54.937%, 56.25%, 67.438%, 68.75%, 81.188% { opacity: 0.62; } }
+      @keyframes k-n { 0%, 14.938%, 16.25%, 28.062%, 29.375%, 41.188%, 42.5%, 54.937%, 56.25%, 67.438%, 68.75%, 81.188%, 82.5%, 98.688%, 100% { opacity: 0.62; } }
+      @keyframes k-n2 { 0%, 14.938%, 29.375%, 41.188%, 42.5%, 54.937%, 56.25%, 67.438%, 68.75%, 81.188%, 82.5%, 98.688%, 100% { opacity: 0.62; } 16.25%, 28.062% { opacity: 1; } }
+      @keyframes k-n3 { 0%, 14.938%, 16.25%, 28.062%, 42.5%, 54.937%, 56.25%, 67.438%, 68.75%, 81.188%, 82.5%, 98.688%, 100% { opacity: 0.62; } 29.375%, 41.188% { opacity: 1; } }
+      @keyframes k-n4 { 0%, 14.938%, 16.25%, 28.062%, 29.375%, 41.188%, 56.25%, 67.438%, 68.75%, 81.188%, 82.5%, 98.688%, 100% { opacity: 0.62; } 42.5%, 54.937% { opacity: 1; } }
+      @keyframes k-n56 { 0%, 14.938%, 16.25%, 28.062%, 29.375%, 41.188%, 42.5%, 54.937%, 82.5%, 98.688%, 100% { opacity: 0.62; } 56.25%, 67.438%, 68.75%, 81.188% { opacity: 1; } }
+      @keyframes k-n1234567 { 0%, 14.938%, 16.25%, 28.062%, 29.375%, 41.188%, 42.5%, 54.937%, 56.25%, 67.438%, 68.75%, 81.188%, 82.5%, 98.688%, 100% { opacity: 1; } }
+      @keyframes k-q7-1 { 0%, 85.812%, 100% { opacity: 0; } 86.594%, 98.688% { opacity: 1; } }
+      @keyframes k-q7-2 { 0%, 87.563%, 100% { opacity: 0; } 88.344%, 98.688% { opacity: 1; } }
+      @keyframes k-x23 { 0%, 14.938%, 42.5%, 54.937%, 56.25%, 67.438%, 68.75%, 81.188%, 82.5%, 98.688%, 100% { opacity: 1; } 16.25%, 28.062%, 29.375%, 41.188% { opacity: 0; } }
+      @keyframes k-n1237 { 0%, 14.938%, 16.25%, 28.062%, 29.375%, 41.188%, 82.5%, 98.688%, 100% { opacity: 1; } 42.5%, 54.937%, 56.25%, 67.438%, 68.75%, 81.188% { opacity: 0.62; } }
+      @keyframes k-n127 { 0%, 14.938%, 16.25%, 28.062%, 82.5%, 98.688%, 100% { opacity: 1; } 29.375%, 41.188%, 42.5%, 54.937%, 56.25%, 67.438%, 68.75%, 81.188% { opacity: 0.62; } }
+      @keyframes k-n137 { 0%, 14.938%, 29.375%, 41.188%, 82.5%, 98.688%, 100% { opacity: 1; } 16.25%, 28.062%, 42.5%, 54.937%, 56.25%, 67.438%, 68.75%, 81.188% { opacity: 0.62; } }
+      @keyframes k-n1467 { 0%, 14.938%, 42.5%, 54.937%, 68.75%, 81.188%, 82.5%, 98.688%, 100% { opacity: 1; } 16.25%, 28.062%, 29.375%, 41.188%, 56.25%, 67.438% { opacity: 0.62; } }
+      @keyframes k-n147 { 0%, 14.938%, 42.5%, 54.937%, 82.5%, 98.688%, 100% { opacity: 1; } 16.25%, 28.062%, 29.375%, 41.188%, 56.25%, 67.438%, 68.75%, 81.188% { opacity: 0.62; } }
+      @keyframes k-n167 { 0%, 14.938%, 68.75%, 81.188%, 82.5%, 98.688%, 100% { opacity: 1; } 16.25%, 28.062%, 29.375%, 41.188%, 42.5%, 54.937%, 56.25%, 67.438% { opacity: 0.62; } }
+      @keyframes k-n1567 { 0%, 14.938%, 56.25%, 67.438%, 68.75%, 81.188%, 82.5%, 98.688%, 100% { opacity: 1; } 16.25%, 28.062%, 29.375%, 41.188%, 42.5%, 54.937% { opacity: 0.62; } }
+      @keyframes k-n157 { 0%, 14.938%, 56.25%, 67.438%, 82.5%, 98.688%, 100% { opacity: 1; } 16.25%, 28.062%, 29.375%, 41.188%, 42.5%, 54.937%, 68.75%, 81.188% { opacity: 0.62; } }
+      @keyframes k-n7 { 0%, 14.938%, 16.25%, 28.062%, 29.375%, 41.188%, 42.5%, 54.937%, 56.25%, 67.438%, 68.75%, 81.188%, 100% { opacity: 0.62; } 82.5%, 98.688% { opacity: 1; } }
+      @keyframes k-q1-1 { 0%, 3%, 16.25%, 100% { opacity: 0; } 3.781%, 14.938% { opacity: 1; } }
+      @keyframes k-q1-2 { 0%, 4.438%, 16.25%, 100% { opacity: 0; } 5.219%, 14.938% { opacity: 1; } }
+      @keyframes k-q1-3 { 0%, 5.875%, 16.25%, 100% { opacity: 0; } 6.656%, 14.938% { opacity: 1; } }
+      @keyframes k-q1-4 { 0%, 7.312%, 16.25%, 100% { opacity: 0; } 8.094%, 14.938% { opacity: 1; } }
+      @keyframes k-q1-5 { 0%, 8.75%, 16.25%, 100% { opacity: 0; } 9.531%, 14.938% { opacity: 1; } }
+      @keyframes k-q1-6 { 0%, 10.188%, 16.25%, 100% { opacity: 0; } 10.969%, 14.938% { opacity: 1; } }
+      @keyframes k-q1-7 { 0%, 11.625%, 16.25%, 100% { opacity: 0; } 12.406%, 14.938% { opacity: 1; } }
+      @keyframes k-q7-0 { 0%, 84.062%, 100% { opacity: 0; } 84.844%, 98.688% { opacity: 1; } }
+      @keyframes k-q7-3 { 0%, 89.312%, 100% { opacity: 0; } 90.094%, 98.688% { opacity: 1; } }
+      @keyframes k-q7-6 { 0%, 94.562%, 100% { opacity: 0; } 95.344%, 98.688% { opacity: 1; } }
+      @keyframes k-q7-7 { 0%, 96.313%, 100% { opacity: 0; } 97.094%, 98.688% { opacity: 1; } }
+      @keyframes k-f-boot-chain-1 { 0%, 100% { stroke-dashoffset: 207.26px; } 16.25%, 98.675% { stroke-dashoffset: 0px; } 98.688% { stroke-dashoffset: 224px; } }
+      @keyframes k-f-boot-chain-2 { 0%, 100% { stroke-dashoffset: 207.26px; } 16.25%, 98.675% { stroke-dashoffset: 0px; } 98.688% { stroke-dashoffset: 224px; } }
+      @keyframes k-f-boot-chain-3 { 0%, 100% { stroke-dashoffset: 207.26px; } 16.25%, 98.675% { stroke-dashoffset: 0px; } 98.688% { stroke-dashoffset: 224px; } }
+      @keyframes k-f-boot-owner-runtime { 0%, 100% { stroke-dashoffset: 194.31px; } 16.25%, 98.675% { stroke-dashoffset: 0px; } 98.688% { stroke-dashoffset: 210px; } }
+      @keyframes k-f-boot-derive { 0%, 100% { stroke-dashoffset: 133.24px; } 16.25%, 98.675% { stroke-dashoffset: 0px; } 98.688% { stroke-dashoffset: 144px; } }
+      @keyframes k-f-spawn-services { 0%, 14.938% { stroke-dashoffset: 200px; } 29.375%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-spawn-ctx-group { 0%, 14.938% { stroke-dashoffset: 196px; } 29.375%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-spawn-group-work { 0%, 14.938% { stroke-dashoffset: 208px; } 29.375%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-spawn-work-tokio { 0%, 14.938% { stroke-dashoffset: 240px; } 29.375%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-schedule-jobs { 0%, 28.062% { stroke-dashoffset: 200px; } 42.5%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-schedule-ctx-group { 0%, 28.062% { stroke-dashoffset: 168px; } 42.5%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-schedule-group-work { 0%, 28.062% { stroke-dashoffset: 182px; } 42.5%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-schedule-work-tokio { 0%, 28.062% { stroke-dashoffset: 195px; } 42.5%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-block-closures { 0%, 41.188%, 44.2%, 47.212%, 50.225%, 53.238%, 56.25%, 100% { stroke-dashoffset: 5000.00px; } 42.694%, 45.706%, 48.719%, 51.731%, 54.744% { stroke-dashoffset: 4960.00px; } }
+      @keyframes k-f-block-ctx-lanes { 0%, 41.188%, 44.2%, 47.212%, 50.225%, 53.238%, 56.25%, 100% { stroke-dashoffset: 5000.00px; } 42.694%, 45.706%, 48.719%, 51.731%, 54.744% { stroke-dashoffset: 4972.00px; } }
+      @keyframes k-f-block-lanes-tokio { 0%, 41.188%, 44.2%, 47.212%, 50.225%, 53.238%, 56.25%, 100% { stroke-dashoffset: 5000.00px; } 42.694%, 45.706%, 48.719%, 51.731%, 54.744% { stroke-dashoffset: 4970.00px; } }
+      @keyframes k-f-budget-budgeted { 0%, 54.937% { stroke-dashoffset: 200px; } 68.75%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-budget-ctx-resources { 0%, 54.937% { stroke-dashoffset: 154px; } 68.75%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-persist-budgeted { 0%, 67.438%, 70.45%, 73.462%, 76.475%, 79.487%, 82.5%, 100% { stroke-dashoffset: 5000.00px; } 68.944%, 71.956%, 74.969%, 77.981%, 80.994% { stroke-dashoffset: 4960.00px; } }
+      @keyframes k-f-persist-ctx-resources { 0%, 67.438%, 70.45%, 73.462%, 76.475%, 79.487%, 82.5%, 100% { stroke-dashoffset: 5000.00px; } 68.944%, 71.956%, 74.969%, 77.981%, 80.994% { stroke-dashoffset: 4972.00px; } }
+      @keyframes k-f-persist-budget-actor { 0%, 67.438%, 69.948%, 72.458%, 74.969%, 77.479%, 79.99%, 82.5%, 100% { stroke-dashoffset: 5000.00px; } 68.693%, 71.203%, 73.714%, 76.224%, 78.734%, 81.245% { stroke-dashoffset: 4970.00px; } }
+      @keyframes k-f-persist-actor-lane { 0%, 67.438%, 72.458%, 77.479%, 82.5%, 100% { stroke-dashoffset: 5000.00px; } 69.948%, 74.969%, 79.99% { stroke-dashoffset: 4687.52px; } }
+      @keyframes k-f-persist-lanes-tokio { 0%, 67.438%, 70.45%, 73.462%, 76.475%, 79.487%, 82.5%, 100% { stroke-dashoffset: 5000.00px; } 68.944%, 71.956%, 74.969%, 77.981%, 80.994% { stroke-dashoffset: 4970.00px; } }
+      @keyframes k-f-shutdown-lifecycle { 0%, 81.188% { stroke-dashoffset: 182px; } 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-q1-0 { 0%, 1.562%, 16.25%, 100% { opacity: 0; } 2.344%, 14.938% { opacity: 1; } }
+      @keyframes k-q1-8 { 0%, 13.062%, 16.25%, 100% { opacity: 0; } 13.844%, 14.938% { opacity: 1; } }
+      @keyframes k-q7-4 { 0%, 91.062%, 100% { opacity: 0; } 91.844%, 98.688% { opacity: 1; } }
+      @keyframes k-t0 { 0%, 8.25%, 87.531%, 100% { opacity: 0; } 9.031%, 86.75% { opacity: 1; } }
+      @keyframes k-t1 { 0%, 86.75%, 89.281%, 100% { opacity: 0; } 87.531%, 88.5% { opacity: 1; } }
+      @keyframes k-t2 { 0%, 88.5%, 94.531%, 100% { opacity: 0; } 89.281%, 93.75% { opacity: 1; } }
+      @keyframes k-t3 { 0%, 93.75%, 100% { opacity: 0; } 94.531%, 99.062% { opacity: 1; } }
+      @keyframes k-l0 { 0%, 12.563%, 14.625%, 100% { opacity: 0; } 13.344%, 13.844% { opacity: 1; } }
+      @keyframes k-l1 { 0%, 13.844%, 85.781%, 100% { opacity: 0; } 14.625%, 85% { opacity: 1; } }
+      @keyframes k-l2 { 0%, 85%, 98.031%, 100% { opacity: 0; } 85.781%, 97.25% { opacity: 1; } }
+      @keyframes k-l3 { 0%, 97.25%, 100% { opacity: 0; } 98.031%, 99.062% { opacity: 1; } }
+      @keyframes k-wv0 { 0%, 21.562%, 28.75%, 100% { opacity: 0; } 22.031%, 28.125% { opacity: 1; } }
+      @keyframes k-wv1 { 0%, 22.188%, 28.75%, 100% { opacity: 0; } 22.656%, 28.125% { opacity: 1; } }
+      @keyframes k-wv2 { 0%, 22.813%, 28.75%, 100% { opacity: 0; } 23.281%, 28.125% { opacity: 1; } }
+      @keyframes k-wv3 { 0%, 23.438%, 28.75%, 100% { opacity: 0; } 23.906%, 28.125% { opacity: 1; } }
+      @keyframes k-wv4 { 0%, 24.062%, 28.75%, 100% { opacity: 0; } 24.531%, 28.125% { opacity: 1; } }
+      @keyframes k-wv5 { 0%, 24.688%, 28.75%, 100% { opacity: 0; } 25.156%, 28.125% { opacity: 1; } }
+      @keyframes k-ru0 { 0%, 32.812%, 37.187%, 100% { opacity: 0; } 33.281%, 36.562% { opacity: 1; } }
+      @keyframes k-wy0 { 0%, 33.594%, 37.812%, 100% { opacity: 0; } 34.062%, 37.187% { opacity: 1; } }
+      @keyframes k-ru1 { 0%, 35.625%, 40%, 100% { opacity: 0; } 36.094%, 39.375% { opacity: 1; } }
+      @keyframes k-wy1 { 0%, 36.406%, 40.625%, 100% { opacity: 0; } 36.875%, 40% { opacity: 1; } }
+      @keyframes k-rv0 { 0%, 38.438%, 41.875%, 100% { opacity: 0; } 38.906%, 41.25% { opacity: 1; } }
+      @keyframes k-wy2 { 0%, 39.219%, 41.875%, 100% { opacity: 0; } 39.688%, 41.25% { opacity: 1; } }
+      @keyframes k-sl0 { 0%, 46.563%, 55.625%, 100% { opacity: 0; } 47.031%, 55% { opacity: 1; } }
+      @keyframes k-bl0 { 0%, 47.969%, 55.625%, 100% { opacity: 0; } 48.438%, 55% { opacity: 1; } }
+      @keyframes k-sl1 { 0%, 47.188%, 55.625%, 100% { opacity: 0; } 47.656%, 55% { opacity: 1; } }
+      @keyframes k-bl1 { 0%, 48.594%, 55.625%, 100% { opacity: 0; } 49.062%, 55% { opacity: 1; } }
+      @keyframes k-sl2 { 0%, 47.813%, 55.625%, 100% { opacity: 0; } 48.281%, 55% { opacity: 1; } }
+      @keyframes k-bl2 { 0%, 49.219%, 55.625%, 100% { opacity: 0; } 49.688%, 55% { opacity: 1; } }
+      @keyframes k-sl3 { 0%, 48.438%, 55.625%, 100% { opacity: 0; } 48.906%, 55% { opacity: 1; } }
+      @keyframes k-bl3 { 0%, 49.844%, 55.625%, 100% { opacity: 0; } 50.313%, 55% { opacity: 1; } }
+      @keyframes k-cb0 { 0%, 59.375%, 68.125%, 100% { opacity: 0; } 59.844%, 67.5% { opacity: 1; } }
+      @keyframes k-rb0 { 0%, 59.656%, 68.125%, 100% { opacity: 0; } 60.125%, 67.5% { opacity: 1; } }
+      @keyframes k-cb1 { 0%, 59.938%, 68.125%, 100% { opacity: 0; } 60.406%, 67.5% { opacity: 1; } }
+      @keyframes k-rb1 { 0%, 60.219%, 68.125%, 100% { opacity: 0; } 60.687%, 67.5% { opacity: 1; } }
+      @keyframes k-cb2 { 0%, 60.5%, 68.125%, 100% { opacity: 0; } 60.969%, 67.5% { opacity: 1; } }
+      @keyframes k-rb2 { 0%, 60.781%, 68.125%, 100% { opacity: 0; } 61.25%, 67.5% { opacity: 1; } }
+      @keyframes k-cb3 { 0%, 61.062%, 68.125%, 100% { opacity: 0; } 61.531%, 67.5% { opacity: 1; } }
+      @keyframes k-rb3 { 0%, 61.344%, 68.125%, 100% { opacity: 0; } 61.812%, 67.5% { opacity: 1; } }
+      @keyframes k-cb4 { 0%, 61.625%, 68.125%, 100% { opacity: 0; } 62.094%, 67.5% { opacity: 1; } }
+      @keyframes k-rb4 { 0%, 61.906%, 68.125%, 100% { opacity: 0; } 62.375%, 67.5% { opacity: 1; } }
+      @keyframes k-cb5 { 0%, 62.187%, 68.125%, 100% { opacity: 0; } 62.656%, 67.5% { opacity: 1; } }
+      @keyframes k-rb5 { 0%, 62.469%, 68.125%, 100% { opacity: 0; } 62.937%, 67.5% { opacity: 1; } }
+      @keyframes k-mb0 { 0%, 72.5%, 80.312%, 100% { opacity: 0; } 72.969%, 79.688% { opacity: 1; } }
+      @keyframes k-mb1 { 0%, 72.875%, 80.312%, 100% { opacity: 0; } 73.344%, 79.688% { opacity: 1; } }
+      @keyframes k-ml0 { 0%, 75%, 80%, 100% { opacity: 0; } 75.469%, 79.375% { opacity: 1; } }
+      @keyframes k-mp0 { 0%, 75.938%, 79.688%, 100% { opacity: 0; } 76.406%, 79.062% { opacity: 1; } }
+      @keyframes k-du { 0%, 79.375%, 82.5%, 100% { opacity: 0; } 80.156%, 81.187% { opacity: 1; } }
+    </style>
+  </defs>
+  <rect width="1400" height="1004" rx="28" class="page"/>
+  <rect width="1400" height="1004" rx="28" fill="url(#glow-violet)"/>
+  <rect width="1400" height="1004" rx="28" fill="url(#glow-orange)"/>
+
+  <!-- Heading -->
+  <text x="40" y="58" class="ti">rocketmq-runtime Architecture</text>
+  <text x="40" y="82" class="le">Runtime ownership, tracked tasks, bounded blocking work, budgets and shutdown evidence.</text>
+
+  <!-- The tour: the step in effect is marked, and its bar fills while it plays -->
+  <g class="k k-r1">
+    <rect x="685.2" y="40" width="75.4" height="34" rx="12" class="sc"/>
+    <rect x="685.2" y="40" width="75.4" height="34" rx="12" class="sh o k k-s1"/>
+    <text x="697.2" y="61.5" class="si">01</text>
+    <text x="697.2" y="61.5" class="si sa o k k-s1">01</text>
+    <text x="719.6" y="61.5" class="st">Boot</text>
+    <path d="M 697.2 73 H 748.6" class="sp o k k-p1" stroke-dasharray="51.4 51.4"/>
+  </g>
+  <g class="k k-r2">
+    <rect x="768.6" y="40" width="88.4" height="34" rx="12" class="sc"/>
+    <rect x="768.6" y="40" width="88.4" height="34" rx="12" class="sh o k k-s2"/>
+    <text x="780.6" y="61.5" class="si">02</text>
+    <text x="780.6" y="61.5" class="si sa o k k-s2">02</text>
+    <text x="803" y="61.5" class="st">Spawn</text>
+    <path d="M 780.6 73 H 845" class="sp o k k-p2" stroke-dasharray="64.4 64.4"/>
+  </g>
+  <g class="k k-r3">
+    <rect x="865" y="40" width="104.4" height="34" rx="12" class="sc"/>
+    <rect x="865" y="40" width="104.4" height="34" rx="12" class="sh o k k-s3"/>
+    <text x="877" y="61.5" class="si">03</text>
+    <text x="877" y="61.5" class="si sa o k k-s3">03</text>
+    <text x="899.4" y="61.5" class="st">Schedule</text>
+    <path d="M 877 73 H 957.4" class="sp o k k-p3" stroke-dasharray="80.4 80.4"/>
+  </g>
+  <g class="k k-r4">
+    <rect x="977.4" y="40" width="81.4" height="34" rx="12" class="sc"/>
+    <rect x="977.4" y="40" width="81.4" height="34" rx="12" class="sh o k k-s4"/>
+    <text x="989.4" y="61.5" class="si">04</text>
+    <text x="989.4" y="61.5" class="si sa o k k-s4">04</text>
+    <text x="1011.8" y="61.5" class="st">Block</text>
+    <path d="M 989.4 73 H 1046.8" class="sp o k k-p4" stroke-dasharray="57.4 57.4"/>
+  </g>
+  <g class="k k-r5">
+    <rect x="1066.8" y="40" width="90.4" height="34" rx="12" class="sc"/>
+    <rect x="1066.8" y="40" width="90.4" height="34" rx="12" class="sh o k k-s5"/>
+    <text x="1078.8" y="61.5" class="si">05</text>
+    <text x="1078.8" y="61.5" class="si sa o k k-s5">05</text>
+    <text x="1101.2" y="61.5" class="st">Budget</text>
+    <path d="M 1078.8 73 H 1145.2" class="sp o k k-p5" stroke-dasharray="66.4 66.4"/>
+  </g>
+  <g class="k k-r6">
+    <rect x="1165.2" y="40" width="89.4" height="34" rx="12" class="sc"/>
+    <rect x="1165.2" y="40" width="89.4" height="34" rx="12" class="sh o k k-s6"/>
+    <text x="1177.2" y="61.5" class="si">06</text>
+    <text x="1177.2" y="61.5" class="si sa o k k-s6">06</text>
+    <text x="1199.6" y="61.5" class="st">Persist</text>
+    <path d="M 1177.2 73 H 1242.6" class="sp o k k-p6" stroke-dasharray="65.4 65.4"/>
+  </g>
+  <g class="k k-r7">
+    <rect x="1262.6" y="40" width="113.4" height="34" rx="12" class="sc"/>
+    <rect x="1262.6" y="40" width="113.4" height="34" rx="12" class="sh o k k-s7"/>
+    <text x="1274.6" y="61.5" class="si">07</text>
+    <text x="1274.6" y="61.5" class="si sa o k k-s7">07</text>
+    <text x="1297" y="61.5" class="st">Shut down</text>
+    <path d="M 1274.6 73 H 1364" class="sp o k k-p7" stroke-dasharray="89.4 89.4"/>
+  </g>
+
+  <!-- Card -->
+  <rect x="24" y="104" width="1352" height="876" rx="24" class="card"/>
+  <rect x="24" y="104" width="1352" height="876" rx="24" class="dots"/>
+
+  <!-- Outlines: what the owner holds, and the groups of cards inside it -->
+  <g class="to gl k k-s17"><rect x="250" y="236" width="1102" height="512" rx="24" class="g5"/><rect x="250" y="236" width="1102" height="512" rx="24" class="g4"/><rect x="250" y="236" width="1102" height="512" rx="24" class="g3"/><rect x="250" y="236" width="1102" height="512" rx="24" class="g2"/><rect x="250" y="236" width="1102" height="512" rx="24" class="g1"/></g>
+  <rect x="250" y="236" width="1102" height="512" rx="24" class="grp"/>
+  <rect x="250" y="236" width="1102" height="512" rx="24" class="to nr k k-s17"/>
+  <text x="268" y="260" class="gt">OWNED RUNTIME</text>
+  <text x="1336" y="260" class="nn" text-anchor="end">root context · Tokio runtime · resources</text>
+  <g class="tc gl k k-s2"><rect x="706" y="272" width="412" height="190" rx="18" class="g5"/><rect x="706" y="272" width="412" height="190" rx="18" class="g4"/><rect x="706" y="272" width="412" height="190" rx="18" class="g3"/><rect x="706" y="272" width="412" height="190" rx="18" class="g2"/><rect x="706" y="272" width="412" height="190" rx="18" class="g1"/></g>
+  <g class="tm gl k k-s3"><rect x="706" y="272" width="412" height="190" rx="18" class="g5"/><rect x="706" y="272" width="412" height="190" rx="18" class="g4"/><rect x="706" y="272" width="412" height="190" rx="18" class="g3"/><rect x="706" y="272" width="412" height="190" rx="18" class="g2"/><rect x="706" y="272" width="412" height="190" rx="18" class="g1"/></g>
+  <rect x="706" y="272" width="412" height="190" rx="18" class="clu"/>
+  <rect x="706" y="272" width="412" height="190" rx="18" class="tc nr k k-s2"/>
+  <rect x="706" y="272" width="412" height="190" rx="18" class="tm nr k k-s3"/>
+  <text x="722" y="293" class="gt">OWNED WORK</text>
+  <text x="1102" y="293" class="nn" text-anchor="end">TaskKind labels each task</text>
+  <g class="tp gl k k-s4"><rect x="474" y="486" width="644" height="110" rx="18" class="g5"/><rect x="474" y="486" width="644" height="110" rx="18" class="g4"/><rect x="474" y="486" width="644" height="110" rx="18" class="g3"/><rect x="474" y="486" width="644" height="110" rx="18" class="g2"/><rect x="474" y="486" width="644" height="110" rx="18" class="g1"/></g>
+  <g class="ts gl k k-s6"><rect x="474" y="486" width="644" height="110" rx="18" class="g5"/><rect x="474" y="486" width="644" height="110" rx="18" class="g4"/><rect x="474" y="486" width="644" height="110" rx="18" class="g3"/><rect x="474" y="486" width="644" height="110" rx="18" class="g2"/><rect x="474" y="486" width="644" height="110" rx="18" class="g1"/></g>
+  <rect x="474" y="486" width="644" height="110" rx="18" class="clu"/>
+  <rect x="474" y="486" width="644" height="110" rx="18" class="tp nr k k-s4"/>
+  <rect x="474" y="486" width="644" height="110" rx="18" class="ts nr k k-s6"/>
+  <text x="490" y="507" class="gt">SHARED BLOCKING LANES</text>
+  <text x="1102" y="507" class="nn" text-anchor="end">scoped admission · one global capacity</text>
+  <g class="ts gl k k-s56"><rect x="474" y="620" width="644" height="110" rx="18" class="g5"/><rect x="474" y="620" width="644" height="110" rx="18" class="g4"/><rect x="474" y="620" width="644" height="110" rx="18" class="g3"/><rect x="474" y="620" width="644" height="110" rx="18" class="g2"/><rect x="474" y="620" width="644" height="110" rx="18" class="g1"/></g>
+  <rect x="474" y="620" width="644" height="110" rx="18" class="clu"/>
+  <rect x="474" y="620" width="644" height="110" rx="18" class="ts nr k k-s56"/>
+  <text x="490" y="641" class="gt">RUNTIME RESOURCES</text>
+  <text x="1102" y="641" class="nn" text-anchor="end">budget tree · apart from the task tree</text>
+  <text x="48" y="344" class="gt">COMPONENT CODE</text>
+
+  <!-- Links -->
+  <path d="M 353 167 H 381" class="r"/>
+  <g class="to"><path d="M 353 167 H 381" class="rt k k-off"/></g>
+  <g class="to a k k-s1"><path d="M 353 167 H 381" class="rg"/><path d="M 353 167 H 381" class="rh"/></g>
+  <path d="M 686 167 H 714" class="r"/>
+  <g class="to"><path d="M 686 167 H 714" class="rt k k-off"/></g>
+  <g class="to a k k-s1"><path d="M 686 167 H 714" class="rg"/><path d="M 686 167 H 714" class="rh"/></g>
+  <path d="M 1019 167 H 1047" class="r"/>
+  <g class="to"><path d="M 1019 167 H 1047" class="rt k k-off"/></g>
+  <g class="to a k k-s1"><path d="M 1019 167 H 1047" class="rg"/><path d="M 1019 167 H 1047" class="rh"/></g>
+  <path d="M 1199 206 V 236" class="r"/>
+  <g class="to"><path d="M 1199 206 V 236" class="rt k k-off"/></g>
+  <g class="to a k k-s1"><path d="M 1199 206 V 236" class="rg"/><path d="M 1199 206 V 236" class="rh"/></g>
+  <path d="M 230 301 H 270" class="r d"/>
+  <path d="M 358 330 V 346" class="r"/>
+  <g class="to a k k-s1"><path d="M 358 330 V 346" class="rg"/><path d="M 358 330 V 346" class="rh"/></g>
+  <path d="M 230 374 H 270" class="r"/>
+  <g class="tc"><path d="M 230 374 H 270" class="rt k k-off"/></g>
+  <g class="tc a k k-s2"><path d="M 230 374 H 270" class="rg"/><path d="M 230 374 H 270" class="rh"/></g>
+  <path d="M 230 426 H 270" class="r"/>
+  <g class="tm"><path d="M 230 426 H 270" class="rt k k-off"/></g>
+  <g class="tm a k k-s3"><path d="M 230 426 H 270" class="rg"/><path d="M 230 426 H 270" class="rh"/></g>
+  <path d="M 230 541 H 270" class="r"/>
+  <g class="tp"><path d="M 230 541 H 270" class="rt k k-off"/></g>
+  <g class="tp a k k-s4"><path d="M 230 541 H 270" class="rg"/><path d="M 230 541 H 270" class="rh"/></g>
+  <path d="M 230 675 H 270" class="r"/>
+  <g class="ts"><path d="M 230 675 H 270" class="rt k k-off"/></g>
+  <g class="ts a k k-s5"><path d="M 230 675 H 270" class="rg"/><path d="M 230 675 H 270" class="rh"/></g>
+  <g class="ts a k k-s6"><path d="M 230 675 H 270" class="rg"/><path d="M 230 675 H 270" class="rh"/></g>
+  <path d="M 446 367 H 474" class="r"/>
+  <g class="tc a k k-s2"><path d="M 446 367 H 474" class="rg"/><path d="M 446 367 H 474" class="rh"/></g>
+  <g class="tm a k k-s3"><path d="M 446 367 H 474" class="rg"/><path d="M 446 367 H 474" class="rh"/></g>
+  <path d="M 680 367 H 706" class="r"/>
+  <g class="tc a k k-s2"><path d="M 680 367 H 706" class="rg"/><path d="M 680 367 H 706" class="rh"/></g>
+  <g class="tm a k k-s3"><path d="M 680 367 H 706" class="rg"/><path d="M 680 367 H 706" class="rh"/></g>
+  <path d="M 1118 367 H 1148" class="r"/>
+  <g class="tc a k k-s2"><path d="M 1118 367 H 1148" class="rg"/><path d="M 1118 367 H 1148" class="rh"/></g>
+  <g class="tm a k k-s3"><path d="M 1118 367 H 1148" class="rg"/><path d="M 1118 367 H 1148" class="rh"/></g>
+  <path d="M 446 541 H 474" class="r d k k-x4"/>
+  <g class="tp"><path d="M 446 541 H 474" class="rt d k k-off"/></g>
+  <g class="tp a k k-s4"><path d="M 446 541 H 474" class="rg"/><path d="M 446 541 H 474" class="rh d k k-d4"/></g>
+  <path d="M 1118 541 H 1148" class="r"/>
+  <g class="tp"><path d="M 1118 541 H 1148" class="rt k k-off"/></g>
+  <g class="tp a k k-s4"><path d="M 1118 541 H 1148" class="rg"/><path d="M 1118 541 H 1148" class="rh"/></g>
+  <g class="ts a k k-s6"><path d="M 1118 541 H 1148" class="rg"/><path d="M 1118 541 H 1148" class="rh"/></g>
+  <path d="M 446 675 H 474" class="r d k k-x56"/>
+  <g class="ts"><path d="M 446 675 H 474" class="rt d k k-off"/></g>
+  <g class="ts a k k-s5"><path d="M 446 675 H 474" class="rg"/><path d="M 446 675 H 474" class="rh d k k-d5"/></g>
+  <g class="ts a k k-s6"><path d="M 446 675 H 474" class="rg"/><path d="M 446 675 H 474" class="rh d k k-d6"/></g>
+  <path d="M 1118 675 H 1148" class="r"/>
+  <g class="ts"><path d="M 1118 675 H 1148" class="rt k k-off"/></g>
+  <g class="ts a k k-s6"><path d="M 1118 675 H 1148" class="rg"/><path d="M 1118 675 H 1148" class="rh"/></g>
+  <path d="M 1180 620 V 614 Q 1180 608 1174 608 H 901 Q 895 608 895 602 V 588" class="r"/>
+  <g class="ts"><path d="M 1180 620 V 614 Q 1180 608 1174 608 H 901 Q 895 608 895 602 V 588" class="rt k k-off"/></g>
+  <g class="ts a k k-s6"><path d="M 1180 620 V 614 Q 1180 608 1174 608 H 901 Q 895 608 895 602 V 588" class="rg"/><path d="M 1180 620 V 614 Q 1180 608 1174 608 H 901 Q 895 608 895 602 V 588" class="rh"/></g>
+  <path d="M 533 776 V 748" class="r"/>
+  <g class="to"><path d="M 533 776 V 748" class="rt k k-off"/></g>
+  <g class="to a k k-s7"><path d="M 533 776 V 748" class="rg"/><path d="M 533 776 V 748" class="rh"/></g>
+  <path d="M 866 748 V 776" class="r"/>
+  <g class="to"><path d="M 866 748 V 776" class="rt k k-off"/></g>
+  <path d="M 1199 748 V 776" class="r d"/>
+  <g class="to a k k-q7-5"><path d="M 866 748 V 776" class="rg"/><path d="M 866 748 V 776" class="rh"/></g>
+
+  <!-- What the links carry -->
+  <text x="1207" y="226" class="lb">owns</text>
+  <g class="to"><text x="1207" y="226" class="lb lt o k k-s1">owns</text></g>
+  <text x="366" y="342" class="lb">derives</text>
+  <g class="to"><text x="366" y="342" class="lb lt o k k-s1">derives</text></g>
+  <text x="541" y="766" class="lb">one frozen deadline</text>
+  <g class="to"><text x="541" y="766" class="lb lt o k k-s7">one frozen deadline</text></g>
+  <text x="874" y="766" class="lb">report</text>
+  <g class="to"><text x="874" y="766" class="lb lt o k k-q7-5">report</text></g>
+  <text x="1207" y="766" class="lb">samples</text>
+
+  <!-- How an entrypoint gets its owner: configuration, plan, build -->
+  <g class="to gl k k-s1"><rect x="48" y="128" width="305" height="78" rx="16" class="g5"/><rect x="48" y="128" width="305" height="78" rx="16" class="g4"/><rect x="48" y="128" width="305" height="78" rx="16" class="g3"/><rect x="48" y="128" width="305" height="78" rx="16" class="g2"/><rect x="48" y="128" width="305" height="78" rx="16" class="g1"/></g>
+  <g class="k k-n1" transform="translate(48 128)">
+    <rect class="nb" width="305" height="78" rx="16"/>
+    <text class="nt" x="18" y="29">Application entrypoint</text>
+    <text class="ns" x="18" y="48">broker · namesrv · proxy · controller</text>
+    <text class="nn" x="18" y="65">block_on(run), then shut down</text>
+  </g>
+  <rect x="48" y="128" width="305" height="78" rx="16" class="to nr k k-s1"/>
+  <g class="to gl k k-s1"><rect x="381" y="128" width="305" height="78" rx="16" class="g5"/><rect x="381" y="128" width="305" height="78" rx="16" class="g4"/><rect x="381" y="128" width="305" height="78" rx="16" class="g3"/><rect x="381" y="128" width="305" height="78" rx="16" class="g2"/><rect x="381" y="128" width="305" height="78" rx="16" class="g1"/></g>
+  <g class="k k-n1" transform="translate(381 128)">
+    <rect class="nb" width="305" height="78" rx="16"/>
+    <text class="nt" x="18" y="29">RuntimeConfig</text>
+    <text class="ns" x="18" y="48">workers · blocking capacity</text>
+    <text class="nn" x="18" y="65">lane policies · drivers · thread name</text>
+  </g>
+  <rect x="381" y="128" width="305" height="78" rx="16" class="to nr k k-s1"/>
+  <g class="to gl k k-s1"><rect x="714" y="128" width="305" height="78" rx="16" class="g5"/><rect x="714" y="128" width="305" height="78" rx="16" class="g4"/><rect x="714" y="128" width="305" height="78" rx="16" class="g3"/><rect x="714" y="128" width="305" height="78" rx="16" class="g2"/><rect x="714" y="128" width="305" height="78" rx="16" class="g1"/></g>
+  <g class="k k-n1" transform="translate(714 128)">
+    <rect class="nb" width="305" height="78" rx="16"/>
+    <text class="nt" x="18" y="29">RuntimeOwnerPlan</text>
+    <text class="ns" x="18" y="48">plan(config) validates</text>
+    <text class="nn" x="18" y="65">memory limit · policy · target capacity</text>
+  </g>
+  <rect x="714" y="128" width="305" height="78" rx="16" class="to nr k k-s1"/>
+  <g class="to gl k k-s17"><rect x="1047" y="128" width="305" height="78" rx="16" class="g5"/><rect x="1047" y="128" width="305" height="78" rx="16" class="g4"/><rect x="1047" y="128" width="305" height="78" rx="16" class="g3"/><rect x="1047" y="128" width="305" height="78" rx="16" class="g2"/><rect x="1047" y="128" width="305" height="78" rx="16" class="g1"/></g>
+  <g class="k k-n17" transform="translate(1047 128)">
+    <rect class="nb" width="305" height="78" rx="16"/>
+    <text class="nt" x="18" y="29">RuntimeOwner</text>
+    <text class="ns" x="18" y="48">build() owns one Tokio runtime</text>
+    <text class="nn" x="18" y="65">root context · resources · shutdown</text>
+  </g>
+  <rect x="1047" y="128" width="305" height="78" rx="16" class="to nr k k-s17"/>
+
+  <!-- The state of the root task group, on the outline -->
+  <g class="bd gy" transform="translate(440 247)"><rect width="44" height="18" rx="9"/><text x="22" y="12.6">OPEN</text></g>
+  <g class="bd o k k-t0" transform="translate(440 247)"><rect width="44" height="18" rx="9"/><text x="22" y="12.6">OPEN</text></g>
+  <g class="bd gy" transform="translate(492 247)"><rect width="62" height="18" rx="9"/><text x="31" y="12.6">CLOSING</text></g>
+  <g class="bd am o k k-t1" transform="translate(492 247)"><rect width="62" height="18" rx="9"/><text x="31" y="12.6">CLOSING</text></g>
+  <g class="bd gy" transform="translate(562 247)"><rect width="56" height="18" rx="9"/><text x="28" y="12.6">CLOSED</text></g>
+  <g class="bd am o k k-t2" transform="translate(562 247)"><rect width="56" height="18" rx="9"/><text x="28" y="12.6">CLOSED</text></g>
+  <g class="bd gy" transform="translate(626 247)"><rect width="130" height="18" rx="9"/><text x="65" y="12.6">SHUTDOWN COMPLETED</text></g>
+  <g class="bd am o k k-t3" transform="translate(626 247)"><rect width="130" height="18" rx="9"/><text x="65" y="12.6">SHUTDOWN COMPLETED</text></g>
+  <path d="M 486 256 H 490 M 556 256 H 560 M 620 256 H 624" class="cn"/>
+
+  <!-- Component code: what a library submits through its context -->
+  <g class="k k-n" transform="translate(48 272)">
+    <rect class="cb op" width="182" height="58" rx="11"/>
+    <text class="ct" x="10" y="20">Tests · migration</text>
+    <text class="cs" x="10" y="35">RuntimeContext</text>
+    <text class="cs" x="10" y="49">borrows a Tokio runtime</text>
+  </g>
+  <g class="tc gl k k-s2"><rect x="48" y="352" width="182" height="44" rx="11" class="g3"/><rect x="48" y="352" width="182" height="44" rx="11" class="g2"/><rect x="48" y="352" width="182" height="44" rx="11" class="g1"/></g>
+  <g class="k k-n2" transform="translate(48 352)">
+    <rect class="cb" width="182" height="44" rx="11"/>
+    <text class="ct" x="10" y="20">Services · workers</text>
+    <text class="cs" x="10" y="35">spawn · spawn_service</text>
+  </g>
+  <rect x="48" y="352" width="182" height="44" rx="11" class="tc nr k k-s2"/>
+  <g class="tm gl k k-s3"><rect x="48" y="404" width="182" height="44" rx="11" class="g3"/><rect x="48" y="404" width="182" height="44" rx="11" class="g2"/><rect x="48" y="404" width="182" height="44" rx="11" class="g1"/></g>
+  <g class="k k-n3" transform="translate(48 404)">
+    <rect class="cb" width="182" height="44" rx="11"/>
+    <text class="ct" x="10" y="20">Periodic jobs</text>
+    <text class="cs" x="10" y="35">schedule(config, policy)</text>
+  </g>
+  <rect x="48" y="404" width="182" height="44" rx="11" class="tm nr k k-s3"/>
+  <g class="tp gl k k-s4"><rect x="48" y="519" width="182" height="44" rx="11" class="g3"/><rect x="48" y="519" width="182" height="44" rx="11" class="g2"/><rect x="48" y="519" width="182" height="44" rx="11" class="g1"/></g>
+  <g class="k k-n4" transform="translate(48 519)">
+    <rect class="cb" width="182" height="44" rx="11"/>
+    <text class="ct" x="10" y="20">Blocking closures</text>
+    <text class="cs" x="10" y="35">spawn_io · spawn_until</text>
+  </g>
+  <rect x="48" y="519" width="182" height="44" rx="11" class="tp nr k k-s4"/>
+  <g class="ts gl k k-s56"><rect x="48" y="653" width="182" height="44" rx="11" class="g3"/><rect x="48" y="653" width="182" height="44" rx="11" class="g2"/><rect x="48" y="653" width="182" height="44" rx="11" class="g1"/></g>
+  <g class="k k-n56" transform="translate(48 653)">
+    <rect class="cb" width="182" height="44" rx="11"/>
+    <text class="ct" x="10" y="20">Queues · snapshots</text>
+    <text class="cs" x="10" y="35">try_acquire · submit</text>
+  </g>
+  <rect x="48" y="653" width="182" height="44" rx="11" class="ts nr k k-s56"/>
+
+  <!-- The sealed root and the component context: one capability per row -->
+  <g class="k k-n17" transform="translate(270 272)">
+    <rect class="cb" width="176" height="58" rx="11"/>
+    <text class="ct" x="10" y="20">Root context</text>
+    <text class="cs" x="10" y="35">RootServiceContext</text>
+    <text class="cs" x="10" y="49">sealed · one per owner</text>
+  </g>
+  <g class="tc gl k k-s2"><rect x="270" y="346" width="176" height="384" rx="16" class="g5"/><rect x="270" y="346" width="176" height="384" rx="16" class="g4"/><rect x="270" y="346" width="176" height="384" rx="16" class="g3"/><rect x="270" y="346" width="176" height="384" rx="16" class="g2"/><rect x="270" y="346" width="176" height="384" rx="16" class="g1"/></g>
+  <g class="tm gl k k-s3"><rect x="270" y="346" width="176" height="384" rx="16" class="g5"/><rect x="270" y="346" width="176" height="384" rx="16" class="g4"/><rect x="270" y="346" width="176" height="384" rx="16" class="g3"/><rect x="270" y="346" width="176" height="384" rx="16" class="g2"/><rect x="270" y="346" width="176" height="384" rx="16" class="g1"/></g>
+  <g class="tp gl k k-s4"><rect x="270" y="346" width="176" height="384" rx="16" class="g5"/><rect x="270" y="346" width="176" height="384" rx="16" class="g4"/><rect x="270" y="346" width="176" height="384" rx="16" class="g3"/><rect x="270" y="346" width="176" height="384" rx="16" class="g2"/><rect x="270" y="346" width="176" height="384" rx="16" class="g1"/></g>
+  <g class="ts gl k k-s56"><rect x="270" y="346" width="176" height="384" rx="16" class="g5"/><rect x="270" y="346" width="176" height="384" rx="16" class="g4"/><rect x="270" y="346" width="176" height="384" rx="16" class="g3"/><rect x="270" y="346" width="176" height="384" rx="16" class="g2"/><rect x="270" y="346" width="176" height="384" rx="16" class="g1"/></g>
+  <g class="k k-n1234567" transform="translate(270 346)">
+    <rect class="nb" width="176" height="384" rx="16"/>
+    <text class="nt" x="18" y="29">Service context</text>
+    <text class="ns" x="18" y="48">ChildServiceContext</text>
+    <text class="nn" x="18" y="70">TaskSpawner · spawn</text>
+    <text class="nn" x="18" y="84">component(scope)</text>
+    <text class="nn" x="18" y="98">scheduled_tasks(..)</text>
+    <text class="nn" x="18" y="181">storage_io()</text>
+    <text class="nn" x="18" y="195">metadata_io()</text>
+    <text class="nn" x="18" y="209">cpu_crypto()</text>
+    <text class="nn" x="18" y="315">process_budget()</text>
+    <text class="nn" x="18" y="329">resources()</text>
+    <text class="nn" x="18" y="343">diagnostics views</text>
+    <text class="gt" x="18" y="161">BLOCKING LANES</text>
+    <text class="gt" x="18" y="295">RESOURCES</text>
+    <g class="tc"><text class="nn lt o k k-s2" x="18" y="70">TaskSpawner · spawn</text></g>
+    <g class="tm"><text class="nn lt o k k-s3" x="18" y="98">scheduled_tasks(..)</text></g>
+    <g class="tp"><text class="nn lt o k k-s4" x="18" y="181">storage_io()</text></g>
+    <g class="ts"><text class="nn lt o k k-s6" x="18" y="195">metadata_io()</text></g>
+    <g class="ts"><text class="nn lt o k k-s56" x="18" y="315">process_budget()</text></g>
+  </g>
+  <rect x="270" y="346" width="176" height="384" rx="16" class="tc nr k k-s2"/>
+  <rect x="270" y="346" width="176" height="384" rx="16" class="tm nr k k-s3"/>
+  <rect x="270" y="346" width="176" height="384" rx="16" class="tp nr k k-s4"/>
+  <rect x="270" y="346" width="176" height="384" rx="16" class="ts nr k k-s56"/>
+
+  <!-- The task group of a component, the work it owns, and the workers that run it -->
+  <g class="tc gl k k-s2"><rect x="474" y="286" width="206" height="162" rx="16" class="g5"/><rect x="474" y="286" width="206" height="162" rx="16" class="g4"/><rect x="474" y="286" width="206" height="162" rx="16" class="g3"/><rect x="474" y="286" width="206" height="162" rx="16" class="g2"/><rect x="474" y="286" width="206" height="162" rx="16" class="g1"/></g>
+  <g class="tm gl k k-s3"><rect x="474" y="286" width="206" height="162" rx="16" class="g5"/><rect x="474" y="286" width="206" height="162" rx="16" class="g4"/><rect x="474" y="286" width="206" height="162" rx="16" class="g3"/><rect x="474" y="286" width="206" height="162" rx="16" class="g2"/><rect x="474" y="286" width="206" height="162" rx="16" class="g1"/></g>
+  <g class="k k-n1237" transform="translate(474 286)">
+    <rect class="nb" width="206" height="162" rx="16"/>
+    <text class="nt" x="18" y="29">TaskGroup</text>
+    <text class="ns" x="18" y="48">one per component scope</text>
+    <text class="nn" x="18" y="70">spawn gate: open only</text>
+    <text class="nn" x="18" y="84">registry · tracker token</text>
+    <text class="nn" x="18" y="98">child token: cancel down</text>
+    <text class="nn" x="18" y="112">panic poisons the group</text>
+    <g class="tc"><text class="nn lt o k k-s2" x="18" y="70">spawn gate: open only</text></g>
+    <g class="tc"><text class="nn lt o k k-s2" x="18" y="84">registry · tracker token</text></g>
+    <g class="to"><text class="nn lt o k k-q7-1" x="18" y="70">spawn gate: open only</text></g>
+    <g class="to"><text class="nn lt o k k-q7-2" x="18" y="98">child token: cancel down</text></g>
+    <g class="bd gy k k-x23" transform="translate(18 130)"><rect width="96" height="18" rx="9"/><text x="48" y="12.6">TASK KIND</text></g>
+    <g class="bd vi o k k-s2" transform="translate(18 130)"><rect width="96" height="18" rx="9"/><text x="48" y="12.6">SERVICE</text></g>
+    <g class="bd cy o k k-s3" transform="translate(18 130)"><rect width="96" height="18" rx="9"/><text x="48" y="12.6">SCHEDULED RUN</text></g>
+  </g>
+  <rect x="474" y="286" width="206" height="162" rx="16" class="tc nr k k-s2"/>
+  <rect x="474" y="286" width="206" height="162" rx="16" class="tm nr k k-s3"/>
+  <g class="tc gl k k-s2"><rect x="714" y="302" width="194" height="44" rx="11" class="g3"/><rect x="714" y="302" width="194" height="44" rx="11" class="g2"/><rect x="714" y="302" width="194" height="44" rx="11" class="g1"/></g>
+  <g class="k k-n127" transform="translate(714 302)">
+    <rect class="cb" width="194" height="44" rx="11"/>
+    <text class="ct" x="10" y="20">Service · worker tasks</text>
+    <text class="cs" x="10" y="35">spawn · spawn_service</text>
+  </g>
+  <rect x="714" y="302" width="194" height="44" rx="11" class="tc nr k k-s2"/>
+  <g class="tc gl k k-s2"><rect x="916" y="302" width="194" height="44" rx="11" class="g3"/><rect x="916" y="302" width="194" height="44" rx="11" class="g2"/><rect x="916" y="302" width="194" height="44" rx="11" class="g1"/></g>
+  <g class="k k-n127" transform="translate(916 302)">
+    <rect class="cb" width="194" height="44" rx="11"/>
+    <text class="ct" x="10" y="20">Operation tasks</text>
+    <text class="cs" x="10" y="35">cancel · deadline · wait</text>
+  </g>
+  <rect x="916" y="302" width="194" height="44" rx="11" class="tc nr k k-s2"/>
+  <g class="tm gl k k-s3"><rect x="714" y="354" width="194" height="44" rx="11" class="g3"/><rect x="714" y="354" width="194" height="44" rx="11" class="g2"/><rect x="714" y="354" width="194" height="44" rx="11" class="g1"/></g>
+  <g class="k k-n137" transform="translate(714 354)">
+    <rect class="cb" width="194" height="44" rx="11"/>
+    <text class="ct" x="10" y="20">ScheduledTaskGroup</text>
+    <text class="cs" x="10" y="35">child group: driver + runs</text>
+    <rect x="152" y="10" width="10" height="12" rx="2.5" class="bk"/><rect x="167" y="10" width="10" height="12" rx="2.5" class="bk"/><rect x="152" y="10" width="10" height="12" rx="2.5" class="bw o k k-ru0"/><rect x="167" y="10" width="10" height="12" rx="2.5" class="bw o k k-ru1"/><rect x="152" y="10" width="10" height="12" rx="2.5" class="bw o k k-rv0"/>
+  </g>
+  <rect x="714" y="354" width="194" height="44" rx="11" class="tm nr k k-s3"/>
+  <g class="k k-n17" transform="translate(916 354)">
+    <rect class="cb" width="194" height="44" rx="11"/>
+    <text class="ct" x="10" y="20">Child components</text>
+    <text class="cs" x="10" y="35">own cancellation token</text>
+  </g>
+  <g class="k k-n17" transform="translate(714 406)">
+    <rect class="cb" width="194" height="44" rx="11"/>
+    <text class="ct" x="10" y="20">Critical tasks</text>
+    <text class="cs" x="10" y="35">failure kept for a monitor</text>
+  </g>
+  <g class="k k-n17" transform="translate(916 406)">
+    <rect class="cb" width="194" height="44" rx="11"/>
+    <text class="ct" x="10" y="20">ServiceManager</text>
+    <text class="cs" x="10" y="35">ServiceTask loop · wakeup</text>
+  </g>
+  <g class="tc gl k k-s2"><rect x="1148" y="272" width="184" height="190" rx="16" class="g5"/><rect x="1148" y="272" width="184" height="190" rx="16" class="g4"/><rect x="1148" y="272" width="184" height="190" rx="16" class="g3"/><rect x="1148" y="272" width="184" height="190" rx="16" class="g2"/><rect x="1148" y="272" width="184" height="190" rx="16" class="g1"/></g>
+  <g class="tm gl k k-s3"><rect x="1148" y="272" width="184" height="190" rx="16" class="g5"/><rect x="1148" y="272" width="184" height="190" rx="16" class="g4"/><rect x="1148" y="272" width="184" height="190" rx="16" class="g3"/><rect x="1148" y="272" width="184" height="190" rx="16" class="g2"/><rect x="1148" y="272" width="184" height="190" rx="16" class="g1"/></g>
+  <g class="k k-n1237" transform="translate(1148 272)">
+    <rect class="nb" width="184" height="190" rx="16"/>
+    <text class="nt" x="18" y="29">Tokio workers</text>
+    <text class="ns" x="18" y="48">multi-thread runtime</text>
+    <text class="nn" x="18" y="70">tasks are polled here</text>
+    <text class="nn" x="18" y="112">one per CPU by default</text>
+    <text class="nn" x="18" y="126">IO and time drivers</text>
+    <text class="nn" x="18" y="140">owned by RuntimeOwner</text>
+    <text class="nn" x="18" y="154">big futures are boxed</text>
+    <rect x="18" y="78" width="10" height="12" rx="2.5" class="bk"/><rect x="33" y="78" width="10" height="12" rx="2.5" class="bk"/><rect x="48" y="78" width="10" height="12" rx="2.5" class="bk"/><rect x="63" y="78" width="10" height="12" rx="2.5" class="bk"/><rect x="78" y="78" width="10" height="12" rx="2.5" class="bk"/><rect x="93" y="78" width="10" height="12" rx="2.5" class="bk"/><rect x="108" y="78" width="10" height="12" rx="2.5" class="bk"/><rect x="123" y="78" width="10" height="12" rx="2.5" class="bk"/><rect x="18" y="78" width="10" height="12" rx="2.5" class="bv o k k-wv0"/><rect x="33" y="78" width="10" height="12" rx="2.5" class="bv o k k-wv1"/><rect x="48" y="78" width="10" height="12" rx="2.5" class="bv o k k-wv2"/><rect x="63" y="78" width="10" height="12" rx="2.5" class="bv o k k-wv3"/><rect x="78" y="78" width="10" height="12" rx="2.5" class="bv o k k-wv4"/><rect x="93" y="78" width="10" height="12" rx="2.5" class="bv o k k-wv5"/><rect x="18" y="78" width="10" height="12" rx="2.5" class="bw o k k-wy0"/><rect x="33" y="78" width="10" height="12" rx="2.5" class="bw o k k-wy1"/><rect x="48" y="78" width="10" height="12" rx="2.5" class="bw o k k-wy2"/>
+  </g>
+  <rect x="1148" y="272" width="184" height="190" rx="16" class="tc nr k k-s2"/>
+  <rect x="1148" y="272" width="184" height="190" rx="16" class="tm nr k k-s3"/>
+
+  <!-- Blocking work: one admission budget, three lanes, the Tokio blocking pool -->
+  <g class="tp gl k k-s4"><rect x="482" y="516" width="190" height="72" rx="11" class="g3"/><rect x="482" y="516" width="190" height="72" rx="11" class="g2"/><rect x="482" y="516" width="190" height="72" rx="11" class="g1"/></g>
+  <g class="ts gl k k-s6"><rect x="482" y="516" width="190" height="72" rx="11" class="g3"/><rect x="482" y="516" width="190" height="72" rx="11" class="g2"/><rect x="482" y="516" width="190" height="72" rx="11" class="g1"/></g>
+  <g class="k k-n1467" transform="translate(482 516)">
+    <rect class="cb" width="190" height="72" rx="11"/>
+    <text class="ct" x="10" y="20">Global budget</text>
+    <text class="cs" x="10" y="35">scope open · queue free</text>
+    <text class="cs" x="10" y="49">capacity · lane ceilings</text>
+    <text class="cs" x="10" y="63">arrival order per lane</text>
+  </g>
+  <rect x="482" y="516" width="190" height="72" rx="11" class="tp nr k k-s4"/>
+  <rect x="482" y="516" width="190" height="72" rx="11" class="ts nr k k-s6"/>
+  <g class="tp gl k k-s4"><rect x="680" y="516" width="138" height="72" rx="11" class="g3"/><rect x="680" y="516" width="138" height="72" rx="11" class="g2"/><rect x="680" y="516" width="138" height="72" rx="11" class="g1"/></g>
+  <g class="k k-n147" transform="translate(680 516)">
+    <rect class="cb" width="138" height="72" rx="11"/>
+    <text class="ct" x="10" y="20">storage-io</text>
+    <text class="cs" x="10" y="35">short storage I/O</text>
+    <rect x="10" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="25" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="40" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="55" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="70" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="85" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="10" y="46" width="10" height="12" rx="2.5" class="bo o k k-sl0"/><rect x="25" y="46" width="10" height="12" rx="2.5" class="bo o k k-sl1"/><rect x="40" y="46" width="10" height="12" rx="2.5" class="bo o k k-sl2"/><rect x="55" y="46" width="10" height="12" rx="2.5" class="bo o k k-sl3"/>
+  </g>
+  <rect x="680" y="516" width="138" height="72" rx="11" class="tp nr k k-s4"/>
+  <g class="ts gl k k-s6"><rect x="826" y="516" width="138" height="72" rx="11" class="g3"/><rect x="826" y="516" width="138" height="72" rx="11" class="g2"/><rect x="826" y="516" width="138" height="72" rx="11" class="g1"/></g>
+  <g class="k k-n167" transform="translate(826 516)">
+    <rect class="cb" width="138" height="72" rx="11"/>
+    <text class="ct" x="10" y="20">metadata-io</text>
+    <text class="cs" x="10" y="35">metadata writes</text>
+    <rect x="10" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="25" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="40" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="55" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="70" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="85" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="10" y="46" width="10" height="12" rx="2.5" class="bg o k k-ml0"/>
+  </g>
+  <rect x="826" y="516" width="138" height="72" rx="11" class="ts nr k k-s6"/>
+  <g class="k k-n17" transform="translate(972 516)">
+    <rect class="cb" width="138" height="72" rx="11"/>
+    <text class="ct" x="10" y="20">cpu-crypto</text>
+    <text class="cs" x="10" y="35">bounded CPU work</text>
+    <rect x="10" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="25" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="40" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="55" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="70" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="85" y="46" width="10" height="12" rx="2.5" class="bk"/>
+  </g>
+  <g class="tp gl k k-s4"><rect x="1148" y="486" width="184" height="110" rx="16" class="g5"/><rect x="1148" y="486" width="184" height="110" rx="16" class="g4"/><rect x="1148" y="486" width="184" height="110" rx="16" class="g3"/><rect x="1148" y="486" width="184" height="110" rx="16" class="g2"/><rect x="1148" y="486" width="184" height="110" rx="16" class="g1"/></g>
+  <g class="ts gl k k-s6"><rect x="1148" y="486" width="184" height="110" rx="16" class="g5"/><rect x="1148" y="486" width="184" height="110" rx="16" class="g4"/><rect x="1148" y="486" width="184" height="110" rx="16" class="g3"/><rect x="1148" y="486" width="184" height="110" rx="16" class="g2"/><rect x="1148" y="486" width="184" height="110" rx="16" class="g1"/></g>
+  <g class="k k-n1467" transform="translate(1148 486)">
+    <rect class="nb" width="184" height="110" rx="16"/>
+    <text class="nt" x="18" y="29">Blocking pool</text>
+    <text class="ns" x="18" y="48">Tokio spawn_blocking</text>
+    <text class="nn" x="18" y="94">capacity + headroom</text>
+    <rect x="18" y="60" width="10" height="12" rx="2.5" class="bk"/><rect x="33" y="60" width="10" height="12" rx="2.5" class="bk"/><rect x="48" y="60" width="10" height="12" rx="2.5" class="bk"/><rect x="63" y="60" width="10" height="12" rx="2.5" class="bk"/><rect x="78" y="60" width="10" height="12" rx="2.5" class="bk"/><rect x="93" y="60" width="10" height="12" rx="2.5" class="bk"/><rect x="108" y="60" width="10" height="12" rx="2.5" class="bk"/><rect x="123" y="60" width="10" height="12" rx="2.5" class="bk"/><rect x="18" y="60" width="10" height="12" rx="2.5" class="bo o k k-bl0"/><rect x="33" y="60" width="10" height="12" rx="2.5" class="bo o k k-bl1"/><rect x="48" y="60" width="10" height="12" rx="2.5" class="bo o k k-bl2"/><rect x="63" y="60" width="10" height="12" rx="2.5" class="bo o k k-bl3"/><rect x="18" y="60" width="10" height="12" rx="2.5" class="bg o k k-mp0"/>
+  </g>
+  <rect x="1148" y="486" width="184" height="110" rx="16" class="tp nr k k-s4"/>
+  <rect x="1148" y="486" width="184" height="110" rx="16" class="ts nr k k-s6"/>
+
+  <!-- Resources: the memory limit, the budget tree, permits and queues, and the metadata actor -->
+  <g class="k k-n17" transform="translate(482 650)">
+    <rect class="cb" width="151" height="72" rx="11"/>
+    <text class="ct" x="10" y="20">Memory limit</text>
+    <text class="cs" x="10" y="35">env · cgroup · host</text>
+    <text class="cs" x="10" y="49">then managed bytes</text>
+  </g>
+  <g class="ts gl k k-s56"><rect x="641" y="650" width="151" height="72" rx="11" class="g3"/><rect x="641" y="650" width="151" height="72" rx="11" class="g2"/><rect x="641" y="650" width="151" height="72" rx="11" class="g1"/></g>
+  <g class="k k-n1567" transform="translate(641 650)">
+    <rect class="cb" width="151" height="72" rx="11"/>
+    <text class="ct" x="10" y="20">Process budget</text>
+    <text class="cs" x="10" y="35">count · bytes · rate</text>
+    <rect x="10" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="25" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="40" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="55" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="70" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="85" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="100" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="115" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="10" y="46" width="10" height="12" rx="2.5" class="bg o k k-rb0"/><rect x="25" y="46" width="10" height="12" rx="2.5" class="bg o k k-rb1"/><rect x="40" y="46" width="10" height="12" rx="2.5" class="bg o k k-rb2"/><rect x="55" y="46" width="10" height="12" rx="2.5" class="bg o k k-rb3"/><rect x="70" y="46" width="10" height="12" rx="2.5" class="bg o k k-rb4"/><rect x="85" y="46" width="10" height="12" rx="2.5" class="bg o k k-rb5"/><rect x="10" y="46" width="10" height="12" rx="2.5" class="bg o k k-mb0"/><rect x="25" y="46" width="10" height="12" rx="2.5" class="bg o k k-mb1"/>
+  </g>
+  <rect x="641" y="650" width="151" height="72" rx="11" class="ts nr k k-s56"/>
+  <g class="ts gl k k-s5"><rect x="800" y="650" width="151" height="72" rx="11" class="g3"/><rect x="800" y="650" width="151" height="72" rx="11" class="g2"/><rect x="800" y="650" width="151" height="72" rx="11" class="g1"/></g>
+  <g class="k k-n157" transform="translate(800 650)">
+    <rect class="cb" width="151" height="72" rx="11"/>
+    <text class="ct" x="10" y="20">Child budgets</text>
+    <text class="cs" x="10" y="35">reserve up the chain</text>
+    <rect x="10" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="25" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="40" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="55" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="70" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="85" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="100" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="115" y="46" width="10" height="12" rx="2.5" class="bk"/><rect x="10" y="46" width="10" height="12" rx="2.5" class="bg o k k-cb0"/><rect x="25" y="46" width="10" height="12" rx="2.5" class="bg o k k-cb1"/><rect x="40" y="46" width="10" height="12" rx="2.5" class="bg o k k-cb2"/><rect x="55" y="46" width="10" height="12" rx="2.5" class="bg o k k-cb3"/><rect x="70" y="46" width="10" height="12" rx="2.5" class="bg o k k-cb4"/><rect x="85" y="46" width="10" height="12" rx="2.5" class="bg o k k-cb5"/>
+  </g>
+  <rect x="800" y="650" width="151" height="72" rx="11" class="ts nr k k-s5"/>
+  <g class="ts gl k k-s5"><rect x="959" y="650" width="151" height="72" rx="11" class="g3"/><rect x="959" y="650" width="151" height="72" rx="11" class="g2"/><rect x="959" y="650" width="151" height="72" rx="11" class="g1"/></g>
+  <g class="k k-n157" transform="translate(959 650)">
+    <rect class="cb" width="151" height="72" rx="11"/>
+    <text class="ct" x="10" y="20">Permits · queues</text>
+    <text class="cs" x="10" y="35">ResourcePermit: RAII</text>
+    <text class="cs" x="10" y="49">BudgetedQueue policy</text>
+  </g>
+  <rect x="959" y="650" width="151" height="72" rx="11" class="ts nr k k-s5"/>
+  <g class="ts gl k k-s6"><rect x="1148" y="620" width="184" height="110" rx="16" class="g5"/><rect x="1148" y="620" width="184" height="110" rx="16" class="g4"/><rect x="1148" y="620" width="184" height="110" rx="16" class="g3"/><rect x="1148" y="620" width="184" height="110" rx="16" class="g2"/><rect x="1148" y="620" width="184" height="110" rx="16" class="g1"/></g>
+  <g class="k k-n167" transform="translate(1148 620)">
+    <rect class="nb" width="184" height="110" rx="16"/>
+    <text class="nt" x="18" y="29">MetadataIoActor</text>
+    <text class="ns" x="18" y="48">coordinator task</text>
+    <text class="nn" x="18" y="65">coalesce generations</text>
+    <text class="nn" x="18" y="79">temp · sync · replace</text>
+    <text class="nn" x="18" y="93">durable generation</text>
+    <g class="ts"><text class="nn lt o k k-du" x="18" y="93">durable generation</text></g>
+  </g>
+  <rect x="1148" y="620" width="184" height="110" rx="16" class="ts nr k k-s6"/>
+
+  <!-- What watches the owner: the lifecycle with its state, the shutdown report, diagnostics -->
+  <g class="to gl k k-s7"><rect x="381" y="776" width="305" height="90" rx="16" class="g5"/><rect x="381" y="776" width="305" height="90" rx="16" class="g4"/><rect x="381" y="776" width="305" height="90" rx="16" class="g3"/><rect x="381" y="776" width="305" height="90" rx="16" class="g2"/><rect x="381" y="776" width="305" height="90" rx="16" class="g1"/></g>
+  <g class="k k-n17" transform="translate(381 776)">
+    <rect class="nb" width="305" height="90" rx="16"/>
+    <text class="nt" x="18" y="29">ServiceLifecycle</text>
+    <text class="ns" x="18" y="48">/readyz · /livez · /drainz · signal</text>
+    <g class="bd gy" transform="translate(18 58)"><rect width="62" height="18" rx="9"/><text x="31" y="12.6">STARTING</text></g>
+    <g class="bd o k k-l0" transform="translate(18 58)"><rect width="62" height="18" rx="9"/><text x="31" y="12.6">STARTING</text></g>
+    <g class="bd gy" transform="translate(88 58)"><rect width="44" height="18" rx="9"/><text x="22" y="12.6">READY</text></g>
+    <g class="bd o k k-l1" transform="translate(88 58)"><rect width="44" height="18" rx="9"/><text x="22" y="12.6">READY</text></g>
+    <g class="bd gy" transform="translate(140 58)"><rect width="62" height="18" rx="9"/><text x="31" y="12.6">DRAINING</text></g>
+    <g class="bd am o k k-l2" transform="translate(140 58)"><rect width="62" height="18" rx="9"/><text x="31" y="12.6">DRAINING</text></g>
+    <g class="bd gy" transform="translate(210 58)"><rect width="56" height="18" rx="9"/><text x="28" y="12.6">STOPPED</text></g>
+    <g class="bd am o k k-l3" transform="translate(210 58)"><rect width="56" height="18" rx="9"/><text x="28" y="12.6">STOPPED</text></g>
+    <path d="M 82 67 H 86 M 134 67 H 138 M 204 67 H 208" class="cn"/>
+  </g>
+  <rect x="381" y="776" width="305" height="90" rx="16" class="to nr k k-s7"/>
+  <g class="to gl k k-q7-5"><rect x="714" y="776" width="305" height="90" rx="16" class="g5"/><rect x="714" y="776" width="305" height="90" rx="16" class="g4"/><rect x="714" y="776" width="305" height="90" rx="16" class="g3"/><rect x="714" y="776" width="305" height="90" rx="16" class="g2"/><rect x="714" y="776" width="305" height="90" rx="16" class="g1"/></g>
+  <g class="k k-n7" transform="translate(714 776)">
+    <rect class="nb" width="305" height="90" rx="16"/>
+    <text class="nt" x="18" y="29">ShutdownReport</text>
+    <text class="ns" x="18" y="48">serializable evidence</text>
+    <text class="nn" x="18" y="65">completed · cancelled · aborted</text>
+    <text class="nn" x="18" y="79">timed out · leaked · still running</text>
+  </g>
+  <g class="k k-n" transform="translate(1047 776)">
+    <rect class="nb" width="305" height="90" rx="16"/>
+    <text class="nt" x="18" y="29">Diagnostics</text>
+    <text class="ns" x="18" y="48">snapshot · view V1 · view V2</text>
+    <text class="nn" x="18" y="65">bounded · sanitized · scoped</text>
+    <text class="nn" x="18" y="79">local · subtree · process shared</text>
+  </g>
+
+  <!-- Start-up brings the parts up in order; shutdown takes them down in order -->
+  <rect x="482" y="650" width="151" height="72" rx="11" class="ts nr k k-q1-1"/>
+  <rect x="474" y="620" width="644" height="110" rx="18" class="ts nr k k-q1-2"/>
+  <rect x="1148" y="272" width="184" height="190" rx="16" class="ts nr k k-q1-3"/>
+  <rect x="1148" y="486" width="184" height="110" rx="16" class="ts nr k k-q1-3"/>
+  <rect x="270" y="272" width="176" height="58" rx="11" class="ts nr k k-q1-4"/>
+  <rect x="474" y="486" width="644" height="110" rx="18" class="ts nr k k-q1-5"/>
+  <rect x="270" y="346" width="176" height="384" rx="16" class="ts nr k k-q1-6"/>
+  <rect x="474" y="286" width="206" height="162" rx="16" class="ts nr k k-q1-6"/>
+  <rect x="381" y="776" width="305" height="90" rx="16" class="ts nr k k-q1-7"/>
+  <rect x="381" y="776" width="305" height="90" rx="16" class="to nr k k-q7-0"/>
+  <rect x="270" y="272" width="176" height="58" rx="11" class="to nr k k-q7-1"/>
+  <rect x="474" y="286" width="206" height="162" rx="16" class="to nr k k-q7-1"/>
+  <rect x="706" y="272" width="412" height="190" rx="18" class="to nr k k-q7-2"/>
+  <rect x="270" y="346" width="176" height="384" rx="16" class="to nr k k-q7-3"/>
+  <rect x="714" y="776" width="305" height="90" rx="16" class="to nr k k-q7-5"/>
+  <rect x="474" y="486" width="644" height="110" rx="18" class="to nr k k-q7-6"/>
+  <rect x="1148" y="272" width="184" height="190" rx="16" class="to nr k k-q7-7"/>
+  <rect x="1148" y="486" width="184" height="110" rx="16" class="to nr k k-q7-7"/>
+
+  <!-- Packets -->
+  <g class="to pk a k k-s1"><path d="M 353 167 H 381" class="p3 k k-f-boot-chain-1"/><path d="M 353 167 H 381" class="p2 k k-f-boot-chain-1"/><path d="M 353 167 H 381" class="p1 k k-f-boot-chain-1"/><path d="M 353 167 H 381" class="p0 k k-f-boot-chain-1"/></g>
+  <g class="to pk a k k-s1"><path d="M 686 167 H 714" class="p3 k k-f-boot-chain-2"/><path d="M 686 167 H 714" class="p2 k k-f-boot-chain-2"/><path d="M 686 167 H 714" class="p1 k k-f-boot-chain-2"/><path d="M 686 167 H 714" class="p0 k k-f-boot-chain-2"/></g>
+  <g class="to pk a k k-s1"><path d="M 1019 167 H 1047" class="p3 k k-f-boot-chain-3"/><path d="M 1019 167 H 1047" class="p2 k k-f-boot-chain-3"/><path d="M 1019 167 H 1047" class="p1 k k-f-boot-chain-3"/><path d="M 1019 167 H 1047" class="p0 k k-f-boot-chain-3"/></g>
+  <g class="to pk a k k-s1"><path d="M 1199 206 V 236" class="p3 k k-f-boot-owner-runtime"/><path d="M 1199 206 V 236" class="p2 k k-f-boot-owner-runtime"/><path d="M 1199 206 V 236" class="p1 k k-f-boot-owner-runtime"/><path d="M 1199 206 V 236" class="p0 k k-f-boot-owner-runtime"/></g>
+  <g class="to pk a k k-s1"><path d="M 358 330 V 346" class="p3 k k-f-boot-derive"/><path d="M 358 330 V 346" class="p2 k k-f-boot-derive"/><path d="M 358 330 V 346" class="p1 k k-f-boot-derive"/><path d="M 358 330 V 346" class="p0 k k-f-boot-derive"/></g>
+  <g class="tc pk a k k-s2"><path d="M 230 374 H 270" class="p3 k k-f-spawn-services"/><path d="M 230 374 H 270" class="p2 k k-f-spawn-services"/><path d="M 230 374 H 270" class="p1 k k-f-spawn-services"/><path d="M 230 374 H 270" class="p0 k k-f-spawn-services"/></g>
+  <g class="tc pk a k k-s2"><path d="M 446 367 H 474" class="p3 k k-f-spawn-ctx-group"/><path d="M 446 367 H 474" class="p2 k k-f-spawn-ctx-group"/><path d="M 446 367 H 474" class="p1 k k-f-spawn-ctx-group"/><path d="M 446 367 H 474" class="p0 k k-f-spawn-ctx-group"/></g>
+  <g class="tc pk a k k-s2"><path d="M 680 367 H 706" class="p3 k k-f-spawn-group-work"/><path d="M 680 367 H 706" class="p2 k k-f-spawn-group-work"/><path d="M 680 367 H 706" class="p1 k k-f-spawn-group-work"/><path d="M 680 367 H 706" class="p0 k k-f-spawn-group-work"/></g>
+  <g class="tc pk a k k-s2"><path d="M 1118 367 H 1148" class="p3 k k-f-spawn-work-tokio"/><path d="M 1118 367 H 1148" class="p2 k k-f-spawn-work-tokio"/><path d="M 1118 367 H 1148" class="p1 k k-f-spawn-work-tokio"/><path d="M 1118 367 H 1148" class="p0 k k-f-spawn-work-tokio"/></g>
+  <g class="tm pk a k k-s3"><path d="M 230 426 H 270" class="p3 k k-f-schedule-jobs"/><path d="M 230 426 H 270" class="p2 k k-f-schedule-jobs"/><path d="M 230 426 H 270" class="p1 k k-f-schedule-jobs"/><path d="M 230 426 H 270" class="p0 k k-f-schedule-jobs"/></g>
+  <g class="tm pk a k k-s3"><path d="M 446 367 H 474" class="p3 k k-f-schedule-ctx-group"/><path d="M 446 367 H 474" class="p2 k k-f-schedule-ctx-group"/><path d="M 446 367 H 474" class="p1 k k-f-schedule-ctx-group"/><path d="M 446 367 H 474" class="p0 k k-f-schedule-ctx-group"/></g>
+  <g class="tm pk a k k-s3"><path d="M 680 367 H 706" class="p3 k k-f-schedule-group-work"/><path d="M 680 367 H 706" class="p2 k k-f-schedule-group-work"/><path d="M 680 367 H 706" class="p1 k k-f-schedule-group-work"/><path d="M 680 367 H 706" class="p0 k k-f-schedule-group-work"/></g>
+  <g class="tm pk a k k-s3"><path d="M 1118 367 H 1148" class="p3 k k-f-schedule-work-tokio"/><path d="M 1118 367 H 1148" class="p2 k k-f-schedule-work-tokio"/><path d="M 1118 367 H 1148" class="p1 k k-f-schedule-work-tokio"/><path d="M 1118 367 H 1148" class="p0 k k-f-schedule-work-tokio"/></g>
+  <g class="tp pk a k k-s4"><path d="M 230 541 H 270" class="p3 k k-f-block-closures"/><path d="M 230 541 H 270" class="p2 k k-f-block-closures"/><path d="M 230 541 H 270" class="p1 k k-f-block-closures"/><path d="M 230 541 H 270" class="p0 k k-f-block-closures"/></g>
+  <g class="tp pk a k k-s4"><path d="M 446 541 H 474" class="p3 k k-f-block-ctx-lanes"/><path d="M 446 541 H 474" class="p2 k k-f-block-ctx-lanes"/><path d="M 446 541 H 474" class="p1 k k-f-block-ctx-lanes"/><path d="M 446 541 H 474" class="p0 k k-f-block-ctx-lanes"/></g>
+  <g class="tp pk a k k-s4"><path d="M 1118 541 H 1148" class="p3 k k-f-block-lanes-tokio"/><path d="M 1118 541 H 1148" class="p2 k k-f-block-lanes-tokio"/><path d="M 1118 541 H 1148" class="p1 k k-f-block-lanes-tokio"/><path d="M 1118 541 H 1148" class="p0 k k-f-block-lanes-tokio"/></g>
+  <g class="ts pk a k k-s5"><path d="M 230 675 H 270" class="p3 k k-f-budget-budgeted"/><path d="M 230 675 H 270" class="p2 k k-f-budget-budgeted"/><path d="M 230 675 H 270" class="p1 k k-f-budget-budgeted"/><path d="M 230 675 H 270" class="p0 k k-f-budget-budgeted"/></g>
+  <g class="ts pk a k k-s5"><path d="M 446 675 H 474" class="p3 k k-f-budget-ctx-resources"/><path d="M 446 675 H 474" class="p2 k k-f-budget-ctx-resources"/><path d="M 446 675 H 474" class="p1 k k-f-budget-ctx-resources"/><path d="M 446 675 H 474" class="p0 k k-f-budget-ctx-resources"/></g>
+  <g class="ts pk a k k-s6"><path d="M 230 675 H 270" class="p3 k k-f-persist-budgeted"/><path d="M 230 675 H 270" class="p2 k k-f-persist-budgeted"/><path d="M 230 675 H 270" class="p1 k k-f-persist-budgeted"/><path d="M 230 675 H 270" class="p0 k k-f-persist-budgeted"/></g>
+  <g class="ts pk a k k-s6"><path d="M 446 675 H 474" class="p3 k k-f-persist-ctx-resources"/><path d="M 446 675 H 474" class="p2 k k-f-persist-ctx-resources"/><path d="M 446 675 H 474" class="p1 k k-f-persist-ctx-resources"/><path d="M 446 675 H 474" class="p0 k k-f-persist-ctx-resources"/></g>
+  <g class="ts pk a k k-s6"><path d="M 1118 675 H 1148" class="p3 k k-f-persist-budget-actor"/><path d="M 1118 675 H 1148" class="p2 k k-f-persist-budget-actor"/><path d="M 1118 675 H 1148" class="p1 k k-f-persist-budget-actor"/><path d="M 1118 675 H 1148" class="p0 k k-f-persist-budget-actor"/></g>
+  <g class="ts pk a k k-s6"><path d="M 1180 620 V 614 Q 1180 608 1174 608 H 901 Q 895 608 895 602 V 588" class="p3 k k-f-persist-actor-lane"/><path d="M 1180 620 V 614 Q 1180 608 1174 608 H 901 Q 895 608 895 602 V 588" class="p2 k k-f-persist-actor-lane"/><path d="M 1180 620 V 614 Q 1180 608 1174 608 H 901 Q 895 608 895 602 V 588" class="p1 k k-f-persist-actor-lane"/><path d="M 1180 620 V 614 Q 1180 608 1174 608 H 901 Q 895 608 895 602 V 588" class="p0 k k-f-persist-actor-lane"/></g>
+  <g class="ts pk a k k-s6"><path d="M 1118 541 H 1148" class="p3 k k-f-persist-lanes-tokio"/><path d="M 1118 541 H 1148" class="p2 k k-f-persist-lanes-tokio"/><path d="M 1118 541 H 1148" class="p1 k k-f-persist-lanes-tokio"/><path d="M 1118 541 H 1148" class="p0 k k-f-persist-lanes-tokio"/></g>
+  <g class="to pk a k k-s7"><path d="M 533 776 V 748" class="p3 k k-f-shutdown-lifecycle"/><path d="M 533 776 V 748" class="p2 k k-f-shutdown-lifecycle"/><path d="M 533 776 V 748" class="p1 k k-f-shutdown-lifecycle"/><path d="M 533 776 V 748" class="p0 k k-f-shutdown-lifecycle"/></g>
+
+  <!-- Legend -->
+  <rect x="48" y="776" width="305" height="90" rx="20" class="panel"/>
+  <text x="64" y="800" class="gt">LEGEND</text>
+  <g class="tc"><path d="M 64 818 H 92" class="ll"/></g>
+  <text x="100" y="822" class="lg">Task ownership</text>
+  <g class="tm"><path d="M 64 835 H 92" class="ll"/></g>
+  <text x="100" y="839" class="lg">Scheduling</text>
+  <g class="tp"><path d="M 64 852 H 92" class="ll"/></g>
+  <text x="100" y="856" class="lg">Blocking work</text>
+  <g class="ts"><path d="M 204 818 H 232" class="ll"/></g>
+  <text x="240" y="822" class="lg">Resource budget</text>
+  <g class="to"><path d="M 204 835 H 232" class="ll"/></g>
+  <text x="240" y="839" class="lg">Lifecycle</text>
+  <path d="M 204 852 H 232" class="r d"/>
+  <text x="240" y="856" class="lg">Shared capability</text>
+
+  <!-- Start-up order and shutdown order -->
+  <rect x="48" y="884" width="1304" height="78" rx="20" class="panel"/>
+  <text x="68" y="912" class="gt">STARTUP ORDER</text>
+  <rect x="220" y="896" width="119" height="24" rx="12" class="fb"/>
+  <text x="279.5" y="911.5" class="jc">validate config</text>
+  <g class="ts"><rect x="220" y="896" width="119" height="24" rx="12" class="nr k k-q1-0"/><text x="279.5" y="911.5" class="jc lt o k k-q1-0">validate config</text></g>
+  <rect x="345" y="896" width="99.2" height="24" rx="12" class="fb"/>
+  <text x="394.6" y="911.5" class="jc">memory limit</text>
+  <g class="ts"><rect x="345" y="896" width="99.2" height="24" rx="12" class="nr k k-q1-1"/><text x="394.6" y="911.5" class="jc lt o k k-q1-1">memory limit</text></g>
+  <rect x="450.2" y="896" width="112.4" height="24" rx="12" class="fb"/>
+  <text x="506.4" y="911.5" class="jc">process budget</text>
+  <g class="ts"><rect x="450.2" y="896" width="112.4" height="24" rx="12" class="nr k k-q1-2"/><text x="506.4" y="911.5" class="jc lt o k k-q1-2">process budget</text></g>
+  <rect x="568.6" y="896" width="105.8" height="24" rx="12" class="fb"/>
+  <text x="621.5" y="911.5" class="jc">Tokio runtime</text>
+  <g class="ts"><rect x="568.6" y="896" width="105.8" height="24" rx="12" class="nr k k-q1-3"/><text x="621.5" y="911.5" class="jc lt o k k-q1-3">Tokio runtime</text></g>
+  <rect x="680.4" y="896" width="86" height="24" rx="12" class="fb"/>
+  <text x="723.4" y="911.5" class="jc">root group</text>
+  <g class="ts"><rect x="680.4" y="896" width="86" height="24" rx="12" class="nr k k-q1-4"/><text x="723.4" y="911.5" class="jc lt o k k-q1-4">root group</text></g>
+  <rect x="772.4" y="896" width="112.4" height="24" rx="12" class="fb"/>
+  <text x="828.6" y="911.5" class="jc">blocking lanes</text>
+  <g class="ts"><rect x="772.4" y="896" width="112.4" height="24" rx="12" class="nr k k-q1-5"/><text x="828.6" y="911.5" class="jc lt o k k-q1-5">blocking lanes</text></g>
+  <rect x="890.8" y="896" width="132.2" height="24" rx="12" class="fb"/>
+  <text x="956.9" y="911.5" class="jc">component context</text>
+  <g class="ts"><rect x="890.8" y="896" width="132.2" height="24" rx="12" class="nr k k-q1-6"/><text x="956.9" y="911.5" class="jc lt o k k-q1-6">component context</text></g>
+  <rect x="1029" y="896" width="119" height="24" rx="12" class="fb"/>
+  <text x="1088.5" y="911.5" class="jc">lifecycle start</text>
+  <g class="ts"><rect x="1029" y="896" width="119" height="24" rx="12" class="nr k k-q1-7"/><text x="1088.5" y="911.5" class="jc lt o k k-q1-7">lifecycle start</text></g>
+  <rect x="1154" y="896" width="53" height="24" rx="12" class="fb"/>
+  <text x="1180.5" y="911.5" class="jc">ready</text>
+  <g class="ts"><rect x="1154" y="896" width="53" height="24" rx="12" class="nr k k-q1-8"/><text x="1180.5" y="911.5" class="jc lt o k k-q1-8">ready</text></g>
+  <text x="1219" y="912" class="fn">plan, then build</text>
+  <text x="68" y="942" class="gt">SHUTDOWN ORDER</text>
+  <rect x="220" y="926" width="119" height="24" rx="12" class="fb"/>
+  <text x="279.5" y="941.5" class="jc">freeze deadline</text>
+  <g class="to"><rect x="220" y="926" width="119" height="24" rx="12" class="nr k k-q7-0"/><text x="279.5" y="941.5" class="jc lt o k k-q7-0">freeze deadline</text></g>
+  <rect x="345" y="926" width="112.4" height="24" rx="12" class="fb"/>
+  <text x="401.2" y="941.5" class="jc">seal admission</text>
+  <g class="to"><rect x="345" y="926" width="112.4" height="24" rx="12" class="nr k k-q7-1"/><text x="401.2" y="941.5" class="jc lt o k k-q7-1">seal admission</text></g>
+  <rect x="463.4" y="926" width="59.6" height="24" rx="12" class="fb"/>
+  <text x="493.2" y="941.5" class="jc">cancel</text>
+  <g class="to"><rect x="463.4" y="926" width="59.6" height="24" rx="12" class="nr k k-q7-2"/><text x="493.2" y="941.5" class="jc lt o k k-q7-2">cancel</text></g>
+  <rect x="529" y="926" width="105.8" height="24" rx="12" class="fb"/>
+  <text x="581.9" y="941.5" class="jc">drain subtree</text>
+  <g class="to"><rect x="529" y="926" width="105.8" height="24" rx="12" class="nr k k-q7-3"/><text x="581.9" y="941.5" class="jc lt o k k-q7-3">drain subtree</text></g>
+  <rect x="640.8" y="926" width="132.2" height="24" rx="12" class="fb"/>
+  <text x="706.9" y="941.5" class="jc">abort at deadline</text>
+  <g class="to"><rect x="640.8" y="926" width="132.2" height="24" rx="12" class="nr k k-q7-4"/><text x="706.9" y="941.5" class="jc lt o k k-q7-4">abort at deadline</text></g>
+  <rect x="779" y="926" width="112.4" height="24" rx="12" class="fb"/>
+  <text x="835.2" y="941.5" class="jc">publish report</text>
+  <g class="to"><rect x="779" y="926" width="112.4" height="24" rx="12" class="nr k k-q7-5"/><text x="835.2" y="941.5" class="jc lt o k k-q7-5">publish report</text></g>
+  <rect x="897.4" y="926" width="112.4" height="24" rx="12" class="fb"/>
+  <text x="953.6" y="941.5" class="jc">merge blocking</text>
+  <g class="to"><rect x="897.4" y="926" width="112.4" height="24" rx="12" class="nr k k-q7-6"/><text x="953.6" y="941.5" class="jc lt o k k-q7-6">merge blocking</text></g>
+  <rect x="1015.8" y="926" width="105.8" height="24" rx="12" class="fb"/>
+  <text x="1068.7" y="941.5" class="jc">release Tokio</text>
+  <g class="to"><rect x="1015.8" y="926" width="105.8" height="24" rx="12" class="nr k k-q7-7"/><text x="1068.7" y="941.5" class="jc lt o k k-q7-7">release Tokio</text></g>
+  <text x="1133.6" y="942" class="fn">one deadline</text>
+</svg>
