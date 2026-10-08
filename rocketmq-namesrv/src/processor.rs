@@ -25,9 +25,9 @@ use rocketmq_auth::AuthRuntime;
 use rocketmq_auth::RemotingAuthContext;
 use rocketmq_error::PublicErrorView;
 use rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED;
-use rocketmq_observability::metrics::namesrv::NameServerAdmissionOutcome;
+use rocketmq_observability::metrics::namesrv::NameServerAdmissionEvent;
 use rocketmq_observability::metrics::namesrv::NameServerMetrics;
-use rocketmq_observability::metrics::namesrv::NameServerRequestOutcome;
+use rocketmq_observability::metrics::namesrv::NameServerRequestStatus;
 use rocketmq_observability::metrics::namesrv::NameServerSecurityEvent;
 use rocketmq_observability::metrics::namesrv::NameServerWorkloadClass;
 use rocketmq_protocol::code::request_code::RequestCode;
@@ -235,7 +235,7 @@ impl NameServerRequestProcessor {
             self.metrics.record_security_event(NameServerSecurityEvent::AuthDenied);
             self.metrics.record_request(
                 metric_class,
-                NameServerRequestOutcome::Rejected,
+                NameServerRequestStatus::Rejected,
                 request_started.elapsed(),
                 0,
             );
@@ -259,34 +259,34 @@ impl NameServerRequestProcessor {
                 None
             } else if config.namesrv_workload_admission_observe_only {
                 let lease = admission.try_observe(admission_class);
-                let outcome = if lease.is_some() {
-                    NameServerAdmissionOutcome::Acquired
+                let event = if lease.is_some() {
+                    NameServerAdmissionEvent::Acquired
                 } else {
-                    NameServerAdmissionOutcome::ObserveSaturated
+                    NameServerAdmissionEvent::ObserveSaturated
                 };
-                record_admission_metric(&self.metrics, admission, admission_class, outcome);
+                record_admission_metric(&self.metrics, admission, admission_class, event);
                 lease
             } else {
                 match admission.acquire(admission_class).await {
                     Ok(lease) => {
-                        let outcome = if lease.was_queued() {
-                            NameServerAdmissionOutcome::Queued
+                        let event = if lease.was_queued() {
+                            NameServerAdmissionEvent::Queued
                         } else {
-                            NameServerAdmissionOutcome::Acquired
+                            NameServerAdmissionEvent::Acquired
                         };
-                        record_admission_metric(&self.metrics, admission, admission_class, outcome);
+                        record_admission_metric(&self.metrics, admission, admission_class, event);
                         Some(lease)
                     }
                     Err(rejection) => {
-                        let outcome = match rejection {
+                        let event = match rejection {
                             workload_admission::WorkloadAdmissionRejection::QueueFull => {
-                                NameServerAdmissionOutcome::Rejected
+                                NameServerAdmissionEvent::Rejected
                             }
                             workload_admission::WorkloadAdmissionRejection::TimedOut => {
-                                NameServerAdmissionOutcome::TimedOut
+                                NameServerAdmissionEvent::TimedOut
                             }
                         };
-                        record_admission_metric(&self.metrics, admission, admission_class, outcome);
+                        record_admission_metric(&self.metrics, admission, admission_class, event);
                         tracing::warn!(
                             request_class = admission_class.as_str(),
                             reason = rejection.as_str(),
@@ -303,7 +303,7 @@ impl NameServerRequestProcessor {
                         let response_bytes = response.body().map_or(0, bytes::Bytes::len);
                         self.metrics.record_request(
                             metric_class,
-                            NameServerRequestOutcome::Rejected,
+                            NameServerRequestStatus::Rejected,
                             request_started.elapsed(),
                             response_bytes,
                         );
@@ -356,24 +356,24 @@ impl NameServerRequestProcessor {
                 Ok(_) => {}
             }
         }
-        let (request_outcome, response_bytes) = match &response {
+        let (request_status, response_bytes) = match &response {
             Ok(Some(command))
                 if command.code() == rocketmq_protocol::code::response_code::ResponseCode::Success as i32 =>
             {
                 (
-                    NameServerRequestOutcome::Success,
+                    NameServerRequestStatus::Success,
                     command.body().map_or(0, bytes::Bytes::len),
                 )
             }
             Ok(Some(command)) => (
-                NameServerRequestOutcome::Rejected,
+                NameServerRequestStatus::Rejected,
                 command.body().map_or(0, bytes::Bytes::len),
             ),
-            Ok(None) => (NameServerRequestOutcome::Success, 0),
-            Err(_) => (NameServerRequestOutcome::Error, 0),
+            Ok(None) => (NameServerRequestStatus::Success, 0),
+            Err(_) => (NameServerRequestStatus::Error, 0),
         };
         self.metrics
-            .record_request(metric_class, request_outcome, request_started.elapsed(), response_bytes);
+            .record_request(metric_class, request_status, request_started.elapsed(), response_bytes);
         drop(_admission_lease);
         if had_admission_lease {
             if let Some(admission) = &self.workload_admission {
@@ -381,7 +381,7 @@ impl NameServerRequestProcessor {
                     &self.metrics,
                     admission,
                     admission_class,
-                    NameServerAdmissionOutcome::Released,
+                    NameServerAdmissionEvent::Released,
                 );
             }
         }
@@ -451,11 +451,11 @@ fn record_admission_metric(
     metrics: &NameServerMetrics,
     admission: &NameServerWorkloadAdmission,
     class: WorkloadAdmissionClass,
-    outcome: NameServerAdmissionOutcome,
+    event: NameServerAdmissionEvent,
 ) {
     let metric_class = metric_workload_class(class);
     let (inflight, waiting) = admission.class_counts(class);
-    metrics.record_workload_admission(metric_class, outcome, inflight, waiting);
+    metrics.record_workload_admission(metric_class, event, inflight, waiting);
 }
 
 fn metric_workload_class(class: WorkloadAdmissionClass) -> NameServerWorkloadClass {
