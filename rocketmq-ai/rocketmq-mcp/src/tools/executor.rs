@@ -26,7 +26,7 @@ use rmcp::ErrorData;
 use rocketmq_observability::metrics::mcp::McpFailureLabel;
 use rocketmq_observability::metrics::mcp::McpMetricsRecorder;
 use rocketmq_observability::metrics::mcp::McpOperationKind;
-use rocketmq_observability::metrics::mcp::McpOperationOutcome;
+use rocketmq_observability::metrics::mcp::McpOperationStatus;
 use tracing::Instrument;
 
 use crate::adapter::query_facade::ReadOnlyQuery;
@@ -258,7 +258,7 @@ struct ToolOperationRecorder {
     metrics: McpMetricsRecorder,
     operation: &'static str,
     started_at: Instant,
-    outcome: McpOperationOutcome,
+    status: McpOperationStatus,
     span: tracing::Span,
 }
 
@@ -268,7 +268,7 @@ impl ToolOperationRecorder {
             metrics,
             operation,
             started_at: Instant::now(),
-            outcome: McpOperationOutcome::Failure,
+            status: McpOperationStatus::Failure,
             span: rocketmq_observability::trace::mcp::tool_span(operation),
         }
     }
@@ -278,27 +278,27 @@ impl ToolOperationRecorder {
     }
 
     fn denied(&mut self) {
-        self.outcome = McpOperationOutcome::Denied;
+        self.status = McpOperationStatus::Denied;
     }
 
     fn observe_call_result(&mut self, result: &Result<CallToolResult, ErrorData>) {
-        if self.outcome == McpOperationOutcome::Denied {
+        if self.status == McpOperationStatus::Denied {
             return;
         }
-        self.outcome = match result {
-            Ok(result) if !result.is_error.unwrap_or(false) => McpOperationOutcome::Success,
-            Ok(_) | Err(_) => McpOperationOutcome::Failure,
+        self.status = match result {
+            Ok(result) if !result.is_error.unwrap_or(false) => McpOperationStatus::Success,
+            Ok(_) | Err(_) => McpOperationStatus::Failure,
         };
     }
 }
 
 impl Drop for ToolOperationRecorder {
     fn drop(&mut self) {
-        rocketmq_observability::trace::mcp::record_outcome(&self.span, self.outcome);
+        rocketmq_observability::trace::mcp::record_status(&self.span, self.status);
         self.metrics.record_operation(
             McpOperationKind::Tool,
             self.operation,
-            self.outcome,
+            self.status,
             self.started_at.elapsed(),
         );
     }

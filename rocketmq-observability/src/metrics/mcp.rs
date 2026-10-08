@@ -54,13 +54,13 @@ impl McpOperationKind {
 
 /// Bounded terminal outcome for a Tool or Resource request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum McpOperationOutcome {
+pub enum McpOperationStatus {
     Success,
     Failure,
     Denied,
 }
 
-impl McpOperationOutcome {
+impl McpOperationStatus {
     #[cfg(any(feature = "otel-metrics", test))]
     const fn as_str(self) -> &'static str {
         match self {
@@ -123,12 +123,12 @@ impl McpCacheEvent {
 
 /// Bounded rate-limit decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum McpRateLimitOutcome {
+pub enum McpRateLimitDecision {
     Accepted,
     Rejected,
 }
 
-impl McpRateLimitOutcome {
+impl McpRateLimitDecision {
     #[cfg(any(feature = "otel-metrics", test))]
     const fn as_str(self) -> &'static str {
         match self {
@@ -238,7 +238,7 @@ impl McpMetricsRecorder {
         &self,
         kind: McpOperationKind,
         operation: &'static str,
-        outcome: McpOperationOutcome,
+        outcome: McpOperationStatus,
         elapsed: Duration,
     ) {
         #[cfg(feature = "otel-metrics")]
@@ -279,7 +279,7 @@ impl McpMetricsRecorder {
     }
 
     /// Records one rate-limit decision.
-    pub fn record_rate_limit(&self, outcome: McpRateLimitOutcome) {
+    pub fn record_rate_limit(&self, outcome: McpRateLimitDecision) {
         #[cfg(feature = "otel-metrics")]
         if self.telemetry.is_active() {
             if let Some(metrics) = &self.metrics {
@@ -335,7 +335,7 @@ impl McpMetricsRecorder {
 pub fn record_operation(
     kind: McpOperationKind,
     operation: &'static str,
-    outcome: McpOperationOutcome,
+    outcome: McpOperationStatus,
     elapsed: Duration,
 ) {
     McpMetricsRecorder::noop().record_operation(kind, operation, outcome, elapsed);
@@ -352,7 +352,7 @@ pub fn record_cache_event(event: McpCacheEvent) {
 }
 
 /// Compatibility helper that never reads global telemetry state.
-pub fn record_rate_limit(outcome: McpRateLimitOutcome) {
+pub fn record_rate_limit(outcome: McpRateLimitDecision) {
     McpMetricsRecorder::noop().record_rate_limit(outcome);
 }
 
@@ -472,7 +472,7 @@ impl McpMetrics {
         &self,
         kind: McpOperationKind,
         operation: &'static str,
-        outcome: McpOperationOutcome,
+        outcome: McpOperationStatus,
         latency_ms: u64,
     ) {
         let base_attributes = [
@@ -509,7 +509,7 @@ impl McpMetrics {
         );
     }
 
-    fn record_rate_limit(&self, outcome: McpRateLimitOutcome) {
+    fn record_rate_limit(&self, outcome: McpRateLimitDecision) {
         self.rate_limit_total.add(
             1,
             &[opentelemetry::KeyValue::new(
@@ -540,10 +540,10 @@ mod tests {
     #[test]
     fn bounded_labels_are_stable() {
         assert_eq!(McpOperationKind::Tool.as_str(), "tool");
-        assert_eq!(McpOperationOutcome::Denied.as_str(), "denied");
+        assert_eq!(McpOperationStatus::Denied.as_str(), "denied");
         assert_eq!(McpFailureLabel::OutputTooLarge.as_str(), "output_too_large");
         assert_eq!(McpCacheEvent::CoalescedWaiter.as_str(), "coalesced_waiter");
-        assert_eq!(McpRateLimitOutcome::Rejected.as_str(), "rejected");
+        assert_eq!(McpRateLimitDecision::Rejected.as_str(), "rejected");
         assert_eq!(McpAuditDropReason::ByteCapacity.as_str(), "byte_capacity");
         assert_eq!(McpAuditFailureKind::Flush.as_str(), "flush");
     }
@@ -553,7 +553,7 @@ mod tests {
         record_operation(
             McpOperationKind::Resource,
             "read_resource",
-            McpOperationOutcome::Success,
+            McpOperationStatus::Success,
             Duration::from_millis(2),
         );
         record_error(
@@ -562,7 +562,7 @@ mod tests {
             McpFailureLabel::SourceUnavailable,
         );
         record_cache_event(McpCacheEvent::Hit);
-        record_rate_limit(McpRateLimitOutcome::Accepted);
+        record_rate_limit(McpRateLimitDecision::Accepted);
         record_audit_backlog(3);
         record_audit_drop(McpAuditDropReason::Closed);
         record_audit_failure(McpAuditFailureKind::Sink);
@@ -590,7 +590,7 @@ mod tests {
         metrics.record_operation(
             McpOperationKind::Tool,
             "get_cluster_overview",
-            McpOperationOutcome::Success,
+            McpOperationStatus::Success,
             4,
         );
         metrics.record_error(
@@ -599,7 +599,7 @@ mod tests {
             McpFailureLabel::PermissionDenied,
         );
         metrics.record_cache_event(McpCacheEvent::Miss);
-        metrics.record_rate_limit(McpRateLimitOutcome::Rejected);
+        metrics.record_rate_limit(McpRateLimitDecision::Rejected);
         metrics.record_audit_drop(McpAuditDropReason::ByteCapacity);
         metrics.record_audit_failure(McpAuditFailureKind::Flush);
 
