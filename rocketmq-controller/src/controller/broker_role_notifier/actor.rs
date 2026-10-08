@@ -41,7 +41,7 @@ const MAX_NOTIFY_ATTEMPTS: u32 = 3;
 const NOTIFY_TIMEOUT_MILLIS: u64 = 3_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SubmitOutcome {
+pub(crate) enum BrokerRoleNotificationSubmissionStatus {
     Accepted,
     Coalesced,
     Replaced,
@@ -138,20 +138,20 @@ impl Mailbox {
         mut task: NotifyTask,
         retry: bool,
         sender: &mpsc::Sender<NotifyKey>,
-    ) -> SubmitOutcome {
+    ) -> BrokerRoleNotificationSubmissionStatus {
         if retry {
             self.retry_waiting.remove(&task.key);
         }
         if !self.started || self.closed {
-            return SubmitOutcome::Closed;
+            return BrokerRoleNotificationSubmissionStatus::Closed;
         }
         if !self.enabled {
-            return SubmitOutcome::Inactive;
+            return BrokerRoleNotificationSubmissionStatus::Inactive;
         }
         if retry {
             if task.generation != self.generation {
                 self.stale += 1;
-                return SubmitOutcome::Stale;
+                return BrokerRoleNotificationSubmissionStatus::Stale;
             }
         } else {
             task.generation = self.generation;
@@ -160,44 +160,44 @@ impl Mailbox {
         if let Some(previous) = self.notified.get(&task.key) {
             if previous == &task.state {
                 self.coalesced += 1;
-                return SubmitOutcome::Coalesced;
+                return BrokerRoleNotificationSubmissionStatus::Coalesced;
             }
             if previous.is_same_or_newer_than(&task.state) {
                 self.stale += 1;
-                return SubmitOutcome::Stale;
+                return BrokerRoleNotificationSubmissionStatus::Stale;
             }
         }
 
         if let Some(previous) = self.in_flight.get(&task.key) {
             if previous == &task.state {
                 self.coalesced += 1;
-                return SubmitOutcome::Coalesced;
+                return BrokerRoleNotificationSubmissionStatus::Coalesced;
             }
             if previous.is_same_or_newer_than(&task.state) {
                 self.stale += 1;
-                return SubmitOutcome::Stale;
+                return BrokerRoleNotificationSubmissionStatus::Stale;
             }
         }
 
         if let Some(previous) = self.retry_waiting.get(&task.key) {
             if previous == &task.state {
                 self.coalesced += 1;
-                return SubmitOutcome::Coalesced;
+                return BrokerRoleNotificationSubmissionStatus::Coalesced;
             }
             if previous.is_same_or_newer_than(&task.state) {
                 self.stale += 1;
-                return SubmitOutcome::Stale;
+                return BrokerRoleNotificationSubmissionStatus::Stale;
             }
         }
 
         if let Some(previous) = self.pending.get(&task.key) {
             if previous.task.state == task.state {
                 self.coalesced += 1;
-                return SubmitOutcome::Coalesced;
+                return BrokerRoleNotificationSubmissionStatus::Coalesced;
             }
             if previous.task.state.is_same_or_newer_than(&task.state) {
                 self.stale += 1;
-                return SubmitOutcome::Stale;
+                return BrokerRoleNotificationSubmissionStatus::Stale;
             }
             self.pending.insert(
                 task.key.clone(),
@@ -207,13 +207,13 @@ impl Mailbox {
                 },
             );
             self.replaced += 1;
-            return SubmitOutcome::Replaced;
+            return BrokerRoleNotificationSubmissionStatus::Replaced;
         }
 
         let key_already_retained = self.in_flight.contains_key(&task.key) || self.retry_waiting.contains_key(&task.key);
         if !key_already_retained && self.retained_keys() >= self.capacity {
             self.rejected_full += 1;
-            return SubmitOutcome::Full;
+            return BrokerRoleNotificationSubmissionStatus::Full;
         }
 
         let key = task.key.clone();
@@ -231,17 +231,17 @@ impl Mailbox {
                 } else {
                     self.accepted += 1;
                 }
-                SubmitOutcome::Accepted
+                BrokerRoleNotificationSubmissionStatus::Accepted
             }
             Err(mpsc::error::TrySendError::Full(_)) => {
                 self.pending.remove(&key);
                 self.rejected_full += 1;
-                SubmitOutcome::Full
+                BrokerRoleNotificationSubmissionStatus::Full
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 self.pending.remove(&key);
                 self.closed = true;
-                SubmitOutcome::Closed
+                BrokerRoleNotificationSubmissionStatus::Closed
             }
         }
     }
@@ -399,11 +399,11 @@ impl BrokerRoleNotifier {
         Ok(())
     }
 
-    pub(crate) fn submit(&self, task: NotifyTask) -> SubmitOutcome {
+    pub(crate) fn submit(&self, task: NotifyTask) -> BrokerRoleNotificationSubmissionStatus {
         self.mailbox.lock().submit(task, false, &self.sender)
     }
 
-    fn submit_retry(&self, task: NotifyTask) -> SubmitOutcome {
+    fn submit_retry(&self, task: NotifyTask) -> BrokerRoleNotificationSubmissionStatus {
         self.mailbox.lock().submit(task, true, &self.sender)
     }
 
@@ -493,7 +493,10 @@ impl BrokerRoleNotifier {
                 _ = tokio::time::sleep(delay) => {}
             }
             let outcome = notifier.submit_retry(task);
-            if matches!(outcome, SubmitOutcome::Full | SubmitOutcome::Closed) {
+            if matches!(
+                outcome,
+                BrokerRoleNotificationSubmissionStatus::Full | BrokerRoleNotificationSubmissionStatus::Closed
+            ) {
                 warn!(?outcome, "Broker role notify retry was not retained");
             }
         }) {
