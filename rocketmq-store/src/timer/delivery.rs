@@ -208,9 +208,9 @@ impl TimelineDeliveryCoordinator {
             let remaining = self.page_messages.saturating_sub(result.examined);
             for key in outbox.scan_ready(lane, remaining)? {
                 result.examined = result.examined.saturating_add(1);
-                let outcome = self.deliver_key(key, epoch, observation.wall_time_ms).await?;
-                result.bytes = result.bytes.saturating_add(outcome.payload_bytes);
-                match outcome.disposition {
+                let delivery_report = self.deliver_key(key, epoch, observation.wall_time_ms).await?;
+                result.bytes = result.bytes.saturating_add(delivery_report.payload_bytes);
+                match delivery_report.disposition {
                     DeliveryDisposition::Committed => result.committed = result.committed.saturating_add(1),
                     DeliveryDisposition::Recovered => result.recovered = result.recovered.saturating_add(1),
                     DeliveryDisposition::Skipped => {}
@@ -228,19 +228,19 @@ impl TimelineDeliveryCoordinator {
         key: TimelineKeyV1,
         epoch: u64,
         wall_time_ms: i64,
-    ) -> Result<DeliveryOutcome, TimelineDeliveryError> {
+    ) -> Result<TimelineDeliveryReport, TimelineDeliveryError> {
         let Some(current) = self.state.get(key.timer_id, key.generation)? else {
             return Err(TimelineDeliveryError::MissingState);
         };
         if current.state != TimelineState::Ready {
-            return Ok(DeliveryOutcome::skipped());
+            return Ok(TimelineDeliveryReport::skipped());
         }
         if current.shadow_only
             || current.route.engine_id() != TimerEngineId::ExtendedTimeline
             || current.admission_epoch < self.activation_epoch
             || key.due_time_ms > wall_time_ms
         {
-            return Ok(DeliveryOutcome::skipped());
+            return Ok(TimelineDeliveryReport::skipped());
         }
         if let Some(receipt) =
             TimelineReceiptStore::new(Arc::clone(&self.timeline)).get(current.route.delivery_token())?
@@ -257,7 +257,7 @@ impl TimelineDeliveryCoordinator {
                 receipt.owner_epoch,
                 side_effects,
             )? {
-                StateTransitionResult::Applied(_) => Ok(DeliveryOutcome {
+                StateTransitionResult::Applied(_) => Ok(TimelineDeliveryReport {
                     disposition: DeliveryDisposition::Recovered,
                     payload_bytes: 0,
                 }),
@@ -265,7 +265,7 @@ impl TimelineDeliveryCoordinator {
                     let mut cleanup = RocksDbWriteBatch::with_capacity(1);
                     TimelineReadyOutbox::delete_ready(&mut cleanup, key);
                     self.timeline.write_batch(&cleanup)?;
-                    Ok(DeliveryOutcome {
+                    Ok(TimelineDeliveryReport {
                         disposition: DeliveryDisposition::Recovered,
                         payload_bytes: 0,
                     })
@@ -290,7 +290,7 @@ impl TimelineDeliveryCoordinator {
         )? {
             StateTransitionResult::Applied(claimed) => claimed,
             StateTransitionResult::Conflict(_) | StateTransitionResult::Missing => {
-                return Ok(DeliveryOutcome::skipped());
+                return Ok(TimelineDeliveryReport::skipped());
             }
         };
         let deadline = self.clock.observe().monotonic_time_ms.saturating_add(self.lease_ms);
@@ -371,7 +371,7 @@ impl TimelineDeliveryCoordinator {
         key: TimelineKeyV1,
         claimed: rocketmq_store_rocksdb::timer::state_index::TimelineStateRecordV1,
         initial_wall_time_ms: i64,
-    ) -> Result<DeliveryOutcome, TimelineDeliveryError> {
+    ) -> Result<TimelineDeliveryReport, TimelineDeliveryError> {
         let record = self.timeline.get(key)?.ok_or(TimelineDeliveryError::MissingTimeline)?;
         if record.shadow_only || record.owner_engine != TimerEngineId::ExtendedTimeline {
             self.quarantine_claim(key, claimed.state_version)?;
@@ -415,7 +415,7 @@ impl TimelineDeliveryCoordinator {
             || !self.role.is_current_delivery_epoch(claimed.owner_epoch.get())
         {
             self.return_claim_to_ready(key, claimed.state_version)?;
-            return Ok(DeliveryOutcome::skipped());
+            return Ok(TimelineDeliveryReport::skipped());
         }
         let current = self
             .state
@@ -426,7 +426,7 @@ impl TimelineDeliveryCoordinator {
             || current.owner_epoch != claimed.owner_epoch
             || current.claim_seq != claimed.claim_seq
         {
-            return Ok(DeliveryOutcome::skipped());
+            return Ok(TimelineDeliveryReport::skipped());
         }
         let committing = match self.state.compare_and_set(
             key.timer_id,
@@ -438,7 +438,7 @@ impl TimelineDeliveryCoordinator {
         )? {
             StateTransitionResult::Applied(committing) => committing,
             StateTransitionResult::Conflict(_) | StateTransitionResult::Missing => {
-                return Ok(DeliveryOutcome::skipped());
+                return Ok(TimelineDeliveryReport::skipped());
             }
         };
         if !self.role.is_current_delivery_epoch(committing.owner_epoch.get())
@@ -446,19 +446,19 @@ impl TimelineDeliveryCoordinator {
             || self.clock.observe().wall_time_ms < key.due_time_ms
         {
             self.return_committing_to_ready(key, committing.state_version)?;
-            return Ok(DeliveryOutcome::skipped());
+            return Ok(TimelineDeliveryReport::skipped());
         }
 
         let put_result = self.writer.put_message(message).await;
         self.leases.lock().remove(&(key.timer_id, key.generation));
         if put_result.is_ok() {
-            return Ok(DeliveryOutcome {
+            return Ok(TimelineDeliveryReport {
                 disposition: DeliveryDisposition::Committed,
                 payload_bytes,
             });
         }
         self.return_committing_to_ready(key, committing.state_version)?;
-        Ok(DeliveryOutcome::skipped())
+        Ok(TimelineDeliveryReport::skipped())
     }
 
     fn quarantine_claim(&self, key: TimelineKeyV1, state_version: u64) -> Result<(), TimelineDeliveryError> {
@@ -521,13 +521,13 @@ enum DeliveryDisposition {
 
 #[cfg(feature = "extended_timeline")]
 #[derive(Clone, Copy, Debug)]
-struct DeliveryOutcome {
+struct TimelineDeliveryReport {
     disposition: DeliveryDisposition,
     payload_bytes: usize,
 }
 
 #[cfg(feature = "extended_timeline")]
-impl DeliveryOutcome {
+impl TimelineDeliveryReport {
     const fn skipped() -> Self {
         Self {
             disposition: DeliveryDisposition::Skipped,
