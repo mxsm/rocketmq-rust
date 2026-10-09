@@ -18,7 +18,7 @@ use std::rc::Rc;
 
 use rocketmq_store_local::commit_log::normal_recovery::NormalRecoveryObservation;
 use rocketmq_store_local::commit_log::normal_recovery::NormalRecoveryRecord;
-use rocketmq_store_local::commit_log::normal_recovery::NormalRecoverySegmentOutcome;
+use rocketmq_store_local::commit_log::normal_recovery::NormalRecoverySegmentResult;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryPolicy;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryState;
 
@@ -60,14 +60,14 @@ fn segment_started_state_error_skips_started_and_next() {
     let events: Events = Rc::new(RefCell::new(Vec::new()));
     let mut recovery = state(NormalRecoveryPolicy::Standard);
 
-    let outcome: NormalRecoverySegmentOutcome<AdapterError> = recovery.drive_segment(
+    let outcome: NormalRecoverySegmentResult<AdapterError> = recovery.drive_segment(
         i64::MAX as u64 + 1,
         || panic!("next must not run"),
         || events.borrow_mut().push("started".into()),
         |_, _: &mut Record| panic!("observe must not run"),
     );
 
-    assert_eq!(outcome, NormalRecoverySegmentOutcome::StateFailed);
+    assert_eq!(outcome, NormalRecoverySegmentResult::StateFailed);
     assert!(events.borrow().is_empty());
 }
 
@@ -88,7 +88,7 @@ fn segment_started_runs_before_next_and_preserves_adapter_error_identity() {
 
     assert_eq!(
         outcome,
-        NormalRecoverySegmentOutcome::AdapterFailed(AdapterError("read"))
+        NormalRecoverySegmentResult::AdapterFailed(AdapterError("read"))
     );
     assert_eq!(&*events.borrow(), &["started", "next"]);
     assert_eq!(recovery.summary().truncate_offset, 13);
@@ -96,7 +96,7 @@ fn segment_started_runs_before_next_and_preserves_adapter_error_identity() {
 
 fn valid_then_source_ended(
     policy: NormalRecoveryPolicy,
-    expected_outcome: NormalRecoverySegmentOutcome<AdapterError>,
+    expected_outcome: NormalRecoverySegmentResult<AdapterError>,
     expected_last_valid: u64,
 ) {
     let events = Rc::new(RefCell::new(Vec::new()));
@@ -151,12 +151,12 @@ fn valid_then_source_ended(
 fn standard_and_optimized_valid_then_source_ended_preserve_policy_outcomes() {
     valid_then_source_ended(
         NormalRecoveryPolicy::Standard,
-        NormalRecoverySegmentOutcome::StopRecovery,
+        NormalRecoverySegmentResult::StopRecovery,
         103,
     );
     valid_then_source_ended(
         NormalRecoveryPolicy::Optimized,
-        NormalRecoverySegmentOutcome::ContinueNextSegment,
+        NormalRecoverySegmentResult::ContinueNextSegment,
         108,
     );
 }
@@ -192,7 +192,7 @@ fn valid_then_blank_observes_each_payload_before_drop_and_stops_reading() {
             },
         );
 
-        assert_eq!(outcome, NormalRecoverySegmentOutcome::ContinueNextSegment);
+        assert_eq!(outcome, NormalRecoverySegmentResult::ContinueNextSegment);
         assert_eq!(*next_calls.borrow(), 2);
         assert_eq!(records.len(), 1);
         assert_eq!(
@@ -229,7 +229,7 @@ fn invalid_some_and_none_are_observed_before_policy_action() {
             },
         );
 
-        assert_eq!(outcome, NormalRecoverySegmentOutcome::ContinueNextSegment);
+        assert_eq!(outcome, NormalRecoverySegmentResult::ContinueNextSegment);
         assert_eq!(&*events.borrow(), &["started", "observe:invalid", "drop:invalid:true"]);
     }
 }
@@ -258,7 +258,7 @@ fn message_state_overflow_skips_observe_drops_payload_and_stops_reading() {
         |_, _| events.borrow_mut().push("observe".into()),
     );
 
-    assert_eq!(outcome, NormalRecoverySegmentOutcome::StateFailed);
+    assert_eq!(outcome, NormalRecoverySegmentResult::StateFailed);
     assert_eq!(next_calls, 1);
     assert_eq!(records.len(), 1);
     assert_eq!(&*events.borrow(), &["started", "drop:overflow:false"]);
@@ -269,11 +269,11 @@ fn source_ended_never_observes_and_stop_or_next_is_bounded() {
     for (policy, expected) in [
         (
             NormalRecoveryPolicy::Standard,
-            NormalRecoverySegmentOutcome::StopRecovery,
+            NormalRecoverySegmentResult::StopRecovery,
         ),
         (
             NormalRecoveryPolicy::Optimized,
-            NormalRecoverySegmentOutcome::ContinueNextSegment,
+            NormalRecoverySegmentResult::ContinueNextSegment,
         ),
     ] {
         let mut recovery = state(policy);

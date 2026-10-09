@@ -137,7 +137,7 @@ use rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockMode;
 use rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockTarget;
 use rocketmq_store_local::commit_log::normal_recovery::NormalRecoveryObservation;
 use rocketmq_store_local::commit_log::normal_recovery::NormalRecoveryRecord;
-use rocketmq_store_local::commit_log::normal_recovery::NormalRecoverySegmentOutcome;
+use rocketmq_store_local::commit_log::normal_recovery::NormalRecoverySegmentResult;
 use rocketmq_store_local::commit_log::record::read_declared_frame;
 use rocketmq_store_local::commit_log::record_parser::inspect_commit_log_record;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordBodyMode;
@@ -1622,14 +1622,14 @@ impl CommitLog {
                 },
             );
             match outcome {
-                NormalRecoverySegmentOutcome::ContinueNextSegment => {
+                NormalRecoverySegmentResult::ContinueNextSegment => {
                     if file_processed {
                         recovery_ctx.stats.files_processed += 1;
                     }
                     index += 1;
                 }
-                NormalRecoverySegmentOutcome::StopRecovery => break 'segments,
-                NormalRecoverySegmentOutcome::AdapterFailed(
+                NormalRecoverySegmentResult::StopRecovery => break 'segments,
+                NormalRecoverySegmentResult::AdapterFailed(
                     NormalRecoveryAdapterViolation::RelativeOffsetConversion(error),
                 ) => {
                     warn!("normal optimized recovery relative offset conversion failed: {error}");
@@ -1637,7 +1637,7 @@ impl CommitLog {
                         commitlog_recovery_failure("recovery offset or adapter state failed").with_source(error)
                     );
                 }
-                NormalRecoverySegmentOutcome::AdapterFailed(NormalRecoveryAdapterViolation::MessageSizeConversion(
+                NormalRecoverySegmentResult::AdapterFailed(NormalRecoveryAdapterViolation::MessageSizeConversion(
                     error,
                 )) => {
                     warn!("normal optimized recovery message size conversion failed: {error}");
@@ -1645,13 +1645,14 @@ impl CommitLog {
                         commitlog_recovery_failure("recovery offset or adapter state failed").with_source(error)
                     );
                 }
-                NormalRecoverySegmentOutcome::AdapterFailed(
-                    NormalRecoveryAdapterViolation::FramePositionOverflow { position, size },
-                ) => {
+                NormalRecoverySegmentResult::AdapterFailed(NormalRecoveryAdapterViolation::FramePositionOverflow {
+                    position,
+                    size,
+                }) => {
                     warn!("normal optimized recovery frame position overflow at {position} with size {size}");
                     return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                 }
-                NormalRecoverySegmentOutcome::StateFailed => {
+                NormalRecoverySegmentResult::StateFailed => {
                     warn!("normal optimized recovery offset state failed");
                     return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                 }
@@ -1800,7 +1801,7 @@ impl CommitLog {
                     },
                 );
                 match outcome {
-                    NormalRecoverySegmentOutcome::ContinueNextSegment => {
+                    NormalRecoverySegmentResult::ContinueNextSegment => {
                         index += 1;
                         if index < mapped_files_inner.len() {
                             if let Some(next_file) = mapped_files_inner.get(index) {
@@ -1814,14 +1815,14 @@ impl CommitLog {
                             );
                         }
                     }
-                    NormalRecoverySegmentOutcome::StopRecovery => break 'segments,
-                    NormalRecoverySegmentOutcome::AdapterFailed(
+                    NormalRecoverySegmentResult::StopRecovery => break 'segments,
+                    NormalRecoverySegmentResult::AdapterFailed(
                         NormalRecoveryAdapterViolation::FramePositionOverflow { position, size },
                     ) => {
                         warn!("normal recovery frame position overflow at {position} with size {size}");
                         return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                     }
-                    NormalRecoverySegmentOutcome::AdapterFailed(
+                    NormalRecoverySegmentResult::AdapterFailed(
                         NormalRecoveryAdapterViolation::RelativeOffsetConversion(error),
                     ) => {
                         warn!("normal recovery relative offset conversion failed: {error}");
@@ -1829,7 +1830,7 @@ impl CommitLog {
                             commitlog_recovery_failure("recovery offset or adapter state failed").with_source(error)
                         );
                     }
-                    NormalRecoverySegmentOutcome::AdapterFailed(
+                    NormalRecoverySegmentResult::AdapterFailed(
                         NormalRecoveryAdapterViolation::MessageSizeConversion(error),
                     ) => {
                         warn!("normal recovery message size conversion failed: {error}");
@@ -1837,7 +1838,7 @@ impl CommitLog {
                             commitlog_recovery_failure("recovery offset or adapter state failed").with_source(error)
                         );
                     }
-                    NormalRecoverySegmentOutcome::StateFailed => {
+                    NormalRecoverySegmentResult::StateFailed => {
                         warn!("normal recovery offset state failed");
                         return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                     }
