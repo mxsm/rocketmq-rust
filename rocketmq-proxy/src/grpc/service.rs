@@ -50,7 +50,7 @@ use crate::grpc::adapter;
 use crate::observability::ProxyHookChain;
 use crate::observability::ProxyMetrics;
 use crate::observability::ProxyMetricsSnapshot;
-use crate::observability::ProxyRequestOutcome;
+use crate::observability::ProxyRequestCompletion;
 use crate::processor::MessagingProcessor;
 use crate::proto::v2;
 use crate::session::ClientSessionRegistry;
@@ -518,27 +518,27 @@ where
         observation
     }
 
-    async fn finish_observation(&self, observation: &RequestObservation, outcome: &ProxyRequestOutcome) {
-        observation.rpc_span().record("result", outcome.metric_result());
+    async fn finish_observation(&self, observation: &RequestObservation, completion: &ProxyRequestCompletion) {
+        observation.rpc_span().record("result", completion.metric_result());
         self.metrics
-            .record_request_completed(observation.context().rpc_name(), outcome, observation.elapsed());
+            .record_request_completed(observation.context().rpc_name(), completion, observation.elapsed());
         if let Some((span, elapsed)) = observation.forward() {
-            rocketmq_observability::trace::proxy::record_status(span, proxy_span_status(outcome));
+            rocketmq_observability::trace::proxy::record_status(span, proxy_span_status(completion));
             self.metrics.record_forward_completed(elapsed);
         }
         self.hooks
-            .after_request(observation.context(), outcome)
+            .after_request(observation.context(), completion)
             .instrument(observation.span())
             .await;
     }
 
     async fn finish_unary_payload(&self, observation: &RequestObservation, status: &v2::Status) {
-        self.finish_observation(observation, &ProxyRequestOutcome::from_payload_status(status))
+        self.finish_observation(observation, &ProxyRequestCompletion::from_payload_status(status))
             .await;
     }
 
     async fn finish_stream_payload(&self, observation: &RequestObservation, status: &v2::Status) {
-        self.finish_observation(observation, &ProxyRequestOutcome::from_payload_status(status))
+        self.finish_observation(observation, &ProxyRequestCompletion::from_payload_status(status))
             .await;
     }
 
@@ -546,7 +546,7 @@ where
         self.metrics.record_request_started(rpc_name);
         self.metrics.record_request_completed(
             rpc_name,
-            &ProxyRequestOutcome::from_tonic_status(status),
+            &ProxyRequestCompletion::from_tonic_status(status),
             Duration::ZERO,
         );
     }
@@ -590,7 +590,7 @@ where
             Err(error) => {
                 return if ProxyStatusMapper::should_use_tonic_status(&error) {
                     let status = ProxyStatusMapper::to_tonic_status(&error);
-                    self.finish_observation(&observation, &ProxyRequestOutcome::from_tonic_status(&status))
+                    self.finish_observation(&observation, &ProxyRequestCompletion::from_tonic_status(&status))
                         .await;
                     Err(Err(status))
                 } else {
@@ -644,7 +644,7 @@ where
             Err(error) => {
                 return if ProxyStatusMapper::should_use_tonic_status(&error) {
                     let status = ProxyStatusMapper::to_tonic_status(&error);
-                    self.finish_observation(&observation, &ProxyRequestOutcome::from_tonic_status(&status))
+                    self.finish_observation(&observation, &ProxyRequestCompletion::from_tonic_status(&status))
                         .await;
                     Err(Err(status))
                 } else {
@@ -1165,13 +1165,13 @@ where
     }
 }
 
-fn proxy_span_status(outcome: &ProxyRequestOutcome) -> rocketmq_observability::trace::proxy::ProxySpanStatus {
-    match outcome {
-        ProxyRequestOutcome::Payload(status) if status.is_ok() => {
+fn proxy_span_status(completion: &ProxyRequestCompletion) -> rocketmq_observability::trace::proxy::ProxySpanStatus {
+    match completion {
+        ProxyRequestCompletion::Payload(status) if status.is_ok() => {
             rocketmq_observability::trace::proxy::ProxySpanStatus::Success
         }
-        ProxyRequestOutcome::Payload(_) => rocketmq_observability::trace::proxy::ProxySpanStatus::PayloadFailure,
-        ProxyRequestOutcome::Transport { .. } => {
+        ProxyRequestCompletion::Payload(_) => rocketmq_observability::trace::proxy::ProxySpanStatus::PayloadFailure,
+        ProxyRequestCompletion::Transport { .. } => {
             rocketmq_observability::trace::proxy::ProxySpanStatus::TransportFailure
         }
     }
@@ -2161,7 +2161,7 @@ mod tests {
     use crate::grpc::adapter;
     use crate::observability::ProxyHook;
     use crate::observability::ProxyHookChain;
-    use crate::observability::ProxyRequestOutcome;
+    use crate::observability::ProxyRequestCompletion;
     use crate::processor::AckMessageRequest;
     use crate::processor::AckMessageResultEntry;
     use crate::processor::ChangeInvisibleDurationPlan;
@@ -2251,7 +2251,7 @@ mod tests {
         rpc_name: &'static str,
         client_id: Option<String>,
         principal: Option<String>,
-        outcome_code: Option<i32>,
+        payload_code: Option<i32>,
     }
 
     #[derive(Default)]
@@ -2275,7 +2275,7 @@ mod tests {
                 principal: context
                     .authenticated_principal()
                     .map(|principal| principal.username().to_owned()),
-                outcome_code: None,
+                payload_code: None,
             });
             Ok(())
         }
@@ -2283,7 +2283,7 @@ mod tests {
         async fn after_request(
             &self,
             context: &crate::context::ProxyContext,
-            outcome: &ProxyRequestOutcome,
+            completion: &ProxyRequestCompletion,
         ) -> crate::error::ProxyResult<()> {
             self.events.lock().expect("hook events mutex poisoned").push(HookEvent {
                 phase: "after",
@@ -2292,9 +2292,9 @@ mod tests {
                 principal: context
                     .authenticated_principal()
                     .map(|principal| principal.username().to_owned()),
-                outcome_code: match outcome {
-                    ProxyRequestOutcome::Payload(status) => Some(status.code()),
-                    ProxyRequestOutcome::Transport { .. } => None,
+                payload_code: match completion {
+                    ProxyRequestCompletion::Payload(status) => Some(status.code()),
+                    ProxyRequestCompletion::Transport { .. } => None,
                 },
             });
             Ok(())
@@ -2971,7 +2971,7 @@ mod tests {
         assert_eq!(events[0].principal, None);
         assert_eq!(events[1].phase, "after");
         assert_eq!(events[1].rpc_name, "QueryRoute");
-        assert_eq!(events[1].outcome_code, Some(v2::Code::Ok as i32));
+        assert_eq!(events[1].payload_code, Some(v2::Code::Ok as i32));
     }
 
     #[tokio::test]

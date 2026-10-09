@@ -88,7 +88,7 @@ pub use observability::ProxyHook;
 pub use observability::ProxyHookChain;
 pub use observability::ProxyMetrics;
 pub use observability::ProxyMetricsSnapshot;
-pub use observability::ProxyRequestOutcome;
+pub use observability::ProxyRequestCompletion;
 pub use observability::ProxyRpcMetricsSnapshot;
 pub use processor::AckMessagePlan;
 pub use processor::AckMessageRequest;

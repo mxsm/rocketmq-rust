@@ -58,12 +58,12 @@ fn proxy_up_attributes(config: &ProxyConfig) -> rocketmq_observability::metrics:
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProxyRequestOutcome {
+pub enum ProxyRequestCompletion {
     Payload(ProxyPayloadStatus),
     Transport { code: TonicCode, message: String },
 }
 
-impl ProxyRequestOutcome {
+impl ProxyRequestCompletion {
     pub fn from_payload_status(status: &v2::Status) -> Self {
         Self::Payload(ProxyPayloadStatus::new(status.code, status.message.clone()))
     }
@@ -102,7 +102,7 @@ pub trait ProxyHook: Send + Sync {
         Ok(())
     }
 
-    async fn after_request(&self, _context: &ProxyContext, _outcome: &ProxyRequestOutcome) -> ProxyResult<()> {
+    async fn after_request(&self, _context: &ProxyContext, _completion: &ProxyRequestCompletion) -> ProxyResult<()> {
         Ok(())
     }
 }
@@ -134,9 +134,9 @@ impl ProxyHookChain {
         }
     }
 
-    pub async fn after_request(&self, context: &ProxyContext, outcome: &ProxyRequestOutcome) {
+    pub async fn after_request(&self, context: &ProxyContext, completion: &ProxyRequestCompletion) {
         for hook in self.hooks.iter() {
-            if let Err(error) = hook.after_request(context, outcome).await {
+            if let Err(error) = hook.after_request(context, completion).await {
                 warn!(
                     rpc = context.rpc_name(),
                     request_id = %context.request_id(),
@@ -186,11 +186,11 @@ impl ProxyMetrics {
     pub fn record_request_completed(
         &self,
         rpc_name: &'static str,
-        outcome: &ProxyRequestOutcome,
+        completion: &ProxyRequestCompletion,
         elapsed: std::time::Duration,
     ) {
         self.rpcs
-            .record_request_completed(rpc_name, outcome.rpc_completion(), elapsed);
+            .record_request_completed(rpc_name, completion.rpc_completion(), elapsed);
         self.otel
             .record_grpc_request_latency(elapsed.as_millis().clamp(0, u128::from(u64::MAX)) as u64);
     }
@@ -234,19 +234,19 @@ mod tests {
 
     use super::proxy_up_attributes;
     use super::ProxyMetrics;
-    use super::ProxyRequestOutcome;
+    use super::ProxyRequestCompletion;
     use crate::config::ProxyConfig;
     use crate::config::ProxyMode;
     use crate::proto::v2;
     use crate::session::ClientSessionRegistry;
 
     #[test]
-    fn metrics_snapshot_tracks_payload_and_transport_outcomes() {
+    fn metrics_snapshot_tracks_payload_and_transport_completions() {
         let metrics = ProxyMetrics::default();
         metrics.record_request_started("QueryRoute");
         metrics.record_request_completed(
             "QueryRoute",
-            &ProxyRequestOutcome::from_payload_status(&v2::Status {
+            &ProxyRequestCompletion::from_payload_status(&v2::Status {
                 code: v2::Code::Ok as i32,
                 message: "OK".to_owned(),
             }),
@@ -255,7 +255,7 @@ mod tests {
         metrics.record_request_started("QueryRoute");
         metrics.record_request_completed(
             "QueryRoute",
-            &ProxyRequestOutcome::from_tonic_status(&Status::unavailable("network split")),
+            &ProxyRequestCompletion::from_tonic_status(&Status::unavailable("network split")),
             std::time::Duration::from_millis(6),
         );
 
