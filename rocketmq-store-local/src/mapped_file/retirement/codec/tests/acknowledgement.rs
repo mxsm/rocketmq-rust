@@ -242,7 +242,9 @@ fn acknowledgement_slot_and_seal_reject_structural_and_crc_corruption() {
 
 #[test]
 fn acknowledged_frame_slot_and_seal_bind_byte_exactly() {
-    let DecodeOutcome::Frame(frame) = decode_next_frame(&COMPLETED_FRAME, 100, 2).expect("golden frame decodes") else {
+    let LedgerFrameDecodeResult::Frame(frame) =
+        decode_next_frame(&COMPLETED_FRAME, 100, 2).expect("golden frame decodes")
+    else {
         panic!("golden frame must be complete");
     };
     let AcknowledgementSlotState::Populated(slot) =

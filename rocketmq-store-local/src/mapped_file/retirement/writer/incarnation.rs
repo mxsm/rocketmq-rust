@@ -353,7 +353,9 @@ impl From<WriterFailure> for IncarnationWriteFailure {
 
 #[cfg(test)]
 mod tests {
-    use crate::mapped_file::retirement::codec::{decode_next_frame, DecodeOutcome, LedgerRecord, COMMIT_SEAL_LENGTH};
+    use crate::mapped_file::retirement::codec::{
+        decode_next_frame, LedgerFrameDecodeResult, LedgerRecord, COMMIT_SEAL_LENGTH,
+    };
     use crate::mapped_file::retirement::identity::{
         FileIncarnationId, PhysicalFileKey, StoreRelativePath, StoreUuid, TicketId,
     };
@@ -557,7 +559,7 @@ mod tests {
         let mut offset = 0;
         let mut sequence = 100;
         while offset < log.len() {
-            let DecodeOutcome::Frame(frame) =
+            let LedgerFrameDecodeResult::Frame(frame) =
                 decode_next_frame(&log[offset..], sequence, 2).expect("frame envelope decodes")
             else {
                 panic!("writer log must contain a complete frame");
