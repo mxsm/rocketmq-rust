@@ -34,9 +34,9 @@ use rocketmq_store_local::commit_log::load::CommitLogMappingMode;
 use rocketmq_store_local::commit_log::load::CommitLogMappingOptions;
 use rocketmq_store_local::commit_log::load::CommitLogMappingPlan;
 use rocketmq_store_local::commit_log::load::CommitLogMetadataCollectionOptions;
-use rocketmq_store_local::commit_log::load::HintOutcome;
 use rocketmq_store_local::commit_log::load::LoadStatistics;
 use rocketmq_store_local::commit_log::load::RecoveryFilePrefetch;
+use rocketmq_store_local::commit_log::load::RecoveryHintReport;
 use rocketmq_store_local::commit_log::load::RecoveryMmapAdvice;
 use tempfile::NamedTempFile;
 use tempfile::TempDir;
@@ -535,8 +535,8 @@ fn not_attempted_outcomes_leave_both_hint_families_unchanged() {
         ..LoadStatistics::default()
     };
 
-    record_mmap_advice(&mut statistics, HintOutcome::not_attempted());
-    record_file_prefetch(&mut statistics, HintOutcome::not_attempted());
+    record_mmap_advice(&mut statistics, RecoveryHintReport::not_attempted());
+    record_file_prefetch(&mut statistics, RecoveryHintReport::not_attempted());
 
     assert_eq!(mmap_counters(&statistics), (11, 12, 13, 14));
     assert_eq!(prefetch_counters(&statistics), (21, 22, 23, 24));
@@ -546,7 +546,10 @@ fn not_attempted_outcomes_leave_both_hint_families_unchanged() {
 fn mmap_success_records_only_mmap_attempt_success_and_whole_milliseconds() {
     let mut statistics = LoadStatistics::default();
 
-    record_mmap_advice(&mut statistics, HintOutcome::success(Duration::from_micros(1_999)));
+    record_mmap_advice(
+        &mut statistics,
+        RecoveryHintReport::success(Duration::from_micros(1_999)),
+    );
 
     assert_eq!(mmap_counters(&statistics), (1, 1, 0, 1));
     assert_eq!(prefetch_counters(&statistics), (0, 0, 0, 0));
@@ -556,7 +559,10 @@ fn mmap_success_records_only_mmap_attempt_success_and_whole_milliseconds() {
 fn mmap_failure_records_zero_for_submillisecond_elapsed_time() {
     let mut statistics = LoadStatistics::default();
 
-    record_mmap_advice(&mut statistics, HintOutcome::failure(Duration::from_nanos(999_999)));
+    record_mmap_advice(
+        &mut statistics,
+        RecoveryHintReport::failure(Duration::from_nanos(999_999)),
+    );
 
     assert_eq!(mmap_counters(&statistics), (1, 0, 1, 0));
     assert_eq!(prefetch_counters(&statistics), (0, 0, 0, 0));
@@ -566,8 +572,8 @@ fn mmap_failure_records_zero_for_submillisecond_elapsed_time() {
 fn prefetch_success_and_failure_record_only_prefetch_fields() {
     let mut statistics = LoadStatistics::default();
 
-    record_file_prefetch(&mut statistics, HintOutcome::success(Duration::from_millis(7)));
-    record_file_prefetch(&mut statistics, HintOutcome::failure(Duration::from_millis(9)));
+    record_file_prefetch(&mut statistics, RecoveryHintReport::success(Duration::from_millis(7)));
+    record_file_prefetch(&mut statistics, RecoveryHintReport::failure(Duration::from_millis(9)));
 
     assert_eq!(mmap_counters(&statistics), (0, 0, 0, 0));
     assert_eq!(prefetch_counters(&statistics), (2, 1, 1, 16));
@@ -577,7 +583,7 @@ fn prefetch_success_and_failure_record_only_prefetch_fields() {
 fn duration_max_is_clamped_to_u64_max_milliseconds() {
     let mut statistics = LoadStatistics::default();
 
-    record_mmap_advice(&mut statistics, HintOutcome::success(Duration::MAX));
+    record_mmap_advice(&mut statistics, RecoveryHintReport::success(Duration::MAX));
 
     assert_eq!(mmap_counters(&statistics), (1, 1, 0, u64::MAX));
 }
@@ -591,7 +597,7 @@ fn mmap_success_saturates_attempt_success_and_elapsed_fields() {
         ..LoadStatistics::default()
     };
 
-    record_mmap_advice(&mut statistics, HintOutcome::success(Duration::from_millis(1)));
+    record_mmap_advice(&mut statistics, RecoveryHintReport::success(Duration::from_millis(1)));
 
     assert_eq!(mmap_counters(&statistics), (u64::MAX, u64::MAX, 0, u64::MAX));
 }
@@ -605,7 +611,7 @@ fn mmap_failure_saturates_attempt_failure_and_elapsed_fields() {
         ..LoadStatistics::default()
     };
 
-    record_mmap_advice(&mut statistics, HintOutcome::failure(Duration::from_millis(1)));
+    record_mmap_advice(&mut statistics, RecoveryHintReport::failure(Duration::from_millis(1)));
 
     assert_eq!(mmap_counters(&statistics), (u64::MAX, 0, u64::MAX, u64::MAX));
 }
@@ -620,8 +626,8 @@ fn prefetch_counters_and_elapsed_fields_saturate() {
         ..LoadStatistics::default()
     };
 
-    record_file_prefetch(&mut statistics, HintOutcome::success(Duration::from_millis(1)));
-    record_file_prefetch(&mut statistics, HintOutcome::failure(Duration::from_millis(1)));
+    record_file_prefetch(&mut statistics, RecoveryHintReport::success(Duration::from_millis(1)));
+    record_file_prefetch(&mut statistics, RecoveryHintReport::failure(Duration::from_millis(1)));
 
     assert_eq!(prefetch_counters(&statistics), (u64::MAX, u64::MAX, u64::MAX, u64::MAX));
 }
