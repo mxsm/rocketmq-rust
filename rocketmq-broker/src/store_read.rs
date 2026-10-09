@@ -16,8 +16,8 @@ use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_store::get_result;
 use rocketmq_store::GetMessageResult;
+use rocketmq_store_api::DecodedReadResult;
 use rocketmq_store_api::GetStatus;
-use rocketmq_store_api::ReadOutcome;
 use tracing::error;
 
 use crate::broker_error::BrokerResult;
@@ -32,11 +32,14 @@ enum DecodeFailurePolicy {
 /// The backend lease remains local to this capability and is released after every selected
 /// record has been decoded. Consumers only receive owned model messages and canonical store
 /// navigation metadata.
-pub(crate) fn decode_read_outcome(result: GetMessageResult, decompress_body: bool) -> Option<ReadOutcome<MessageExt>> {
+pub(crate) fn decode_read_result(
+    result: GetMessageResult,
+    decompress_body: bool,
+) -> Option<DecodedReadResult<MessageExt>> {
     decode_store_records(result, decompress_body, DecodeFailurePolicy::SkipRecord).ok()
 }
 
-pub(crate) fn decode_transaction_read_outcome(result: GetMessageResult) -> BrokerResult<ReadOutcome<MessageExt>> {
+pub(crate) fn decode_transaction_read_result(result: GetMessageResult) -> BrokerResult<DecodedReadResult<MessageExt>> {
     decode_store_records(result, false, DecodeFailurePolicy::FailRead)
 }
 
@@ -44,7 +47,7 @@ fn decode_store_records(
     result: GetMessageResult,
     decompress_body: bool,
     failure_policy: DecodeFailurePolicy,
-) -> BrokerResult<ReadOutcome<MessageExt>> {
+) -> BrokerResult<DecodedReadResult<MessageExt>> {
     let canonical = get_result(result);
     let Some(status) = canonical.status else {
         error!("store read result did not include a status");
@@ -73,7 +76,7 @@ fn decode_store_records(
         None
     };
 
-    Ok(ReadOutcome::new(
+    Ok(DecodedReadResult::new(
         status,
         canonical.next_begin_offset,
         canonical.min_offset,
@@ -92,7 +95,7 @@ mod tests {
 
     #[test]
     fn transaction_decode_preserves_empty_navigation_but_rejects_missing_status() {
-        let error = decode_transaction_read_outcome(GetMessageResult::new()).unwrap_err();
+        let error = decode_transaction_read_result(GetMessageResult::new()).unwrap_err();
         assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_READ_FAILED);
 
         let mut empty = GetMessageResult::new();
@@ -100,7 +103,7 @@ mod tests {
         empty.set_next_begin_offset(7);
         empty.set_min_offset(7);
         empty.set_max_offset(7);
-        let decoded = decode_transaction_read_outcome(empty).unwrap();
+        let decoded = decode_transaction_read_result(empty).unwrap();
         assert_eq!(decoded.status(), GetStatus::NoMessageInQueue);
         assert_eq!(decoded.next_begin_offset(), 7);
         assert!(decoded.records().is_none());
@@ -116,7 +119,7 @@ mod tests {
             7,
             1,
         );
-        let error = decode_transaction_read_outcome(result).unwrap_err();
+        let error = decode_transaction_read_result(result).unwrap_err();
         assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_READ_FAILED);
     }
 }

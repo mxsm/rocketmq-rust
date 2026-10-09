@@ -47,15 +47,15 @@ use rocketmq_store::AppendMessageStatus;
 use rocketmq_store::BatchAckMsg;
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::PopCheckPoint;
+use rocketmq_store_api::DecodedReadResult;
 use rocketmq_store_api::GetStatus;
-use rocketmq_store_api::ReadOutcome;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
 
 use crate::processor::pop_message_processor::capability::PopReviveContext;
 use crate::processor::pop_message_processor::PopMessageProcessor;
-use crate::store_read::decode_read_outcome;
+use crate::store_read::decode_read_result;
 
 /// Maximum number of concurrent in-flight revive requests
 const MAX_INFLIGHT_REVIVE_REQUESTS: usize = 3;
@@ -253,7 +253,7 @@ impl<MS: BrokerReadWriteStore> PopReviveService<MS> {
         offset: i64,
         nums: i32,
         de_compress_body: bool,
-    ) -> Option<ReadOutcome<MessageExt>> {
+    ) -> Option<DecodedReadResult<MessageExt>> {
         let get_message_result = self
             .context
             .store
@@ -264,7 +264,7 @@ impl<MS: BrokerReadWriteStore> PopReviveService<MS> {
             .await
             .ok()?;
         if let Some(get_message_result) = get_message_result {
-            decode_read_outcome(get_message_result, de_compress_body)
+            decode_read_result(get_message_result, de_compress_body)
         } else {
             if let Ok(max_queue_offset) = self.context.store.max_offset(topic, queue_id) {
                 if max_queue_offset > offset {
@@ -1031,9 +1031,9 @@ impl<MS: BrokerReadWriteStore> PopReviveService<MS> {
     }
 }
 
-fn reach_tail(read_outcome: &ReadOutcome<MessageExt>, offset: i64) -> bool {
-    is_no_new_message(read_outcome.status())
-        || is_offset_illegal_or_unmatched(read_outcome.status()) && offset == read_outcome.max_offset()
+fn reach_tail(read_result: &DecodedReadResult<MessageExt>, offset: i64) -> bool {
+    is_no_new_message(read_result.status())
+        || is_offset_illegal_or_unmatched(read_result.status()) && offset == read_result.max_offset()
 }
 
 fn is_no_new_message(status: GetStatus) -> bool {
