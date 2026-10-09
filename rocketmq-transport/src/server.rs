@@ -768,9 +768,7 @@ impl SessionHandle {
             self.send.task_group.abort_task(self.send.writer_task_id);
             return Err(connection_failed(TransportStage::Closed, source));
         }
-        let close_result = result
-            .await
-            .unwrap_or_else(|source| Err(connection_failed(TransportStage::Closed, source)));
+        let close_result = self.send.writer.wait_for_close(result).await;
         let _ = self.send.session_closed_tx.send(true);
         let _ = self.send.state_tx.send(ConnectionState::Closed);
         self.send.reader_cancellation.cancel();

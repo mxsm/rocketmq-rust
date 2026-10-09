@@ -1129,7 +1129,7 @@ async fn registry_lookups_fail_closed_after_close_now_before_disconnect_cleanup(
     assert!(!registry.contains(session_id));
 
     running.begin_shutdown();
-    running.finish().await;
+    running.finish_after_forced_close().await;
 }
 
 #[tokio::test]
@@ -1470,7 +1470,7 @@ async fn aborting_a_written_server_request_retires_its_owner_and_rejects_late_re
     assert!(replacement.receive_command().await.is_none());
 
     running.begin_shutdown();
-    running.finish().await;
+    running.finish_after_forced_close().await;
 }
 
 fn consumer_status_request() -> ServerRequestCommand {

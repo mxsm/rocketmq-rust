@@ -152,6 +152,7 @@ struct ScriptedClientIo {
     start_block: Option<Arc<Notify>>,
     pull_entered: Mutex<Option<oneshot::Sender<()>>>,
     pull_block: Option<Arc<Notify>>,
+    pull_wait_poll_gate: Option<CancellationToken>,
     shutdown_block: Option<Arc<Notify>>,
 }
 
@@ -179,6 +180,7 @@ impl ScriptedClientIo {
             start_block: None,
             pull_entered: Mutex::new(None),
             pull_block: None,
+            pull_wait_poll_gate: None,
             shutdown_block: None,
         }
     }
@@ -427,6 +429,9 @@ impl ClusterClientIo for ScriptedClientIo {
         _request: PullMessageRequestHeader,
         _timeout_millis: u64,
     ) -> Result<PullOutcome<MessageExt>, CanonicalError> {
+        // Subscribe before publishing readiness so a broadcast cannot be lost
+        // between the call count becoming visible and the wait being polled.
+        let released = self.pull_block.as_ref().map(|block| block.notified());
         self.record("client.pull");
         self.pull_calls.fetch_add(1, Ordering::AcqRel);
         if let Some(sender) = self
@@ -437,8 +442,11 @@ impl ClusterClientIo for ScriptedClientIo {
         {
             let _ = sender.send(());
         }
-        if let Some(block) = &self.pull_block {
-            block.notified().await;
+        if let Some(gate) = &self.pull_wait_poll_gate {
+            gate.cancelled().await;
+        }
+        if let Some(released) = released {
+            released.await;
         }
         Self::scripted(&self.pulls, "pull_outcome_from_broker")
     }
@@ -1081,7 +1089,9 @@ async fn same_consumer_key_is_fifo_without_serializing_distinct_keys() {
 #[tokio::test]
 async fn distinct_consumer_keys_reach_remote_io_concurrently() {
     let events = Arc::new(Mutex::new(Vec::new()));
-    let (client, first_pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
+    let (mut client, first_pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
+    let pull_wait_poll_gate = CancellationToken::new();
+    client.pull_wait_poll_gate = Some(pull_wait_poll_gate.clone());
     client.push_pull(PullOutcome::new(
         PullStatus::NoNewMsg,
         11,
@@ -1116,13 +1126,15 @@ async fn distinct_consumer_keys_reach_remote_io_concurrently() {
                     .as_ref()
                     .expect("blocking pull control")
                     .notify_waiters();
+                // Broadcast before either mock is allowed to poll its wait.
+                pull_wait_poll_gate.cancel();
             };
             let (second, ()) = tokio::join!(second, observe);
             second
         };
         let (first, second) = tokio::join!(first, probe);
-        assert!(first.is_ok(), "first distinct-key pull");
-        assert!(second.is_ok(), "second distinct-key pull");
+        first.expect("first distinct-key pull");
+        second.expect("second distinct-key pull");
         assert_eq!(executor.lanes.snapshot().max_inflight, 2);
         cancellation.cancel();
     })
