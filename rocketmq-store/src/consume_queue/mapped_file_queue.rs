@@ -676,12 +676,12 @@ where
 
 /// Submission and namespace completion are distinct cleanup outcomes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CleanupOutcome {
+pub(crate) enum MappedFileCleanupReport {
     ManagedSubmitted { selected: usize, submitted: i32 },
     LegacyCompleted { namespace_removed: i32 },
 }
 
-impl CleanupOutcome {
+impl MappedFileCleanupReport {
     // Compatibility only: managed counts mean accepted tickets, never physical deletion.
     fn compatibility_count(self) -> i32 {
         match self {
@@ -755,7 +755,7 @@ impl MappedFileQueueCleanupHandle {
         clean_immediately: bool,
         delete_file_batch_max: i32,
         pinned_file_offset: Option<u64>,
-    ) -> CleanupOutcome {
+    ) -> MappedFileCleanupReport {
         let _maintenance_guard = self.runtime_state.commit_lock().lock();
         let files = self.mapped_files.snapshot();
         self.check_self();
@@ -771,7 +771,7 @@ impl MappedFileQueueCleanupHandle {
             let selected = candidates.len();
             let submitted =
                 submit_managed_retirements(&runtime, &generation, candidates, ManagedRetirementReason::TtlExpired);
-            return CleanupOutcome::ManagedSubmitted { selected, submitted };
+            return MappedFileCleanupReport::ManagedSubmitted { selected, submitted };
         }
         let deletion = delete_expired_mapped_files_by_time_before(
             files.as_ref(),
@@ -783,7 +783,7 @@ impl MappedFileQueueCleanupHandle {
             pinned_file_offset,
             || i64::try_from(current_millis()).unwrap_or(i64::MAX),
         );
-        CleanupOutcome::LegacyCompleted {
+        MappedFileCleanupReport::LegacyCompleted {
             namespace_removed: self.mapped_files.apply_legacy_namespace_removal(deletion),
         }
     }
