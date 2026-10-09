@@ -34,8 +34,8 @@ use rocketmq_store_local::index::service::should_remove_unsafe_index_file;
 use rocketmq_store_local::index::service::shutdown_index_files;
 use rocketmq_store_local::index::service::total_index_file_size;
 use rocketmq_store_local::index::service::IndexBuildKeyKind;
-use rocketmq_store_local::index::service::IndexBuildKeysOutcome;
 use rocketmq_store_local::index::service::IndexBuildPreflight;
+use rocketmq_store_local::index::service::IndexKeyBuildResult;
 use rocketmq_store_local::index::service::IndexServiceFile;
 use rocketmq_store_local::index::service::IndexServiceRoot;
 
@@ -222,7 +222,7 @@ fn build_preflight_and_key_driver_preserve_skip_and_key_order() {
             true
         },
     );
-    assert_eq!(outcome, IndexBuildKeysOutcome::Completed);
+    assert_eq!(outcome, IndexKeyBuildResult::Completed);
     assert_eq!(
         visited,
         [
@@ -236,7 +236,7 @@ fn build_preflight_and_key_driver_preserve_skip_and_key_order() {
     let outcome = drive_index_build_keys(None, "key", Some("tag"), " ", "U", "T", |kind, _, _| {
         kind != IndexBuildKeyKind::Tag
     });
-    assert_eq!(outcome, IndexBuildKeysOutcome::TagFailed);
+    assert_eq!(outcome, IndexKeyBuildResult::TagFailed);
     assert!(outcome.advances_safe_offset());
 }
 
