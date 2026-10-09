@@ -89,10 +89,10 @@ use super::physical_key;
 use super::types::NamespaceEntry;
 use super::types::NamespaceFailureClass;
 use super::types::NamespaceOperation;
+use super::types::NamespaceOperationResult;
 use super::types::NamespacePolicyViolation;
 use super::types::NamespaceRetirementRequest;
 use super::types::NamespaceTransition;
-use super::types::NamespaceTransitionOutcome;
 use crate::mapped_file::retirement::identity::PhysicalFileKey;
 use crate::mapped_file::retirement::identity::StoreRelativePath;
 use crate::mapped_file::retirement::writer::AllocatedIncarnationReceipt;
@@ -110,16 +110,16 @@ pub(super) struct NamespaceRoot {
 }
 
 impl NamespaceRoot {
-    pub(super) fn open(file: File) -> Result<Self, NamespaceTransitionOutcome> {
+    pub(super) fn open(file: File) -> Result<Self, NamespaceOperationResult> {
         let attributes =
             query_attributes(&file, NamespaceOperation::VerifyRoot).map_err(BackendFailure::into_verification_error)?;
         if attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::RootIsReparsePoint,
             ));
         }
         if attributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 == 0 {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::RootIsNotDirectory,
             ));
         }
@@ -136,19 +136,19 @@ impl NamespaceRoot {
         &self,
         request: &NamespaceRetirementRequest,
         transition: NamespaceTransition,
-    ) -> Result<NamespaceReservation, NamespaceTransitionOutcome> {
+    ) -> Result<NamespaceReservation, NamespaceOperationResult> {
         if !matches!(request.physical_key(), PhysicalFileKey::Windows(_)) {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::PhysicalKeyPlatformMismatch,
             ));
         }
         if transition == NamespaceTransition::DirectUnlink {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::UnsupportedTransition { transition },
             ));
         }
         if !self.writer_qualified {
-            return Err(NamespaceTransitionOutcome::Unsupported {
+            return Err(NamespaceOperationResult::Unsupported {
                 platform: "windows",
                 reason: UNQUALIFIED_WRITER_REASON,
             });
@@ -156,7 +156,7 @@ impl NamespaceRoot {
         let (parent_path, canonical_name) = split_parent(request.canonical_path().as_str());
         let (tombstone_parent, tombstone_name) = split_parent(request.tombstone_path().as_str());
         if parent_path != tombstone_parent {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::ParentEscapedRoot,
             ));
         }
@@ -179,15 +179,15 @@ impl NamespaceRoot {
         path: &StoreRelativePath,
         expected_key: PhysicalFileKey,
         expected_length: u64,
-    ) -> Result<File, NamespaceTransitionOutcome> {
+    ) -> Result<File, NamespaceOperationResult> {
         if !self.writer_qualified {
-            return Err(NamespaceTransitionOutcome::Unsupported {
+            return Err(NamespaceOperationResult::Unsupported {
                 platform: "windows",
                 reason: UNQUALIFIED_WRITER_REASON,
             });
         }
         if !matches!(expected_key, PhysicalFileKey::Windows(_)) {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::PhysicalKeyPlatformMismatch,
             ));
         }
@@ -198,7 +198,7 @@ impl NamespaceRoot {
         let attributes = query_attributes(&file, NamespaceOperation::VerifyCanonical)
             .map_err(BackendFailure::into_verification_error)?;
         if attributes.FileAttributes & (FILE_ATTRIBUTE_DIRECTORY.0 | FILE_ATTRIBUTE_REPARSE_POINT.0) != 0 {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::UnexpectedEntryType {
                     entry: NamespaceEntry::Canonical,
                 },
@@ -208,7 +208,7 @@ impl NamespaceRoot {
             .metadata()
             .map_err(|error| classify_io(NamespaceOperation::VerifyCanonical, error).into_verification_error())?;
         if metadata.len() != expected_length {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::ExpectedLengthMismatch {
                     entry: NamespaceEntry::Canonical,
                     expected: expected_length,
@@ -219,7 +219,7 @@ impl NamespaceRoot {
         let actual_key = physical_key::capture(&file)
             .map_err(|error| classify_io(NamespaceOperation::VerifyCanonical, error).into_verification_error())?;
         if actual_key != expected_key {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::NamespaceChangedDuringVerification,
             ));
         }
@@ -487,7 +487,7 @@ fn observe_entry(
     })
 }
 
-fn open_parent(root: &File, parent_path: &str) -> Result<File, NamespaceTransitionOutcome> {
+fn open_parent(root: &File, parent_path: &str) -> Result<File, NamespaceOperationResult> {
     let mut parent = root
         .try_clone()
         .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?;
@@ -508,12 +508,12 @@ fn open_parent(root: &File, parent_path: &str) -> Result<File, NamespaceTransiti
         let attributes = query_attributes(&parent, NamespaceOperation::OpenParent)
             .map_err(BackendFailure::into_verification_error)?;
         if attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::ParentEscapedRoot,
             ));
         }
         if attributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 == 0 {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::ParentEscapedRoot,
             ));
         }
@@ -521,7 +521,7 @@ fn open_parent(root: &File, parent_path: &str) -> Result<File, NamespaceTransiti
     Ok(parent)
 }
 
-fn open_or_create_parent(root: &File, parent_path: &str) -> Result<File, NamespaceTransitionOutcome> {
+fn open_or_create_parent(root: &File, parent_path: &str) -> Result<File, NamespaceOperationResult> {
     let mut parent = root
         .try_clone()
         .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?;
@@ -530,7 +530,7 @@ fn open_or_create_parent(root: &File, parent_path: &str) -> Result<File, Namespa
     }
     for component in parent_path.split('/') {
         if component.is_empty() || component == "." || component == ".." {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::ParentEscapedRoot,
             ));
         }
@@ -540,7 +540,7 @@ fn open_or_create_parent(root: &File, parent_path: &str) -> Result<File, Namespa
         if attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
             || attributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 == 0
         {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::ParentEscapedRoot,
             ));
         }
@@ -559,7 +559,7 @@ fn open_or_create_parent(root: &File, parent_path: &str) -> Result<File, Namespa
         let reopened_key = physical_key::capture(&reopened)
             .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?;
         if created_key != reopened_key {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::ParentEscapedRoot,
             ));
         }
@@ -568,13 +568,13 @@ fn open_or_create_parent(root: &File, parent_path: &str) -> Result<File, Namespa
     Ok(parent)
 }
 
-fn open_or_create_directory_component(parent: &File, name: &str) -> Result<File, NamespaceTransitionOutcome> {
+fn open_or_create_directory_component(parent: &File, name: &str) -> Result<File, NamespaceOperationResult> {
     let mut wide = name.encode_utf16().collect::<Vec<_>>();
     let byte_length = wide
         .len()
         .checked_mul(size_of::<u16>())
         .and_then(|value| u16::try_from(value).ok())
-        .ok_or(NamespaceTransitionOutcome::Rejected(
+        .ok_or(NamespaceOperationResult::Rejected(
             NamespacePolicyViolation::ParentEscapedRoot,
         ))?;
     let unicode = UNICODE_STRING {

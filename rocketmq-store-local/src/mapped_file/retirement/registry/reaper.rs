@@ -25,10 +25,10 @@ use crate::mapped_file::retirement::platform::authorize_namespace_transition;
 use crate::mapped_file::retirement::platform::authorize_tombstone_removal;
 use crate::mapped_file::retirement::platform::AuthorizedNamespaceTransitionResult;
 use crate::mapped_file::retirement::platform::NamespaceFailure;
+use crate::mapped_file::retirement::platform::NamespaceOperationResult;
 use crate::mapped_file::retirement::platform::NamespacePolicyViolation;
 use crate::mapped_file::retirement::platform::NamespaceRequestViolation;
 use crate::mapped_file::retirement::platform::NamespaceTransition;
-use crate::mapped_file::retirement::platform::NamespaceTransitionOutcome;
 use crate::mapped_file::retirement::platform::VerifiedNamespaceRoot;
 use crate::mapped_file::retirement::writer::ManagedLedgerWriter;
 use crate::mapped_file::retirement::writer::ManagedLedgerWriterFailure;
@@ -71,7 +71,7 @@ pub(in crate::mapped_file::retirement) enum NamespacePending {
         platform: &'static str,
         reason: &'static str,
     },
-    Verification(NamespaceTransitionOutcome),
+    Verification(NamespaceOperationResult),
     UnexpectedOutcome(&'static str),
 }
 
@@ -137,13 +137,13 @@ pub(in crate::mapped_file::retirement) fn commit_logical_namespace_outcome<I: Le
 ) -> Result<LogicalNamespaceProgress<O>, ManagedLedgerWriterFailure> {
     let (capability, outcome) = result.into_parts();
     match outcome {
-        NamespaceTransitionOutcome::Tombstoned(proof) => writer
+        NamespaceOperationResult::Tombstoned(proof) => writer
             .append_tombstoned(capability, proof)
             .map(LogicalNamespaceProgress::Tombstoned),
-        NamespaceTransitionOutcome::NamespaceAbsentVerified(proof) => writer
+        NamespaceOperationResult::NamespaceAbsentVerified(proof) => writer
             .append_namespace_absent(capability, proof, observation_time_ns)
             .map(LogicalNamespaceProgress::NamespaceAbsent),
-        NamespaceTransitionOutcome::Superseded {
+        NamespaceOperationResult::Superseded {
             expected_key,
             observed_key,
         } => {
@@ -162,19 +162,19 @@ pub(in crate::mapped_file::retirement) fn commit_logical_namespace_outcome<I: Le
                 },
             })
         }
-        NamespaceTransitionOutcome::Retryable(failure) => Ok(LogicalNamespaceProgress::Pending {
+        NamespaceOperationResult::Retryable(failure) => Ok(LogicalNamespaceProgress::Pending {
             capability,
             status: NamespacePending::Retryable(failure),
         }),
-        NamespaceTransitionOutcome::Failed(failure) => Ok(LogicalNamespaceProgress::Pending {
+        NamespaceOperationResult::Failed(failure) => Ok(LogicalNamespaceProgress::Pending {
             capability,
             status: NamespacePending::Failed(failure),
         }),
-        NamespaceTransitionOutcome::Rejected(violation) => Ok(LogicalNamespaceProgress::Pending {
+        NamespaceOperationResult::Rejected(violation) => Ok(LogicalNamespaceProgress::Pending {
             capability,
             status: NamespacePending::Rejected(violation),
         }),
-        NamespaceTransitionOutcome::Unsupported { platform, reason } => Ok(LogicalNamespaceProgress::Pending {
+        NamespaceOperationResult::Unsupported { platform, reason } => Ok(LogicalNamespaceProgress::Pending {
             capability,
             status: NamespacePending::Unsupported { platform, reason },
         }),
@@ -189,30 +189,30 @@ pub(in crate::mapped_file::retirement) fn commit_tombstone_namespace_outcome<I: 
 ) -> Result<TombstoneNamespaceProgress<O>, ManagedLedgerWriterFailure> {
     let (capability, outcome) = result.into_parts();
     match outcome {
-        NamespaceTransitionOutcome::NamespaceAbsentVerified(proof) => writer
+        NamespaceOperationResult::NamespaceAbsentVerified(proof) => writer
             .append_namespace_absent_after_tombstone(capability, proof, observation_time_ns)
             .map(|capability| TombstoneNamespaceProgress::NamespaceAbsent(Box::new(capability))),
-        NamespaceTransitionOutcome::Retryable(failure) => Ok(TombstoneNamespaceProgress::Pending {
+        NamespaceOperationResult::Retryable(failure) => Ok(TombstoneNamespaceProgress::Pending {
             capability: Box::new(capability),
             status: NamespacePending::Retryable(failure),
         }),
-        NamespaceTransitionOutcome::Failed(failure) => Ok(TombstoneNamespaceProgress::Pending {
+        NamespaceOperationResult::Failed(failure) => Ok(TombstoneNamespaceProgress::Pending {
             capability: Box::new(capability),
             status: NamespacePending::Failed(failure),
         }),
-        NamespaceTransitionOutcome::Rejected(violation) => Ok(TombstoneNamespaceProgress::Pending {
+        NamespaceOperationResult::Rejected(violation) => Ok(TombstoneNamespaceProgress::Pending {
             capability: Box::new(capability),
             status: NamespacePending::Rejected(violation),
         }),
-        NamespaceTransitionOutcome::Unsupported { platform, reason } => Ok(TombstoneNamespaceProgress::Pending {
+        NamespaceOperationResult::Unsupported { platform, reason } => Ok(TombstoneNamespaceProgress::Pending {
             capability: Box::new(capability),
             status: NamespacePending::Unsupported { platform, reason },
         }),
-        NamespaceTransitionOutcome::Tombstoned(_) => Ok(TombstoneNamespaceProgress::Pending {
+        NamespaceOperationResult::Tombstoned(_) => Ok(TombstoneNamespaceProgress::Pending {
             capability: Box::new(capability),
             status: NamespacePending::UnexpectedOutcome("RemoveTombstone returned Tombstoned"),
         }),
-        NamespaceTransitionOutcome::Superseded { .. } => Ok(TombstoneNamespaceProgress::Pending {
+        NamespaceOperationResult::Superseded { .. } => Ok(TombstoneNamespaceProgress::Pending {
             capability: Box::new(capability),
             status: NamespacePending::UnexpectedOutcome("RemoveTombstone returned Superseded"),
         }),

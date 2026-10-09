@@ -20,9 +20,9 @@ use super::engine::NamespaceSnapshot;
 use super::types::NamespaceEntry;
 use super::types::NamespaceFailureClass;
 use super::types::NamespaceOperation;
+use super::types::NamespaceOperationResult;
 use super::types::NamespaceRetirementRequest;
 use super::types::NamespaceTransition;
-use super::types::NamespaceTransitionOutcome;
 use crate::mapped_file::retirement::identity::PhysicalFileKey;
 use crate::mapped_file::retirement::identity::StoreRelativePath;
 use crate::mapped_file::retirement::writer::AllocatedIncarnationReceipt;
@@ -36,8 +36,8 @@ const REASON: &str = "no audited handle-relative managed-retirement backend exis
 pub(super) struct NamespaceRoot;
 
 impl NamespaceRoot {
-    pub(super) fn open(_file: File) -> Result<Self, NamespaceTransitionOutcome> {
-        Err(NamespaceTransitionOutcome::Unsupported {
+    pub(super) fn open(_file: File) -> Result<Self, NamespaceOperationResult> {
+        Err(NamespaceOperationResult::Unsupported {
             platform: "unsupported target",
             reason: REASON,
         })
@@ -52,8 +52,8 @@ impl NamespaceRoot {
         _path: &StoreRelativePath,
         _expected_key: PhysicalFileKey,
         _expected_length: u64,
-    ) -> Result<File, NamespaceTransitionOutcome> {
-        Err(NamespaceTransitionOutcome::Unsupported {
+    ) -> Result<File, NamespaceOperationResult> {
+        Err(NamespaceOperationResult::Unsupported {
             platform: "unsupported target",
             reason: REASON,
         })
@@ -67,8 +67,8 @@ impl NamespaceRoot {
         &self,
         _request: &NamespaceRetirementRequest,
         _transition: NamespaceTransition,
-    ) -> Result<NamespaceReservation, NamespaceTransitionOutcome> {
-        Err(NamespaceTransitionOutcome::Unsupported {
+    ) -> Result<NamespaceReservation, NamespaceOperationResult> {
+        Err(NamespaceOperationResult::Unsupported {
             platform: "unsupported target",
             reason: REASON,
         })

@@ -18,7 +18,7 @@ use std::io;
 use thiserror::Error;
 
 use super::native;
-use super::NamespaceTransitionOutcome;
+use super::NamespaceOperationResult;
 use super::VerifiedNamespaceRoot;
 use crate::mapped_file::retirement::identity::PhysicalFileKey;
 use crate::mapped_file::retirement::writer::{AllocatedIncarnationReceipt, BoundIncarnationReceipt};
@@ -60,7 +60,7 @@ enum IncarnationCreationFailureSource {
         io::Error,
     ),
     #[error("namespace transition rejected: {0:?}")]
-    Namespace(Box<NamespaceTransitionOutcome>),
+    Namespace(Box<NamespaceOperationResult>),
     #[error("{0}")]
     Policy(&'static str),
     #[allow(
@@ -89,7 +89,7 @@ impl IncarnationCreationFailure {
         }
     }
 
-    pub(super) fn namespace(stage: IncarnationCreationStage, source: NamespaceTransitionOutcome) -> Self {
+    pub(super) fn namespace(stage: IncarnationCreationStage, source: NamespaceOperationResult) -> Self {
         Self {
             stage,
             source: IncarnationCreationFailureSource::Namespace(Box::new(source)),
@@ -191,7 +191,7 @@ mod tests {
     use super::IncarnationCreationFailureSource;
     use super::IncarnationCreationStage;
     use crate::mapped_file::retirement::platform::types::NamespacePolicyViolation;
-    use crate::mapped_file::retirement::platform::NamespaceTransitionOutcome;
+    use crate::mapped_file::retirement::platform::NamespaceOperationResult;
 
     #[test]
     fn creation_failure_is_compact_and_preserves_the_typed_io_chain() {
@@ -221,7 +221,7 @@ mod tests {
     fn creation_failure_preserves_the_boxed_namespace_outcome() {
         let failure = IncarnationCreationFailure::namespace(
             IncarnationCreationStage::OpenParent,
-            NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::ParentEscapedRoot),
+            NamespaceOperationResult::Rejected(NamespacePolicyViolation::ParentEscapedRoot),
         );
 
         assert!(matches!(
@@ -229,7 +229,7 @@ mod tests {
             IncarnationCreationFailureSource::Namespace(source)
                 if matches!(
                     source.as_ref(),
-                    NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::ParentEscapedRoot)
+                    NamespaceOperationResult::Rejected(NamespacePolicyViolation::ParentEscapedRoot)
                 )
         ));
     }
