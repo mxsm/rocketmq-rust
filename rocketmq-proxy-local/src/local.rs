@@ -2370,16 +2370,16 @@ fn process_pop_response(
 }
 
 fn process_pull_response(response: EmbeddedResponse) -> ProxyResult<PullMessagePlan> {
-    enum PullResponseOutcome {
+    enum PullResponseStatus {
         Found,
         NotFound,
         OffsetMoved,
     }
 
-    let outcome = match ResponseCode::from(response.response_code()) {
-        ResponseCode::Success => PullResponseOutcome::Found,
-        ResponseCode::PullNotFound | ResponseCode::PullRetryImmediately => PullResponseOutcome::NotFound,
-        ResponseCode::PullOffsetMoved => PullResponseOutcome::OffsetMoved,
+    let response_status = match ResponseCode::from(response.response_code()) {
+        ResponseCode::Success => PullResponseStatus::Found,
+        ResponseCode::PullNotFound | ResponseCode::PullRetryImmediately => PullResponseStatus::NotFound,
+        ResponseCode::PullOffsetMoved => PullResponseStatus::OffsetMoved,
         _ => return Err(broker_operation_error("pullMessage", &response)),
     };
     let response_header = response
@@ -2389,8 +2389,8 @@ fn process_pull_response(response: EmbeddedResponse) -> ProxyResult<PullMessageP
     let next_offset = response_header.next_begin_offset;
     let min_offset = response_header.min_offset;
     let max_offset = response_header.max_offset;
-    match outcome {
-        PullResponseOutcome::Found => {
+    match response_status {
+        PullResponseStatus::Found => {
             let (_, body) = response.into_parts();
             Ok(PullMessagePlan {
                 status: ProxyStatusMapper::ok_payload(),
@@ -2403,7 +2403,7 @@ fn process_pull_response(response: EmbeddedResponse) -> ProxyResult<PullMessageP
                     .collect(),
             })
         }
-        PullResponseOutcome::NotFound => Ok(PullMessagePlan {
+        PullResponseStatus::NotFound => Ok(PullMessagePlan {
             status: ProxyStatusMapper::from_payload_code(
                 rocketmq_proxy_core::proto::v2::Code::MessageNotFound,
                 "no message available",
@@ -2413,7 +2413,7 @@ fn process_pull_response(response: EmbeddedResponse) -> ProxyResult<PullMessageP
             max_offset,
             messages: Vec::new(),
         }),
-        PullResponseOutcome::OffsetMoved => Ok(PullMessagePlan {
+        PullResponseStatus::OffsetMoved => Ok(PullMessagePlan {
             status: ProxyStatusMapper::from_payload_code(
                 rocketmq_proxy_core::proto::v2::Code::IllegalOffset,
                 "pull offset is illegal",
