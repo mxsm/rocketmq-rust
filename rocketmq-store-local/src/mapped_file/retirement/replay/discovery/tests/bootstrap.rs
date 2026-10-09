@@ -30,7 +30,7 @@ fn marker_absent_managed_artifacts_require_bootstrap_recovery() {
     let handle = open_root(preactivation.root.path()).expect("Store-root handle");
     assert_eq!(
         inspect_managed_lifecycle_read_only(&handle).expect("preactivation inspection succeeds"),
-        ManagedLifecycleReadOutcome::RecoveryWriteRequired(ManagedLifecycleRecoveryReason::BootstrapResume)
+        ManagedLifecycleEvidenceStatus::RecoveryWriteRequired(ManagedLifecycleRecoveryReason::BootstrapResume)
     );
 }
 
@@ -47,7 +47,7 @@ fn marker_absent_accepts_the_exact_log_only_store_initialized_checkpoint() {
 
     assert_eq!(
         inspect_managed_lifecycle_read_only(&handle).expect("exact bootstrap checkpoint is resumable"),
-        ManagedLifecycleReadOutcome::RecoveryWriteRequired(ManagedLifecycleRecoveryReason::BootstrapResume)
+        ManagedLifecycleEvidenceStatus::RecoveryWriteRequired(ManagedLifecycleRecoveryReason::BootstrapResume)
     );
 }
 
@@ -138,7 +138,7 @@ fn marker_absent_reconstructs_each_torn_acknowledgement_slot_from_seals() {
 
     assert_eq!(
         inspect_managed_lifecycle_read_only(&handle).expect("the unique seals reconstruct the torn slot"),
-        ManagedLifecycleReadOutcome::RecoveryWriteRequired(ManagedLifecycleRecoveryReason::BootstrapResume)
+        ManagedLifecycleEvidenceStatus::RecoveryWriteRequired(ManagedLifecycleRecoveryReason::BootstrapResume)
     );
 }
 

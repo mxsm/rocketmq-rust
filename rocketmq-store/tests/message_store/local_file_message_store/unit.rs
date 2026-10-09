@@ -120,7 +120,7 @@ use crate::store_error::StoreError;
 use crate::store_path_config_helper::get_abort_file;
 use crate::store_path_config_helper::get_store_checkpoint;
 use crate::store_path_config_helper::get_timer_metrics_path;
-use rocketmq_store_local::mapped_file::ManagedLifecycleReadOutcome;
+use rocketmq_store_local::mapped_file::ManagedLifecycleEvidenceStatus;
 use rocketmq_store_local::mapped_file::ManagedLifecycleRecoveryReason;
 use rocketmq_store_local::message_store::lifecycle::LocalStoreState;
 
@@ -2355,15 +2355,15 @@ fn constructor_checks_store_lock_before_checkpoint_creation() {
 #[test]
 fn root_mode_accepts_only_stable_legacy_or_reconciliable_managed_evidence() {
     assert_eq!(
-        StoreRootMode::from_read_outcome(ManagedLifecycleReadOutcome::LegacyAbsent),
+        StoreRootMode::from_read_outcome(ManagedLifecycleEvidenceStatus::LegacyAbsent),
         Ok(StoreRootMode::Legacy)
     );
     assert_eq!(
-        StoreRootMode::from_read_outcome(ManagedLifecycleReadOutcome::ManagedNeedsReconciliation),
+        StoreRootMode::from_read_outcome(ManagedLifecycleEvidenceStatus::ManagedNeedsReconciliation),
         Ok(StoreRootMode::Managed)
     );
     assert_eq!(
-        StoreRootMode::from_read_outcome(ManagedLifecycleReadOutcome::RecoveryWriteRequired(
+        StoreRootMode::from_read_outcome(ManagedLifecycleEvidenceStatus::RecoveryWriteRequired(
             ManagedLifecycleRecoveryReason::TailRepair,
         )),
         Err(ManagedLifecycleRecoveryReason::TailRepair)
@@ -2423,8 +2423,8 @@ fn managed_lifecycle_session_owns_the_exclusive_root_lease() {
         .expect("inspect managed evidence under the retained exclusive lease");
 
     assert_eq!(
-        inspection.outcome(),
-        ManagedLifecycleReadOutcome::RecoveryWriteRequired(ManagedLifecycleRecoveryReason::BootstrapResume)
+        inspection.evidence_status(),
+        ManagedLifecycleEvidenceStatus::RecoveryWriteRequired(ManagedLifecycleRecoveryReason::BootstrapResume)
     );
 
     drop(lease);

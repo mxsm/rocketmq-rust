@@ -55,7 +55,7 @@ use reading::validate_snapshot_prefix;
 pub(crate) use types::ManagedLifecycleReadFailure;
 use types::{corruption, io_error, limit_error};
 pub use types::{
-    LockedManagedLifecycleInspection, ManagedLifecycleReadLimits, ManagedLifecycleReadOutcome,
+    LockedManagedLifecycleInspection, ManagedLifecycleEvidenceStatus, ManagedLifecycleReadLimits,
     ManagedLifecycleRecoveryReason, ManagedLifecycleSession,
 };
 
@@ -81,7 +81,7 @@ const MAX_TOTAL_READ_BYTES: u64 = 1024 * 1024 * 1024;
 #[doc(hidden)]
 pub(crate) fn inspect_managed_lifecycle_read_only(
     store_root: &File,
-) -> Result<ManagedLifecycleReadOutcome, ManagedLifecycleReadFailure> {
+) -> Result<ManagedLifecycleEvidenceStatus, ManagedLifecycleReadFailure> {
     inspect_with_hook(store_root, || {})
 }
 
@@ -95,7 +95,7 @@ pub(crate) fn inspect_managed_lifecycle_read_only(
 pub(crate) fn inspect_managed_lifecycle_read_only_with_limits(
     store_root: &File,
     limits: ManagedLifecycleReadLimits,
-) -> Result<ManagedLifecycleReadOutcome, ManagedLifecycleReadFailure> {
+) -> Result<ManagedLifecycleEvidenceStatus, ManagedLifecycleReadFailure> {
     inspect_with_limits_and_hooks(store_root, limits, || {}, || {})
 }
 
@@ -144,7 +144,7 @@ pub(crate) unsafe fn inspect_managed_lifecycle_under_exclusive_lock(
 fn inspect_with_hook(
     store_root: &File,
     after_first_inventory: impl FnOnce(),
-) -> Result<ManagedLifecycleReadOutcome, ManagedLifecycleReadFailure> {
+) -> Result<ManagedLifecycleEvidenceStatus, ManagedLifecycleReadFailure> {
     inspect_with_limits_and_hooks(
         store_root,
         ManagedLifecycleReadLimits::default(),
@@ -157,7 +157,7 @@ fn inspect_with_hooks(
     store_root: &File,
     after_first_inventory: impl FnOnce(),
     before_third_inventory: impl FnOnce(),
-) -> Result<ManagedLifecycleReadOutcome, ManagedLifecycleReadFailure> {
+) -> Result<ManagedLifecycleEvidenceStatus, ManagedLifecycleReadFailure> {
     inspect_with_limits_and_hooks(
         store_root,
         ManagedLifecycleReadLimits::default(),
@@ -171,7 +171,7 @@ fn inspect_with_limits_and_hooks(
     limits: ManagedLifecycleReadLimits,
     after_first_inventory: impl FnOnce(),
     before_third_inventory: impl FnOnce(),
-) -> Result<ManagedLifecycleReadOutcome, ManagedLifecycleReadFailure> {
+) -> Result<ManagedLifecycleEvidenceStatus, ManagedLifecycleReadFailure> {
     inspect_stable_with_limits_and_hooks(store_root, limits, after_first_inventory, before_third_inventory)
         .map(StableLifecycleInspection::outcome)
 }
@@ -290,16 +290,16 @@ enum StableLifecycleInspection {
 }
 
 impl StableLifecycleInspection {
-    fn outcome(self) -> ManagedLifecycleReadOutcome {
+    fn outcome(self) -> ManagedLifecycleEvidenceStatus {
         match self {
-            Self::LegacyAbsent => ManagedLifecycleReadOutcome::LegacyAbsent,
+            Self::LegacyAbsent => ManagedLifecycleEvidenceStatus::LegacyAbsent,
             Self::Managed(managed) => managed.outcome,
         }
     }
 }
 
 struct StableManagedLifecycle {
-    outcome: ManagedLifecycleReadOutcome,
+    outcome: ManagedLifecycleEvidenceStatus,
     store_uuid: Option<crate::mapped_file::retirement::identity::StoreUuid>,
     decision: Option<RecoveryDecision>,
 }
@@ -310,7 +310,7 @@ impl StableManagedLifecycle {
         store_uuid: Option<crate::mapped_file::retirement::identity::StoreUuid>,
     ) -> Self {
         Self {
-            outcome: ManagedLifecycleReadOutcome::RecoveryWriteRequired(reason),
+            outcome: ManagedLifecycleEvidenceStatus::RecoveryWriteRequired(reason),
             store_uuid,
             decision: None,
         }
@@ -686,25 +686,25 @@ impl DecodedInventory {
         })
         .map_err(map_replay_error)?;
         let outcome = match &decision {
-            RecoveryDecision::NeedsReconciliation(_) => ManagedLifecycleReadOutcome::ManagedNeedsReconciliation,
-            RecoveryDecision::AcknowledgeSelectedAnchor(_) => ManagedLifecycleReadOutcome::RecoveryWriteRequired(
+            RecoveryDecision::NeedsReconciliation(_) => ManagedLifecycleEvidenceStatus::ManagedNeedsReconciliation,
+            RecoveryDecision::AcknowledgeSelectedAnchor(_) => ManagedLifecycleEvidenceStatus::RecoveryWriteRequired(
                 ManagedLifecycleRecoveryReason::AcknowledgeSelectedAnchor,
             ),
             RecoveryDecision::CompleteSeal(_) => {
-                ManagedLifecycleReadOutcome::RecoveryWriteRequired(ManagedLifecycleRecoveryReason::CompleteSeal)
+                ManagedLifecycleEvidenceStatus::RecoveryWriteRequired(ManagedLifecycleRecoveryReason::CompleteSeal)
             }
-            RecoveryDecision::CompleteMarkerWitness(_) => ManagedLifecycleReadOutcome::RecoveryWriteRequired(
+            RecoveryDecision::CompleteMarkerWitness(_) => ManagedLifecycleEvidenceStatus::RecoveryWriteRequired(
                 ManagedLifecycleRecoveryReason::CompleteMarkerWitness,
             ),
             RecoveryDecision::TailRepair(_) => {
-                ManagedLifecycleReadOutcome::RecoveryWriteRequired(ManagedLifecycleRecoveryReason::TailRepair)
+                ManagedLifecycleEvidenceStatus::RecoveryWriteRequired(ManagedLifecycleRecoveryReason::TailRepair)
             }
             RecoveryDecision::ResumeGeneration(_) => {
-                ManagedLifecycleReadOutcome::RecoveryWriteRequired(ManagedLifecycleRecoveryReason::ResumeGeneration)
+                ManagedLifecycleEvidenceStatus::RecoveryWriteRequired(ManagedLifecycleRecoveryReason::ResumeGeneration)
             }
         };
-        let outcome = if has_temporary && outcome == ManagedLifecycleReadOutcome::ManagedNeedsReconciliation {
-            ManagedLifecycleReadOutcome::RecoveryWriteRequired(ManagedLifecycleRecoveryReason::TemporaryArtifact)
+        let outcome = if has_temporary && outcome == ManagedLifecycleEvidenceStatus::ManagedNeedsReconciliation {
+            ManagedLifecycleEvidenceStatus::RecoveryWriteRequired(ManagedLifecycleRecoveryReason::TemporaryArtifact)
         } else {
             outcome
         };
@@ -758,7 +758,7 @@ fn lifecycle_read_store_error(error: ManagedLifecycleReadFailure) -> StoreError 
 #[doc(hidden)]
 pub fn inspect_managed_lifecycle_read_only_for_store(
     store_root: &File,
-) -> Result<ManagedLifecycleReadOutcome, StoreError> {
+) -> Result<ManagedLifecycleEvidenceStatus, StoreError> {
     inspect_managed_lifecycle_read_only(store_root).map_err(lifecycle_read_store_error)
 }
 
@@ -766,7 +766,7 @@ pub fn inspect_managed_lifecycle_read_only_for_store(
 pub fn inspect_managed_lifecycle_read_only_with_limits_for_store(
     store_root: &File,
     limits: ManagedLifecycleReadLimits,
-) -> Result<ManagedLifecycleReadOutcome, StoreError> {
+) -> Result<ManagedLifecycleEvidenceStatus, StoreError> {
     inspect_managed_lifecycle_read_only_with_limits(store_root, limits).map_err(lifecycle_read_store_error)
 }
 

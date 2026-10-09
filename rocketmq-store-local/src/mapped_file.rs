@@ -72,7 +72,8 @@ pub use retirement::registry::MappedFileQueueSnapshot;
 pub use retirement::replay::{
     inspect_managed_lifecycle_read_only_for_store, inspect_managed_lifecycle_read_only_with_limits_for_store,
     inspect_managed_lifecycle_under_exclusive_lock_for_store, LockedManagedLifecycleInspection,
-    ManagedLifecycleReadLimits, ManagedLifecycleReadOutcome, ManagedLifecycleRecoveryReason, ManagedLifecycleSession,
+    ManagedLifecycleEvidenceStatus, ManagedLifecycleReadLimits, ManagedLifecycleRecoveryReason,
+    ManagedLifecycleSession,
 };
 #[doc(hidden)]
 pub use retirement::service::{

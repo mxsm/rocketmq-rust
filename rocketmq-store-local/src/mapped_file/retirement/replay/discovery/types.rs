@@ -31,7 +31,7 @@ use crate::mapped_file::retirement::sidecar::SidecarViolation;
 /// Store-local, read-only classification of managed lifecycle evidence.
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ManagedLifecycleReadOutcome {
+pub enum ManagedLifecycleEvidenceStatus {
     LegacyAbsent,
     ManagedNeedsReconciliation,
     RecoveryWriteRequired(ManagedLifecycleRecoveryReason),
@@ -60,7 +60,7 @@ pub enum ManagedLifecycleRecoveryReason {
 pub struct ManagedLifecycleSession {
     retained_root: File,
     _exclusive_lease: Arc<dyn Send + Sync>,
-    outcome: ManagedLifecycleReadOutcome,
+    evidence_status: ManagedLifecycleEvidenceStatus,
     store_uuid: Option<StoreUuid>,
     decision: Option<RecoveryDecision>,
 }
@@ -69,7 +69,7 @@ impl std::fmt::Debug for ManagedLifecycleSession {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("ManagedLifecycleSession")
-            .field("outcome", &self.outcome)
+            .field("evidence_status", &self.evidence_status)
             .field("has_store_uuid", &self.store_uuid.is_some())
             .field("has_replay_decision", &self.decision.is_some())
             .finish_non_exhaustive()
@@ -80,14 +80,14 @@ impl ManagedLifecycleSession {
     pub(super) fn new(
         retained_root: File,
         exclusive_lease: Arc<dyn Send + Sync>,
-        outcome: ManagedLifecycleReadOutcome,
+        evidence_status: ManagedLifecycleEvidenceStatus,
         store_uuid: Option<StoreUuid>,
         decision: Option<RecoveryDecision>,
     ) -> Self {
         Self {
             retained_root,
             _exclusive_lease: exclusive_lease,
-            outcome,
+            evidence_status,
             store_uuid,
             decision,
         }
@@ -95,8 +95,8 @@ impl ManagedLifecycleSession {
 
     /// Returns the read-only disposition without exposing replay or namespace authority.
     #[doc(hidden)]
-    pub const fn outcome(&self) -> ManagedLifecycleReadOutcome {
-        self.outcome
+    pub const fn evidence_status(&self) -> ManagedLifecycleEvidenceStatus {
+        self.evidence_status
     }
 
     pub(in crate::mapped_file::retirement) const fn store_uuid(&self) -> Option<StoreUuid> {
@@ -123,10 +123,10 @@ pub enum LockedManagedLifecycleInspection {
 impl LockedManagedLifecycleInspection {
     /// Returns the same stable disposition as the read-only inspector.
     #[doc(hidden)]
-    pub const fn outcome(&self) -> ManagedLifecycleReadOutcome {
+    pub const fn evidence_status(&self) -> ManagedLifecycleEvidenceStatus {
         match self {
-            Self::LegacyAbsent => ManagedLifecycleReadOutcome::LegacyAbsent,
-            Self::Managed(session) => session.outcome(),
+            Self::LegacyAbsent => ManagedLifecycleEvidenceStatus::LegacyAbsent,
+            Self::Managed(session) => session.evidence_status(),
         }
     }
 }
