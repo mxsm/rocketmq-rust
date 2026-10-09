@@ -1998,7 +1998,7 @@ mod tests {
     use crate::processor::default_request_processor::DefaultRequestProcessor;
     use crate::processor::ClientRequestProcessor;
     use crate::processor::ClusterTestTopicRouteResolution;
-    use crate::route::route_info_manager::TopicClusterTestLookupStatus;
+    use crate::route::route_info_manager::TopicRouteLookupOutcome;
     use crate::route::types::BrokerSession;
 
     fn test_broker_session(remote_addr: SocketAddr) -> (BrokerSession, SessionId) {
@@ -3400,7 +3400,7 @@ mod tests {
                     .inner
                     .route_info_manager()
                     .pickup_topic_route_data(&registered_topic),
-                Ok(TopicClusterTestLookupStatus::Found(_))
+                Ok(TopicRouteLookupOutcome::Found(_))
             ),
             "registered topic should be visible through route manager"
         );
@@ -3420,7 +3420,7 @@ mod tests {
                     .inner
                     .route_info_manager()
                     .pickup_topic_route_data(&registered_topic),
-                Ok(TopicClusterTestLookupStatus::NotFound)
+                Ok(TopicRouteLookupOutcome::NotFound)
             ),
             "deleted topic should no longer have route data"
         );
@@ -3547,7 +3547,7 @@ mod tests {
                     .inner
                     .route_info_manager()
                     .pickup_topic_route_data(&topic_name),
-                Ok(TopicClusterTestLookupStatus::Found(_))
+                Ok(TopicRouteLookupOutcome::Found(_))
             ),
             "registered topic route should exist before unregister"
         );
@@ -3575,7 +3575,7 @@ mod tests {
                     .inner
                     .route_info_manager()
                     .pickup_topic_route_data(&topic_name),
-                Ok(TopicClusterTestLookupStatus::NotFound)
+                Ok(TopicRouteLookupOutcome::NotFound)
             )
         })
         .await;
@@ -3803,7 +3803,7 @@ mod tests {
         )
         .await;
 
-        let TopicClusterTestLookupStatus::Found(topic_route_data) = bootstrap
+        let TopicRouteLookupOutcome::Found(topic_route_data) = bootstrap
             .name_server_runtime
             .inner
             .route_info_manager()
@@ -3871,7 +3871,7 @@ mod tests {
 
             matches!(
                 route_manager.pickup_topic_route_data(&topic_name),
-                Ok(TopicClusterTestLookupStatus::NotFound)
+                Ok(TopicRouteLookupOutcome::NotFound)
             ) && route_manager
                 .query_broker_topic_config(cluster_name.clone(), broker_addr.clone())
                 .is_none()
@@ -3977,7 +3977,7 @@ mod tests {
 
             matches!(
                 route_manager.pickup_topic_route_data(&topic_name),
-                Ok(TopicClusterTestLookupStatus::NotFound)
+                Ok(TopicRouteLookupOutcome::NotFound)
             ) && route_manager
                 .query_broker_topic_config(cluster_name.clone(), broker_addr.clone())
                 .is_none()
@@ -4064,7 +4064,7 @@ mod tests {
         wait_until("duplicate unregister cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
-            let Ok(TopicClusterTestLookupStatus::Found(route_data)) =
+            let Ok(TopicRouteLookupOutcome::Found(route_data)) =
                 route_manager.pickup_topic_route_data(&topic_name)
             else {
                 return false;
@@ -4164,7 +4164,7 @@ mod tests {
         wait_until("channel destroy cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
-            let Ok(TopicClusterTestLookupStatus::Found(route_data)) =
+            let Ok(TopicRouteLookupOutcome::Found(route_data)) =
                 route_manager.pickup_topic_route_data(&topic_name)
             else {
                 return false;
@@ -4266,7 +4266,7 @@ mod tests {
         wait_until("acting master cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
-            let Ok(TopicClusterTestLookupStatus::Found(route_data)) =
+            let Ok(TopicRouteLookupOutcome::Found(route_data)) =
                 route_manager.pickup_topic_route_data(&topic_name)
             else {
                 return false;
@@ -4669,7 +4669,7 @@ mod tests {
             .expect("first broker session should publish connect");
         assert!(matches!(
             runtime.route_info_manager().pickup_topic_route_data(&topic_name),
-            Ok(TopicClusterTestLookupStatus::Found(_))
+            Ok(TopicRouteLookupOutcome::Found(_))
         ));
 
         let mut replacement = connect(&addr).await;
@@ -4697,7 +4697,7 @@ mod tests {
         assert!(
             matches!(
                 runtime.route_info_manager().pickup_topic_route_data(&topic_name),
-                Ok(TopicClusterTestLookupStatus::Found(_))
+                Ok(TopicRouteLookupOutcome::Found(_))
             ),
             "an old session disconnect must not remove its replacement registration"
         );
@@ -4716,7 +4716,7 @@ mod tests {
         wait_until("replacement disconnect route cleanup", || {
             matches!(
                 runtime.route_info_manager().pickup_topic_route_data(&topic_name),
-                Ok(TopicClusterTestLookupStatus::NotFound)
+                Ok(TopicRouteLookupOutcome::NotFound)
             )
         })
         .await;
