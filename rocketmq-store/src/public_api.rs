@@ -148,7 +148,7 @@ pub use crate::message_store::StoreReleaseCheckpointService;
 pub use crate::platform::classify_file_preallocate_result;
 pub use crate::platform::current_store_platform_capability;
 pub use crate::platform::preallocate_file;
-pub use crate::platform::FilePreallocateOutcome;
+pub use crate::platform::FilePreallocationResult;
 pub use crate::platform::StorePlatformCapability;
 pub use crate::platform::StorePlatformIoHintBranch;
 pub use crate::platform::StorePlatformOptimizationCapability;
