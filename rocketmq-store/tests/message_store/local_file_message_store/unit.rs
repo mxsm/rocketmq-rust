@@ -5568,7 +5568,7 @@ async fn clean_expired_removes_trimmed_queue_directly() {
 #[cfg(any(target_os = "linux", windows))]
 #[tokio::test]
 async fn managed_cleanup_reports_submission_before_reaper_completion() {
-    use crate::consume_queue::mapped_file_queue::CleanupOutcome;
+    use crate::consume_queue::mapped_file_queue::MappedFileCleanupReport;
     let temp_dir = tempdir().unwrap();
     let mut store = new_configured_test_store(
         &temp_dir,
@@ -5599,13 +5599,13 @@ async fn managed_cleanup_reports_submission_before_reaper_completion() {
     }
     let alias = store.commit_log.get_data(0).unwrap();
     let runtime = store.managed_lifecycle_runtime.as_ref().unwrap();
-    let outcome = store
+    let cleanup_report = store
         .commit_log
         .cleanup_handle()
         .delete_expired_files_by_time_before(0, 0, 0, true, 10, None);
     assert_eq!(
-        outcome,
-        CleanupOutcome::ManagedSubmitted {
+        cleanup_report,
+        MappedFileCleanupReport::ManagedSubmitted {
             selected: 2,
             submitted: 2
         }

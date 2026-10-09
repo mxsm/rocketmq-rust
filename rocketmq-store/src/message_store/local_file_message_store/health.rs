@@ -252,7 +252,7 @@ impl CleanCommitLogService {
             .as_ref()
             .and_then(|minimum_pinned_wal_segment| minimum_pinned_wal_segment());
         if is_time_up || disk_decision.should_delete || is_manual_delete {
-            let outcome = self.commit_log.delete_expired_files_by_time_before(
+            let cleanup_report = self.commit_log.delete_expired_files_by_time_before(
                 expired_time,
                 self.message_store_config.delete_commit_log_files_interval as i32,
                 self.message_store_config.destroy_mapped_file_interval_forcibly as i64,
@@ -260,9 +260,9 @@ impl CleanCommitLogService {
                 self.message_store_config.delete_file_batch_max as i32,
                 minimum_pinned_wal_segment,
             );
-            use crate::consume_queue::mapped_file_queue::CleanupOutcome;
-            match outcome {
-                CleanupOutcome::ManagedSubmitted { selected, submitted } => {
+            use crate::consume_queue::mapped_file_queue::MappedFileCleanupReport;
+            match cleanup_report {
+                MappedFileCleanupReport::ManagedSubmitted { selected, submitted } => {
                     if selected > 0 {
                         info!(
                             selected,
@@ -270,7 +270,7 @@ impl CleanCommitLogService {
                         );
                     }
                 }
-                CleanupOutcome::LegacyCompleted { namespace_removed } => {
+                MappedFileCleanupReport::LegacyCompleted { namespace_removed } => {
                     if namespace_removed > 0 {
                         info!(namespace_removed, "expired commitlog namespace entries removed; physical free space requires a new disk sample");
                     } else if disk_decision.should_delete {

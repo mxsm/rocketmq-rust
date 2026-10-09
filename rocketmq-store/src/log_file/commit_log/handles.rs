@@ -72,7 +72,7 @@ impl CommitLogCleanupHandle {
         clean_immediately: bool,
         delete_file_batch_max: i32,
         pinned_file_offset: Option<u64>,
-    ) -> crate::consume_queue::mapped_file_queue::CleanupOutcome {
+    ) -> crate::consume_queue::mapped_file_queue::MappedFileCleanupReport {
         self.mapped_file_queue.delete_expired_files_by_time_before(
             expired_time,
             delete_files_interval,
