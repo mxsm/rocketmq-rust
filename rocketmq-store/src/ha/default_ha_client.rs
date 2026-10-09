@@ -81,7 +81,7 @@ struct ConnectedMaster {
     endpoint_updates: watch::Receiver<MasterEndpointSnapshot>,
 }
 
-enum MasterConnectOutcome {
+enum MasterConnectionAttemptResult {
     Connected(ConnectedMaster),
     Retry { observed_generation: u64 },
     EndpointChanged,
@@ -147,11 +147,11 @@ impl Inner {
         self.last_read_timestamp.store(0, Ordering::SeqCst);
     }
 
-    async fn connect_master(&self) -> Result<MasterConnectOutcome, HAClientError> {
+    async fn connect_master(&self) -> Result<MasterConnectionAttemptResult, HAClientError> {
         self.connect_master_with(TcpStream::connect).await
     }
 
-    async fn connect_master_with<C, F>(&self, connector: C) -> Result<MasterConnectOutcome, HAClientError>
+    async fn connect_master_with<C, F>(&self, connector: C) -> Result<MasterConnectionAttemptResult, HAClientError>
     where
         C: FnOnce(String) -> F,
         F: Future<Output = std::io::Result<TcpStream>>,
@@ -159,12 +159,12 @@ impl Inner {
         let mut endpoint_updates = self.master_endpoint.subscribe();
         let endpoint = endpoint_updates.borrow_and_update().clone();
         let Some(address) = endpoint.address.clone() else {
-            return Ok(MasterConnectOutcome::Retry {
+            return Ok(MasterConnectionAttemptResult::Retry {
                 observed_generation: endpoint.generation,
             });
         };
         if self.owner_cancel.is_cancelled() {
-            return Ok(MasterConnectOutcome::Shutdown);
+            return Ok(MasterConnectionAttemptResult::Shutdown);
         }
 
         let connect_timeout = self.connect_timeout;
@@ -172,17 +172,17 @@ impl Inner {
         tokio::pin!(timeout);
         let connect_result = tokio::select! {
             biased;
-            _ = self.owner_cancel.cancelled() => return Ok(MasterConnectOutcome::Shutdown),
+            _ = self.owner_cancel.cancelled() => return Ok(MasterConnectionAttemptResult::Shutdown),
             changed = endpoint_updates.changed() => {
                 return Ok(if changed.is_ok() {
-                    MasterConnectOutcome::EndpointChanged
+                    MasterConnectionAttemptResult::EndpointChanged
                 } else {
-                    MasterConnectOutcome::Shutdown
+                    MasterConnectionAttemptResult::Shutdown
                 });
             }
             _ = &mut timeout => {
                 warn!("HAClient connection attempt timed out");
-                return Ok(MasterConnectOutcome::Retry {
+                return Ok(MasterConnectionAttemptResult::Retry {
                     observed_generation: endpoint.generation,
                 });
             }
@@ -196,7 +196,7 @@ impl Inner {
                     source_present = true,
                     "HAClient failed to connect to the current master endpoint"
                 );
-                return Ok(MasterConnectOutcome::Retry {
+                return Ok(MasterConnectionAttemptResult::Retry {
                     observed_generation: endpoint.generation,
                 });
             }
@@ -205,14 +205,14 @@ impl Inner {
 
         if !self.activate_connected_endpoint(&endpoint).await {
             return Ok(if self.owner_cancel.is_cancelled() {
-                MasterConnectOutcome::Shutdown
+                MasterConnectionAttemptResult::Shutdown
             } else {
-                MasterConnectOutcome::EndpointChanged
+                MasterConnectionAttemptResult::EndpointChanged
             });
         }
 
         info!("HAClient connected to the current master endpoint");
-        Ok(MasterConnectOutcome::Connected(ConnectedMaster {
+        Ok(MasterConnectionAttemptResult::Connected(ConnectedMaster {
             stream,
             endpoint,
             endpoint_updates,
@@ -459,7 +459,7 @@ impl HAClient for DefaultHAClient {
                 if *read_guard == HAConnectionState::Ready {
                     drop(read_guard);
                     match client.connect_master().await {
-                        Ok(MasterConnectOutcome::Connected(connection)) => {
+                        Ok(MasterConnectionAttemptResult::Connected(connection)) => {
                             let ConnectedMaster {
                                 stream,
                                 endpoint,
@@ -649,14 +649,14 @@ impl HAClient for DefaultHAClient {
                                 break;
                             }
                         }
-                        Ok(MasterConnectOutcome::Retry { observed_generation }) => {
+                        Ok(MasterConnectionAttemptResult::Retry { observed_generation }) => {
                             if client.wait_reconnect_delay_after(observed_generation).await {
                                 break;
                             }
                             continue;
                         }
-                        Ok(MasterConnectOutcome::EndpointChanged) => continue,
-                        Ok(MasterConnectOutcome::Shutdown) => break,
+                        Ok(MasterConnectionAttemptResult::EndpointChanged) => continue,
+                        Ok(MasterConnectionAttemptResult::Shutdown) => break,
                         Err(_error) => {
                             warn!(source_present = true, "HAClient master connection operation failed");
                             if client.wait_reconnect_delay().await {
@@ -1234,7 +1234,7 @@ mod tests {
         assert!(changed);
         assert!(matches!(
             outcome.expect("connect outcome"),
-            MasterConnectOutcome::EndpointChanged
+            MasterConnectionAttemptResult::EndpointChanged
         ));
         assert_eq!(
             client.inner.master_endpoint_snapshot(),
@@ -1269,7 +1269,7 @@ mod tests {
 
         assert!(matches!(
             outcome.expect("connect outcome"),
-            MasterConnectOutcome::Shutdown
+            MasterConnectionAttemptResult::Shutdown
         ));
     }
 
@@ -1297,7 +1297,7 @@ mod tests {
 
         assert!(matches!(
             outcome,
-            MasterConnectOutcome::Retry { observed_generation: 1 }
+            MasterConnectionAttemptResult::Retry { observed_generation: 1 }
         ));
     }
 
