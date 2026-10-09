@@ -52,7 +52,7 @@ fn absent_lifecycle_directory_is_legacy_without_writes() {
 
     assert_eq!(
         inspect_managed_lifecycle_read_only(&handle).expect("legacy inspection succeeds"),
-        ManagedLifecycleReadOutcome::LegacyAbsent
+        ManagedLifecycleEvidenceStatus::LegacyAbsent
     );
     assert_eq!(tree_bytes(root.path()), before);
 }
@@ -65,7 +65,7 @@ fn complete_generation_inventory_replays_and_performs_zero_writes() {
 
     assert_eq!(
         inspect_managed_lifecycle_read_only(&handle).expect("managed inspection succeeds"),
-        ManagedLifecycleReadOutcome::ManagedNeedsReconciliation
+        ManagedLifecycleEvidenceStatus::ManagedNeedsReconciliation
     );
     assert_eq!(tree_bytes(fixture.root.path()), before);
 }
@@ -289,7 +289,7 @@ fn torn_nonzero_acknowledgement_slot_is_reconstructed_from_the_unique_seal() {
 
     assert_eq!(
         inspect_managed_lifecycle_read_only(&handle).expect("seal reconstructs the torn older slot"),
-        ManagedLifecycleReadOutcome::ManagedNeedsReconciliation
+        ManagedLifecycleEvidenceStatus::ManagedNeedsReconciliation
     );
 }
 
@@ -307,7 +307,7 @@ fn valid_temporary_artifact_requires_write_side_recovery() {
 
     assert_eq!(
         inspect_managed_lifecycle_read_only(&handle).expect("temporary is classified"),
-        ManagedLifecycleReadOutcome::RecoveryWriteRequired(ManagedLifecycleRecoveryReason::TemporaryArtifact)
+        ManagedLifecycleEvidenceStatus::RecoveryWriteRequired(ManagedLifecycleRecoveryReason::TemporaryArtifact)
     );
 }
 
@@ -402,7 +402,7 @@ fn explicit_limits_accept_exact_boundaries_and_reject_one_less() {
     let handle = open_root(fixture.root.path()).expect("Store-root handle");
     assert_eq!(
         inspect_managed_lifecycle_read_only_with_limits(&handle, exact).expect("exact limits succeed"),
-        ManagedLifecycleReadOutcome::ManagedNeedsReconciliation
+        ManagedLifecycleEvidenceStatus::ManagedNeedsReconciliation
     );
 
     let too_short_log = ManagedLifecycleReadLimits {

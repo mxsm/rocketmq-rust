@@ -25,7 +25,7 @@ use rocketmq_store_local::mapped_file::bootstrap_managed_lifecycle_under_exclusi
 use rocketmq_store_local::mapped_file::inspect_managed_lifecycle_read_only_for_store;
 use rocketmq_store_local::mapped_file::inspect_managed_lifecycle_under_exclusive_lock_for_store;
 use rocketmq_store_local::mapped_file::LockedManagedLifecycleInspection;
-use rocketmq_store_local::mapped_file::ManagedLifecycleReadOutcome;
+use rocketmq_store_local::mapped_file::ManagedLifecycleEvidenceStatus;
 use rocketmq_store_local::mapped_file::ManagedLifecycleRecoveryReason;
 
 use crate::store_error::StoreComponent;
@@ -51,12 +51,12 @@ pub(super) enum StoreRootMode {
 
 impl StoreRootMode {
     pub(super) fn from_read_outcome(
-        outcome: ManagedLifecycleReadOutcome,
+        outcome: ManagedLifecycleEvidenceStatus,
     ) -> Result<Self, ManagedLifecycleRecoveryReason> {
         match outcome {
-            ManagedLifecycleReadOutcome::LegacyAbsent => Ok(Self::Legacy),
-            ManagedLifecycleReadOutcome::ManagedNeedsReconciliation => Ok(Self::Managed),
-            ManagedLifecycleReadOutcome::RecoveryWriteRequired(reason) => Err(reason),
+            ManagedLifecycleEvidenceStatus::LegacyAbsent => Ok(Self::Legacy),
+            ManagedLifecycleEvidenceStatus::ManagedNeedsReconciliation => Ok(Self::Managed),
+            ManagedLifecycleEvidenceStatus::RecoveryWriteRequired(reason) => Err(reason),
         }
     }
 }
@@ -105,7 +105,7 @@ impl StoreRootLease {
     pub(super) fn lifecycle_outcome(
         &self,
         operation: StoreOperation,
-    ) -> Result<ManagedLifecycleReadOutcome, StoreError> {
+    ) -> Result<ManagedLifecycleEvidenceStatus, StoreError> {
         self.validate_root_binding(operation)?;
         inspect_managed_lifecycle_read_only_for_store(&self.root)
     }
@@ -297,12 +297,12 @@ impl StoreRootLease {
         self.validate_root_binding(operation)?;
 
         match inspect_managed_lifecycle_read_only_for_store(&self.root) {
-            Ok(ManagedLifecycleReadOutcome::LegacyAbsent) => Ok(()),
-            Ok(ManagedLifecycleReadOutcome::ManagedNeedsReconciliation) => Err(managed_lifecycle_fence(
+            Ok(ManagedLifecycleEvidenceStatus::LegacyAbsent) => Ok(()),
+            Ok(ManagedLifecycleEvidenceStatus::ManagedNeedsReconciliation) => Err(managed_lifecycle_fence(
                 operation,
                 "reconciliation before segment publication",
             )),
-            Ok(ManagedLifecycleReadOutcome::RecoveryWriteRequired(reason)) => {
+            Ok(ManagedLifecycleEvidenceStatus::RecoveryWriteRequired(reason)) => {
                 Err(managed_lifecycle_fence(operation, recovery_requirement(reason)))
             }
             Err(error) => Err(error),

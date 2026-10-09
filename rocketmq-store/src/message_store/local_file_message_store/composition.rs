@@ -281,8 +281,8 @@ impl LocalFileMessageStore {
         if message_store_config.enable_mapped_file_lifecycle_wave_b
             && matches!(
                 initial_outcome,
-                rocketmq_store_local::mapped_file::ManagedLifecycleReadOutcome::LegacyAbsent
-                    | rocketmq_store_local::mapped_file::ManagedLifecycleReadOutcome::RecoveryWriteRequired(
+                rocketmq_store_local::mapped_file::ManagedLifecycleEvidenceStatus::LegacyAbsent
+                    | rocketmq_store_local::mapped_file::ManagedLifecycleEvidenceStatus::RecoveryWriteRequired(
                         rocketmq_store_local::mapped_file::ManagedLifecycleRecoveryReason::BootstrapResume
                     )
             )
