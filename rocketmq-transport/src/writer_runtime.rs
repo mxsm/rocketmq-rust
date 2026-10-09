@@ -33,6 +33,7 @@ use crate::deadline::RequestDeadline;
 use crate::error_helpers::argument_invalid;
 use crate::error_helpers::client_shutting_down;
 use crate::error_helpers::connection_failed;
+use crate::error_helpers::connection_failed_without_source;
 use crate::error_helpers::TransportStage;
 use crate::telemetry::TransportTelemetry;
 use crate::write_result::WriterFailure;
@@ -216,6 +217,24 @@ impl WriterLanes {
             .send(CloseRequest { completion })
             .await
             .map_err(|_| mpsc::error::SendError(()))
+    }
+
+    pub(crate) async fn wait_for_close(
+        &self,
+        mut result: oneshot::Receiver<Result<(), rocketmq_error::SharedError>>,
+    ) -> Result<(), rocketmq_error::SharedError> {
+        // A send can reserve capacity before the writer is dropped and publish
+        // afterwards. Its queued receipt then lives as long as these senders,
+        // so waiting only for the oneshot would stall session retirement.
+        tokio::select! {
+            biased;
+            result = &mut result => result
+                .unwrap_or_else(|source| Err(connection_failed(TransportStage::Closed, source))),
+            // The writer can publish between polling the two branches. Recheck
+            // synchronously so its receipt, including its original error, wins.
+            () = self.close.closed() => result.try_recv()
+                .unwrap_or_else(|_| Err(connection_failed_without_source(TransportStage::Closed))),
+        }
     }
 }
 
@@ -776,6 +795,7 @@ mod queue_regression_tests {
 
     use super::try_reserve_bytes;
     use super::writer_lanes;
+    use super::CloseRequest;
     use super::LaneEnvelope;
     use super::MicroBatchConfig;
     use super::WriterEnqueueOutcome;
@@ -786,6 +806,8 @@ mod queue_regression_tests {
     use crate::admission::AdmissionLimits;
     use crate::admission::AdmissionResource;
     use crate::admission::AdmissionScope;
+    use crate::error_helpers::connection_failed;
+    use crate::error_helpers::TransportStage;
     use crate::write_strategy::OutboundPayload;
     use crate::write_strategy::QueuedWrite;
     use crate::write_strategy::QueuedWriteProgress;
@@ -871,6 +893,72 @@ mod queue_regression_tests {
             .expect("close signal has an independent lane");
 
         assert!(matches!(receivers.recv().await, WriterEvent::Close(_)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn close_receipt_does_not_wait_for_a_writer_dropped_after_reservation() {
+        let (lanes, receivers) = writer_lanes(queue_config());
+        let (completion, result) = oneshot::channel();
+        // Sender::send reserves before publishing. Force cancellation into
+        // that gap while keeping the session's sender alive, as retirement does.
+        let reserved = lanes.close.reserve().await.expect("reserve close capacity");
+        drop(receivers);
+        reserved.send(CloseRequest { completion });
+
+        let result = tokio::time::timeout(Duration::from_secs(1), lanes.wait_for_close(result))
+            .await
+            .expect("a dropped writer cannot acknowledge the queued close");
+        assert!(
+            result.is_err(),
+            "writer disappearance must not report a successful close"
+        );
+    }
+
+    #[tokio::test]
+    async fn published_close_receipt_wins_over_writer_disappearance() {
+        let (lanes, receivers) = writer_lanes(queue_config());
+        let (completion, result) = oneshot::channel();
+        completion.send(Ok(())).expect("publish successful close");
+        drop(receivers);
+        lanes
+            .wait_for_close(result)
+            .await
+            .expect("preserve successful close receipt");
+    }
+
+    #[tokio::test]
+    async fn published_close_receipt_survives_exhausted_cooperative_budget() {
+        let (lanes, receivers) = writer_lanes(queue_config());
+        let (completion, result) = oneshot::channel();
+        completion.send(Ok(())).expect("publish successful close");
+        drop(receivers);
+
+        tokio::spawn(async move {
+            while tokio::task::coop::has_budget_remaining() {
+                tokio::task::consume_budget().await;
+            }
+            lanes.wait_for_close(result).await
+        })
+        .await
+        .expect("close waiter task")
+        .expect("a scheduler yield must not hide a published close receipt");
+    }
+
+    #[tokio::test]
+    async fn published_close_failure_keeps_its_source_after_writer_disappearance() {
+        let (lanes, receivers) = writer_lanes(queue_config());
+        let (completion, result) = oneshot::channel();
+        let source = connection_failed(
+            TransportStage::Closed,
+            std::io::Error::from(std::io::ErrorKind::BrokenPipe),
+        );
+        completion.send(Err(Arc::clone(&source))).expect("publish failed close");
+        drop(receivers);
+        let observed = lanes
+            .wait_for_close(result)
+            .await
+            .expect_err("preserve failed close receipt");
+        assert!(Arc::ptr_eq(&source, &observed));
     }
 
     #[test]

@@ -87,14 +87,24 @@ impl RunningServer {
         }
     }
 
-    pub(super) async fn finish(mut self) -> ShutdownReport {
+    pub(super) async fn finish(self) -> ShutdownReport {
+        self.finish_with_abort_budget(0).await
+    }
+
+    pub(super) async fn finish_after_forced_close(self) -> ShutdownReport {
+        // The deliberately aborted writer is reported only if its session
+        // group is still retained when server shutdown takes its snapshot.
+        self.finish_with_abort_budget(1).await
+    }
+
+    async fn finish_with_abort_budget(mut self, mut allowed_aborts: usize) -> ShutdownReport {
         self.begin_shutdown();
         let report = tokio::time::timeout(Duration::from_secs(2), &mut self.result)
             .await
             .expect("owned server shutdown deadline")
             .expect("owned server result channel")
             .expect("owned server shutdown report");
-        assert_clean_shutdown("server", &report);
+        assert_shutdown_with_abort_budget("server", &report, &mut allowed_aborts);
         finish_owner(self.owner).await;
         report
     }
@@ -222,14 +232,19 @@ async fn finish_owner(owner: RuntimeOwner) {
 }
 
 fn assert_clean_shutdown(owner: &str, report: &ShutdownReport) {
+    assert_shutdown_with_abort_budget(owner, report, &mut 0);
+}
+
+fn assert_shutdown_with_abort_budget(owner: &str, report: &ShutdownReport, allowed_aborts: &mut usize) {
     assert!(report.is_healthy(), "{owner}: {}", report.to_json());
-    assert_eq!(report.aborted, 0, "{owner}: {}", report.to_json());
+    assert!(report.aborted <= *allowed_aborts, "{owner}: {}", report.to_json());
+    *allowed_aborts -= report.aborted;
     assert_eq!(report.panicked, 0, "{owner}: {}", report.to_json());
     assert_eq!(report.timed_out, 0, "{owner}: {}", report.to_json());
     assert_eq!(report.leaked, 0, "{owner}: {}", report.to_json());
     assert_eq!(report.blocking_still_running, 0, "{owner}: {}", report.to_json());
     assert!(report.remaining_tasks.is_empty(), "{owner}: {}", report.to_json());
     for child in &report.children {
-        assert_clean_shutdown(owner, child);
+        assert_shutdown_with_abort_budget(owner, child, allowed_aborts);
     }
 }
