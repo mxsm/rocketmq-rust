@@ -56,8 +56,8 @@ use rocketmq_store::BrokerMasterAddressStore;
 use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
+use rocketmq_store_api::DecodedReadResult;
 use rocketmq_store_api::GetStatus;
-use rocketmq_store_api::ReadOutcome;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tracing::debug;
@@ -87,7 +87,7 @@ const MAX_CONCURRENT_OP_WRITES: usize = 32;
 /// Budget for [`TransactionalMessageService::close`], which has no caller deadline.
 const TRANSACTION_CLOSE_TIMEOUT: Duration = Duration::from_secs(30);
 
-type TransactionMessageReadResult = ReadOutcome<MessageExt>;
+type TransactionMessageReadResult = DecodedReadResult<MessageExt>;
 
 fn is_no_new_message(status: GetStatus) -> bool {
     matches!(
@@ -1128,7 +1128,7 @@ where
     /// # Returns
     ///
     /// A `Result` containing an optional store read outcome:
-    /// - `Some(ReadOutcome)` if the operation messages were successfully read.
+    /// - `Some(DecodedReadResult)` if the operation messages were successfully read.
     /// - `None` if no operation messages were found.
     ///
     /// # Errors
