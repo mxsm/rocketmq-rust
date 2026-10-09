@@ -5874,8 +5874,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::timer::timer_message_store::TimerPayloadReadOutcome",
-          "identity": "rocketmq-store/src/public_api.rs:pub use crate::timer::timer_message_store::TimerPayloadReadOutcome",
+          "declaration": "pub use crate::timer::timer_message_store::TimerPayloadReadResult",
+          "identity": "rocketmq-store/src/public_api.rs:pub use crate::timer::timer_message_store::TimerPayloadReadResult",
           "owner": "store",
           "path": "rocketmq-store/src/public_api.rs",
           "rationale": "preserve source-free timer payload read decisions at the Store boundary",

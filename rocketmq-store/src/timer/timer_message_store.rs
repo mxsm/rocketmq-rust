@@ -143,9 +143,9 @@ struct TimerDeleteIdentity {
 #[derive(Debug)]
 #[allow(
     clippy::large_enum_variant,
-    reason = "the public read outcome preserves the decoded MessageExt payload by value"
+    reason = "the public read result preserves the decoded MessageExt payload by value"
 )]
-pub enum TimerPayloadReadOutcome {
+pub enum TimerPayloadReadResult {
     /// The CommitLog payload decoded successfully.
     Decoded(MessageExt),
     /// The locator is empty, negative, or exceeds the caller's byte budget.
@@ -541,9 +541,9 @@ impl TimerMessageStore {
         self.storage_metrics.snapshot()
     }
 
-    fn look_messages_by_locator(&self, locators: &[(i64, i32)], max_bytes: usize) -> Vec<TimerPayloadReadOutcome> {
+    fn look_messages_by_locator(&self, locators: &[(i64, i32)], max_bytes: usize) -> Vec<TimerPayloadReadResult> {
         let Some(store_context) = self.store_context.as_ref() else {
-            return locators.iter().map(|_| TimerPayloadReadOutcome::Missing).collect();
+            return locators.iter().map(|_| TimerPayloadReadResult::Missing).collect();
         };
         let mut output = Vec::with_capacity(locators.len());
         let mut cursor = 0usize;
@@ -551,12 +551,12 @@ impl TimerMessageStore {
         while cursor < locators.len() {
             let (start, first_size) = locators[cursor];
             let Ok(first_size) = usize::try_from(first_size) else {
-                output.push(TimerPayloadReadOutcome::InvalidLocator);
+                output.push(TimerPayloadReadResult::InvalidLocator);
                 cursor += 1;
                 continue;
             };
             if start < 0 || first_size == 0 || retained_bytes.saturating_add(first_size) > max_bytes {
-                output.push(TimerPayloadReadOutcome::InvalidLocator);
+                output.push(TimerPayloadReadResult::InvalidLocator);
                 cursor += 1;
                 continue;
             }
@@ -583,13 +583,13 @@ impl TimerMessageStore {
             }
 
             let Some(segments) = store_context.commit_log.get_bulk_data(start, run_bytes as i32) else {
-                output.extend((run_start..cursor).map(|_| TimerPayloadReadOutcome::Missing));
+                output.extend((run_start..cursor).map(|_| TimerPayloadReadResult::Missing));
                 retained_bytes = retained_bytes.saturating_add(run_bytes);
                 continue;
             };
             let mut payload_cursor = TimerPayloadCursor::new(segments);
             if payload_cursor.remaining() != run_bytes {
-                output.extend((run_start..cursor).map(|_| TimerPayloadReadOutcome::ShortRead));
+                output.extend((run_start..cursor).map(|_| TimerPayloadReadResult::ShortRead));
                 retained_bytes = retained_bytes.saturating_add(run_bytes);
                 continue;
             }
@@ -597,11 +597,11 @@ impl TimerMessageStore {
                 let size = *size as usize;
                 let result = match payload_cursor.take_frame(size) {
                     Err(error) => match error {
-                        TimerPayloadCursorViolation::InvalidFrameSize { .. } => TimerPayloadReadOutcome::InvalidLocator,
-                        TimerPayloadCursorViolation::ShortRead { .. } => TimerPayloadReadOutcome::ShortRead,
+                        TimerPayloadCursorViolation::InvalidFrameSize { .. } => TimerPayloadReadResult::InvalidLocator,
+                        TimerPayloadCursorViolation::ShortRead { .. } => TimerPayloadReadResult::ShortRead,
                     },
                     Ok(mut bytes) => MessageDecoder::decode(&mut bytes, true, false, false, false, false)
-                        .map_or(TimerPayloadReadOutcome::Decode, TimerPayloadReadOutcome::Decoded),
+                        .map_or(TimerPayloadReadResult::Decode, TimerPayloadReadResult::Decoded),
                 };
                 output.push(result);
             }
@@ -1605,15 +1605,15 @@ impl TimerMessageStore {
 
         for (cq_unit, message) in batch.into_iter().zip(messages) {
             let message = match message {
-                TimerPayloadReadOutcome::Decoded(message) => message,
+                TimerPayloadReadResult::Decoded(message) => message,
                 reason => {
                     let corruption = match reason {
-                        TimerPayloadReadOutcome::Missing => CorruptionReason::MissingPayload,
-                        TimerPayloadReadOutcome::ShortRead => CorruptionReason::ShortRead,
-                        TimerPayloadReadOutcome::Decode | TimerPayloadReadOutcome::InvalidLocator => {
+                        TimerPayloadReadResult::Missing => CorruptionReason::MissingPayload,
+                        TimerPayloadReadResult::ShortRead => CorruptionReason::ShortRead,
+                        TimerPayloadReadResult::Decode | TimerPayloadReadResult::InvalidLocator => {
                             CorruptionReason::UnsupportedRecord
                         }
-                        TimerPayloadReadOutcome::Decoded(_) => continue,
+                        TimerPayloadReadResult::Decoded(_) => continue,
                     };
                     self.quarantine_source(cq_unit.queue_offset, corruption);
                     warn!("timer materialization is blocked by an unreadable persisted payload");
