@@ -5694,8 +5694,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::timer::timeline::TimelinePromotionOutcome",
-          "identity": "rocketmq-store/src/public_api.rs:pub use crate::timer::timeline::TimelinePromotionOutcome",
+          "declaration": "pub use crate::timer::timeline::TimelinePromotionDecision",
+          "identity": "rocketmq-store/src/public_api.rs:pub use crate::timer::timeline::TimelinePromotionDecision",
           "owner": "store",
           "path": "rocketmq-store/src/public_api.rs",
           "rationale": "preserve source-free timeline promotion decisions at the Store boundary",

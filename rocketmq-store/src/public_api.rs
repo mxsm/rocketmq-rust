@@ -185,7 +185,7 @@ pub use crate::timer::pipeline::TimerPipelineDiagnostics;
 #[cfg(feature = "extended_timeline")]
 pub use crate::timer::timeline::TimelineAdmissionOutcome;
 #[cfg(feature = "extended_timeline")]
-pub use crate::timer::timeline::TimelinePromotionOutcome;
+pub use crate::timer::timeline::TimelinePromotionDecision;
 pub use crate::timer::timer_checkpoint::TimerCheckpoint;
 pub use crate::timer::timer_checkpoint::TimerCheckpointSnapshot;
 pub use crate::timer::timer_message_store::build_canonical_delete_key;
