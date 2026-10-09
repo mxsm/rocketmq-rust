@@ -183,7 +183,7 @@ pub use crate::store_ports::StorePorts;
 pub use crate::telemetry::StoreTelemetry;
 pub use crate::timer::pipeline::TimerPipelineDiagnostics;
 #[cfg(feature = "extended_timeline")]
-pub use crate::timer::timeline::TimelineAdmissionOutcome;
+pub use crate::timer::timeline::TimelineAdmissionDecision;
 #[cfg(feature = "extended_timeline")]
 pub use crate::timer::timeline::TimelinePromotionDecision;
 pub use crate::timer::timer_checkpoint::TimerCheckpoint;
