@@ -52,7 +52,7 @@ pub use self::client_request_processor::ClientRequestProcessor;
 pub use self::cluster_test_request_processor::ClusterTestRequestProcessor;
 pub(crate) use self::cluster_test_request_processor::ClusterTestRouteLookup;
 #[cfg(test)]
-pub(crate) use self::cluster_test_request_processor::ClusterTestTopicRouteOutcome;
+pub(crate) use self::cluster_test_request_processor::ClusterTestTopicRouteResolution;
 pub(crate) use self::cluster_test_request_processor::TransportClusterTestRouteLookup;
 use crate::bootstrap::InFlightRequestTracker;
 use crate::bootstrap::NameServerRuntimeHandle;

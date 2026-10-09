@@ -30,7 +30,7 @@ use tracing::info;
 use crate::bootstrap::NameServerRuntimeHandle;
 use crate::processor::client_request_processor::encode_topic_route_response_for_zone;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
-use crate::route::route_info_manager::TopicRouteLookupOutcome;
+use crate::route::route_info_manager::TopicClusterTestLookupStatus;
 use crate::route::zone_filter::filter_route_by_zone;
 use crate::route::zone_filter::ZoneRequest;
 use crate::route::zone_filter::TYPED_ZONE_ROUTE_ENABLED;
@@ -41,7 +41,7 @@ mod lookup_cache;
 mod route_lookup;
 
 pub(crate) use route_lookup::ClusterTestRouteLookup;
-pub(crate) use route_lookup::ClusterTestTopicRouteOutcome;
+pub(crate) use route_lookup::ClusterTestTopicRouteResolution;
 pub(crate) use route_lookup::TransportClusterTestRouteLookup;
 
 pub struct ClusterTestRequestProcessor {
@@ -72,8 +72,8 @@ impl ClusterTestRequestProcessor {
             .route_info_manager()
             .pickup_topic_route_data(request_header.topic.as_ref())
         {
-            Ok(TopicRouteLookupOutcome::Found(route_data)) => Some(route_data),
-            Ok(TopicRouteLookupOutcome::NotFound) => None,
+            Ok(TopicClusterTestLookupStatus::Found(route_data)) => Some(route_data),
+            Ok(TopicClusterTestLookupStatus::NotFound) => None,
             Err(error) => return Err(error),
         };
 
@@ -87,10 +87,10 @@ impl ClusterTestRequestProcessor {
                 .lookup_topic_route(&request_header.topic)
                 .await
             {
-                Ok(ClusterTestTopicRouteOutcome::Found(route_data)) => {
+                Ok(ClusterTestTopicRouteResolution::Found(route_data)) => {
                     topic_route_data = Some(route_data);
                 }
-                Ok(ClusterTestTopicRouteOutcome::NotFound | ClusterTestTopicRouteOutcome::Unavailable) => {}
+                Ok(ClusterTestTopicRouteResolution::NotFound | ClusterTestTopicRouteResolution::Unavailable) => {}
                 Err(error) => {
                     info!(
                         product_env = %route_config.product_env_name,
@@ -178,7 +178,7 @@ mod tests {
 
     #[derive(Clone)]
     enum TestLookupResult {
-        Outcome(ClusterTestTopicRouteOutcome),
+        Outcome(ClusterTestTopicRouteResolution),
         Failure,
     }
 
@@ -194,7 +194,7 @@ mod tests {
         fn lookup_topic_route(
             &self,
             _topic: &CheetahString,
-        ) -> ClusterTestLookupFuture<'_, ClusterTestTopicRouteOutcome> {
+        ) -> ClusterTestLookupFuture<'_, ClusterTestTopicRouteResolution> {
             let result = self.result.clone();
             Box::pin(async move {
                 match result {
@@ -234,7 +234,7 @@ mod tests {
             ..NamesrvConfig::default()
         };
         let mock_lookup = Arc::new(TestClusterTestRouteLookup {
-            result: TestLookupResult::Outcome(ClusterTestTopicRouteOutcome::Found(sample_topic_route_data())),
+            result: TestLookupResult::Outcome(ClusterTestTopicRouteResolution::Found(sample_topic_route_data())),
         });
 
         let runtime = rocketmq_runtime::RuntimeContext::from_current("namesrv-cluster-test-processor");
@@ -284,8 +284,8 @@ mod tests {
     #[tokio::test]
     async fn cluster_test_absence_unavailable_and_failure_keep_fixed_owner_r17() {
         for result in [
-            TestLookupResult::Outcome(ClusterTestTopicRouteOutcome::NotFound),
-            TestLookupResult::Outcome(ClusterTestTopicRouteOutcome::Unavailable),
+            TestLookupResult::Outcome(ClusterTestTopicRouteResolution::NotFound),
+            TestLookupResult::Outcome(ClusterTestTopicRouteResolution::Unavailable),
             TestLookupResult::Failure,
         ] {
             let namesrv_config = NamesrvConfig {
