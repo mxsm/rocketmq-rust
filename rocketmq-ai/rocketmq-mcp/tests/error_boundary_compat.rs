@@ -65,13 +65,13 @@ fn assert_mcp_result_future<T>(_: impl Future<Output = McpResult<T>>) {}
 fn bootstrap_returns_mcp_result(
     config: McpConfig,
     process_telemetry: rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
-    security_bootstrap: rocketmq_security_api::SecurityBootstrapOutcome,
+    security_validation: rocketmq_security_api::SecurityBootstrapValidation,
     service_context: rocketmq_runtime::ChildServiceContext,
 ) {
     assert_mcp_result_future(McpApp::bootstrap(
         config,
         process_telemetry,
-        security_bootstrap,
+        security_validation,
         service_context,
     ));
 }

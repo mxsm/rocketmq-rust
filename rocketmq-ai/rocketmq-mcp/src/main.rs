@@ -29,8 +29,8 @@ use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ServiceLifecycleState;
 use rocketmq_runtime::ShutdownReason;
 use rocketmq_security_api::SecurityBootstrapConfig;
-use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
+use rocketmq_security_api::SecurityBootstrapValidation;
 
 const RUNTIME_TEARDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 fn main() -> rocketmq_mcp::McpResult<()> {
@@ -76,9 +76,9 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     let config = McpConfig::load_with_overrides(&args)?;
     let security_bootstrap = SecurityBootstrapConfig::from_env().map_err(McpError::from_source)?;
     let bootstrap_handoff = prepare_mcp_bootstrap(config, &security_bootstrap, lifecycle.config().probe_bind_addr)?;
-    let validated_security = bootstrap_handoff.security_outcome();
+    let security_validation = bootstrap_handoff.security_validation();
     let app = McpApp::bootstrap_validated(bootstrap_handoff, service_context).await?;
-    log_security_bootstrap(validated_security);
+    log_security_bootstrap(security_validation);
     if let Err(error) = app.start_lifecycle(&lifecycle).await {
         lifecycle.mark_failed();
         let request = lifecycle.request_shutdown(ShutdownReason::Internal);
@@ -127,12 +127,12 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     Ok(())
 }
 
-fn log_security_bootstrap(outcome: SecurityBootstrapOutcome) {
-    match outcome {
-        SecurityBootstrapOutcome::Disabled => {
+fn log_security_bootstrap(validation: SecurityBootstrapValidation) {
+    match validation {
+        SecurityBootstrapValidation::Disabled => {
             tracing::warn!("MCP security bootstrap is disabled because no security profile is configured")
         }
-        SecurityBootstrapOutcome::Validated(validated) => match validated.profile() {
+        SecurityBootstrapValidation::Validated(validated) => match validated.profile() {
             SecurityBootstrapProfile::DevelopmentInsecureLoopback => tracing::warn!(
                 profile = validated.profile().as_str(),
                 listener_count = validated.listener_count(),
@@ -178,12 +178,12 @@ mod tests {
     use rocketmq_mcp::app::validate_mcp_security;
     use rocketmq_security_api::SecurityBootstrap;
     use rocketmq_security_api::SecurityBootstrapConfig;
-    use rocketmq_security_api::SecurityBootstrapOutcome;
     use rocketmq_security_api::SecurityBootstrapProfile;
+    use rocketmq_security_api::SecurityBootstrapValidation;
 
     #[test]
     fn disabled_security_bootstrap_skips_mcp_listener_validation() {
-        let outcome = validate_mcp_security(
+        let validation = validate_mcp_security(
             &SecurityBootstrap::Disabled,
             TransportKind::StreamableHttp,
             "not-a-socket-address",
@@ -192,7 +192,7 @@ mod tests {
         )
         .expect("disabled security bootstrap should not inspect MCP listeners");
 
-        assert_eq!(outcome, SecurityBootstrapOutcome::Disabled);
+        assert_eq!(validation, SecurityBootstrapValidation::Disabled);
     }
 
     #[test]
