@@ -22,9 +22,9 @@ use std::time::Instant;
 use parking_lot::Condvar;
 use parking_lot::Mutex;
 
-use super::lifecycle_model::AcquireTransitionOutcome;
 use super::lifecycle_model::AcquireTransitionRejection;
 use super::lifecycle_model::BeginCloseTransition;
+use super::lifecycle_model::LeaseAcquireTransitionResult;
 use super::lifecycle_model::LifecyclePackedSnapshot;
 use super::lifecycle_model::LifecycleTransitionState;
 pub use super::lifecycle_model::MappedFileAdmissionState;
@@ -219,12 +219,12 @@ impl SegmentLifecycle {
         operation: MappedFileOperation,
     ) -> LifecycleAcquireOutcome<MappedFileLease> {
         match self.try_admit(operation) {
-            AcquireTransitionOutcome::Acquired => LifecycleAcquireOutcome::Acquired(MappedFileLease {
+            LeaseAcquireTransitionResult::Acquired => LifecycleAcquireOutcome::Acquired(MappedFileLease {
                 lifecycle: Arc::clone(self),
                 operation,
                 armed: true,
             }),
-            AcquireTransitionOutcome::Rejected(reason) => {
+            LeaseAcquireTransitionResult::Rejected(reason) => {
                 LifecycleAcquireOutcome::Rejected(map_acquire_rejection(reason, operation))
             }
         }
@@ -236,19 +236,19 @@ impl SegmentLifecycle {
         operation: MappedFileOperation,
     ) -> LifecycleAcquireOutcome<BorrowedMappedFileLease<'_>> {
         match self.try_admit(operation) {
-            AcquireTransitionOutcome::Acquired => LifecycleAcquireOutcome::Acquired(BorrowedMappedFileLease {
+            LeaseAcquireTransitionResult::Acquired => LifecycleAcquireOutcome::Acquired(BorrowedMappedFileLease {
                 lifecycle: self,
                 operation,
                 armed: true,
             }),
-            AcquireTransitionOutcome::Rejected(reason) => {
+            LeaseAcquireTransitionResult::Rejected(reason) => {
                 LifecycleAcquireOutcome::Rejected(map_acquire_rejection(reason, operation))
             }
         }
     }
 
     #[inline]
-    fn try_admit(&self, operation: MappedFileOperation) -> AcquireTransitionOutcome {
+    fn try_admit(&self, operation: MappedFileOperation) -> LeaseAcquireTransitionResult {
         self.transitions.try_acquire(operation)
     }
 
@@ -443,12 +443,12 @@ impl SegmentLifecycle {
 
     #[inline]
     fn release_one(&self, operation: MappedFileOperation) -> ReleaseTransition {
-        let outcome = self.transitions.release(operation);
-        if outcome.writers_drained_after_rejection() && self.seal_waiters.load(Ordering::Acquire) != 0 {
+        let release_report = self.transitions.release(operation);
+        if release_report.writers_drained_after_rejection() && self.seal_waiters.load(Ordering::Acquire) != 0 {
             let _control = self.seal_wait_control.lock();
             self.writers_drained.notify_all();
         }
-        let transition = outcome.transition();
+        let transition = release_report.transition();
         self.finish_release_transition(transition);
         transition
     }

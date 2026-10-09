@@ -28,9 +28,9 @@ use loom::thread;
 #[path = "../src/mapped_file/lifecycle_model.rs"]
 mod lifecycle_model;
 
-use lifecycle_model::AcquireTransitionOutcome;
 use lifecycle_model::AcquireTransitionRejection;
 use lifecycle_model::BeginCloseTransition;
+use lifecycle_model::LeaseAcquireTransitionResult;
 use lifecycle_model::LifecycleAtomicUsize;
 use lifecycle_model::LifecycleTransitionState;
 use lifecycle_model::MappedFileAdmissionState;
@@ -61,10 +61,10 @@ impl LifecycleAtomicUsize for AtomicUsize {
 
 type LoomLifecycle = LifecycleTransitionState<AtomicUsize>;
 
-fn acquire_result(outcome: AcquireTransitionOutcome) -> Result<(), AcquireTransitionRejection> {
-    match outcome {
-        AcquireTransitionOutcome::Acquired => Ok(()),
-        AcquireTransitionOutcome::Rejected(rejection) => Err(rejection),
+fn acquire_result(result: LeaseAcquireTransitionResult) -> Result<(), AcquireTransitionRejection> {
+    match result {
+        LeaseAcquireTransitionResult::Acquired => Ok(()),
+        LeaseAcquireTransitionResult::Rejected(rejection) => Err(rejection),
     }
 }
 
@@ -276,13 +276,13 @@ impl ModelSealWait {
     }
 
     fn release(&self, lifecycle: &LoomLifecycle, operation: MappedFileOperation) -> ReleaseTransition {
-        let outcome = lifecycle.release(operation);
-        if outcome.writers_drained_after_rejection() && self.waiters.load(Ordering::Acquire) != 0 {
+        let release_report = lifecycle.release(operation);
+        if release_report.writers_drained_after_rejection() && self.waiters.load(Ordering::Acquire) != 0 {
             let _control = self.control.lock().expect("seal-wait notification control");
             self.cold_notify_entries.fetch_add(1, Ordering::SeqCst);
             self.writers_drained.notify_all();
         }
-        outcome.transition()
+        release_report.transition()
     }
 }
 
