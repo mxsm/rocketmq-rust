@@ -81,7 +81,8 @@ pub(crate) enum ClusterTestTopicRouteResolution {
 pub(crate) trait ClusterTestRouteLookup: Send + Sync {
     fn start(&self) -> ClusterTestLookupFuture<'_, ()>;
 
-    fn lookup_topic_route(&self, topic: &CheetahString) -> ClusterTestLookupFuture<'_, ClusterTestTopicRouteResolution>;
+    fn lookup_topic_route(&self, topic: &CheetahString)
+        -> ClusterTestLookupFuture<'_, ClusterTestTopicRouteResolution>;
 
     fn shutdown(&self) -> ClusterTestLookupFuture<'_, ()>;
 }
@@ -307,7 +308,10 @@ impl ClusterTestRouteLookup for TransportClusterTestRouteLookup {
         })
     }
 
-    fn lookup_topic_route(&self, topic: &CheetahString) -> ClusterTestLookupFuture<'_, ClusterTestTopicRouteResolution> {
+    fn lookup_topic_route(
+        &self,
+        topic: &CheetahString,
+    ) -> ClusterTestLookupFuture<'_, ClusterTestTopicRouteResolution> {
         let topic = topic.clone();
         Box::pin(async move {
             let deadline = RequestDeadline::after(self.request_timeout);

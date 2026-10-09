@@ -4064,7 +4064,8 @@ mod tests {
         wait_until("duplicate unregister cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
-            let Ok(TopicClusterTestLookupStatus::Found(route_data)) = route_manager.pickup_topic_route_data(&topic_name)
+            let Ok(TopicClusterTestLookupStatus::Found(route_data)) =
+                route_manager.pickup_topic_route_data(&topic_name)
             else {
                 return false;
             };
@@ -4163,7 +4164,8 @@ mod tests {
         wait_until("channel destroy cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
-            let Ok(TopicClusterTestLookupStatus::Found(route_data)) = route_manager.pickup_topic_route_data(&topic_name)
+            let Ok(TopicClusterTestLookupStatus::Found(route_data)) =
+                route_manager.pickup_topic_route_data(&topic_name)
             else {
                 return false;
             };
@@ -4264,7 +4266,8 @@ mod tests {
         wait_until("acting master cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
-            let Ok(TopicClusterTestLookupStatus::Found(route_data)) = route_manager.pickup_topic_route_data(&topic_name)
+            let Ok(TopicClusterTestLookupStatus::Found(route_data)) =
+                route_manager.pickup_topic_route_data(&topic_name)
             else {
                 return false;
             };
