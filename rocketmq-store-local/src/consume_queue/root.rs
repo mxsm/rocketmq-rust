@@ -111,7 +111,7 @@ pub struct ConsumeQueueDispatchMetadata {
 
 /// Final result of one ConsumeQueue dispatch drive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ConsumeQueueDispatchOutcome {
+pub enum ConsumeQueueDispatchResult {
     Appended { attempts: usize },
     InvalidBatch,
     NotWriteable,
@@ -125,22 +125,22 @@ pub fn drive_consume_queue_dispatch<TryAppend>(
     writeable: bool,
     max_attempts: usize,
     mut try_append: TryAppend,
-) -> ConsumeQueueDispatchOutcome
+) -> ConsumeQueueDispatchResult
 where
     TryAppend: FnMut(usize) -> bool,
 {
     if mode == ConsumeQueueDispatchMode::Batch && (metadata.message_base_offset < 0 || metadata.batch_size <= 0) {
-        return ConsumeQueueDispatchOutcome::InvalidBatch;
+        return ConsumeQueueDispatchResult::InvalidBatch;
     }
     if !writeable {
-        return ConsumeQueueDispatchOutcome::NotWriteable;
+        return ConsumeQueueDispatchResult::NotWriteable;
     }
     for attempt in 0..max_attempts {
         if try_append(attempt) {
-            return ConsumeQueueDispatchOutcome::Appended { attempts: attempt + 1 };
+            return ConsumeQueueDispatchResult::Appended { attempts: attempt + 1 };
         }
     }
-    ConsumeQueueDispatchOutcome::Exhausted { attempts: max_attempts }
+    ConsumeQueueDispatchResult::Exhausted { attempts: max_attempts }
 }
 
 /// Runs the lock-free lookup, out-of-lock construction, and atomic publication sequence.

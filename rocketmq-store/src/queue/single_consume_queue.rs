@@ -32,7 +32,7 @@ pub use rocketmq_store_local::consume_queue::record::MSG_TAG_OFFSET_INDEX;
 use rocketmq_store_local::consume_queue::root::drive_consume_queue_dispatch;
 use rocketmq_store_local::consume_queue::root::ConsumeQueueDispatchMetadata;
 use rocketmq_store_local::consume_queue::root::ConsumeQueueDispatchMode;
-use rocketmq_store_local::consume_queue::root::ConsumeQueueDispatchOutcome;
+use rocketmq_store_local::consume_queue::root::ConsumeQueueDispatchResult;
 use rocketmq_store_local::consume_queue::single::find_min_offset_record;
 use rocketmq_store_local::consume_queue::single::plan_truncate_records;
 use rocketmq_store_local::consume_queue::single::scan_recovery_records;
@@ -963,7 +963,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
                 appended
             },
         );
-        if matches!(outcome, ConsumeQueueDispatchOutcome::Appended { .. }) {
+        if matches!(outcome, ConsumeQueueDispatchResult::Appended { .. }) {
             let message_store_config = self.context.message_store_config();
             let store_checkpoint = self.context.store_checkpoint();
             if message_store_config.broker_role == BrokerRole::Slave || message_store_config.enable_dledger_commit_log {
