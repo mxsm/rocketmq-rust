@@ -53,7 +53,7 @@ pub enum IndexHeaderUpdate {
 
 /// Result of one put-driver invocation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IndexPutOutcome {
+pub enum IndexEntryWriteResult {
     Written,
     Full,
     SlotUnavailable,
@@ -62,7 +62,7 @@ pub enum IndexPutOutcome {
 
 /// Terminal condition of one query-driver invocation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IndexQueryOutcome {
+pub enum IndexQueryStatus {
     Completed,
     SlotUnavailable,
     EntryUnavailable,
@@ -94,28 +94,28 @@ pub fn drive_index_put<ReadSlot, WriteBytes, ApplyHeader>(
     mut read_slot: ReadSlot,
     mut write_bytes: WriteBytes,
     mut apply_header: ApplyHeader,
-) -> IndexPutOutcome
+) -> IndexEntryWriteResult
 where
     ReadSlot: FnMut(usize) -> Option<[u8; 4]>,
     WriteBytes: FnMut(usize, &[u8]),
     ApplyHeader: FnMut(IndexHeaderUpdate),
 {
     if snapshot.index_count >= snapshot.index_num as i32 {
-        return IndexPutOutcome::Full;
+        return IndexEntryWriteResult::Full;
     }
     if snapshot.hash_slot_num == 0 || snapshot.index_count < 0 {
-        return IndexPutOutcome::LayoutOverflow;
+        return IndexEntryWriteResult::LayoutOverflow;
     }
 
     let slot_index = key_hash as usize % snapshot.hash_slot_num;
     let Some(slot_position) = hash_slot_position(slot_index) else {
-        return IndexPutOutcome::LayoutOverflow;
+        return IndexEntryWriteResult::LayoutOverflow;
     };
     let Some(slot_bytes) = read_slot(slot_position) else {
-        return IndexPutOutcome::SlotUnavailable;
+        return IndexEntryWriteResult::SlotUnavailable;
     };
     let Some(IndexSlot(mut previous_index)) = IndexSlot::decode(&slot_bytes) else {
-        return IndexPutOutcome::SlotUnavailable;
+        return IndexEntryWriteResult::SlotUnavailable;
     };
     if previous_index <= INVALID_INDEX || previous_index > snapshot.index_count {
         previous_index = INVALID_INDEX;
@@ -123,7 +123,7 @@ where
 
     let time_diff = index_time_diff_seconds(snapshot.begin_timestamp, store_timestamp);
     let Some(entry_position) = index_entry_position(snapshot.hash_slot_num, snapshot.index_count as usize) else {
-        return IndexPutOutcome::LayoutOverflow;
+        return IndexEntryWriteResult::LayoutOverflow;
     };
 
     let entry = IndexEntry::new(key_hash, physical_offset, time_diff, previous_index).encode();
@@ -141,7 +141,7 @@ where
     apply_header(IndexHeaderUpdate::IncrementIndexCount);
     apply_header(IndexHeaderUpdate::SetEndPhyOffset(physical_offset));
     apply_header(IndexHeaderUpdate::SetEndTimestamp(store_timestamp));
-    IndexPutOutcome::Written
+    IndexEntryWriteResult::Written
 }
 
 /// Owns slot lookup, collision-chain traversal, time filtering, and result limiting.
@@ -154,39 +154,39 @@ pub fn query_index_offsets<ReadSlot, ReadEntry>(
     physical_offsets: &mut Vec<i64>,
     mut read_slot: ReadSlot,
     mut read_entry: ReadEntry,
-) -> IndexQueryOutcome
+) -> IndexQueryStatus
 where
     ReadSlot: FnMut(usize) -> Option<[u8; 4]>,
     ReadEntry: FnMut(usize) -> Option<[u8; 20]>,
 {
     if snapshot.hash_slot_num == 0 {
-        return IndexQueryOutcome::LayoutOverflow;
+        return IndexQueryStatus::LayoutOverflow;
     }
 
     let slot_index = key_hash as usize % snapshot.hash_slot_num;
     let Some(slot_position) = hash_slot_position(slot_index) else {
-        return IndexQueryOutcome::LayoutOverflow;
+        return IndexQueryStatus::LayoutOverflow;
     };
     let Some(slot_bytes) = read_slot(slot_position) else {
-        return IndexQueryOutcome::SlotUnavailable;
+        return IndexQueryStatus::SlotUnavailable;
     };
     let Some(IndexSlot(slot_value)) = IndexSlot::decode(&slot_bytes) else {
-        return IndexQueryOutcome::SlotUnavailable;
+        return IndexQueryStatus::SlotUnavailable;
     };
     if slot_value <= INVALID_INDEX || slot_value > snapshot.index_count || snapshot.index_count <= 1 {
-        return IndexQueryOutcome::Completed;
+        return IndexQueryStatus::Completed;
     }
 
     let mut next_index_to_read = slot_value;
     while physical_offsets.len() < max_num {
         let Some(entry_position) = index_entry_position(snapshot.hash_slot_num, next_index_to_read as usize) else {
-            return IndexQueryOutcome::LayoutOverflow;
+            return IndexQueryStatus::LayoutOverflow;
         };
         let Some(entry_bytes) = read_entry(entry_position) else {
-            return IndexQueryOutcome::EntryUnavailable;
+            return IndexQueryStatus::EntryUnavailable;
         };
         let Some(entry) = IndexEntry::decode(&entry_bytes) else {
-            return IndexQueryOutcome::EntryUnavailable;
+            return IndexQueryStatus::EntryUnavailable;
         };
         if entry.time_diff < 0 {
             break;
@@ -205,7 +205,7 @@ where
         }
         next_index_to_read = entry.previous_index;
     }
-    IndexQueryOutcome::Completed
+    IndexQueryStatus::Completed
 }
 
 fn index_time_diff_seconds(begin_timestamp: i64, store_timestamp: i64) -> i32 {

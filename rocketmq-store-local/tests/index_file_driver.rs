@@ -22,10 +22,10 @@ use rocketmq_store_local::index::file::drive_index_put;
 use rocketmq_store_local::index::file::is_index_time_matched;
 use rocketmq_store_local::index::file::normalize_index_key_hash;
 use rocketmq_store_local::index::file::query_index_offsets;
+use rocketmq_store_local::index::file::IndexEntryWriteResult;
 use rocketmq_store_local::index::file::IndexFileSnapshot;
 use rocketmq_store_local::index::file::IndexHeaderUpdate;
-use rocketmq_store_local::index::file::IndexPutOutcome;
-use rocketmq_store_local::index::file::IndexQueryOutcome;
+use rocketmq_store_local::index::file::IndexQueryStatus;
 
 fn index_size(hash_slot_num: usize, index_num: usize) -> usize {
     index_file_total_size(hash_slot_num, index_num).expect("valid test layout")
@@ -47,7 +47,7 @@ fn put_driver_writes_entry_and_slot_before_the_legacy_header_sequence() {
         |update| updates.borrow_mut().push(update),
     );
 
-    assert_eq!(outcome, IndexPutOutcome::Written);
+    assert_eq!(outcome, IndexEntryWriteResult::Written);
     assert_eq!(IndexSlot::decode(&storage.borrow()[44..48]), Some(IndexSlot(1)));
     let entry_position = index_entry_position(2, 1).unwrap();
     assert_eq!(
@@ -84,7 +84,7 @@ fn put_driver_normalizes_chain_head_and_clamps_time_diff() {
         |update| updates.borrow_mut().push(update),
     );
 
-    assert_eq!(outcome, IndexPutOutcome::Written);
+    assert_eq!(outcome, IndexEntryWriteResult::Written);
     let entry_position = index_entry_position(1, 3).unwrap();
     assert_eq!(
         IndexEntry::decode(&storage.borrow()[entry_position..entry_position + 20]),
@@ -105,7 +105,7 @@ fn put_driver_stops_before_io_when_full_or_invalid() {
         |_, _| writes += 1,
         |_| panic!("full file must not update the header"),
     );
-    assert_eq!(outcome, IndexPutOutcome::Full);
+    assert_eq!(outcome, IndexEntryWriteResult::Full);
     assert_eq!(writes, 0);
 
     let outcome = drive_index_put(
@@ -117,7 +117,7 @@ fn put_driver_stops_before_io_when_full_or_invalid() {
         |_, _| writes += 1,
         |_| {},
     );
-    assert_eq!(outcome, IndexPutOutcome::LayoutOverflow);
+    assert_eq!(outcome, IndexEntryWriteResult::LayoutOverflow);
     assert_eq!(writes, 0);
 }
 
@@ -142,7 +142,7 @@ fn query_driver_walks_collision_chain_and_honors_time_and_result_limits() {
         |position| read_array::<4>(&storage.borrow(), position),
         |position| read_array::<20>(&storage.borrow(), position),
     );
-    assert_eq!(outcome, IndexQueryOutcome::Completed);
+    assert_eq!(outcome, IndexQueryStatus::Completed);
     assert_eq!(offsets, [300, 100]);
 
     let mut limited = vec![999];
@@ -156,7 +156,7 @@ fn query_driver_walks_collision_chain_and_honors_time_and_result_limits() {
         |position| read_array::<4>(&storage.borrow(), position),
         |position| read_array::<20>(&storage.borrow(), position),
     );
-    assert_eq!(outcome, IndexQueryOutcome::Completed);
+    assert_eq!(outcome, IndexQueryStatus::Completed);
     assert_eq!(limited, [999, 300]);
 }
 
@@ -180,7 +180,7 @@ fn query_driver_reports_unavailable_storage_without_losing_prior_results() {
         },
     );
 
-    assert_eq!(outcome, IndexQueryOutcome::EntryUnavailable);
+    assert_eq!(outcome, IndexQueryStatus::EntryUnavailable);
     assert_eq!(offsets, [200]);
 }
 
