@@ -1997,7 +1997,7 @@ mod tests {
     }
     use crate::processor::default_request_processor::DefaultRequestProcessor;
     use crate::processor::ClientRequestProcessor;
-    use crate::processor::ClusterTestTopicRouteResolution;
+    use crate::processor::ClusterTestTopicRouteOutcome;
     use crate::route::route_info_manager::TopicRouteLookupOutcome;
     use crate::route::types::BrokerSession;
 
@@ -2300,8 +2300,8 @@ mod tests {
         fn lookup_topic_route(
             &self,
             _topic: &CheetahString,
-        ) -> TestRouteLookupFuture<'_, ClusterTestTopicRouteResolution> {
-            Box::pin(async { Ok(ClusterTestTopicRouteResolution::NotFound) })
+        ) -> TestRouteLookupFuture<'_, ClusterTestTopicRouteOutcome> {
+            Box::pin(async { Ok(ClusterTestTopicRouteOutcome::NotFound) })
         }
 
         fn shutdown(&self) -> TestRouteLookupFuture<'_, ()> {
@@ -4064,8 +4064,7 @@ mod tests {
         wait_until("duplicate unregister cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
-            let Ok(TopicRouteLookupOutcome::Found(route_data)) =
-                route_manager.pickup_topic_route_data(&topic_name)
+            let Ok(TopicRouteLookupOutcome::Found(route_data)) = route_manager.pickup_topic_route_data(&topic_name)
             else {
                 return false;
             };
@@ -4164,8 +4163,7 @@ mod tests {
         wait_until("channel destroy cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
-            let Ok(TopicRouteLookupOutcome::Found(route_data)) =
-                route_manager.pickup_topic_route_data(&topic_name)
+            let Ok(TopicRouteLookupOutcome::Found(route_data)) = route_manager.pickup_topic_route_data(&topic_name)
             else {
                 return false;
             };
@@ -4266,8 +4264,7 @@ mod tests {
         wait_until("acting master cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
-            let Ok(TopicRouteLookupOutcome::Found(route_data)) =
-                route_manager.pickup_topic_route_data(&topic_name)
+            let Ok(TopicRouteLookupOutcome::Found(route_data)) = route_manager.pickup_topic_route_data(&topic_name)
             else {
                 return false;
             };
