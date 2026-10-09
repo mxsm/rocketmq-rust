@@ -142,7 +142,7 @@ use rocketmq_store_local::commit_log::record::read_declared_frame;
 use rocketmq_store_local::commit_log::record_parser::inspect_commit_log_record;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordBodyMode;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordChecksum;
-use rocketmq_store_local::commit_log::record_parser::CommitLogRecordOutcome;
+use rocketmq_store_local::commit_log::record_parser::CommitLogRecordDecodeResult;
 use rocketmq_store_local::commit_log::recovery::abnormal_confirm_candidate_end;
 use rocketmq_store_local::commit_log::recovery::plan_normal_recovery_file_window;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryDispatchGate;
@@ -2755,7 +2755,7 @@ pub(crate) fn check_message_and_return_size_in_segment(
         CommitLogRecordBodyMode::Read
     };
     let record = match inspect_commit_log_record(bytes, body_mode, &CommonCommitLogChecksum) {
-        CommitLogRecordOutcome::Blank { declared_size } => {
+        CommitLogRecordDecodeResult::Blank { declared_size } => {
             if usize::try_from(declared_size).map_or(true, |size| size > segment_remaining) {
                 return DispatchRequest {
                     msg_size: -1,
@@ -2770,8 +2770,8 @@ pub(crate) fn check_message_and_return_size_in_segment(
                 ..Default::default()
             };
         }
-        CommitLogRecordOutcome::Message(record) => record,
-        CommitLogRecordOutcome::IllegalMagic { magic_code, .. } => {
+        CommitLogRecordDecodeResult::Message(record) => record,
+        CommitLogRecordDecodeResult::IllegalMagic { magic_code, .. } => {
             warn!("found a illegal magic code 0x{}", format!("{:X}", magic_code));
             return DispatchRequest {
                 msg_size: -1,
@@ -2779,7 +2779,7 @@ pub(crate) fn check_message_and_return_size_in_segment(
                 ..Default::default()
             };
         }
-        CommitLogRecordOutcome::BodyCrcMismatch { computed, stored, .. } => {
+        CommitLogRecordDecodeResult::BodyCrcMismatch { computed, stored, .. } => {
             warn!("CRC check failed. bodyCRC={}, currentCRC={}", computed, stored);
             return DispatchRequest {
                 msg_size: -1,
@@ -2787,7 +2787,7 @@ pub(crate) fn check_message_and_return_size_in_segment(
                 ..Default::default()
             };
         }
-        CommitLogRecordOutcome::Truncated {
+        CommitLogRecordDecodeResult::Truncated {
             field,
             needed,
             remaining,
@@ -2803,7 +2803,7 @@ pub(crate) fn check_message_and_return_size_in_segment(
                 ..Default::default()
             };
         }
-        CommitLogRecordOutcome::NegativeLength { field, value, .. } => {
+        CommitLogRecordDecodeResult::NegativeLength { field, value, .. } => {
             warn!("negative commitlog record length at {:?}: value={}", field, value);
             return DispatchRequest {
                 msg_size: -1,
