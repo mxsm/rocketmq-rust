@@ -47,8 +47,8 @@ use crate::contract::TransportContractViolation;
 use crate::dispatch::deferred_session_cleanup::RegistryCleanupTarget;
 use crate::dispatch::deferred_session_cleanup::TargetRecord;
 use crate::dispatch::DeferredAdmission;
-use crate::dispatch::DeferredAdmissionAcquireOutcome;
 use crate::dispatch::DeferredExpiryKind;
+use crate::dispatch::DeferredWaitAdmissionResult;
 use crate::dispatch::DeferredWaitLimits;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestMeta;
@@ -65,14 +65,14 @@ trait DeferredAdmissionTestExt {
     fn expect(self, message: &str) -> DeferredWaitPermit;
 }
 
-impl DeferredAdmissionTestExt for DeferredAdmissionAcquireOutcome {
+impl DeferredAdmissionTestExt for DeferredWaitAdmissionResult {
     fn expect(self, message: &str) -> DeferredWaitPermit {
         match self {
-            DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
-            DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
-            DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)
-            | DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)
-            | DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => panic!("{message}"),
+            DeferredWaitAdmissionResult::Closed => panic!("deferred admission unexpectedly closed"),
+            DeferredWaitAdmissionResult::Acquired(permit) => permit,
+            DeferredWaitAdmissionResult::WaiterCapacityExhausted(_)
+            | DeferredWaitAdmissionResult::RetainedByteCapacityExhausted(_)
+            | DeferredWaitAdmissionResult::ParentCapacityExhausted(_) => panic!("{message}"),
         }
     }
 }

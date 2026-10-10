@@ -34,7 +34,7 @@ use crate::admission::AdmissionScope;
 use crate::admission::PartialFramePermit;
 use crate::admission::ResourceLimit;
 use crate::contract::TransportContractViolation;
-use crate::dispatch::DeferredAdmissionAcquireOutcome;
+use crate::dispatch::DeferredWaitAdmissionResult;
 use crate::dispatch::ResponseState;
 use crate::request_ordering::RequestOrdering;
 use crate::session_executor::SessionDispatchAttempt;
@@ -65,7 +65,7 @@ fn closed_dynamic_parent_is_not_reported_as_deferred_capacity_exhaustion() {
     key.close();
     assert!(matches!(
         admission.try_reserve(retained(8)),
-        DeferredAdmissionAcquireOutcome::Closed
+        DeferredWaitAdmissionResult::Closed
     ));
     assert_eq!(admission.snapshot().waiting_count(), 0);
     assert_eq!(root.snapshot().current_count, 0);
@@ -73,65 +73,65 @@ fn closed_dynamic_parent_is_not_reported_as_deferred_capacity_exhaustion() {
 
 fn expect_acquired(admission: &DeferredAdmission, retained: DeferredRetainedSize, context: &str) -> DeferredWaitPermit {
     match admission.try_reserve(retained) {
-        DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
-        DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
-        DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_) => {
+        DeferredWaitAdmissionResult::Closed => panic!("deferred admission unexpectedly closed"),
+        DeferredWaitAdmissionResult::Acquired(permit) => permit,
+        DeferredWaitAdmissionResult::WaiterCapacityExhausted(_) => {
             panic!("{context}: waiter capacity was unexpectedly exhausted")
         }
-        DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_) => {
+        DeferredWaitAdmissionResult::RetainedByteCapacityExhausted(_) => {
             panic!("{context}: retained-byte capacity was unexpectedly exhausted")
         }
-        DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
+        DeferredWaitAdmissionResult::ParentCapacityExhausted(_) => {
             panic!("{context}: parent capacity was unexpectedly exhausted")
         }
     }
 }
 
-fn expect_waiter_capacity_exhausted(outcome: DeferredAdmissionAcquireOutcome) -> BudgetRejection {
+fn expect_waiter_capacity_exhausted(outcome: DeferredWaitAdmissionResult) -> BudgetRejection {
     match outcome {
-        DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
-        DeferredAdmissionAcquireOutcome::Acquired(_) => {
+        DeferredWaitAdmissionResult::Closed => panic!("deferred admission unexpectedly closed"),
+        DeferredWaitAdmissionResult::Acquired(_) => {
             panic!("reservation unexpectedly acquired waiter capacity")
         }
-        DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(rejection) => rejection,
-        DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_) => {
+        DeferredWaitAdmissionResult::WaiterCapacityExhausted(rejection) => rejection,
+        DeferredWaitAdmissionResult::RetainedByteCapacityExhausted(_) => {
             panic!("reservation exhausted retained-byte capacity instead of waiter capacity")
         }
-        DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
+        DeferredWaitAdmissionResult::ParentCapacityExhausted(_) => {
             panic!("reservation exhausted parent capacity instead of waiter capacity")
         }
     }
 }
 
-fn expect_retained_byte_capacity_exhausted(outcome: DeferredAdmissionAcquireOutcome) -> BudgetRejection {
+fn expect_retained_byte_capacity_exhausted(outcome: DeferredWaitAdmissionResult) -> BudgetRejection {
     match outcome {
-        DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
-        DeferredAdmissionAcquireOutcome::Acquired(_) => {
+        DeferredWaitAdmissionResult::Closed => panic!("deferred admission unexpectedly closed"),
+        DeferredWaitAdmissionResult::Acquired(_) => {
             panic!("reservation unexpectedly acquired retained-byte capacity")
         }
-        DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_) => {
+        DeferredWaitAdmissionResult::WaiterCapacityExhausted(_) => {
             panic!("reservation exhausted waiter capacity instead of retained-byte capacity")
         }
-        DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(rejection) => rejection,
-        DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
+        DeferredWaitAdmissionResult::RetainedByteCapacityExhausted(rejection) => rejection,
+        DeferredWaitAdmissionResult::ParentCapacityExhausted(_) => {
             panic!("reservation exhausted parent capacity instead of retained-byte capacity")
         }
     }
 }
 
-fn expect_parent_capacity_exhausted(outcome: DeferredAdmissionAcquireOutcome) -> BudgetRejection {
+fn expect_parent_capacity_exhausted(outcome: DeferredWaitAdmissionResult) -> BudgetRejection {
     match outcome {
-        DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
-        DeferredAdmissionAcquireOutcome::Acquired(_) => {
+        DeferredWaitAdmissionResult::Closed => panic!("deferred admission unexpectedly closed"),
+        DeferredWaitAdmissionResult::Acquired(_) => {
             panic!("reservation unexpectedly acquired parent capacity")
         }
-        DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_) => {
+        DeferredWaitAdmissionResult::WaiterCapacityExhausted(_) => {
             panic!("reservation exhausted waiter capacity instead of parent capacity")
         }
-        DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_) => {
+        DeferredWaitAdmissionResult::RetainedByteCapacityExhausted(_) => {
             panic!("reservation exhausted retained-byte capacity instead of parent capacity")
         }
-        DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(rejection) => rejection,
+        DeferredWaitAdmissionResult::ParentCapacityExhausted(rejection) => rejection,
     }
 }
 
@@ -381,11 +381,11 @@ fn concurrent_reservations_stop_at_the_shared_cap_and_finish_at_zero() {
             workers.push(scope.spawn(move || {
                 start.wait();
                 let permit = match admission.try_reserve(size) {
-                    DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
-                    DeferredAdmissionAcquireOutcome::Acquired(permit) => Some(permit),
-                    DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_) => None,
-                    DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_) => None,
-                    DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => None,
+                    DeferredWaitAdmissionResult::Closed => panic!("deferred admission unexpectedly closed"),
+                    DeferredWaitAdmissionResult::Acquired(permit) => Some(permit),
+                    DeferredWaitAdmissionResult::WaiterCapacityExhausted(_) => None,
+                    DeferredWaitAdmissionResult::RetainedByteCapacityExhausted(_) => None,
+                    DeferredWaitAdmissionResult::ParentCapacityExhausted(_) => None,
                 };
                 acquired.wait();
                 release.wait();

@@ -893,13 +893,13 @@ mod tests {
             .into_responder(original);
         let response_state = Arc::clone(responder.response_state());
         let permit = match admission.try_reserve(retained) {
-            crate::dispatch::DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
-            crate::dispatch::DeferredAdmissionAcquireOutcome::Closed => {
+            crate::dispatch::DeferredWaitAdmissionResult::Acquired(permit) => permit,
+            crate::dispatch::DeferredWaitAdmissionResult::Closed => {
                 panic!("deferred admission unexpectedly closed")
             }
-            crate::dispatch::DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)
-            | crate::dispatch::DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)
-            | crate::dispatch::DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
+            crate::dispatch::DeferredWaitAdmissionResult::WaiterCapacityExhausted(_)
+            | crate::dispatch::DeferredWaitAdmissionResult::RetainedByteCapacityExhausted(_)
+            | crate::dispatch::DeferredWaitAdmissionResult::ParentCapacityExhausted(_) => {
                 panic!("cleanup panic wait permit must be acquired")
             }
         };

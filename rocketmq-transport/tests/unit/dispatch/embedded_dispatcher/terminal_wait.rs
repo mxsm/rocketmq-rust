@@ -14,7 +14,6 @@
 
 use super::*;
 use crate::dispatch::DeferredAdmission;
-use crate::dispatch::DeferredAdmissionAcquireOutcome;
 use crate::dispatch::DeferredClaimOutcome;
 use crate::dispatch::DeferredId;
 use crate::dispatch::DeferredParts;
@@ -26,6 +25,7 @@ use crate::dispatch::DeferredResponderOutcome;
 use crate::dispatch::DeferredResumeOutcome;
 use crate::dispatch::DeferredResumeRetainedSize;
 use crate::dispatch::DeferredRetainedSizeParts;
+use crate::dispatch::DeferredWaitAdmissionResult;
 use crate::dispatch::DeferredWaitLimits;
 use crate::dispatch::DeferredWakeReason;
 use crate::telemetry::TransportTelemetry;
@@ -40,13 +40,13 @@ fn terminal_responder(outcome: DeferredResponderOutcome) -> DeferredResponder {
     }
 }
 
-fn terminal_permit(outcome: DeferredAdmissionAcquireOutcome) -> crate::dispatch::DeferredWaitPermit {
+fn terminal_permit(outcome: DeferredWaitAdmissionResult) -> crate::dispatch::DeferredWaitPermit {
     match outcome {
-        DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
-        DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
-        DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)
-        | DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)
-        | DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
+        DeferredWaitAdmissionResult::Closed => panic!("deferred admission unexpectedly closed"),
+        DeferredWaitAdmissionResult::Acquired(permit) => permit,
+        DeferredWaitAdmissionResult::WaiterCapacityExhausted(_)
+        | DeferredWaitAdmissionResult::RetainedByteCapacityExhausted(_)
+        | DeferredWaitAdmissionResult::ParentCapacityExhausted(_) => {
             panic!("terminal wait capacity is available")
         }
     }

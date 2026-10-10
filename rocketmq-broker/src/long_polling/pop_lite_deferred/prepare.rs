@@ -20,7 +20,6 @@ use std::sync::Arc;
 
 use rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::api::DeferredAdmissionAcquireOutcome;
 use rocketmq_transport::api::DeferredExpiryOutcome;
 use rocketmq_transport::api::DeferredId;
 use rocketmq_transport::api::DeferredParts;
@@ -30,6 +29,7 @@ use rocketmq_transport::api::DeferredRegistryOutcome;
 use rocketmq_transport::api::DeferredRegistryRecovery;
 use rocketmq_transport::api::DeferredResponderOutcome;
 use rocketmq_transport::api::DeferredRetainedSizeParts;
+use rocketmq_transport::api::DeferredWaitAdmissionResult;
 use rocketmq_transport::api::DeferredWaitPermit;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestId;
@@ -189,7 +189,7 @@ impl PopLiteDeferredService {
             }
         };
         let permit = match self.admission.try_reserve(retained_size) {
-            DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
+            DeferredWaitAdmissionResult::Acquired(permit) => permit,
             outcome => {
                 return Ok(PopLiteDeferredPreparationStatus::Rejected(
                     PopLiteDeferredPrepareRejection::Admission(outcome),
@@ -336,7 +336,7 @@ pub(crate) enum PopLiteDeferredPrepareRejection {
     InvalidHeader,
     Deadline(PopLiteWaitDeadlineRejection),
     IndexCapacity(PopLiteIndexReserveRejection),
-    Admission(DeferredAdmissionAcquireOutcome),
+    Admission(DeferredWaitAdmissionResult),
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

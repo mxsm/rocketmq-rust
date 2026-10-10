@@ -47,7 +47,6 @@ use crate::admission::AdmissionScope;
 use crate::dispatch::AuthenticationState;
 use crate::dispatch::ClaimedDeferred;
 use crate::dispatch::DeferredAdmission;
-use crate::dispatch::DeferredAdmissionAcquireOutcome;
 use crate::dispatch::DeferredClaimOutcome;
 use crate::dispatch::DeferredParts;
 use crate::dispatch::DeferredRegistry;
@@ -57,6 +56,7 @@ use crate::dispatch::DeferredResumeOutcome;
 use crate::dispatch::DeferredResumeSubmitOutcome;
 use crate::dispatch::DeferredRetainedSizeParts;
 use crate::dispatch::DeferredTerminalReason;
+use crate::dispatch::DeferredWaitAdmissionResult;
 use crate::dispatch::DeferredWaitLimits;
 use crate::dispatch::DeferredWakeReason;
 use crate::dispatch::OriginalRequestIdentity;
@@ -74,13 +74,13 @@ use crate::session_executor::SessionExecutor;
 use crate::session_view::EmbeddedSessionRecord;
 use crate::telemetry::TransportTelemetry;
 
-fn acquired(outcome: DeferredAdmissionAcquireOutcome) -> crate::dispatch::DeferredWaitPermit {
+fn acquired(outcome: DeferredWaitAdmissionResult) -> crate::dispatch::DeferredWaitPermit {
     match outcome {
-        DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
-        DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
-        DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)
-        | DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)
-        | DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
+        DeferredWaitAdmissionResult::Closed => panic!("deferred admission unexpectedly closed"),
+        DeferredWaitAdmissionResult::Acquired(permit) => permit,
+        DeferredWaitAdmissionResult::WaiterCapacityExhausted(_)
+        | DeferredWaitAdmissionResult::RetainedByteCapacityExhausted(_)
+        | DeferredWaitAdmissionResult::ParentCapacityExhausted(_) => {
             panic!("terminal ownership wait capacity is available")
         }
     }

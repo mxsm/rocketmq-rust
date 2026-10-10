@@ -175,7 +175,7 @@ impl DeferredRetainedSize {
 
 /// Result of reserving bounded capacity for one deferred wait.
 #[must_use]
-pub enum DeferredAdmissionAcquireOutcome {
+pub enum DeferredWaitAdmissionResult {
     /// Admission closed when a dynamic parent generation was retired.
     Closed,
     /// Capacity was acquired and the affine permit is returned.
@@ -284,23 +284,21 @@ impl DeferredAdmission {
     /// The returned outcome distinguishes local count, local retained-byte,
     /// and shared-parent exhaustion. No registry or asynchronous wait is
     /// created.
-    pub fn try_reserve(&self, retained: DeferredRetainedSize) -> DeferredAdmissionAcquireOutcome {
+    pub fn try_reserve(&self, retained: DeferredRetainedSize) -> DeferredWaitAdmissionResult {
         match self.inner.budget.try_acquire(retained.bytes(), BudgetClass::Data) {
-            Ok(permit) => DeferredAdmissionAcquireOutcome::Acquired(DeferredWaitPermit {
+            Ok(permit) => DeferredWaitAdmissionResult::Acquired(DeferredWaitPermit {
                 permit: Some(permit),
                 retained_bytes: retained.bytes(),
             }),
-            Err(rejection) if rejection.is_closed() => DeferredAdmissionAcquireOutcome::Closed,
+            Err(rejection) if rejection.is_closed() => DeferredWaitAdmissionResult::Closed,
             Err(rejection) if rejection.exhausted_path() != self.inner.budget.path() => {
-                DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(rejection)
+                DeferredWaitAdmissionResult::ParentCapacityExhausted(rejection)
             }
             Err(rejection) => match rejection.dimension() {
-                Some(BudgetDimension::Count) => DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(rejection),
-                Some(BudgetDimension::Bytes) => {
-                    DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(rejection)
-                }
-                Some(BudgetDimension::Rate) => DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(rejection),
-                None => DeferredAdmissionAcquireOutcome::Closed,
+                Some(BudgetDimension::Count) => DeferredWaitAdmissionResult::WaiterCapacityExhausted(rejection),
+                Some(BudgetDimension::Bytes) => DeferredWaitAdmissionResult::RetainedByteCapacityExhausted(rejection),
+                Some(BudgetDimension::Rate) => DeferredWaitAdmissionResult::ParentCapacityExhausted(rejection),
+                None => DeferredWaitAdmissionResult::Closed,
             },
         }
     }

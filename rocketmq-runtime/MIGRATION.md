@@ -82,7 +82,7 @@ full or age policy. `try_push_budgeted` still releases a permit on a normal
 rejection; only `ForeignPermit` returns the item and unchanged charge together.
 
 The workspace consumers migrate in the same change. Transport pending requests
-report `SessionClosed`; `DeferredAdmissionAcquireOutcome` gains `Closed` rather
+report `SessionClosed`; `DeferredWaitAdmissionResult` gains `Closed` rather
 than reporting parent capacity exhaustion. Telemetry reports a closed buffer.
 Broker capacity rejection messages retain their existing dimension text and
 can accurately describe closure.

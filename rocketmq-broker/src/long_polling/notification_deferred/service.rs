@@ -37,7 +37,6 @@ use rocketmq_runtime::TaskId;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_transport::api::ClaimedDeferred;
 use rocketmq_transport::api::DeferredAdmission;
-use rocketmq_transport::api::DeferredAdmissionAcquireOutcome;
 use rocketmq_transport::api::DeferredAdmissionSnapshot;
 use rocketmq_transport::api::DeferredClaimOutcome;
 use rocketmq_transport::api::DeferredExpiryBatch;
@@ -56,6 +55,7 @@ use rocketmq_transport::api::DeferredResumeOutcome;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
 use rocketmq_transport::api::DeferredResumeSubmitOutcome;
 use rocketmq_transport::api::DeferredRetainedSizeParts;
+use rocketmq_transport::api::DeferredWaitAdmissionResult;
 use rocketmq_transport::api::DeferredWakeReason;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RemotingResponse;
@@ -285,7 +285,7 @@ impl NotificationDeferredService {
             }
         };
         let permit = match self.admission.try_reserve(retained_size) {
-            DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
+            DeferredWaitAdmissionResult::Acquired(permit) => permit,
             outcome => {
                 return Ok(NotificationDeferredPreparationStatus::Rejected(
                     NotificationDeferredPrepareRejection::Admission(outcome),
@@ -1213,7 +1213,7 @@ pub(crate) enum NotificationDeferredPrepareRejection {
     EmbeddedOrigin,
     Deadline(NotificationWaitDeadlineRejection),
     IndexCapacity(NotificationIndexReserveRejection),
-    Admission(DeferredAdmissionAcquireOutcome),
+    Admission(DeferredWaitAdmissionResult),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

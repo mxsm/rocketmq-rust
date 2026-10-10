@@ -42,13 +42,13 @@ use super::RemotingResponse;
 use super::RequestProcessor;
 use super::ResponseAction;
 use super::TransportServer;
-use crate::dispatch::DeferredAdmissionAcquireOutcome;
 use crate::dispatch::DeferredClaimOutcome;
 use crate::dispatch::DeferredExpiryMargins;
 use crate::dispatch::DeferredExpiryOutcome;
 use crate::dispatch::DeferredRegistryOutcome;
 use crate::dispatch::DeferredResponderOutcome;
 use crate::dispatch::DeferredResumeOutcome;
+use crate::dispatch::DeferredWaitAdmissionResult;
 use crate::telemetry::TransportTelemetry;
 
 #[derive(Clone, Copy)]
@@ -117,11 +117,11 @@ impl RequestProcessor for TcpDeferredExpiryProcessor {
         let retained = DeferredRegistry::<i32>::try_retained_size(DeferredRetainedSizeParts::new(0))
             .map_err(|_| crate::error_helpers::argument_invalid())?;
         let permit = match self.admission.try_reserve(retained) {
-            DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
-            DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
-            DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)
-            | DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)
-            | DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
+            DeferredWaitAdmissionResult::Closed => panic!("deferred admission unexpectedly closed"),
+            DeferredWaitAdmissionResult::Acquired(permit) => permit,
+            DeferredWaitAdmissionResult::WaiterCapacityExhausted(_)
+            | DeferredWaitAdmissionResult::RetainedByteCapacityExhausted(_)
+            | DeferredWaitAdmissionResult::ParentCapacityExhausted(_) => {
                 return Err(crate::error_helpers::argument_invalid());
             }
         };
