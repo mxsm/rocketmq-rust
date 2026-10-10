@@ -30,11 +30,11 @@ use crate::admission::AdmissionLimits;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScope;
 use crate::admission::AdmissionScopeHandle;
-use crate::base::pending_request_table::PendingRegistrationOutcome;
 use crate::base::pending_request_table::PendingRequestLimits;
 use crate::base::pending_request_table::PendingRequestOwner;
+use crate::base::pending_request_table::PendingRequestRegistrationResult;
 use crate::base::pending_request_table::PendingRequestTable;
-use crate::base::pending_request_table::PendingResponseOutcome;
+use crate::base::pending_request_table::PendingResponseDisposition;
 use crate::deadline::RequestDeadline;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RemotingResponse;
@@ -250,7 +250,7 @@ impl PendingHotPathHarness {
     pub fn concrete_register_complete(&self) {
         let opaque = self.next_opaque.fetch_add(1, Ordering::Relaxed);
         let (sender, _receiver) = tokio::sync::oneshot::channel();
-        let PendingRegistrationOutcome::Registered(guard) = self.table.register_for_owner(
+        let PendingRequestRegistrationResult::Registered(guard) = self.table.register_for_owner(
             &self.owner,
             opaque,
             RequestDeadline::after(std::time::Duration::from_secs(30)),
@@ -264,7 +264,7 @@ impl PendingHotPathHarness {
                 opaque,
                 RemotingCommand::create_success_response_command().set_opaque(opaque),
             ),
-            PendingResponseOutcome::Completed
+            PendingResponseDisposition::Completed
         );
         black_box(guard);
     }
