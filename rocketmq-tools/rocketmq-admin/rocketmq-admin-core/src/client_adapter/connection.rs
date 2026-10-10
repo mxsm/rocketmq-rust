@@ -104,7 +104,7 @@ impl ClientConnectionQueryAdmin for AdminSession {
     }
 }
 
-struct ConnectionOutcome<T> {
+struct ConnectionQueryEvidence<T> {
     result: T,
     successful_sources: usize,
     failures: Vec<AdminSourceFailure>,
@@ -113,7 +113,7 @@ struct ConnectionOutcome<T> {
 async fn query_consumer_connections(
     admin: &rocketmq_client_rust::DefaultMQAdminExt,
     request: &QueryConsumerConnectionsRequest,
-) -> AdminResult<ConnectionOutcome<QueryConsumerConnectionsResult>> {
+) -> AdminResult<ConnectionQueryEvidence<QueryConsumerConnectionsResult>> {
     let (targets, mut failures) =
         cluster_broker_targets(admin, &request.cluster, AdminQuerySource::ConsumerConnection).await?;
     failures.retain(|failure| {
@@ -166,7 +166,7 @@ async fn query_consumer_connections(
         }
     }
     let failed_brokers = failure_targets(&failures);
-    Ok(ConnectionOutcome {
+    Ok(ConnectionQueryEvidence {
         result: QueryConsumerConnectionsResult {
             consumer_group: request.consumer_group.clone(),
             connections: connections.into_values().take(request.max_connections).collect(),
@@ -182,7 +182,7 @@ async fn query_consumer_connections(
 async fn query_producer_connections(
     admin: &rocketmq_client_rust::DefaultMQAdminExt,
     request: &ListProducerConnectionsRequest,
-) -> AdminResult<ConnectionOutcome<ListProducerConnectionsResult>> {
+) -> AdminResult<ConnectionQueryEvidence<ListProducerConnectionsResult>> {
     let (targets, mut failures) =
         cluster_broker_targets(admin, &request.cluster, AdminQuerySource::ProducerConnection).await?;
     failures.retain(|failure| {
@@ -230,7 +230,7 @@ async fn query_producer_connections(
         }
     }
     let failed_brokers = failure_targets(&failures);
-    Ok(ConnectionOutcome {
+    Ok(ConnectionQueryEvidence {
         result: ListProducerConnectionsResult {
             connections: connections.into_values().take(request.max_connections).collect(),
             queried_broker_count: queried_brokers.len(),
