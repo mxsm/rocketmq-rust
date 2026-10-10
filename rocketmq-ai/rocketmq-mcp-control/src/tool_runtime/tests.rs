@@ -936,3 +936,101 @@ fn response_mapping_preserves_unchanged_conflict_partial_and_persistence_states(
         vec!["broker-a", "broker-b"]
     );
 }
+
+/// Accepts the `started` record and rejects every later append.
+struct TerminalRejectingSink {
+    inner: MemoryAuditSink,
+    appends: AtomicUsize,
+}
+
+impl ReliableAuditSink for TerminalRejectingSink {
+    fn append<'a>(
+        &'a self,
+        record: &'a crate::audit::AuditRecord,
+    ) -> crate::audit::AuditFuture<'a, Result<(), ControlError>> {
+        Box::pin(async move {
+            if self.appends.fetch_add(1, Ordering::SeqCst) > 0 {
+                return Err(ControlError::audit_unavailable());
+            }
+            self.inner.append(record).await
+        })
+    }
+
+    fn records(&self) -> crate::audit::AuditFuture<'_, Result<Vec<crate::audit::AuditRecord>, ControlError>> {
+        self.inner.records()
+    }
+}
+
+#[tokio::test]
+async fn audit_failures_are_logged_by_stage_with_what_the_mutation_did() {
+    let logs = crate::telemetry::testing::LogCapture::start();
+    let context = rocketmq_runtime::RuntimeContext::from_current("control-audit-signal-test");
+    let owner = context
+        .service_context("control-audit-signal-test")
+        .task_group()
+        .clone();
+    let counters = Arc::new(Counters::default());
+    let factory = || {
+        Arc::new(FakeFactory {
+            behavior: Behavior::Success,
+            counters: counters.clone(),
+            gate: Arc::new(tokio::sync::Notify::new()),
+        })
+    };
+
+    // A lost `started` record stops the call before any session is opened.
+    let unavailable = ToolRuntime::new(
+        AuditTrail::new(Arc::new(MemoryAuditSink::failing(32, 4096))),
+        factory(),
+        Duration::from_secs(1),
+        owner.clone(),
+    );
+    let error = unavailable
+        .execute(
+            &principal("alice"),
+            &authorized(),
+            request(None),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), crate::error::ControlErrorCode::AuditUnavailable);
+    assert_eq!(counters.opens.load(Ordering::SeqCst), 0);
+
+    // A lost terminal record is reported together with the result that was not recorded.
+    let lossy = ToolRuntime::new(
+        AuditTrail::new(Arc::new(TerminalRejectingSink {
+            inner: MemoryAuditSink::new(32, 4096),
+            appends: AtomicUsize::new(0),
+        })),
+        factory(),
+        Duration::from_secs(1),
+        owner,
+    );
+    let error = lossy
+        .execute(
+            &principal("alice"),
+            &authorized(),
+            request(None),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), crate::error::ControlErrorCode::AuditUnavailable);
+    assert_eq!(counters.runs.load(Ordering::SeqCst), 1);
+    assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
+
+    let text = logs.text();
+    for expected in [
+        r#"durable audit record is unavailable site="audit" stage="started" suppressed=0"#,
+        r#"mutation call was rejected before execution site="call" tool="rocketmq_upsert_topic" code="audit_unavailable" suppressed=0"#,
+        r#"durable audit record is unavailable site="audit" stage="terminal" suppressed=0"#,
+        r#"mutation finished without a clean result operation="topic_upsert" cluster="cluster-a" mode="execute" result="applied" audit_recorded=false invocation_id=1 "#,
+    ] {
+        assert!(text.contains(expected), "missing {expected} in {text}");
+    }
+    assert_eq!(text.matches("mutation call was rejected before execution").count(), 1);
+    for forbidden in ["alice", "planned operation", "orders", "broker-a"] {
+        assert!(!text.contains(forbidden), "log exposed {forbidden}");
+    }
+}

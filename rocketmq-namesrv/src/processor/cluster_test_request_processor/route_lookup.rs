@@ -56,23 +56,23 @@ const ROUTE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 const ROUTE_LOOKUP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub(crate) type ClusterTestLookupFuture<'a, T> = Pin<Box<dyn Future<Output = NameServerResult<T>> + Send + 'a>>;
-type EndpointResolveFuture<'a> = ClusterTestLookupFuture<'a, EndpointResolutionOutcome>;
+type EndpointResolveFuture<'a> = ClusterTestLookupFuture<'a, NameServerEndpointResolution>;
 
 #[derive(Debug)]
-enum EndpointResolutionOutcome {
+enum NameServerEndpointResolution {
     Resolved(Vec<SocketAddr>),
     Unavailable,
 }
 
 #[derive(Debug)]
-pub(super) enum RouteLookupOutcome<T> {
+pub(super) enum ClusterTestLookupStatus<T> {
     Resolved(T),
     Unavailable,
     Cancelled,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum ClusterTestTopicRouteOutcome {
+pub(crate) enum ClusterTestTopicRouteResolution {
     Found(TopicRouteData),
     NotFound,
     Unavailable,
@@ -81,7 +81,8 @@ pub(crate) enum ClusterTestTopicRouteOutcome {
 pub(crate) trait ClusterTestRouteLookup: Send + Sync {
     fn start(&self) -> ClusterTestLookupFuture<'_, ()>;
 
-    fn lookup_topic_route(&self, topic: &CheetahString) -> ClusterTestLookupFuture<'_, ClusterTestTopicRouteOutcome>;
+    fn lookup_topic_route(&self, topic: &CheetahString)
+        -> ClusterTestLookupFuture<'_, ClusterTestTopicRouteResolution>;
 
     fn shutdown(&self) -> ClusterTestLookupFuture<'_, ()>;
 }
@@ -121,7 +122,7 @@ impl ClusterTestEndpointResolver for ProductEnvironmentEndpointResolver {
             .map_err(|source| route_lookup_timeout_caused_by(deadline, self.address_server.as_str(), source))?;
 
             let Some(address_list) = address_list else {
-                return Ok(EndpointResolutionOutcome::Unavailable);
+                return Ok(NameServerEndpointResolution::Unavailable);
             };
 
             resolve_socket_addresses(&address_list, deadline).await
@@ -211,11 +212,11 @@ impl TransportClusterTestRouteLookup {
         &self,
         topic: &CheetahString,
         deadline: RequestDeadline,
-    ) -> NameServerResult<RouteLookupOutcome<Option<TopicRouteData>>> {
+    ) -> NameServerResult<ClusterTestLookupStatus<Option<TopicRouteData>>> {
         let (endpoints, endpoint_generation) = match self.resolve_endpoints(deadline).await? {
-            RouteLookupOutcome::Resolved(endpoints) => endpoints,
-            RouteLookupOutcome::Unavailable => return Ok(RouteLookupOutcome::Unavailable),
-            RouteLookupOutcome::Cancelled => return Ok(RouteLookupOutcome::Cancelled),
+            ClusterTestLookupStatus::Resolved(endpoints) => endpoints,
+            ClusterTestLookupStatus::Unavailable => return Ok(ClusterTestLookupStatus::Unavailable),
+            ClusterTestLookupStatus::Cancelled => return Ok(ClusterTestLookupStatus::Cancelled),
         };
         let cache_key = LookupCacheKey::new(endpoint_generation, topic.clone());
         self.lookup_cache
@@ -232,7 +233,7 @@ impl TransportClusterTestRouteLookup {
         endpoints: Vec<SocketAddr>,
         endpoint_generation: u64,
         deadline: RequestDeadline,
-    ) -> NameServerResult<RouteLookupOutcome<ResolvedRoute>> {
+    ) -> NameServerResult<ClusterTestLookupStatus<ResolvedRoute>> {
         let mut last_error = None;
 
         for endpoint in endpoints {
@@ -245,7 +246,7 @@ impl TransportClusterTestRouteLookup {
                 .invoke(endpoint, route_request(&self.command_factory, topic), deadline)
                 .await
             {
-                Ok(response) => return decode_route_response(response).map(RouteLookupOutcome::Resolved),
+                Ok(response) => return decode_route_response(response).map(ClusterTestLookupStatus::Resolved),
                 Err(error) => last_error = Some(error),
             }
         }
@@ -256,18 +257,18 @@ impl TransportClusterTestRouteLookup {
         }
         match last_error {
             Some(error) => Err(error),
-            None => Ok(RouteLookupOutcome::Unavailable),
+            None => Ok(ClusterTestLookupStatus::Unavailable),
         }
     }
 
     async fn resolve_endpoints(
         &self,
         deadline: RequestDeadline,
-    ) -> NameServerResult<RouteLookupOutcome<(Vec<SocketAddr>, u64)>> {
+    ) -> NameServerResult<ClusterTestLookupStatus<(Vec<SocketAddr>, u64)>> {
         {
             let cached = self.cached_endpoints.read();
             if !cached.endpoints.is_empty() {
-                return Ok(RouteLookupOutcome::Resolved((
+                return Ok(ClusterTestLookupStatus::Resolved((
                     cached.endpoints.clone(),
                     cached.generation,
                 )));
@@ -278,22 +279,22 @@ impl TransportClusterTestRouteLookup {
         {
             let cached = self.cached_endpoints.read();
             if !cached.endpoints.is_empty() {
-                return Ok(RouteLookupOutcome::Resolved((
+                return Ok(ClusterTestLookupStatus::Resolved((
                     cached.endpoints.clone(),
                     cached.generation,
                 )));
             }
         }
-        let EndpointResolutionOutcome::Resolved(resolved) = self.resolver.resolve(deadline).await? else {
-            return Ok(RouteLookupOutcome::Unavailable);
+        let NameServerEndpointResolution::Resolved(resolved) = self.resolver.resolve(deadline).await? else {
+            return Ok(ClusterTestLookupStatus::Unavailable);
         };
         if resolved.is_empty() {
-            return Ok(RouteLookupOutcome::Unavailable);
+            return Ok(ClusterTestLookupStatus::Unavailable);
         }
         let mut cached = self.cached_endpoints.write();
         cached.generation = cached.generation.wrapping_add(1).max(1);
         cached.endpoints = resolved.clone();
-        Ok(RouteLookupOutcome::Resolved((resolved, cached.generation)))
+        Ok(ClusterTestLookupStatus::Resolved((resolved, cached.generation)))
     }
 }
 
@@ -307,21 +308,24 @@ impl ClusterTestRouteLookup for TransportClusterTestRouteLookup {
         })
     }
 
-    fn lookup_topic_route(&self, topic: &CheetahString) -> ClusterTestLookupFuture<'_, ClusterTestTopicRouteOutcome> {
+    fn lookup_topic_route(
+        &self,
+        topic: &CheetahString,
+    ) -> ClusterTestLookupFuture<'_, ClusterTestTopicRouteResolution> {
         let topic = topic.clone();
         Box::pin(async move {
             let deadline = RequestDeadline::after(self.request_timeout);
             let cancellation = self.task_group.cancellation_token();
-            let outcome = tokio::select! {
+            let status = tokio::select! {
                 biased;
-                _ = cancellation.cancelled() => Ok(RouteLookupOutcome::Cancelled),
+                _ = cancellation.cancelled() => Ok(ClusterTestLookupStatus::Cancelled),
                 result = self.lookup_topic_route_until(&topic, deadline) => result,
             }?;
-            match outcome {
-                RouteLookupOutcome::Resolved(Some(route)) => Ok(ClusterTestTopicRouteOutcome::Found(route)),
-                RouteLookupOutcome::Resolved(None) => Ok(ClusterTestTopicRouteOutcome::NotFound),
-                RouteLookupOutcome::Unavailable => Ok(ClusterTestTopicRouteOutcome::Unavailable),
-                RouteLookupOutcome::Cancelled => Err(route_lookup_cancelled_error()),
+            match status {
+                ClusterTestLookupStatus::Resolved(Some(route)) => Ok(ClusterTestTopicRouteResolution::Found(route)),
+                ClusterTestLookupStatus::Resolved(None) => Ok(ClusterTestTopicRouteResolution::NotFound),
+                ClusterTestLookupStatus::Unavailable => Ok(ClusterTestTopicRouteResolution::Unavailable),
+                ClusterTestLookupStatus::Cancelled => Err(route_lookup_cancelled_error()),
             }
         })
     }
@@ -372,7 +376,7 @@ fn decode_route_response(response: RemotingCommand) -> NameServerResult<Resolved
 async fn resolve_socket_addresses(
     address_list: &str,
     deadline: RequestDeadline,
-) -> NameServerResult<EndpointResolutionOutcome> {
+) -> NameServerResult<NameServerEndpointResolution> {
     let mut resolved = Vec::new();
     let mut last_error = None;
 
@@ -400,10 +404,10 @@ async fn resolve_socket_addresses(
     if resolved.is_empty() {
         return match last_error {
             Some(source) => Err(route_lookup_dns_failure_from_source(source)),
-            None => Ok(EndpointResolutionOutcome::Unavailable),
+            None => Ok(NameServerEndpointResolution::Unavailable),
         };
     }
-    Ok(EndpointResolutionOutcome::Resolved(resolved))
+    Ok(NameServerEndpointResolution::Resolved(resolved))
 }
 
 #[track_caller]
@@ -524,11 +528,11 @@ mod tests {
 
     #[tokio::test]
     async fn absent_endpoint_discovery_is_a_normal_unavailable_outcome() {
-        let outcome = resolve_socket_addresses(" ; ", RequestDeadline::from_timeout_millis(25))
+        let resolution = resolve_socket_addresses(" ; ", RequestDeadline::from_timeout_millis(25))
             .await
             .expect("an absent endpoint list is not a DNS failure");
 
-        assert!(matches!(outcome, EndpointResolutionOutcome::Unavailable));
+        assert!(matches!(resolution, NameServerEndpointResolution::Unavailable));
     }
 
     #[test]
@@ -567,7 +571,7 @@ mod tests {
         fn resolve(&self, _deadline: RequestDeadline) -> EndpointResolveFuture<'_> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let endpoints = self.endpoints.clone();
-            Box::pin(async move { Ok(EndpointResolutionOutcome::Resolved(endpoints)) })
+            Box::pin(async move { Ok(NameServerEndpointResolution::Resolved(endpoints)) })
         }
     }
 
@@ -586,7 +590,7 @@ mod tests {
             assert_eq!(header.topic, CheetahString::from("missing-topic"));
             let response = RemotingCommand::create_response_command_with_code(ResponseCode::Success)
                 .set_body(self.route.encode().map_err(crate::namesrv_error::from_error)?);
-            response_outcome(response)
+            response_resolution(response)
         }
     }
 
@@ -595,7 +599,7 @@ mod tests {
 
     impl RequestProcessor for MissingRouteProcessor {
         async fn process(&mut self, _request: &mut RemotingRequest) -> NameServerResult<ResponseAction> {
-            response_outcome(RemotingCommand::create_response_command_with_code(
+            response_resolution(RemotingCommand::create_response_command_with_code(
                 ResponseCode::TopicNotExist,
             ))
         }
@@ -611,13 +615,13 @@ mod tests {
         async fn process(&mut self, _request: &mut RemotingRequest) -> NameServerResult<ResponseAction> {
             self.entered.notify_one();
             self.release.notified().await;
-            response_outcome(RemotingCommand::create_response_command_with_code(
+            response_resolution(RemotingCommand::create_response_command_with_code(
                 ResponseCode::Success,
             ))
         }
     }
 
-    fn response_outcome(response: RemotingCommand) -> NameServerResult<ResponseAction> {
+    fn response_resolution(response: RemotingCommand) -> NameServerResult<ResponseAction> {
         let response = RemotingResponse::from_command(response).map_err(|error| {
             crate::namesrv_error::response_source("namesrv.route_lookup_test.remoting_response", error)
         })?;
@@ -745,7 +749,7 @@ mod tests {
             .lookup_topic_route(&CheetahString::from("missing-topic"))
             .await
             .unwrap();
-        assert_eq!(first, ClusterTestTopicRouteOutcome::Found(sample_route()));
+        assert_eq!(first, ClusterTestTopicRouteResolution::Found(sample_route()));
         assert_eq!(second, first);
         assert_eq!(resolver.calls.load(Ordering::SeqCst), 1);
 
@@ -780,7 +784,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(first, ClusterTestTopicRouteOutcome::NotFound);
+        assert_eq!(first, ClusterTestTopicRouteResolution::NotFound);
         assert_eq!(second, first);
         assert_eq!(resolver.calls.load(Ordering::SeqCst), 1);
 
@@ -804,12 +808,12 @@ mod tests {
         );
         lookup.start().await.unwrap();
 
-        let outcome = lookup
+        let resolution = lookup
             .lookup_topic_route(&CheetahString::from("missing-topic"))
             .await
             .unwrap();
 
-        assert_eq!(outcome, ClusterTestTopicRouteOutcome::Unavailable);
+        assert_eq!(resolution, ClusterTestTopicRouteResolution::Unavailable);
 
         lookup.shutdown().await.unwrap();
         runtime

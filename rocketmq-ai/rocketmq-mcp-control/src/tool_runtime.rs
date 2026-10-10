@@ -35,6 +35,9 @@ use crate::guard::AuthorizedMutation;
 use crate::model::ClusterName;
 use crate::model::ControlOperation;
 use crate::model::Principal;
+use crate::telemetry::AuditStage;
+use crate::telemetry::ControlSignals;
+use crate::telemetry::MutationRecord;
 use crate::tools;
 
 const IDEMPOTENCY_TTL: Duration = Duration::from_secs(10 * 60);
@@ -190,6 +193,7 @@ pub(crate) struct ToolRuntime {
     operation_timeout: Duration,
     owner: TaskGroup,
     idempotency: Arc<Mutex<IdempotencyState>>,
+    signals: ControlSignals,
 }
 
 impl ToolRuntime {
@@ -205,7 +209,13 @@ impl ToolRuntime {
             operation_timeout,
             owner,
             idempotency: Arc::new(Mutex::new(IdempotencyState::default())),
+            signals: ControlSignals::default(),
         }
+    }
+
+    pub(crate) fn with_signals(mut self, signals: ControlSignals) -> Self {
+        self.signals = signals;
+        self
     }
 
     pub(crate) async fn execute(
@@ -215,6 +225,35 @@ impl ToolRuntime {
         request: MutationToolRequest,
         cancellation: CancellationToken,
     ) -> Result<MutationToolResponse, ControlError> {
+        let started = tokio::time::Instant::now();
+        let receiver = self
+            .start_supervised(principal, authorized, request, cancellation, started)
+            .await
+            .inspect_err(|error| {
+                self.signals.call_rejected(
+                    crate::telemetry::tool_name(authorized.operation()),
+                    error.code(),
+                    started.elapsed(),
+                );
+            })?;
+        receiver.await.map_err(|_| {
+            self.signals.audit_failed(AuditStage::Supervisor);
+            ControlError::audit_unavailable()
+        })?
+    }
+
+    /// Persists the `started` record and hands the mutation to its supervisor.
+    ///
+    /// The supervisor records the terminal state itself, so the mutation is logged even when the
+    /// request that started it is dropped. An error returned here means no supervisor ran.
+    async fn start_supervised(
+        &self,
+        principal: &Principal,
+        authorized: &AuthorizedMutation,
+        request: MutationToolRequest,
+        cancellation: CancellationToken,
+        started: tokio::time::Instant,
+    ) -> Result<oneshot::Receiver<Result<MutationToolResponse, ControlError>>, ControlError> {
         let audit_context = AuditContext::try_new(authorized.operator(), request.reason())?;
         let cluster = authorized.cluster().clone();
         let identity = IdempotencyIdentity::from_request(principal, &cluster, &request)?;
@@ -231,14 +270,17 @@ impl ToolRuntime {
                             authorized.cluster(),
                             request.dry_run(),
                         )
-                        .await?;
+                        .await
+                        .inspect_err(|_| self.signals.audit_failed(AuditStage::Started))?;
                     let error = ControlError::invalid_argument();
                     self.audit
                         .terminal(&invocation, AuditResult::Failed, Some(error.code()))
-                        .await?;
+                        .await
+                        .inspect_err(|_| self.signals.audit_failed(AuditStage::Terminal))?;
                     return Err(error);
                 }
             };
+        self.signals.cache_event(admission.event());
         let is_leader = matches!(&admission, idempotency::CacheAdmission::Leader);
         let invocation = match self
             .audit
@@ -252,6 +294,7 @@ impl ToolRuntime {
         {
             Ok(invocation) => invocation,
             Err(error) => {
+                self.signals.audit_failed(AuditStage::Started);
                 if is_leader {
                     idempotency::abort_cache_reservation(&self.idempotency, &identity, error.clone()).await;
                 }
@@ -266,6 +309,10 @@ impl ToolRuntime {
         let cache = self.idempotency.clone();
         let cleanup_identity = identity.clone();
         let task_invocation = invocation.clone();
+        let signals = self.signals.clone();
+        let operation = authorized.operation();
+        let dry_run = request.dry_run();
+        let record_cluster = cluster.clone();
         let spawn = self.owner.spawn_service("mcp-control-mutation-supervisor", async move {
             let result = execute_admitted(
                 cache,
@@ -290,6 +337,19 @@ impl ToolRuntime {
                 Err(error) => (AuditResult::Failed, Some(error.code())),
             };
             let terminal = audit.terminal(&task_invocation, audit_result, error_code).await;
+            if terminal.is_err() {
+                signals.audit_failed(AuditStage::Terminal);
+            }
+            signals.mutation_finished(MutationRecord {
+                operation,
+                cluster: &record_cluster,
+                dry_run,
+                result: audit_result,
+                error_code,
+                invocation: task_invocation.id(),
+                audit_recorded: terminal.is_ok(),
+                elapsed: started.elapsed(),
+            });
             let delivered = terminal.map_or_else(Err, |_| result);
             let _ = sender.send(delivered);
         });
@@ -300,10 +360,11 @@ impl ToolRuntime {
             }
             self.audit
                 .terminal(&invocation, AuditResult::Failed, Some(error.code()))
-                .await?;
+                .await
+                .inspect_err(|_| self.signals.audit_failed(AuditStage::Terminal))?;
             return Err(error);
         }
-        receiver.await.map_err(|_| ControlError::audit_unavailable())?
+        Ok(receiver)
     }
 }
 

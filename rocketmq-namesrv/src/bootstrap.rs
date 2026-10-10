@@ -1997,7 +1997,7 @@ mod tests {
     }
     use crate::processor::default_request_processor::DefaultRequestProcessor;
     use crate::processor::ClientRequestProcessor;
-    use crate::processor::ClusterTestTopicRouteOutcome;
+    use crate::processor::ClusterTestTopicRouteResolution;
     use crate::route::route_info_manager::TopicRouteLookupOutcome;
     use crate::route::types::BrokerSession;
 
@@ -2300,8 +2300,8 @@ mod tests {
         fn lookup_topic_route(
             &self,
             _topic: &CheetahString,
-        ) -> TestRouteLookupFuture<'_, ClusterTestTopicRouteOutcome> {
-            Box::pin(async { Ok(ClusterTestTopicRouteOutcome::NotFound) })
+        ) -> TestRouteLookupFuture<'_, ClusterTestTopicRouteResolution> {
+            Box::pin(async { Ok(ClusterTestTopicRouteResolution::NotFound) })
         }
 
         fn shutdown(&self) -> TestRouteLookupFuture<'_, ()> {

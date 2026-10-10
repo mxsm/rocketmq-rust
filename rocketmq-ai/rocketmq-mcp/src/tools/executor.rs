@@ -60,10 +60,53 @@ pub(crate) enum ToolFailure {
     Operational(ToolExecutionError),
 }
 
+/// The kind of logical RocketMQ entity a `not_found` Tool error refers to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum NotFoundEntity {
+    Cluster,
+    Topic,
+    ConsumerGroup,
+    Broker,
+    Message,
+    Proxy,
+    Controller,
+}
+
+impl NotFoundEntity {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Cluster => "cluster",
+            Self::Topic => "topic",
+            Self::ConsumerGroup => "consumer group",
+            Self::Broker => "broker",
+            Self::Message => "message",
+            Self::Proxy => "proxy",
+            Self::Controller => "controller",
+        }
+    }
+
+    pub(crate) const fn suggestion(self) -> &'static str {
+        match self {
+            Self::Cluster => "Ask the server operator to verify the RocketMQ cluster name configured for this cluster.",
+            Self::Topic => "Confirm the Topic name with rocketmq_list_topics.",
+            Self::ConsumerGroup => "Confirm the Consumer Group name with rocketmq_list_consumer_groups.",
+            Self::Broker => "Confirm the Broker name with rocketmq_get_cluster_overview.",
+            Self::Message => "Verify the message identifier and that the message is still retained.",
+            Self::Proxy => "Use a Proxy name configured for the selected cluster.",
+            Self::Controller => "Use a Controller name configured for the selected cluster.",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum ToolRejection {
     InvalidArguments {
         _source: Option<std::sync::Arc<crate::McpError>>,
+    },
+    /// The request was well formed, but the selected entity does not exist.
+    NotFound {
+        entity: NotFoundEntity,
     },
     PermissionDenied,
     UnauthorizedScope,
@@ -116,6 +159,18 @@ impl ToolFailure {
         ))))
     }
 
+    pub(crate) const fn not_found(entity: NotFoundEntity) -> Self {
+        Self::Rejected(ToolRejection::NotFound { entity })
+    }
+
+    /// Returns the entity a `not_found` failure refers to.
+    pub(crate) const fn not_found_entity(&self) -> Option<NotFoundEntity> {
+        match self {
+            Self::Rejected(ToolRejection::NotFound { entity }) => Some(*entity),
+            _ => None,
+        }
+    }
+
     pub(crate) fn internal(error: impl std::error::Error + Send + Sync + 'static) -> Self {
         Self::Operational(ToolExecutionError::Internal(Some(std::sync::Arc::new(
             crate::McpError::from_source(error),
@@ -125,6 +180,7 @@ impl ToolFailure {
     pub(crate) fn code(&self) -> &'static str {
         match self {
             Self::Rejected(ToolRejection::InvalidArguments { .. }) => "invalid_arguments",
+            Self::Rejected(ToolRejection::NotFound { .. }) => "not_found",
             Self::Operational(ToolExecutionError::Backend(_)) => "source_unavailable",
             Self::Rejected(ToolRejection::PermissionDenied) => "permission_denied",
             Self::Rejected(ToolRejection::UnauthorizedScope) => "unauthorized_scope",
@@ -156,6 +212,7 @@ impl ToolFailure {
             Self::Rejected(ToolRejection::InvalidArguments { .. }) => {
                 vec!["Correct the arguments using the Tool input schema and retry."]
             }
+            Self::Rejected(ToolRejection::NotFound { entity }) => vec![entity.suggestion()],
             Self::Operational(ToolExecutionError::Backend(_)) => {
                 vec!["Retry after verifying the selected cluster and RocketMQ availability."]
             }
@@ -195,7 +252,9 @@ impl ToolFailure {
 
     fn metric_failure_label(&self) -> McpFailureLabel {
         match self {
-            Self::Rejected(ToolRejection::InvalidArguments { .. }) => McpFailureLabel::InvalidRequest,
+            Self::Rejected(ToolRejection::InvalidArguments { .. }) | Self::Rejected(ToolRejection::NotFound { .. }) => {
+                McpFailureLabel::InvalidRequest
+            }
             Self::Rejected(ToolRejection::AliasInputBoundExceeded)
             | Self::Rejected(ToolRejection::AliasCapacityExceeded)
             | Self::Rejected(ToolRejection::AliasCollisionExhausted) => McpFailureLabel::SourceUnavailable,
@@ -218,6 +277,7 @@ impl ToolFailure {
     fn public_message(&self) -> String {
         match self {
             Self::Rejected(ToolRejection::InvalidArguments { .. }) => "invalid arguments".to_string(),
+            Self::Rejected(ToolRejection::NotFound { entity }) => format!("{} was not found", entity.label()),
             Self::Operational(ToolExecutionError::Backend(_)) => "RocketMQ source is unavailable".to_string(),
             Self::Rejected(ToolRejection::PermissionDenied) => "permission denied for this Tool".to_string(),
             Self::Rejected(ToolRejection::UnauthorizedScope) => {
@@ -311,6 +371,9 @@ struct ToolErrorContent<'a> {
     correlation_id: &'a str,
     tool: &'a str,
     code: &'static str,
+    /// Present only for `not_found`: the kind of entity that does not exist.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entity: Option<NotFoundEntity>,
     retryable: bool,
     message: String,
     suggestions: Vec<&'static str>,
@@ -385,6 +448,19 @@ where
         result
     }
 
+    /// Renders a Tool error and counts it under its bounded failure label.
+    fn error_result(
+        &self,
+        operation: &'static str,
+        tool_name: &str,
+        request_id: &str,
+        error: ToolFailure,
+    ) -> CallToolResult {
+        self.metrics
+            .record_error(McpOperationKind::Tool, operation, error.metric_failure_label());
+        error_result(operation, tool_name, request_id, error)
+    }
+
     async fn execute(
         &self,
         request: CallToolRequestParams,
@@ -395,16 +471,13 @@ where
         let tool_id = match ToolId::resolve(&tool_name) {
             Some(tool_id) => tool_id,
             None => {
-                rocketmq_observability::metrics::mcp::record_error(
-                    McpOperationKind::Tool,
-                    "unknown_tool",
-                    McpFailureLabel::InvalidRequest,
-                );
+                self.metrics
+                    .record_error(McpOperationKind::Tool, "unknown_tool", McpFailureLabel::InvalidRequest);
                 return Err(ErrorData::invalid_params("unknown tool", None));
             }
         };
         let descriptor = tool_id.descriptor();
-        let arguments = request.arguments.unwrap_or_default();
+        let mut arguments = request.arguments.unwrap_or_default();
         let audit_arguments = audit_arguments(tool_id, &arguments);
         let guarded_call =
             match self
@@ -414,12 +487,17 @@ where
                 Ok(guarded_call) => guarded_call,
                 Err(error) => {
                     operation_recorder.denied();
-                    return Ok(error_result(descriptor.name, &tool_name, request_id, error.into()));
+                    return Ok(self.error_result(descriptor.name, &tool_name, request_id, error.into()));
                 }
             };
+        // The Guard authorized exactly this cluster, so the query reads it instead of
+        // resolving one from the raw arguments.
+        if let Some(cluster) = guarded_call.cluster() {
+            arguments.insert("cluster".to_string(), Value::String(cluster.to_string()));
+        }
 
         if let Err(error) = validate_input(&descriptor, &arguments) {
-            return Ok(guarded_call.finish_result(error_result(descriptor.name, &tool_name, request_id, error)));
+            return Ok(guarded_call.finish_result(self.error_result(descriptor.name, &tool_name, request_id, error)));
         }
 
         let result = match tool_id {
@@ -428,7 +506,7 @@ where
                 let args = match args {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -447,7 +525,7 @@ where
                 let args = match decode_args::<topic_tools::ListTopicsArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -466,7 +544,7 @@ where
                 let args = match decode_args::<topic_tools::DescribeTopicArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -485,7 +563,7 @@ where
                 let args = match decode_args::<topic_tools::QueryTopicRouteArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -505,7 +583,7 @@ where
                 let args = match decode_args::<consumer_tools::ListConsumerGroupsArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -524,7 +602,7 @@ where
                 let args = match decode_args::<consumer_tools::QueryConsumerLagArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -549,7 +627,7 @@ where
                 let args = match decode_args::<broker_tools::DescribeBrokerArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -569,7 +647,7 @@ where
                 let args = match decode_args::<broker_tools::BrokerDiagnosticsArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -591,7 +669,7 @@ where
                 let args = match decode_args::<config_tools::BrokerConfigSummaryArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -613,7 +691,7 @@ where
                 let args = match decode_args::<config_tools::BrokerLogFilterStateArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -631,7 +709,7 @@ where
                 let args = match decode_args::<proxy_tools::ProxyDrainStateArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -649,7 +727,7 @@ where
                 let args = match decode_args::<diagnosis_tools::DiagnoseConsumerLagArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -674,7 +752,7 @@ where
                 let args = match decode_args::<connection_tools::ListConsumerConnectionsArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -692,7 +770,7 @@ where
                 let args = match decode_args::<connection_tools::ListProducerConnectionsArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -710,7 +788,7 @@ where
                 let args = match decode_args::<message_tools::MessageMetadataArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -728,7 +806,7 @@ where
                 let args = match decode_args::<config_tools::TopicConfigStateArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -746,7 +824,7 @@ where
                 let args = match decode_args::<config_tools::ConsumerGroupConfigStateArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -764,7 +842,7 @@ where
                 let args = match decode_args::<topic_tools::GetTopicStatsArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -786,7 +864,7 @@ where
                 let args = match decode_args::<config_tools::GetTopicConfigArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -806,7 +884,7 @@ where
                 let args = match decode_args::<consumer_tools::GetConsumerGroupDetailsArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -824,7 +902,7 @@ where
                 let args = match decode_args::<consumer_tools::GetConsumerProgressArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -848,7 +926,7 @@ where
                 let args = match decode_args::<infrastructure_tools::GetHaStatusArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -866,7 +944,7 @@ where
                 let args = match decode_args::<infrastructure_tools::GetControllerMetadataArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -885,7 +963,7 @@ where
                 {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -904,7 +982,7 @@ where
                 let args = match decode_args::<change_tools::CreateTopicArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -932,7 +1010,7 @@ where
                 let args = match decode_args::<change_tools::UpdateTopicConfigArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -960,7 +1038,7 @@ where
                 let args = match decode_args::<change_tools::UpdateTopicPermArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -988,7 +1066,7 @@ where
                 let args = match decode_args::<change_tools::UpdateBrokerConfigArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -1015,7 +1093,7 @@ where
                 let args = match decode_args::<change_tools::ResetConsumerOffsetArgs>(arguments.clone()) {
                     Ok(args) => args,
                     Err(error) => {
-                        return Ok(guarded_call.finish_result(error_result(
+                        return Ok(guarded_call.finish_result(self.error_result(
                             descriptor.name,
                             &tool_name,
                             request_id,
@@ -1041,7 +1119,7 @@ where
             }
         };
 
-        let result = result.unwrap_or_else(|error| error_result(descriptor.name, &tool_name, request_id, error));
+        let result = result.unwrap_or_else(|error| self.error_result(descriptor.name, &tool_name, request_id, error));
         let result = guarded_call.finish_result(result);
 
         Ok(result)
@@ -1233,7 +1311,6 @@ fn validate_schema(schema: &JsonObject, value: &Value, _label: &str) -> Result<(
 }
 
 fn error_result(operation: &'static str, tool_name: &str, request_id: &str, error: ToolFailure) -> CallToolResult {
-    rocketmq_observability::metrics::mcp::record_error(McpOperationKind::Tool, operation, error.metric_failure_label());
     if error.has_private_detail() {
         tracing::warn!(
             correlation_id = request_id,
@@ -1248,6 +1325,7 @@ fn error_result(operation: &'static str, tool_name: &str, request_id: &str, erro
         correlation_id: request_id,
         tool: tool_name,
         code: error.code(),
+        entity: error.not_found_entity(),
         retryable: error.retryable(),
         message: error.public_message(),
         suggestions: error.suggestions(),
@@ -2159,6 +2237,47 @@ mod tests {
         assert_eq!(error["retryable"], false);
         assert_eq!(error["request_id"], "test-request");
         assert!(!error["suggestions"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn not_found_is_a_non_retryable_tool_error_that_names_the_entity() {
+        for (entity, wire_entity, next_step) in [
+            (NotFoundEntity::Topic, "topic", "rocketmq_list_topics"),
+            (
+                NotFoundEntity::ConsumerGroup,
+                "consumer_group",
+                "rocketmq_list_consumer_groups",
+            ),
+            (NotFoundEntity::Broker, "broker", "rocketmq_get_cluster_overview"),
+        ] {
+            let failure = ToolFailure::not_found(entity);
+            assert_eq!(failure.metric_failure_label(), McpFailureLabel::InvalidRequest);
+            let result = error_result(
+                "rocketmq_get_topic_route",
+                "rocketmq_get_topic_route",
+                "request-1",
+                failure,
+            );
+
+            assert_eq!(result.is_error, Some(true));
+            let error: serde_json::Value = serde_json::from_str(&content_text(&result)).unwrap();
+            assert_eq!(error["code"], "not_found");
+            assert_eq!(error["entity"], wire_entity);
+            assert_eq!(error["retryable"], false);
+            assert!(error["suggestions"][0].as_str().unwrap().contains(next_step));
+        }
+
+        // Only `not_found` carries an entity; every other error keeps its previous shape.
+        let result = error_result(
+            "rocketmq_get_topic_route",
+            "rocketmq_get_topic_route",
+            "request-1",
+            ToolFailure::Operational(ToolExecutionError::Backend(None)),
+        );
+        let error: serde_json::Value = serde_json::from_str(&content_text(&result)).unwrap();
+        assert_eq!(error["code"], "source_unavailable");
+        assert_eq!(error["retryable"], true);
+        assert!(error.get("entity").is_none());
     }
 
     #[tokio::test]

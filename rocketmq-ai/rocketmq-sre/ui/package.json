@@ -17,9 +17,9 @@
     "preview": "vite preview --host 0.0.0.0 --port 3004"
   },
   "dependencies": {
-    "@radix-ui/react-select": "^2.3.7",
+    "@radix-ui/react-select": "^2.3.8",
     "@radix-ui/react-slot": "^1.3.3",
-    "@radix-ui/react-tabs": "^1.1.21",
+    "@radix-ui/react-tabs": "^1.1.22",
     "@radix-ui/react-tooltip": "^1.3.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -47,7 +47,7 @@
     "openapi-typescript": "^7.13.0",
     "typescript": "5.9.3",
     "typescript-eslint": "^8.71.1",
-    "vite": "^8.3.2",
+    "vite": "^8.3.3",
     "vitest": "^5.0.3"
   },
   "overrides": {

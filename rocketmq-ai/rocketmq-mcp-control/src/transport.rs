@@ -48,6 +48,9 @@ use crate::config::ControlConfig;
 use crate::config::REQUIRED_WRITE_SCOPE;
 use crate::error::ControlError;
 use crate::server::ControlServer;
+use crate::telemetry::server_failed;
+use crate::telemetry::ControlSignals;
+use crate::telemetry::ServerStage;
 
 pub const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
 pub const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -61,11 +64,31 @@ pub async fn serve<F>(
 where
     F: FutureShutdown,
 {
+    serve_with_signals(config, service_context, audit, ControlSignals::default(), shutdown).await
+}
+
+/// Serves the control endpoint and reports rejections and mutation results through `signals`.
+///
+/// # Errors
+///
+/// Returns a stable error when the configuration, signing keys, certificate, or listener is
+/// unusable, or when the server stops abnormally. The failed stage is logged.
+pub async fn serve_with_signals<F>(
+    config: ControlConfig,
+    service_context: ChildServiceContext,
+    audit: crate::audit::AuditTrail,
+    signals: ControlSignals,
+    shutdown: F,
+) -> Result<(), ControlError>
+where
+    F: FutureShutdown,
+{
     config.validate()?;
     let metadata_url = resource_metadata_url(&config);
     let auth = AuthState::<HttpJwksSource>::initialize(&config.oauth, metadata_url)
         .await
-        .map_err(|_| ControlError::invalid_config())?;
+        .map_err(|_| server_failed(ServerStage::OAuthKeys, ControlError::invalid_config()))?
+        .with_signals(signals);
     serve_authenticated(config, service_context, audit, shutdown, auth).await
 }
 
@@ -82,37 +105,40 @@ where
 {
     let tls = TlsServerRuntime::initialize_with_service_context(tls_config(&config), &service_context)
         .await
-        .map_err(|_| ControlError::invalid_config())?;
+        .map_err(|_| server_failed(ServerStage::Tls, ControlError::invalid_config()))?;
     if tls.active_generation() == 0 {
-        return Err(ControlError::invalid_config());
+        return Err(server_failed(ServerStage::Tls, ControlError::invalid_config()));
     }
     let bind = config
         .server
         .bind
         .parse::<SocketAddr>()
-        .map_err(|_| ControlError::invalid_config())?;
+        .map_err(|_| server_failed(ServerStage::Listener, ControlError::invalid_config()))?;
     let tcp = tokio::net::TcpListener::bind(bind)
         .await
-        .map_err(|_| ControlError::invalid_config())?;
+        .map_err(|_| server_failed(ServerStage::Listener, ControlError::invalid_config()))?;
     let listener = HttpsListener { tcp, tls };
     let cancellation = CancellationToken::new();
     #[cfg(feature = "write-tools")]
-    let server = ControlServer::from_config(&config, audit, service_context.component("mutation-tools"))?;
+    let server = ControlServer::from_config(&config, audit, service_context.component("mutation-tools"))
+        .map_err(|error| server_failed(ServerStage::MutationTools, error))?;
     #[cfg(not(feature = "write-tools"))]
     let server = {
         let _ = (audit, &service_context);
         ControlServer::new(config.mutations.mutations_enabled)
     };
+    let server = server.with_signals(auth.signals().clone());
+    let capabilities = server.capabilities().clone();
     let router = build_router_with_auth(&config, server, cancellation.clone(), auth);
 
-    tracing::info!("rocketmq-mcp-control authenticated HTTPS transport is ready");
+    crate::telemetry::server_ready(&capabilities);
     axum::serve(listener, router)
         .with_graceful_shutdown(async move {
             shutdown.await;
             cancellation.cancel();
         })
         .await
-        .map_err(|_| ControlError::execution_failed())
+        .map_err(|_| server_failed(ServerStage::Serve, ControlError::execution_failed()))
 }
 
 pub trait FutureShutdown: std::future::Future<Output = ()> + Send + 'static {}
@@ -126,6 +152,7 @@ pub(crate) fn build_router_with_auth<S: JwksSource + 'static>(
     auth: AuthState<S>,
 ) -> Router {
     let endpoint = config.server.endpoint.clone();
+    let signals = server.signals().clone();
     let service = streamable_service(config, server, cancellation);
     let metadata_path = "/.well-known/oauth-protected-resource";
     let metadata = protected_resource_metadata(config);
@@ -136,6 +163,7 @@ pub(crate) fn build_router_with_auth<S: JwksSource + 'static>(
     let policy = RequestOriginPolicy {
         host: config.server.public_base_url.host().to_string(),
         origin: config.server.public_base_url.as_str().to_string(),
+        signals,
     };
     apply_http_limits(
         Router::new()
@@ -162,6 +190,7 @@ fn apply_http_limits(router: Router) -> Router {
 struct RequestOriginPolicy {
     host: String,
     origin: String,
+    signals: ControlSignals,
 }
 
 async fn validate_host_origin(State(policy): State<RequestOriginPolicy>, request: Request, next: Next) -> Response {
@@ -176,6 +205,7 @@ async fn validate_host_origin(State(policy): State<RequestOriginPolicy>, request
         .map(|value| value.to_str().is_ok_and(|value| value == policy.origin))
         .unwrap_or(true);
     if !host_matches || !origin_matches {
+        policy.signals.request_rejected();
         return (
             StatusCode::BAD_REQUEST,
             axum::Json(ControlError::request_rejected().envelope()),
@@ -2066,6 +2096,102 @@ mod tests {
         for forbidden in [hostile_host, hostile_origin, "token=secret", "127.0.0.1"] {
             assert!(!body.contains(forbidden));
             assert!(!captured.contains(forbidden));
+        }
+        assert!(captured.contains(
+            r#"request was rejected before authentication site="origin" code="request_rejected" suppressed=0"#
+        ));
+    }
+
+    #[tokio::test]
+    async fn rejections_are_logged_with_closed_labels_and_without_caller_text() {
+        let logs = crate::telemetry::testing::LogCapture::start();
+        let router = router().await;
+
+        for credential in [None, Some("attacker-controlled-credential")] {
+            let response = router
+                .clone()
+                .oneshot(request("/mcp", Body::from("{}"), credential))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+
+        let write_token = token_with_claims(REQUIRED_WRITE_SCOPE, vec!["topic_upsert"], vec!["cluster-a"]);
+        let hostile_tool = "rocketmq_upsert_topic; drop 10.0.0.9";
+        let hostile_cluster = "nameserver-10.0.0.9:9876";
+        let call = json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": {"name": hostile_tool, "arguments": {"cluster": hostile_cluster}}
+        });
+        let response = router
+            .oneshot(request("/mcp", Body::from(call.to_string()), Some(&write_token)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["result"]["structuredContent"]["code"], "cluster_not_allowed");
+
+        let text = logs.text();
+        assert!(text.contains(r#"site="authentication" code="unauthorized" reason="invalid_token" suppressed=0"#));
+        assert!(text.contains(r#"site="call" tool="unknown" code="cluster_not_allowed" suppressed=0"#));
+        for forbidden in [
+            "attacker-controlled-credential",
+            hostile_tool,
+            hostile_cluster,
+            "10.0.0.9",
+            "operator@example.test",
+            write_token.as_str(),
+        ] {
+            assert!(!text.contains(forbidden), "log exposed {forbidden}");
+        }
+    }
+
+    #[cfg(feature = "write-tools")]
+    #[tokio::test]
+    async fn supervised_mutations_are_logged_with_the_audit_invocation_and_no_operator_evidence() {
+        let logs = crate::telemetry::testing::LogCapture::start();
+        let (router, _, sink) = write_router().await;
+        let token = token_with_claims(REQUIRED_WRITE_SCOPE, vec!["topic_upsert"], vec!["cluster-a"]);
+
+        let mut arguments = topic_arguments("orders", vec!["broker-a".to_owned(), "broker-b".to_owned()]);
+        let planned =
+            authenticated_tool_call(&router, &token, 500, crate::tools::UPSERT_TOPIC_TOOL, arguments.clone()).await;
+        assert_eq!(planned["result"]["structuredContent"]["status"], "planned");
+        let object = arguments.as_object_mut().unwrap();
+        object.insert("dry_run".to_owned(), serde_json::json!(false));
+        object.insert("confirm".to_owned(), serde_json::json!(true));
+        object.insert("reason".to_owned(), serde_json::json!("approved topic rollout"));
+        let applied = authenticated_tool_call(&router, &token, 501, crate::tools::UPSERT_TOPIC_TOOL, arguments).await;
+        assert_eq!(applied["result"]["structuredContent"]["status"], "applied");
+
+        // The logged invocation is the sequence number of the durable `started` record.
+        let records = sink.records().await.unwrap();
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.invocation_id.get())
+                .collect::<Vec<_>>(),
+            [1, 1, 3, 3]
+        );
+        let text = logs.text();
+        assert!(text.contains(
+            r#"mutation finished operation="topic_upsert" cluster="cluster-a" mode="dry_run" result="planned" invocation_id=1 "#
+        ));
+        assert!(text.contains(
+            r#"mutation finished operation="topic_upsert" cluster="cluster-a" mode="execute" result="applied" invocation_id=3 "#
+        ));
+        assert_eq!(text.matches("mutation finished").count(), 2);
+        for forbidden in [
+            "operator@example.test",
+            "approved topic rollout",
+            "orders",
+            "broker-a",
+            token.as_str(),
+        ] {
+            assert!(!text.contains(forbidden), "log exposed {forbidden}");
         }
     }
 
