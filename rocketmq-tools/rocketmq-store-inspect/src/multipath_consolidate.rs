@@ -27,7 +27,7 @@ use bytes::Bytes;
 use rocketmq_store::inspect_commit_log_record;
 use rocketmq_store::CommitLogRecordBodyMode;
 use rocketmq_store::CommitLogRecordChecksum;
-use rocketmq_store::CommitLogRecordOutcome;
+use rocketmq_store::CommitLogRecordDecodeResult;
 use serde::Serialize;
 
 /// Immutable request for one offline consolidation attempt.
@@ -218,7 +218,7 @@ fn validate_segment_frames(path: &Path, segment_offset: u64) -> io::Result<usize
             CommitLogRecordBodyMode::Skip,
             &IgnoredChecksum,
         ) {
-            CommitLogRecordOutcome::Message(record) => {
+            CommitLogRecordDecodeResult::Message(record) => {
                 let expected_offset = segment_offset
                     .checked_add(position as u64)
                     .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "CommitLog physical offset overflow"))?;
@@ -234,7 +234,7 @@ fn validate_segment_frames(path: &Path, segment_offset: u64) -> io::Result<usize
                 }
                 records += 1;
             }
-            CommitLogRecordOutcome::Blank { .. } => {
+            CommitLogRecordDecodeResult::Blank { .. } => {
                 if bytes[end..].iter().any(|byte| *byte != 0) {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,

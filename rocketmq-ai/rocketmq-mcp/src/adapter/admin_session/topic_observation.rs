@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::tools::executor::NotFoundEntity;
 use crate::tools::executor::ToolRejection;
 use rocketmq_admin_core::core::topic_observation::QueryTopicConfigRequest;
 use rocketmq_admin_core::core::topic_observation::QueryTopicStatsRequest;
@@ -19,7 +20,7 @@ use rocketmq_admin_core::core::topic_observation::TopicConfigDifferenceField as 
 use rocketmq_admin_core::core::topic_observation::TopicObservationQueryAdmin;
 use rocketmq_admin_core::core::topic_observation::MAX_TOPIC_STATS_ROWS;
 
-use super::map_logical_admin_error;
+use super::map_admin_error;
 use super::AdminCoreSession;
 use super::SessionTopicStats;
 use crate::model::contract::observed_at;
@@ -43,7 +44,7 @@ impl AdminCoreSession {
             .admin_mut()?
             .query_topic_stats(&request)
             .await
-            .map_err(map_logical_admin_error)?;
+            .map_err(map_admin_error(NotFoundEntity::Topic))?;
         Ok(QueryPayload::from_admin(result).map(|result| SessionTopicStats {
             total_message_count: result.total_message_count,
             queue_count: result.queue_count,
@@ -73,7 +74,7 @@ impl AdminCoreSession {
             .admin_mut()?
             .query_topic_config(&request)
             .await
-            .map_err(map_logical_admin_error)?;
+            .map_err(map_admin_error(NotFoundEntity::Topic))?;
         let cluster = self.cluster.name.clone();
         Ok(QueryPayload::from_admin(result).map(|result| GetTopicConfigOutput {
             cluster,

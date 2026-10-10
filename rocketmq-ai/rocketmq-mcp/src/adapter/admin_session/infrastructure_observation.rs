@@ -15,9 +15,10 @@
 use rocketmq_admin_core::core::infrastructure_observation as admin;
 use rocketmq_admin_core::core::infrastructure_observation::InfrastructureObservationQueryAdmin;
 
-use super::map_logical_admin_error;
+use super::map_admin_error;
 use super::AdminCoreSession;
 use crate::model::contract::QueryPayload;
+use crate::tools::executor::NotFoundEntity;
 use crate::tools::executor::ToolFailure;
 use crate::tools::infrastructure_tools as tool;
 
@@ -34,12 +35,12 @@ impl AdminCoreSession {
             include_sync_state,
             controller_names.iter().cloned(),
         )
-        .map_err(map_logical_admin_error)?;
+        .map_err(map_admin_error(NotFoundEntity::Broker))?;
         let result = self
             .admin_mut()?
             .query_ha_status(&request)
             .await
-            .map_err(map_logical_admin_error)?;
+            .map_err(map_admin_error(NotFoundEntity::Broker))?;
         let cluster = self.cluster.name.clone();
         Ok(QueryPayload::from_admin(result).map(|result| tool::GetHaStatusOutput {
             cluster,
@@ -98,12 +99,12 @@ impl AdminCoreSession {
             self.cluster.rocketmq_cluster_name.clone(),
             controller_names.iter().cloned(),
         )
-        .map_err(map_logical_admin_error)?;
+        .map_err(map_admin_error(NotFoundEntity::Controller))?;
         let result = self
             .admin_mut()?
             .query_controller_metadata(&request)
             .await
-            .map_err(map_logical_admin_error)?;
+            .map_err(map_admin_error(NotFoundEntity::Controller))?;
         let cluster = self.cluster.name.clone();
         Ok(
             QueryPayload::from_admin(result).map(|result| tool::GetControllerMetadataOutput {
@@ -130,12 +131,12 @@ impl AdminCoreSession {
         &mut self,
     ) -> Result<QueryPayload<tool::GetNameserverConfigSummaryOutput>, ToolFailure> {
         let request = admin::QueryNameserverConfigSummaryRequest::try_new(self.cluster.rocketmq_cluster_name.clone())
-            .map_err(map_logical_admin_error)?;
+            .map_err(map_admin_error(NotFoundEntity::Cluster))?;
         let result = self
             .admin_mut()?
             .query_nameserver_config_summary(&request)
             .await
-            .map_err(map_logical_admin_error)?;
+            .map_err(map_admin_error(NotFoundEntity::Cluster))?;
         let cluster = self.cluster.name.clone();
         Ok(
             QueryPayload::from_admin(result).map(|result| tool::GetNameserverConfigSummaryOutput {

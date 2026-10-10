@@ -30,7 +30,7 @@ use crate::mapped_file::retirement::codec::decode_commit_seal;
 use crate::mapped_file::retirement::codec::decode_next_frame;
 use crate::mapped_file::retirement::codec::validate_acknowledged_frame;
 use crate::mapped_file::retirement::codec::AcknowledgementSlotState;
-use crate::mapped_file::retirement::codec::DecodeOutcome;
+use crate::mapped_file::retirement::codec::LedgerFrameDecodeResult;
 use crate::mapped_file::retirement::codec::LedgerRecord;
 use crate::mapped_file::retirement::codec::OpenReason;
 use crate::mapped_file::retirement::codec::ACKNOWLEDGEMENT_SLOT_LENGTH;
@@ -183,7 +183,7 @@ fn assert_generation_frontier_relationships(fixtures: &[Fixture]) {
             .base_sequence
             .checked_add(1)
             .expect("frontier sequence advances");
-        let DecodeOutcome::Frame(opened_frame) =
+        let LedgerFrameDecodeResult::Frame(opened_frame) =
             decode_next_frame(opened_bytes, opened_sequence, snapshot.log_generation)
                 .expect("frontier LogOpened frame decodes")
         else {
@@ -253,15 +253,16 @@ fn assert_marker_witness(
     opened_sequence: u64,
     selected: &crate::mapped_file::retirement::sidecar::EnabledMarkerSlot,
 ) {
-    let DecodeOutcome::Frame(opened) =
+    let LedgerFrameDecodeResult::Frame(opened) =
         decode_next_frame(log, opened_sequence, generation).expect("witness log anchor decodes")
     else {
         panic!("witness log starts with a complete anchor");
     };
     let witness_offset = opened.encoded_len() + COMMIT_SEAL_LENGTH;
     let witness_sequence = opened_sequence.checked_add(1).expect("witness sequence advances");
-    let DecodeOutcome::Frame(witness) = decode_next_frame(&log[witness_offset..], witness_sequence, generation)
-        .expect("MarkerCommitted witness decodes")
+    let LedgerFrameDecodeResult::Frame(witness) =
+        decode_next_frame(&log[witness_offset..], witness_sequence, generation)
+            .expect("MarkerCommitted witness decodes")
     else {
         panic!("frontier contains a complete MarkerCommitted witness");
     };
@@ -350,7 +351,7 @@ fn validate_fixture(fixture: &Fixture, bytes: &[u8]) {
             decode_next_frame(bytes, sequence, generation).expect_err("corrupt frame fixture is rejected");
         }
         FixtureValidation::InvalidTypedLedgerFrame { sequence, generation } => {
-            let DecodeOutcome::Frame(frame) =
+            let LedgerFrameDecodeResult::Frame(frame) =
                 decode_next_frame(bytes, sequence, generation).expect("invalid typed payload has a valid envelope")
             else {
                 panic!("invalid typed fixture must contain one complete frame");
@@ -403,7 +404,7 @@ fn validate_fixture(fixture: &Fixture, bytes: &[u8]) {
 }
 
 fn validate_invalid_frame_stream(bytes: &[u8], first_sequence: u64, generation: u64) {
-    let DecodeOutcome::Frame(first) =
+    let LedgerFrameDecodeResult::Frame(first) =
         decode_next_frame(bytes, first_sequence, generation).expect("first stream frame decodes")
     else {
         panic!("invalid stream fixture starts with a partial frame");
@@ -414,7 +415,7 @@ fn validate_invalid_frame_stream(bytes: &[u8], first_sequence: u64, generation: 
 }
 
 fn validate_sequence_overflow_stream(bytes: &[u8], generation: u64) {
-    let DecodeOutcome::Frame(first) =
+    let LedgerFrameDecodeResult::Frame(first) =
         decode_next_frame(bytes, u64::MAX, generation).expect("maximum sequence frame decodes")
     else {
         panic!("overflow stream starts with a partial frame");
@@ -427,7 +428,8 @@ fn validate_sequence_overflow_stream(bytes: &[u8], generation: u64) {
 }
 
 fn validate_frame_then_partial_seal(bytes: &[u8], sequence: u64, generation: u64) {
-    let DecodeOutcome::Frame(frame) = decode_next_frame(bytes, sequence, generation).expect("frame envelope decodes")
+    let LedgerFrameDecodeResult::Frame(frame) =
+        decode_next_frame(bytes, sequence, generation).expect("frame envelope decodes")
     else {
         panic!("partial-seal fixture must contain a complete frame");
     };
@@ -481,7 +483,7 @@ fn validate_reconstruction_bundle(bytes: &[u8], sequence: u64, generation: u64) 
         panic!("reconstructed slot is populated");
     };
     let seal = decode_commit_seal(parts.seal).expect("reconstruction seal decodes");
-    let DecodeOutcome::Frame(frame) =
+    let LedgerFrameDecodeResult::Frame(frame) =
         decode_next_frame(parts.frame, sequence, generation).expect("reconstruction frame decodes")
     else {
         panic!("reconstruction bundle contains a complete frame");
@@ -500,7 +502,7 @@ fn validate_invalid_acknowledged_unit_binding(bytes: &[u8], sequence: u64, gener
         panic!("acknowledgement slot is populated");
     };
     let seal = decode_commit_seal(parts.seal).expect("mismatched seal remains structurally valid");
-    let DecodeOutcome::Frame(frame) =
+    let LedgerFrameDecodeResult::Frame(frame) =
         decode_next_frame(parts.frame, sequence, generation).expect("acknowledged frame decodes")
     else {
         panic!("binding fixture contains a complete frame");
@@ -526,8 +528,9 @@ fn validate_acknowledged_log_bundle(bytes: &[u8], first_sequence: u64, final_seq
         "sealed prefix ends immediately before the final frame"
     );
     assert_eq!(prefix_offset, prefix_length as u64);
-    let DecodeOutcome::Frame(frame) = decode_next_frame(&bytes[prefix_end..frame_end], final_sequence, generation)
-        .expect("final acknowledged frame decodes")
+    let LedgerFrameDecodeResult::Frame(frame) =
+        decode_next_frame(&bytes[prefix_end..frame_end], final_sequence, generation)
+            .expect("final acknowledged frame decodes")
     else {
         panic!("acknowledged bundle contains a complete final frame");
     };
@@ -587,7 +590,7 @@ fn validate_sealed_units_with_unsealed_final(bytes: &[u8], first_sequence: u64, 
     let mut remaining = bytes;
     let mut sequence = first_sequence;
     for _ in 0..sealed_units {
-        let DecodeOutcome::Frame(frame) =
+        let LedgerFrameDecodeResult::Frame(frame) =
             decode_next_frame(remaining, sequence, generation).expect("sealed prefix frame decodes")
         else {
             panic!("sealed prefix contains a complete frame");
@@ -599,7 +602,7 @@ fn validate_sealed_units_with_unsealed_final(bytes: &[u8], first_sequence: u64, 
         remaining = &remaining[seal_end..];
         sequence = sequence.checked_add(1).expect("fixture sequence advances");
     }
-    let DecodeOutcome::Frame(frame) =
+    let LedgerFrameDecodeResult::Frame(frame) =
         decode_next_frame(remaining, sequence, generation).expect("unsealed final frame decodes")
     else {
         panic!("frontier contains a complete unsealed final frame");
@@ -615,7 +618,7 @@ fn validate_sealed_units_with_unsealed_final(bytes: &[u8], first_sequence: u64, 
 fn validate_sealed_unit_stream(mut bytes: &[u8], mut sequence: u64, generation: u64) -> (u64, u64) {
     let mut offset = 0_u64;
     while !bytes.is_empty() {
-        let DecodeOutcome::Frame(frame) =
+        let LedgerFrameDecodeResult::Frame(frame) =
             decode_next_frame(bytes, sequence, generation).expect("sealed stream frame decodes")
         else {
             panic!("sealed stream contains a complete frame");
@@ -645,7 +648,7 @@ fn read_bundle_length(bytes: &[u8], offset: usize, field: &str) -> usize {
 }
 
 fn validate_frame(bytes: &[u8], sequence: u64, generation: u64) {
-    let DecodeOutcome::Frame(frame) =
+    let LedgerFrameDecodeResult::Frame(frame) =
         decode_next_frame(bytes, sequence, generation).expect("ledger-frame fixture envelope decodes")
     else {
         panic!("ledger-frame fixture must contain a complete frame");
@@ -656,7 +659,7 @@ fn validate_frame(bytes: &[u8], sequence: u64, generation: u64) {
 fn validate_frame_stream(mut bytes: &[u8], mut sequence: u64, generation: u64) {
     let mut count = 0;
     while !bytes.is_empty() {
-        let DecodeOutcome::Frame(frame) =
+        let LedgerFrameDecodeResult::Frame(frame) =
             decode_next_frame(bytes, sequence, generation).expect("stream frame envelope decodes")
         else {
             panic!("stream fixture contains a partial frame");
@@ -680,8 +683,8 @@ fn validate_truncation_set(mut bytes: &[u8], sequence: u64, generation: u64) {
         assert_eq!(length, expected_length, "truncation corpus is gap-free");
         let (truncated, rest) = rest.split_at(length);
         match (length, decode_next_frame(truncated, sequence, generation)) {
-            (0, Ok(DecodeOutcome::EndOfInput)) => {}
-            (_, Ok(DecodeOutcome::TrailingPartial(partial))) => {
+            (0, Ok(LedgerFrameDecodeResult::EndOfInput)) => {}
+            (_, Ok(LedgerFrameDecodeResult::TrailingPartial(partial))) => {
                 assert_eq!(partial.available, length);
                 assert!(partial.required > partial.available);
             }
@@ -707,12 +710,12 @@ fn validate_sealed_unit_truncation_set(mut bytes: &[u8], sequence: u64, generati
         let (prefix, rest) = rest.split_at(length);
         if length < frame_length {
             match (length, decode_next_frame(prefix, sequence, generation)) {
-                (0, Ok(DecodeOutcome::EndOfInput)) => {}
-                (_, Ok(DecodeOutcome::TrailingPartial(_))) => {}
+                (0, Ok(LedgerFrameDecodeResult::EndOfInput)) => {}
+                (_, Ok(LedgerFrameDecodeResult::TrailingPartial(_))) => {}
                 (_, outcome) => panic!("frame prefix at length {length} was not partial: {outcome:?}"),
             }
         } else {
-            let DecodeOutcome::Frame(frame) =
+            let LedgerFrameDecodeResult::Frame(frame) =
                 decode_next_frame(prefix, sequence, generation).expect("complete frame prefix decodes")
             else {
                 panic!("complete frame prefix was classified partial");

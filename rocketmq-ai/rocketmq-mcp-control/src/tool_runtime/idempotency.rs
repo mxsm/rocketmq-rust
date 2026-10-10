@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use rocketmq_observability::metrics::mcp::McpCacheEvent;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -91,6 +92,18 @@ pub(super) enum CacheAdmission {
     Follower(oneshot::Receiver<Result<MutationToolResponse, ControlError>>),
     Hit(Box<Result<MutationToolResponse, ControlError>>),
     Uncached,
+}
+
+impl CacheAdmission {
+    /// Returns the cache event that this admission counts as.
+    pub(super) const fn event(&self) -> McpCacheEvent {
+        match self {
+            Self::Leader => McpCacheEvent::Miss,
+            Self::Follower(_) => McpCacheEvent::CoalescedWaiter,
+            Self::Hit(_) => McpCacheEvent::Hit,
+            Self::Uncached => McpCacheEvent::Bypass,
+        }
+    }
 }
 
 #[derive(Debug)]

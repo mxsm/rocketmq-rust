@@ -48,6 +48,7 @@ use crate::guard::policy::PolicyEngine;
 use crate::guard::rate_limit::RateLimiter;
 use crate::resources::uri::ResourceAuthorization;
 use crate::resources::uri::ResourceKind;
+use crate::tools::catalog::ClusterArg;
 use crate::tools::catalog::ToolId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -106,6 +107,7 @@ pub struct Guard {
     security: SecurityConfig,
     audit_config: AuditConfig,
     allowed_clusters: Arc<[String]>,
+    default_cluster: Option<Arc<str>>,
     cluster_tenants: Arc<std::collections::HashMap<String, Option<String>>>,
     audit_log: AuditLog,
     rate_limiter: RateLimiter,
@@ -125,6 +127,7 @@ impl Guard {
             .map(|cluster| cluster.name.clone())
             .collect::<Vec<_>>()
             .into();
+        let default_cluster = crate::config::default_cluster(clusters).map(|cluster| Arc::from(cluster.name.as_str()));
         let policy = PolicyEngine::load(std::path::Path::new(&security.permissions_file))?;
         let cluster_tenants = clusters
             .iter()
@@ -143,6 +146,7 @@ impl Guard {
             security,
             audit_config,
             allowed_clusters,
+            default_cluster,
             cluster_tenants: Arc::new(cluster_tenants),
             audit_log: AuditLog::default(),
             rate_limiter: RateLimiter::default(),
@@ -150,6 +154,16 @@ impl Guard {
             cluster_concurrency: Arc::new(cluster_concurrency),
             next_request_id: Arc::new(AtomicU64::new(1)),
         })
+    }
+
+    /// Reports rate-limit decisions and audit backlog, drops, and failures through `metrics`.
+    ///
+    /// Apply this before the Guard is shared or its audit log is started: the audit log and
+    /// the rate limiter are replaced by fresh instances bound to `metrics`.
+    pub(crate) fn with_metrics(mut self, metrics: rocketmq_observability::metrics::mcp::McpMetricsRecorder) -> Self {
+        self.audit_log = AuditLog::with_metrics(metrics.clone());
+        self.rate_limiter = RateLimiter::with_metrics(metrics);
+        self
     }
 
     pub fn audit_log(&self) -> AuditLog {
@@ -167,6 +181,7 @@ impl Guard {
         risk_level: RiskLevel,
         arguments: &JsonObject,
     ) -> Result<GuardedToolCall, GuardRejection> {
+        let effective_cluster = self.effective_cluster(tool_name, arguments);
         let mut guarded = GuardedToolCall {
             guard: self.clone(),
             request_id: self.allocate_request_id(),
@@ -174,19 +189,21 @@ impl Guard {
             risk_level,
             principal: context.principal.clone(),
             client: context.client.clone(),
-            cluster: extract_cluster(arguments),
+            cluster: effective_cluster.as_ref().ok().cloned(),
             arguments_hash: hash_arguments(arguments),
             started_at: Instant::now(),
             _cluster_permit: None,
         };
 
-        if requires_explicit_cluster(tool_name) && guarded.cluster.is_none() {
-            let error = GuardRejection::InvalidArgument;
-            guarded.record_failure(error.to_string());
-            return Err(error);
-        }
+        let cluster = match effective_cluster {
+            Ok(cluster) => cluster,
+            Err(error) => {
+                guarded.record_failure(error.to_string());
+                return Err(error);
+            }
+        };
 
-        if let Err(error) = self.validate_cluster(context, arguments) {
+        if let Err(error) = self.validate_cluster(context, &cluster) {
             guarded.record_failure(error.to_string());
             return Err(error);
         }
@@ -196,9 +213,9 @@ impl Guard {
             return Err(error);
         }
 
-        if let Err(error) =
-            self.policy
-                .authorize_tool(&context.principal, tool_name, guarded.cluster.as_deref(), risk_level)
+        if let Err(error) = self
+            .policy
+            .authorize_tool(&context.principal, tool_name, Some(&cluster), risk_level)
         {
             guarded.record_failure(error.to_string());
             return Err(error);
@@ -206,7 +223,7 @@ impl Guard {
 
         if let Err(error) = self.rate_limiter.check(
             &context.principal.id,
-            guarded.cluster.as_deref(),
+            Some(&cluster),
             tool_name,
             self.security.rate_limit_per_minute,
         ) {
@@ -214,8 +231,8 @@ impl Guard {
             return Err(error);
         }
 
-        match self.acquire_cluster_permit(guarded.cluster.as_deref()) {
-            Ok(permit) => guarded._cluster_permit = permit,
+        match self.acquire_cluster_permit(&cluster) {
+            Ok(permit) => guarded._cluster_permit = Some(permit),
             Err(error) => {
                 guarded.record_failure(error.to_string());
                 return Err(error);
@@ -230,16 +247,30 @@ impl Guard {
         format!("mcp-{id}")
     }
 
-    fn validate_cluster(&self, context: &RequestContext, arguments: &JsonObject) -> Result<(), GuardRejection> {
-        let Some(cluster) = extract_cluster(arguments) else {
-            return Ok(());
-        };
+    /// Resolves the one logical cluster a Tool call reads, before any other check runs.
+    ///
+    /// The allow-list, tenant, role, rate-limit, and concurrency decisions and the query itself
+    /// all use this value, so a blank or omitted `cluster` can never select a cluster that was
+    /// not authorized. Names that are not in the catalog are treated as requiring a cluster.
+    fn effective_cluster(&self, tool_name: &str, arguments: &JsonObject) -> Result<String, GuardRejection> {
+        let cluster_arg = ToolId::resolve(tool_name).map_or(ClusterArg::Required, ToolId::cluster_arg);
+        match arguments.get("cluster") {
+            Some(Value::String(cluster)) if !cluster.trim().is_empty() => Ok(cluster.trim().to_string()),
+            None | Some(Value::Null) if cluster_arg == ClusterArg::OptionalDefault => self
+                .default_cluster
+                .as_deref()
+                .map(ToString::to_string)
+                .ok_or(GuardRejection::InvalidArgument),
+            _ => Err(GuardRejection::InvalidArgument),
+        }
+    }
 
-        if !self.allowed_clusters.iter().any(|allowed| allowed == &cluster) {
+    fn validate_cluster(&self, context: &RequestContext, cluster: &str) -> Result<(), GuardRejection> {
+        if !self.allowed_clusters.iter().any(|allowed| allowed == cluster) {
             return Err(GuardRejection::ClusterNotAllowed);
         }
 
-        self.validate_tenant(context, &cluster)
+        self.validate_tenant(context, cluster)
     }
 
     fn validate_tenant(&self, context: &RequestContext, cluster: &str) -> Result<(), GuardRejection> {
@@ -267,10 +298,7 @@ impl Guard {
         RequestContext::local(&self.security.profile)
     }
 
-    fn acquire_cluster_permit(&self, cluster: Option<&str>) -> Result<Option<OwnedSemaphorePermit>, GuardRejection> {
-        let Some(cluster) = cluster else {
-            return Ok(None);
-        };
+    fn acquire_cluster_permit(&self, cluster: &str) -> Result<OwnedSemaphorePermit, GuardRejection> {
         let semaphore = self
             .cluster_concurrency
             .get(cluster)
@@ -278,7 +306,6 @@ impl Guard {
         semaphore
             .clone()
             .try_acquire_owned()
-            .map(Some)
             .map_err(|_| GuardRejection::RateLimited)
     }
 
@@ -378,8 +405,8 @@ impl Guard {
             guarded.record_failure(error.to_string());
             return Err(error);
         }
-        match self.acquire_cluster_permit(Some(cluster)) {
-            Ok(permit) => guarded._cluster_permit = permit,
+        match self.acquire_cluster_permit(cluster) {
+            Ok(permit) => guarded._cluster_permit = Some(permit),
             Err(error) => {
                 guarded.record_failure(error.to_string());
                 return Err(error);
@@ -524,6 +551,13 @@ pub struct GuardedToolCall {
 }
 
 impl GuardedToolCall {
+    /// Returns the logical cluster this call was authorized for.
+    ///
+    /// The query must read exactly this cluster rather than resolving one from the raw arguments.
+    pub fn cluster(&self) -> Option<&str> {
+        self.cluster.as_deref()
+    }
+
     pub fn finish_result(&self, result: CallToolResult) -> CallToolResult {
         let result = sanitizer::process_call_tool_result(result, &self.request_id, self.guard.security.sanitize_output);
 
@@ -568,37 +602,6 @@ impl GuardedToolCall {
         );
         self.guard.audit_log.record(&self.guard.audit_config, record);
     }
-}
-
-fn extract_cluster(arguments: &JsonObject) -> Option<String> {
-    arguments
-        .get("cluster")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-}
-
-fn requires_explicit_cluster(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "rocketmq_get_broker_diagnostics"
-            | "rocketmq_get_broker_config_summary"
-            | "rocketmq_get_broker_log_filter_state"
-            | "rocketmq_get_proxy_drain_state"
-            | "rocketmq_list_consumer_connections"
-            | "rocketmq_list_producer_connections"
-            | "rocketmq_get_message_metadata"
-            | "rocketmq_get_topic_config_state"
-            | "rocketmq_get_consumer_group_config_state"
-            | "rocketmq_get_topic_stats"
-            | "rocketmq_get_topic_config"
-            | "rocketmq_get_consumer_group_details"
-            | "rocketmq_get_consumer_progress"
-            | "rocketmq_get_ha_status"
-            | "rocketmq_get_controller_metadata"
-            | "rocketmq_get_nameserver_config_summary"
-    )
 }
 
 fn hash_arguments(arguments: &JsonObject) -> String {
@@ -655,6 +658,121 @@ mod tests {
                 .begin_tool_call(&guard.local_request_context(), tool, RiskLevel::ReadOnly, &arguments)
                 .unwrap_err();
             assert!(matches!(error, GuardRejection::InvalidArgument), "tool={tool}");
+        }
+    }
+
+    #[test]
+    fn blank_cluster_is_rejected_for_every_tool() {
+        let guard = two_cluster_guard(8);
+        for tool in ToolId::ALL {
+            let descriptor = tool.descriptor();
+            for cluster in ["", "   "] {
+                let arguments = serde_json::json!({ "cluster": cluster }).as_object().unwrap().clone();
+                let error = guard
+                    .begin_tool_call(
+                        &guard.local_request_context(),
+                        descriptor.name,
+                        descriptor.risk_level,
+                        &arguments,
+                    )
+                    .unwrap_err();
+                assert_eq!(error, GuardRejection::InvalidArgument, "tool={}", descriptor.name);
+            }
+            if tool.cluster_arg() == ClusterArg::Required {
+                let error = guard
+                    .begin_tool_call(
+                        &guard.local_request_context(),
+                        descriptor.name,
+                        descriptor.risk_level,
+                        &JsonObject::new(),
+                    )
+                    .unwrap_err();
+                assert_eq!(error, GuardRejection::InvalidArgument, "tool={}", descriptor.name);
+            }
+        }
+        assert!(guard
+            .audit_log()
+            .records()
+            .iter()
+            .all(|record| record.cluster.is_none()));
+    }
+
+    #[test]
+    fn omitted_cluster_is_authorized_as_the_default_cluster() {
+        let guard = two_cluster_guard(1);
+        for tool in ["rocketmq_list_topics", "rocketmq_list_consumer_groups"] {
+            let mut other_tenant = guard.local_request_context();
+            other_tenant.principal.tenant = Some("tenant-a".to_string());
+            assert!(
+                matches!(
+                    guard.begin_tool_call(&other_tenant, tool, RiskLevel::ReadOnly, &JsonObject::new()),
+                    Err(GuardRejection::TenantMismatch)
+                ),
+                "tool={tool}"
+            );
+
+            let mut cluster_limited = guard.local_request_context();
+            cluster_limited.principal.tenant = Some("tenant-b".to_string());
+            cluster_limited.principal.allowed_clusters = Some(["allowed-a".to_string()].into_iter().collect());
+            assert!(
+                matches!(
+                    guard.begin_tool_call(&cluster_limited, tool, RiskLevel::ReadOnly, &JsonObject::new()),
+                    Err(GuardRejection::ClusterNotAllowed)
+                ),
+                "tool={tool}"
+            );
+            let explicit = serde_json::json!({ "cluster": "allowed-a" })
+                .as_object()
+                .unwrap()
+                .clone();
+            assert_eq!(
+                guard
+                    .begin_tool_call(&cluster_limited, tool, RiskLevel::ReadOnly, &explicit)
+                    .unwrap()
+                    .cluster(),
+                Some("allowed-a"),
+                "tool={tool}"
+            );
+
+            let mut authorized = guard.local_request_context();
+            authorized.principal.tenant = Some("tenant-b".to_string());
+            let first = guard
+                .begin_tool_call(&authorized, tool, RiskLevel::ReadOnly, &JsonObject::new())
+                .unwrap();
+            assert_eq!(first.cluster(), Some("secret-b"), "tool={tool}");
+            // The default cluster's only concurrency permit is held by `first`.
+            assert!(
+                matches!(
+                    guard.begin_tool_call(&authorized, tool, RiskLevel::ReadOnly, &JsonObject::new()),
+                    Err(GuardRejection::RateLimited)
+                ),
+                "tool={tool}"
+            );
+            first.record_protocol_error("test completed");
+            let records = guard.audit_log().records();
+            assert_eq!(
+                records.last().unwrap().cluster.as_deref(),
+                Some("secret-b"),
+                "tool={tool}"
+            );
+        }
+    }
+
+    #[test]
+    fn omitted_cluster_without_a_default_cluster_is_rejected() {
+        let mut clusters = two_clusters();
+        clusters[1].default = Some(false);
+        let guard = guard_for_clusters(&clusters, 8);
+        for tool in ["rocketmq_list_topics", "rocketmq_list_consumer_groups"] {
+            let error = guard
+                .begin_tool_call(
+                    &guard.local_request_context(),
+                    tool,
+                    RiskLevel::ReadOnly,
+                    &JsonObject::new(),
+                )
+                .unwrap_err();
+            assert_eq!(error, GuardRejection::InvalidArgument, "tool={tool}");
         }
     }
 
@@ -733,6 +851,33 @@ mod tests {
         let records = guard.audit_log().records();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].status, AuditStatus::Failure);
+    }
+
+    #[test]
+    fn binding_metrics_keeps_rate_limiting_and_audit_working() {
+        let guard = test_guard("diagnose", false, 1)
+            .with_metrics(rocketmq_observability::metrics::mcp::McpMetricsRecorder::noop());
+        let arguments = serde_json::json!({ "cluster": "local-dev" })
+            .as_object()
+            .unwrap()
+            .clone();
+        let call = || {
+            guard.begin_tool_call(
+                &guard.local_request_context(),
+                "rocketmq_get_cluster_overview",
+                RiskLevel::ReadOnly,
+                &arguments,
+            )
+        };
+
+        let first = call().unwrap();
+        assert_eq!(call().unwrap_err(), GuardRejection::RateLimited);
+        drop(first);
+
+        let records = guard.audit_log().records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, AuditStatus::Failure);
+        assert_eq!(guard.audit_metrics().accepted, 1);
     }
 
     #[test]
@@ -869,6 +1014,44 @@ mod tests {
     }
 
     #[test]
+    fn denied_tool_is_hidden_and_blocks_its_backing_resource() {
+        let directory = tempfile::tempdir().unwrap();
+        let permissions = directory.path().join("permissions.toml");
+        std::fs::write(
+            &permissions,
+            "[roles.diagnose]\nallowed_clusters = [\"*\"]\nallow_tools = [\"*\"]\ndeny_tools = \
+             [\"rocketmq_get_topic_config\"]\n",
+        )
+        .unwrap();
+        let guard = guard_with_permissions(permissions.to_string_lossy().into_owned(), &two_clusters(), 8);
+        let context = guard.local_request_context();
+        let arguments = serde_json::json!({ "cluster": "allowed-a", "topic": "orders" })
+            .as_object()
+            .unwrap()
+            .clone();
+
+        assert!(!guard.allows_tool(&context, "rocketmq_get_topic_config", RiskLevel::ReadOnly));
+        assert_eq!(
+            guard
+                .begin_tool_call(&context, "rocketmq_get_topic_config", RiskLevel::ReadOnly, &arguments)
+                .unwrap_err(),
+            GuardRejection::PermissionDenied
+        );
+        assert!(matches!(
+            guard.authorize_resource(&context, "allowed-a", &ResourceKind::TopicConfig("orders".to_string())),
+            Err(GuardRejection::PermissionDenied)
+        ));
+
+        assert!(guard.allows_tool(&context, "rocketmq_get_topic_stats", RiskLevel::ReadOnly));
+        assert!(guard
+            .begin_tool_call(&context, "rocketmq_get_topic_stats", RiskLevel::ReadOnly, &arguments)
+            .is_ok());
+        assert!(guard
+            .authorize_resource(&context, "allowed-a", &ResourceKind::TopicStats("orders".to_string()))
+            .is_ok());
+    }
+
+    #[test]
     fn diagnostic_resource_denial_is_audited_with_diagnose_risk() {
         let guard = test_guard("read_only", false, 60);
         let uri = "rocketmq://clusters/local-dev/brokers/broker-a/diagnostics";
@@ -956,6 +1139,59 @@ mod tests {
                 proxies: Vec::new(),
                 controllers: Vec::new(),
             }],
+        )
+        .unwrap()
+    }
+
+    /// `allowed-a` has no tenant binding; the default cluster `secret-b` is bound to `tenant-b`.
+    fn two_clusters() -> Vec<ClusterConfig> {
+        let cluster = |name: &str, default: bool, tenant: Option<&str>| ClusterConfig {
+            name: name.to_string(),
+            namesrv_addr: "127.0.0.1:9876".to_string(),
+            default: Some(default),
+            rocketmq_cluster_name: None,
+            tenant: tenant.map(ToString::to_string),
+            credentials: None,
+            proxies: Vec::new(),
+            controllers: Vec::new(),
+        };
+        vec![
+            cluster("allowed-a", false, None),
+            cluster("secret-b", true, Some("tenant-b")),
+        ]
+    }
+
+    fn two_cluster_guard(max_concurrent_requests_per_cluster: usize) -> Guard {
+        guard_for_clusters(&two_clusters(), max_concurrent_requests_per_cluster)
+    }
+
+    fn guard_for_clusters(clusters: &[ClusterConfig], max_concurrent_requests_per_cluster: usize) -> Guard {
+        guard_with_permissions(permission_path(), clusters, max_concurrent_requests_per_cluster)
+    }
+
+    fn guard_with_permissions(
+        permissions_file: String,
+        clusters: &[ClusterConfig],
+        max_concurrent_requests_per_cluster: usize,
+    ) -> Guard {
+        Guard::new(
+            SecurityConfig {
+                profile: "diagnose".to_string(),
+                allow_change_planning: false,
+                sanitize_output: true,
+                rate_limit_per_minute: 60,
+                permissions_file,
+                max_concurrent_requests_per_cluster,
+            },
+            AuditConfig {
+                enabled: true,
+                sink: "memory".to_string(),
+                path: String::new(),
+                queue_capacity: 256,
+                max_record_bytes: 16 * 1024,
+                queue_max_bytes: 1024 * 1024,
+            },
+            clusters,
         )
         .unwrap()
     }

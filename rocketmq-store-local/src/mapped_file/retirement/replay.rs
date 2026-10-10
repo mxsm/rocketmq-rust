@@ -26,7 +26,7 @@ use super::codec::validate_acknowledged_frame;
 use super::codec::AcknowledgementSlot;
 use super::codec::AcknowledgementSlotState;
 use super::codec::CommitSeal;
-use super::codec::DecodeOutcome;
+use super::codec::LedgerFrameDecodeResult;
 use super::codec::LedgerRecord;
 use super::codec::OpenReason;
 use super::sidecar::decode_snapshot;

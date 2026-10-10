@@ -49,6 +49,8 @@ use crate::model::valid_operator;
 use crate::model::ClusterName;
 use crate::model::ControlOperation;
 use crate::model::Principal;
+use crate::telemetry::AuthenticationRejection;
+use crate::telemetry::ControlSignals;
 
 const MAX_JWKS_BYTES: usize = 256 * 1024;
 const MAX_JWKS_KEYS: usize = 64;
@@ -300,6 +302,7 @@ pub(crate) struct AuthState<S = HttpJwksSource> {
     verifier: JwksVerifier<S>,
     validation: Arc<Validation>,
     resource_metadata: Arc<str>,
+    signals: ControlSignals,
 }
 
 impl<S> Clone for AuthState<S> {
@@ -308,7 +311,19 @@ impl<S> Clone for AuthState<S> {
             verifier: self.verifier.clone(),
             validation: self.validation.clone(),
             resource_metadata: self.resource_metadata.clone(),
+            signals: self.signals.clone(),
         }
+    }
+}
+
+impl<S> AuthState<S> {
+    pub(crate) fn with_signals(mut self, signals: ControlSignals) -> Self {
+        self.signals = signals;
+        self
+    }
+
+    pub(crate) fn signals(&self) -> &ControlSignals {
+        &self.signals
     }
 }
 
@@ -334,6 +349,7 @@ impl<S: JwksSource> AuthState<S> {
             verifier,
             validation: Arc::new(jwt_validation(config)),
             resource_metadata: Arc::from(resource_metadata),
+            signals: ControlSignals::default(),
         })
     }
 
@@ -419,6 +435,14 @@ impl AuthError {
             Self::Unavailable => ControlError::unauthorized(),
         }
     }
+
+    const fn rejection(self) -> AuthenticationRejection {
+        match self {
+            Self::Unauthorized => AuthenticationRejection::InvalidToken,
+            Self::InsufficientScope => AuthenticationRejection::InsufficientScope,
+            Self::Unavailable => AuthenticationRejection::KeysUnavailable,
+        }
+    }
 }
 
 pub(crate) async fn oauth_middleware<S: JwksSource + 'static>(
@@ -432,7 +456,11 @@ pub(crate) async fn oauth_middleware<S: JwksSource + 'static>(
             next.run(request).await
         }
         Err(error) => {
-            let mut response = (error.status(), axum::Json(error.control_error().envelope())).into_response();
+            let control_error = error.control_error();
+            state
+                .signals
+                .authentication_rejected(error.rejection(), control_error.code());
+            let mut response = (error.status(), axum::Json(control_error.envelope())).into_response();
             if let Some(challenge) = state.challenge(error) {
                 response.headers_mut().insert(WWW_AUTHENTICATE, challenge);
             }

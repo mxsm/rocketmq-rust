@@ -93,6 +93,13 @@ pub enum AuditResult {
 #[serde(transparent)]
 pub struct AuditInvocationId(u64);
 
+impl AuditInvocationId {
+    /// Returns the sequence number of the invocation's durable `started` record.
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, JsonSchema)]
 pub struct AuditRecord {
     pub schema_version: AuditSchemaVersion,

@@ -14,16 +14,16 @@
 
 use rocketmq_store::classify_file_preallocate_result;
 use rocketmq_store::current_store_platform_capability;
-use rocketmq_store::FilePreallocateOutcome;
+use rocketmq_store::FilePreallocationResult;
 use rocketmq_store::PREALLOCATE_UNSUPPORTED_ERRNO;
 use rocketmq_store_local::mapped_file::file::classify_file_preallocate_result as canonical_classify;
 use rocketmq_store_local::mapped_file::file::preallocate_file as canonical_preallocate;
-use rocketmq_store_local::mapped_file::file::FilePreallocateOutcome as CanonicalFilePreallocateOutcome;
+use rocketmq_store_local::mapped_file::file::FilePreallocationResult as CanonicalFilePreallocationResult;
 use rocketmq_store_local::mapped_file::file::PREALLOCATE_UNSUPPORTED_ERRNO as CANONICAL_UNSUPPORTED_ERRNO;
 
 use rocketmq_store_api::TimerStoreMode;
 
-fn canonical_outcome(value: FilePreallocateOutcome) -> CanonicalFilePreallocateOutcome {
+fn canonical_outcome(value: FilePreallocationResult) -> CanonicalFilePreallocationResult {
     value
 }
 
@@ -42,7 +42,7 @@ fn unsupported_preallocation_errno_is_reported_as_degraded() {
 
     assert_eq!(
         outcome,
-        FilePreallocateOutcome::Unsupported {
+        FilePreallocationResult::Unsupported {
             errno: PREALLOCATE_UNSUPPORTED_ERRNO
         }
     );
@@ -57,8 +57,8 @@ fn legacy_preallocation_paths_are_exact_canonical_reexports() {
         canonical_classify(-1, CANONICAL_UNSUPPORTED_ERRNO)
     );
 
-    let legacy_fn: fn(&std::fs::File, u64) -> FilePreallocateOutcome = rocketmq_store::preallocate_file;
-    let canonical_fn: fn(&std::fs::File, u64) -> CanonicalFilePreallocateOutcome = canonical_preallocate;
+    let legacy_fn: fn(&std::fs::File, u64) -> FilePreallocationResult = rocketmq_store::preallocate_file;
+    let canonical_fn: fn(&std::fs::File, u64) -> CanonicalFilePreallocationResult = canonical_preallocate;
     assert_eq!(legacy_fn as usize, canonical_fn as usize);
 }
 

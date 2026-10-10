@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::tools::executor::NotFoundEntity;
 use crate::tools::executor::ToolRejection;
 use rocketmq_admin_core::core::consumer_observation as admin;
 use rocketmq_admin_core::core::consumer_observation::ConsumerObservationQueryAdmin;
 
-use super::map_logical_admin_error;
+use super::map_admin_error;
 use super::AdminCoreSession;
 use super::SessionConsumerProgress;
 use crate::model::contract::observed_at;
@@ -39,7 +40,7 @@ impl AdminCoreSession {
             .admin_mut()?
             .query_consumer_group_details(&request)
             .await
-            .map_err(map_logical_admin_error)?;
+            .map_err(map_admin_error(NotFoundEntity::ConsumerGroup))?;
         let cluster = self.cluster.name.clone();
         Ok(
             QueryPayload::from_admin(result).map(|result| tool::GetConsumerGroupDetailsOutput {
@@ -112,7 +113,7 @@ impl AdminCoreSession {
             .admin_mut()?
             .query_consumer_progress(&request)
             .await
-            .map_err(map_logical_admin_error)?;
+            .map_err(map_admin_error(NotFoundEntity::ConsumerGroup))?;
         Ok(QueryPayload::from_admin(result).map(|result| SessionConsumerProgress {
             state: match result.state {
                 admin::ConsumerProgressState::NoConsumption => tool::ConsumerProgressState::NoConsumption,

@@ -133,7 +133,7 @@ Use a simple explicit-cluster query first. This is a `tools/call` request for an
 
 `limit` is 1–200 and defaults to 50. Follow the opaque `data.next_cursor` while `has_more` is true; do not invent a cursor or treat it as a queue offset. Supply the same logical target and corresponding query parameters. See the [complete Tool Reference](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp/docs/tool-reference.md) for exact schemas and per-tool output.
 
-Discovery checks scopes and Tool allow/deny policy; it does not establish that a particular cluster/tenant call is authorized. The two inventory tools allow omitted clusters with a default/sole-cluster fallback; the current implementation does not run the same explicit per-cluster/tenant checks on that omitted-cluster path. Use explicit clusters in operational clients and account for this limitation in deployment policy; do not describe omission as a stronger isolation guarantee.
+Discovery checks scopes and Tool allow/deny policy; it does not establish that a particular cluster/tenant call is authorized. The two inventory tools allow an omitted cluster and then use the default cluster, or the only configured one. That cluster goes through the same per-cluster and tenant checks, rate limit and concurrency limit as an explicitly named cluster; an empty or whitespace-only cluster is rejected as `invalid_arguments` by every tool. Prefer explicit clusters in operational clients so that a call never depends on which cluster is the default.
 
 ## Interpret observations, partial data and failures
 
@@ -145,6 +145,7 @@ Output arrays are bounded to 1,000 rows and structured output to 1 MiB. Truncati
 | --- | --- |
 | Missing tool | Inspect compiled feature, principal scope and Tool policy; planning additionally needs runtime permission at call time. |
 | `unauthorized_scope` / `cluster_not_allowed` / `tenant_mismatch` | Check verified identity and configured policy; changing the query alias cannot grant access. |
+| `not_found` | The request was valid but the target named by `entity` does not exist in the selected cluster. Do not retry; confirm the name with the matching list tool. |
 | `source_unavailable` | Check the MCP process's route to configured NameServer/Broker/Proxy/Controller endpoints and outbound read credentials. |
 | `rate_limited` | Reduce query rate and respect bounded retry; avoid multiplying retries across the AI client and MCP layer. |
 | `output_too_large` or partial warning | Narrow the query, paginate where supported and preserve the warning in the diagnosis. |

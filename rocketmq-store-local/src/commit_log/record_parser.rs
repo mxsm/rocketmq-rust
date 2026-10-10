@@ -195,7 +195,7 @@ impl CommitLogRecord {
     reason = "CommitLog decoding is a per-message hot path; retaining the record inline avoids a heap allocation"
 )]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum CommitLogRecordOutcome {
+pub enum CommitLogRecordDecodeResult {
     /// End-of-segment blank marker.
     Blank {
         /// Size carried by the marker header.
@@ -226,7 +226,7 @@ pub enum CommitLogRecordOutcome {
     },
 }
 
-impl From<CommitLogRecordViolation> for CommitLogRecordOutcome {
+impl From<CommitLogRecordViolation> for CommitLogRecordDecodeResult {
     fn from(violation: CommitLogRecordViolation) -> Self {
         match violation {
             CommitLogRecordViolation::Truncated {
@@ -361,7 +361,7 @@ pub(crate) fn decode_commit_log_record<C: CommitLogRecordChecksum>(
     input: &Bytes,
     body_mode: CommitLogRecordBodyMode,
     checksum: &C,
-) -> Result<CommitLogRecordOutcome, CommitLogRecordViolation> {
+) -> Result<CommitLogRecordDecodeResult, CommitLogRecordViolation> {
     let declared_size = top_level_i32(input, 0, CommitLogRecordField::TotalSize)?;
     if declared_size < 8 {
         return Err(CommitLogRecordViolation::NegativeLength {
@@ -386,7 +386,7 @@ pub(crate) fn decode_commit_log_record<C: CommitLogRecordChecksum>(
         other => other,
     })?;
     if magic_code == BLANK_MAGIC_CODE {
-        return Ok(CommitLogRecordOutcome::Blank { declared_size });
+        return Ok(CommitLogRecordDecodeResult::Blank { declared_size });
     }
     if input.len() < declared_len {
         return Err(CommitLogRecordViolation::Truncated {
@@ -475,7 +475,7 @@ pub(crate) fn decode_commit_log_record<C: CommitLogRecordChecksum>(
     let properties = reader.take(properties_len as usize, CommitLogRecordField::Properties)?;
     let computed_size = reader.index as i32;
 
-    Ok(CommitLogRecordOutcome::Message(CommitLogRecord {
+    Ok(CommitLogRecordDecodeResult::Message(CommitLogRecord {
         raw_frame,
         declared_size,
         computed_size,
@@ -505,7 +505,7 @@ pub fn inspect_commit_log_record<C: CommitLogRecordChecksum>(
     input: &Bytes,
     body_mode: CommitLogRecordBodyMode,
     checksum: &C,
-) -> CommitLogRecordOutcome {
+) -> CommitLogRecordDecodeResult {
     match decode_commit_log_record(input, body_mode, checksum) {
         Ok(outcome) => outcome,
         Err(violation) => violation.into(),
@@ -525,7 +525,7 @@ mod tests {
     use super::decode_commit_log_record;
     use super::CommitLogRecordBodyMode;
     use super::CommitLogRecordChecksum;
-    use super::CommitLogRecordOutcome;
+    use super::CommitLogRecordDecodeResult;
     use super::CommitLogRecordVersion;
     use super::BLANK_MAGIC_CODE;
     use super::MESSAGE_MAGIC_CODE;
@@ -661,7 +661,7 @@ mod tests {
 
         assert!(matches!(
             outcome,
-            CommitLogRecordOutcome::Blank {
+            CommitLogRecordDecodeResult::Blank {
                 declared_size: 16_777_216
             }
         ));
@@ -681,7 +681,7 @@ mod tests {
                 let checksum = SpyChecksum { calls: Cell::new(0) };
                 let outcome = decode_commit_log_record(&input, CommitLogRecordBodyMode::Read, &checksum)
                     .expect("complete record should decode");
-                let CommitLogRecordOutcome::Message(record) = outcome else {
+                let CommitLogRecordDecodeResult::Message(record) = outcome else {
                     panic!("expected message record");
                 };
 

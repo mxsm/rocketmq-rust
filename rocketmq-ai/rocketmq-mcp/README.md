@@ -226,7 +226,7 @@ For production, set `mode = "oauth-jwt"` and configure `issuer`, `audience`, `re
 
 `permissions.example.toml` is loaded at startup. Verified principal, client, roles, scopes, `rocketmq_tenant`, and `rocketmq_clusters` claims propagate through the real MCP handler to RBAC, tenant boundary, cluster allow-list, rate-limit, and audit decisions; an HTTP request cannot substitute the local stdio identity. Tool, Resource, and Prompt discovery are filtered by this policy, and Resource reads and Tool calls are enforced again at execution time. Audit records contain the verified principal and client identifier but never store the bearer token.
 
-Authorization, source, and output failures expose stable, sanitized codes such as `unauthorized_scope`, `tenant_mismatch`, `cluster_not_allowed`, `rate_limited`, `source_unavailable`, and `output_too_large`. Error envelopes include `retryable` and `correlation_id`; they do not echo credentials or tenant details.
+Authorization, source, and output failures expose stable, sanitized codes such as `unauthorized_scope`, `tenant_mismatch`, `cluster_not_allowed`, `rate_limited`, `source_unavailable`, and `output_too_large`. A Topic, Consumer Group, Broker, message, or Proxy that does not exist is reported as the non-retryable `not_found` with an `entity` field instead of a retryable source failure. Error envelopes include `retryable` and `correlation_id`; they do not echo credentials or tenant details. The full code table is in `docs/tool-reference.md`.
 
 For OTLP export, build with `--features otlp` and either configure the
 `[observability]` file section shown in `conf/mcp.example.toml` or set both

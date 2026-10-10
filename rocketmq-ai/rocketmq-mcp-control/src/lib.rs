@@ -31,6 +31,7 @@ pub mod guard;
 pub mod model;
 pub mod server;
 pub mod session;
+pub mod telemetry;
 #[cfg(feature = "write-tools")]
 mod tool_runtime;
 pub mod tools;

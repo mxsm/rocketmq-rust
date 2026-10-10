@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(store-local):** Renamed the crate-private `DecodeOutcome` to `LedgerFrameDecodeResult` (renamed from `DecodeOutcome`); variants `EndOfInput`, `TrailingPartial`, and `Frame` are unchanged ([#11306](https://github.com/mxsm/rocketmq-rust/issues/11306)).
 - **refactor(store-local):** Renamed `ManagedLifecycleReadOutcome` to `ManagedLifecycleEvidenceStatus` (breaking), exported as `rocketmq_store_local::mapped_file::ManagedLifecycleEvidenceStatus`. External callers must update imports and type references; no compatibility alias is provided. Variants and `ManagedLifecycleRecoveryReason` payloads are unchanged; `ManagedLifecycleSession` and `LockedManagedLifecycleInspection` expose `evidence_status()` instead of `outcome()` ([#11308](https://github.com/mxsm/rocketmq-rust/issues/11308)).
 - **refactor(store-local):** Renamed `MappedFileDetachOutcome` to `MappedFileDetachResult` (breaking), exported as `rocketmq_store_local::mapped_file::MappedFileDetachResult`. External callers must update imports and type references; no compatibility alias is provided. Variants, fields, `is_detached()` and `try_detach_physical_owners` are unchanged ([#11304](https://github.com/mxsm/rocketmq-rust/issues/11304)).
 - **refactor(namesrv):** Renamed the private NameServer KV `MutationOutcome` to `KvMutationEffect` ([#11251](https://github.com/mxsm/rocketmq-rust/issues/11251)).

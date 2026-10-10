@@ -18,7 +18,7 @@ use std::rc::Rc;
 
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryObservation;
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryRecord;
-use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoverySegmentOutcome;
+use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoverySegmentResult;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryDispatchGate;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryPolicy;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryState;
@@ -60,13 +60,13 @@ fn state(policy: AbnormalRecoveryPolicy) -> AbnormalRecoveryState {
 fn segment_state_error_skips_started_and_preserves_adapter_error_identity() {
     let events: Events = Rc::new(RefCell::new(Vec::new()));
     let mut invalid = state(AbnormalRecoveryPolicy::Standard);
-    let outcome: AbnormalRecoverySegmentOutcome<AdapterError> = invalid.drive_abnormal_segment(
+    let outcome: AbnormalRecoverySegmentResult<AdapterError> = invalid.drive_abnormal_segment(
         i64::MAX as u64 + 1,
         || panic!("next must not run"),
         || events.borrow_mut().push("started".into()),
         |_, _: &mut Record| panic!("observe must not run"),
     );
-    assert_eq!(outcome, AbnormalRecoverySegmentOutcome::StateFailed);
+    assert_eq!(outcome, AbnormalRecoverySegmentResult::StateFailed);
     assert!(events.borrow().is_empty());
 
     let mut recovery = state(AbnormalRecoveryPolicy::Standard);
@@ -81,7 +81,7 @@ fn segment_state_error_skips_started_and_preserves_adapter_error_identity() {
     );
     assert_eq!(
         outcome,
-        AbnormalRecoverySegmentOutcome::AdapterFailed(AdapterError("read"))
+        AbnormalRecoverySegmentResult::AdapterFailed(AdapterError("read"))
     );
     assert_eq!(&*events.borrow(), &["started", "next"]);
 }
@@ -120,7 +120,7 @@ fn dispatch_and_skip_observe_after_state_and_before_payload_drop() {
                 events.borrow_mut().push(format!("observe:{observation:?}"));
             },
         );
-        assert_eq!(outcome, AbnormalRecoverySegmentOutcome::ContinueNextSegment);
+        assert_eq!(outcome, AbnormalRecoverySegmentResult::ContinueNextSegment);
         assert_eq!(
             &*events.borrow(),
             &[
@@ -157,7 +157,7 @@ fn blank_observes_once_and_stops_reading() {
                 events.borrow_mut().push("observe:blank".into());
             },
         );
-        assert_eq!(outcome, AbnormalRecoverySegmentOutcome::ContinueNextSegment);
+        assert_eq!(outcome, AbnormalRecoverySegmentResult::ContinueNextSegment);
         assert_eq!(calls, 1);
         assert_eq!(records.len(), 1);
         assert_eq!(&*events.borrow(), &["started", "observe:blank", "drop:blank:true"]);
@@ -169,11 +169,11 @@ fn invalid_is_observed_before_policy_action() {
     for (policy, expected) in [
         (
             AbnormalRecoveryPolicy::Standard,
-            AbnormalRecoverySegmentOutcome::StopRecovery,
+            AbnormalRecoverySegmentResult::StopRecovery,
         ),
         (
             AbnormalRecoveryPolicy::Optimized,
-            AbnormalRecoverySegmentOutcome::ContinueNextSegment,
+            AbnormalRecoverySegmentResult::ContinueNextSegment,
         ),
     ] {
         let events: Events = Rc::new(RefCell::new(Vec::new()));
@@ -226,7 +226,7 @@ fn message_state_failure_drops_unobserved_payload_and_stops_reading() {
         || events.borrow_mut().push("started".into()),
         |_, _| events.borrow_mut().push("observe".into()),
     );
-    assert_eq!(outcome, AbnormalRecoverySegmentOutcome::StateFailed);
+    assert_eq!(outcome, AbnormalRecoverySegmentResult::StateFailed);
     assert_eq!(calls, 1);
     assert_eq!(records.len(), 1);
     assert_eq!(&*events.borrow(), &["started", "drop:overflow:false"]);
@@ -237,11 +237,11 @@ fn source_ended_never_observes_and_returns_policy_action() {
     for (policy, expected) in [
         (
             AbnormalRecoveryPolicy::Standard,
-            AbnormalRecoverySegmentOutcome::StopRecovery,
+            AbnormalRecoverySegmentResult::StopRecovery,
         ),
         (
             AbnormalRecoveryPolicy::Optimized,
-            AbnormalRecoverySegmentOutcome::ContinueNextSegment,
+            AbnormalRecoverySegmentResult::ContinueNextSegment,
         ),
     ] {
         let mut recovery = state(policy);

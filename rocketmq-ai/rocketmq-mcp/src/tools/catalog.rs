@@ -32,6 +32,15 @@ use crate::tools::message_tools;
 use crate::tools::proxy_tools;
 use crate::tools::topic_tools;
 
+/// How a Tool binds a request to one configured logical cluster.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClusterArg {
+    /// `cluster` must name a configured logical cluster.
+    Required,
+    /// `cluster` may be omitted; the configured default cluster is then authorized and queried.
+    OptionalDefault,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolId {
     GetClusterOverview,
@@ -113,6 +122,44 @@ impl ToolId {
             .iter()
             .copied()
             .find(|tool_id| tool_id.descriptor().name == name)
+    }
+
+    /// Returns how this Tool binds a request to one logical cluster.
+    ///
+    /// The Guard resolves the effective cluster from this shape before authorization, so it
+    /// must match the input schema: `OptionalDefault` exactly when `cluster` is not required.
+    pub const fn cluster_arg(self) -> ClusterArg {
+        match self {
+            Self::ListTopics | Self::ListConsumerGroups => ClusterArg::OptionalDefault,
+            Self::GetClusterOverview
+            | Self::DescribeTopic
+            | Self::GetTopicRoute
+            | Self::GetConsumerLag
+            | Self::DescribeBroker
+            | Self::GetBrokerDiagnostics
+            | Self::GetBrokerConfigSummary
+            | Self::GetBrokerLogFilterState
+            | Self::GetProxyDrainState
+            | Self::DiagnoseConsumerLag
+            | Self::ListConsumerConnections
+            | Self::ListProducerConnections
+            | Self::GetMessageMetadata
+            | Self::GetTopicConfigState
+            | Self::GetConsumerGroupConfigState
+            | Self::GetTopicStats
+            | Self::GetTopicConfig
+            | Self::GetConsumerGroupDetails
+            | Self::GetConsumerProgress
+            | Self::GetHaStatus
+            | Self::GetControllerMetadata
+            | Self::GetNameserverConfigSummary => ClusterArg::Required,
+            #[cfg(feature = "change-planning")]
+            Self::PlanCreateTopic
+            | Self::PlanUpdateTopicConfig
+            | Self::PlanUpdateTopicPermissions
+            | Self::PlanUpdateBrokerConfig
+            | Self::PlanResetConsumerOffset => ClusterArg::Required,
+        }
     }
 
     pub fn descriptor(self) -> ToolDescriptor {
@@ -561,6 +608,28 @@ mod tests {
         assert_eq!(names.len(), 24);
         #[cfg(feature = "change-planning")]
         assert_eq!(names.len(), 29);
+    }
+
+    #[test]
+    fn cluster_arg_matches_the_input_schema() {
+        for tool_id in ToolId::ALL {
+            let definition = tool_id.definition();
+            let schema = serde_json::to_value(definition.input_schema.as_ref()).expect("input schema serializes");
+            assert!(
+                schema["properties"].get("cluster").is_some(),
+                "{} must take a cluster argument",
+                definition.name
+            );
+            let cluster_is_required = schema["required"]
+                .as_array()
+                .is_some_and(|required| required.iter().any(|name| name == "cluster"));
+            let expected = if cluster_is_required {
+                ClusterArg::Required
+            } else {
+                ClusterArg::OptionalDefault
+            };
+            assert_eq!(tool_id.cluster_arg(), expected, "tool={}", definition.name);
+        }
     }
 
     #[test]

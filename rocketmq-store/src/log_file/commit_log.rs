@@ -123,7 +123,7 @@ use crate::utils::ffi::MemoryAdvice;
 
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryObservation;
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryRecord;
-use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoverySegmentOutcome;
+use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoverySegmentResult;
 use rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy;
 use rocketmq_store_local::commit_log::append::sequencer::AppendSequencerConfig;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendStatus;
@@ -142,7 +142,7 @@ use rocketmq_store_local::commit_log::record::read_declared_frame;
 use rocketmq_store_local::commit_log::record_parser::inspect_commit_log_record;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordBodyMode;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordChecksum;
-use rocketmq_store_local::commit_log::record_parser::CommitLogRecordOutcome;
+use rocketmq_store_local::commit_log::record_parser::CommitLogRecordDecodeResult;
 use rocketmq_store_local::commit_log::recovery::abnormal_confirm_candidate_end;
 use rocketmq_store_local::commit_log::recovery::plan_normal_recovery_file_window;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryDispatchGate;
@@ -2071,18 +2071,18 @@ impl CommitLog {
                 },
             );
             match outcome {
-                AbnormalRecoverySegmentOutcome::ContinueNextSegment => {
+                AbnormalRecoverySegmentResult::ContinueNextSegment => {
                     if file_processed {
                         recovery_ctx.stats.files_processed += 1;
                     }
                     index += 1;
                 }
-                AbnormalRecoverySegmentOutcome::StopRecovery => break 'segments,
-                AbnormalRecoverySegmentOutcome::AdapterFailed(AbnormalRecoveryAdapterViolation::ConfirmCandidate) => {
+                AbnormalRecoverySegmentResult::StopRecovery => break 'segments,
+                AbnormalRecoverySegmentResult::AdapterFailed(AbnormalRecoveryAdapterViolation::ConfirmCandidate) => {
                     warn!("optimized abnormal recovery confirm candidate failed");
                     return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                 }
-                AbnormalRecoverySegmentOutcome::AdapterFailed(
+                AbnormalRecoverySegmentResult::AdapterFailed(
                     AbnormalRecoveryAdapterViolation::ConfirmLimitConversion(error),
                 ) => {
                     warn!("optimized abnormal recovery confirm limit conversion failed: {error}");
@@ -2090,7 +2090,7 @@ impl CommitLog {
                         commitlog_recovery_failure("recovery offset or adapter state failed").with_source(error)
                     );
                 }
-                AbnormalRecoverySegmentOutcome::AdapterFailed(
+                AbnormalRecoverySegmentResult::AdapterFailed(
                     AbnormalRecoveryAdapterViolation::RelativeOffsetConversion(error),
                 ) => {
                     warn!("optimized abnormal recovery relative offset conversion failed: {error}");
@@ -2098,7 +2098,7 @@ impl CommitLog {
                         commitlog_recovery_failure("recovery offset or adapter state failed").with_source(error)
                     );
                 }
-                AbnormalRecoverySegmentOutcome::AdapterFailed(
+                AbnormalRecoverySegmentResult::AdapterFailed(
                     AbnormalRecoveryAdapterViolation::ValidatedSizeConversion(error),
                 ) => {
                     warn!("optimized abnormal recovery validated size conversion failed: {error}");
@@ -2106,17 +2106,17 @@ impl CommitLog {
                         commitlog_recovery_failure("recovery offset or adapter state failed").with_source(error)
                     );
                 }
-                AbnormalRecoverySegmentOutcome::AdapterFailed(
+                AbnormalRecoverySegmentResult::AdapterFailed(
                     AbnormalRecoveryAdapterViolation::FramePositionOverflow { position, size },
                 ) => {
                     warn!("optimized abnormal recovery frame position overflow at {position} with size {size}");
                     return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                 }
-                AbnormalRecoverySegmentOutcome::StateFailed => {
+                AbnormalRecoverySegmentResult::StateFailed => {
                     warn!("optimized abnormal recovery offset state failed");
                     return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                 }
-                AbnormalRecoverySegmentOutcome::UnexpectedAction(action) => {
+                AbnormalRecoverySegmentResult::UnexpectedAction(action) => {
                     warn!("optimized abnormal recovery unexpected action: {action:?}");
                     return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                 }
@@ -2282,7 +2282,7 @@ impl CommitLog {
                     },
                 );
                 match outcome {
-                    AbnormalRecoverySegmentOutcome::ContinueNextSegment => {
+                    AbnormalRecoverySegmentResult::ContinueNextSegment => {
                         index += 1;
                         if index < mapped_files_inner.len() {
                             if let Some(next_file) = mapped_files_inner.get(index) {
@@ -2295,14 +2295,14 @@ impl CommitLog {
                             );
                         }
                     }
-                    AbnormalRecoverySegmentOutcome::StopRecovery => break 'segments,
-                    AbnormalRecoverySegmentOutcome::AdapterFailed(
+                    AbnormalRecoverySegmentResult::StopRecovery => break 'segments,
+                    AbnormalRecoverySegmentResult::AdapterFailed(
                         AbnormalRecoveryAdapterViolation::ConfirmCandidate,
                     ) => {
                         warn!("standard abnormal recovery confirm candidate failed");
                         return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                     }
-                    AbnormalRecoverySegmentOutcome::AdapterFailed(
+                    AbnormalRecoverySegmentResult::AdapterFailed(
                         AbnormalRecoveryAdapterViolation::ConfirmLimitConversion(error),
                     ) => {
                         warn!("standard abnormal recovery confirm limit conversion failed: {error}");
@@ -2310,13 +2310,13 @@ impl CommitLog {
                             commitlog_recovery_failure("recovery offset or adapter state failed").with_source(error)
                         );
                     }
-                    AbnormalRecoverySegmentOutcome::AdapterFailed(
+                    AbnormalRecoverySegmentResult::AdapterFailed(
                         AbnormalRecoveryAdapterViolation::FramePositionOverflow { position, size },
                     ) => {
                         warn!("standard abnormal recovery frame position overflow at {position} with size {size}");
                         return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                     }
-                    AbnormalRecoverySegmentOutcome::AdapterFailed(
+                    AbnormalRecoverySegmentResult::AdapterFailed(
                         AbnormalRecoveryAdapterViolation::RelativeOffsetConversion(error),
                     ) => {
                         warn!("standard abnormal recovery relative offset conversion failed: {error}");
@@ -2324,7 +2324,7 @@ impl CommitLog {
                             commitlog_recovery_failure("recovery offset or adapter state failed").with_source(error)
                         );
                     }
-                    AbnormalRecoverySegmentOutcome::AdapterFailed(
+                    AbnormalRecoverySegmentResult::AdapterFailed(
                         AbnormalRecoveryAdapterViolation::ValidatedSizeConversion(error),
                     ) => {
                         warn!("standard abnormal recovery validated size conversion failed: {error}");
@@ -2332,11 +2332,11 @@ impl CommitLog {
                             commitlog_recovery_failure("recovery offset or adapter state failed").with_source(error)
                         );
                     }
-                    AbnormalRecoverySegmentOutcome::StateFailed => {
+                    AbnormalRecoverySegmentResult::StateFailed => {
                         warn!("standard abnormal recovery offset state failed");
                         return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                     }
-                    AbnormalRecoverySegmentOutcome::UnexpectedAction(action) => {
+                    AbnormalRecoverySegmentResult::UnexpectedAction(action) => {
                         warn!("standard abnormal recovery unexpected action: {action:?}");
                         return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                     }
@@ -2755,7 +2755,7 @@ pub(crate) fn check_message_and_return_size_in_segment(
         CommitLogRecordBodyMode::Read
     };
     let record = match inspect_commit_log_record(bytes, body_mode, &CommonCommitLogChecksum) {
-        CommitLogRecordOutcome::Blank { declared_size } => {
+        CommitLogRecordDecodeResult::Blank { declared_size } => {
             if usize::try_from(declared_size).map_or(true, |size| size > segment_remaining) {
                 return DispatchRequest {
                     msg_size: -1,
@@ -2770,8 +2770,8 @@ pub(crate) fn check_message_and_return_size_in_segment(
                 ..Default::default()
             };
         }
-        CommitLogRecordOutcome::Message(record) => record,
-        CommitLogRecordOutcome::IllegalMagic { magic_code, .. } => {
+        CommitLogRecordDecodeResult::Message(record) => record,
+        CommitLogRecordDecodeResult::IllegalMagic { magic_code, .. } => {
             warn!("found a illegal magic code 0x{}", format!("{:X}", magic_code));
             return DispatchRequest {
                 msg_size: -1,
@@ -2779,7 +2779,7 @@ pub(crate) fn check_message_and_return_size_in_segment(
                 ..Default::default()
             };
         }
-        CommitLogRecordOutcome::BodyCrcMismatch { computed, stored, .. } => {
+        CommitLogRecordDecodeResult::BodyCrcMismatch { computed, stored, .. } => {
             warn!("CRC check failed. bodyCRC={}, currentCRC={}", computed, stored);
             return DispatchRequest {
                 msg_size: -1,
@@ -2787,7 +2787,7 @@ pub(crate) fn check_message_and_return_size_in_segment(
                 ..Default::default()
             };
         }
-        CommitLogRecordOutcome::Truncated {
+        CommitLogRecordDecodeResult::Truncated {
             field,
             needed,
             remaining,
@@ -2803,7 +2803,7 @@ pub(crate) fn check_message_and_return_size_in_segment(
                 ..Default::default()
             };
         }
-        CommitLogRecordOutcome::NegativeLength { field, value, .. } => {
+        CommitLogRecordDecodeResult::NegativeLength { field, value, .. } => {
             warn!("negative commitlog record length at {:?}: value={}", field, value);
             return DispatchRequest {
                 msg_size: -1,
