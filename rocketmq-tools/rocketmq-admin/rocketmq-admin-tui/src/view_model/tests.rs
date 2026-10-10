@@ -53,19 +53,19 @@ use rocketmq_admin_core::client_adapter::services::export_data::ExportPopRecordT
 use rocketmq_admin_core::client_adapter::services::export_data::ExportRocksDbConfigRpcResult;
 use rocketmq_admin_core::client_adapter::services::export_data::ExportRocksDbConfigRpcTargetResult;
 use rocketmq_admin_core::client_adapter::services::message::DecodeMessageIdEntry;
-use rocketmq_admin_core::client_adapter::services::message::DecodeMessageIdOutcome;
 use rocketmq_admin_core::client_adapter::services::message::DecodeMessageIdResult;
 use rocketmq_admin_core::client_adapter::services::message::DirectConsumeMessageResult;
 use rocketmq_admin_core::client_adapter::services::message::DirectConsumeMessageResultDetail;
 use rocketmq_admin_core::client_adapter::services::message::DirectConsumeMessageStatus;
+use rocketmq_admin_core::client_adapter::services::message::MessageIdDecodeStatus;
+use rocketmq_admin_core::client_adapter::services::message::MessageIdLookupStatus;
 use rocketmq_admin_core::client_adapter::services::message::MessagePullEvent;
 use rocketmq_admin_core::client_adapter::services::message::MessageTraceView;
 use rocketmq_admin_core::client_adapter::services::message::MessageTrackEntry;
-use rocketmq_admin_core::client_adapter::services::message::MessageTrackOutcome;
+use rocketmq_admin_core::client_adapter::services::message::MessageTrackLookupStatus;
 use rocketmq_admin_core::client_adapter::services::message::MessageTrackResult;
 use rocketmq_admin_core::client_adapter::services::message::MessageTrackRow;
 use rocketmq_admin_core::client_adapter::services::message::QueryMessageByIdEntry;
-use rocketmq_admin_core::client_adapter::services::message::QueryMessageByIdOutcome;
 use rocketmq_admin_core::client_adapter::services::message::QueryMessageByIdResult;
 use rocketmq_admin_core::client_adapter::services::message::QueryMessageByKeyResult;
 use rocketmq_admin_core::client_adapter::services::message::QueryMessageByKeyRow;
@@ -387,7 +387,7 @@ fn phase_two_consumer_and_message_results_render_as_tables() {
             entries: vec![
                 DecodeMessageIdEntry {
                     message_id: "msg-1".into(),
-                    outcome: DecodeMessageIdOutcome::Decoded {
+                    outcome: MessageIdDecodeStatus::Decoded {
                         broker_ip: "127.0.0.1".to_string(),
                         broker_port: 10911,
                         commit_log_offset: 64,
@@ -396,7 +396,7 @@ fn phase_two_consumer_and_message_results_render_as_tables() {
                 },
                 DecodeMessageIdEntry {
                     message_id: "bad".into(),
-                    outcome: DecodeMessageIdOutcome::Invalid {
+                    outcome: MessageIdDecodeStatus::Invalid {
                         error: "invalid id".to_string(),
                     },
                 },
@@ -520,7 +520,7 @@ fn phase_two_message_detail_results_render_as_tables() {
             entries: vec![
                 QueryMessageByIdEntry {
                     message_id: "msg-1".into(),
-                    outcome: QueryMessageByIdOutcome::Found {
+                    outcome: MessageIdLookupStatus::Found {
                         message: Box::new(message.clone()),
                         broker_addr: "127.0.0.1:10911".to_string(),
                         query_time_ms: 7,
@@ -528,7 +528,7 @@ fn phase_two_message_detail_results_render_as_tables() {
                 },
                 QueryMessageByIdEntry {
                     message_id: "missing".into(),
-                    outcome: QueryMessageByIdOutcome::NotFound {
+                    outcome: MessageIdLookupStatus::NotFound {
                         reason: "not found".to_string(),
                         query_time_ms: 3,
                     },
@@ -1397,7 +1397,7 @@ fn phase_five_message_track_result_renders_as_table() {
         &MessageTrackResult {
             entries: vec![MessageTrackEntry {
                 message_id: "MSGID".into(),
-                outcome: MessageTrackOutcome::Found {
+                outcome: MessageTrackLookupStatus::Found {
                     broker_addr: "127.0.0.1:10911".to_string(),
                     query_time_ms: 7,
                     tracks: vec![MessageTrackRow {

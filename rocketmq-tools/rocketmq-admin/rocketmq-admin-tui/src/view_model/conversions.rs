@@ -43,16 +43,16 @@ use rocketmq_admin_core::client_adapter::services::export_data::ExportMetricsRes
 use rocketmq_admin_core::client_adapter::services::export_data::ExportPopRecordResult;
 use rocketmq_admin_core::client_adapter::services::export_data::ExportRocksDbConfigRpcResult;
 use rocketmq_admin_core::client_adapter::services::lite::TriggerLiteDispatchResult;
-use rocketmq_admin_core::client_adapter::services::message::DecodeMessageIdOutcome;
 use rocketmq_admin_core::client_adapter::services::message::DecodeMessageIdResult;
 use rocketmq_admin_core::client_adapter::services::message::DirectConsumeMessageResult;
 use rocketmq_admin_core::client_adapter::services::message::DirectConsumeMessageStatus;
 use rocketmq_admin_core::client_adapter::services::message::DumpCompactionLogResult;
+use rocketmq_admin_core::client_adapter::services::message::MessageIdDecodeStatus;
+use rocketmq_admin_core::client_adapter::services::message::MessageIdLookupStatus;
 use rocketmq_admin_core::client_adapter::services::message::MessagePullEvent;
 use rocketmq_admin_core::client_adapter::services::message::MessageTraceView;
-use rocketmq_admin_core::client_adapter::services::message::MessageTrackOutcome;
+use rocketmq_admin_core::client_adapter::services::message::MessageTrackLookupStatus;
 use rocketmq_admin_core::client_adapter::services::message::MessageTrackResult;
-use rocketmq_admin_core::client_adapter::services::message::QueryMessageByIdOutcome;
 use rocketmq_admin_core::client_adapter::services::message::QueryMessageByIdResult;
 use rocketmq_admin_core::client_adapter::services::message::QueryMessageByKeyResult;
 use rocketmq_admin_core::client_adapter::services::message::QueryMessageByOffsetResult;
@@ -613,7 +613,7 @@ impl CommandResultViewModel {
                 .entries
                 .iter()
                 .map(|entry| match &entry.outcome {
-                    QueryMessageByIdOutcome::Found {
+                    MessageIdLookupStatus::Found {
                         message,
                         broker_addr,
                         query_time_ms,
@@ -622,17 +622,17 @@ impl CommandResultViewModel {
                         message,
                         &format!("broker_addr={broker_addr}; query_time_ms={query_time_ms}"),
                     ),
-                    QueryMessageByIdOutcome::NotFound { reason, query_time_ms } => empty_message_detail_row(
+                    MessageIdLookupStatus::NotFound { reason, query_time_ms } => empty_message_detail_row(
                         entry.message_id.as_str(),
                         "not-found",
                         &format!("reason={}; query_time_ms={query_time_ms}", sanitize_cell(reason)),
                     ),
-                    QueryMessageByIdOutcome::Failed { error, query_time_ms } => empty_message_detail_row(
+                    MessageIdLookupStatus::Failed { error, query_time_ms } => empty_message_detail_row(
                         entry.message_id.as_str(),
                         "failed",
                         &format!("error={}; query_time_ms={query_time_ms}", sanitize_cell(error)),
                     ),
-                    QueryMessageByIdOutcome::TimedOut => {
+                    MessageIdLookupStatus::TimedOut => {
                         empty_message_detail_row(entry.message_id.as_str(), "timed-out", "query timed out")
                     }
                 })
@@ -732,7 +732,7 @@ impl CommandResultViewModel {
         let mut rows = Vec::new();
         for entry in &result.entries {
             match &entry.outcome {
-                MessageTrackOutcome::Found {
+                MessageTrackLookupStatus::Found {
                     broker_addr,
                     query_time_ms,
                     tracks,
@@ -746,7 +746,7 @@ impl CommandResultViewModel {
                     query_time_ms.to_string(),
                     "no consumer".to_string(),
                 ]),
-                MessageTrackOutcome::Found {
+                MessageTrackLookupStatus::Found {
                     broker_addr,
                     query_time_ms,
                     tracks,
@@ -764,7 +764,7 @@ impl CommandResultViewModel {
                         ]
                     }));
                 }
-                MessageTrackOutcome::NotFound { reason, query_time_ms } => rows.push(vec![
+                MessageTrackLookupStatus::NotFound { reason, query_time_ms } => rows.push(vec![
                     entry.message_id.to_string(),
                     "not-found".to_string(),
                     String::new(),
@@ -774,7 +774,7 @@ impl CommandResultViewModel {
                     query_time_ms.to_string(),
                     sanitize_cell(reason),
                 ]),
-                MessageTrackOutcome::Failed { error, query_time_ms } => rows.push(vec![
+                MessageTrackLookupStatus::Failed { error, query_time_ms } => rows.push(vec![
                     entry.message_id.to_string(),
                     "failed".to_string(),
                     String::new(),
@@ -784,7 +784,7 @@ impl CommandResultViewModel {
                     query_time_ms.to_string(),
                     sanitize_cell(error),
                 ]),
-                MessageTrackOutcome::TimedOut => rows.push(vec![
+                MessageTrackLookupStatus::TimedOut => rows.push(vec![
                     entry.message_id.to_string(),
                     "timed-out".to_string(),
                     String::new(),
@@ -828,7 +828,7 @@ impl CommandResultViewModel {
                 .entries
                 .iter()
                 .map(|entry| match &entry.outcome {
-                    DecodeMessageIdOutcome::Decoded {
+                    MessageIdDecodeStatus::Decoded {
                         broker_ip,
                         broker_port,
                         commit_log_offset,
@@ -841,7 +841,7 @@ impl CommandResultViewModel {
                         offset_hex.to_string(),
                         String::new(),
                     ],
-                    DecodeMessageIdOutcome::Invalid { error } => vec![
+                    MessageIdDecodeStatus::Invalid { error } => vec![
                         entry.message_id.to_string(),
                         "invalid".to_string(),
                         String::new(),
