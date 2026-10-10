@@ -55,7 +55,7 @@ pub enum AdminFailure {
 
 /// Closed completion state for an admin operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum AdminOutcome {
+pub enum AdminCompletionStatus {
     /// Every required target or source completed successfully.
     Success,
     /// Usable data or mutations completed, but at least one target failed.
@@ -349,8 +349,8 @@ impl AdminError {
     }
 
     /// Returns the closed failed completion state.
-    pub const fn outcome(&self) -> AdminOutcome {
-        AdminOutcome::Failure
+    pub const fn outcome(&self) -> AdminCompletionStatus {
+        AdminCompletionStatus::Failure
     }
 
     /// Returns the stable descriptor-owned code.
