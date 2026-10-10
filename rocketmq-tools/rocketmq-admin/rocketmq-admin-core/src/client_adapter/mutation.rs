@@ -87,28 +87,28 @@ use crate::core::security::AdminCredentials;
 use crate::core::supervised_mutation::*;
 use crate::core::topic::DeleteTopicAdminRequest;
 use crate::core::topic::DeleteTopicsInBrokerRequest;
-use crate::core::topic::PatchTopicConfigOutcome;
 use crate::core::topic::PatchTopicConfigRequest;
 use crate::core::topic::QueryTopicConfigCasRequest;
 use crate::core::topic::ResetTopicConsumerOffsetRequest;
 use crate::core::topic::SkipTopicAccumulatedRequest;
 use crate::core::topic::TopicBatchDeleteAdmin;
-use crate::core::topic::TopicBatchDeleteOutcome;
+use crate::core::topic::TopicBatchDeleteReport;
 use crate::core::topic::TopicBatchDeleteRequest;
 use crate::core::topic::TopicBatchMutationAdmin;
-use crate::core::topic::TopicBatchMutationOutcome;
-use crate::core::topic::TopicBatchOrderConfigOutcome;
-use crate::core::topic::TopicBatchTargetOutcome;
+use crate::core::topic::TopicBatchMutationReport;
+use crate::core::topic::TopicBatchTargetResult;
 use crate::core::topic::TopicBatchUpsertRequest;
 use crate::core::topic::TopicConfigCasState;
+use crate::core::topic::TopicConfigPatchResult;
 use crate::core::topic::TopicMutationAdmin;
-use crate::core::topic::TopicMutationOutcome;
 use crate::core::topic::TopicMutationPreflightAdmin;
+use crate::core::topic::TopicMutationSummary;
 use crate::core::topic::TopicOffsetMutationAdmin;
 use crate::core::topic::TopicOffsetMutationFailureCode;
-use crate::core::topic::TopicOffsetMutationOutcome;
+use crate::core::topic::TopicOffsetMutationReport;
 use crate::core::topic::TopicOffsetMutationRequest;
-use crate::core::topic::TopicOffsetTargetOutcome;
+use crate::core::topic::TopicOffsetTargetResult;
+use crate::core::topic::TopicOrderConfigMutationResult;
 use crate::core::topic::TopicSendRequest;
 use crate::core::topic::TopicSendResult;
 use crate::core::topic::TopicSkipMutationAdmin;
@@ -245,7 +245,7 @@ impl TopicMutationAdmin for MutationAdminSession {
     fn patch_config_if_version<'a>(
         &'a mut self,
         request: &'a PatchTopicConfigRequest,
-    ) -> AdminFuture<'a, PatchTopicConfigOutcome> {
+    ) -> AdminFuture<'a, TopicConfigPatchResult> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             let request = PatchTopicConfigRequest::try_new(
@@ -273,14 +273,14 @@ impl TopicMutationAdmin for MutationAdminSession {
                 ClientTopicConfigPatchResult::Applied {
                     previous_version,
                     version,
-                } => PatchTopicConfigOutcome::Applied {
+                } => TopicConfigPatchResult::Applied {
                     previous_version,
                     version,
                 },
                 ClientTopicConfigPatchResult::VersionConflict {
                     expected_version,
                     actual_version,
-                } => PatchTopicConfigOutcome::VersionConflict {
+                } => TopicConfigPatchResult::VersionConflict {
                     expected_version,
                     actual_version,
                 },
@@ -288,7 +288,7 @@ impl TopicMutationAdmin for MutationAdminSession {
         })
     }
 
-    fn upsert_topic<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationOutcome> {
+    fn upsert_topic<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationSummary> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             let topic = require_non_empty("topic", &request.topic)?;
@@ -363,7 +363,7 @@ impl TopicMutationAdmin for MutationAdminSession {
                     .map_err(|error| backend_error("upsert_order_topic_config", error))?;
             }
 
-            Ok(TopicMutationOutcome {
+            Ok(TopicMutationSummary {
                 message: format!("Topic `{topic}` was saved successfully."),
                 target_count: target_addrs.len(),
             })
@@ -373,7 +373,7 @@ impl TopicMutationAdmin for MutationAdminSession {
     fn delete_topics_in_broker<'a>(
         &'a mut self,
         request: &'a DeleteTopicsInBrokerRequest,
-    ) -> AdminFuture<'a, TopicMutationOutcome> {
+    ) -> AdminFuture<'a, TopicMutationSummary> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             self.inner
@@ -388,7 +388,7 @@ impl TopicMutationAdmin for MutationAdminSession {
                 )
                 .await
                 .map_err(|error| backend_error("remove_topics_from_broker", error))?;
-            Ok(TopicMutationOutcome {
+            Ok(TopicMutationSummary {
                 message: format!(
                     "deleted {} topics through one broker batch request",
                     request.topics.len()
@@ -398,7 +398,7 @@ impl TopicMutationAdmin for MutationAdminSession {
         })
     }
 
-    fn delete_topic<'a>(&'a mut self, request: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationOutcome> {
+    fn delete_topic<'a>(&'a mut self, request: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationSummary> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             let topic = require_non_empty("topic", &request.topic)?;
@@ -420,7 +420,7 @@ impl TopicMutationAdmin for MutationAdminSession {
                     .remove_topic_from_brokers(HashSet::from([broker_addr]), CheetahString::from(topic))
                     .await
                     .map_err(|error| backend_error("remove_topic_from_brokers", error))?;
-                return Ok(TopicMutationOutcome {
+                return Ok(TopicMutationSummary {
                     message: format!("Topic `{topic}` was deleted from broker `{broker_name}`."),
                     target_count: 1,
                 });
@@ -453,7 +453,7 @@ impl TopicMutationAdmin for MutationAdminSession {
                     .await
                     .map_err(|error| backend_error("remove_topic", error))?;
             }
-            Ok(TopicMutationOutcome {
+            Ok(TopicMutationSummary {
                 message: format!("Topic `{topic}` was deleted from {} cluster(s).", clusters.len()),
                 target_count: clusters.len(),
             })
@@ -463,7 +463,7 @@ impl TopicMutationAdmin for MutationAdminSession {
     fn reset_topic_consumer_offset<'a>(
         &'a mut self,
         request: &'a ResetTopicConsumerOffsetRequest,
-    ) -> AdminFuture<'a, TopicMutationOutcome> {
+    ) -> AdminFuture<'a, TopicMutationSummary> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             let offsets = self
@@ -494,7 +494,7 @@ impl TopicMutationAdmin for MutationAdminSession {
                     .len(),
                 Err(error) => return Err(backend_error("reset_consumer_offset", error)),
             };
-            Ok(TopicMutationOutcome {
+            Ok(TopicMutationSummary {
                 message: format!(
                     "Consumer group `{}` offset was reset for {affected_queues} queue(s).",
                     request.consumer_group
@@ -582,7 +582,7 @@ impl TopicBatchMutationAdmin for MutationAdminSession {
     fn upsert_topic_batch<'a>(
         &'a mut self,
         request: &'a TopicBatchUpsertRequest,
-    ) -> AdminFuture<'a, TopicBatchMutationOutcome> {
+    ) -> AdminFuture<'a, TopicBatchMutationReport> {
         Box::pin(async move { self.upsert_topic_batch_inner(request).await })
     }
 }
@@ -591,7 +591,7 @@ impl TopicBatchDeleteAdmin for MutationAdminSession {
     fn delete_topic_batch<'a>(
         &'a mut self,
         request: &'a TopicBatchDeleteRequest,
-    ) -> AdminFuture<'a, TopicBatchDeleteOutcome> {
+    ) -> AdminFuture<'a, TopicBatchDeleteReport> {
         Box::pin(async move { self.delete_topic_batch_inner(request).await })
     }
 }
@@ -600,7 +600,7 @@ impl TopicSkipMutationAdmin for MutationAdminSession {
     fn skip_accumulated<'a>(
         &'a mut self,
         request: &'a SkipTopicAccumulatedRequest,
-    ) -> AdminFuture<'a, TopicMutationOutcome> {
+    ) -> AdminFuture<'a, TopicMutationSummary> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             let affected_queues = self
@@ -614,7 +614,7 @@ impl TopicSkipMutationAdmin for MutationAdminSession {
                 )
                 .await
                 .map_err(|error| backend_error("skip_accumulated_message", error))?;
-            Ok(TopicMutationOutcome {
+            Ok(TopicMutationSummary {
                 message: "Accumulated messages were skipped to the latest offsets.".to_string(),
                 target_count: affected_queues,
             })
@@ -626,7 +626,7 @@ impl TopicOffsetMutationAdmin for MutationAdminSession {
     fn reset_consumer_offset_detailed<'a>(
         &'a mut self,
         request: &'a TopicOffsetMutationRequest,
-    ) -> AdminFuture<'a, TopicOffsetMutationOutcome> {
+    ) -> AdminFuture<'a, TopicOffsetMutationReport> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             let timestamp = request
@@ -651,7 +651,7 @@ impl TopicOffsetMutationAdmin for MutationAdminSession {
     fn skip_accumulated_detailed<'a>(
         &'a mut self,
         request: &'a TopicOffsetMutationRequest,
-    ) -> AdminFuture<'a, TopicOffsetMutationOutcome> {
+    ) -> AdminFuture<'a, TopicOffsetMutationReport> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             if request.timestamp().is_some() {
@@ -677,7 +677,7 @@ impl MutationAdminSession {
     async fn upsert_topic_batch_inner(
         &mut self,
         request: &TopicBatchUpsertRequest,
-    ) -> AdminResult<TopicBatchMutationOutcome> {
+    ) -> AdminResult<TopicBatchMutationReport> {
         self.inner.ensure_open()?;
         let request = request.canonical_for_execution()?;
         let cluster_info = self
@@ -715,12 +715,12 @@ impl MutationAdminSession {
                 )),
             };
             targets.push(match result {
-                Ok(()) => TopicBatchTargetOutcome {
+                Ok(()) => TopicBatchTargetResult {
                     broker_name: broker_name.clone(),
                     success: true,
                     message: "Topic configuration saved".to_string(),
                 },
-                Err(error) => TopicBatchTargetOutcome {
+                Err(error) => TopicBatchTargetResult {
                     broker_name: broker_name.clone(),
                     success: false,
                     message: crate::core::stable_error_message(&error),
@@ -756,23 +756,23 @@ impl MutationAdminSession {
                     .map_err(|error| backend_error("delete_order_topic_config", error))
             };
             Some(match result {
-                Ok(()) => TopicBatchOrderConfigOutcome {
+                Ok(()) => TopicOrderConfigMutationResult {
                     success: true,
                     message: "Order topic configuration reconciled".to_string(),
                 },
-                Err(error) => TopicBatchOrderConfigOutcome {
+                Err(error) => TopicOrderConfigMutationResult {
                     success: false,
                     message: crate::core::stable_error_message(&error),
                 },
             })
         };
-        Ok(TopicBatchMutationOutcome { targets, order_config })
+        Ok(TopicBatchMutationReport { targets, order_config })
     }
 
     async fn delete_topic_batch_inner(
         &mut self,
         request: &TopicBatchDeleteRequest,
-    ) -> AdminResult<TopicBatchDeleteOutcome> {
+    ) -> AdminResult<TopicBatchDeleteReport> {
         self.inner.ensure_open()?;
         let request = request.canonical_for_execution()?;
         let mut targets = Vec::with_capacity(request.cluster_names().len());
@@ -787,12 +787,12 @@ impl MutationAdminSession {
                 .await
                 .map_err(|error| backend_error("remove_topic", error));
             targets.push(match result {
-                Ok(()) => TopicBatchTargetOutcome {
+                Ok(()) => TopicBatchTargetResult {
                     broker_name: cluster_name.clone(),
                     success: true,
                     message: "Topic deleted from cluster".to_string(),
                 },
-                Err(error) => TopicBatchTargetOutcome {
+                Err(error) => TopicBatchTargetResult {
                     broker_name: cluster_name.clone(),
                     success: false,
                     message: crate::core::stable_error_message(&error),
@@ -810,12 +810,12 @@ impl MutationAdminSession {
                 Ok(route) if topic_route_is_absent(route.as_ref()) => {
                     self.delete_order_config_after_route_absent(request.topic()).await
                 }
-                Ok(_) => TopicBatchOrderConfigOutcome {
+                Ok(_) => TopicOrderConfigMutationResult {
                     success: false,
                     message: "authoritative Topic route still contains targets; order configuration was retained"
                         .to_string(),
                 },
-                Err(error) => TopicBatchOrderConfigOutcome {
+                Err(error) => TopicOrderConfigMutationResult {
                     success: false,
                     message: crate::core::stable_error_message(&error),
                 },
@@ -823,10 +823,10 @@ impl MutationAdminSession {
         } else {
             None
         };
-        Ok(TopicBatchDeleteOutcome { targets, order_config })
+        Ok(TopicBatchDeleteReport { targets, order_config })
     }
 
-    async fn delete_order_config_after_route_absent(&self, topic: &str) -> TopicBatchOrderConfigOutcome {
+    async fn delete_order_config_after_route_absent(&self, topic: &str) -> TopicOrderConfigMutationResult {
         match self
             .inner
             .inner
@@ -834,11 +834,11 @@ impl MutationAdminSession {
             .await
             .map_err(|error| backend_error("delete_order_topic_config", error))
         {
-            Ok(()) => TopicBatchOrderConfigOutcome {
+            Ok(()) => TopicOrderConfigMutationResult {
                 success: true,
                 message: "Order topic configuration deleted".to_string(),
             },
-            Err(error) => TopicBatchOrderConfigOutcome {
+            Err(error) => TopicOrderConfigMutationResult {
                 success: false,
                 message: crate::core::stable_error_message(&error),
             },
@@ -1972,12 +1972,12 @@ fn topic_route_is_absent(route: Option<&TopicRouteData>) -> bool {
 
 fn map_consumer_offset_report(
     outcome: rocketmq_client_rust::ConsumerOffsetMutationReport,
-) -> TopicOffsetMutationOutcome {
-    TopicOffsetMutationOutcome {
+) -> TopicOffsetMutationReport {
+    TopicOffsetMutationReport {
         targets: outcome
             .targets
             .into_iter()
-            .map(|target| TopicOffsetTargetOutcome {
+            .map(|target| TopicOffsetTargetResult {
                 broker_name: target.broker_name,
                 queue_id: target.queue_id,
                 applied: target.applied,

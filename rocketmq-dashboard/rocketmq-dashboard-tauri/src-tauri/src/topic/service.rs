@@ -16,7 +16,7 @@ use crate::topic::batch::{TopicBatchOperation, TopicBatchResult, TopicTargetKind
 use crate::topic::guard::{TopicIntent, TopicWriteMode, check_topic, validate_targets};
 use rocketmq_admin_core::core::topic::{
     SkipTopicAccumulatedRequest, TopicBatchDeleteAdmin, TopicBatchDeleteRequest, TopicBatchMutationAdmin,
-    TopicBatchTargetOutcome, TopicBatchUpsertRequest, TopicSkipMutationAdmin,
+    TopicBatchTargetResult, TopicBatchUpsertRequest, TopicSkipMutationAdmin,
 };
 use std::sync::Arc;
 
@@ -695,7 +695,7 @@ impl TopicManager {
                         broker_name: Some(broker_name.clone()),
                     })
                     .await;
-                let target = TopicBatchTargetOutcome {
+                let target = TopicBatchTargetResult {
                     broker_name,
                     success: outcome.is_ok(),
                     message: String::new(),

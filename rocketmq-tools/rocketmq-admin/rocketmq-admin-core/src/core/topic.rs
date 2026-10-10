@@ -568,7 +568,7 @@ impl CanonicalTopicBatchUpsertRequest {
 
 /// One broker-local result from a batch Topic mutation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TopicBatchTargetOutcome {
+pub struct TopicBatchTargetResult {
     pub broker_name: String,
     pub success: bool,
     pub message: String,
@@ -576,16 +576,16 @@ pub struct TopicBatchTargetOutcome {
 
 /// The global order-configuration result from a batch Topic mutation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TopicBatchOrderConfigOutcome {
+pub struct TopicOrderConfigMutationResult {
     pub success: bool,
     pub message: String,
 }
 
 /// Results for the complete batch-owned Topic mutation sequence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TopicBatchMutationOutcome {
-    pub targets: Vec<TopicBatchTargetOutcome>,
-    pub order_config: Option<TopicBatchOrderConfigOutcome>,
+pub struct TopicBatchMutationReport {
+    pub targets: Vec<TopicBatchTargetResult>,
+    pub order_config: Option<TopicOrderConfigMutationResult>,
 }
 
 /// A closed, validated complete deletion batch for one Topic across authoritative clusters.
@@ -646,9 +646,9 @@ impl TopicBatchDeleteRequest {
 
 /// Outcome of a complete batch-owned Topic deletion.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TopicBatchDeleteOutcome {
-    pub targets: Vec<TopicBatchTargetOutcome>,
-    pub order_config: Option<TopicBatchOrderConfigOutcome>,
+pub struct TopicBatchDeleteReport {
+    pub targets: Vec<TopicBatchTargetResult>,
+    pub order_config: Option<TopicOrderConfigMutationResult>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -679,7 +679,7 @@ impl DeleteTopicsInBrokerRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TopicMutationOutcome {
+pub struct TopicMutationSummary {
     pub message: String,
     pub target_count: usize,
 }
@@ -694,7 +694,7 @@ pub enum TopicOffsetMutationFailureCode {
 
 /// One broker/queue result from a detailed reset or skip operation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TopicOffsetTargetOutcome {
+pub struct TopicOffsetTargetResult {
     pub broker_name: String,
     pub queue_id: Option<i32>,
     pub applied: bool,
@@ -704,8 +704,8 @@ pub struct TopicOffsetTargetOutcome {
 
 /// Failure-aware results that retain already-applied offset targets.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TopicOffsetMutationOutcome {
-    pub targets: Vec<TopicOffsetTargetOutcome>,
+pub struct TopicOffsetMutationReport {
+    pub targets: Vec<TopicOffsetTargetResult>,
 }
 
 /// Exact cluster-scoped request for a detailed reset or skip operation.
@@ -835,7 +835,7 @@ impl PatchTopicConfigRequest {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum PatchTopicConfigOutcome {
+pub enum TopicConfigPatchResult {
     Applied { previous_version: u64, version: u64 },
     VersionConflict { expected_version: u64, actual_version: u64 },
 }
@@ -910,14 +910,14 @@ pub trait TopicAdmin: Send {
 
     fn get_topic_config<'a>(&'a mut self, request: &'a GetTopicConfigRequest) -> AdminFuture<'a, TopicConfigDetail>;
 
-    fn upsert_topic<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationOutcome>;
+    fn upsert_topic<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationSummary>;
 
-    fn delete_topic<'a>(&'a mut self, request: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationOutcome>;
+    fn delete_topic<'a>(&'a mut self, request: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationSummary>;
 
     fn delete_topics_in_broker<'a>(
         &'a mut self,
         request: &'a DeleteTopicsInBrokerRequest,
-    ) -> AdminFuture<'a, TopicMutationOutcome>;
+    ) -> AdminFuture<'a, TopicMutationSummary>;
 
     fn get_topic_consumer_groups<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, TopicConsumerGroups>;
 
@@ -926,7 +926,7 @@ pub trait TopicAdmin: Send {
     fn reset_topic_consumer_offset<'a>(
         &'a mut self,
         request: &'a ResetTopicConsumerOffsetRequest,
-    ) -> AdminFuture<'a, TopicMutationOutcome>;
+    ) -> AdminFuture<'a, TopicMutationSummary>;
 
     fn send_topic_test_message<'a>(&'a mut self, request: &'a TopicSendRequest) -> AdminFuture<'a, TopicSendResult>;
 }
@@ -1041,7 +1041,7 @@ pub trait TopicMutationAdmin: Send {
     fn patch_config_if_version<'a>(
         &'a mut self,
         _request: &'a PatchTopicConfigRequest,
-    ) -> AdminFuture<'a, PatchTopicConfigOutcome> {
+    ) -> AdminFuture<'a, TopicConfigPatchResult> {
         Box::pin(async {
             Err(crate::core::AdminError::backend(
                 "patch_topic_config_if_version",
@@ -1050,16 +1050,16 @@ pub trait TopicMutationAdmin: Send {
         })
     }
 
-    fn upsert_topic<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationOutcome>;
-    fn delete_topic<'a>(&'a mut self, request: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationOutcome>;
+    fn upsert_topic<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationSummary>;
+    fn delete_topic<'a>(&'a mut self, request: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationSummary>;
     fn delete_topics_in_broker<'a>(
         &'a mut self,
         request: &'a DeleteTopicsInBrokerRequest,
-    ) -> AdminFuture<'a, TopicMutationOutcome>;
+    ) -> AdminFuture<'a, TopicMutationSummary>;
     fn reset_topic_consumer_offset<'a>(
         &'a mut self,
         request: &'a ResetTopicConsumerOffsetRequest,
-    ) -> AdminFuture<'a, TopicMutationOutcome>;
+    ) -> AdminFuture<'a, TopicMutationSummary>;
     fn send_topic_test_message<'a>(&'a mut self, request: &'a TopicSendRequest) -> AdminFuture<'a, TopicSendResult>;
 }
 
@@ -1079,7 +1079,7 @@ pub trait TopicBatchMutationAdmin: Send {
     fn upsert_topic_batch<'a>(
         &'a mut self,
         request: &'a TopicBatchUpsertRequest,
-    ) -> AdminFuture<'a, TopicBatchMutationOutcome>;
+    ) -> AdminFuture<'a, TopicBatchMutationReport>;
 }
 
 /// Admin-owned complete multi-cluster Topic deletion workflow.
@@ -1089,7 +1089,7 @@ pub trait TopicBatchDeleteAdmin: Send {
     fn delete_topic_batch<'a>(
         &'a mut self,
         request: &'a TopicBatchDeleteRequest,
-    ) -> AdminFuture<'a, TopicBatchDeleteOutcome>;
+    ) -> AdminFuture<'a, TopicBatchDeleteReport>;
 }
 
 /// Separate skip-accumulated mutation capability. Implementations must advance
@@ -1098,7 +1098,7 @@ pub trait TopicSkipMutationAdmin: Send {
     fn skip_accumulated<'a>(
         &'a mut self,
         request: &'a SkipTopicAccumulatedRequest,
-    ) -> AdminFuture<'a, TopicMutationOutcome>;
+    ) -> AdminFuture<'a, TopicMutationSummary>;
 }
 
 /// Detailed, exact-cluster offset mutations that retain per-target partial outcomes.
@@ -1106,12 +1106,12 @@ pub trait TopicOffsetMutationAdmin: Send {
     fn reset_consumer_offset_detailed<'a>(
         &'a mut self,
         request: &'a TopicOffsetMutationRequest,
-    ) -> AdminFuture<'a, TopicOffsetMutationOutcome>;
+    ) -> AdminFuture<'a, TopicOffsetMutationReport>;
 
     fn skip_accumulated_detailed<'a>(
         &'a mut self,
         request: &'a TopicOffsetMutationRequest,
-    ) -> AdminFuture<'a, TopicOffsetMutationOutcome>;
+    ) -> AdminFuture<'a, TopicOffsetMutationReport>;
 }
 
 impl<T: TopicAdmin + ?Sized> TopicQueryAdmin for T {
@@ -1142,22 +1142,22 @@ impl<T: TopicAdmin + ?Sized> TopicQueryAdmin for T {
 }
 
 impl<T: TopicAdmin + ?Sized> TopicMutationAdmin for T {
-    fn upsert_topic<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationOutcome> {
+    fn upsert_topic<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationSummary> {
         TopicAdmin::upsert_topic(self, request)
     }
-    fn delete_topic<'a>(&'a mut self, request: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationOutcome> {
+    fn delete_topic<'a>(&'a mut self, request: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationSummary> {
         TopicAdmin::delete_topic(self, request)
     }
     fn delete_topics_in_broker<'a>(
         &'a mut self,
         request: &'a DeleteTopicsInBrokerRequest,
-    ) -> AdminFuture<'a, TopicMutationOutcome> {
+    ) -> AdminFuture<'a, TopicMutationSummary> {
         TopicAdmin::delete_topics_in_broker(self, request)
     }
     fn reset_topic_consumer_offset<'a>(
         &'a mut self,
         request: &'a ResetTopicConsumerOffsetRequest,
-    ) -> AdminFuture<'a, TopicMutationOutcome> {
+    ) -> AdminFuture<'a, TopicMutationSummary> {
         TopicAdmin::reset_topic_consumer_offset(self, request)
     }
     fn send_topic_test_message<'a>(&'a mut self, request: &'a TopicSendRequest) -> AdminFuture<'a, TopicSendResult> {
@@ -1177,7 +1177,7 @@ mod tests {
     use super::ResetTopicConsumerOffsetRequest;
     use super::TopicAdmin;
     use super::TopicBatchMutationAdmin;
-    use super::TopicBatchMutationOutcome;
+    use super::TopicBatchMutationReport;
     use super::TopicBatchUpsertRequest;
     use super::TopicCatalog;
     use super::TopicCatalogRequest;
@@ -1189,7 +1189,7 @@ mod tests {
     use super::TopicInventoryAdmin;
     use super::TopicInventoryRequest;
     use super::TopicInventoryResult;
-    use super::TopicMutationOutcome;
+    use super::TopicMutationSummary;
     use super::TopicRoute;
     use super::TopicSendRequest;
     use super::TopicSendResult;
@@ -1307,18 +1307,18 @@ mod tests {
             Box::pin(async { Err(AdminError::session_closed()) })
         }
 
-        fn upsert_topic<'a>(&'a mut self, _: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationOutcome> {
+        fn upsert_topic<'a>(&'a mut self, _: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationSummary> {
             Box::pin(async { Err(AdminError::session_closed()) })
         }
 
-        fn delete_topic<'a>(&'a mut self, _: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationOutcome> {
+        fn delete_topic<'a>(&'a mut self, _: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationSummary> {
             Box::pin(async { Err(AdminError::session_closed()) })
         }
 
         fn delete_topics_in_broker<'a>(
             &'a mut self,
             _: &'a DeleteTopicsInBrokerRequest,
-        ) -> AdminFuture<'a, TopicMutationOutcome> {
+        ) -> AdminFuture<'a, TopicMutationSummary> {
             Box::pin(async { Err(AdminError::session_closed()) })
         }
 
@@ -1333,7 +1333,7 @@ mod tests {
         fn reset_topic_consumer_offset<'a>(
             &'a mut self,
             _: &'a ResetTopicConsumerOffsetRequest,
-        ) -> AdminFuture<'a, TopicMutationOutcome> {
+        ) -> AdminFuture<'a, TopicMutationSummary> {
             Box::pin(async { Err(AdminError::session_closed()) })
         }
 
@@ -1348,7 +1348,7 @@ mod tests {
         fn upsert_topic_batch<'a>(
             &'a mut self,
             _: &'a TopicBatchUpsertRequest,
-        ) -> AdminFuture<'a, TopicBatchMutationOutcome> {
+        ) -> AdminFuture<'a, TopicBatchMutationReport> {
             Box::pin(async { Err(AdminError::session_closed()) })
         }
     }
