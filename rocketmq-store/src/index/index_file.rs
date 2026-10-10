@@ -30,9 +30,9 @@ use rocketmq_store_local::index::file::drive_index_put;
 use rocketmq_store_local::index::file::is_index_time_matched;
 use rocketmq_store_local::index::file::normalize_index_key_hash;
 use rocketmq_store_local::index::file::query_index_offsets;
+use rocketmq_store_local::index::file::IndexEntryWriteResult;
 use rocketmq_store_local::index::file::IndexFileSnapshot;
 use rocketmq_store_local::index::file::IndexHeaderUpdate;
-use rocketmq_store_local::index::file::IndexPutOutcome;
 #[cfg(test)]
 use rocketmq_store_local::mapped_file::MappedFileAdmissionState;
 use rocketmq_store_local::mapped_file::MappedFileRemovalStatus;
@@ -325,7 +325,7 @@ impl IndexFile {
             |update| header_updates.push(update),
         );
         match outcome {
-            IndexPutOutcome::Written => {
+            IndexEntryWriteResult::Written => {
                 if !writes_succeeded.get() {
                     warn!(file_name = %self.get_file_name(), "failed to write index entry");
                     return false;
@@ -336,7 +336,7 @@ impl IndexFile {
                 }
                 true
             }
-            IndexPutOutcome::Full => {
+            IndexEntryWriteResult::Full => {
                 warn!(
                     "Over index file capacity: index count = {}; index max num = {}",
                     self.index_header.get_index_count(),
@@ -344,11 +344,11 @@ impl IndexFile {
                 );
                 false
             }
-            IndexPutOutcome::SlotUnavailable => {
+            IndexEntryWriteResult::SlotUnavailable => {
                 warn!("Index hash slot is outside the mapped file");
                 false
             }
-            IndexPutOutcome::LayoutOverflow => {
+            IndexEntryWriteResult::LayoutOverflow => {
                 warn!("Index file layout position overflow");
                 false
             }

@@ -27,17 +27,17 @@ use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_store_local::commit_log::append::prepared_payload::PreparedPayload;
-use rocketmq_store_local::commit_log::append::sequencer::AppendAdmissionOutcome;
 use rocketmq_store_local::commit_log::append::sequencer::AppendAdmissionRejection;
+use rocketmq_store_local::commit_log::append::sequencer::AppendAdmissionResult;
 use rocketmq_store_local::commit_log::append::sequencer::AppendSequencer;
 use rocketmq_store_local::commit_log::append::sequencer::AppendSequencerConfig;
 use rocketmq_store_local::commit_log::append::sequencer::AppendSequencerReceiver;
 use rocketmq_store_local::commit_log::append::sequencer::AppendSequencerSender;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAborted;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAttempt;
+use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAttemptResult;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendCompleted;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendFailure;
-use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendOutcome;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendResolution;
 use tokio::sync::oneshot;
 use tracing::error;
@@ -106,7 +106,7 @@ impl CommitLogAppendPort {
             completion,
         };
         let retained_bytes = request.retained_bytes();
-        if let AppendAdmissionOutcome::Rejected { request, reason } = self.sender.try_submit(request, retained_bytes) {
+        if let AppendAdmissionResult::Rejected { request, reason } = self.sender.try_submit(request, retained_bytes) {
             request.reject(PutMessageResult::rejected_before_append(Self::admission_status(reason)));
         }
         response.await.unwrap_or_else(|response_error| {
@@ -132,7 +132,7 @@ impl CommitLogAppendPort {
             completion,
         };
         let retained_bytes = request.retained_bytes();
-        if let AppendAdmissionOutcome::Rejected { request, reason } = self.sender.try_submit(request, retained_bytes) {
+        if let AppendAdmissionResult::Rejected { request, reason } = self.sender.try_submit(request, retained_bytes) {
             request.reject(PutMessageResult::rejected_before_append(Self::admission_status(reason)));
         }
         response.await.unwrap_or_else(|response_error| {
@@ -620,7 +620,7 @@ impl CommitLogAppendProcessor {
 
     fn resolve_append(
         &self,
-        outcome: rocketmq_store_local::commit_log::append_attempt::CommitLogAppendOutcome<
+        outcome: rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAttemptResult<
             Arc<DefaultMappedFile>,
             rocketmq_store_api::StoreError,
         >,
@@ -630,7 +630,7 @@ impl CommitLogAppendProcessor {
         // Capture the worker's finalized outcome before legacy status projection.
         // A later lease fence or flush/replication timeout cannot erase these facts.
         let evidence = match &outcome {
-            CommitLogAppendOutcome::Completed(CommitLogAppendCompleted::PutOk { result, .. }) => {
+            CommitLogAppendAttemptResult::Completed(CommitLogAppendCompleted::PutOk { result, .. }) => {
                 match (
                     result.wrote_offset.checked_add(i64::from(result.wrote_bytes)),
                     i64::try_from(self.append.current_append_offset()),
@@ -646,11 +646,11 @@ impl CommitLogAppendProcessor {
                     _ => AppendExecutionEvidence::Unknown,
                 }
             }
-            CommitLogAppendOutcome::Completed(CommitLogAppendCompleted::RetryRejected { .. })
-            | CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialUnknown { .. }) => {
+            CommitLogAppendAttemptResult::Completed(CommitLogAppendCompleted::RetryRejected { .. })
+            | CommitLogAppendAttemptResult::Aborted(CommitLogAppendAborted::InitialUnknown { .. }) => {
                 AppendExecutionEvidence::Unknown
             }
-            CommitLogAppendOutcome::Aborted(
+            CommitLogAppendAttemptResult::Aborted(
                 CommitLogAppendAborted::InitialSegmentUnavailable
                 | CommitLogAppendAborted::InitialActiveLockFailed { .. }
                 | CommitLogAppendAborted::InitialMessageIllegal { .. }

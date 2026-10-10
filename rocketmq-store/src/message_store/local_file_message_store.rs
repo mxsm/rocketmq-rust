@@ -209,7 +209,7 @@ use crate::timer::timeline::ShadowTimelineMaterializer;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::timeline::TimelineAdmissionController;
 #[cfg(feature = "extended_timeline")]
-use crate::timer::timeline::TimelineAdmissionOutcome;
+use crate::timer::timeline::TimelineAdmissionDecision;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::timeline::TimelineCompletionReconciler;
 #[cfg(feature = "extended_timeline")]

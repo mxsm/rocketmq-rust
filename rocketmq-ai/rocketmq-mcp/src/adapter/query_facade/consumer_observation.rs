@@ -43,7 +43,7 @@ where
     ) -> Result<QueryResult<GetConsumerGroupDetailsOutput>, ToolFailure> {
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.consumer_group = normalized_identifier("consumer_group", &args.consumer_group)?;
-        let cluster = self.resolve_required_cluster(&args.cluster)?;
+        let cluster = self.resolve_cluster(&args.cluster)?;
         let key = self.cache_key(
             "consumer_group_details",
             &cluster.name,
@@ -72,7 +72,7 @@ where
     ) -> Result<QueryResult<GetConsumerProgressOutput>, ToolFailure> {
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.consumer_group = normalized_identifier("consumer_group", &args.consumer_group)?;
-        let cluster = self.resolve_required_cluster(&args.cluster)?;
+        let cluster = self.resolve_cluster(&args.cluster)?;
         let request = SnapshotRequest::try_new_with_selection(
             SnapshotKind::ConsumerProgress,
             cluster.name.clone(),

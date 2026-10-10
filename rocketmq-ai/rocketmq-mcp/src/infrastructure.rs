@@ -13,4 +13,5 @@
 // limitations under the License.
 
 pub(crate) mod cache;
+pub(crate) mod metrics;
 pub(crate) mod snapshot;

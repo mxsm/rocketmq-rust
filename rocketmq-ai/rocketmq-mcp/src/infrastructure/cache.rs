@@ -30,7 +30,9 @@ use tokio_util::sync::CancellationToken;
 use serde::Serialize;
 
 use rocketmq_observability::metrics::mcp::McpCacheEvent;
+use rocketmq_observability::metrics::mcp::McpMetricsRecorder;
 
+use crate::infrastructure::metrics::ComponentMetrics;
 use crate::infrastructure::snapshot::RetainedSize;
 use crate::model::contract::observed_at;
 use crate::model::contract::CacheStatus;
@@ -89,6 +91,7 @@ struct QueryCacheInner {
     state: Mutex<CacheState>,
     flights: Mutex<HashMap<String, Weak<Mutex<()>>>>,
     metrics: CacheMetrics,
+    telemetry: ComponentMetrics,
 }
 
 #[derive(Default)]
@@ -111,7 +114,36 @@ impl QueryCache {
         Self::with_byte_limits(enabled, capacity, MAX_CACHE_ENTRY_BYTES, MAX_CACHE_TOTAL_BYTES)
     }
 
+    /// Returns an empty cache with the same limits that reports its events through `metrics`.
+    ///
+    /// Apply this before the cache is used: entries and counters do not carry over.
+    pub(crate) fn with_metrics(self, metrics: McpMetricsRecorder) -> Self {
+        Self::build(
+            self.inner.enabled,
+            self.inner.capacity,
+            self.inner.max_entry_bytes,
+            self.inner.max_total_bytes,
+            ComponentMetrics::new(metrics),
+        )
+    }
+
     fn with_byte_limits(enabled: bool, capacity: usize, max_entry_bytes: usize, max_total_bytes: usize) -> Self {
+        Self::build(
+            enabled,
+            capacity,
+            max_entry_bytes,
+            max_total_bytes,
+            ComponentMetrics::default(),
+        )
+    }
+
+    fn build(
+        enabled: bool,
+        capacity: usize,
+        max_entry_bytes: usize,
+        max_total_bytes: usize,
+        telemetry: ComponentMetrics,
+    ) -> Self {
         Self {
             inner: Arc::new(QueryCacheInner {
                 enabled,
@@ -122,6 +154,7 @@ impl QueryCache {
                 state: Mutex::new(CacheState::default()),
                 flights: Mutex::new(HashMap::new()),
                 metrics: CacheMetrics::default(),
+                telemetry,
             }),
         }
     }
@@ -165,7 +198,7 @@ impl QueryCache {
     {
         if !self.inner.enabled || self.inner.capacity == 0 || ttl.is_zero() {
             self.inner.metrics.bypasses.fetch_add(1, Ordering::Relaxed);
-            rocketmq_observability::metrics::mcp::record_cache_event(McpCacheEvent::Bypass);
+            self.inner.telemetry.record_cache_event(McpCacheEvent::Bypass);
             return load()
                 .await
                 .map(|payload| QueryResult::from_payload(payload, observed_at(), 0, CacheStatus::Bypass));
@@ -178,7 +211,7 @@ impl QueryCache {
         let (flight, coalesced) = self.flight_lock(&key).await;
         if coalesced {
             self.inner.metrics.coalesced_waiters.fetch_add(1, Ordering::Relaxed);
-            rocketmq_observability::metrics::mcp::record_cache_event(McpCacheEvent::CoalescedWaiter);
+            self.inner.telemetry.record_cache_event(McpCacheEvent::CoalescedWaiter);
         }
         let _flight_guard = tokio::select! {
             biased;
@@ -203,7 +236,7 @@ impl QueryCache {
         )
         .await;
         self.inner.metrics.misses.fetch_add(1, Ordering::Relaxed);
-        rocketmq_observability::metrics::mcp::record_cache_event(McpCacheEvent::Miss);
+        self.inner.telemetry.record_cache_event(McpCacheEvent::Miss);
         Ok(QueryResult::from_payload(payload, observed_at, 0, CacheStatus::Miss))
     }
 
@@ -228,7 +261,7 @@ impl QueryCache {
         state.insertion_order.shrink_to_fit();
         state.retained_bytes = 0;
         self.inner.metrics.invalidations.fetch_add(1, Ordering::Relaxed);
-        rocketmq_observability::metrics::mcp::record_cache_event(McpCacheEvent::Invalidation);
+        self.inner.telemetry.record_cache_event(McpCacheEvent::Invalidation);
         removed
     }
 
@@ -252,7 +285,7 @@ impl QueryCache {
             .unwrap_or(u64::MAX);
         let result = QueryResult::from_payload(payload, entry.observed_at.clone(), freshness_ms, CacheStatus::Hit);
         self.inner.metrics.hits.fetch_add(1, Ordering::Relaxed);
-        rocketmq_observability::metrics::mcp::record_cache_event(McpCacheEvent::Hit);
+        self.inner.telemetry.record_cache_event(McpCacheEvent::Hit);
         Some(result)
     }
 
@@ -295,7 +328,7 @@ impl QueryCache {
             if let Some(entry) = state.entries.remove(&oldest) {
                 state.retained_bytes = state.retained_bytes.saturating_sub(entry.retained_bytes);
                 self.inner.metrics.evictions.fetch_add(1, Ordering::Relaxed);
-                rocketmq_observability::metrics::mcp::record_cache_event(McpCacheEvent::Eviction);
+                self.inner.telemetry.record_cache_event(McpCacheEvent::Eviction);
             }
         }
         let inserted_at = Instant::now();
@@ -398,6 +431,28 @@ mod tests {
         assert_eq!(second.cache_status, CacheStatus::Hit);
         assert_eq!(first.data, second.data);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn binding_metrics_keeps_the_configured_limits_and_behavior() {
+        let cache =
+            QueryCache::with_byte_limits(true, 3, 64 * 1024, 128 * 1024).with_metrics(McpMetricsRecorder::noop());
+        assert!(cache.inner.enabled);
+        assert_eq!(cache.inner.capacity, 3);
+        assert_eq!(cache.inner.max_entry_bytes, 64 * 1024);
+        assert_eq!(cache.inner.max_total_bytes, 128 * 1024);
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let first = load_string(&cache, "topic:orders", Duration::from_secs(1), calls.clone()).await;
+        let second = load_string(&cache, "topic:orders", Duration::from_secs(1), calls.clone()).await;
+        assert_eq!(first.cache_status, CacheStatus::Miss);
+        assert_eq!(second.cache_status, CacheStatus::Hit);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(cache.metrics().hits, 1);
+
+        let disabled = QueryCache::new(false, 8).with_metrics(McpMetricsRecorder::noop());
+        let bypassed = load_string(&disabled, "topic:orders", Duration::from_secs(1), calls.clone()).await;
+        assert_eq!(bypassed.cache_status, CacheStatus::Bypass);
     }
 
     #[tokio::test]

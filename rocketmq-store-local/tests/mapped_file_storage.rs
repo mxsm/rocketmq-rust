@@ -19,7 +19,7 @@ use std::io::SeekFrom;
 use std::io::Write;
 
 use rocketmq_store_local::mapped_file::file::classify_file_preallocate_result;
-use rocketmq_store_local::mapped_file::file::FilePreallocateOutcome;
+use rocketmq_store_local::mapped_file::file::FilePreallocationResult;
 use rocketmq_store_local::mapped_file::file::MappedFileStorage;
 use rocketmq_store_local::mapped_file::file::PREALLOCATE_UNSUPPORTED_ERRNO;
 
@@ -131,17 +131,17 @@ fn zero_length_file_skips_preallocation() {
 fn preallocation_results_keep_legacy_classification() {
     assert_eq!(
         classify_file_preallocate_result(0, 123),
-        FilePreallocateOutcome::Allocated
+        FilePreallocationResult::Allocated
     );
     assert_eq!(
         classify_file_preallocate_result(-1, PREALLOCATE_UNSUPPORTED_ERRNO),
-        FilePreallocateOutcome::Unsupported {
+        FilePreallocationResult::Unsupported {
             errno: PREALLOCATE_UNSUPPORTED_ERRNO,
         }
     );
     assert_eq!(
         classify_file_preallocate_result(-1, 28),
-        FilePreallocateOutcome::Failed { errno: 28 }
+        FilePreallocationResult::Failed { errno: 28 }
     );
 }
 

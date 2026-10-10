@@ -57,7 +57,7 @@ use crate::base::transient_store_pool::PoolLease;
 use crate::base::transient_store_pool::TransientStorePool;
 use crate::config::FlushDiskType;
 use crate::mapped_file::file::FileOwner;
-use crate::mapped_file::file::FilePreallocateOutcome;
+use crate::mapped_file::file::FilePreallocationResult;
 use crate::mapped_file::file::MappedFileStorage;
 use crate::mapped_file::generation::GenerationRegion;
 use crate::mapped_file::generation::MappedFileMapping;
@@ -166,15 +166,15 @@ fn errno_from_io_error(error: &io::Error) -> i32 {
 }
 
 #[cfg(test)]
-fn file_preallocate_degradation_event(outcome: FilePreallocateOutcome) -> Option<LinuxStorageDegradationEvent> {
+fn file_preallocate_degradation_event(outcome: FilePreallocationResult) -> Option<LinuxStorageDegradationEvent> {
     match outcome {
-        FilePreallocateOutcome::Allocated => None,
-        FilePreallocateOutcome::Unsupported { errno } => Some(LinuxStorageDegradationEvent::new(
+        FilePreallocationResult::Allocated => None,
+        FilePreallocationResult::Unsupported { errno } => Some(LinuxStorageDegradationEvent::new(
             LINUX_STORAGE_OP_FALLOCATE,
             LINUX_STORAGE_REASON_UNSUPPORTED,
             errno,
         )),
-        FilePreallocateOutcome::Failed { errno } => Some(LinuxStorageDegradationEvent::new(
+        FilePreallocationResult::Failed { errno } => Some(LinuxStorageDegradationEvent::new(
             LINUX_STORAGE_OP_FALLOCATE,
             LINUX_STORAGE_REASON_FAILED,
             errno,
@@ -817,12 +817,12 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
             MappedFileStorage::open_with_metrics(path_buf, file_size, Arc::clone(&metrics))?;
         if let Some(preallocate_outcome) = preallocate_outcome {
             match preallocate_outcome {
-                FilePreallocateOutcome::Allocated => {}
-                FilePreallocateOutcome::Unsupported { errno } => debug!(
+                FilePreallocationResult::Allocated => {}
+                FilePreallocationResult::Unsupported { errno } => debug!(
                     "File preallocation is unsupported for mapped file {} and will be skipped, errno={}",
                     file_name, errno
                 ),
-                FilePreallocateOutcome::Failed { errno } => warn!(
+                FilePreallocationResult::Failed { errno } => warn!(
                     "File preallocation failed for mapped file {} and will continue with set_len, errno={}",
                     file_name, errno
                 ),
@@ -3450,9 +3450,9 @@ mod tests {
 
     #[test]
     fn preallocate_degradation_events_include_operation_reason_and_errno() {
-        let unsupported = file_preallocate_degradation_event(FilePreallocateOutcome::Unsupported { errno: 95 })
+        let unsupported = file_preallocate_degradation_event(FilePreallocationResult::Unsupported { errno: 95 })
             .expect("unsupported preallocation should be observable");
-        let failed = file_preallocate_degradation_event(FilePreallocateOutcome::Failed { errno: 28 })
+        let failed = file_preallocate_degradation_event(FilePreallocationResult::Failed { errno: 28 })
             .expect("failed preallocation should be observable");
 
         assert_eq!(
@@ -3463,7 +3463,7 @@ mod tests {
             failed,
             LinuxStorageDegradationEvent::new(LINUX_STORAGE_OP_FALLOCATE, LINUX_STORAGE_REASON_FAILED, 28)
         );
-        assert!(file_preallocate_degradation_event(FilePreallocateOutcome::Allocated).is_none());
+        assert!(file_preallocate_degradation_event(FilePreallocationResult::Allocated).is_none());
     }
 
     #[test]

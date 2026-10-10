@@ -130,15 +130,16 @@ impl McpApp {
         service_context: rocketmq_runtime::ChildServiceContext,
         telemetry_handle: rocketmq_observability::TelemetryHandle,
     ) -> crate::error::McpResult<Self> {
-        let guard = Guard::new(config.security.clone(), config.audit.clone(), &config.clusters)?;
         let metrics = rocketmq_observability::metrics::mcp::McpMetricsRecorder::from_handle(&telemetry_handle);
+        let guard =
+            Guard::new(config.security.clone(), config.audit.clone(), &config.clusters)?.with_metrics(metrics.clone());
         let client_runtime = ClientRuntime::try_new(
             service_context.component("rocketmq-mcp-client"),
             ClientRuntimeConfig::default(),
             telemetry_handle,
         )
         .map_err(|error| crate::error::McpError::infrastructure("initialize MCP client runtime", error))?;
-        let query = Arc::new(QueryFacade::new(config.clone(), client_runtime.clone()));
+        let query = Arc::new(QueryFacade::new(config.clone(), client_runtime.clone()).with_metrics(metrics.clone()));
         let resources = crate::resources::registry::ResourceRegistry::new()?;
         Ok(Self {
             config,
@@ -158,7 +159,8 @@ impl McpApp {
         factory: crate::adapter::admin_session::ProtocolTestSessionFactory,
     ) -> Self {
         let factory = AdminCoreSessionFactory::new(self.client_runtime.clone()).with_test_session_factory(factory);
-        self.query = Arc::new(QueryFacade::with_factory(self.config.clone(), factory));
+        self.query =
+            Arc::new(QueryFacade::with_factory(self.config.clone(), factory).with_metrics(self.metrics.clone()));
         self
     }
 

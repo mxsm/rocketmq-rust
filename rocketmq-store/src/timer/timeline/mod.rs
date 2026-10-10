@@ -30,7 +30,7 @@ mod snapshot;
 
 pub(crate) use admission::usage_summary_keys;
 pub(crate) use admission::TimelineAdmissionController;
-pub use admission::TimelineAdmissionOutcome;
+pub use admission::TimelineAdmissionDecision;
 pub(crate) use due_scanner::TimelineDueScanner;
 pub(crate) use due_scanner::TimelineDueScannerError;
 pub(crate) use engine::ExtendedTimelineEngine;

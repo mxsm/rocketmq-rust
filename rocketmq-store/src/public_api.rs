@@ -109,8 +109,8 @@ pub use crate::inspection::inspect_commit_log_record;
 pub use crate::inspection::CommitLogRecord;
 pub use crate::inspection::CommitLogRecordBodyMode;
 pub use crate::inspection::CommitLogRecordChecksum;
+pub use crate::inspection::CommitLogRecordDecodeResult;
 pub use crate::inspection::CommitLogRecordField;
-pub use crate::inspection::CommitLogRecordOutcome;
 pub use crate::inspection::CommitLogRecordVersion;
 pub use crate::log_file::commit_log::check_message_and_return_size;
 pub use crate::log_file::commit_log::get_cq_type;
@@ -148,7 +148,7 @@ pub use crate::message_store::StoreReleaseCheckpointService;
 pub use crate::platform::classify_file_preallocate_result;
 pub use crate::platform::current_store_platform_capability;
 pub use crate::platform::preallocate_file;
-pub use crate::platform::FilePreallocateOutcome;
+pub use crate::platform::FilePreallocationResult;
 pub use crate::platform::StorePlatformCapability;
 pub use crate::platform::StorePlatformIoHintBranch;
 pub use crate::platform::StorePlatformOptimizationCapability;
@@ -183,7 +183,7 @@ pub use crate::store_ports::StorePorts;
 pub use crate::telemetry::StoreTelemetry;
 pub use crate::timer::pipeline::TimerPipelineDiagnostics;
 #[cfg(feature = "extended_timeline")]
-pub use crate::timer::timeline::TimelineAdmissionOutcome;
+pub use crate::timer::timeline::TimelineAdmissionDecision;
 #[cfg(feature = "extended_timeline")]
 pub use crate::timer::timeline::TimelinePromotionDecision;
 pub use crate::timer::timer_checkpoint::TimerCheckpoint;

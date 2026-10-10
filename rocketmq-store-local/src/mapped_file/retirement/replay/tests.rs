@@ -1222,7 +1222,8 @@ fn build_log_inner(meta: &StoreMeta, frames: &[Vec<u8>], epochs: &[u64], capture
         slots[slot_index as usize] = encoded_slot;
         seals.push(encoded_seal);
         if capture_evidence {
-            let DecodeOutcome::Frame(decoded) = decode_next_frame(frame, sequence, 0).expect("frame decodes") else {
+            let LedgerFrameDecodeResult::Frame(decoded) = decode_next_frame(frame, sequence, 0).expect("frame decodes")
+            else {
                 panic!("test frame is complete")
             };
             let record = decoded.decode_record().expect("typed record decodes");

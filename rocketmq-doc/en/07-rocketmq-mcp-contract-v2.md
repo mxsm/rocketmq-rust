@@ -130,9 +130,11 @@ Correctable Tool failures set `isError: true`, omit success
 }
 ```
 
-Stable codes include `invalid_arguments`, `backend_error`,
+Stable codes include `invalid_arguments`, `not_found`, `source_unavailable`,
 `permission_denied`, `rate_limited`, `change_planning_disabled`,
 `internal_error`, `output_too_large`, `backend_timeout`, and `cancelled`.
+A `not_found` error also carries `entity`, the kind of target that does not
+exist. The Tool Reference lists every code.
 
 ## Query Lifecycle and Diagnosis Provenance
 
