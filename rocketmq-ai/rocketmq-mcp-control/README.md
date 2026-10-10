@@ -6,8 +6,9 @@ exactly five typed tools: Topic and Consumer Group upsert, consumer offset reset
 and consumer request mode. The default build contains neither Admin Core nor production mutation tools.
 
 Read the [reviewed mutation Tool Reference](docs/tool-reference.md) before operating the server. The
-[operations runbook](docs/operations-runbook.md) covers rollout, rollback, audit, and emergency stop-write
-handling; the [real-cluster E2E runbook](docs/e2e-runbook.md) covers the opt-in local harness and its cleanup.
+[operations runbook](docs/operations-runbook.md) covers rollout, rollback, logs and metrics, audit, and emergency
+stop-write handling; the [real-cluster E2E runbook](docs/e2e-runbook.md) covers the opt-in local harness and its
+cleanup.
 
 ## Security boundary
 
@@ -43,6 +44,9 @@ The optional feature enables only `rocketmq-admin-core/mutation-client-adapter`,
 only `admin-mutation`. It does not enable read or full Admin adapters. Delete, skip, resend, CLI, shell, and
 free-form RPC remain outside this delivery.
 
+A separate `otlp` feature adds an OTLP gRPC metrics exporter and no Admin dependency. Every build logs to
+stderr; see [Logs and metrics](docs/operations-runbook.md#logs-and-metrics).
+
 ## Configuration
 
 Set `ROCKETMQ_MCP_CONTROL_CONFIG` to a TOML file based on
@@ -50,7 +54,7 @@ Set `ROCKETMQ_MCP_CONTROL_CONFIG` to a TOML file based on
 fields. `mutations_enabled` defaults to `false` and `dry_run` defaults to `true`. Issuer, JWKS, and public server
 URLs must use canonical public HTTPS hostnames. The listener rejects wildcard binds. Configuration is loaded at
 startup; changing `mutations_enabled` or either allowlist, including an emergency disable, requires a process
-restart.
+restart. A rejected configuration is logged with its stage, position, and key or field name, never with a value.
 
 The private cluster registry maps a logical alias to a NameServer endpoint, TLS policy, and optional environment
 variable names for credentials. Inline credentials are rejected. Registry values and resolved credentials have

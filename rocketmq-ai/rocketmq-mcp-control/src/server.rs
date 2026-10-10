@@ -45,6 +45,7 @@ use crate::model::ClusterName;
 use crate::model::ControlCapabilities;
 use crate::model::ControlOperation;
 use crate::model::Principal;
+use crate::telemetry::ControlSignals;
 use crate::tools::PATCH_BROKER_CONFIG_TOOL;
 use crate::tools::RESET_CONSUMER_OFFSET_TOOL;
 use crate::tools::SET_CONSUMER_REQUEST_MODE_TOOL;
@@ -59,6 +60,7 @@ pub struct ControlServer {
     capabilities: ControlCapabilities,
     guard: MutationGuard,
     configured_clusters: BTreeSet<ClusterName>,
+    signals: ControlSignals,
     #[cfg(feature = "write-tools")]
     tool_runtime: Option<Arc<crate::tool_runtime::ToolRuntime>>,
     #[cfg(test)]
@@ -78,6 +80,7 @@ impl ControlServer {
             capabilities,
             guard: MutationGuard::new(&policy),
             configured_clusters: BTreeSet::new(),
+            signals: ControlSignals::default(),
             #[cfg(feature = "write-tools")]
             tool_runtime: None,
             #[cfg(test)]
@@ -118,6 +121,7 @@ impl ControlServer {
             capabilities,
             guard,
             configured_clusters,
+            signals: ControlSignals::default(),
             tool_runtime,
             #[cfg(test)]
             response_delay: None,
@@ -145,6 +149,7 @@ impl ControlServer {
             capabilities,
             guard: MutationGuard::new(policy),
             configured_clusters,
+            signals: ControlSignals::default(),
             tool_runtime: Some(Arc::new(tool_runtime)),
             response_delay: None,
         }
@@ -163,6 +168,33 @@ impl ControlServer {
             self.guard
                 .allows_discovery(principal, operation, &self.configured_clusters)
         })
+    }
+
+    /// Binds the recorder for this server's logs and metrics, including its mutation runtime.
+    pub(crate) fn with_signals(mut self, signals: ControlSignals) -> Self {
+        #[cfg(feature = "write-tools")]
+        if let Some(runtime) = self.tool_runtime.take() {
+            self.tool_runtime = Some(Arc::new(
+                crate::tool_runtime::ToolRuntime::clone(&runtime).with_signals(signals.clone()),
+            ));
+        }
+        self.signals = signals;
+        self
+    }
+
+    pub(crate) fn signals(&self) -> &ControlSignals {
+        &self.signals
+    }
+
+    /// Records a call that ended before a supervised mutation started and renders its error.
+    fn rejected(
+        &self,
+        tool: &'static str,
+        started: std::time::Instant,
+        error: crate::error::ControlError,
+    ) -> CallToolResult {
+        self.signals.call_rejected(tool, error.code(), started.elapsed());
+        tool_error(error)
     }
 
     #[cfg(test)]
@@ -222,6 +254,7 @@ impl ServerHandler for ControlServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        let started = std::time::Instant::now();
         let principal = principal_from_context(&context)?;
         let raw = request
             .arguments
@@ -233,40 +266,48 @@ impl ServerHandler for ControlServer {
             .and_then(|object| object.get("cluster"))
             .and_then(serde_json::Value::as_str)
             .unwrap_or("");
-        let (operation_name, operation) = match request.name.as_ref() {
+        // `tool` labels logs and metrics, so it is a reviewed name and never the caller's text.
+        let (tool, operation_name, operation) = match request.name.as_ref() {
             UPSERT_TOPIC_TOOL => (
+                UPSERT_TOPIC_TOOL,
                 ControlOperation::TopicUpsert.as_str(),
                 Some(ControlOperation::TopicUpsert),
             ),
             UPSERT_CONSUMER_GROUP_TOOL => (
+                UPSERT_CONSUMER_GROUP_TOOL,
                 ControlOperation::ConsumerGroupUpsert.as_str(),
                 Some(ControlOperation::ConsumerGroupUpsert),
             ),
             RESET_CONSUMER_OFFSET_TOOL => (
+                RESET_CONSUMER_OFFSET_TOOL,
                 ControlOperation::ConsumerOffsetReset.as_str(),
                 Some(ControlOperation::ConsumerOffsetReset),
             ),
             PATCH_BROKER_CONFIG_TOOL => (
+                PATCH_BROKER_CONFIG_TOOL,
                 ControlOperation::BrokerConfigPatch.as_str(),
                 Some(ControlOperation::BrokerConfigPatch),
             ),
             SET_CONSUMER_REQUEST_MODE_TOOL => (
+                SET_CONSUMER_REQUEST_MODE_TOOL,
                 ControlOperation::ConsumerRequestMode.as_str(),
                 Some(ControlOperation::ConsumerRequestMode),
             ),
-            _ => ("unknown", None),
+            _ => ("unknown", "unknown", None),
         };
         let authorized = match self
             .guard
             .authorize_raw(&principal, operation_name, cluster, &self.catalog)
         {
             Ok(authorized) => authorized,
-            Err(error) => return Ok(tool_error(error).into()),
+            Err(error) => return Ok(self.rejected(tool, started, error).into()),
         };
         #[cfg(not(feature = "write-tools"))]
         {
             let _ = (authorized, operation, context);
-            return Ok(tool_error(crate::error::ControlError::operation_unavailable()).into());
+            Ok(self
+                .rejected(tool, started, crate::error::ControlError::operation_unavailable())
+                .into())
         }
         #[cfg(feature = "write-tools")]
         {
@@ -275,10 +316,14 @@ impl ServerHandler for ControlServer {
                 Some(ControlOperation::TopicUpsert) => {
                     let mut args: crate::tools::UpsertTopicArgs = match serde_json::from_value(raw) {
                         Ok(args) => args,
-                        Err(_) => return Ok(tool_error(crate::error::ControlError::invalid_argument()).into()),
+                        Err(_) => {
+                            return Ok(self
+                                .rejected(tool, started, crate::error::ControlError::invalid_argument())
+                                .into())
+                        }
                     };
                     if let Err(error) = args.validate(self.guard.default_dry_run(), dry_run_omitted) {
-                        return Ok(tool_error(error).into());
+                        return Ok(self.rejected(tool, started, error).into());
                     }
                     args.dry_run = args.effective_dry_run(self.guard.default_dry_run(), dry_run_omitted);
                     crate::tool_runtime::MutationToolRequest::Topic(args)
@@ -286,10 +331,14 @@ impl ServerHandler for ControlServer {
                 Some(ControlOperation::ConsumerGroupUpsert) => {
                     let mut args: crate::tools::UpsertConsumerGroupArgs = match serde_json::from_value(raw) {
                         Ok(args) => args,
-                        Err(_) => return Ok(tool_error(crate::error::ControlError::invalid_argument()).into()),
+                        Err(_) => {
+                            return Ok(self
+                                .rejected(tool, started, crate::error::ControlError::invalid_argument())
+                                .into())
+                        }
                     };
                     if let Err(error) = args.validate(self.guard.default_dry_run(), dry_run_omitted) {
-                        return Ok(tool_error(error).into());
+                        return Ok(self.rejected(tool, started, error).into());
                     }
                     args.dry_run = args.effective_dry_run(self.guard.default_dry_run(), dry_run_omitted);
                     crate::tool_runtime::MutationToolRequest::ConsumerGroup(args)
@@ -297,10 +346,14 @@ impl ServerHandler for ControlServer {
                 Some(ControlOperation::ConsumerOffsetReset) => {
                     let mut args: crate::tools::ResetConsumerOffsetArgs = match serde_json::from_value(raw) {
                         Ok(args) => args,
-                        Err(_) => return Ok(tool_error(crate::error::ControlError::invalid_argument()).into()),
+                        Err(_) => {
+                            return Ok(self
+                                .rejected(tool, started, crate::error::ControlError::invalid_argument())
+                                .into())
+                        }
                     };
                     if let Err(error) = args.validate(self.guard.default_dry_run(), dry_run_omitted) {
-                        return Ok(tool_error(error).into());
+                        return Ok(self.rejected(tool, started, error).into());
                     }
                     args.dry_run = args.effective_dry_run(self.guard.default_dry_run(), dry_run_omitted);
                     crate::tool_runtime::MutationToolRequest::ConsumerOffset(args)
@@ -308,10 +361,14 @@ impl ServerHandler for ControlServer {
                 Some(ControlOperation::BrokerConfigPatch) => {
                     let mut args: crate::tools::PatchBrokerConfigArgs = match serde_json::from_value(raw) {
                         Ok(args) => args,
-                        Err(_) => return Ok(tool_error(crate::error::ControlError::invalid_argument()).into()),
+                        Err(_) => {
+                            return Ok(self
+                                .rejected(tool, started, crate::error::ControlError::invalid_argument())
+                                .into())
+                        }
                     };
                     if let Err(error) = args.validate(self.guard.default_dry_run(), dry_run_omitted) {
-                        return Ok(tool_error(error).into());
+                        return Ok(self.rejected(tool, started, error).into());
                     }
                     args.dry_run = args.effective_dry_run(self.guard.default_dry_run(), dry_run_omitted);
                     crate::tool_runtime::MutationToolRequest::BrokerConfig(args)
@@ -319,19 +376,31 @@ impl ServerHandler for ControlServer {
                 Some(ControlOperation::ConsumerRequestMode) => {
                     let mut args: crate::tools::SetConsumerRequestModeArgs = match serde_json::from_value(raw) {
                         Ok(args) => args,
-                        Err(_) => return Ok(tool_error(crate::error::ControlError::invalid_argument()).into()),
+                        Err(_) => {
+                            return Ok(self
+                                .rejected(tool, started, crate::error::ControlError::invalid_argument())
+                                .into())
+                        }
                     };
                     if let Err(error) = args.validate(self.guard.default_dry_run(), dry_run_omitted) {
-                        return Ok(tool_error(error).into());
+                        return Ok(self.rejected(tool, started, error).into());
                     }
                     args.dry_run = args.effective_dry_run(self.guard.default_dry_run(), dry_run_omitted);
                     crate::tool_runtime::MutationToolRequest::ConsumerRequestMode(args)
                 }
-                _ => return Ok(tool_error(crate::error::ControlError::operation_not_allowed()).into()),
+                _ => {
+                    return Ok(self
+                        .rejected(tool, started, crate::error::ControlError::operation_not_allowed())
+                        .into())
+                }
             };
             let Some(runtime) = &self.tool_runtime else {
-                return Ok(tool_error(crate::error::ControlError::operation_unavailable()).into());
+                return Ok(self
+                    .rejected(tool, started, crate::error::ControlError::operation_unavailable())
+                    .into());
             };
+            // From here the runtime records the call: a supervised mutation is logged when its
+            // terminal audit record is written, even if this request is dropped first.
             let result = runtime
                 .execute(&principal, &authorized, mutation, context.ct.clone())
                 .await;

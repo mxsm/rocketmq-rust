@@ -153,6 +153,8 @@ fn error_status(error: &ToolFailure) -> EvidenceStatus {
         ToolFailure::Rejected(ToolRejection::TimedOut { .. }) => EvidenceStatus::Timeout,
         ToolFailure::Rejected(ToolRejection::PermissionDenied) => EvidenceStatus::Unauthorized,
         ToolFailure::Rejected(ToolRejection::InvalidArguments { .. }) => EvidenceStatus::Invalid,
+        // The lookup completed and established that the target does not exist.
+        ToolFailure::Rejected(ToolRejection::NotFound { .. }) => EvidenceStatus::Missing,
         _ => EvidenceStatus::Unavailable,
     }
 }

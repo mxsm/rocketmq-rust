@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::tools::executor::NotFoundEntity;
 use crate::tools::executor::ToolExecutionError;
 use crate::tools::executor::ToolRejection;
 use rmcp::model::ReadResourceResult;
@@ -121,7 +122,7 @@ where
                 })
                 .await?;
             if output.data.brokers.is_empty() {
-                return Err(ToolFailure::Rejected(ToolRejection::InvalidArguments { _source: None }));
+                return Err(ToolFailure::not_found(NotFoundEntity::Broker));
             }
             Ok(live_payload(uri, "broker", output, |data| json!(data)))
         }
@@ -234,7 +235,8 @@ fn resource_error(error: ToolFailure) -> ErrorData {
             "RocketMQ resource is unavailable",
             Some(json!({ "code": code, "retryable": false })),
         ),
-        ToolFailure::Rejected(ToolRejection::InvalidArguments { .. }) => {
+        ToolFailure::Rejected(ToolRejection::InvalidArguments { .. })
+        | ToolFailure::Rejected(ToolRejection::NotFound { .. }) => {
             ErrorData::resource_not_found("resource not found", None)
         }
         ToolFailure::Rejected(ToolRejection::TimedOut { timeout_ms }) => ErrorData::internal_error(
@@ -710,6 +712,23 @@ mod tests {
         let wire = format!("{} {}", permission.message, permission.data.as_ref().unwrap());
         assert!(!wire.contains("token=secret"));
         assert!(!wire.contains("127.0.0.1"));
+    }
+
+    #[test]
+    fn missing_target_is_a_resource_not_found_error_instead_of_a_source_failure() {
+        for entity in [
+            NotFoundEntity::Topic,
+            NotFoundEntity::ConsumerGroup,
+            NotFoundEntity::Broker,
+        ] {
+            let error = resource_error(ToolFailure::not_found(entity));
+            assert_eq!(
+                error.code,
+                rmcp::model::ErrorCode::RESOURCE_NOT_FOUND,
+                "entity={entity:?}"
+            );
+            assert!(error.data.is_none());
+        }
     }
 
     fn resource_contents_uri(result: &ReadResourceResult) -> &str {

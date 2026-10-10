@@ -43,7 +43,7 @@ where
             args.controller_names,
         )
         .map_err(|_| ToolFailure::Rejected(ToolRejection::InvalidArguments { _source: None }))?;
-        let cluster = self.resolve_required_cluster(&request.cluster)?;
+        let cluster = self.resolve_cluster(&request.cluster)?;
         let key = self.cache_key(
             "ha_status",
             &cluster.name,
@@ -85,7 +85,7 @@ where
     ) -> Result<QueryResult<GetControllerMetadataOutput>, ToolFailure> {
         let request = QueryControllerMetadataRequest::try_new(args.cluster, args.controller_names)
             .map_err(|_| ToolFailure::Rejected(ToolRejection::InvalidArguments { _source: None }))?;
-        let cluster = self.resolve_required_cluster(&request.cluster)?;
+        let cluster = self.resolve_cluster(&request.cluster)?;
         let key = self.cache_key(
             "controller_metadata",
             &cluster.name,
@@ -114,7 +114,7 @@ where
     ) -> Result<QueryResult<GetNameserverConfigSummaryOutput>, ToolFailure> {
         let request = QueryNameserverConfigSummaryRequest::try_new(args.cluster)
             .map_err(|_| ToolFailure::Rejected(ToolRejection::InvalidArguments { _source: None }))?;
-        let cluster = self.resolve_required_cluster(&request.cluster)?;
+        let cluster = self.resolve_cluster(&request.cluster)?;
         let key = self.cache_key("nameserver_config_summary", &cluster.name, "");
         let ttl = Duration::from_millis(self.config.cache.broker_metrics_ttl_ms);
         self.cache

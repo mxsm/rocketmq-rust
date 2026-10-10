@@ -1,3 +1,11 @@
+# Rules from every role of a principal, including included roles, are combined.
+# The more specific rule wins and a denial wins between equally specific rules:
+#   1. a Tool named in deny_tools is denied;
+#   2. otherwise a Tool named in allow_tools is allowed;
+#   3. otherwise deny_tools = ["*"] denies it;
+#   4. otherwise allow_tools = ["*"] allows it.
+# Listing Tools by name next to deny_tools = ["*"] grants exactly the listed Tools.
+
 [roles.read_only]
 allowed_clusters = ["*"]
 allow_tools = [
