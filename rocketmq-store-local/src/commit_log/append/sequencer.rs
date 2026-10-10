@@ -95,11 +95,11 @@ impl<T> AppendSequencerSender<T> {
     /// Attempts to admit one request without waiting for capacity.
     ///
     /// Returns whether the request was accepted or rejected with ownership preserved.
-    pub fn try_submit(&self, request: T, retained_bytes: usize) -> AppendAdmissionOutcome<T> {
+    pub fn try_submit(&self, request: T, retained_bytes: usize) -> AppendAdmissionResult<T> {
         match self.queue.try_push_data(request, retained_bytes) {
             QueueEnqueueStatus::Enqueued
             | QueueEnqueueStatus::Coalesced { .. }
-            | QueueEnqueueStatus::DroppedStale { .. } => AppendAdmissionOutcome::Accepted,
+            | QueueEnqueueStatus::DroppedStale { .. } => AppendAdmissionResult::Accepted,
             QueueEnqueueStatus::Rejected {
                 item: request,
                 rejection,
@@ -112,7 +112,7 @@ impl<T> AppendSequencerSender<T> {
                         AppendAdmissionRejection::Closed
                     }
                 };
-                AppendAdmissionOutcome::Rejected { request, reason }
+                AppendAdmissionResult::Rejected { request, reason }
             }
         }
     }
@@ -191,29 +191,29 @@ impl<T> AppendSequencerReceiver<T> {
                 break;
             }
 
-            enum WaitOutcome<T> {
+            enum MicroBatchWaitEvent<T> {
                 Item(Option<BudgetedItem<T>>),
                 Cancelled,
                 Deadline,
             }
-            let outcome = tokio::select! {
+            let wait_event = tokio::select! {
                 biased;
                 item = tokio::time::timeout_at(deadline, self.queue.recv_budgeted()) => {
                     match item {
-                        Ok(item) => WaitOutcome::Item(item),
-                        Err(_) => WaitOutcome::Deadline,
+                        Ok(item) => MicroBatchWaitEvent::Item(item),
+                        Err(_) => MicroBatchWaitEvent::Deadline,
                     }
                 },
-                () = cancellation.cancelled() => WaitOutcome::Cancelled,
+                () = cancellation.cancelled() => MicroBatchWaitEvent::Cancelled,
             };
-            match outcome {
-                WaitOutcome::Item(Some(next)) => {
+            match wait_event {
+                MicroBatchWaitEvent::Item(Some(next)) => {
                     if !self.try_include(next, &mut items, &mut retained_bytes) {
                         break;
                     }
                 }
-                WaitOutcome::Item(None) | WaitOutcome::Deadline => break,
-                WaitOutcome::Cancelled => {
+                MicroBatchWaitEvent::Item(None) | MicroBatchWaitEvent::Deadline => break,
+                MicroBatchWaitEvent::Cancelled => {
                     self.queue.close();
                 }
             }
@@ -252,7 +252,7 @@ pub enum AppendAdmissionRejection {
 }
 
 /// Result of attempting append admission without waiting for capacity.
-pub enum AppendAdmissionOutcome<T> {
+pub enum AppendAdmissionResult<T> {
     /// The sequencer accepted ownership of the request.
     Accepted,
     /// The caller retains the rejected request and receives the semantic reason.
@@ -285,9 +285,9 @@ mod tests {
     async fn drains_fifo_by_item_and_byte_limits() {
         let policy = MicroBatchPolicy::try_new(3, 5, Duration::ZERO).expect("policy");
         let (sender, mut receiver) = AppendSequencer::bounded(config(policy)).expect("sequencer");
-        assert!(matches!(sender.try_submit(1, 2), AppendAdmissionOutcome::Accepted));
-        assert!(matches!(sender.try_submit(2, 2), AppendAdmissionOutcome::Accepted));
-        assert!(matches!(sender.try_submit(3, 2), AppendAdmissionOutcome::Accepted));
+        assert!(matches!(sender.try_submit(1, 2), AppendAdmissionResult::Accepted));
+        assert!(matches!(sender.try_submit(2, 2), AppendAdmissionResult::Accepted));
+        assert!(matches!(sender.try_submit(3, 2), AppendAdmissionResult::Accepted));
         let cancellation = CancellationToken::new();
 
         let first = receiver.next_batch(&cancellation).await.expect("first batch");
@@ -311,8 +311,8 @@ mod tests {
     async fn disabled_policy_preserves_single_request_batches() {
         let policy = MicroBatchPolicy::disabled(1024).expect("policy");
         let (sender, mut receiver) = AppendSequencer::bounded(config(policy)).expect("sequencer");
-        assert!(matches!(sender.try_submit(1, 1), AppendAdmissionOutcome::Accepted));
-        assert!(matches!(sender.try_submit(2, 1), AppendAdmissionOutcome::Accepted));
+        assert!(matches!(sender.try_submit(1, 1), AppendAdmissionResult::Accepted));
+        assert!(matches!(sender.try_submit(2, 1), AppendAdmissionResult::Accepted));
         let cancellation = CancellationToken::new();
 
         assert_eq!(receiver.next_batch(&cancellation).await.expect("first").len(), 1);
@@ -325,9 +325,9 @@ mod tests {
         let (sender, mut receiver) = AppendSequencer::bounded(config(policy)).expect("sequencer");
         assert!(matches!(
             sender.try_submit("oversized", 8),
-            AppendAdmissionOutcome::Accepted
+            AppendAdmissionResult::Accepted
         ));
-        assert!(matches!(sender.try_submit("next", 1), AppendAdmissionOutcome::Accepted));
+        assert!(matches!(sender.try_submit("next", 1), AppendAdmissionResult::Accepted));
         let cancellation = CancellationToken::new();
 
         let first = receiver.next_batch(&cancellation).await.expect("first");
@@ -348,10 +348,7 @@ mod tests {
     async fn partial_batch_is_released_at_its_configured_deadline() {
         let policy = MicroBatchPolicy::try_new(4, 1024, Duration::from_millis(10)).expect("policy");
         let (sender, mut receiver) = AppendSequencer::bounded(config(policy)).expect("sequencer");
-        assert!(matches!(
-            sender.try_submit("first", 1),
-            AppendAdmissionOutcome::Accepted
-        ));
+        assert!(matches!(sender.try_submit("first", 1), AppendAdmissionResult::Accepted));
         let cancellation = CancellationToken::new();
         let mut next_batch = Box::pin(receiver.next_batch(&cancellation));
 
@@ -372,8 +369,8 @@ mod tests {
     async fn cancellation_closes_admission_but_drains_existing_fifo() {
         let policy = MicroBatchPolicy::try_new(8, 1024, Duration::from_millis(10)).expect("policy");
         let (sender, mut receiver) = AppendSequencer::bounded(config(policy)).expect("sequencer");
-        assert!(matches!(sender.try_submit(1, 1), AppendAdmissionOutcome::Accepted));
-        assert!(matches!(sender.try_submit(2, 1), AppendAdmissionOutcome::Accepted));
+        assert!(matches!(sender.try_submit(1, 1), AppendAdmissionResult::Accepted));
+        assert!(matches!(sender.try_submit(2, 1), AppendAdmissionResult::Accepted));
         let cancellation = CancellationToken::new();
         cancellation.cancel();
 
@@ -387,7 +384,7 @@ mod tests {
         assert_eq!(items, vec![1, 2]);
         assert!(matches!(
             sender.try_submit(3, 1),
-            AppendAdmissionOutcome::Rejected {
+            AppendAdmissionResult::Rejected {
                 request: 3,
                 reason: AppendAdmissionRejection::Closed,
             }
@@ -404,14 +401,11 @@ mod tests {
             micro_batch: policy,
         };
         let (sender, _receiver) = AppendSequencer::bounded(config).expect("sequencer");
-        assert!(matches!(
-            sender.try_submit("first", 4),
-            AppendAdmissionOutcome::Accepted
-        ));
+        assert!(matches!(sender.try_submit("first", 4), AppendAdmissionResult::Accepted));
 
         assert!(matches!(
             sender.try_submit("second", 1),
-            AppendAdmissionOutcome::Rejected {
+            AppendAdmissionResult::Rejected {
                 request: "second",
                 reason: AppendAdmissionRejection::Saturated,
             }
@@ -422,13 +416,10 @@ mod tests {
     fn terminal_consumer_failure_releases_pending_queue_budget() {
         let policy = MicroBatchPolicy::disabled(1024).expect("policy");
         let (sender, _receiver) = AppendSequencer::bounded(config(policy)).expect("sequencer");
-        assert!(matches!(
-            sender.try_submit("first", 4),
-            AppendAdmissionOutcome::Accepted
-        ));
+        assert!(matches!(sender.try_submit("first", 4), AppendAdmissionResult::Accepted));
         assert!(matches!(
             sender.try_submit("second", 8),
-            AppendAdmissionOutcome::Accepted
+            AppendAdmissionResult::Accepted
         ));
 
         assert_eq!(sender.close_and_discard_pending(), 2);

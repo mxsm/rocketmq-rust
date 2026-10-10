@@ -27,8 +27,8 @@ use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_store_local::commit_log::append::prepared_payload::PreparedPayload;
-use rocketmq_store_local::commit_log::append::sequencer::AppendAdmissionOutcome;
 use rocketmq_store_local::commit_log::append::sequencer::AppendAdmissionRejection;
+use rocketmq_store_local::commit_log::append::sequencer::AppendAdmissionResult;
 use rocketmq_store_local::commit_log::append::sequencer::AppendSequencer;
 use rocketmq_store_local::commit_log::append::sequencer::AppendSequencerConfig;
 use rocketmq_store_local::commit_log::append::sequencer::AppendSequencerReceiver;
@@ -106,7 +106,7 @@ impl CommitLogAppendPort {
             completion,
         };
         let retained_bytes = request.retained_bytes();
-        if let AppendAdmissionOutcome::Rejected { request, reason } = self.sender.try_submit(request, retained_bytes) {
+        if let AppendAdmissionResult::Rejected { request, reason } = self.sender.try_submit(request, retained_bytes) {
             request.reject(PutMessageResult::rejected_before_append(Self::admission_status(reason)));
         }
         response.await.unwrap_or_else(|response_error| {
@@ -132,7 +132,7 @@ impl CommitLogAppendPort {
             completion,
         };
         let retained_bytes = request.retained_bytes();
-        if let AppendAdmissionOutcome::Rejected { request, reason } = self.sender.try_submit(request, retained_bytes) {
+        if let AppendAdmissionResult::Rejected { request, reason } = self.sender.try_submit(request, retained_bytes) {
             request.reject(PutMessageResult::rejected_before_append(Self::admission_status(reason)));
         }
         response.await.unwrap_or_else(|response_error| {
