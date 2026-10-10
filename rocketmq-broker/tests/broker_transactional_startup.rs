@@ -55,9 +55,17 @@ fn broker_configs(root: &std::path::Path, normal_port: u16) -> (BrokerConfig, Me
     broker_config.broker_server_config.listen_port = normal_port as u32;
     let message_store_config = MessageStoreConfig {
         store_path_root_dir: root.into(),
+        // The default HA port (10912) is shared with other test binaries that start a store, which
+        // can run at the same time under cargo-nextest.
+        ha_listen_port: unused_local_port() as usize,
         ..MessageStoreConfig::default()
     };
     (broker_config, message_store_config)
+}
+
+fn unused_local_port() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("reserve HA listener");
+    listener.local_addr().expect("reserved HA listener address").port()
 }
 
 #[tokio::test]

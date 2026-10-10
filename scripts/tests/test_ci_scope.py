@@ -86,6 +86,14 @@ class CiScopeTests(unittest.TestCase):
                 self.assertTrue(scope["rust"] and scope["observability"] and scope["rocksdb"])
                 self.assertTrue(scope["full_features"])
 
+    def test_nextest_config_runs_rust_tests_and_pilot_without_feature_matrices(self) -> None:
+        enabled = {name for name, value in self.scope(".config/nextest.toml").items() if value}
+        self.assertEqual({"rust", "nextest"}, enabled)
+
+    def test_nextest_pilot_runs_for_root_workflow_but_not_ordinary_rust_changes(self) -> None:
+        self.assertTrue(self.scope(".github/workflows/rocketmq-rust-ci.yaml")["nextest"])
+        self.assertFalse(self.scope("rocketmq-broker/src/broker_runtime.rs")["nextest"])
+
     def test_ordinary_source_changes_keep_default_feature_checks(self) -> None:
         self.assertFalse(self.scope("rocketmq-client/src/consumer.rs")["full_features"])
 
