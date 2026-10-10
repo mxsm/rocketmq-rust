@@ -42,7 +42,7 @@ use crate::base::pending_request_table::PendingRegistrationOutcome;
 use crate::base::pending_request_table::PendingRequestCompletion;
 use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestTable;
-use crate::connection::CommandSendOutcome;
+use crate::connection::CommandWriteResult;
 use crate::deadline::RequestDeadline;
 use crate::error::TransportError;
 use crate::error_helpers::connection_failed_without_source;
@@ -207,14 +207,14 @@ enum ServerCommandDisposition {
     },
 }
 
-fn server_command_disposition(outcome: CommandSendOutcome) -> ServerCommandDisposition {
+fn server_command_disposition(outcome: CommandWriteResult) -> ServerCommandDisposition {
     match outcome {
-        CommandSendOutcome::Written => ServerCommandDisposition::Written,
-        CommandSendOutcome::QueueSaturated => ServerCommandDisposition::QueueSaturated,
-        CommandSendOutcome::DeadlineExpired => ServerCommandDisposition::DeadlineExpired,
-        CommandSendOutcome::SessionClosed | CommandSendOutcome::Cancelled => ServerCommandDisposition::SessionClosed,
-        CommandSendOutcome::EncodingFailed(source) => ServerCommandDisposition::EncodingFailed(source),
-        CommandSendOutcome::OperationalFailure { progress, error } => {
+        CommandWriteResult::Written => ServerCommandDisposition::Written,
+        CommandWriteResult::QueueSaturated => ServerCommandDisposition::QueueSaturated,
+        CommandWriteResult::DeadlineExpired => ServerCommandDisposition::DeadlineExpired,
+        CommandWriteResult::SessionClosed | CommandWriteResult::Cancelled => ServerCommandDisposition::SessionClosed,
+        CommandWriteResult::EncodingFailed(source) => ServerCommandDisposition::EncodingFailed(source),
+        CommandWriteResult::OperationalFailure { progress, error } => {
             ServerCommandDisposition::OperationalFailure { progress, error }
         }
     }
@@ -1007,7 +1007,7 @@ mod tests {
 
     #[test]
     fn post_acquire_expected_close_outcomes_remain_normal_session_closure() {
-        for outcome in [CommandSendOutcome::SessionClosed, CommandSendOutcome::Cancelled] {
+        for outcome in [CommandWriteResult::SessionClosed, CommandWriteResult::Cancelled] {
             assert!(matches!(
                 server_command_disposition(outcome),
                 ServerCommandDisposition::SessionClosed

@@ -46,7 +46,7 @@ use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::base::pending_request_table::PendingResponseOutcome;
 use crate::codec::remoting_command_codec::FrameLimits;
-use crate::connection::CommandSendOutcome;
+use crate::connection::CommandWriteResult;
 use crate::connection::Connection;
 use crate::connection::ConnectionStateHandle;
 use crate::deadline::RequestDeadline;
@@ -759,8 +759,8 @@ impl<PR> TransportSession<PR> {
             .send_command_outcome_with_deadline(request, deadline, target)
             .await
         {
-            CommandSendOutcome::Written => {}
-            CommandSendOutcome::DeadlineExpired => {
+            CommandWriteResult::Written => {}
+            CommandWriteResult::DeadlineExpired => {
                 return Ok(OutboundRequestOutcome::Rejected(
                     OutboundRequestRejection::deadline_expired(
                         OutboundRequestStage::BeforeWrite,
@@ -769,30 +769,30 @@ impl<PR> TransportSession<PR> {
                     ),
                 ));
             }
-            CommandSendOutcome::SessionClosed => {
+            CommandWriteResult::SessionClosed => {
                 return Ok(OutboundRequestOutcome::Rejected(
                     OutboundRequestRejection::session_closed(OutboundRequestStage::BeforeWrite, REMOTE_ADDR_PRESENT),
                 ));
             }
-            CommandSendOutcome::Cancelled => {
+            CommandWriteResult::Cancelled => {
                 return Ok(OutboundRequestOutcome::Rejected(OutboundRequestRejection::cancelled(
                     OutboundRequestStage::BeforeWrite,
                     REMOTE_ADDR_PRESENT,
                 )));
             }
-            CommandSendOutcome::QueueSaturated => {
+            CommandWriteResult::QueueSaturated => {
                 return Ok(OutboundRequestOutcome::Rejected(
                     OutboundRequestRejection::queue_saturated(OutboundRequestStage::BeforeWrite, REMOTE_ADDR_PRESENT),
                 ));
             }
-            CommandSendOutcome::EncodingFailed(error) => {
+            CommandWriteResult::EncodingFailed(error) => {
                 return Err(TransportError::request(
                     RequestOperation::Write,
                     OutboundRequestStage::BeforeWrite,
                     error,
                 ));
             }
-            CommandSendOutcome::OperationalFailure { progress, error } => {
+            CommandWriteResult::OperationalFailure { progress, error } => {
                 let stage = match progress {
                     WriteProgress::NotStarted => OutboundRequestStage::BeforeWrite,
                     WriteProgress::PossiblyPartial => OutboundRequestStage::Writing,
