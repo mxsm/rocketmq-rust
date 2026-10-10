@@ -47,8 +47,8 @@ use rocketmq_transport::api::DeferredExpiryOutcome;
 use rocketmq_transport::api::DeferredId;
 use rocketmq_transport::api::DeferredParts;
 use rocketmq_transport::api::DeferredRegistration;
+use rocketmq_transport::api::DeferredRegistrationResult;
 use rocketmq_transport::api::DeferredRegistry;
-use rocketmq_transport::api::DeferredRegistryOutcome;
 use rocketmq_transport::api::DeferredRegistryRecovery;
 use rocketmq_transport::api::DeferredRegistryShutdownOutcome;
 use rocketmq_transport::api::DeferredResponderOutcome;
@@ -593,33 +593,33 @@ impl PopDeferredService {
             let index_lease = reservation.publish(id, deadline, Arc::clone(&criteria));
             Ok::<_, Infallible>(ResumePop::new(request, criteria, deadline, index_lease))
         }) {
-            DeferredRegistryOutcome::Registered(registration) => {
+            DeferredRegistrationResult::Registered(registration) => {
                 Ok(PopDeferredRegistrationStatus::Registered(Box::new(registration)))
             }
-            DeferredRegistryOutcome::DuplicateRequest(recovery) => {
+            DeferredRegistrationResult::DuplicateRequest(recovery) => {
                 release_deferred_registry_recovery(recovery);
                 Ok(PopDeferredRegistrationStatus::Rejected(Box::new(
                     PopDeferredRegisterRejection::RegistryRejected,
                 )))
             }
-            DeferredRegistryOutcome::IdentityExhausted(recovery) => {
+            DeferredRegistrationResult::IdentityExhausted(recovery) => {
                 release_deferred_registry_recovery(recovery);
                 Err(PopDeferredRegisterError::RegistryIdentityExhausted)
             }
-            DeferredRegistryOutcome::ParentCancelled
-            | DeferredRegistryOutcome::SessionClosed
-            | DeferredRegistryOutcome::DeadlineExpired => Ok(PopDeferredRegistrationStatus::Rejected(Box::new(
+            DeferredRegistrationResult::ParentCancelled
+            | DeferredRegistrationResult::SessionClosed
+            | DeferredRegistrationResult::DeadlineExpired => Ok(PopDeferredRegistrationStatus::Rejected(Box::new(
                 PopDeferredRegisterRejection::RegistryRejected,
             ))),
-            DeferredRegistryOutcome::BuilderRejected { error, parts } => {
+            DeferredRegistrationResult::BuilderRejected { error, parts } => {
                 drop(parts);
                 match error {}
             }
-            DeferredRegistryOutcome::ContractViolation { violation, recovery } => {
+            DeferredRegistrationResult::ContractViolation { violation, recovery } => {
                 release_deferred_registry_recovery(recovery);
                 Err(PopDeferredRegisterError::RegistryContract(violation))
             }
-            DeferredRegistryOutcome::OperationalFailure { error, recovery } => {
+            DeferredRegistrationResult::OperationalFailure { error, recovery } => {
                 release_deferred_registry_recovery(recovery);
                 Err(PopDeferredRegisterError::RegistryOperational(error))
             }

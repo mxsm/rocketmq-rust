@@ -907,15 +907,15 @@ mod tests {
             44,
             crate::dispatch::DeferredParts::new(responder, permit),
         )) {
-            crate::dispatch::DeferredRegistryOutcome::Registered(registration) => registration,
-            crate::dispatch::DeferredRegistryOutcome::DuplicateRequest(_)
-            | crate::dispatch::DeferredRegistryOutcome::IdentityExhausted(_)
-            | crate::dispatch::DeferredRegistryOutcome::ParentCancelled
-            | crate::dispatch::DeferredRegistryOutcome::SessionClosed
-            | crate::dispatch::DeferredRegistryOutcome::DeadlineExpired
-            | crate::dispatch::DeferredRegistryOutcome::ContractViolation { .. }
-            | crate::dispatch::DeferredRegistryOutcome::OperationalFailure { .. }
-            | crate::dispatch::DeferredRegistryOutcome::BuilderRejected { .. } => {
+            crate::dispatch::DeferredRegistrationResult::Registered(registration) => registration,
+            crate::dispatch::DeferredRegistrationResult::DuplicateRequest(_)
+            | crate::dispatch::DeferredRegistrationResult::IdentityExhausted(_)
+            | crate::dispatch::DeferredRegistrationResult::ParentCancelled
+            | crate::dispatch::DeferredRegistrationResult::SessionClosed
+            | crate::dispatch::DeferredRegistrationResult::DeadlineExpired
+            | crate::dispatch::DeferredRegistrationResult::ContractViolation { .. }
+            | crate::dispatch::DeferredRegistrationResult::OperationalFailure { .. }
+            | crate::dispatch::DeferredRegistrationResult::BuilderRejected { .. } => {
                 panic!("cleanup panic registry enrollment must succeed")
             }
         };

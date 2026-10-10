@@ -53,7 +53,7 @@ pub use claim::DeferredResumeRetainedSize;
 pub use claim::DeferredResumeSubmitOutcome;
 pub use claim::DeferredWakeReason;
 use claim::TicketResolution;
-pub use errors::DeferredRegistryOutcome;
+pub use errors::DeferredRegistrationResult;
 pub use errors::DeferredRegistryRecovery;
 pub(in crate::dispatch) use errors::RegistryFailure;
 pub use expiry::DeferredExpiryBatch;
@@ -459,10 +459,10 @@ where
     /// returned as source-free outcomes. Deterministic retained-size violations
     /// and operational registry failures retain the original request in their
     /// typed carrier branches.
-    pub fn register(&self, mut request: DeferredRequest<R>) -> DeferredRegistryOutcome<R> {
+    pub fn register(&self, mut request: DeferredRequest<R>) -> DeferredRegistrationResult<R> {
         let request_id = request.request_id();
         if let Err(violation) = validate_retained_floor::<R>(request.retained_bytes()) {
-            return DeferredRegistryOutcome::ContractViolation {
+            return DeferredRegistrationResult::ContractViolation {
                 violation,
                 recovery: DeferredRegistryRecovery::Request(request),
             };
@@ -506,7 +506,7 @@ where
                 DeferredRegistryRecovery::Request(*request),
             );
         }
-        DeferredRegistryOutcome::Registered(DeferredRegistration::new(
+        DeferredRegistrationResult::Registered(DeferredRegistration::new(
             id,
             request_id,
             Box::new(RegistrationOwnerImpl {
@@ -535,14 +535,14 @@ where
     /// deferred parts. A builder rejection returns its error with the same
     /// parts. If lifecycle cancellation wins after the builder returns, the
     /// builder result and deferred parts are consumed and released.
-    pub fn register_with<E, F>(&self, mut parts: DeferredParts, builder: F) -> DeferredRegistryOutcome<R, E, F>
+    pub fn register_with<E, F>(&self, mut parts: DeferredParts, builder: F) -> DeferredRegistrationResult<R, E, F>
     where
         E: Error + Send + Sync + 'static,
         F: FnOnce(DeferredId) -> Result<R, E>,
     {
         let request_id = parts.request_id();
         if let Err(violation) = validate_retained_floor::<R>(parts.retained_bytes()) {
-            return DeferredRegistryOutcome::ContractViolation {
+            return DeferredRegistrationResult::ContractViolation {
                 violation,
                 recovery: DeferredRegistryRecovery::Builder { builder, parts },
             };
@@ -626,10 +626,10 @@ where
                     return registry_lifecycle_outcome(kind);
                 }
                 let parts = transaction.rollback();
-                return DeferredRegistryOutcome::BuilderRejected { error: source, parts };
+                return DeferredRegistrationResult::BuilderRejected { error: source, parts };
             }
         }
-        DeferredRegistryOutcome::Registered(DeferredRegistration::new(
+        DeferredRegistrationResult::Registered(DeferredRegistration::new(
             id,
             request_id,
             Box::new(RegistrationOwnerImpl {
@@ -948,11 +948,11 @@ where
     }
 }
 
-fn registry_lifecycle_outcome<R, E, F>(kind: RegistryFailure) -> DeferredRegistryOutcome<R, E, F> {
+fn registry_lifecycle_outcome<R, E, F>(kind: RegistryFailure) -> DeferredRegistrationResult<R, E, F> {
     match kind {
-        RegistryFailure::ParentCancelled => DeferredRegistryOutcome::ParentCancelled,
-        RegistryFailure::SessionClosed => DeferredRegistryOutcome::SessionClosed,
-        RegistryFailure::DeadlineExpired => DeferredRegistryOutcome::DeadlineExpired,
+        RegistryFailure::ParentCancelled => DeferredRegistrationResult::ParentCancelled,
+        RegistryFailure::SessionClosed => DeferredRegistrationResult::SessionClosed,
+        RegistryFailure::DeadlineExpired => DeferredRegistrationResult::DeadlineExpired,
         _ => registry_failure_outcome(kind, DeferredRegistryRecovery::None),
     }
 }
@@ -960,12 +960,12 @@ fn registry_lifecycle_outcome<R, E, F>(kind: RegistryFailure) -> DeferredRegistr
 fn registry_failure_outcome<R, E, F>(
     kind: RegistryFailure,
     recovery: DeferredRegistryRecovery<R, F>,
-) -> DeferredRegistryOutcome<R, E, F> {
+) -> DeferredRegistrationResult<R, E, F> {
     if kind == RegistryFailure::DuplicateRequest {
-        return DeferredRegistryOutcome::DuplicateRequest(recovery);
+        return DeferredRegistrationResult::DuplicateRequest(recovery);
     }
     if kind == RegistryFailure::IdentityExhausted {
-        return DeferredRegistryOutcome::IdentityExhausted(recovery);
+        return DeferredRegistrationResult::IdentityExhausted(recovery);
     }
     let source = match kind {
         RegistryFailure::RegistryInvariant => RegistryOperationalFailure::Invariant,
@@ -976,7 +976,7 @@ fn registry_failure_outcome<R, E, F>(
         | RegistryFailure::DeadlineExpired
         | RegistryFailure::CleanupInstallerRejected => RegistryOperationalFailure::Invariant,
     };
-    DeferredRegistryOutcome::OperationalFailure {
+    DeferredRegistrationResult::OperationalFailure {
         error: crate::error::TransportError::dispatch(source),
         recovery,
     }

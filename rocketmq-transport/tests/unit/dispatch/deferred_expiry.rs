@@ -31,8 +31,8 @@ use crate::dispatch::DeferredAdmission;
 use crate::dispatch::DeferredClaimOutcome;
 use crate::dispatch::DeferredExpiryOutcome;
 use crate::dispatch::DeferredParts;
+use crate::dispatch::DeferredRegistrationResult;
 use crate::dispatch::DeferredRegistry;
-use crate::dispatch::DeferredRegistryOutcome;
 use crate::dispatch::DeferredRequest;
 use crate::dispatch::DeferredRetainedSizeParts;
 use crate::dispatch::DeferredTerminalReason;
@@ -233,29 +233,29 @@ async fn owner_only_deadline_rejects_claim_without_protocol_expiry_or_response()
     let mut fixture = PartsFixture::new(9_822, Some(RequestDeadline::after(Duration::from_secs(5))));
     let registry = DeferredRegistry::<()>::new();
     let registration = match registry.register(DeferredRequest::new((), fixture.take_parts())) {
-        DeferredRegistryOutcome::Registered(registration) => registration,
-        DeferredRegistryOutcome::DuplicateRequest(_) => {
+        DeferredRegistrationResult::Registered(registration) => registration,
+        DeferredRegistrationResult::DuplicateRequest(_) => {
             panic!("owner-only deferred registration was classified as a duplicate")
         }
-        DeferredRegistryOutcome::IdentityExhausted(_) => {
+        DeferredRegistrationResult::IdentityExhausted(_) => {
             panic!("owner-only deferred registration exhausted the identity space")
         }
-        DeferredRegistryOutcome::ParentCancelled => {
+        DeferredRegistrationResult::ParentCancelled => {
             panic!("owner-only deferred registration was unexpectedly parent-cancelled")
         }
-        DeferredRegistryOutcome::SessionClosed => {
+        DeferredRegistrationResult::SessionClosed => {
             panic!("owner-only deferred registration was unexpectedly session-closed")
         }
-        DeferredRegistryOutcome::DeadlineExpired => {
+        DeferredRegistrationResult::DeadlineExpired => {
             panic!("owner-only deferred registration was unexpectedly deadline-expired")
         }
-        DeferredRegistryOutcome::BuilderRejected { .. } => {
+        DeferredRegistrationResult::BuilderRejected { .. } => {
             panic!("owner-only deferred registration was unexpectedly builder-rejected")
         }
-        DeferredRegistryOutcome::ContractViolation { .. } => {
+        DeferredRegistrationResult::ContractViolation { .. } => {
             panic!("owner-only deferred registration violated a contract")
         }
-        DeferredRegistryOutcome::OperationalFailure { .. } => {
+        DeferredRegistrationResult::OperationalFailure { .. } => {
             panic!("owner-only deferred registration failed operationally")
         }
     };
@@ -317,13 +317,13 @@ async fn lifecycle_priority_is_parent_then_session_then_owner_deadline() {
         let outcome = DeferredRegistry::<()>::new().register(DeferredRequest::new((), fixture.take_parts()));
         match expected_kind {
             ExpectedLifecycleOutcome::ParentCancelled => {
-                assert!(matches!(outcome, DeferredRegistryOutcome::ParentCancelled));
+                assert!(matches!(outcome, DeferredRegistrationResult::ParentCancelled));
             }
             ExpectedLifecycleOutcome::SessionClosed => {
-                assert!(matches!(outcome, DeferredRegistryOutcome::SessionClosed));
+                assert!(matches!(outcome, DeferredRegistrationResult::SessionClosed));
             }
             ExpectedLifecycleOutcome::DeadlineExpired => {
-                assert!(matches!(outcome, DeferredRegistryOutcome::DeadlineExpired));
+                assert!(matches!(outcome, DeferredRegistrationResult::DeadlineExpired));
             }
         }
         assert_eq!(fixture.admission.snapshot().waiting_count(), 0);

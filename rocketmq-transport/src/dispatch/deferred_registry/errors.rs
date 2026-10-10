@@ -54,7 +54,7 @@ pub enum DeferredRegistryRecovery<R, F = Infallible> {
 /// operational failure branches remain typed failures and carry the exact
 /// caller-owned state that can be retried or released.
 #[must_use]
-pub enum DeferredRegistryOutcome<R, E = Infallible, F = Infallible> {
+pub enum DeferredRegistrationResult<R, E = Infallible, F = Infallible> {
     /// The request was installed provisionally.
     Registered(DeferredRegistration),
     /// The request already has provisional or active ownership.

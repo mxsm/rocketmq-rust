@@ -18,8 +18,8 @@ use crate::dispatch::DeferredAdmissionAcquireOutcome;
 use crate::dispatch::DeferredClaimOutcome;
 use crate::dispatch::DeferredId;
 use crate::dispatch::DeferredParts;
+use crate::dispatch::DeferredRegistrationResult;
 use crate::dispatch::DeferredRegistry;
-use crate::dispatch::DeferredRegistryOutcome;
 use crate::dispatch::DeferredRequest;
 use crate::dispatch::DeferredResponder;
 use crate::dispatch::DeferredResponderOutcome;
@@ -52,19 +52,19 @@ fn terminal_permit(outcome: DeferredAdmissionAcquireOutcome) -> crate::dispatch:
     }
 }
 
-fn terminal_registration(outcome: DeferredRegistryOutcome<()>) -> crate::dispatch::DeferredRegistration {
+fn terminal_registration(outcome: DeferredRegistrationResult<()>) -> crate::dispatch::DeferredRegistration {
     match outcome {
-        DeferredRegistryOutcome::Registered(registration) => registration,
-        DeferredRegistryOutcome::DuplicateRequest(_)
-        | DeferredRegistryOutcome::IdentityExhausted(_)
-        | DeferredRegistryOutcome::ParentCancelled
-        | DeferredRegistryOutcome::SessionClosed
-        | DeferredRegistryOutcome::DeadlineExpired
-        | DeferredRegistryOutcome::ContractViolation { .. }
-        | DeferredRegistryOutcome::OperationalFailure { .. } => {
+        DeferredRegistrationResult::Registered(registration) => registration,
+        DeferredRegistrationResult::DuplicateRequest(_)
+        | DeferredRegistrationResult::IdentityExhausted(_)
+        | DeferredRegistrationResult::ParentCancelled
+        | DeferredRegistrationResult::SessionClosed
+        | DeferredRegistrationResult::DeadlineExpired
+        | DeferredRegistrationResult::ContractViolation { .. }
+        | DeferredRegistrationResult::OperationalFailure { .. } => {
             panic!("terminal wait registration succeeds")
         }
-        DeferredRegistryOutcome::BuilderRejected { error, .. } => match error {},
+        DeferredRegistrationResult::BuilderRejected { error, .. } => match error {},
     }
 }
 

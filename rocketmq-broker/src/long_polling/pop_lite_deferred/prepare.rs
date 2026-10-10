@@ -25,8 +25,8 @@ use rocketmq_transport::api::DeferredExpiryOutcome;
 use rocketmq_transport::api::DeferredId;
 use rocketmq_transport::api::DeferredParts;
 use rocketmq_transport::api::DeferredRegistration;
+use rocketmq_transport::api::DeferredRegistrationResult;
 use rocketmq_transport::api::DeferredRegistry;
-use rocketmq_transport::api::DeferredRegistryOutcome;
 use rocketmq_transport::api::DeferredRegistryRecovery;
 use rocketmq_transport::api::DeferredResponderOutcome;
 use rocketmq_transport::api::DeferredRetainedSizeParts;
@@ -280,41 +280,41 @@ impl PopLiteDeferredService {
             let index_lease = reservation.publish(id, deadline);
             Ok::<_, Infallible>(ResumePopLite::new(request, deadline, index_lease))
         }) {
-            DeferredRegistryOutcome::Registered(registration) => registration,
-            DeferredRegistryOutcome::DuplicateRequest(recovery) => {
+            DeferredRegistrationResult::Registered(registration) => registration,
+            DeferredRegistrationResult::DuplicateRequest(recovery) => {
                 release_deferred_registry_recovery(recovery);
                 return Ok(PopLiteDeferredRegistrationStatus::Rejected(Box::new(
                     PopLiteDeferredRegisterRejection::DuplicateRequest,
                 )));
             }
-            DeferredRegistryOutcome::IdentityExhausted(recovery) => {
+            DeferredRegistrationResult::IdentityExhausted(recovery) => {
                 release_deferred_registry_recovery(recovery);
                 return Err(PopLiteDeferredRegisterFailure::IdentityExhausted);
             }
-            DeferredRegistryOutcome::ParentCancelled => {
+            DeferredRegistrationResult::ParentCancelled => {
                 return Ok(PopLiteDeferredRegistrationStatus::Rejected(Box::new(
                     PopLiteDeferredRegisterRejection::ParentCancelled,
                 )));
             }
-            DeferredRegistryOutcome::SessionClosed => {
+            DeferredRegistrationResult::SessionClosed => {
                 return Ok(PopLiteDeferredRegistrationStatus::Rejected(Box::new(
                     PopLiteDeferredRegisterRejection::SessionClosed,
                 )));
             }
-            DeferredRegistryOutcome::DeadlineExpired => {
+            DeferredRegistrationResult::DeadlineExpired => {
                 return Ok(PopLiteDeferredRegistrationStatus::Rejected(Box::new(
                     PopLiteDeferredRegisterRejection::DeadlineExpired,
                 )));
             }
-            DeferredRegistryOutcome::BuilderRejected { error, parts } => {
+            DeferredRegistrationResult::BuilderRejected { error, parts } => {
                 drop(parts);
                 match error {}
             }
-            DeferredRegistryOutcome::ContractViolation { violation, recovery } => {
+            DeferredRegistrationResult::ContractViolation { violation, recovery } => {
                 release_deferred_registry_recovery(recovery);
                 return Err(PopLiteDeferredRegisterFailure::RegistryContract(violation));
             }
-            DeferredRegistryOutcome::OperationalFailure { error, recovery } => {
+            DeferredRegistrationResult::OperationalFailure { error, recovery } => {
                 release_deferred_registry_recovery(recovery);
                 return Err(PopLiteDeferredRegisterFailure::RegistryOperational(error));
             }

@@ -42,8 +42,8 @@ use crate::dispatch::DeferredAdmission;
 use crate::dispatch::DeferredAdmissionAcquireOutcome;
 use crate::dispatch::DeferredClaimOutcome;
 use crate::dispatch::DeferredParts;
+use crate::dispatch::DeferredRegistrationResult;
 use crate::dispatch::DeferredRegistry;
-use crate::dispatch::DeferredRegistryOutcome;
 use crate::dispatch::DeferredRequest;
 use crate::dispatch::DeferredResponderOutcome;
 use crate::dispatch::DeferredResumeOutcome;
@@ -369,29 +369,29 @@ impl RequestProcessor for NetworkDeferredCleanupProcessor {
             opaque as usize,
             DeferredParts::new(responder, permit),
         )) {
-            DeferredRegistryOutcome::Registered(registration) => registration,
-            DeferredRegistryOutcome::DuplicateRequest(recovery)
-            | DeferredRegistryOutcome::IdentityExhausted(recovery) => {
+            DeferredRegistrationResult::Registered(registration) => registration,
+            DeferredRegistrationResult::DuplicateRequest(recovery)
+            | DeferredRegistrationResult::IdentityExhausted(recovery) => {
                 drop(recovery);
                 return Err(crate::error_helpers::argument_invalid());
             }
-            DeferredRegistryOutcome::ParentCancelled
-            | DeferredRegistryOutcome::SessionClosed
-            | DeferredRegistryOutcome::DeadlineExpired => {
+            DeferredRegistrationResult::ParentCancelled
+            | DeferredRegistrationResult::SessionClosed
+            | DeferredRegistrationResult::DeadlineExpired => {
                 return Err(crate::error_helpers::argument_invalid());
             }
-            DeferredRegistryOutcome::BuilderRejected { error, parts } => {
+            DeferredRegistrationResult::BuilderRejected { error, parts } => {
                 drop(parts);
                 match error {}
             }
-            DeferredRegistryOutcome::ContractViolation { violation, recovery } => {
+            DeferredRegistrationResult::ContractViolation { violation, recovery } => {
                 drop(recovery);
                 return Err(crate::error_helpers::internal_failure(
                     "register network deferred request",
                     violation,
                 ));
             }
-            DeferredRegistryOutcome::OperationalFailure { error, recovery } => {
+            DeferredRegistrationResult::OperationalFailure { error, recovery } => {
                 drop(recovery);
                 return Err(crate::error_helpers::internal_failure(
                     "register network deferred request",
