@@ -110,7 +110,7 @@ async fn owner_cutoff_cancels_an_ordered_waiter_before_processor_execution() {
             .wait()
             .await
             .expect("owner cutoff is a normal cancellation outcome"),
-        DeferredResumeOutcome::Cancelled
+        DeferredResumeResult::Cancelled
     );
     assert_eq!(first_executions.load(Ordering::Acquire), 1);
     assert_eq!(second_executions.load(Ordering::Acquire), 0);

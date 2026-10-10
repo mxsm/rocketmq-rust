@@ -28,7 +28,7 @@ use crate::admission::AdmissionLimits;
 use crate::contract::TransportContractViolation;
 use crate::deadline::RequestDeadline;
 use crate::dispatch::DeferredAdmission;
-use crate::dispatch::DeferredClaimOutcome;
+use crate::dispatch::DeferredClaimResult;
 use crate::dispatch::DeferredExpiryOutcome;
 use crate::dispatch::DeferredParts;
 use crate::dispatch::DeferredRegistry;
@@ -268,7 +268,7 @@ async fn owner_only_deadline_rejects_claim_without_protocol_expiry_or_response()
         .claim(id, crate::dispatch::DeferredWakeReason::Timeout)
         .await
         .expect("expired owner-only request should converge to a normal outcome");
-    assert!(matches!(outcome, DeferredClaimOutcome::DeadlineExpired));
+    assert!(matches!(outcome, DeferredClaimResult::DeadlineExpired));
     assert_eq!(fixture.admission.snapshot().waiting_count(), 0);
     assert_eq!(
         fixture.terminals.lock().as_slice(),

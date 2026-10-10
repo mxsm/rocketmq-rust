@@ -334,7 +334,7 @@ async fn notification_deferred_tcp_prepare_register_claim_resume_writes_one_fram
             .await
             .expect("Notification receipt channel")
             .expect("canonical Notification write"),
-        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        rocketmq_transport::api::DeferredResumeResult::Completed(_)
     ));
 
     let response = client
@@ -427,7 +427,7 @@ async fn notification_deferred_filter_miss_stays_registered_then_later_match_cla
             .await
             .expect("filtered Notification receipt channel")
             .expect("canonical filtered Notification write"),
-        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        rocketmq_transport::api::DeferredResumeResult::Completed(_)
     ));
     let response = client
         .receive_command()

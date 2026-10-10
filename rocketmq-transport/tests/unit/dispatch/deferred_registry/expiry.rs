@@ -15,7 +15,7 @@
 use super::*;
 
 use crate::dispatch::DeferredAdmissionAcquireOutcome;
-use crate::dispatch::DeferredClaimOutcome;
+use crate::dispatch::DeferredClaimResult;
 use crate::dispatch::DeferredExpiryOutcome;
 use crate::dispatch::DeferredRegistryOutcome;
 
@@ -86,20 +86,20 @@ where
 }
 
 fn expect_claimed<R>(
-    result: Result<DeferredClaimOutcome<R>, crate::error::TransportError>,
+    result: Result<DeferredClaimResult<R>, crate::error::TransportError>,
     context: &str,
 ) -> crate::dispatch::ClaimedDeferred<R>
 where
     R: Send + 'static,
 {
     match result {
-        Ok(DeferredClaimOutcome::Claimed(claimed)) => claimed,
-        Ok(DeferredClaimOutcome::NotFound) => panic!("{context}: request not found"),
-        Ok(DeferredClaimOutcome::AlreadyClaimed) => panic!("{context}: request already claimed"),
-        Ok(DeferredClaimOutcome::AlreadyCompleted) => panic!("{context}: request already completed"),
-        Ok(DeferredClaimOutcome::ParentCancelled) => panic!("{context}: parent cancelled"),
-        Ok(DeferredClaimOutcome::SessionClosed) => panic!("{context}: session closed"),
-        Ok(DeferredClaimOutcome::DeadlineExpired) => panic!("{context}: deadline expired"),
+        Ok(DeferredClaimResult::Claimed(claimed)) => claimed,
+        Ok(DeferredClaimResult::NotFound) => panic!("{context}: request not found"),
+        Ok(DeferredClaimResult::AlreadyClaimed) => panic!("{context}: request already claimed"),
+        Ok(DeferredClaimResult::AlreadyCompleted) => panic!("{context}: request already completed"),
+        Ok(DeferredClaimResult::ParentCancelled) => panic!("{context}: parent cancelled"),
+        Ok(DeferredClaimResult::SessionClosed) => panic!("{context}: session closed"),
+        Ok(DeferredClaimResult::DeadlineExpired) => panic!("{context}: deadline expired"),
         Err(_) => panic!("{context}: operational claim failure"),
     }
 }
@@ -253,7 +253,7 @@ async fn message_claim_before_expiry_sweep_keeps_message_as_the_immutable_winner
         .claim(id, DeferredWakeReason::Timeout)
         .await
         .expect("timeout observes the message claim marker as a normal outcome");
-    assert!(matches!(loser, DeferredClaimOutcome::AlreadyClaimed));
+    assert!(matches!(loser, DeferredClaimResult::AlreadyClaimed));
     assert_eq!(registry.test_claim_marker_count(), 1);
     assert_eq!(harness.admission.snapshot().waiting_count(), 1);
 
@@ -297,7 +297,7 @@ async fn expiry_sweep_before_message_claim_keeps_timeout_as_the_immutable_winner
         .claim(id, DeferredWakeReason::MessageArrived)
         .await
         .expect("message observes the timeout claim marker as a normal outcome");
-    assert!(matches!(loser, DeferredClaimOutcome::AlreadyClaimed));
+    assert!(matches!(loser, DeferredClaimResult::AlreadyClaimed));
     assert_eq!(registry.test_claim_marker_count(), 1);
     assert_eq!(harness.admission.snapshot().waiting_count(), 1);
 
@@ -461,7 +461,7 @@ async fn shutdown_freezes_parent_over_session_for_ticket_state_and_one_metric() 
     let outcome = claim
         .await
         .expect("shutdown resolves the provisional ticket as a normal outcome");
-    assert!(matches!(outcome, DeferredClaimOutcome::ParentCancelled));
+    assert!(matches!(outcome, DeferredClaimResult::ParentCancelled));
     assert_eq!(
         state.terminal_reason(),
         Some(crate::dispatch::DeferredTerminalReason::ParentCancelled)

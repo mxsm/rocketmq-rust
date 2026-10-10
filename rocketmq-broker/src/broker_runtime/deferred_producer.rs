@@ -27,7 +27,7 @@ use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskId;
 use rocketmq_runtime::TaskKind;
 use rocketmq_store::BrokerReadWriteStore;
-use rocketmq_transport::api::DeferredClaimOutcome;
+use rocketmq_transport::api::DeferredClaimResult;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
 use rocketmq_transport::api::DeferredWakeReason;
 use tracing::warn;
@@ -551,7 +551,7 @@ where
             .task_group
             .spawn("broker.deferred.pull-arrival", TaskKind::Worker, async move {
                 let _route = route;
-                if let Ok(DeferredClaimOutcome::Claimed(claimed)) = service.claim_candidate(candidate, reason).await {
+                if let Ok(DeferredClaimResult::Claimed(claimed)) = service.claim_candidate(candidate, reason).await {
                     submit_pull(service, processor, claimed);
                 }
             });
@@ -572,7 +572,7 @@ where
             .task_group
             .spawn("broker.deferred.pop-arrival", TaskKind::Worker, async move {
                 let _route = route;
-                if let Ok(DeferredClaimOutcome::Claimed(claimed)) = service.claim_candidate(candidate, reason).await {
+                if let Ok(DeferredClaimResult::Claimed(claimed)) = service.claim_candidate(candidate, reason).await {
                     submit_pop(service, processor, claimed);
                 }
             });
@@ -594,7 +594,7 @@ where
             .spawn("broker.deferred.pop-lag", TaskKind::Worker, async move {
                 let _route = route;
                 match service.claim_forced_candidate(candidate).await {
-                    Ok(DeferredClaimOutcome::Claimed(claimed)) => {
+                    Ok(DeferredClaimResult::Claimed(claimed)) => {
                         let Some(processor) = processor.upgrade() else {
                             drop(observer);
                             return;
@@ -627,7 +627,7 @@ where
             .task_group
             .spawn("broker.deferred.notification-arrival", TaskKind::Worker, async move {
                 let _route = route;
-                if let Ok(DeferredClaimOutcome::Claimed(claimed)) = service.claim_arrival_candidate(candidate).await {
+                if let Ok(DeferredClaimResult::Claimed(claimed)) = service.claim_arrival_candidate(candidate).await {
                     submit_notification(service, processor, claimed);
                 }
             });

@@ -31,15 +31,15 @@ use parking_lot::Mutex;
 use rocketmq_transport::api::ClaimedDeferred;
 use rocketmq_transport::api::DeferredAdmission;
 use rocketmq_transport::api::DeferredAdmissionSnapshot;
-use rocketmq_transport::api::DeferredClaimOutcome;
+use rocketmq_transport::api::DeferredClaimResult;
 use rocketmq_transport::api::DeferredExpiryBatch;
 use rocketmq_transport::api::DeferredExpiryBatchStats;
 use rocketmq_transport::api::DeferredExpiryMargins;
 use rocketmq_transport::api::DeferredRegistry;
 use rocketmq_transport::api::DeferredRegistryShutdownOutcome;
-use rocketmq_transport::api::DeferredResumeOutcome;
+use rocketmq_transport::api::DeferredResumeResult;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
-use rocketmq_transport::api::DeferredResumeSubmitOutcome;
+use rocketmq_transport::api::DeferredResumeSubmissionStatus;
 use rocketmq_transport::api::DeferredWakeReason;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::TransportError;
@@ -220,7 +220,7 @@ impl PopLiteDeferredService {
         };
         let id = candidate.id();
         match self.registry.claim(id, DeferredWakeReason::MessageArrived).await? {
-            DeferredClaimOutcome::Claimed(mut claimed) => {
+            DeferredClaimResult::Claimed(mut claimed) => {
                 drop(claimed.resume_data_mut().take_index_lease());
                 drop(candidate);
                 Ok(Some(PopLiteEventClaim {
@@ -245,7 +245,7 @@ impl PopLiteDeferredService {
         event_claim: PopLiteEventClaim,
         handler_retained: DeferredResumeRetainedSize,
         handler: F,
-    ) -> Result<DeferredResumeOutcome, TransportError>
+    ) -> Result<DeferredResumeResult, TransportError>
     where
         F: FnOnce(ResumePopLite, DeferredWakeReason, LiteEventBatchExecution) -> Fut + Send + 'static,
         Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,
@@ -289,7 +289,7 @@ impl PopLiteDeferredService {
         claimed: ClaimedDeferred<ResumePopLite>,
         handler_retained: DeferredResumeRetainedSize,
         handler: F,
-    ) -> Result<DeferredResumeOutcome, TransportError>
+    ) -> Result<DeferredResumeResult, TransportError>
     where
         F: FnOnce(ResumePopLite, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,
@@ -311,7 +311,7 @@ impl PopLiteDeferredService {
         event_claim: PopLiteEventClaim,
         handler_retained: DeferredResumeRetainedSize,
         handler: F,
-    ) -> Result<DeferredResumeSubmitOutcome, TransportError>
+    ) -> Result<DeferredResumeSubmissionStatus, TransportError>
     where
         F: FnOnce(ResumePopLite, DeferredWakeReason, LiteEventBatchExecution) -> Fut + Send + 'static,
         Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,
@@ -354,7 +354,7 @@ impl PopLiteDeferredService {
         claimed: ClaimedDeferred<ResumePopLite>,
         handler_retained: DeferredResumeRetainedSize,
         handler: F,
-    ) -> Result<DeferredResumeSubmitOutcome, TransportError>
+    ) -> Result<DeferredResumeSubmissionStatus, TransportError>
     where
         F: FnOnce(ResumePopLite, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,

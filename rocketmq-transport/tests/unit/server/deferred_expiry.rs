@@ -43,12 +43,12 @@ use super::RequestProcessor;
 use super::ResponseAction;
 use super::TransportServer;
 use crate::dispatch::DeferredAdmissionAcquireOutcome;
-use crate::dispatch::DeferredClaimOutcome;
+use crate::dispatch::DeferredClaimResult;
 use crate::dispatch::DeferredExpiryMargins;
 use crate::dispatch::DeferredExpiryOutcome;
 use crate::dispatch::DeferredRegistryOutcome;
 use crate::dispatch::DeferredResponderOutcome;
-use crate::dispatch::DeferredResumeOutcome;
+use crate::dispatch::DeferredResumeResult;
 use crate::telemetry::TransportTelemetry;
 
 #[derive(Clone, Copy)]
@@ -312,7 +312,7 @@ async fn real_tcp_protocol_timeout_sweeps_and_resumes_exactly_once() {
         )
         .await
         .expect("protocol timeout resumes through the canonical session executor");
-    assert!(matches!(outcome, DeferredResumeOutcome::Completed(_)));
+    assert!(matches!(outcome, DeferredResumeResult::Completed(_)));
 
     let response = client
         .receive_command()
@@ -418,13 +418,13 @@ async fn real_tcp_parent_service_shutdown_terminalizes_accepted_resume_without_a
         .await
         .expect("claim committed request before service stop")
     {
-        DeferredClaimOutcome::Claimed(claim) => claim,
-        DeferredClaimOutcome::NotFound
-        | DeferredClaimOutcome::AlreadyClaimed
-        | DeferredClaimOutcome::AlreadyCompleted
-        | DeferredClaimOutcome::ParentCancelled
-        | DeferredClaimOutcome::SessionClosed
-        | DeferredClaimOutcome::DeadlineExpired => panic!("committed request is claimable before service stop"),
+        DeferredClaimResult::Claimed(claim) => claim,
+        DeferredClaimResult::NotFound
+        | DeferredClaimResult::AlreadyClaimed
+        | DeferredClaimResult::AlreadyCompleted
+        | DeferredClaimResult::ParentCancelled
+        | DeferredClaimResult::SessionClosed
+        | DeferredClaimResult::DeadlineExpired => panic!("committed request is claimable before service stop"),
     };
     let entered = Arc::new(tokio::sync::Notify::new());
     let never_release = Arc::new(tokio::sync::Notify::new());
@@ -449,7 +449,7 @@ async fn real_tcp_parent_service_shutdown_terminalizes_accepted_resume_without_a
     let outcome = (&mut resume)
         .await
         .expect("service stop is a normal cancellation outcome");
-    assert_eq!(outcome, DeferredResumeOutcome::Cancelled);
+    assert_eq!(outcome, DeferredResumeResult::Cancelled);
     running.finish().await;
     let frame = client.receive_command().await;
     assert!(frame.is_none(), "service stop must not emit a response frame");

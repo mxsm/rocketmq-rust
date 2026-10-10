@@ -15,14 +15,14 @@
 use super::harness::*;
 use crate::dispatch::DeferredAdmission;
 use crate::dispatch::DeferredAdmissionAcquireOutcome;
-use crate::dispatch::DeferredClaimOutcome;
+use crate::dispatch::DeferredClaimResult;
 use crate::dispatch::DeferredCommitErrorKind;
 use crate::dispatch::DeferredRegistration;
 use crate::dispatch::DeferredRegistryOutcome;
 use crate::dispatch::DeferredResponder;
 use crate::dispatch::DeferredResponderOutcome;
 use crate::dispatch::DeferredResponseOutcome;
-use crate::dispatch::DeferredResumeOutcome;
+use crate::dispatch::DeferredResumeResult;
 use crate::dispatch::DeferredResumeRetainedSize;
 use crate::dispatch::DeferredWaitLimits;
 use crate::dispatch::DeferredWakeReason;
@@ -74,20 +74,20 @@ where
 }
 
 fn expect_claimed<R>(
-    result: Result<DeferredClaimOutcome<R>, crate::error::TransportError>,
+    result: Result<DeferredClaimResult<R>, crate::error::TransportError>,
     context: &str,
 ) -> crate::dispatch::ClaimedDeferred<R>
 where
     R: Send + 'static,
 {
     match result {
-        Ok(DeferredClaimOutcome::Claimed(claimed)) => claimed,
-        Ok(DeferredClaimOutcome::NotFound) => panic!("{context}: request not found"),
-        Ok(DeferredClaimOutcome::AlreadyClaimed) => panic!("{context}: request already claimed"),
-        Ok(DeferredClaimOutcome::AlreadyCompleted) => panic!("{context}: request already completed"),
-        Ok(DeferredClaimOutcome::ParentCancelled) => panic!("{context}: parent cancelled"),
-        Ok(DeferredClaimOutcome::SessionClosed) => panic!("{context}: session closed"),
-        Ok(DeferredClaimOutcome::DeadlineExpired) => panic!("{context}: deadline expired"),
+        Ok(DeferredClaimResult::Claimed(claimed)) => claimed,
+        Ok(DeferredClaimResult::NotFound) => panic!("{context}: request not found"),
+        Ok(DeferredClaimResult::AlreadyClaimed) => panic!("{context}: request already claimed"),
+        Ok(DeferredClaimResult::AlreadyCompleted) => panic!("{context}: request already completed"),
+        Ok(DeferredClaimResult::ParentCancelled) => panic!("{context}: parent cancelled"),
+        Ok(DeferredClaimResult::SessionClosed) => panic!("{context}: session closed"),
+        Ok(DeferredClaimResult::DeadlineExpired) => panic!("{context}: deadline expired"),
         Err(_) => panic!("{context}: operational claim failure"),
     }
 }
@@ -102,12 +102,12 @@ fn expect_deferred_responder(outcome: DeferredResponderOutcome, context: &str) -
     }
 }
 
-fn expect_deferred_completed(outcome: DeferredResumeOutcome, context: &str) -> crate::dispatch::ResponseReceipt {
+fn expect_deferred_completed(outcome: DeferredResumeResult, context: &str) -> crate::dispatch::ResponseReceipt {
     match outcome {
-        DeferredResumeOutcome::Completed(receipt) => receipt,
-        DeferredResumeOutcome::Cancelled => panic!("{context}: request cancelled"),
-        DeferredResumeOutcome::SessionClosed => panic!("{context}: session closed"),
-        DeferredResumeOutcome::AdmissionRejected => panic!("{context}: admission rejected"),
+        DeferredResumeResult::Completed(receipt) => receipt,
+        DeferredResumeResult::Cancelled => panic!("{context}: request cancelled"),
+        DeferredResumeResult::SessionClosed => panic!("{context}: session closed"),
+        DeferredResumeResult::AdmissionRejected => panic!("{context}: admission rejected"),
     }
 }
 
@@ -597,7 +597,7 @@ async fn expired_resume_cancels_without_polling_the_handler_or_writing_a_respons
         })
         .await
         .expect("owner deadline is a normal resume outcome");
-    assert!(matches!(outcome, DeferredResumeOutcome::Cancelled));
+    assert!(matches!(outcome, DeferredResumeResult::Cancelled));
     assert!(!handler_called.load(Ordering::SeqCst));
     assert_eq!(registry.test_index_counts(), (0, 0, 0));
     assert_eq!(registry.test_claim_marker_count(), 0);

@@ -320,7 +320,7 @@ async fn pop_lite_deferred_real_store_single_chain_writes_exact_terminal_frame()
             )
             .await
             .expect("write canonical real-store PopLite response"),
-        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        rocketmq_transport::api::DeferredResumeResult::Completed(_)
     ));
 
     let mut response = client
@@ -408,7 +408,7 @@ async fn pop_lite_deferred_real_store_claimed_empty_is_exact_terminal_timeout() 
             )
             .await
             .expect("write canonical empty-store PopLite response"),
-        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        rocketmq_transport::api::DeferredResumeResult::Completed(_)
     ));
 
     let mut response = client

@@ -48,7 +48,7 @@ use crate::admission::AdmissionScope;
 use crate::admission::ResourceLimit;
 use crate::deadline::RequestDeadline;
 use crate::dispatch::DeferredId;
-use crate::dispatch::DeferredResumeOutcome;
+use crate::dispatch::DeferredResumeResult;
 use crate::dispatch::RequestControlView;
 use crate::dispatch::RequestId;
 use crate::dispatch::RequestMeta;
@@ -359,7 +359,7 @@ async fn real_queued_admission_rejects_the_checked_high_alignment_charge_and_ret
     drop(cell);
     assert_eq!(
         completion.wait().await.expect("unexecuted job terminalizes normally"),
-        DeferredResumeOutcome::Cancelled
+        DeferredResumeResult::Cancelled
     );
     let snapshot = controller.snapshot();
     assert_eq!(snapshot.queued.current_count, 0);
@@ -397,7 +397,7 @@ async fn detached_submit_admission_failure_terminalizes_and_observes_exactly_onc
         Some(Box::new(move |result| {
             calls.fetch_add(1, Ordering::AcqRel);
             admission.store(
-                matches!(result, Ok(DeferredResumeOutcome::AdmissionRejected)),
+                matches!(result, Ok(DeferredResumeResult::AdmissionRejected)),
                 Ordering::Release,
             );
         })),
@@ -438,7 +438,7 @@ async fn detached_submit_admission_failure_terminalizes_and_observes_exactly_onc
     let result = completion.take_finished();
     assert_eq!(
         result.expect("admission is a normal terminal outcome"),
-        DeferredResumeOutcome::AdmissionRejected
+        DeferredResumeResult::AdmissionRejected
     );
     assert_eq!(observed.load(Ordering::Acquire), 1);
     assert!(observed_admission.load(Ordering::Acquire));
@@ -486,7 +486,7 @@ async fn inflight_admission_rejection_returns_the_exact_job_and_releases_queued_
     drop(cell);
     assert_eq!(
         completion.wait().await.expect("unexecuted job terminalizes normally"),
-        DeferredResumeOutcome::Cancelled
+        DeferredResumeResult::Cancelled
     );
     let snapshot = controller.snapshot();
     assert_eq!(snapshot.queued.current_count, 0);
@@ -530,7 +530,7 @@ async fn processor_rejection_runs_inside_the_owned_task_and_releases_all_capacit
     assert_eq!(executions.load(Ordering::Acquire), 0);
     assert_eq!(
         completion.wait().await.expect("processor rejection result"),
-        DeferredResumeOutcome::AdmissionRejected
+        DeferredResumeResult::AdmissionRejected
     );
     let report = executor
         .drain_until(ShutdownDeadline::after(Duration::from_secs(1)))
@@ -580,7 +580,7 @@ async fn operation_close_at_spawn_returns_the_exact_cell_and_source_free_cancell
             .wait()
             .await
             .expect("unspawned job terminalizes without a source"),
-        DeferredResumeOutcome::Cancelled
+        DeferredResumeResult::Cancelled
     );
     let snapshot = controller.snapshot();
     assert_eq!(snapshot.queued.current_count, 0);
@@ -616,7 +616,7 @@ async fn retired_resume_executor_returns_the_exact_cell_and_source_free_cancelle
             .wait()
             .await
             .expect("retired executor terminalizes without a source"),
-        DeferredResumeOutcome::Cancelled
+        DeferredResumeResult::Cancelled
     );
 }
 
@@ -656,7 +656,7 @@ async fn preclosed_resume_executor_returns_the_exact_cell_and_source_free_cancel
             .wait()
             .await
             .expect("preclosed executor terminalizes without a source"),
-        DeferredResumeOutcome::Cancelled
+        DeferredResumeResult::Cancelled
     );
     let snapshot = controller.snapshot();
     assert_eq!(snapshot.queued.current_count, 0);
@@ -818,7 +818,7 @@ async fn accepted_never_polled_is_service_stopped_without_leaking_admission() {
     assert_eq!(usage.processors.current_count, 0);
     assert_eq!(
         completion.wait().await.expect("aborted owner terminalizes the job"),
-        DeferredResumeOutcome::Cancelled
+        DeferredResumeResult::Cancelled
     );
     let settled = executor
         .drain_report_until(ShutdownDeadline::after(Duration::from_secs(1)))
