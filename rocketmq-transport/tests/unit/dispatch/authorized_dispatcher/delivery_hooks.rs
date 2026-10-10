@@ -90,7 +90,7 @@ async fn admitted_reply_uses_body_free_hooks_resolve_bind_writer_and_one_observa
         .dispatch(&harness.authorized, session, harness.context(None), command, 256, None)
         .await
         .expect("dispatch submission");
-    assert!(matches!(outcome, DispatchOutcome::Accepted(_)));
+    assert!(matches!(outcome, DispatchSubmissionResult::Accepted(_)));
     let response = harness.receive().await;
     wait_for_observation_count(&state, 1).await;
 
@@ -185,7 +185,7 @@ async fn file_region_crosses_hooks_and_metric_projection_without_entering_the_ob
         .dispatch(&harness.authorized, session, harness.context(None), command, 256, None)
         .await
         .expect("dispatch file response");
-    assert!(matches!(outcome, DispatchOutcome::Accepted(_)));
+    assert!(matches!(outcome, DispatchSubmissionResult::Accepted(_)));
     writer_barrier.wait_reached().await;
 
     assert_eq!(
