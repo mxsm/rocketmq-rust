@@ -27,14 +27,14 @@ use crate::core::topic::CanonicalTopicBatchUpsertRequest;
 use crate::core::topic::DeleteTopicAdminRequest;
 use crate::core::topic::TopicAdmin;
 use crate::core::topic::TopicBatchDeleteAdmin;
-use crate::core::topic::TopicBatchDeleteOutcome;
+use crate::core::topic::TopicBatchDeleteReport;
 use crate::core::topic::TopicBatchDeleteRequest;
 use crate::core::topic::TopicBatchMutationAdmin;
-use crate::core::topic::TopicBatchMutationOutcome;
-use crate::core::topic::TopicBatchOrderConfigOutcome;
-use crate::core::topic::TopicBatchTargetOutcome;
+use crate::core::topic::TopicBatchMutationReport;
+use crate::core::topic::TopicBatchTargetResult;
 use crate::core::topic::TopicBatchUpsertRequest;
-use crate::core::topic::TopicMutationOutcome;
+use crate::core::topic::TopicMutationSummary;
+use crate::core::topic::TopicOrderConfigMutationResult;
 use crate::core::topic::UpsertTopicRequest;
 use crate::core::AdminFuture;
 use crate::core::AdminResult;
@@ -46,7 +46,7 @@ impl TopicBatchMutationAdmin for AdminSession {
     fn upsert_topic_batch<'a>(
         &'a mut self,
         request: &'a TopicBatchUpsertRequest,
-    ) -> AdminFuture<'a, TopicBatchMutationOutcome> {
+    ) -> AdminFuture<'a, TopicBatchMutationReport> {
         Box::pin(async move { run_topic_batch_workflow(self, request).await })
     }
 }
@@ -55,7 +55,7 @@ impl TopicBatchDeleteAdmin for AdminSession {
     fn delete_topic_batch<'a>(
         &'a mut self,
         request: &'a TopicBatchDeleteRequest,
-    ) -> AdminFuture<'a, TopicBatchDeleteOutcome> {
+    ) -> AdminFuture<'a, TopicBatchDeleteReport> {
         Box::pin(async move { run_topic_batch_delete_workflow(self, request).await })
     }
 }
@@ -64,7 +64,7 @@ trait TopicBatchDeleteExecutor {
     fn delete_topic_cluster<'a>(
         &'a mut self,
         request: &'a DeleteTopicAdminRequest,
-    ) -> AdminFuture<'a, TopicMutationOutcome>;
+    ) -> AdminFuture<'a, TopicMutationSummary>;
 
     fn delete_order_config<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, ()>;
 }
@@ -73,7 +73,7 @@ impl TopicBatchDeleteExecutor for AdminSession {
     fn delete_topic_cluster<'a>(
         &'a mut self,
         request: &'a DeleteTopicAdminRequest,
-    ) -> AdminFuture<'a, TopicMutationOutcome> {
+    ) -> AdminFuture<'a, TopicMutationSummary> {
         TopicAdmin::delete_topic(self, request)
     }
 
@@ -94,7 +94,7 @@ impl TopicBatchDeleteExecutor for AdminSession {
 async fn run_topic_batch_delete_workflow<E>(
     executor: &mut E,
     request: &TopicBatchDeleteRequest,
-) -> AdminResult<TopicBatchDeleteOutcome>
+) -> AdminResult<TopicBatchDeleteReport>
 where
     E: TopicBatchDeleteExecutor,
 {
@@ -109,12 +109,12 @@ where
             })
             .await
         {
-            Ok(outcome) => targets.push(TopicBatchTargetOutcome {
+            Ok(outcome) => targets.push(TopicBatchTargetResult {
                 broker_name: cluster_name.clone(),
                 success: true,
                 message: outcome.message,
             }),
-            Err(error) => targets.push(TopicBatchTargetOutcome {
+            Err(error) => targets.push(TopicBatchTargetResult {
                 broker_name: cluster_name.clone(),
                 success: false,
                 message: stable_error_message(&error),
@@ -123,11 +123,11 @@ where
     }
     let order_config = if targets.iter().all(|target| target.success) {
         Some(match executor.delete_order_config(request.topic()).await {
-            Ok(()) => TopicBatchOrderConfigOutcome {
+            Ok(()) => TopicOrderConfigMutationResult {
                 success: true,
                 message: "Order topic configuration deleted".to_string(),
             },
-            Err(error) => TopicBatchOrderConfigOutcome {
+            Err(error) => TopicOrderConfigMutationResult {
                 success: false,
                 message: stable_error_message(&error),
             },
@@ -135,11 +135,11 @@ where
     } else {
         None
     };
-    Ok(TopicBatchDeleteOutcome { targets, order_config })
+    Ok(TopicBatchDeleteReport { targets, order_config })
 }
 
 trait TopicBatchExecutor {
-    fn upsert_topic_local<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationOutcome>;
+    fn upsert_topic_local<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationSummary>;
 
     fn reconcile_order_config<'a>(
         &'a mut self,
@@ -149,7 +149,7 @@ trait TopicBatchExecutor {
 }
 
 impl TopicBatchExecutor for AdminSession {
-    fn upsert_topic_local<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationOutcome> {
+    fn upsert_topic_local<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationSummary> {
         Box::pin(async move { self.upsert_topic_config(request, false).await })
     }
 
@@ -168,7 +168,7 @@ impl TopicBatchExecutor for AdminSession {
 async fn run_topic_batch_workflow<E>(
     executor: &mut E,
     request: &TopicBatchUpsertRequest,
-) -> AdminResult<TopicBatchMutationOutcome>
+) -> AdminResult<TopicBatchMutationReport>
 where
     E: TopicBatchExecutor,
 {
@@ -186,12 +186,12 @@ where
             message_type: request.message_type.clone(),
         };
         match executor.upsert_topic_local(&local_request).await {
-            Ok(outcome) => targets.push(TopicBatchTargetOutcome {
+            Ok(outcome) => targets.push(TopicBatchTargetResult {
                 broker_name: broker_name.clone(),
                 success: true,
                 message: outcome.message,
             }),
-            Err(error) => targets.push(TopicBatchTargetOutcome {
+            Err(error) => targets.push(TopicBatchTargetResult {
                 broker_name: broker_name.clone(),
                 success: false,
                 message: stable_error_message(&error),
@@ -208,18 +208,18 @@ where
     } else {
         Some(
             match executor.reconcile_order_config(&request, &successful_brokers).await {
-                Ok(()) => TopicBatchOrderConfigOutcome {
+                Ok(()) => TopicOrderConfigMutationResult {
                     success: true,
                     message: "Order topic configuration reconciled".to_string(),
                 },
-                Err(error) => TopicBatchOrderConfigOutcome {
+                Err(error) => TopicOrderConfigMutationResult {
                     success: false,
                     message: stable_error_message(&error),
                 },
             },
         )
     };
-    Ok(TopicBatchMutationOutcome { targets, order_config })
+    Ok(TopicBatchMutationReport { targets, order_config })
 }
 
 impl AdminSession {
@@ -262,7 +262,7 @@ mod tests {
     use crate::core::topic::DeleteTopicAdminRequest;
     use crate::core::topic::TopicBatchDeleteRequest;
     use crate::core::topic::TopicBatchUpsertRequest;
-    use crate::core::topic::TopicMutationOutcome;
+    use crate::core::topic::TopicMutationSummary;
     use crate::core::topic::UpsertTopicRequest;
     use crate::core::AdminError;
     use crate::core::AdminFuture;
@@ -454,7 +454,7 @@ mod tests {
         fn upsert_topic_local<'a>(
             &'a mut self,
             request: &'a UpsertTopicRequest,
-        ) -> AdminFuture<'a, TopicMutationOutcome> {
+        ) -> AdminFuture<'a, TopicMutationSummary> {
             self.local_targets.push(request.broker_names[0].clone());
             let should_fail =
                 self.fail_all || self.failing_target.as_deref() == request.broker_names.first().map(String::as_str);
@@ -462,7 +462,7 @@ mod tests {
                 if should_fail {
                     Err(AdminError::backend("local_topic_update", "unavailable"))
                 } else {
-                    Ok(TopicMutationOutcome {
+                    Ok(TopicMutationSummary {
                         message: "saved".to_string(),
                         target_count: 1,
                     })
@@ -493,7 +493,7 @@ mod tests {
         fn delete_topic_cluster<'a>(
             &'a mut self,
             request: &'a DeleteTopicAdminRequest,
-        ) -> AdminFuture<'a, TopicMutationOutcome> {
+        ) -> AdminFuture<'a, TopicMutationSummary> {
             let cluster = request.cluster_name.clone().expect("test cluster request");
             self.clusters.push(cluster.clone());
             let should_fail = self.fail_all || self.failing_cluster.as_deref() == Some(cluster.as_str());
@@ -501,7 +501,7 @@ mod tests {
                 if should_fail {
                     Err(AdminError::backend("delete_topic", "unavailable"))
                 } else {
-                    Ok(TopicMutationOutcome {
+                    Ok(TopicMutationSummary {
                         message: "deleted".to_string(),
                         target_count: 1,
                     })

@@ -43,11 +43,11 @@ use rocketmq_admin_core::{
         security::AdminCredentials,
         topic::{
             DeleteTopicsInBrokerRequest, DetailedTopicCatalog, DetailedTopicConfig, DetailedTopicConsumers,
-            DetailedTopicStats, GetTopicRouteRequest, PatchTopicConfigOutcome, PatchTopicConfigRequest,
-            QueryTopicConfigCasRequest, TopicBatchDeleteAdmin, TopicBatchDeleteOutcome, TopicBatchDeleteRequest,
-            TopicBatchMutationAdmin, TopicBatchMutationOutcome, TopicBatchUpsertRequest, TopicConfigCasState,
-            TopicInspectionAdmin, TopicMutationAdmin, TopicMutationOutcome, TopicMutationPreflightAdmin,
-            TopicOffsetMutationAdmin, TopicOffsetMutationOutcome, TopicOffsetMutationRequest, TopicRoute,
+            DetailedTopicStats, GetTopicRouteRequest, PatchTopicConfigRequest, QueryTopicConfigCasRequest,
+            TopicBatchDeleteAdmin, TopicBatchDeleteReport, TopicBatchDeleteRequest, TopicBatchMutationAdmin,
+            TopicBatchMutationReport, TopicBatchUpsertRequest, TopicConfigCasState, TopicConfigPatchResult,
+            TopicInspectionAdmin, TopicMutationAdmin, TopicMutationPreflightAdmin, TopicMutationSummary,
+            TopicOffsetMutationAdmin, TopicOffsetMutationReport, TopicOffsetMutationRequest, TopicRoute,
             TopicSendRequest, TopicSendResult,
         },
     },
@@ -161,25 +161,25 @@ pub(crate) trait DashboardMutationSession: Send {
     fn patch_topic_config<'a>(
         &'a mut self,
         _request: &'a PatchTopicConfigRequest,
-    ) -> SessionFuture<'a, AdminResult<PatchTopicConfigOutcome>> {
+    ) -> SessionFuture<'a, AdminResult<TopicConfigPatchResult>> {
         Box::pin(async { Err(unsupported_topic_session("patch_topic_config")) })
     }
     fn upsert_topic_batch<'a>(
         &'a mut self,
         _request: &'a TopicBatchUpsertRequest,
-    ) -> SessionFuture<'a, AdminResult<TopicBatchMutationOutcome>> {
+    ) -> SessionFuture<'a, AdminResult<TopicBatchMutationReport>> {
         Box::pin(async { Err(unsupported_topic_session("upsert_topic_batch")) })
     }
     fn delete_topic_batch<'a>(
         &'a mut self,
         _request: &'a TopicBatchDeleteRequest,
-    ) -> SessionFuture<'a, AdminResult<TopicBatchDeleteOutcome>> {
+    ) -> SessionFuture<'a, AdminResult<TopicBatchDeleteReport>> {
         Box::pin(async { Err(unsupported_topic_session("delete_topic_batch")) })
     }
     fn delete_topics_in_broker<'a>(
         &'a mut self,
         _request: &'a DeleteTopicsInBrokerRequest,
-    ) -> SessionFuture<'a, AdminResult<TopicMutationOutcome>> {
+    ) -> SessionFuture<'a, AdminResult<TopicMutationSummary>> {
         Box::pin(async { Err(unsupported_topic_session("delete_topics_in_broker")) })
     }
     fn send_topic_message<'a>(
@@ -191,13 +191,13 @@ pub(crate) trait DashboardMutationSession: Send {
     fn reset_topic_offset_detailed<'a>(
         &'a mut self,
         _request: &'a TopicOffsetMutationRequest,
-    ) -> SessionFuture<'a, AdminResult<TopicOffsetMutationOutcome>> {
+    ) -> SessionFuture<'a, AdminResult<TopicOffsetMutationReport>> {
         Box::pin(async { Err(unsupported_topic_session("reset_topic_offset_detailed")) })
     }
     fn skip_topic_accumulated_detailed<'a>(
         &'a mut self,
         _request: &'a TopicOffsetMutationRequest,
-    ) -> SessionFuture<'a, AdminResult<TopicOffsetMutationOutcome>> {
+    ) -> SessionFuture<'a, AdminResult<TopicOffsetMutationReport>> {
         Box::pin(async { Err(unsupported_topic_session("skip_topic_accumulated_detailed")) })
     }
     fn upsert_consumer_group_exact_batch<'a>(
@@ -469,28 +469,28 @@ impl DashboardMutationSession for RealMutationSession {
     fn patch_topic_config<'a>(
         &'a mut self,
         request: &'a PatchTopicConfigRequest,
-    ) -> SessionFuture<'a, AdminResult<PatchTopicConfigOutcome>> {
+    ) -> SessionFuture<'a, AdminResult<TopicConfigPatchResult>> {
         TopicMutationAdmin::patch_config_if_version(&mut self.inner, request)
     }
 
     fn upsert_topic_batch<'a>(
         &'a mut self,
         request: &'a TopicBatchUpsertRequest,
-    ) -> SessionFuture<'a, AdminResult<TopicBatchMutationOutcome>> {
+    ) -> SessionFuture<'a, AdminResult<TopicBatchMutationReport>> {
         TopicBatchMutationAdmin::upsert_topic_batch(&mut self.inner, request)
     }
 
     fn delete_topic_batch<'a>(
         &'a mut self,
         request: &'a TopicBatchDeleteRequest,
-    ) -> SessionFuture<'a, AdminResult<TopicBatchDeleteOutcome>> {
+    ) -> SessionFuture<'a, AdminResult<TopicBatchDeleteReport>> {
         TopicBatchDeleteAdmin::delete_topic_batch(&mut self.inner, request)
     }
 
     fn delete_topics_in_broker<'a>(
         &'a mut self,
         request: &'a DeleteTopicsInBrokerRequest,
-    ) -> SessionFuture<'a, AdminResult<TopicMutationOutcome>> {
+    ) -> SessionFuture<'a, AdminResult<TopicMutationSummary>> {
         TopicMutationAdmin::delete_topics_in_broker(&mut self.inner, request)
     }
 
@@ -504,14 +504,14 @@ impl DashboardMutationSession for RealMutationSession {
     fn reset_topic_offset_detailed<'a>(
         &'a mut self,
         request: &'a TopicOffsetMutationRequest,
-    ) -> SessionFuture<'a, AdminResult<TopicOffsetMutationOutcome>> {
+    ) -> SessionFuture<'a, AdminResult<TopicOffsetMutationReport>> {
         TopicOffsetMutationAdmin::reset_consumer_offset_detailed(&mut self.inner, request)
     }
 
     fn skip_topic_accumulated_detailed<'a>(
         &'a mut self,
         request: &'a TopicOffsetMutationRequest,
-    ) -> SessionFuture<'a, AdminResult<TopicOffsetMutationOutcome>> {
+    ) -> SessionFuture<'a, AdminResult<TopicOffsetMutationReport>> {
         TopicOffsetMutationAdmin::skip_accumulated_detailed(&mut self.inner, request)
     }
 

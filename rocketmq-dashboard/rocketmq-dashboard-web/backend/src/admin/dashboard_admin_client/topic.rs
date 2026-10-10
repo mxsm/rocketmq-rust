@@ -303,7 +303,7 @@ trait TopicUpsertExecutor {
     async fn upsert_batch(
         &mut self,
         request: &TopicBatchUpsertRequest,
-    ) -> Result<topic::TopicBatchMutationOutcome, AdminError>;
+    ) -> Result<topic::TopicBatchMutationReport, AdminError>;
 }
 
 struct TopicAdminUpsertExecutor<'a, T> {
@@ -328,7 +328,7 @@ where
 }
 
 trait TopicDeleteExecutor {
-    async fn delete(&mut self, request: &DeleteTopicAdminRequest) -> Result<topic::TopicMutationOutcome, AdminError>;
+    async fn delete(&mut self, request: &DeleteTopicAdminRequest) -> Result<topic::TopicMutationSummary, AdminError>;
 }
 
 struct TopicAdminDeleteExecutor<'a, T> {
@@ -339,7 +339,7 @@ impl<T> TopicDeleteExecutor for TopicAdminDeleteExecutor<'_, T>
 where
     T: TopicAdmin,
 {
-    async fn delete(&mut self, request: &DeleteTopicAdminRequest) -> Result<topic::TopicMutationOutcome, AdminError> {
+    async fn delete(&mut self, request: &DeleteTopicAdminRequest) -> Result<topic::TopicMutationSummary, AdminError> {
         self.admin.delete_topic(request).await
     }
 }
@@ -350,7 +350,7 @@ trait TopicOffsetExecutor {
     async fn reset_offset(
         &mut self,
         request: &ResetTopicConsumerOffsetRequest,
-    ) -> Result<topic::TopicMutationOutcome, AdminError>;
+    ) -> Result<topic::TopicMutationSummary, AdminError>;
 }
 
 struct TopicAdminOffsetExecutor<'a, T> {
@@ -368,7 +368,7 @@ where
     async fn reset_offset(
         &mut self,
         request: &ResetTopicConsumerOffsetRequest,
-    ) -> Result<topic::TopicMutationOutcome, AdminError> {
+    ) -> Result<topic::TopicMutationSummary, AdminError> {
         self.admin.reset_topic_consumer_offset(request).await
     }
 }
@@ -514,7 +514,7 @@ where
     async fn upsert_batch(
         &mut self,
         request: &TopicBatchUpsertRequest,
-    ) -> Result<topic::TopicBatchMutationOutcome, AdminError> {
+    ) -> Result<topic::TopicBatchMutationReport, AdminError> {
         self.admin.upsert_topic_batch(request).await
     }
 }
@@ -1173,7 +1173,7 @@ mod tests {
         async fn delete(
             &mut self,
             request: &core_topic::DeleteTopicAdminRequest,
-        ) -> Result<core_topic::TopicMutationOutcome, AdminError> {
+        ) -> Result<core_topic::TopicMutationSummary, AdminError> {
             let target = request
                 .broker_name
                 .clone()
@@ -1183,7 +1183,7 @@ mod tests {
             if self.delete_failures.get(&target).copied().unwrap_or(false) {
                 return Err(AdminError::backend("delete", "planned failure"));
             }
-            Ok(core_topic::TopicMutationOutcome {
+            Ok(core_topic::TopicMutationSummary {
                 message: format!("deleted {target}"),
                 target_count: 1,
             })
@@ -1200,9 +1200,9 @@ mod tests {
         async fn reset_offset(
             &mut self,
             _: &core_topic::ResetTopicConsumerOffsetRequest,
-        ) -> Result<core_topic::TopicMutationOutcome, AdminError> {
+        ) -> Result<core_topic::TopicMutationSummary, AdminError> {
             self.offset_reset_count += 1;
-            Ok(core_topic::TopicMutationOutcome {
+            Ok(core_topic::TopicMutationSummary {
                 message: "reset".into(),
                 target_count: 1,
             })
@@ -1215,18 +1215,18 @@ mod tests {
         async fn delete_batch(
             &mut self,
             request: &core_topic::TopicBatchDeleteRequest,
-        ) -> Result<core_topic::TopicBatchDeleteOutcome, AdminError> {
-            Ok(core_topic::TopicBatchDeleteOutcome {
+        ) -> Result<core_topic::TopicBatchDeleteReport, AdminError> {
+            Ok(core_topic::TopicBatchDeleteReport {
                 targets: request
                     .cluster_names()
                     .iter()
-                    .map(|cluster| core_topic::TopicBatchTargetOutcome {
+                    .map(|cluster| core_topic::TopicBatchTargetResult {
                         broker_name: cluster.clone(),
                         success: true,
                         message: "deleted".into(),
                     })
                     .collect(),
-                order_config: Some(core_topic::TopicBatchOrderConfigOutcome {
+                order_config: Some(core_topic::TopicOrderConfigMutationResult {
                     success: false,
                     message: "cleanup failed".into(),
                 }),
@@ -1550,7 +1550,7 @@ mod tests {
         async fn upsert_batch(
             &mut self,
             request: &TopicBatchUpsertRequest,
-        ) -> Result<core_topic::TopicBatchMutationOutcome, AdminError> {
+        ) -> Result<core_topic::TopicBatchMutationReport, AdminError> {
             self.batch_requests.push(request.clone());
             let targets = request
                 .broker_names()
@@ -1558,7 +1558,7 @@ mod tests {
                 .map(|broker_name| {
                     self.calls.push(broker_name.clone());
                     let success = self.failing_target.as_deref() != Some(broker_name.as_str());
-                    core_topic::TopicBatchTargetOutcome {
+                    core_topic::TopicBatchTargetResult {
                         broker_name: broker_name.clone(),
                         success,
                         message: if success { "saved" } else { "unavailable" }.to_string(),
@@ -1567,7 +1567,7 @@ mod tests {
                 .collect::<Vec<_>>();
             let order_config = targets.iter().any(|target| target.success).then(|| {
                 let success = self.reconcile_error.is_none();
-                core_topic::TopicBatchOrderConfigOutcome {
+                core_topic::TopicOrderConfigMutationResult {
                     success,
                     message: self
                         .reconcile_error
@@ -1575,7 +1575,7 @@ mod tests {
                         .map_or_else(|| "reconciled".to_string(), |error| error.to_string()),
                 }
             });
-            Ok(core_topic::TopicBatchMutationOutcome { targets, order_config })
+            Ok(core_topic::TopicBatchMutationReport { targets, order_config })
         }
     }
 }

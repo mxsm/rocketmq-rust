@@ -19,10 +19,10 @@ use std::{fmt, sync::Arc};
 
 use rocketmq_admin_core::core::topic::{
     DeleteTopicsInBrokerRequest, DetailedTopicCatalog, DetailedTopicCatalogItem, DetailedTopicConsumers,
-    DetailedTopicStats, PatchTopicConfigOutcome, PatchTopicConfigRequest, QueryTopicConfigCasRequest,
-    TopicBatchDeleteRequest, TopicBatchMutationOutcome, TopicBatchUpsertRequest, TopicConfigCasPatch,
-    TopicConfigCasState, TopicInspectionCompleteness, TopicInspectionFailure, TopicInspectionFailureCode,
-    TopicInspectionStage, TopicMutationOutcome, TopicOffsetMutationFailureCode, TopicOffsetMutationOutcome,
+    DetailedTopicStats, PatchTopicConfigRequest, QueryTopicConfigCasRequest, TopicBatchDeleteRequest,
+    TopicBatchMutationReport, TopicBatchUpsertRequest, TopicConfigCasPatch, TopicConfigCasState,
+    TopicConfigPatchResult, TopicInspectionCompleteness, TopicInspectionFailure, TopicInspectionFailureCode,
+    TopicInspectionStage, TopicMutationSummary, TopicOffsetMutationFailureCode, TopicOffsetMutationReport,
     TopicOffsetMutationRequest, TopicRoute, TopicSendRequest,
 };
 use rocketmq_dashboard_common::{
@@ -376,14 +376,14 @@ impl GpuiAdminProvider {
             select_admin(cancellation, session.patch_topic_config(&patch))
                 .await
                 .map(|outcome| match outcome {
-                    PatchTopicConfigOutcome::Applied {
+                    TopicConfigPatchResult::Applied {
                         previous_version,
                         version,
                     } => SafeTopicPatchOutcome::Applied {
                         previous_version,
                         version,
                     },
-                    PatchTopicConfigOutcome::VersionConflict {
+                    TopicConfigPatchResult::VersionConflict {
                         expected_version,
                         actual_version,
                     } => SafeTopicPatchOutcome::VersionConflict {

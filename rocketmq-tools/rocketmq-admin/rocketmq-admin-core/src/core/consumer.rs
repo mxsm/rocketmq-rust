@@ -906,7 +906,6 @@ impl DeleteSubscriptionGroupsRequest {
     }
 }
 
-/// Report for a completed subscription-group deletion batch.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsumerBatchMutationReport {
     pub message: String,
@@ -1050,7 +1049,6 @@ impl PatchSubscriptionGroupConfigRequest {
     }
 }
 
-/// Result of a version-guarded subscription-group config patch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SubscriptionGroupConfigPatchResult {
