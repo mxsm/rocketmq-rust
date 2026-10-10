@@ -38,9 +38,9 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use tokio::sync::broadcast;
 
 use crate::base::pending_request_table::materialize_and_estimate_remoting_command_retained_bytes;
-use crate::base::pending_request_table::PendingRegistrationOutcome;
 use crate::base::pending_request_table::PendingRequestCompletion;
 use crate::base::pending_request_table::PendingRequestOwner;
+use crate::base::pending_request_table::PendingRequestRegistrationResult;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::connection::CommandSendOutcome;
 use crate::deadline::RequestDeadline;
@@ -547,11 +547,11 @@ impl ServerRequestSender {
             retained_bytes,
             response_tx,
         ) {
-            PendingRegistrationOutcome::Registered(guard) => guard,
-            PendingRegistrationOutcome::QueueSaturated => return Ok(ServerRequestOutcome::QueueSaturated),
-            PendingRegistrationOutcome::DeadlineExpired => return Ok(ServerRequestOutcome::DeadlineExpired),
-            PendingRegistrationOutcome::SessionClosed => return Ok(ServerRequestOutcome::SessionClosed),
-            PendingRegistrationOutcome::OperationalFailure(source) => {
+            PendingRequestRegistrationResult::Registered(guard) => guard,
+            PendingRequestRegistrationResult::QueueSaturated => return Ok(ServerRequestOutcome::QueueSaturated),
+            PendingRequestRegistrationResult::DeadlineExpired => return Ok(ServerRequestOutcome::DeadlineExpired),
+            PendingRequestRegistrationResult::SessionClosed => return Ok(ServerRequestOutcome::SessionClosed),
+            PendingRequestRegistrationResult::OperationalFailure(source) => {
                 return Err(TransportError::request_failed(
                     crate::error::RequestOperation::Register,
                     crate::request_outcome::OutboundRequestStage::BeforeWrite,

@@ -26,12 +26,12 @@ use crate::admission::AdmissionController;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScope;
 use crate::base::pending_request_table::materialize_and_estimate_remoting_command_retained_bytes;
-use crate::base::pending_request_table::PendingRegistrationOutcome;
 use crate::base::pending_request_table::PendingRequestCompletion;
 use crate::base::pending_request_table::PendingRequestLimits;
+use crate::base::pending_request_table::PendingRequestRegistrationResult;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::base::pending_request_table::PendingRequestUsage;
-use crate::base::pending_request_table::PendingResponseOutcome;
+use crate::base::pending_request_table::PendingResponseDisposition;
 use crate::clients::nameserver_endpoint::ConnectTarget;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::config::SocketOptions;
@@ -586,18 +586,18 @@ impl OneShotTransportClient {
             .pending
             .register_for_owner_with_bytes(&owner, opaque, deadline, retained_bytes, sender)
         {
-            PendingRegistrationOutcome::Registered(guard) => guard,
-            PendingRegistrationOutcome::DeadlineExpired => return Err(deadline.elapsed_error()),
-            PendingRegistrationOutcome::SessionClosed => {
+            PendingRequestRegistrationResult::Registered(guard) => guard,
+            PendingRequestRegistrationResult::DeadlineExpired => return Err(deadline.elapsed_error()),
+            PendingRequestRegistrationResult::SessionClosed => {
                 return Err(connection_failed_without_source_for_remote(
                     address.to_string(),
                     TransportStage::Closed,
                 ));
             }
-            PendingRegistrationOutcome::QueueSaturated => {
+            PendingRequestRegistrationResult::QueueSaturated => {
                 return Err(admission_queue_saturated(address.to_string()));
             }
-            PendingRegistrationOutcome::OperationalFailure(error) => {
+            PendingRequestRegistrationResult::OperationalFailure(error) => {
                 return Err(error);
             }
         };
@@ -624,7 +624,7 @@ impl OneShotTransportClient {
                 if !matches!(
                     self.pending
                         .complete_response_for_owner(&owner, response_opaque, response),
-                    PendingResponseOutcome::Completed
+                    PendingResponseDisposition::Completed
                 ) {
                     guard.complete(PendingRequestCompletion::OperationalFailure(
                         connection_failed_without_source_for_remote(address.to_string(), TransportStage::Closed),
