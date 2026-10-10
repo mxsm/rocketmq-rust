@@ -1179,7 +1179,7 @@ impl TransportListener {
                 return Err(connection_failed_without_source(TransportStage::Closed));
             };
             let scope = AdmissionScope::new(remote_addr.ip()).with_session(session_id);
-            let crate::admission::AdmissionOutcome::Acquired(connection_permit) = admission.try_acquire(
+            let crate::admission::AdmissionDecision::Acquired(connection_permit) = admission.try_acquire(
                 AdmissionResource::Connection,
                 scope,
                 crate::admission::estimated_connection_retained_bytes(),
@@ -2082,7 +2082,7 @@ impl SessionTransportServer {
                     break;
                 };
                 let scope = AdmissionScope::new(remote_addr.ip()).with_session(session_id);
-                let crate::admission::AdmissionOutcome::Acquired(connection_permit) =
+                let crate::admission::AdmissionDecision::Acquired(connection_permit) =
                     server.dispatch.admission_controller().try_acquire(
                         AdmissionResource::Connection,
                         scope,

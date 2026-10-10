@@ -17,8 +17,8 @@ use std::str::FromStr;
 
 use rocketmq_transport::api::AdmissionClass;
 use rocketmq_transport::api::AdmissionController;
+use rocketmq_transport::api::AdmissionDecision;
 use rocketmq_transport::api::AdmissionLimits;
-use rocketmq_transport::api::AdmissionOutcome;
 use rocketmq_transport::api::AdmissionResource;
 use rocketmq_transport::api::AdmissionScope;
 use rocketmq_transport::api::FullPolicy;
@@ -38,12 +38,12 @@ fn global_ip_tenant_and_session_limits_release_as_one_permit() {
         .with_tenant(7)
         .with_session(9);
     let permit = match controller.try_acquire(AdmissionResource::Inflight, scope, 8, AdmissionClass::Data) {
-        AdmissionOutcome::Acquired(permit) => permit,
-        AdmissionOutcome::Rejected(rejection) => panic!("initial admission unexpectedly rejected: {rejection:?}"),
+        AdmissionDecision::Acquired(permit) => permit,
+        AdmissionDecision::Rejected(rejection) => panic!("initial admission unexpectedly rejected: {rejection:?}"),
     };
     let rejection = match controller.try_acquire(AdmissionResource::Inflight, scope, 1, AdmissionClass::Data) {
-        AdmissionOutcome::Acquired(_) => panic!("over-budget admission unexpectedly acquired"),
-        AdmissionOutcome::Rejected(rejection) => rejection,
+        AdmissionDecision::Acquired(_) => panic!("over-budget admission unexpectedly acquired"),
+        AdmissionDecision::Rejected(rejection) => rejection,
     };
     assert_eq!(rejection.policy(), FullPolicy::Reject);
     assert_eq!(controller.snapshot().inflight.current_count, 1);
@@ -54,7 +54,7 @@ fn global_ip_tenant_and_session_limits_release_as_one_permit() {
     assert_eq!(controller.snapshot().inflight.current_bytes, 0);
     assert!(matches!(
         controller.try_acquire(AdmissionResource::Inflight, scope, 8, AdmissionClass::Data),
-        AdmissionOutcome::Acquired(_)
+        AdmissionDecision::Acquired(_)
     ));
 }
 
@@ -71,22 +71,22 @@ fn control_reserve_remains_bounded_and_available_during_data_overload() {
     let controller = AdmissionController::new(limits);
     let scope = AdmissionScope::new(IpAddr::from_str("127.0.0.2").unwrap());
     let data = match controller.try_acquire(AdmissionResource::Processor, scope, 4, AdmissionClass::Data) {
-        AdmissionOutcome::Acquired(permit) => permit,
-        AdmissionOutcome::Rejected(rejection) => panic!("initial data admission unexpectedly rejected: {rejection:?}"),
+        AdmissionDecision::Acquired(permit) => permit,
+        AdmissionDecision::Rejected(rejection) => panic!("initial data admission unexpectedly rejected: {rejection:?}"),
     };
     assert!(matches!(
         controller.try_acquire(AdmissionResource::Processor, scope, 1, AdmissionClass::Data),
-        AdmissionOutcome::Rejected(_)
+        AdmissionDecision::Rejected(_)
     ));
     let control = match controller.try_acquire(AdmissionResource::Processor, scope, 4, AdmissionClass::Control) {
-        AdmissionOutcome::Acquired(permit) => permit,
-        AdmissionOutcome::Rejected(rejection) => {
+        AdmissionDecision::Acquired(permit) => permit,
+        AdmissionDecision::Rejected(rejection) => {
             panic!("reserved control capacity must remain available: {rejection:?}")
         }
     };
     assert!(matches!(
         controller.try_acquire(AdmissionResource::Processor, scope, 1, AdmissionClass::Control),
-        AdmissionOutcome::Rejected(_)
+        AdmissionDecision::Rejected(_)
     ));
     drop((data, control));
 }
@@ -104,17 +104,17 @@ fn scoped_control_reserve_survives_per_ip_data_overload() {
     let controller = AdmissionController::new(limits);
     let scope = AdmissionScope::new(IpAddr::from_str("127.0.0.22").unwrap());
     let data = match controller.try_acquire(AdmissionResource::Processor, scope, 4, AdmissionClass::Data) {
-        AdmissionOutcome::Acquired(permit) => permit,
-        AdmissionOutcome::Rejected(rejection) => panic!("first data request was rejected: {rejection:?}"),
+        AdmissionDecision::Acquired(permit) => permit,
+        AdmissionDecision::Rejected(rejection) => panic!("first data request was rejected: {rejection:?}"),
     };
 
     assert!(matches!(
         controller.try_acquire(AdmissionResource::Processor, scope, 1, AdmissionClass::Data),
-        AdmissionOutcome::Rejected(_)
+        AdmissionDecision::Rejected(_)
     ));
     let control = match controller.try_acquire(AdmissionResource::Processor, scope, 4, AdmissionClass::Control) {
-        AdmissionOutcome::Acquired(permit) => permit,
-        AdmissionOutcome::Rejected(rejection) => {
+        AdmissionDecision::Acquired(permit) => permit,
+        AdmissionDecision::Rejected(rejection) => {
             panic!("per-IP reserve must remain available to control traffic: {rejection:?}")
         }
     };
@@ -130,8 +130,8 @@ async fn dropped_collector_never_blocks_or_unbounds_data_plane_admission() {
     let scope = AdmissionScope::new(IpAddr::from_str("127.0.0.3").unwrap());
     for _ in 0..100 {
         let permit = match controller.try_acquire(AdmissionResource::Queued, scope, 1, AdmissionClass::Data) {
-            AdmissionOutcome::Acquired(permit) => permit,
-            AdmissionOutcome::Rejected(rejection) => panic!("queued admission unexpectedly rejected: {rejection:?}"),
+            AdmissionDecision::Acquired(permit) => permit,
+            AdmissionDecision::Rejected(rejection) => panic!("queued admission unexpectedly rejected: {rejection:?}"),
         };
         drop(permit);
     }
@@ -153,8 +153,8 @@ fn released_session_scopes_are_reclaimed_before_the_key_limit_rejects_new_sessio
             0,
             AdmissionClass::Data,
         ) {
-            AdmissionOutcome::Acquired(permit) => permit,
-            AdmissionOutcome::Rejected(rejection) => {
+            AdmissionDecision::Acquired(permit) => permit,
+            AdmissionDecision::Rejected(rejection) => {
                 panic!("released session {session} should not exhaust scope keys: {rejection:?}")
             }
         };
@@ -175,8 +175,8 @@ fn scope_reclamation_is_safe_when_release_and_next_acquire_cross_threads() {
         0,
         AdmissionClass::Data,
     ) {
-        AdmissionOutcome::Acquired(permit) => permit,
-        AdmissionOutcome::Rejected(rejection) => panic!("first connection was rejected: {rejection:?}"),
+        AdmissionDecision::Acquired(permit) => permit,
+        AdmissionDecision::Rejected(rejection) => panic!("first connection was rejected: {rejection:?}"),
     };
     let released = std::sync::Arc::new(std::sync::Barrier::new(2));
     let release_barrier = released.clone();
@@ -194,7 +194,7 @@ fn scope_reclamation_is_safe_when_release_and_next_acquire_cross_threads() {
     );
     releasing.join().unwrap();
     assert!(
-        matches!(second, AdmissionOutcome::Acquired(_)),
+        matches!(second, AdmissionDecision::Acquired(_)),
         "a fully released scope must be reclaimable across threads"
     );
 }
@@ -225,8 +225,8 @@ fn reclaiming_idle_sessions_never_detaches_them_from_the_per_ip_parent() {
         1024,
         AdmissionClass::Data,
     ) {
-        AdmissionOutcome::Acquired(permit) => permit,
-        AdmissionOutcome::Rejected(rejection) => panic!("first session was rejected: {rejection:?}"),
+        AdmissionDecision::Acquired(permit) => permit,
+        AdmissionDecision::Rejected(rejection) => panic!("first session was rejected: {rejection:?}"),
     };
     drop(first);
 
@@ -236,8 +236,8 @@ fn reclaiming_idle_sessions_never_detaches_them_from_the_per_ip_parent() {
         1024,
         AdmissionClass::Data,
     ) {
-        AdmissionOutcome::Acquired(permit) => permit,
-        AdmissionOutcome::Rejected(rejection) => {
+        AdmissionDecision::Acquired(permit) => permit,
+        AdmissionDecision::Rejected(rejection) => {
             panic!("idle first session should be reclaimable: {rejection:?}")
         }
     };
@@ -249,7 +249,7 @@ fn reclaiming_idle_sessions_never_detaches_them_from_the_per_ip_parent() {
             1024,
             AdmissionClass::Data,
         ),
-        AdmissionOutcome::Rejected(_)
+        AdmissionDecision::Rejected(_)
     ));
     drop(second);
 }
