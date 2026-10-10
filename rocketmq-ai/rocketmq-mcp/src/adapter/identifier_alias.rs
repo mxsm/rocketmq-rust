@@ -12,82 +12,39 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::hash_map::RandomState;
-use std::collections::HashMap;
-use std::hash::BuildHasher;
-use std::hash::Hash;
-use std::hash::Hasher;
 use std::sync::Arc;
-use std::sync::Mutex;
 
-const MAX_ALIAS_IDENTITIES: usize = 16_384;
+use hmac::digest::KeyInit;
+use hmac::Hmac;
+use hmac::Mac;
+use sha2::Sha256;
+
 const MAX_ALIAS_INPUT_BYTES: usize = 1_024;
 const MAX_ALIAS_PARTS: usize = 4;
-const MAX_COLLISION_ATTEMPTS: u16 = 256;
+/// Keeps these pseudonyms apart from any other use of the same key.
+const ALIAS_CONTEXT: &[u8] = b"rocketmq-mcp/identifier-alias/v1";
+/// How much of the MAC a pseudonym keeps: 128 bits, written as 32 hexadecimal digits.
+const ALIAS_TAG_BYTES: usize = 16;
+const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
 
-/// Process-local keyed pseudonyms. Clones share one randomly keyed lifetime.
+/// Keyed pseudonyms for client and message identifiers.
+///
+/// A pseudonym is a truncated HMAC-SHA256 of the identifier. Nothing is kept per identifier, so
+/// the number of distinct identifiers is unbounded, and every process that holds the same key
+/// derives the same pseudonym. The default key is random: its pseudonyms are valid for the
+/// lifetime of one process. Clones share one key.
 #[derive(Clone)]
 pub(crate) struct IdentifierAliaser {
-    keys: Arc<AliasKeys>,
+    mac: Arc<Hmac<Sha256>>,
 }
 
-struct AliasKeys {
-    primary: RandomState,
-    secondary: RandomState,
-    state: Mutex<AliasState>,
-    max_identities: usize,
-    max_input_bytes: usize,
-    #[cfg(test)]
-    forced_collision_attempts: u16,
-}
-
-#[derive(Default)]
-struct AliasState {
-    identities_by_alias: HashMap<String, AliasIdentity>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct AliasIdentity {
-    domain: &'static str,
-    parts: Vec<String>,
-}
-
+/// The identifier is longer than a pseudonym may cover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum IdentifierAliasRejection {
-    InputBoundExceeded,
-    CapacityExceeded,
-    CollisionExhausted,
-}
+pub(crate) struct AliasInputBoundExceeded;
 
-#[derive(Debug)]
-pub(crate) enum IdentifierAliasFailure {
-    Rejected(IdentifierAliasRejection),
-    Operational(crate::McpError),
-}
-
-impl From<IdentifierAliasRejection> for IdentifierAliasFailure {
-    fn from(rejection: IdentifierAliasRejection) -> Self {
-        Self::Rejected(rejection)
-    }
-}
-
-#[derive(thiserror::Error)]
-#[error("identifier alias state is unavailable")]
-struct AliasStateError(#[source] std::sync::PoisonError<()>);
-
-impl std::fmt::Debug for AliasStateError {
+impl std::fmt::Display for AliasInputBoundExceeded {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(self, f)
-    }
-}
-
-impl std::fmt::Display for IdentifierAliasRejection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InputBoundExceeded => write!(f, "identifier alias input exceeds the process safety bound"),
-            Self::CapacityExceeded => write!(f, "identifier alias capacity is exhausted"),
-            Self::CollisionExhausted => write!(f, "identifier alias collision attempts are exhausted"),
-        }
+        f.write_str("identifier alias input exceeds the process safety bound")
     }
 }
 
@@ -98,174 +55,186 @@ impl std::fmt::Debug for IdentifierAliaser {
 }
 
 impl Default for IdentifierAliaser {
+    /// Draws a random key that no other process shares.
     fn default() -> Self {
+        // A key of exactly one hash block needs no length handling, so this cannot fail.
+        let mut key = [0u8; 64];
+        rand::fill(&mut key);
         Self {
-            keys: Arc::new(AliasKeys {
-                primary: RandomState::new(),
-                secondary: RandomState::new(),
-                state: Mutex::new(AliasState::default()),
-                max_identities: MAX_ALIAS_IDENTITIES,
-                max_input_bytes: MAX_ALIAS_INPUT_BYTES,
-                #[cfg(test)]
-                forced_collision_attempts: 0,
-            }),
+            mac: Arc::new(Hmac::new(&key.into())),
         }
     }
 }
 
 impl IdentifierAliaser {
-    pub(crate) fn client_alias(&self, client_id: &str, client_addr: &str) -> Result<String, IdentifierAliasFailure> {
+    /// Uses a key that several replicas share, so that they all derive the same pseudonyms.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the MAC rejects the key. HMAC accepts every key length, so this
+    /// reports a broken invariant instead of panicking.
+    pub(crate) fn with_key(key: &[u8]) -> crate::McpResult<Self> {
+        let mac = Hmac::new_from_slice(key).map_err(crate::McpError::from_source)?;
+        Ok(Self { mac: Arc::new(mac) })
+    }
+
+    pub(crate) fn client_alias(&self, client_id: &str, client_addr: &str) -> Result<String, AliasInputBoundExceeded> {
         self.alias("client", &[client_id, client_addr])
     }
 
-    pub(crate) fn message_alias(&self, message_id: &str) -> Result<String, IdentifierAliasFailure> {
+    pub(crate) fn message_alias(&self, message_id: &str) -> Result<String, AliasInputBoundExceeded> {
         self.alias("message", &[message_id])
     }
 
-    pub(crate) fn unique_message_alias(&self, message_id: &str) -> Result<String, IdentifierAliasFailure> {
+    pub(crate) fn unique_message_alias(&self, message_id: &str) -> Result<String, AliasInputBoundExceeded> {
         self.alias("unique-message", &[message_id])
     }
 
-    fn alias(&self, domain: &'static str, parts: &[&str]) -> Result<String, IdentifierAliasFailure> {
+    fn alias(&self, domain: &'static str, parts: &[&str]) -> Result<String, AliasInputBoundExceeded> {
         let input_bytes = parts
             .iter()
             .try_fold(0usize, |total, part| total.checked_add(part.len()))
-            .ok_or(IdentifierAliasRejection::InputBoundExceeded)?;
-        if parts.is_empty() || parts.len() > MAX_ALIAS_PARTS || input_bytes > self.keys.max_input_bytes {
-            return Err(IdentifierAliasRejection::InputBoundExceeded.into());
+            .ok_or(AliasInputBoundExceeded)?;
+        if parts.is_empty() || parts.len() > MAX_ALIAS_PARTS || input_bytes > MAX_ALIAS_INPUT_BYTES {
+            return Err(AliasInputBoundExceeded);
         }
-        let identity = AliasIdentity {
-            domain,
-            parts: parts.iter().map(|part| (*part).to_string()).collect(),
-        };
-        let mut state = self.keys.state.lock().map_err(|poison| {
-            drop(poison.into_inner());
-            IdentifierAliasFailure::Operational(crate::McpError::from_source(AliasStateError(
-                std::sync::PoisonError::new(()),
-            )))
-        })?;
-        for attempt in 0..MAX_COLLISION_ATTEMPTS {
-            let candidate = self.candidate(domain, parts, attempt);
-            match state.identities_by_alias.get(&candidate) {
-                Some(existing) if existing == &identity => return Ok(candidate),
-                Some(_) => continue,
-                None if state.identities_by_alias.len() >= self.keys.max_identities => {
-                    return Err(IdentifierAliasRejection::CapacityExceeded.into());
-                }
-                None => {
-                    state.identities_by_alias.insert(candidate.clone(), identity);
-                    return Ok(candidate);
-                }
-            }
+        // Every field carries its length, so no two inputs share an encoding: neither a
+        // different split of the same text nor the same text under another domain.
+        let mut mac = Hmac::clone(&self.mac);
+        update_framed(&mut mac, ALIAS_CONTEXT);
+        update_framed(&mut mac, domain.as_bytes());
+        mac.update(&length_prefix(parts.len()));
+        for part in parts {
+            update_framed(&mut mac, part.as_bytes());
         }
-        Err(IdentifierAliasRejection::CollisionExhausted.into())
-    }
+        let tag = mac.finalize().into_bytes();
 
-    fn candidate(&self, domain: &'static str, parts: &[&str], attempt: u16) -> String {
-        #[cfg(test)]
-        if attempt < self.keys.forced_collision_attempts {
-            return format!("{domain}-00000000000000000000000000000000");
+        let mut alias = String::with_capacity(domain.len() + 1 + ALIAS_TAG_BYTES * 2);
+        alias.push_str(domain);
+        alias.push('-');
+        for byte in &tag[..ALIAS_TAG_BYTES] {
+            alias.push(char::from(HEX_DIGITS[usize::from(byte >> 4)]));
+            alias.push(char::from(HEX_DIGITS[usize::from(byte & 0x0f)]));
         }
-        let primary = keyed_hash(&self.keys.primary, domain, parts, attempt);
-        let secondary = keyed_hash(&self.keys.secondary, domain, parts, attempt);
-        format!("{domain}-{primary:016x}{secondary:016x}")
-    }
-
-    #[cfg(test)]
-    fn with_test_limits(max_identities: usize, max_input_bytes: usize, forced_collision_attempts: u16) -> Self {
-        Self {
-            keys: Arc::new(AliasKeys {
-                primary: RandomState::new(),
-                secondary: RandomState::new(),
-                state: Mutex::new(AliasState::default()),
-                max_identities,
-                max_input_bytes,
-                forced_collision_attempts,
-            }),
-        }
+        Ok(alias)
     }
 }
 
-fn keyed_hash(state: &RandomState, domain: &str, parts: &[&str], attempt: u16) -> u64 {
-    let mut hasher = state.build_hasher();
-    domain.hash(&mut hasher);
-    attempt.hash(&mut hasher);
-    parts.len().hash(&mut hasher);
-    for part in parts {
-        part.len().hash(&mut hasher);
-        part.hash(&mut hasher);
-    }
-    hasher.finish()
+fn update_framed(mac: &mut Hmac<Sha256>, field: &[u8]) {
+    mac.update(&length_prefix(field.len()));
+    mac.update(field);
+}
+
+fn length_prefix(length: usize) -> [u8; 8] {
+    // `usize` is at most 64 bits on every supported target.
+    (length as u64).to_be_bytes()
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
+    const SHARED_KEY: &[u8] = b"0123456789abcdef0123456789abcdef";
+
     #[test]
-    fn aliases_are_stable_bounded_and_domain_separated() {
+    fn alias_is_stable_and_domain_separated() {
         let aliases = IdentifierAliaser::default();
         let clone = aliases.clone();
         let client = aliases.client_alias("raw-client", "10.0.0.1:1234").unwrap();
 
         assert_eq!(client, clone.client_alias("raw-client", "10.0.0.1:1234").unwrap());
+        assert_eq!(client, aliases.client_alias("raw-client", "10.0.0.1:1234").unwrap());
         assert_ne!(client, aliases.client_alias("raw-client", "10.0.0.2:1234").unwrap());
-        assert_ne!(client, aliases.message_alias("raw-client").unwrap());
-        assert_eq!(client.len(), "client-".len() + 32);
+        // The same text split differently, or under another domain, is another identifier.
+        assert_ne!(
+            aliases.client_alias("ab", "c").unwrap(),
+            aliases.client_alias("a", "bc").unwrap()
+        );
+        assert_ne!(
+            aliases.message_alias("raw-client").unwrap()["message-".len()..],
+            aliases.unique_message_alias("raw-client").unwrap()["unique-message-".len()..]
+        );
+
+        let digits = client.strip_prefix("client-").unwrap();
+        assert_eq!(digits.len(), 32);
+        assert!(digits
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
         assert!(!client.contains("raw-client"));
         assert!(!client.contains("10.0.0.1"));
     }
 
     #[test]
-    fn collisions_are_detected_without_rebinding_existing_identities() {
-        let aliases = IdentifierAliaser::with_test_limits(8, 128, 1);
-        let first = aliases.client_alias("client-a", "addr-a").unwrap();
-        let second = aliases.client_alias("client-b", "addr-b").unwrap();
+    fn aliases_never_run_out() {
+        let aliases = IdentifierAliaser::default();
+        let distinct = (0..20_000)
+            .map(|index| aliases.message_alias(&format!("message-{index}")).unwrap())
+            .collect::<HashSet<_>>();
 
-        assert_ne!(first, second);
-        assert_eq!(first, aliases.client_alias("client-a", "addr-a").unwrap());
-        assert_eq!(second, aliases.client_alias("client-b", "addr-b").unwrap());
-        assert_ne!(first, aliases.message_alias("client-a").unwrap());
+        assert_eq!(distinct.len(), 20_000);
     }
 
     #[test]
-    fn capacity_and_input_bounds_fail_without_exposing_input() {
-        let capacity = IdentifierAliaser::with_test_limits(1, 16, 0);
-        capacity.message_alias("first").unwrap();
-        assert!(matches!(
-            capacity.message_alias("second-secret").unwrap_err(),
-            IdentifierAliasFailure::Rejected(IdentifierAliasRejection::CapacityExceeded)
-        ));
+    fn shared_key_yields_the_same_alias_across_instances() {
+        let first = IdentifierAliaser::with_key(SHARED_KEY).unwrap();
+        let second = IdentifierAliaser::with_key(SHARED_KEY).unwrap();
+        let other_key = IdentifierAliaser::with_key(b"another-key-another-key-another-key").unwrap();
+        let alias = first.client_alias("consumer-1", "10.0.0.7:51234").unwrap();
 
-        let bounded = IdentifierAliaser::with_test_limits(2, 4, 0);
-        let error = bounded.message_alias("raw-secret").unwrap_err();
-        assert!(matches!(
-            error,
-            IdentifierAliasFailure::Rejected(IdentifierAliasRejection::InputBoundExceeded)
-        ));
-        assert!(!format!("{error:?}").contains("raw-secret"));
+        assert_eq!(alias, second.client_alias("consumer-1", "10.0.0.7:51234").unwrap());
+        assert_ne!(alias, other_key.client_alias("consumer-1", "10.0.0.7:51234").unwrap());
+        // Two processes without a configured key do not agree, by design.
+        assert_ne!(
+            IdentifierAliaser::default().message_alias("message-1").unwrap(),
+            IdentifierAliaser::default().message_alias("message-1").unwrap()
+        );
+    }
+
+    /// Replicas that share a key may run different builds, so the derivation is part of the
+    /// contract. The expected values were computed with an independent HMAC-SHA256.
+    #[test]
+    fn shared_key_derivation_is_pinned() {
+        let aliases = IdentifierAliaser::with_key(SHARED_KEY).unwrap();
+
+        assert_eq!(
+            aliases.message_alias("7F000001000078BF000000000000022A").unwrap(),
+            "message-66decfcbab57428005f1483eed772524"
+        );
+        assert_eq!(
+            aliases
+                .unique_message_alias("7F000001000078BF000000000000022A")
+                .unwrap(),
+            "unique-message-019c942efb02ab17d234660ca7d3c528"
+        );
+        assert_eq!(
+            aliases.client_alias("consumer-1@10.0.0.7", "10.0.0.7:51234").unwrap(),
+            "client-ea5e2065d7b53b5f5d0676474a23f51b"
+        );
     }
 
     #[test]
-    fn collision_exhaustion_is_distinct_from_poisoned_state() {
-        use std::error::Error;
-        let aliases = IdentifierAliaser::with_test_limits(8, 128, MAX_COLLISION_ATTEMPTS);
-        aliases.message_alias("first").unwrap();
-        assert!(matches!(
-            aliases.message_alias("second"),
-            Err(IdentifierAliasFailure::Rejected(
-                IdentifierAliasRejection::CollisionExhausted
-            ))
-        ));
-        let _ = std::panic::catch_unwind(|| {
-            let _state = aliases.keys.state.lock().unwrap();
-            panic!("poison private alias state");
-        });
-        let Err(IdentifierAliasFailure::Operational(error)) = aliases.message_alias("first") else {
-            panic!("expected poisoned state to be operational");
-        };
-        let source = error.source().unwrap().downcast_ref::<AliasStateError>().unwrap();
-        assert!(source.source().unwrap().is::<std::sync::PoisonError<()>>());
-        assert_eq!(format!("{source:?}"), "identifier alias state is unavailable");
+    fn input_bound_fails_without_exposing_input() {
+        let aliases = IdentifierAliaser::default();
+        let at_the_bound = "x".repeat(MAX_ALIAS_INPUT_BYTES);
+        aliases.message_alias(&at_the_bound).unwrap();
+
+        let too_long = format!("raw-secret-{at_the_bound}");
+        let error = aliases.message_alias(&too_long).unwrap_err();
+        assert_eq!(error, AliasInputBoundExceeded);
+        assert!(!format!("{error} {error:?}").contains("raw-secret"));
+        // The bound covers all parts together.
+        assert_eq!(
+            aliases.client_alias(&at_the_bound, "x").unwrap_err(),
+            AliasInputBoundExceeded
+        );
+    }
+
+    #[test]
+    fn key_never_appears_in_debug_output() {
+        let aliases = IdentifierAliaser::with_key(SHARED_KEY).unwrap();
+
+        assert_eq!(format!("{aliases:?}"), "IdentifierAliaser { .. }");
     }
 }

@@ -42,21 +42,28 @@ operation_schema!(
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct BrokerConfigProperties {
+    /// `true` or `false`: whether the Broker creates a missing Topic on first use.
     #[serde(default, deserialize_with = "deserialize_present_string")]
     #[schemars(schema_with = "string_schema")]
     pub auto_create_topic_enable: Option<String>,
+    /// `true` or `false`: whether the Broker creates a missing Consumer Group on first use.
     #[serde(default, deserialize_with = "deserialize_present_string")]
     #[schemars(schema_with = "string_schema")]
     pub auto_create_subscription_group: Option<String>,
+    /// Permission bits as a decimal string from `1` to `7`: 2 allows writing, 4 allows reading, 6 allows both.
+    /// At least one of reading or writing must be allowed.
     #[serde(default, deserialize_with = "deserialize_present_string")]
     #[schemars(schema_with = "string_schema")]
     pub broker_permission: Option<String>,
+    /// Queue count of automatically created Topics, as a decimal string from `1` to `128`.
     #[serde(default, deserialize_with = "deserialize_present_string")]
     #[schemars(schema_with = "string_schema")]
     pub default_topic_queue_nums: Option<String>,
+    /// `true` or `false`: whether the Broker builds the message index.
     #[serde(default, deserialize_with = "deserialize_present_string")]
     #[schemars(schema_with = "string_schema")]
     pub message_index_enable: Option<String>,
+    /// `true` or `false`: whether the Broker hosts the system message-trace Topic.
     #[serde(default, deserialize_with = "deserialize_present_string")]
     #[schemars(schema_with = "string_schema")]
     pub trace_topic_enable: Option<String>,
@@ -73,23 +80,67 @@ fn string_schema(_generator: &mut SchemaGenerator) -> Schema {
     schemars::json_schema!({"type": "string"})
 }
 
+/// Decodes the settings from a JSON object only, as the input schema declares.
+///
+/// A derived struct also decodes from an array by field position, which would bind values to
+/// settings that the caller never named.
+fn deserialize_properties_object<'de, D>(deserializer: D) -> Result<BrokerConfigProperties, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct ObjectOnly;
+
+    impl<'de> serde::de::Visitor<'de> for ObjectOnly {
+        type Value = BrokerConfigProperties;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an object of Broker settings")
+        }
+
+        fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::MapAccess<'de>,
+        {
+            BrokerConfigProperties::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        }
+    }
+
+    deserializer.deserialize_map(ObjectOnly)
+}
+
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PatchBrokerConfigArgs {
+    /// Version of this argument schema. Always `rocketmq-mcp-control.arguments.v1`.
     #[schemars(regex(pattern = "^rocketmq-mcp-control\\.arguments\\.v1$"))]
     pub schema_version: String,
+    /// Logical cluster name from the server configuration, never a NameServer or Broker address. Both the
+    /// caller and the server policy must allow it.
     #[schemars(length(min = 1, max = 64), regex(pattern = "^[a-zA-Z0-9_-]+$"))]
     pub cluster: String,
+    /// Logical name of the one Broker to patch; never an address.
     #[schemars(length(min = 1, max = 127), regex(pattern = "^[%|a-zA-Z0-9_-]+$"))]
     pub broker_name: String,
+    /// Settings to change, at least one. Each value is a string, and a setting left out keeps its current
+    /// value.
+    #[serde(deserialize_with = "deserialize_properties_object")]
     pub properties: BrokerConfigProperties,
+    /// Plan only: read the current state and report what would change, without writing. When omitted, the
+    /// server's configured default applies, which is a dry run unless the operator changed it.
     #[serde(default = "default_dry_run")]
     pub dry_run: bool,
+    /// Explicit confirmation. Must be true to execute, that is when `dry_run` is false; a dry run does not
+    /// need it.
     #[serde(default)]
     pub confirm: bool,
+    /// Why the change is made; kept only in the durable audit log. Required to execute. 5 to 256 characters of
+    /// letters, digits, spaces and `._,#-`, without addresses, host names or tokens.
     #[serde(default)]
     #[schemars(length(min = 5, max = 256))]
     pub reason: Option<String>,
+    /// Optional idempotency key of 8 to 64 letters, digits and `._:-`. An execute call that repeats a key with
+    /// the same arguments returns the outcome already recorded for it instead of writing again; the same key
+    /// with different arguments is rejected.
     #[serde(default)]
     #[schemars(length(min = 8, max = 64), regex(pattern = "^[a-zA-Z0-9._:-]+$"))]
     pub request_key: Option<String>,
@@ -296,6 +347,31 @@ mod tests {
                 .map_err(|_| ControlError::invalid_argument())
                 .and_then(|args| args.validate(true, false));
             assert!(rejected.is_err());
+        }
+    }
+
+    #[test]
+    fn broker_properties_decode_from_an_object_only() {
+        let value = serde_json::json!({
+            "schema_version": MUTATION_ARGUMENTS_SCHEMA_VERSION,
+            "cluster": "cluster-a",
+            "broker_name": "broker-a",
+            "properties": {"traceTopicEnable": "true"}
+        });
+        let args: PatchBrokerConfigArgs = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(args.validate(true, true).unwrap().trace_topic_enable, Some(true));
+        // An array must not be read by field position: its first entry would otherwise become
+        // `autoCreateTopicEnable`, a setting the caller did not name.
+        for properties in [
+            serde_json::json!(["true"]),
+            serde_json::json!(["true", "true", "6", "8", "true", "true"]),
+            serde_json::json!([]),
+            serde_json::json!("true"),
+            serde_json::Value::Null,
+        ] {
+            let mut case = value.clone();
+            case["properties"] = properties;
+            assert!(serde_json::from_value::<PatchBrokerConfigArgs>(case).is_err());
         }
     }
 }

@@ -293,6 +293,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | [rocketmq-dashboard-tauri](./rocketmq-dashboard/rocketmq-dashboard-tauri) | 基于 Tauri 和 React 的跨平台桌面 Dashboard。 |
 | [rocketmq-mcp](./rocketmq-ai/rocketmq-mcp) | 用于集群诊断的只读 Model Context Protocol 服务。 |
 | [rocketmq-mcp-control](./rocketmq-ai/rocketmq-mcp-control) | 独立隔离、默认拒绝的 MCP 服务，用于受控的集群变更。 |
+| [rocketmq-mcp-auth](./rocketmq-ai/rocketmq-mcp-auth) | 两个 MCP 服务共用的 JWKS 获取、缓存和 RS256 密钥选择库。 |
 | [rocketmq-sre](./rocketmq-ai/rocketmq-sre) | AI SRE 平台，用于证据采集、诊断、规划和受控自动化。 |
 | [rocketmq-website](./rocketmq-website) | [rocketmqrust.com](https://rocketmqrust.com/zh-CN/) 的 Docusaurus 源码。 |
 | [fuzz](./fuzz) | 针对协议、配置、Controller 快照和存储恢复输入的 `cargo-fuzz` 目标。 |

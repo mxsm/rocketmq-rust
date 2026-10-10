@@ -2753,6 +2753,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "rocketmq-mcp-auth"
+version = "1.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "http",
+ "jsonwebtoken",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "rocketmq-mcp-control"
 version = "1.0.0"
 dependencies = [
@@ -2763,15 +2779,18 @@ dependencies = [
  "insta",
  "jsonwebtoken",
  "rcgen",
+ "regex",
  "reqwest",
  "rmcp",
  "rocketmq-admin-core",
+ "rocketmq-mcp-auth",
  "rocketmq-observability",
  "rocketmq-runtime",
  "rocketmq-transport",
  "schemars",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror",
  "tokio",

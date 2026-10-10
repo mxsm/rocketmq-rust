@@ -35,6 +35,8 @@ pub struct ControlConfig {
     #[serde(default)]
     pub(crate) clusters: Vec<MutationClusterConfig>,
     pub audit: AuditConfig,
+    #[serde(default)]
+    pub limits: LimitsConfig,
 }
 
 impl fmt::Debug for ControlConfig {
@@ -97,7 +99,14 @@ impl ControlConfig {
                 "mutations.allowed_clusters",
             )?;
         }
-        self.audit.check()
+        self.audit.check()?;
+        self.limits.check()?;
+        // A new audit segment starts with a copy of every call still in flight, and each of those
+        // calls still needs room for its terminal record.
+        require(
+            self.audit.capacity >= self.limits.max_concurrent_calls.saturating_mul(4),
+            "audit.capacity",
+        )
     }
 
     #[cfg(feature = "write-tools")]
@@ -558,10 +567,65 @@ impl AuditConfig {
         require(!self.path.trim().is_empty(), "audit.path")?;
         require((16..=65_536).contains(&self.capacity), "audit.capacity")?;
         require(
-            (512..=16_384).contains(&self.max_record_bytes),
+            (crate::audit::MIN_AUDIT_RECORD_BYTES..=16_384).contains(&self.max_record_bytes),
             "audit.max_record_bytes",
         )
     }
+}
+
+/// How many mutation calls the server admits. A refused call gets `rate_limited` before its
+/// `started` audit record, so it costs no audit capacity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LimitsConfig {
+    /// Dry runs one principal may start per minute.
+    #[serde(default = "default_dry_runs_per_minute")]
+    pub dry_runs_per_minute: u32,
+    /// Execute calls one principal may start per minute.
+    #[serde(default = "default_executes_per_minute")]
+    pub executes_per_minute: u32,
+    /// Mutation calls of all principals that may be in flight at once.
+    #[serde(default = "default_max_concurrent_calls")]
+    pub max_concurrent_calls: usize,
+}
+
+impl LimitsConfig {
+    fn check(&self) -> Result<(), ConfigViolation> {
+        require(
+            (1..=6_000).contains(&self.dry_runs_per_minute),
+            "limits.dry_runs_per_minute",
+        )?;
+        require(
+            (1..=6_000).contains(&self.executes_per_minute),
+            "limits.executes_per_minute",
+        )?;
+        require(
+            (1..=64).contains(&self.max_concurrent_calls),
+            "limits.max_concurrent_calls",
+        )
+    }
+}
+
+impl Default for LimitsConfig {
+    fn default() -> Self {
+        Self {
+            dry_runs_per_minute: default_dry_runs_per_minute(),
+            executes_per_minute: default_executes_per_minute(),
+            max_concurrent_calls: default_max_concurrent_calls(),
+        }
+    }
+}
+
+const fn default_dry_runs_per_minute() -> u32 {
+    60
+}
+
+const fn default_executes_per_minute() -> u32 {
+    20
+}
+
+const fn default_max_concurrent_calls() -> usize {
+    8
 }
 
 const fn default_dry_run() -> bool {
@@ -671,6 +735,7 @@ mod tests {
                 capacity: 64,
                 max_record_bytes: 4096,
             },
+            limits: crate::config::LimitsConfig::default(),
         }
     }
 
@@ -860,6 +925,56 @@ mod tests {
             unregistered.to_string(),
             "`mutations.allowed_clusters` has a value that is not allowed"
         );
+    }
+
+    #[test]
+    fn call_limits_have_defaults_bounds_and_room_in_an_audit_segment() {
+        let expected = LimitsConfig {
+            dry_runs_per_minute: 60,
+            executes_per_minute: 20,
+            max_concurrent_calls: 8,
+        };
+        assert_eq!(ControlConfig::from_toml(EXAMPLE).unwrap().limits, expected);
+        // A configuration written before the section existed keeps working with the defaults.
+        let without_section = EXAMPLE.split("[limits]").next().unwrap();
+        assert_eq!(ControlConfig::from_toml(without_section).unwrap().limits, expected);
+
+        for (replaced, replacement, expected) in [
+            (
+                "dry_runs_per_minute = 60",
+                "dry_runs_per_minute = 0",
+                "`limits.dry_runs_per_minute` has a value that is not allowed",
+            ),
+            (
+                "executes_per_minute = 20",
+                "executes_per_minute = 6001",
+                "`limits.executes_per_minute` has a value that is not allowed",
+            ),
+            (
+                "max_concurrent_calls = 8",
+                "max_concurrent_calls = 65",
+                "`limits.max_concurrent_calls` has a value that is not allowed",
+            ),
+            // The smallest record bound holds every audit record, so nothing below it is accepted.
+            (
+                "max_record_bytes = 4096",
+                "max_record_bytes = 4095",
+                "`audit.max_record_bytes` has a value that is not allowed",
+            ),
+            // A segment needs room for the carried start and the terminal record of every call in flight.
+            (
+                "capacity = 4096",
+                "capacity = 31",
+                "`audit.capacity` has a value that is not allowed",
+            ),
+        ] {
+            let invalid = rejection(&EXAMPLE.replace(replaced, replacement));
+            assert_eq!(invalid.stage(), "validate");
+            assert_eq!(invalid.to_string(), expected);
+        }
+        assert!(ControlConfig::from_toml(&EXAMPLE.replace("capacity = 4096", "capacity = 32")).is_ok());
+        let unknown = rejection(&format!("{EXAMPLE}burst = 5\n"));
+        assert_eq!(unknown.stage(), "parse");
     }
 
     #[test]

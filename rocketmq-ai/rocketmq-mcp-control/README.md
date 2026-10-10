@@ -19,6 +19,12 @@ cleanup.
 - JWKS generations have a bounded five-minute lifetime. Rotation and revocation replace the whole generation;
   unknown keys use a bounded negative cache and refresh cooldown. DNS answers are rechecked at connection time,
   and any private, loopback, link-local, or reserved answer rejects the connection.
+- A JWKS entry is used when it is an RSA key of 2048 to 8192 bits with exponent 65537, its `use` is absent or
+  `sig`, its `key_ops` is absent or lists `verify`, its `alg` is absent or `RS256`, and its `kid` is 1 to 128
+  ASCII letters, digits, or `._:-`. Other entries, such as encryption keys, and members such as `x5c` and `x5t`
+  are ignored. The service does not start when the document has no usable entry or repeats a `kid` among them.
+  Retrieval, caching, and key selection are shared with the query MCP through
+  [`rocketmq-mcp-auth`](../rocketmq-mcp-auth/README.md).
 - The listener accepts at most 1 MiB per request and applies a 30-second request timeout.
 - Principal scope, closed cluster claim/allowlist, closed operation claim/allowlist, runtime enablement, and
   compile/catalog availability are evaluated in that order before common argument schema parsing or
@@ -110,13 +116,15 @@ broker CAS and after it. A pre-change is a zero-broker-write conflict; a post-ch
 truth and returns `order_reconciliation_failed` as a partial result. Unselected and other-cluster KV entries are
 never rewritten.
 
-Optional request keys use an in-process 10-minute, 4096-entry singleflight/result cache scoped by principal,
-operation, cluster, sorted target set, and canonical payload. Matching followers and cache hits open no Admin
-session and perform no RocketMQ RPC, but every invocation writes its own started/terminal audit pair. Reusing a
-key with a different payload is rejected. If all 4096 slots are in flight, a new explicit key is rejected before
-audit or session creation; an unkeyed request may still run uncached. A follower's cancellation or timeout ends
-only that invocation and its audit pair—the leader continues and its result remains cacheable. The cache makes no
-cross-restart guarantee.
+Optional request keys of execute calls use an in-process 10-minute, 4096-entry singleflight/result cache scoped
+by principal, operation, cluster, sorted target set, and canonical payload. Matching followers and cache hits open
+no Admin session and perform no RocketMQ RPC, but every invocation writes its own started/terminal audit pair.
+Only a settled outcome is kept: applied, partial, or conflict. After a failure, a timeout, a cancellation, or an
+unverified write, the same key runs preflight again instead of repeating the error, and a dry run is never keyed.
+Reusing a key with a different payload is rejected. If all 4096 slots are in flight, a new explicit key is
+rejected before audit or session creation; an unkeyed request may still run uncached. A follower's cancellation
+or timeout ends only that invocation and its audit pair—the leader continues and a settled result remains
+cacheable. The cache makes no cross-restart guarantee.
 
 ## Reliable audit and session ordering
 
@@ -125,12 +133,21 @@ and awaits append, flush, and storage confirmation. Payloads are synced before a
 transaction has an internal two-second budget. Cancellation or an incomplete transaction permanently poisons
 the live trail; a partial disk tail is rejected during restart. Its records are queryable by the owning service
 without adding an MCP audit tool. A bounded memory sink supports deterministic tests. New records use
-`rocketmq-mcp-control.audit.v2` and contain sequence, invocation id, timestamp, event, closed operation, safe
+`rocketmq-mcp-control.audit.v3` and contain sequence, invocation id, timestamp, event, closed operation, safe
 cluster alias, validated OAuth subject as `operator`, optional validated request `reason`,
 `dry_run|execute` mode, closed `started|planned|applied|partial|conflict|failed` result, terminal error code, and
-terminal monotonic duration. Operator and reason are a durable-audit-only exception: they never enter MCP
-responses, error envelopes, tracing, or ordinary logs. Audit records never contain tokens, credentials, network
-addresses, request keys, message bodies, endpoints, or raw backend errors.
+terminal monotonic duration. Version 3 adds the object and the outcome of the mutation: the validated logical
+`target` names, SHA-256 digests of the requested state, the request key and the pre-change state, whether a
+target was written, and per-target result counts. Operator and reason are a durable-audit-only exception: they
+never enter MCP responses, error envelopes, tracing, or ordinary logs. Audit records never contain the requested
+values, tokens, credentials, network addresses, request keys, message bodies, endpoints, or raw backend errors.
+
+`audit.capacity` bounds one segment of the trail. A full segment is sealed beside the active file as
+`<path>.<six-digit number>` and a new one starts with a header that links to it, so the trail has no lifetime
+limit; the server never deletes a sealed segment. `[limits]` bounds how fast segments fill: each OAuth subject
+has a per-minute budget of dry runs and one of execute calls, and the server caps the calls in flight. A call
+over a limit gets `rate_limited` before its `started` record and so costs no audit capacity. The
+[tool reference](docs/tool-reference.md) describes the record fields and the segment header.
 
 The audit operator grammar is 1–128 ASCII bytes: it starts with an ASCII letter or digit, then uses only ASCII
 letters/digits plus `._@-`. Without `@`, endpoint-shaped dotted subjects are rejected. Email-like IDs contain
@@ -148,16 +165,17 @@ remain valid. Whitespace, controls, Unicode,
 paths/URLs, percent escapes, credentials, bearer material, canonical or legacy numeric IP/socket values, numeric
 top-level labels, and endpoint-shaped identities remain invalid. The same operator and reason rules run during
 OAuth principal construction, audit-context creation,
-and version-2 recovery. Version-1 records remain readable under their original identity-free rules.
+and version-2 and version-3 recovery. Version-1 records remain readable under their original identity-free rules.
 
 Every reliable audit sink read, recovery, append error, or two-second transaction timeout is exposed only as
 `audit_unavailable`; a sink-provided code or message is never propagated. Repair and validate durable audit
 storage before retrying. In particular, a failed `started` append opens no Admin session and performs no RPC;
 a terminal append failure is reported only after the acquired session has completed bounded shutdown.
 
-On restart, the trail reconstructs completed and dangling invocation state from strict version-1, version-2, or
-mixed JSONL without rewriting old bytes. Version-1 `invalid_arguments` and `conflict` values recover as
-`invalid_argument` and `precondition_conflict`; new writes are version 2 only. A terminal
+On restart, the trail validates the active segment, which may hold strict version-1, version-2, version-3, or
+mixed JSONL, without rewriting old bytes, and continues its sequence. Version-1 `invalid_arguments` and
+`conflict` values recover as `invalid_argument` and `precondition_conflict`; new writes are version 3 only. An
+invocation that an earlier process left without a terminal record stays unfinished. A terminal
 record is accepted only for a matching active invocation from the same live trail, and only one concurrent
 terminal attempt can become durable. Unknown, cross-trail, and duplicate terminal attempts fail closed; a failed
 terminal write leaves the invocation active while poisoning subsequent audit operations.

@@ -19,7 +19,10 @@ use serde::Serialize;
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct MessageMetadataArgs {
+    /// Logical cluster name configured on this server. It is a name, not a NameServer address.
+    #[schemars(length(min = 1))]
     pub cluster: String,
+    /// Identifier of the message to read, exactly as RocketMQ reported it.
     pub message_id: String,
 }
 

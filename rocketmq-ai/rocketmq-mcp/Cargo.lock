@@ -3211,23 +3211,25 @@ dependencies = [
 name = "rocketmq-mcp"
 version = "1.0.0"
 dependencies = [
- "arc-swap",
  "axum",
  "base64 0.23.1",
  "chrono",
  "clap",
  "config",
+ "hmac",
  "insta",
  "jsonschema",
  "jsonwebtoken",
  "mockall",
  "percent-encoding",
  "pretty_assertions",
+ "rand 0.10.3",
  "rcgen",
  "regex",
  "reqwest",
  "rmcp",
  "rocketmq-admin-core",
+ "rocketmq-mcp-auth",
  "rocketmq-observability",
  "rocketmq-runtime",
  "rocketmq-security-api",
@@ -3247,6 +3249,22 @@ dependencies = [
  "tracing",
  "url",
  "validator",
+]
+
+[[package]]
+name = "rocketmq-mcp-auth"
+version = "1.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "http",
+ "jsonwebtoken",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]

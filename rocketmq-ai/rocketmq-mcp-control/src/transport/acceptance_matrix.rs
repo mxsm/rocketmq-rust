@@ -202,6 +202,28 @@ impl Scenario {
         )
     }
 
+    /// Sessions that two identical calls carrying one request key open.
+    ///
+    /// A settled outcome is replayed for the second call. A plan, a failure and an unverified
+    /// write are not kept, so the second call runs again.
+    const fn sessions_for_two_calls(self) -> usize {
+        match self {
+            Self::ValidExecute | Self::CasConflict | Self::MultiTargetPartial => 1,
+            Self::ValidDryRun
+            | Self::SingleTargetFailure
+            | Self::PostReadFailure
+            | Self::SessionShutdownFailure
+            | Self::SensitiveRuntimeFailure => 2,
+            Self::ExecuteWithoutConfirm
+            | Self::ExecuteWithoutReason
+            | Self::MissingWriteScope
+            | Self::ClusterNotAllowed
+            | Self::OperationNotAllowed
+            | Self::ArgumentOutOfBounds
+            | Self::AuditWriteFailure => 0,
+        }
+    }
+
     const fn expected_audit_result(self) -> Option<AuditResult> {
         match self {
             Self::ValidDryRun => Some(AuditResult::Planned),
@@ -1120,6 +1142,7 @@ fn expected_adapter_error_envelope(code: ControlErrorCode) -> serde_json::Value 
             "mutation operation is unavailable",
             false,
         ),
+        ControlErrorCode::RateLimited => ("rate_limited", "mutation call rate limit was reached", true),
         ControlErrorCode::ConfirmationRequired => (
             "confirmation_required",
             "explicit mutation confirmation is required",
@@ -1163,6 +1186,30 @@ fn expected_adapter_error_envelope(code: ControlErrorCode) -> serde_json::Value 
     })
 }
 
+/// The arguments an `invalid_argument` scenario must locate, as path and constraint pairs.
+///
+/// The pre-epoch timestamp, the empty patch and the missing reason break rules that the input
+/// schemas do not declare, so those rejections locate nothing.
+fn expected_violations(tool: ToolKind, scenario: Scenario) -> &'static [(&'static str, &'static str)] {
+    match (scenario, tool) {
+        (Scenario::ArgumentOutOfBounds, ToolKind::Topic) => &[("/read_queue_nums", "minimum")],
+        (Scenario::ArgumentOutOfBounds, ToolKind::ConsumerGroup) => &[("/retry_queue_nums", "maximum")],
+        (Scenario::ArgumentOutOfBounds, ToolKind::RequestMode) => &[("/timeout_millis", "maximum")],
+        _ => &[],
+    }
+}
+
+fn located_error_envelope(scenario: Scenario, violations: &[(&str, &str)]) -> serde_json::Value {
+    let mut envelope = expected_error_envelope(scenario);
+    if !violations.is_empty() {
+        envelope["violations"] = violations
+            .iter()
+            .map(|(path, constraint)| serde_json::json!({"path": path, "constraint": constraint}))
+            .collect();
+    }
+    envelope
+}
+
 fn expected_adapter_retryable(code: ControlErrorCode) -> bool {
     expected_adapter_error_envelope(code)["retryable"].as_bool().unwrap()
 }
@@ -1201,6 +1248,7 @@ fn strict_payload(call: &ObservedCall, scenario: Scenario) -> &serde_json::Value
 fn assert_public_contract(
     tool: ToolKind,
     scenario: Scenario,
+    violations: &[(&str, &str)],
     first: &ObservedCall,
     second: &ObservedCall,
     bearer: &str,
@@ -1227,7 +1275,11 @@ fn assert_public_contract(
             assert_response_truth(first_payload, scenario);
         }
         _ => {
-            assert_eq!(first_payload, &expected_error_envelope(scenario));
+            assert_eq!(
+                first_payload,
+                &located_error_envelope(scenario, violations),
+                "envelope mismatch for {tool:?}/{scenario:?}"
+            );
             assert!(first_payload.get("status").is_none());
         }
     }
@@ -1315,8 +1367,12 @@ fn assert_response_truth(response: &serde_json::Value, scenario: Scenario) {
 }
 
 fn assert_lifecycle(tool: ToolKind, scenario: Scenario, counters: &LifecycleCounters) {
-    let runtime_started = scenario.reaches_runtime() && scenario != Scenario::AuditWriteFailure;
-    let expected = usize::from(runtime_started);
+    let expected = scenario.sessions_for_two_calls();
+    assert_eq!(
+        expected > 0,
+        scenario.reaches_runtime() && scenario != Scenario::AuditWriteFailure,
+        "{scenario:?}"
+    );
     assert_eq!(
         counters.starts.load(Ordering::SeqCst),
         expected,
@@ -1333,21 +1389,27 @@ fn assert_lifecycle(tool: ToolKind, scenario: Scenario, counters: &LifecycleCoun
         expected,
         "{tool:?}/{scenario:?}"
     );
-    let mutation = usize::from(
-        runtime_started && !matches!(scenario, Scenario::ValidDryRun | Scenario::SensitiveRuntimeFailure),
-    );
+    let mutation = if matches!(scenario, Scenario::ValidDryRun | Scenario::SensitiveRuntimeFailure) {
+        0
+    } else {
+        expected
+    };
     assert_eq!(
         counters.mutation_calls.load(Ordering::SeqCst),
         mutation,
         "{tool:?}/{scenario:?}"
     );
-    let verification = usize::from(matches!(
+    let verification = if matches!(
         scenario,
         Scenario::ValidExecute
             | Scenario::MultiTargetPartial
             | Scenario::PostReadFailure
             | Scenario::SessionShutdownFailure
-    ));
+    ) {
+        expected
+    } else {
+        0
+    };
     assert_eq!(
         counters.verification_reads.load(Ordering::SeqCst),
         verification,
@@ -1355,7 +1417,11 @@ fn assert_lifecycle(tool: ToolKind, scenario: Scenario, counters: &LifecycleCoun
     );
     assert_eq!(
         counters.sensitive_failures.load(Ordering::SeqCst),
-        usize::from(scenario == Scenario::SensitiveRuntimeFailure),
+        if scenario == Scenario::SensitiveRuntimeFailure {
+            expected
+        } else {
+            0
+        },
         "{tool:?}/{scenario:?}"
     );
 }
@@ -1555,7 +1621,7 @@ async fn terminal_audit_failure_never_replays_an_unaudited_success() {
             request_arguments,
         )
         .await;
-        assert_public_contract(tool, Scenario::AuditWriteFailure, &first, &second, &bearer);
+        assert_public_contract(tool, Scenario::AuditWriteFailure, &[], &first, &second, &bearer);
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
         assert_eq!(counters.runs.load(Ordering::SeqCst), 1);
         assert_eq!(counters.preflight_reads.load(Ordering::SeqCst), 1);
@@ -1604,6 +1670,7 @@ async fn raw_backend_failures_are_sanitized_across_every_public_surface() {
         assert_public_contract(
             tool,
             Scenario::SensitiveRuntimeFailure,
+            &[],
             &first,
             &second,
             &bearer,
@@ -1653,11 +1720,13 @@ async fn raw_backend_failures_are_sanitized_across_every_public_surface() {
         assert_public_contract(
             tool,
             Scenario::SensitiveRuntimeFailure,
+            &[],
             &open_first,
             &open_second,
             &bearer,
         );
-        assert_eq!(opens.load(Ordering::SeqCst), 1);
+        // A session that could not be opened settles nothing, so the second call tries again.
+        assert_eq!(opens.load(Ordering::SeqCst), 2);
         let open_records = open_sink.records().await.unwrap();
         assert_eq!(open_records.len(), 4);
         for pair in open_records.chunks_exact(2) {
@@ -1711,6 +1780,7 @@ async fn adapter_error_codes_survive_canonical_redaction_for_open_run_followers_
         ControlErrorCode::OperationNotAllowed,
         ControlErrorCode::MutationDisabled,
         ControlErrorCode::OperationUnavailable,
+        ControlErrorCode::RateLimited,
         ControlErrorCode::ConfirmationRequired,
         ControlErrorCode::InvalidArgument,
         ControlErrorCode::AuditUnavailable,
@@ -1789,6 +1859,15 @@ async fn adapter_error_codes_survive_canonical_redaction_for_open_run_followers_
             assert_eq!(mcp_payload(&leader, true), &expected);
             assert_eq!(mcp_payload(&follower, true), &expected);
 
+            // Only a conflict or a partial apply is settled and replayed. After any other code
+            // the same key is a new attempt, which reaches the hostile adapter again.
+            let settled = matches!(
+                code,
+                ControlErrorCode::PreconditionConflict | ControlErrorCode::PartialApply
+            );
+            if !settled {
+                gate.notify_one();
+            }
             let replay = acceptance_tool_call(
                 &router,
                 &bearer,
@@ -1798,12 +1877,15 @@ async fn adapter_error_codes_survive_canonical_redaction_for_open_run_followers_
             )
             .await;
             assert_eq!(mcp_payload(&replay, true), &expected);
-            assert_eq!(opens.load(Ordering::SeqCst), 1);
-            assert_eq!(runs.load(Ordering::SeqCst), usize::from(matches!(stage, HostileFailureStage::Run)));
-            assert_eq!(
-                shutdowns.load(Ordering::SeqCst),
-                usize::from(matches!(stage, HostileFailureStage::Run))
-            );
+            let attempts = if settled { 1 } else { 2 };
+            let sessions = if matches!(stage, HostileFailureStage::Run) {
+                attempts
+            } else {
+                0
+            };
+            assert_eq!(opens.load(Ordering::SeqCst), attempts, "{code:?}");
+            assert_eq!(runs.load(Ordering::SeqCst), sessions, "{code:?}");
+            assert_eq!(shutdowns.load(Ordering::SeqCst), sessions, "{code:?}");
 
             let records = sink.records().await.unwrap();
             assert_eq!(records.len(), 6);
@@ -1902,6 +1984,7 @@ async fn request_keys_share_leaders_replay_results_and_reject_collisions_for_eve
         assert_public_contract(
             tool,
             Scenario::ValidExecute,
+            &[],
             &first,
             &follower,
             &bearer,
@@ -2021,7 +2104,14 @@ async fn five_tool_by_fourteen_scenario_acceptance_matrix() {
                 request_arguments,
             )
             .await;
-            let payload = assert_public_contract(tool, scenario, &first, &second, &bearer);
+            let payload = assert_public_contract(
+                tool,
+                scenario,
+                expected_violations(tool, scenario),
+                &first,
+                &second,
+                &bearer,
+            );
             assert!(exact_contract
                 .insert(format!("{}/{}", tool.slug(), scenario.slug()), payload)
                 .is_none());
@@ -2047,10 +2137,13 @@ async fn five_tool_by_fourteen_scenario_acceptance_matrix() {
                 assert_public_contract(
                     tool,
                     Scenario::ArgumentOutOfBounds,
+                    &[("/*", "additional_property")],
                     &unknown_first,
                     &unknown_second,
                     &bearer,
                 );
+                // The undeclared property is located without repeating the name the caller chose.
+                assert!(!format!("{}{}", unknown_first.body, unknown_second.body).contains("unexpected"));
             }
             if scenario == Scenario::ExecuteWithoutReason {
                 let mut unsafe_reason = arguments(tool, Scenario::ValidExecute);
@@ -2074,6 +2167,7 @@ async fn five_tool_by_fourteen_scenario_acceptance_matrix() {
                 assert_public_contract(
                     tool,
                     Scenario::ExecuteWithoutReason,
+                    &[],
                     &unsafe_first,
                     &unsafe_second,
                     &bearer,

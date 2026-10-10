@@ -32,10 +32,14 @@ use crate::model::diagnosis::MetricWatchItem;
 use crate::model::diagnosis::Recommendation;
 use crate::model::diagnosis::RootCauseCandidate;
 use crate::model::diagnosis::Severity;
+use crate::service::diagnosis_collector::ConsumerLagSummary;
+#[cfg(test)]
+use crate::service::diagnosis_collector::QueueLagBreakdown;
 #[cfg(test)]
 use crate::tools::broker_tools::DescribeBrokerArgs;
 #[cfg(test)]
 use crate::tools::consumer_tools::QueryConsumerLagArgs;
+#[cfg(test)]
 use crate::tools::consumer_tools::QueryConsumerLagOutput;
 use crate::tools::diagnosis_tools::DiagnoseConsumerLagArgs;
 use crate::tools::executor::ToolFailure;
@@ -66,7 +70,7 @@ where
             page: PageRequest::default(),
         })
         .await
-        .map(|result| result.data);
+        .map(|result| lag_summary(result.data));
     let topic_result = adapter
         .describe_topic(DescribeTopicArgs {
             cluster: args.cluster.clone(),
@@ -83,12 +87,12 @@ where
         })
         .await
         .map(|result| result.data);
-    let broker_result = match top_lag_broker(lag_result.as_ref().ok()) {
+    let broker_result = match lag_result.as_ref().ok().and_then(ConsumerLagSummary::top_lag_broker) {
         Some(broker_name) => Some(
             adapter
                 .describe_broker(DescribeBrokerArgs {
                     cluster: args.cluster.clone(),
-                    broker_name,
+                    broker_name: broker_name.to_string(),
                 })
                 .await
                 .map(|result| result.data),
@@ -108,7 +112,7 @@ where
 #[cfg(test)]
 pub(crate) fn build_consumer_lag_report<Topic, Route, Broker>(
     args: DiagnoseConsumerLagArgs,
-    lag_result: Result<QueryConsumerLagOutput, ToolFailure>,
+    lag_result: Result<ConsumerLagSummary, ToolFailure>,
     topic_result: Result<Topic, ToolFailure>,
     route_result: Result<Route, ToolFailure>,
     broker_result: Option<Result<Broker, ToolFailure>>,
@@ -131,7 +135,7 @@ where
 pub(crate) fn build_consumer_lag_report_with_threshold<Topic, Route, Broker>(
     args: DiagnoseConsumerLagArgs,
     threshold: i64,
-    lag_result: Result<QueryConsumerLagOutput, ToolFailure>,
+    lag_result: Result<ConsumerLagSummary, ToolFailure>,
     topic_result: Result<Topic, ToolFailure>,
     route_result: Result<Route, ToolFailure>,
     broker_result: Option<Result<Broker, ToolFailure>>,
@@ -230,11 +234,11 @@ fn confidence_band(confidence: f32) -> ConfidenceBand {
     }
 }
 
-fn severity_for_lag(lag: Option<&QueryConsumerLagOutput>, threshold: i64) -> Severity {
+fn severity_for_lag(lag: Option<&ConsumerLagSummary>, threshold: i64) -> Severity {
     let Some(lag) = lag else {
         return Severity::Unknown;
     };
-    if lag.page.total_count == 0 {
+    if lag.queues.queue_count == 0 {
         return Severity::Unknown;
     }
     if lag.total_lag <= threshold {
@@ -250,7 +254,7 @@ fn severity_for_lag(lag: Option<&QueryConsumerLagOutput>, threshold: i64) -> Sev
 }
 
 fn confidence_for_evidence<Topic, Route>(
-    lag: Option<&QueryConsumerLagOutput>,
+    lag: Option<&ConsumerLagSummary>,
     topic: Option<&Topic>,
     route: Option<&Route>,
 ) -> f32 {
@@ -264,7 +268,7 @@ fn confidence_for_evidence<Topic, Route>(
     if route.is_some() {
         confidence += 0.15;
     }
-    if lag.is_some_and(|lag| lag.page.total_count > 0) {
+    if lag.is_some_and(|lag| lag.queues.queue_count > 0) {
         confidence += 0.10;
     }
     confidence
@@ -272,7 +276,7 @@ fn confidence_for_evidence<Topic, Route>(
 
 fn summary_for_lag(
     args: &DiagnoseConsumerLagArgs,
-    lag: Option<&QueryConsumerLagOutput>,
+    lag: Option<&ConsumerLagSummary>,
     threshold: i64,
     severity: Severity,
 ) -> String {
@@ -283,7 +287,7 @@ fn summary_for_lag(
         ),
         Some(lag) => format!(
             "Consumer group {} on topic {} has {} total lag across {} queues; severity is {:?}.",
-            args.consumer_group, args.topic, lag.total_lag, lag.page.total_count, severity
+            args.consumer_group, args.topic, lag.total_lag, lag.queues.queue_count, severity
         ),
         None => format!(
             "Consumer lag diagnosis for group {} on topic {} is Unknown because primary lag evidence is missing.",
@@ -292,7 +296,7 @@ fn summary_for_lag(
     }
 }
 
-fn impacts_for_lag(lag: Option<&QueryConsumerLagOutput>, severity: Severity) -> Vec<ImpactItem> {
+fn impacts_for_lag(lag: Option<&ConsumerLagSummary>, severity: Severity) -> Vec<ImpactItem> {
     let Some(lag) = lag else {
         return vec![ImpactItem {
             area: "consumer_lag".to_string(),
@@ -305,13 +309,13 @@ fn impacts_for_lag(lag: Option<&QueryConsumerLagOutput>, severity: Severity) -> 
         area: format!("{}:{}", lag.topic, lag.consumer_group),
         description: format!(
             "Total lag is {} across {} queues, with max queue lag {}.",
-            lag.total_lag, lag.page.total_count, lag.max_queue_lag
+            lag.total_lag, lag.queues.queue_count, lag.queues.max_queue_lag
         ),
         severity,
     }]
 }
 
-fn root_causes_for_lag(lag: Option<&QueryConsumerLagOutput>, threshold: i64) -> Vec<RootCauseCandidate> {
+fn root_causes_for_lag(lag: Option<&ConsumerLagSummary>, threshold: i64) -> Vec<RootCauseCandidate> {
     let Some(lag) = lag else {
         return vec![RootCauseCandidate {
             cause: "Unknown".to_string(),
@@ -320,7 +324,7 @@ fn root_causes_for_lag(lag: Option<&QueryConsumerLagOutput>, threshold: i64) -> 
             reasoning: "Primary consumer lag evidence is unavailable.".to_string(),
         }];
     };
-    if lag.page.total_count == 0 {
+    if lag.queues.queue_count == 0 {
         return vec![RootCauseCandidate {
             cause: "Unknown".to_string(),
             confidence: 0.30,
@@ -346,14 +350,14 @@ fn root_causes_for_lag(lag: Option<&QueryConsumerLagOutput>, threshold: i64) -> 
             reasoning: format!("consume_tps={} while total_lag={}.", lag.consume_tps, lag.total_lag),
         });
     }
-    if skew_ratio(lag) >= SKEW_RATIO_THRESHOLD && lag.page.total_count > 1 {
+    if skew_ratio(lag) >= SKEW_RATIO_THRESHOLD && lag.queues.queue_count > 1 {
         causes.push(RootCauseCandidate {
             cause: "Lag is concentrated on a small subset of queues".to_string(),
             confidence: 0.68,
             evidence_refs: vec!["consumer_lag".to_string(), "topic_route".to_string()],
             reasoning: format!(
                 "max_queue_lag={} accounts for {:.0}% of total_lag={}.",
-                lag.max_queue_lag,
+                lag.queues.max_queue_lag,
                 skew_ratio(lag) * 100.0,
                 lag.total_lag
             ),
@@ -371,7 +375,7 @@ fn root_causes_for_lag(lag: Option<&QueryConsumerLagOutput>, threshold: i64) -> 
     causes
 }
 
-fn recommendations_for_lag(lag: Option<&QueryConsumerLagOutput>, severity: Severity) -> Vec<Recommendation> {
+fn recommendations_for_lag(lag: Option<&ConsumerLagSummary>, severity: Severity) -> Vec<Recommendation> {
     match (lag, severity) {
         (None, _) | (_, Severity::Unknown) => vec![Recommendation {
             action: "Collect consumer lag, topic route, and broker evidence again.".to_string(),
@@ -400,7 +404,7 @@ fn recommendations_for_lag(lag: Option<&QueryConsumerLagOutput>, severity: Sever
                 priority: "medium".to_string(),
                 rationale: format!(
                     "max_queue_lag={} may identify a localized queue or broker issue.",
-                    lag.max_queue_lag
+                    lag.queues.max_queue_lag
                 ),
                 risk: "Queue-level findings require route evidence before rebalancing decisions.".to_string(),
                 verification: "Confirm max_queue_lag converges after the placement review.".to_string(),
@@ -409,7 +413,7 @@ fn recommendations_for_lag(lag: Option<&QueryConsumerLagOutput>, severity: Sever
     }
 }
 
-fn risks_for_lag(lag: Option<&QueryConsumerLagOutput>, severity: Severity) -> Vec<String> {
+fn risks_for_lag(lag: Option<&ConsumerLagSummary>, severity: Severity) -> Vec<String> {
     match (lag, severity) {
         (None, _) | (_, Severity::Unknown) => {
             vec!["Evidence is incomplete; automated remediation is not safe.".to_string()]
@@ -472,22 +476,26 @@ where
     }
 }
 
+/// Summarizes a lag Tool result whose page holds every queue.
 #[cfg(test)]
-fn top_lag_broker(lag: Option<&QueryConsumerLagOutput>) -> Option<String> {
-    lag.and_then(|lag| {
-        lag.page
-            .items
-            .iter()
-            .max_by_key(|queue| queue.lag)
-            .map(|queue| queue.broker_name.clone())
-    })
+fn lag_summary(output: QueryConsumerLagOutput) -> ConsumerLagSummary {
+    ConsumerLagSummary {
+        cluster: output.cluster,
+        topic: output.topic,
+        consumer_group: output.consumer_group,
+        total_lag: output.total_lag,
+        consume_tps: output.consume_tps,
+        inflight_total: output.inflight_total,
+        queues: QueueLagBreakdown::from_queues(output.page.items),
+        generated_at: output.generated_at,
+    }
 }
 
-fn skew_ratio(lag: &QueryConsumerLagOutput) -> f64 {
+fn skew_ratio(lag: &ConsumerLagSummary) -> f64 {
     if lag.total_lag <= 0 {
         return 0.0;
     }
-    lag.max_queue_lag as f64 / lag.total_lag as f64
+    lag.queues.max_queue_lag as f64 / lag.total_lag as f64
 }
 
 #[cfg(test)]

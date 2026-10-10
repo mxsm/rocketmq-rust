@@ -22,7 +22,10 @@ use crate::model::contract::PageRequest;
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ListConsumerConnectionsArgs {
+    /// Logical cluster name configured on this server. It is a name, not a NameServer address.
+    #[schemars(length(min = 1))]
     pub cluster: String,
+    /// Exact Consumer Group name. `rocketmq_list_consumer_groups` lists the names.
     pub consumer_group: String,
     #[serde(flatten)]
     pub page: PageRequest,
@@ -31,8 +34,12 @@ pub struct ListConsumerConnectionsArgs {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ListProducerConnectionsArgs {
+    /// Logical cluster name configured on this server. It is a name, not a NameServer address.
+    #[schemars(length(min = 1))]
     pub cluster: String,
+    /// Exact Topic name. `rocketmq_list_topics` lists the names.
     pub topic: String,
+    /// Exact Producer Group name.
     pub producer_group: String,
     #[serde(flatten)]
     pub page: PageRequest,

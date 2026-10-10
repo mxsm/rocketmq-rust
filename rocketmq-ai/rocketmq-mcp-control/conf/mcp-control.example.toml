@@ -34,7 +34,17 @@ access_key_env = "ROCKETMQ_CONTROL_ACCESS_KEY"
 secret_key_env = "ROCKETMQ_CONTROL_SECRET_KEY"
 # security_token_env = "ROCKETMQ_CONTROL_SECURITY_TOKEN"
 
+# `path` is the active audit segment. A full segment is sealed beside it as
+# `<path>.<six-digit number>`; the server never deletes a sealed segment, so archive them yourself.
+# `capacity` counts the lines of one segment, and every call writes two.
 [audit]
 path = "var/audit/rocketmq-mcp-control.jsonl"
 capacity = 4096
 max_record_bytes = 4096
+
+# Admission control per OAuth subject. A refused call gets `rate_limited` and writes no audit record.
+# `capacity` above must be at least four times `max_concurrent_calls`.
+[limits]
+dry_runs_per_minute = 60
+executes_per_minute = 20
+max_concurrent_calls = 8

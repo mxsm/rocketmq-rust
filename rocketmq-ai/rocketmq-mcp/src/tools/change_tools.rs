@@ -23,19 +23,27 @@ const PLAN_TTL_SECONDS: u64 = 300;
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PlanRequest<T> {
+    /// Logical cluster name configured on this server. It is a name, not a NameServer address.
+    #[schemars(length(min = 1))]
     pub cluster: String,
+    /// Why the change is wanted. It is copied into the plan.
     pub reason: String,
+    /// The state the plan should lead to.
     pub desired: T,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CreateTopicDesiredState {
+    /// Name of the Topic to create.
     pub topic: String,
+    /// Number of read queues for the new Topic. Optional.
     #[serde(default)]
     pub read_queue_nums: Option<u32>,
+    /// Number of write queues for the new Topic. Optional.
     #[serde(default)]
     pub write_queue_nums: Option<u32>,
+    /// Permission value for the new Topic, written as it should appear in the plan. Optional.
     #[serde(default)]
     pub perm: Option<String>,
 }
@@ -43,33 +51,46 @@ pub struct CreateTopicDesiredState {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateTopicConfigDesiredState {
+    /// Exact name of the Topic to change.
     pub topic: String,
+    /// Name of the Topic configuration entry to change.
     pub config_key: String,
+    /// Value the entry should have.
     pub config_value: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateTopicPermissionsDesiredState {
+    /// Exact name of the Topic to change.
     pub topic: String,
+    /// Permission value the Topic should have.
     pub perm: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateBrokerConfigDesiredState {
+    /// Logical Broker name as reported by `rocketmq_get_cluster_overview`, for example `broker-a`. It is a name, not a
+    /// network address.
     pub broker_name: String,
+    /// Name of the Broker configuration entry to change.
     pub config_key: String,
+    /// Value the entry should have.
     pub config_value: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ResetConsumerOffsetDesiredState {
+    /// Exact name of the Topic whose offsets the plan resets.
     pub topic: String,
+    /// Exact name of the Consumer Group whose offsets the plan resets.
     pub consumer_group: String,
+    /// Queue offset to reset to. Optional.
     #[serde(default)]
     pub target_offset: Option<i64>,
+    /// Point in time to reset to, in milliseconds since the Unix epoch. Optional.
     #[serde(default)]
     pub timestamp_millis: Option<i64>,
 }

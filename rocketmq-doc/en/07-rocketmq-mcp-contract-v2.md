@@ -132,9 +132,14 @@ Correctable Tool failures set `isError: true`, omit success
 
 Stable codes include `invalid_arguments`, `not_found`, `source_unavailable`,
 `permission_denied`, `rate_limited`, `change_planning_disabled`,
-`internal_error`, `output_too_large`, `backend_timeout`, and `cancelled`.
+`internal_error`, `output_too_large`, `backend_timeout`, `cancelled`,
+`cursor_expired`, `cursor_invalid`, and `result_too_large`.
 A `not_found` error also carries `entity`, the kind of target that does not
-exist. The Tool Reference lists every code.
+exist. An `invalid_arguments` error carries `violations` when the server can
+locate the arguments: up to three `path` and `constraint` pairs that name the
+argument and the kind of rule it broke, never the value that was sent. The three paging codes call for different recoveries: request the first
+page again, resend the cursor unchanged, or narrow the request. The Tool
+Reference lists every code.
 
 ## Query Lifecycle and Diagnosis Provenance
 

@@ -26,7 +26,11 @@ pub use observation::TopicConfigObservationRow;
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct BrokerConfigSummaryArgs {
+    /// Logical cluster name configured on this server. It is a name, not a NameServer address.
+    #[schemars(length(min = 1))]
     pub cluster: String,
+    /// Logical Broker name as reported by `rocketmq_get_cluster_overview`, for example `broker-a`. It is a name, not a
+    /// network address.
     pub broker_name: String,
 }
 
@@ -51,8 +55,13 @@ pub struct BrokerConfigSummaryOutput {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TopicConfigStateArgs {
+    /// Logical cluster name configured on this server. It is a name, not a NameServer address.
+    #[schemars(length(min = 1))]
     pub cluster: String,
+    /// Exact Topic name. `rocketmq_list_topics` lists the names.
     pub topic: String,
+    /// Logical Broker names to read the Topic configuration from, 1 to 64 entries. They are names as reported by
+    /// `rocketmq_get_cluster_overview`, not network addresses.
     pub broker_names: Vec<String>,
 }
 
@@ -75,8 +84,13 @@ pub struct TopicConfigStateOutput {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ConsumerGroupConfigStateArgs {
+    /// Logical cluster name configured on this server. It is a name, not a NameServer address.
+    #[schemars(length(min = 1))]
     pub cluster: String,
+    /// Exact Consumer Group name. `rocketmq_list_consumer_groups` lists the names.
     pub group: String,
+    /// Logical Broker names to read the Consumer Group configuration from, 1 to 64 entries. They are names as reported
+    /// by `rocketmq_get_cluster_overview`, not network addresses.
     pub broker_names: Vec<String>,
 }
 
@@ -107,8 +121,14 @@ pub struct ConsumerGroupConfigStateOutput {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct BrokerLogFilterStateArgs {
+    /// Logical cluster name configured on this server. It is a name, not a NameServer address.
+    #[schemars(length(min = 1))]
     pub cluster: String,
+    /// Logical Broker name as reported by `rocketmq_get_cluster_overview`, for example `broker-a`. It is a name, not a
+    /// network address.
     pub broker_name: String,
+    /// Rust module path of the Broker logger to inspect. It must start with `rocketmq_broker::`, for example
+    /// `rocketmq_broker::processor`, and be at most 128 bytes.
     pub logger: String,
 }
 

@@ -626,8 +626,23 @@ impl std::fmt::Display for SnapshotRejection {
 }
 
 impl From<SnapshotRejection> for ToolFailure {
-    fn from(_error: SnapshotRejection) -> Self {
-        ToolFailure::Rejected(ToolRejection::InvalidArguments { _source: None })
+    /// Tells the caller which of three different recoveries applies: request the first page
+    /// again, resend the cursor unchanged, or narrow the request.
+    fn from(error: SnapshotRejection) -> Self {
+        ToolFailure::Rejected(match error {
+            SnapshotRejection::InvalidLimit | SnapshotRejection::ContextTooLarge => {
+                ToolRejection::InvalidArguments { _source: None }
+            }
+            SnapshotRejection::Expired | SnapshotRejection::Evicted | SnapshotRejection::Invalidated => {
+                ToolRejection::CursorExpired
+            }
+            SnapshotRejection::InvalidCursor
+            | SnapshotRejection::ContextMismatch
+            | SnapshotRejection::PageContractMismatch => ToolRejection::CursorInvalid,
+            SnapshotRejection::EntryBudgetExceeded
+            | SnapshotRejection::RowBudgetExceeded
+            | SnapshotRejection::ByteBudgetExceeded => ToolRejection::ResultTooLarge,
+        })
     }
 }
 
@@ -972,10 +987,7 @@ impl SnapshotStore {
             .filter_map(|record| match record.phase {
                 FlightPhase::Completed { .. } => {
                     if matches!(record.outcome, FlightOutcome::Success(_)) {
-                        record.outcome =
-                            FlightOutcome::Failure(ToolFailure::Rejected(ToolRejection::InvalidArguments {
-                                _source: None,
-                            }));
+                        record.outcome = FlightOutcome::Failure(SnapshotRejection::Invalidated.into());
                     }
                     Some(record.cell.clone())
                 }
@@ -2040,6 +2052,25 @@ mod tests {
         value
     }
 
+    #[test]
+    fn snapshot_rejections_map_to_distinct_tool_codes() {
+        for (rejection, code) in [
+            (SnapshotRejection::InvalidLimit, "invalid_arguments"),
+            (SnapshotRejection::ContextTooLarge, "invalid_arguments"),
+            (SnapshotRejection::InvalidCursor, "cursor_invalid"),
+            (SnapshotRejection::ContextMismatch, "cursor_invalid"),
+            (SnapshotRejection::PageContractMismatch, "cursor_invalid"),
+            (SnapshotRejection::Expired, "cursor_expired"),
+            (SnapshotRejection::Evicted, "cursor_expired"),
+            (SnapshotRejection::Invalidated, "cursor_expired"),
+            (SnapshotRejection::EntryBudgetExceeded, "result_too_large"),
+            (SnapshotRejection::RowBudgetExceeded, "result_too_large"),
+            (SnapshotRejection::ByteBudgetExceeded, "result_too_large"),
+        ] {
+            assert_eq!(ToolFailure::from(rejection).code(), code, "{rejection:?}");
+        }
+    }
+
     #[tokio::test]
     async fn cursor_is_stable_context_bound_and_tamper_evident() {
         let store = SnapshotStore::new(8);
@@ -2075,20 +2106,22 @@ mod tests {
         let mut tampered = cursor.clone().into_bytes();
         *tampered.last_mut().unwrap() ^= 1;
         let tampered = String::from_utf8(tampered).unwrap();
-        assert!(store
-            .get_or_load(
-                request(SnapshotKind::TopicInventory, "a", 2),
-                Some(&tampered),
-                Duration::from_secs(1),
-                Some(Duration::from_secs(1)),
-                |items: &Vec<u8>| SnapshotWeight::inventory(items.len()),
-                &cancellation,
-                || async { panic!("tampered cursor must not reload") },
-            )
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("invalid arguments"));
+        assert_eq!(
+            store
+                .get_or_load(
+                    request(SnapshotKind::TopicInventory, "a", 2),
+                    Some(&tampered),
+                    Duration::from_secs(1),
+                    Some(Duration::from_secs(1)),
+                    |items: &Vec<u8>| SnapshotWeight::inventory(items.len()),
+                    &cancellation,
+                    || async { panic!("tampered cursor must not reload") },
+                )
+                .await
+                .unwrap_err()
+                .code(),
+            "cursor_invalid"
+        );
 
         let claims = store.decode_cursor(&cursor).unwrap();
         let forged_claims = format!("{}:{}:{}", claims.id, claims.position + 1, claims.generation);
@@ -2115,67 +2148,75 @@ mod tests {
             store.decode_cursor(&"x".repeat(MAX_CURSOR_BYTES + 1)),
             Err(SnapshotRejection::InvalidCursor)
         );
-        assert!(store
-            .get_or_load(
-                request(SnapshotKind::TopicInventory, "b", 2),
-                Some(&cursor),
-                Duration::from_secs(1),
-                Some(Duration::from_secs(1)),
-                |items: &Vec<u8>| SnapshotWeight::inventory(items.len()),
-                &cancellation,
-                || async { panic!("context mismatch must not reload") },
-            )
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("invalid arguments"));
+        assert_eq!(
+            store
+                .get_or_load(
+                    request(SnapshotKind::TopicInventory, "b", 2),
+                    Some(&cursor),
+                    Duration::from_secs(1),
+                    Some(Duration::from_secs(1)),
+                    |items: &Vec<u8>| SnapshotWeight::inventory(items.len()),
+                    &cancellation,
+                    || async { panic!("context mismatch must not reload") },
+                )
+                .await
+                .unwrap_err()
+                .code(),
+            "cursor_invalid"
+        );
 
-        assert!(store
-            .get_or_load(
-                request(SnapshotKind::ConsumerGroupInventory, "a", 2),
-                Some(&cursor),
-                Duration::from_secs(1),
-                Some(Duration::from_secs(1)),
-                |items: &Vec<u8>| SnapshotWeight::inventory(items.len()),
-                &cancellation,
-                || async { panic!("cross-query cursor must not reload") },
-            )
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("invalid arguments"));
+        assert_eq!(
+            store
+                .get_or_load(
+                    request(SnapshotKind::ConsumerGroupInventory, "a", 2),
+                    Some(&cursor),
+                    Duration::from_secs(1),
+                    Some(Duration::from_secs(1)),
+                    |items: &Vec<u8>| SnapshotWeight::inventory(items.len()),
+                    &cancellation,
+                    || async { panic!("cross-query cursor must not reload") },
+                )
+                .await
+                .unwrap_err()
+                .code(),
+            "cursor_invalid"
+        );
 
-        assert!(store
-            .get_or_load(
-                request(SnapshotKind::TopicInventory, "a", 1),
-                Some(&cursor),
-                Duration::from_secs(1),
-                Some(Duration::from_secs(1)),
-                |items: &Vec<u8>| SnapshotWeight::inventory(items.len()),
-                &cancellation,
-                || async { panic!("page-contract mismatch must not reload") },
-            )
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("invalid arguments"));
+        assert_eq!(
+            store
+                .get_or_load(
+                    request(SnapshotKind::TopicInventory, "a", 1),
+                    Some(&cursor),
+                    Duration::from_secs(1),
+                    Some(Duration::from_secs(1)),
+                    |items: &Vec<u8>| SnapshotWeight::inventory(items.len()),
+                    &cancellation,
+                    || async { panic!("page-contract mismatch must not reload") },
+                )
+                .await
+                .unwrap_err()
+                .code(),
+            "cursor_invalid"
+        );
 
         let mut visibility_mismatch = request(SnapshotKind::TopicInventory, "a", 2);
         visibility_mismatch.visibility = "sensitive".to_string();
-        assert!(store
-            .get_or_load(
-                visibility_mismatch,
-                Some(&cursor),
-                Duration::from_secs(1),
-                Some(Duration::from_secs(1)),
-                |items: &Vec<u8>| SnapshotWeight::inventory(items.len()),
-                &cancellation,
-                || async { panic!("visibility mismatch must not reload") },
-            )
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("invalid arguments"));
+        assert_eq!(
+            store
+                .get_or_load(
+                    visibility_mismatch,
+                    Some(&cursor),
+                    Duration::from_secs(1),
+                    Some(Duration::from_secs(1)),
+                    |items: &Vec<u8>| SnapshotWeight::inventory(items.len()),
+                    &cancellation,
+                    || async { panic!("visibility mismatch must not reload") },
+                )
+                .await
+                .unwrap_err()
+                .code(),
+            "cursor_invalid"
+        );
     }
 
     #[tokio::test]
@@ -2214,7 +2255,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("invalid arguments"));
+        assert_eq!(error.code(), "cursor_expired");
 
         let view = store
             .get_or_load(
@@ -2242,7 +2283,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("invalid arguments"));
+        assert_eq!(error.code(), "cursor_expired");
     }
 
     #[tokio::test]
@@ -2286,7 +2327,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("invalid arguments"));
+        assert_eq!(error.code(), "cursor_expired");
     }
 
     #[tokio::test]
@@ -2305,7 +2346,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(entry_error.to_string().contains("invalid arguments"));
+        assert_eq!(entry_error.code(), "result_too_large");
 
         let row_error = store
             .get_or_load(
@@ -2319,7 +2360,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(row_error.to_string().contains("invalid arguments"));
+        assert_eq!(row_error.code(), "result_too_large");
 
         let byte_error = store
             .get_or_load(
@@ -2333,7 +2374,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(byte_error.to_string().contains("invalid arguments"));
+        assert_eq!(byte_error.code(), "result_too_large");
 
         let metadata_store = SnapshotStore::with_limits(
             8,
@@ -2366,7 +2407,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(metadata_error.to_string().contains("invalid arguments"));
+        assert_eq!(metadata_error.code(), "result_too_large");
     }
 
     #[tokio::test]
@@ -2391,7 +2432,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(error.to_string().contains("invalid arguments"));
+        assert_eq!(error.code(), "result_too_large");
     }
 
     #[tokio::test]
@@ -2417,7 +2458,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(error.to_string().contains("invalid arguments"));
+        assert_eq!(error.code(), "result_too_large");
     }
 
     #[test]
@@ -2503,20 +2544,22 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(scope_store
-            .get_or_load(
-                request(SnapshotKind::TopicInventory, "a", 1),
-                Some(&cursor),
-                Duration::from_secs(1),
-                None,
-                |_: &Vec<String>| SnapshotWeight::inventory(2),
-                &cancellation,
-                || async { panic!("evicted cursor must not reload") },
-            )
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("invalid arguments"));
+        assert_eq!(
+            scope_store
+                .get_or_load(
+                    request(SnapshotKind::TopicInventory, "a", 1),
+                    Some(&cursor),
+                    Duration::from_secs(1),
+                    None,
+                    |_: &Vec<String>| SnapshotWeight::inventory(2),
+                    &cancellation,
+                    || async { panic!("evicted cursor must not reload") },
+                )
+                .await
+                .unwrap_err()
+                .code(),
+            "cursor_expired"
+        );
 
         let too_large_for_scope = SnapshotStore::with_limits(
             16,
@@ -2526,20 +2569,22 @@ mod tests {
                 ..SnapshotLimits::default()
             },
         );
-        assert!(too_large_for_scope
-            .get_or_load(
-                request(SnapshotKind::TopicInventory, "a", 1),
-                None,
-                Duration::from_secs(1),
-                None,
-                |_: &Vec<String>| SnapshotWeight::inventory(1),
-                &cancellation,
-                || async { Ok(QueryPayload::complete(vec![short_string_with_capacity(8 * 1024)])) },
-            )
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("invalid arguments"));
+        assert_eq!(
+            too_large_for_scope
+                .get_or_load(
+                    request(SnapshotKind::TopicInventory, "a", 1),
+                    None,
+                    Duration::from_secs(1),
+                    None,
+                    |_: &Vec<String>| SnapshotWeight::inventory(1),
+                    &cancellation,
+                    || async { Ok(QueryPayload::complete(vec![short_string_with_capacity(8 * 1024)])) },
+                )
+                .await
+                .unwrap_err()
+                .code(),
+            "result_too_large"
+        );
 
         let global_store = SnapshotStore::with_limits(
             16,
@@ -2575,20 +2620,22 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(global_store
-            .get_or_load(
-                request(SnapshotKind::TopicInventory, "a", 1),
-                Some(&cursor),
-                Duration::from_secs(1),
-                None,
-                |_: &Vec<String>| SnapshotWeight::inventory(2),
-                &cancellation,
-                || async { panic!("globally evicted cursor must not reload") },
-            )
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("invalid arguments"));
+        assert_eq!(
+            global_store
+                .get_or_load(
+                    request(SnapshotKind::TopicInventory, "a", 1),
+                    Some(&cursor),
+                    Duration::from_secs(1),
+                    None,
+                    |_: &Vec<String>| SnapshotWeight::inventory(2),
+                    &cancellation,
+                    || async { panic!("globally evicted cursor must not reload") },
+                )
+                .await
+                .unwrap_err()
+                .code(),
+            "cursor_expired"
+        );
     }
 
     #[tokio::test]
@@ -3369,7 +3416,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(
             waiter_error,
-            ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { .. })
+            ToolFailure::Rejected(crate::tools::executor::ToolRejection::CursorExpired)
         ));
         drop(waiter);
         let cursor_error = store
@@ -3384,7 +3431,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(cursor_error.to_string().contains("invalid arguments"));
+        assert_eq!(cursor_error.code(), "cursor_expired");
         assert!(store.lock_state().flights.records.is_empty());
     }
 
@@ -3442,7 +3489,7 @@ mod tests {
                 .wait::<Vec<u8>>(&stale_key, &CancellationToken::new())
                 .await
                 .unwrap_err(),
-            ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { .. })
+            ToolFailure::Rejected(crate::tools::executor::ToolRejection::CursorExpired)
         ));
         drop(stale_waiter);
         let state = store.lock_state();

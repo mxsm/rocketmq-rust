@@ -27,8 +27,13 @@ use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
+use crate::audit::AuditBrokerSet;
 use crate::audit::AuditContext;
+use crate::audit::AuditOutcome;
 use crate::audit::AuditResult;
+use crate::audit::AuditSubject;
+use crate::audit::AuditTarget;
+use crate::audit::AuditTargetResults;
 use crate::audit::AuditTrail;
 use crate::error::ControlError;
 use crate::guard::AuthorizedMutation;
@@ -115,6 +120,63 @@ impl MutationToolRequest {
         }
         serde_json::to_string(&canonical).map_err(|_| ControlError::invalid_argument())
     }
+
+    /// Describes the object of this call for its audit records.
+    ///
+    /// Nothing here needs an RPC, so the `started` record can carry it before any session opens.
+    fn audit_subject(&self) -> Result<AuditSubject, ControlError> {
+        let name = |name: &String| Some(name.clone());
+        let target = match self {
+            Self::Topic(args) => AuditTarget {
+                topic: name(&args.topic),
+                brokers: Some(AuditBrokerSet::from_names(&args.broker_names)),
+                ..AuditTarget::default()
+            },
+            Self::ConsumerGroup(args) => AuditTarget {
+                consumer_group: name(&args.consumer_group),
+                brokers: Some(AuditBrokerSet::from_names(&args.broker_names)),
+                ..AuditTarget::default()
+            },
+            Self::ConsumerOffset(args) => AuditTarget {
+                topic: name(&args.topic),
+                consumer_group: name(&args.consumer_group),
+                ..AuditTarget::default()
+            },
+            Self::BrokerConfig(args) => AuditTarget {
+                broker: name(&args.broker_name),
+                ..AuditTarget::default()
+            },
+            Self::ConsumerRequestMode(args) => AuditTarget {
+                topic: name(&args.topic),
+                consumer_group: name(&args.consumer_group),
+                ..AuditTarget::default()
+            },
+        };
+        AuditSubject::try_new(
+            self.operation(),
+            target,
+            self.requested_digest()?,
+            self.request_key().map(|key| crate::audit::sha256_hex(key.as_bytes())),
+        )
+    }
+
+    /// Digests what this call asks for: its arguments with the Broker names sorted and without
+    /// `reason`, `request_key`, `dry_run` and `confirm`, which say how and why, not what.
+    fn requested_digest(&self) -> Result<String, ControlError> {
+        let mut canonical = self.clone();
+        match &mut canonical {
+            Self::Topic(args) => args.broker_names.sort(),
+            Self::ConsumerGroup(args) => args.broker_names.sort(),
+            Self::ConsumerOffset(_) | Self::BrokerConfig(_) | Self::ConsumerRequestMode(_) => {}
+        }
+        let mut requested = serde_json::to_value(&canonical).map_err(|_| ControlError::invalid_argument())?;
+        if let Some(arguments) = requested.as_object_mut() {
+            for excluded in ["reason", "request_key", "dry_run", "confirm"] {
+                arguments.remove(excluded);
+            }
+        }
+        Ok(crate::audit::digest_canonical_json(&requested))
+    }
 }
 
 impl Serialize for MutationToolRequest {
@@ -193,6 +255,7 @@ pub(crate) struct ToolRuntime {
     operation_timeout: Duration,
     owner: TaskGroup,
     idempotency: Arc<Mutex<IdempotencyState>>,
+    admission: Arc<Admission>,
     signals: ControlSignals,
 }
 
@@ -209,12 +272,19 @@ impl ToolRuntime {
             operation_timeout,
             owner,
             idempotency: Arc::new(Mutex::new(IdempotencyState::default())),
+            admission: Admission::new(crate::config::LimitsConfig::default()),
             signals: ControlSignals::default(),
         }
     }
 
     pub(crate) fn with_signals(mut self, signals: ControlSignals) -> Self {
         self.signals = signals;
+        self
+    }
+
+    /// Replaces the default call budgets with the configured ones.
+    pub(crate) fn with_limits(mut self, limits: crate::config::LimitsConfig) -> Self {
+        self.admission = Admission::new(limits);
         self
     }
 
@@ -254,7 +324,17 @@ impl ToolRuntime {
         cancellation: CancellationToken,
         started: tokio::time::Instant,
     ) -> Result<oneshot::Receiver<Result<MutationToolResponse, ControlError>>, ControlError> {
+        // Admission comes first: a refused call must not cost an audit record or a cache slot.
+        let permit = match self.admission.admit(&principal.subject, request.dry_run()) {
+            Ok(permit) => permit,
+            Err(error) => {
+                self.signals.rate_limit_decided(false);
+                return Err(error);
+            }
+        };
+        self.signals.rate_limit_decided(true);
         let audit_context = AuditContext::try_new(authorized.operator(), request.reason())?;
+        let subject = request.audit_subject()?;
         let cluster = authorized.cluster().clone();
         let identity = IdempotencyIdentity::from_request(principal, &cluster, &request)?;
         let admission =
@@ -269,12 +349,18 @@ impl ToolRuntime {
                             authorized.operation(),
                             authorized.cluster(),
                             request.dry_run(),
+                            &subject,
                         )
                         .await
                         .inspect_err(|_| self.signals.audit_failed(AuditStage::Started))?;
                     let error = ControlError::invalid_argument();
                     self.audit
-                        .terminal(&invocation, AuditResult::Failed, Some(error.code()))
+                        .terminal(
+                            &invocation,
+                            AuditResult::Failed,
+                            Some(error.code()),
+                            &AuditOutcome::default(),
+                        )
                         .await
                         .inspect_err(|_| self.signals.audit_failed(AuditStage::Terminal))?;
                     return Err(error);
@@ -289,6 +375,7 @@ impl ToolRuntime {
                 authorized.operation(),
                 authorized.cluster(),
                 request.dry_run(),
+                &subject,
             )
             .await
         {
@@ -314,6 +401,8 @@ impl ToolRuntime {
         let dry_run = request.dry_run();
         let record_cluster = cluster.clone();
         let spawn = self.owner.spawn_service("mcp-control-mutation-supervisor", async move {
+            // The concurrent slot is held until the terminal record is written.
+            let _permit = permit;
             let result = execute_admitted(
                 cache,
                 identity,
@@ -326,17 +415,10 @@ impl ToolRuntime {
                 owner_cancellation,
             )
             .await;
-            let (audit_result, error_code) = match &result {
-                Ok(response) => response.audit_terminal(),
-                Err(error) if error.code() == crate::error::ControlErrorCode::PreconditionConflict => {
-                    (AuditResult::Conflict, Some(error.code()))
-                }
-                Err(error) if error.code() == crate::error::ControlErrorCode::PartialApply => {
-                    (AuditResult::Partial, Some(error.code()))
-                }
-                Err(error) => (AuditResult::Failed, Some(error.code())),
-            };
-            let terminal = audit.terminal(&task_invocation, audit_result, error_code).await;
+            let (audit_result, error_code) = terminal_audit(&result);
+            let terminal = audit
+                .terminal(&task_invocation, audit_result, error_code, &audit_outcome(&result))
+                .await;
             if terminal.is_err() {
                 signals.audit_failed(AuditStage::Terminal);
             }
@@ -359,7 +441,12 @@ impl ToolRuntime {
                 idempotency::abort_cache_reservation(&self.idempotency, &cleanup_identity, error.clone()).await;
             }
             self.audit
-                .terminal(&invocation, AuditResult::Failed, Some(error.code()))
+                .terminal(
+                    &invocation,
+                    AuditResult::Failed,
+                    Some(error.code()),
+                    &AuditOutcome::default(),
+                )
                 .await
                 .inspect_err(|_| self.signals.audit_failed(AuditStage::Terminal))?;
             return Err(error);
@@ -368,12 +455,79 @@ impl ToolRuntime {
     }
 }
 
+/// Maps a finished attempt to the result and error code of its terminal audit record.
+fn terminal_audit(
+    result: &Result<MutationToolResponse, ControlError>,
+) -> (AuditResult, Option<crate::error::ControlErrorCode>) {
+    match result {
+        Ok(response) => response.audit_terminal(),
+        Err(error) if error.code() == crate::error::ControlErrorCode::PreconditionConflict => {
+            (AuditResult::Conflict, Some(error.code()))
+        }
+        Err(error) if error.code() == crate::error::ControlErrorCode::PartialApply => {
+            (AuditResult::Partial, Some(error.code()))
+        }
+        Err(error) => (AuditResult::Failed, Some(error.code())),
+    }
+}
+
+/// Whether a finished attempt settled what happened to its targets.
+///
+/// Applied, partially applied and conflicting attempts did: a repeated request key replays them.
+/// A failed attempt did not. It may have timed out, been cancelled or lost its verification read,
+/// so the same key must read the cluster again instead of repeating the error.
+fn is_settled(result: &Result<MutationToolResponse, ControlError>) -> bool {
+    matches!(
+        terminal_audit(result).0,
+        AuditResult::Applied | AuditResult::Partial | AuditResult::Conflict
+    )
+}
+
+/// Reads what a finished attempt reported about its targets, for the terminal audit record.
+///
+/// An attempt without a result reports nothing: after a timeout or an adapter error the record
+/// does not claim to know whether a write happened.
+fn audit_outcome(result: &Result<MutationToolResponse, ControlError>) -> AuditOutcome {
+    let Ok(Ok(response)) = result.as_ref().map(serde_json::to_value) else {
+        return AuditOutcome::default();
+    };
+    let read = |value: &serde_json::Value| match value {
+        serde_json::Value::Null => false,
+        serde_json::Value::Object(members) => !members.is_empty(),
+        serde_json::Value::Array(items) => !items.is_empty(),
+        _ => true,
+    };
+    let targets = response.get("targets").and_then(serde_json::Value::as_array);
+    AuditOutcome {
+        before_digest: response
+            .get("before")
+            .filter(|before| read(before))
+            .map(crate::audit::digest_canonical_json),
+        changed: targets.map(|targets| targets.iter().any(|target| target["changed"] == true)),
+        target_results: targets.map(|targets| {
+            let mut results = AuditTargetResults::default();
+            for target in targets {
+                let counter = match target["failure"].as_str() {
+                    Some("conflict") => &mut results.conflict,
+                    Some(_) => &mut results.failed,
+                    None if target["changed"] == true => &mut results.applied,
+                    None => &mut results.unchanged,
+                };
+                *counter = counter.saturating_add(1);
+            }
+            results
+        }),
+    }
+}
+
 pub(crate) mod admin_session;
+mod admission;
 mod execution;
 mod idempotency;
 mod remaining;
 
 pub(crate) use admin_session::AdminMutationToolFactory;
+use admission::Admission;
 use idempotency::execute_admitted;
 use idempotency::IdempotencyIdentity;
 use idempotency::IdempotencyState;

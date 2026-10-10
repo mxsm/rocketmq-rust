@@ -93,6 +93,7 @@ soak, complete disaster recovery, Docker images, and real external adapters rema
 | `rocketmq-example` | `rocketmq-runtime` | `rocketmq-runtime` |
 | `rocketmq-example` | `rocketmq-tools` | `rocketmq-tools/rocketmq-admin/rocketmq-admin-core` |
 | `rocketmq-mcp` | `rocketmq-admin-core` | `rocketmq-tools/rocketmq-admin/rocketmq-admin-core` |
+| `rocketmq-mcp` | `rocketmq-mcp-auth` | `rocketmq-ai/rocketmq-mcp-auth` |
 | `rocketmq-mcp` | `rocketmq-observability` | `rocketmq-observability` |
 | `rocketmq-mcp` | `rocketmq-runtime` | `rocketmq-runtime` |
 | `rocketmq-mcp` | `rocketmq-security-api` | `rocketmq-security-api` |

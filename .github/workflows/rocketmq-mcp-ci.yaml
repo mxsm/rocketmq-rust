@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "rocketmq-ai/rocketmq-mcp/**"
+      - "rocketmq-ai/rocketmq-mcp-auth/**"
       - "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/**"
       - "rocketmq-auth/**"
       - "rocketmq-client/**"
@@ -24,6 +25,7 @@ on:
   pull_request:
     paths:
       - "rocketmq-ai/rocketmq-mcp/**"
+      - "rocketmq-ai/rocketmq-mcp-auth/**"
       - "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/**"
       - "rocketmq-auth/**"
       - "rocketmq-client/**"
@@ -69,3 +71,21 @@ jobs:
       - run: cargo clippy --locked --all-targets --features streamable-http -- -D warnings
       - if: github.event_name != 'pull_request'
         run: cargo doc --locked --no-deps
+
+  # The JWKS crate shared with the control MCP has its own workspace, so its tests run here.
+  shared-auth:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rocketmq-ai/rocketmq-mcp-auth
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rocketmq-ai/rocketmq-mcp-auth
+      - run: cargo fmt --all -- --check
+      - run: cargo test --locked
+      - run: cargo clippy --locked --all-targets -- -D warnings

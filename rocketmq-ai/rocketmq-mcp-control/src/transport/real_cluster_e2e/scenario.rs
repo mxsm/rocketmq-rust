@@ -1435,8 +1435,24 @@ fn verify_audit(path: &Path, expected: &[ExpectedAudit]) -> E2eResult<()> {
         let started = &pair[0];
         let terminal = &pair[1];
         ensure(
-            started.schema_version == AuditSchemaVersion::V2,
-            "audit start was not schema v2",
+            started.schema_version == AuditSchemaVersion::V3 && terminal.schema_version == AuditSchemaVersion::V3,
+            "audit pair was not schema v3",
+        )?;
+        ensure(
+            started.target.is_some() && started.target == terminal.target,
+            "audit target was absent or changed within its pair",
+        )?;
+        ensure(
+            started.requested_digest.is_some() && started.requested_digest == terminal.requested_digest,
+            "audit requested digest was absent or changed within its pair",
+        )?;
+        ensure(
+            started.request_key_digest.is_some() && started.request_key_digest == terminal.request_key_digest,
+            "audit request key digest was absent or changed within its pair",
+        )?;
+        ensure(
+            started.changed.is_none() && started.target_results.is_none() && started.before_digest.is_none(),
+            "audit start claimed to know the outcome",
         )?;
         ensure(
             started.event == AuditEvent::Started,

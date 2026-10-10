@@ -42,25 +42,43 @@ operation_schema!(
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ResetConsumerOffsetArgs {
+    /// Version of this argument schema. Always `rocketmq-mcp-control.arguments.v1`.
     #[schemars(regex(pattern = "^rocketmq-mcp-control\\.arguments\\.v1$"))]
     pub schema_version: String,
+    /// Logical cluster name from the server configuration, never a NameServer or Broker address. Both the
+    /// caller and the server policy must allow it.
     #[schemars(length(min = 1, max = 64), regex(pattern = "^[a-zA-Z0-9_-]+$"))]
     pub cluster: String,
+    /// Topic whose consumer offsets are reset. System Topics are rejected.
     #[schemars(length(min = 1, max = 127), regex(pattern = "^[%|a-zA-Z0-9_-]+$"))]
     pub topic: String,
+    /// Consumer Group whose offsets are reset. Built-in system groups are rejected.
     #[schemars(length(min = 1, max = 255), regex(pattern = "^[%|a-zA-Z0-9_-]+$"))]
     pub consumer_group: String,
+    /// Time to reset to, in RFC 3339 with a time zone, for example `2026-08-30T08:00:00+08:00`. Each queue is
+    /// planned at the offset stored for that time.
     #[schemars(length(min = 20, max = 40))]
     pub timestamp: String,
+    /// Whether an offset may move forward. When false, a queue whose reset would advance its offset, or that
+    /// has no offset yet, is left unchanged.
     #[serde(default)]
     pub force: bool,
+    /// Plan only: read the current state and report what would change, without writing. When omitted, the
+    /// server's configured default applies, which is a dry run unless the operator changed it.
     #[serde(default = "default_dry_run")]
     pub dry_run: bool,
+    /// Explicit confirmation. Must be true to execute, that is when `dry_run` is false; a dry run does not
+    /// need it.
     #[serde(default)]
     pub confirm: bool,
+    /// Why the change is made; kept only in the durable audit log. Required to execute. 5 to 256 characters of
+    /// letters, digits, spaces and `._,#-`, without addresses, host names or tokens.
     #[serde(default)]
     #[schemars(length(min = 5, max = 256))]
     pub reason: Option<String>,
+    /// Optional idempotency key of 8 to 64 letters, digits and `._:-`. An execute call that repeats a key with
+    /// the same arguments returns the outcome already recorded for it instead of writing again; the same key
+    /// with different arguments is rejected.
     #[serde(default)]
     #[schemars(length(min = 8, max = 64), regex(pattern = "^[a-zA-Z0-9._:-]+$"))]
     pub request_key: Option<String>,

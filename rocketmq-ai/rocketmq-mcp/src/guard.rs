@@ -1088,6 +1088,7 @@ mod tests {
                 rate_limit_per_minute,
                 permissions_file: permission_path(),
                 max_concurrent_requests_per_cluster,
+                pseudonym_key_env: None,
             },
             AuditConfig {
                 enabled: true,
@@ -1120,6 +1121,7 @@ mod tests {
                 rate_limit_per_minute: 60,
                 permissions_file: permission_path(),
                 max_concurrent_requests_per_cluster: 8,
+                pseudonym_key_env: None,
             },
             AuditConfig {
                 enabled: true,
@@ -1182,6 +1184,7 @@ mod tests {
                 rate_limit_per_minute: 60,
                 permissions_file,
                 max_concurrent_requests_per_cluster,
+                pseudonym_key_env: None,
             },
             AuditConfig {
                 enabled: true,

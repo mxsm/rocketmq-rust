@@ -23,6 +23,7 @@ use crate::guard::GuardRejection;
 use crate::guard::RiskLevel;
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PermissionConfig {
     #[serde(default)]
     pub roles: BTreeMap<String, PermissionRole>,
@@ -34,6 +35,7 @@ const RESOURCE_READ: &str = "resource:read";
 const RESOURCE_READ_BACKING_TOOL: &str = "rocketmq_get_cluster_overview";
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PermissionRole {
     #[serde(default)]
     pub include: Vec<String>,
@@ -217,6 +219,7 @@ fn matches_cluster(clusters: &BTreeSet<String>, cluster: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::catalog::ToolId;
 
     #[test]
     fn policy_combines_roles_scopes_and_cluster_allow_lists() {
@@ -256,9 +259,18 @@ mod tests {
             .is_err());
     }
 
-    const LIST_TOPICS: &str = "rocketmq_list_topics";
-    const MESSAGE_METADATA: &str = "rocketmq_get_message_metadata";
-    const DIAGNOSE_LAG: &str = "rocketmq_diagnose_consumer_lag";
+    // Tool names come from the catalog, so the tests cannot drift from the registered Tools.
+    fn list_topics() -> &'static str {
+        ToolId::ListTopics.descriptor().name
+    }
+
+    fn message_metadata() -> &'static str {
+        ToolId::GetMessageMetadata.descriptor().name
+    }
+
+    fn diagnose_lag() -> &'static str {
+        ToolId::DiagnoseConsumerLag.descriptor().name
+    }
 
     fn role(include: &[&str], allow_tools: &[&str], deny_tools: &[&str]) -> PermissionRole {
         let owned = |values: &[&str]| values.iter().map(ToString::to_string).collect::<Vec<_>>();
@@ -300,6 +312,30 @@ mod tests {
     }
 
     #[test]
+    fn misspelled_permission_keys_are_rejected_instead_of_being_ignored() {
+        let directory = tempfile::tempdir().unwrap();
+        let load = |contents: &str| {
+            let path = directory.path().join("permissions.toml");
+            std::fs::write(&path, contents).unwrap();
+            PolicyEngine::load(&path)
+        };
+
+        // A misspelled `deny_tools` used to leave the role with every Tool `*` grants.
+        let role = load("[roles.ops]\nallow_tools = [\"*\"]\ndeny_tool = [\"rocketmq_get_message_metadata\"]\n")
+            .expect_err("a misspelled role key must be rejected");
+        assert_eq!(
+            role.to_string(),
+            "MCP configuration is invalid: unknown key `deny_tool` in `roles.ops`"
+        );
+
+        let top_level = load("[role.ops]\nallow_tools = [\"*\"]\n").expect_err("an unknown table must be rejected");
+        assert_eq!(
+            top_level.to_string(),
+            "MCP configuration is invalid: unknown key `role`"
+        );
+    }
+
+    #[test]
     fn example_permissions_keep_their_current_behavior() {
         let policy = PolicyEngine::load(
             &Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -310,65 +346,68 @@ mod tests {
 
         // `read_only` grants Tools by name next to `deny_tools = ["*"]`, and `diagnose` includes it.
         let read_only = principal(&["read_only"]);
-        assert!(allows(&policy, &read_only, LIST_TOPICS));
-        assert!(allows(&policy, &read_only, MESSAGE_METADATA));
-        assert!(!allows(&policy, &read_only, DIAGNOSE_LAG));
+        assert!(allows(&policy, &read_only, list_topics()));
+        assert!(allows(&policy, &read_only, message_metadata()));
+        assert!(!allows(&policy, &read_only, diagnose_lag()));
 
         let diagnose = principal(&["diagnose"]);
-        assert!(allows(&policy, &diagnose, LIST_TOPICS));
-        assert!(allows(&policy, &diagnose, DIAGNOSE_LAG));
+        assert!(allows(&policy, &diagnose, list_topics()));
+        assert!(allows(&policy, &diagnose, diagnose_lag()));
         assert!(!allows(&policy, &diagnose, "rocketmq_plan_create_topic"));
         assert!(allows(&policy, &principal(&["operator"]), "rocketmq_plan_create_topic"));
     }
 
     #[test]
     fn exact_deny_overrides_wildcard_allow() {
-        let policy = policy(&[("ops", role(&[], &[WILDCARD], &[MESSAGE_METADATA]))]);
+        let policy = policy(&[("ops", role(&[], &[WILDCARD], &[message_metadata()]))]);
         let principal = principal(&["ops"]);
 
-        assert!(!allows(&policy, &principal, MESSAGE_METADATA));
-        assert!(allows(&policy, &principal, LIST_TOPICS));
+        assert!(!allows(&policy, &principal, message_metadata()));
+        assert!(allows(&policy, &principal, list_topics()));
     }
 
     #[test]
     fn exact_deny_overrides_exact_allow() {
-        let policy = policy(&[("ops", role(&[], &[LIST_TOPICS, MESSAGE_METADATA], &[MESSAGE_METADATA]))]);
+        let policy = policy(&[(
+            "ops",
+            role(&[], &[list_topics(), message_metadata()], &[message_metadata()]),
+        )]);
         let principal = principal(&["ops"]);
 
-        assert!(!allows(&policy, &principal, MESSAGE_METADATA));
-        assert!(allows(&policy, &principal, LIST_TOPICS));
+        assert!(!allows(&policy, &principal, message_metadata()));
+        assert!(allows(&policy, &principal, list_topics()));
     }
 
     #[test]
     fn wildcard_deny_overrides_wildcard_allow_but_not_a_grant_by_name() {
-        let policy = policy(&[("ops", role(&[], &[WILDCARD, LIST_TOPICS], &[WILDCARD]))]);
+        let policy = policy(&[("ops", role(&[], &[WILDCARD, list_topics()], &[WILDCARD]))]);
         let principal = principal(&["ops"]);
 
-        assert!(allows(&policy, &principal, LIST_TOPICS));
-        assert!(!allows(&policy, &principal, MESSAGE_METADATA));
+        assert!(allows(&policy, &principal, list_topics()));
+        assert!(!allows(&policy, &principal, message_metadata()));
     }
 
     #[test]
     fn deny_from_an_included_or_sibling_role_applies() {
         let policy = policy(&[
-            ("base", role(&[], &[], &[MESSAGE_METADATA])),
+            ("base", role(&[], &[], &[message_metadata()])),
             ("ops", role(&["base"], &[WILDCARD], &[])),
             ("reader", role(&[], &[WILDCARD], &[])),
         ]);
 
-        assert!(!allows(&policy, &principal(&["ops"]), MESSAGE_METADATA));
-        assert!(allows(&policy, &principal(&["ops"]), LIST_TOPICS));
-        assert!(allows(&policy, &principal(&["reader"]), MESSAGE_METADATA));
-        assert!(!allows(&policy, &principal(&["reader", "base"]), MESSAGE_METADATA));
+        assert!(!allows(&policy, &principal(&["ops"]), message_metadata()));
+        assert!(allows(&policy, &principal(&["ops"]), list_topics()));
+        assert!(allows(&policy, &principal(&["reader"]), message_metadata()));
+        assert!(!allows(&policy, &principal(&["reader", "base"]), message_metadata()));
     }
 
     #[test]
     fn denied_tool_is_hidden_from_discovery() {
-        let policy = policy(&[("ops", role(&[], &[WILDCARD], &[MESSAGE_METADATA]))]);
+        let policy = policy(&[("ops", role(&[], &[WILDCARD], &[message_metadata()]))]);
         let principal = principal(&["ops"]);
 
-        assert!(!policy.allows_tool(&principal, MESSAGE_METADATA, RiskLevel::ReadOnly));
-        assert!(policy.allows_tool(&principal, LIST_TOPICS, RiskLevel::ReadOnly));
+        assert!(!policy.allows_tool(&principal, message_metadata(), RiskLevel::ReadOnly));
+        assert!(policy.allows_tool(&principal, list_topics(), RiskLevel::ReadOnly));
     }
 
     #[test]

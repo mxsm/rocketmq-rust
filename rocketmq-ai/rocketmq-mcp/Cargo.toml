@@ -45,9 +45,9 @@ otlp            = [
 auth            = []
 streamable-http = [
     "rmcp/transport-streamable-http-server",
-    "dep:arc-swap",
     "dep:axum",
     "dep:reqwest",
+    "dep:rocketmq-mcp-auth",
     "dep:rocketmq-transport",
     "dep:tokio-rustls",
     "dep:tower-http",
@@ -61,16 +61,19 @@ rocketmq-observability = { version = "1.0.0", path = "../../rocketmq-observabili
 rocketmq-runtime      = { version = "1.0.0", path = "../../rocketmq-runtime" }
 rocketmq-security-api = { version = "1.0.0", path = "../../rocketmq-security-api" }
 rocketmq-transport    = { version = "1.0.0", path = "../../rocketmq-transport", default-features = false, features = ["tls"], optional = true }
+# JWKS retrieval and RS256 key selection shared with the control MCP.
+rocketmq-mcp-auth     = { version = "1.0.0", path = "../rocketmq-mcp-auth", optional = true }
 
-arc-swap           = { version = "1.9", optional = true }
 axum               = { version = "0.8", optional = true }
 chrono             = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap               = { version = "4.6.1", features = ["derive", "env"] }
 config             = "0.15.23"
+hmac               = "0.13"
 jsonschema         = { version = "0.58", default-features = false }
 # Keep RS256 on AWS-LC: the RustCrypto backend pulls rsa 0.9, which has no fix for RUSTSEC-2023-0071.
 jsonwebtoken       = { version = "11.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 percent-encoding   = "2.3"
+rand               = "0.10"
 regex              = "1.12.4"
 reqwest            = { version = "0.13", default-features = false, features = ["rustls"], optional = true }
 rmcp               = { version = "3.1", features = ["server", "macros", "schemars"] }
@@ -95,6 +98,7 @@ mockall           = "0.15.0"
 pretty_assertions = "1.4"
 rcgen            = "0.14"
 tempfile          = "3.27.0"
+tokio             = { version = "1.52", features = ["test-util"] }
 tower             = { version = "0.5", features = ["util"] }
 
 [[bin]]

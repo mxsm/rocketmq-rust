@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
+use rmcp::model::JsonObject;
 use rmcp::model::ListToolsResult;
 use rmcp::model::Tool;
 use rmcp::model::ToolAnnotations;
@@ -94,7 +96,7 @@ fn tool_definition(operation: ControlOperation) -> Option<Tool> {
     .destructive(true)
     .idempotent(true)
     .open_world(true);
-    match operation {
+    let tool = match operation {
         ControlOperation::TopicUpsert => Some(
             Tool::new(
                 UPSERT_TOPIC_TOOL,
@@ -150,7 +152,44 @@ fn tool_definition(operation: ControlOperation) -> Option<Tool> {
             .with_output_schema::<RequestModeMutationToolResponse>()
             .with_annotations(annotations),
         ),
+    };
+    tool.map(|mut tool| {
+        unwrap_descriptions(Arc::make_mut(&mut tool.input_schema));
+        if let Some(output_schema) = &mut tool.output_schema {
+            unwrap_descriptions(Arc::make_mut(output_schema));
+        }
+        tool
+    })
+}
+
+/// Joins the wrapped lines of every `description` in a schema, keeping paragraph breaks.
+///
+/// schemars publishes a doc comment with its source line breaks. Left in, re-wrapping a comment
+/// would change the published Tool schema.
+fn unwrap_descriptions(schema: &mut JsonObject) {
+    for (keyword, value) in schema.iter_mut() {
+        match value {
+            serde_json::Value::String(text) if keyword == "description" && text.contains('\n') => {
+                *text = unwrap_lines(text);
+            }
+            // A value under these keywords is data, not a schema.
+            _ if matches!(keyword.as_str(), "default" | "const" | "enum" | "examples") => {}
+            serde_json::Value::Object(nested) => unwrap_descriptions(nested),
+            serde_json::Value::Array(items) => items
+                .iter_mut()
+                .filter_map(serde_json::Value::as_object_mut)
+                .for_each(unwrap_descriptions),
+            _ => {}
+        }
     }
+}
+
+fn unwrap_lines(text: &str) -> String {
+    let paragraphs = text.split("\n\n").map(|paragraph| {
+        let lines = paragraph.lines().map(str::trim).filter(|line| !line.is_empty());
+        lines.collect::<Vec<_>>().join(" ")
+    });
+    paragraphs.collect::<Vec<_>>().join("\n\n")
 }
 
 #[cfg(test)]
@@ -218,6 +257,98 @@ mod tests {
             ));
             assert_eq!(all.registered_operations(), 5);
         }
+    }
+
+    fn all_operations() -> OperationCatalog {
+        OperationCatalog {
+            operations: BTreeSet::from([
+                ControlOperation::TopicUpsert,
+                ControlOperation::ConsumerGroupUpsert,
+                ControlOperation::ConsumerOffsetReset,
+                ControlOperation::BrokerConfigPatch,
+                ControlOperation::ConsumerRequestMode,
+            ]),
+        }
+    }
+
+    /// Calls `visit` with the pointer and the schema of every input property, nested ones included.
+    fn for_each_input_property(schema: &JsonObject, pointer: &str, visit: &mut impl FnMut(&str, &JsonObject)) {
+        for keyword in ["properties", "$defs"] {
+            let Some(named) = schema.get(keyword).and_then(serde_json::Value::as_object) else {
+                continue;
+            };
+            for (name, nested) in named {
+                let pointer = format!("{pointer}/{name}");
+                let nested = nested.as_object().expect("a schema object");
+                if keyword == "properties" {
+                    visit(&pointer, nested);
+                }
+                for_each_input_property(nested, &pointer, visit);
+            }
+        }
+    }
+
+    #[test]
+    fn every_input_property_has_a_description() {
+        let tools = all_operations().list_tools().tools;
+        assert_eq!(tools.len(), 5);
+        let mut described = 0;
+        for tool in tools {
+            for_each_input_property(&tool.input_schema, "", &mut |pointer, property| {
+                let description = property.get("description").and_then(serde_json::Value::as_str);
+                assert!(
+                    description.is_some_and(|text| !text.trim().is_empty()),
+                    "{}: input {pointer} has no description",
+                    tool.name
+                );
+                described += 1;
+            });
+        }
+        // 61 arguments over the five Tools, plus the six settings of a Broker configuration patch.
+        assert_eq!(described, 67);
+    }
+
+    #[test]
+    fn published_descriptions_do_not_keep_source_line_breaks() {
+        fn assert_unwrapped(tool: &str, value: &serde_json::Value) {
+            match value {
+                serde_json::Value::Object(members) => {
+                    for (keyword, nested) in members {
+                        match nested.as_str() {
+                            Some(text) if keyword == "description" => {
+                                let single_break = text.replace("\n\n", "").contains('\n');
+                                assert!(!single_break, "{tool}: wrapped description {text:?}");
+                            }
+                            _ => assert_unwrapped(tool, nested),
+                        }
+                    }
+                }
+                serde_json::Value::Array(items) => items.iter().for_each(|item| assert_unwrapped(tool, item)),
+                _ => {}
+            }
+        }
+
+        for tool in all_operations().list_tools().tools {
+            assert_unwrapped(&tool.name, &serde_json::to_value(&tool).unwrap());
+        }
+        assert_eq!(
+            unwrap_lines("first line\n  second line\n\nnext paragraph\nends here"),
+            "first line second line\n\nnext paragraph ends here"
+        );
+        let mut schema = serde_json::json!({
+            "description": "wrapped\ntext",
+            "default": {"description": "data\nstays"},
+            "properties": {"description": {"description": "nested\ntext", "enum": ["a\nb"]}}
+        });
+        unwrap_descriptions(schema.as_object_mut().unwrap());
+        assert_eq!(
+            schema,
+            serde_json::json!({
+                "description": "wrapped text",
+                "default": {"description": "data\nstays"},
+                "properties": {"description": {"description": "nested text", "enum": ["a\nb"]}}
+            })
+        );
     }
 
     #[cfg(feature = "write-tools")]

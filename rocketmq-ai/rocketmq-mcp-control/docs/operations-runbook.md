@@ -24,7 +24,9 @@ Start with dry-run and inspect the operation-specific top-level `target`, aggreg
 then the broker-sorted per-target evidence. For execution, preserve the same complete replacement and target
 set, set `dry_run=false` and `confirm=true`, and provide a safe operator reason. Inspect aggregate `after` as
 well as each target's persistence/verification evidence. Use a request key when retry or concurrent delivery is
-possible. Do not change the payload for a reused key.
+possible. Do not change the payload for a reused key. A repeated key replays an applied, partial, or conflicting
+outcome; after any failure it runs preflight again, so retrying with the same key is the way to learn the current
+state.
 
 The server persists `started` before opening an Admin session. One lifecycle-owned supervisor then opens one
 mutation-only session, performs targeted preflight, optionally executes the sealed conditional plan, performs a
@@ -101,7 +103,8 @@ The service records the shared MCP instruments.
 | --- | --- | --- |
 | `rocketmq_mcp_requests_total`, `rocketmq_mcp_request_latency` | `operation_kind="tool"`, `operation`, `result` | Every tool call. `operation` is the tool name for a rejected call and the tool name plus `.dry_run` or `.execute` for a supervised mutation. `result` is `success`, `failure`, or `denied`. |
 | `rocketmq_mcp_errors_total` | `operation_kind="tool"`, `operation`, `result` | Every failed call, plus `operation="authentication"` and `operation="http_request"` for requests rejected before a tool was selected. |
-| `rocketmq_mcp_cache_operations_total` | `result` | Request-key admission: `miss` leads, `coalesced_waiter` follows an in-flight call, `hit` replays a completed one, `bypass` has no request key. |
+| `rocketmq_mcp_cache_operations_total` | `result` | Request-key admission: `miss` leads, `coalesced_waiter` follows an in-flight call, `hit` replays a settled one, `bypass` has no request key or is a dry run. |
+| `rocketmq_mcp_rate_limit_total` | `result` | Admission control for an authorized, valid call: `accepted` or `rejected`. |
 | `rocketmq_mcp_audit_failures_total` | `reason="sink"` | Every durable audit record that could not be persisted or confirmed. |
 
 `rocketmq_mcp_errors_total` folds the control codes into the shared failure classes:
@@ -110,20 +113,61 @@ The service records the shared MCP instruments.
 | --- | --- |
 | `permission_denied` | `unauthorized`, `permission_denied`, `cluster_not_allowed`, `operation_not_allowed`, `mutation_disabled` |
 | `invalid_request` | `request_rejected`, `confirmation_required`, `invalid_argument`, `precondition_conflict` |
+| `rate_limited` | `rate_limited` |
 | `source_unavailable` | `operation_unavailable`, `audit_unavailable`, `partial_apply`, `verification_failed`, `timeout`, `shutdown_failed` |
 | `internal` | `execution_failed`, `cancelled`, `invalid_config` |
 
 The exact code of each call is in the log line and in the audit record.
 
+## Audit capacity and archiving
+
+Every admitted call writes two audit records, a dry run included: `started` before any session, and one
+terminal record. Each record is one line of the active file at `audit.path`.
+
+- `audit.capacity` is the number of lines in one segment. A full segment is sealed as
+  `<path>.<six-digit number>` and a new active file starts, so the trail has no lifetime limit and a full segment
+  does not fail a call. With the default `capacity = 4096`, a segment holds about 2,000 calls.
+- `audit.max_record_bytes` is at least 4,096. A segment is at most `capacity` times that size and never more
+  than 64 MiB.
+- `[limits]` bounds how fast segments fill. Each OAuth subject may start `dry_runs_per_minute` dry runs and
+  `executes_per_minute` execute calls, and at most `max_concurrent_calls` calls run at once. A call over a limit
+  gets `rate_limited`, writes no audit record, and counts as `rejected` in `rocketmq_mcp_rate_limit_total`. At
+  the defaults, one subject can fill at most one default segment in about 25 minutes.
+- `audit.capacity` must be at least four times `max_concurrent_calls`: a new segment starts with a copy of every
+  call still in flight.
+
+The server logs `audit segment was sealed` with the segment number, its record count, and its last sequence at
+each rotation. It exports no gauge for the number of sealed segments or the fill of the active one, so plan disk
+space from the log line and the file sizes.
+
+To archive, copy or move sealed segments, the files with a numeric suffix, to long-term storage. The service can
+keep running: it never reads a sealed segment again. Never touch the active file or a `<path>.next` file while
+the service runs. Keep the sealed segments in order; each header names the last sequence and the SHA-256 of the
+segment before it, which lets an auditor prove that none is missing or altered.
+
+When calls fail with `audit_unavailable`:
+
+1. Read the service log. `durable audit record is unavailable` names the stage, `started` or `terminal`. At
+   startup, `a sealed audit segment already has the number of the active segment` means a file already exists
+   under the name the active segment would be sealed to; move that file to the archive.
+2. Check that the volume of `audit.path` is writable and has free space, and that no other process holds or
+   has modified the active file.
+3. Restart the service after the cause is fixed. A failed write poisons the live trail on purpose, so it does
+   not recover without a restart. Startup validates the active segment and refuses a file that is torn,
+   reordered, or altered.
+4. A call that was `started` and has no terminal record after the restart stays that way. Compare its `target`
+   and `requested_digest` with the RocketMQ state to decide whether it took effect.
+
 ## Failure and emergency handling
 
 If audit `started` is unavailable, the operation opens no session and performs no RocketMQ RPC. Treat audit
 poison, shutdown failure, persistence failure, or verification failure as fail-closed and investigate the
-durable audit plus RocketMQ state using separately authorized operational systems. Version-2 audit records
-contain the validated OAuth subject and optional safe request reason strictly as durable operator evidence.
-Neither value appears in responses, errors, tracing, or ordinary logs. Audit records contain no credentials,
-tokens, endpoints, request keys, message bodies, or backend error text. Existing version-1 and mixed-version
-JSONL is recovered in place and is never rewritten; new writes are version 2 only.
+durable audit plus RocketMQ state using separately authorized operational systems. Version-3 audit records
+contain the validated OAuth subject and optional safe request reason strictly as durable operator evidence,
+together with the logical target names, digests, and outcome counts described in the tool reference.
+Operator and reason appear in no response, error, trace, or ordinary log. Audit records contain no credentials,
+tokens, endpoints, request keys, message bodies, or backend error text. Existing version-1, version-2, and
+mixed-version JSONL is recovered in place and is never rewritten; new writes are version 3 only.
 
 To stop new mutations, set `mutations_enabled=false` and restart. Removing an operation or cluster from the
 server allowlist also requires restart. Keep the service unavailable until incomplete or partial targets are

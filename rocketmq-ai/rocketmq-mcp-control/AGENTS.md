@@ -8,6 +8,9 @@ This file applies to `rocketmq-ai/rocketmq-mcp-control/`.
 
 - This directory is a standalone Rust 2021 Cargo workspace excluded from the root workspace.
 - HTTPS Streamable MCP with RS256 OAuth/JWKS is the only transport and authentication mode.
+- JWKS retrieval, caching, and key selection come from `../rocketmq-mcp-auth/`. This service states its own
+  limits in `JWKS_POLICY` (`src/auth.rs`): keys are never used past their five-minute lifetime, and the JWKS
+  endpoint is reached only at public addresses. The boundary check scans that crate as production source.
 - The default feature set must not depend on RocketMQ Admin or client mutation adapters.
 - `write-tools` may enable only `rocketmq-admin-core/mutation-client-adapter`; it must never enable a read or full adapter.
 - The reviewed production tools are `rocketmq_upsert_topic`,
@@ -18,9 +21,13 @@ This file applies to `rocketmq-ai/rocketmq-mcp-control/`.
 - OAuth and closed operation/cluster authorization must complete before mutation argument parsing. A durable
   `started` audit record must then complete before session creation or RPC.
 - Do not add stdio, CLI, shell, subprocess, free-form RPC, arbitrary Admin commands, or stdout protocol output.
-- Durable audit v2 records may contain only the validated OAuth subject and optional safe bounded request reason
-  as operator evidence. Responses, errors, tracing, ordinary logs, and all other public data must exclude both;
-  every surface must also exclude credentials, tokens, network addresses, raw backend errors, and message bodies.
+- Durable audit v3 records may contain only: the validated OAuth subject and optional safe bounded request reason
+  as operator evidence; the validated logical names of the mutation target (Topic, Consumer Group, Broker names);
+  SHA-256 digests of the requested state, the request key, the pre-change state, and the selected Broker set; and
+  closed outcome values (whether a target changed, per-target result counts). Never store the requested values, a
+  request key, or a name that fails argument validation. Responses, errors, tracing, ordinary logs, and all other
+  public data must exclude the operator and reason; every surface must also exclude credentials, tokens, network
+  addresses, raw backend errors, and message bodies.
 - An audit operator is 1--128 ASCII bytes: the first byte is alphanumeric and every remaining byte is
   alphanumeric or one of `._@-`. Without `@`, it must not be endpoint-shaped. With exactly one `@`, the local
   side starts/ends alphanumeric and has no consecutive dots; the domain is a non-IP, non-rooted, valid
@@ -38,9 +45,12 @@ This file applies to `rocketmq-ai/rocketmq-mcp-control/`.
   explicit hash-number or uppercase-tag ticket references and decimal version tokens immediately following
   `release` or `version`.
   Apply both rules at OAuth,
-  request context, and v2 recovery boundaries; v1 recovery retains its legacy shape rules.
-- Normalize every reliable audit sink read, recovery, append, or timeout failure to `audit_unavailable`; never
-  expose a sink-provided code or message. A failed durable `started` append must precede and prevent session/RPC.
+  request context, and v2/v3 recovery boundaries; v1 recovery retains its legacy shape rules.
+- Normalize every reliable audit sink read, recovery, append, rotation, or timeout failure to `audit_unavailable`;
+  never expose a sink-provided code or message. A failed durable `started` append must precede and prevent
+  session/RPC. Never delete or rewrite a sealed audit segment.
+- Admission control runs after authorization and argument validation and before the `started` record. A call it
+  refuses gets `rate_limited`, writes no durable audit record, and reaches no session.
 - Each upsert accepts only 1--64 explicit broker names. All operations validate the full selected-cluster topology
   before target state RPC, keep plans sealed to one Admin session, and preserve exact-target post-read verification.
 - Targeted Topic upserts must treat the complete order-Topic KV as a sealed no-write guard. Never merge, put,

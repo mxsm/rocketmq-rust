@@ -339,6 +339,8 @@ mod tests {
     struct StaticSource;
 
     impl JwksSource for StaticSource {
+        type Error = AuthError;
+
         async fn fetch(&self) -> Result<Vec<u8>, AuthError> {
             Ok(serde_json::to_vec(&serde_json::json!({"keys": [{
                 "kty": "RSA", "kid": "test-key", "alg": "RS256", "use": "sig",
@@ -405,6 +407,7 @@ mod tests {
                 capacity: 64,
                 max_record_bytes: 4096,
             },
+            limits: crate::config::LimitsConfig::default(),
         }
     }
 
@@ -1223,7 +1226,39 @@ mod tests {
                 value["result"]["structuredContent"]["code"], expected_code,
                 "case {index}"
             );
+            // A caller that fails authorization learns nothing about the arguments it sent.
+            assert!(
+                value["result"]["structuredContent"].get("violations").is_none(),
+                "case {index}"
+            );
         }
+
+        // The same arguments are located once the caller may run the operation on the cluster.
+        let located = router
+            .clone()
+            .oneshot(request(
+                "/mcp",
+                Body::from(r#"{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{"name":"rocketmq_upsert_topic","arguments":{"cluster":"cluster-a","unknown":true}}}"#),
+                Some(&both),
+            ))
+            .await
+            .unwrap();
+        let located_body = to_bytes(located.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
+        let located_value: serde_json::Value = serde_json::from_slice(&located_body).unwrap();
+        assert_eq!(
+            located_value["result"]["structuredContent"],
+            serde_json::json!({
+                "schema_version": crate::error::ERROR_SCHEMA_VERSION,
+                "code": "invalid_argument",
+                "message": "mutation argument is invalid",
+                "retryable": false,
+                "violations": [
+                    {"path": "/schema_version", "constraint": "required"},
+                    {"path": "/topic", "constraint": "required"},
+                    {"path": "/broker_names", "constraint": "required"}
+                ]
+            })
+        );
         assert_eq!(counters.opens.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_eq!(counters.preflights.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_eq!(counters.executes.load(std::sync::atomic::Ordering::SeqCst), 0);

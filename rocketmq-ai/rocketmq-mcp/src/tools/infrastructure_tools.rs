@@ -21,11 +21,19 @@ use serde::Serialize;
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct GetHaStatusArgs {
+    /// Logical cluster name configured on this server. It is a name, not a NameServer address.
+    #[schemars(length(min = 1))]
     pub cluster: String,
+    /// Logical names of the master Brokers to inspect, at most 64. Leave it empty to inspect every master Broker of the
+    /// cluster. They are names, not network addresses.
     #[serde(default)]
     pub broker_names: Vec<String>,
+    /// Also read the in-sync replica state from the Controllers. Defaults to false. It must be true when
+    /// `controller_names` is not empty.
     #[serde(default)]
     pub include_sync_state: bool,
+    /// Names of the Controllers to ask for the sync state, as configured for this cluster on the server: at most 32,
+    /// without duplicates. Leave it empty to ask every configured Controller.
     #[serde(default)]
     pub controller_names: Vec<String>,
 }
@@ -91,7 +99,11 @@ pub struct GetHaStatusOutput {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct GetControllerMetadataArgs {
+    /// Logical cluster name configured on this server. It is a name, not a NameServer address.
+    #[schemars(length(min = 1))]
     pub cluster: String,
+    /// Names of the Controllers to read, as configured for this cluster on the server: at most 32, without duplicates.
+    /// Leave it empty to read every configured Controller.
     #[serde(default)]
     pub controller_names: Vec<String>,
 }
@@ -120,6 +132,8 @@ pub struct GetControllerMetadataOutput {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct GetNameserverConfigSummaryArgs {
+    /// Logical cluster name configured on this server. It is a name, not a NameServer address.
+    #[schemars(length(min = 1))]
     pub cluster: String,
 }
 

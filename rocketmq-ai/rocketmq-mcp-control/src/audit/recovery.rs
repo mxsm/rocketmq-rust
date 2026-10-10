@@ -17,6 +17,8 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use super::evidence::is_digest;
+use super::evidence::validate_subject;
 use super::AuditEvent;
 use super::AuditMode;
 use super::AuditRecord;
@@ -49,6 +51,9 @@ pub(super) fn recover_audit_state(records: &[AuditRecord]) -> Result<AuditTrailS
                                 operator: record.operator.clone(),
                                 reason: record.reason.clone(),
                                 mode: record.mode,
+                                target: record.target.clone(),
+                                requested_digest: record.requested_digest.clone(),
+                                request_key_digest: record.request_key_digest.clone(),
                                 terminal: false,
                             },
                         )
@@ -68,6 +73,9 @@ pub(super) fn recover_audit_state(records: &[AuditRecord]) -> Result<AuditTrailS
                     || recovered.operator != record.operator
                     || recovered.reason != record.reason
                     || recovered.mode != record.mode
+                    || recovered.target != record.target
+                    || recovered.requested_digest != record.requested_digest
+                    || recovered.request_key_digest != record.request_key_digest
                     || matches!(record.event, AuditEvent::Completed) != record.error_code.is_none()
                 {
                     return Err(ControlError::audit_unavailable());
@@ -81,7 +89,17 @@ pub(super) fn recover_audit_state(records: &[AuditRecord]) -> Result<AuditTrailS
 }
 
 pub(super) fn validate_record_shape(record: &AuditRecord) -> Result<(), ControlError> {
+    let has_evidence = record.target.is_some()
+        || record.requested_digest.is_some()
+        || record.request_key_digest.is_some()
+        || record.before_digest.is_some()
+        || record.changed.is_some()
+        || record.target_results.is_some();
     match record.schema_version {
+        // Only version 3 knows the object and outcome of a mutation.
+        AuditSchemaVersion::V1 | AuditSchemaVersion::V2 if has_evidence => {
+            return Err(ControlError::audit_unavailable());
+        }
         AuditSchemaVersion::V1 => {
             if record.operator.is_some() || record.reason.is_some() || record.duration_millis.is_some() {
                 return Err(ControlError::audit_unavailable());
@@ -104,7 +122,10 @@ pub(super) fn validate_record_shape(record: &AuditRecord) -> Result<(), ControlE
                 return Err(ControlError::audit_unavailable());
             }
         }
-        AuditSchemaVersion::V2 => {
+        AuditSchemaVersion::V2 | AuditSchemaVersion::V3 => {
+            if record.schema_version == AuditSchemaVersion::V3 {
+                validate_evidence(record)?;
+            }
             let Some(operator) = record.operator.as_deref() else {
                 return Err(ControlError::audit_unavailable());
             };
@@ -142,6 +163,26 @@ pub(super) fn validate_record_shape(record: &AuditRecord) -> Result<(), ControlE
                 }
             }
         }
+    }
+    Ok(())
+}
+
+/// Checks what a version-3 record says about the object and outcome of its mutation.
+fn validate_evidence(record: &AuditRecord) -> Result<(), ControlError> {
+    let (Some(target), Some(requested_digest)) = (&record.target, record.requested_digest.as_deref()) else {
+        return Err(ControlError::audit_unavailable());
+    };
+    let subject = validate_subject(
+        record.operation,
+        target,
+        requested_digest,
+        record.request_key_digest.as_deref(),
+    );
+    // A `started` record is written before any RPC, so it cannot know an outcome.
+    let started_knows_outcome = record.event == AuditEvent::Started
+        && (record.before_digest.is_some() || record.changed.is_some() || record.target_results.is_some());
+    if !subject || started_knows_outcome || !record.before_digest.as_deref().is_none_or(is_digest) {
+        return Err(ControlError::audit_unavailable());
     }
     Ok(())
 }

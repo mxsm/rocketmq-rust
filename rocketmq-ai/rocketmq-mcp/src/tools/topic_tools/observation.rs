@@ -22,7 +22,10 @@ use crate::model::contract::PageRequest;
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct GetTopicStatsArgs {
+    /// Logical cluster name configured on this server. It is a name, not a NameServer address.
+    #[schemars(length(min = 1))]
     pub cluster: String,
+    /// Exact Topic name. `rocketmq_list_topics` lists the names.
     pub topic: String,
     #[serde(flatten)]
     pub page: PageRequest,

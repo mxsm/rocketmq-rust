@@ -96,6 +96,28 @@ rows are truncated, with `partial=true` and `output_rows_truncated`. A serialize
 1 MiB instead fails with `OutputTooLarge` (`output_too_large`); it is not returned as a truncated
 partial response.
 
+A cursor continues one result that the server keeps for `cache.cursor_snapshot_ttl_ms` (60 seconds
+by default, at most 5 minutes), so that every page comes from the same observation. Send it back
+unchanged, with the same arguments and `limit` as the request that returned it. Paging fails in
+three different ways, each with its own code and recovery:
+
+- `cursor_expired`: the kept result is gone, because it expired, was evicted to make room, or the
+  cache was invalidated. Send the request again without `cursor` and page from the start.
+- `cursor_invalid`: the cursor was altered, or the arguments or `limit` differ from the request that
+  returned it. Resend the cursor exactly as received with the original arguments.
+- `result_too_large`: the result exceeds what the server keeps for paging, 10,000 entries or rows
+  or 4 MiB. Narrow the request, for example with a more specific `filter`.
+
+`rocketmq_get_cluster_overview` reports `topic_count` and `consumer_group_count` for inventories of
+any size, including ones that `rocketmq_list_topics` and `rocketmq_list_consumer_groups` can only
+return with a `filter`.
+
+Client and message identifiers are returned as pseudonyms: `client-`, `message-`, or
+`unique-message-` followed by 32 hexadecimal digits. A pseudonym is a keyed hash of the identifier,
+so the same identifier always gets the same pseudonym from one server and the original cannot be
+read back from it. The key is random for each process unless `security.pseudonym_key_env` names a
+shared one: without it, pseudonyms change when the server restarts and differ between replicas.
+
 ```json
 {
   "schema_version": "rocketmq-mcp.v2",
@@ -120,10 +142,10 @@ A failed call returns `isError=true` and one text block holding a JSON object wi
 
 | `code` | Retryable | Meaning |
 | --- | --- | --- |
-| `invalid_arguments` | no | The arguments violate the input schema or a validation rule. |
+| `invalid_arguments` | no | The arguments violate the input schema or a validation rule. The additional `violations` field locates them when the server can tell which argument is wrong. |
 | `not_found` | no | The request was valid, but the selected entity does not exist. The additional `entity` field names its kind: `topic`, `consumer_group`, `broker`, `message`, `proxy`, `controller`, or `cluster`. |
 | `source_unavailable` | yes | A RocketMQ source could not be reached or answered with a failure. |
-| `backend_timeout` | yes | The query exceeded its time budget. |
+| `backend_timeout` | yes | The request used up `server.request_timeout_ms` (25 seconds by default), the time it may spend on RocketMQ sources over every query the Tool runs. |
 | `rate_limited` | yes | The rate limit or the per-cluster concurrency limit was reached. |
 | `cancelled` | no | The client cancelled the request. |
 | `unauthorized_scope` | no | The principal lacks the scope the Tool's risk level requires. |
@@ -132,8 +154,24 @@ A failed call returns `isError=true` and one text block holding a JSON object wi
 | `tenant_mismatch` | no | The principal's tenant does not match the cluster's tenant binding. |
 | `change_planning_disabled` | no | Planning is not enabled by server policy. |
 | `output_too_large` | no | The serialized response would exceed 1 MiB. |
-| `identifier_input_bound_exceeded`, `identifier_capacity_exceeded`, `identifier_collision_exhausted` | no | An identifier could not be given a safe alias. |
+| `cursor_expired` | no | The result that `cursor` continued is no longer kept. Request the first page again without `cursor`. |
+| `cursor_invalid` | no | `cursor` was altered, or the arguments or `limit` differ from the request that returned it. |
+| `result_too_large` | no | The result exceeds the size the server keeps for paging. Narrow the request, for example with `filter`. |
+| `identifier_input_bound_exceeded` | no | An identifier is longer than the 1,024 bytes a pseudonym may cover. |
 | `internal_error` | no | The server failed internally; report the `request_id`. |
+
+`violations` holds at most three entries, each with a `path` and a `constraint`:
+
+```json
+{"code":"invalid_arguments","retryable":false,"violations":[{"path":"/topic","constraint":"required"},{"path":"/limit","constraint":"maximum"}]}
+```
+
+`path` is a JSON Pointer into the arguments. Its segments are names that the Tool's input schema
+declares, or array indexes; `*` stands for a property the schema does not declare. `constraint` is
+one of `required`, `type`, `min_length`, `max_length`, `minimum`, `maximum`, `enum`, `pattern`,
+`additional_property`, or `other`. A violation never repeats a value that was sent, nor the name of
+an undeclared property. The limits themselves are in each Tool's input schema, which `tools/list`
+returns with a description of every argument.
 
 A missing target is `not_found`, never `source_unavailable`: do not retry it, confirm the name with
 the Tool named in `suggestions` instead. `rocketmq_diagnose_consumer_lag` does not fail when the
@@ -395,6 +433,19 @@ It is read-only and **diagnose** risk; callers cannot supply a time range or thr
 
 **Output.** `data` is the versioned diagnosis report, including its evidence snapshot, findings,
 recommendations, and sanitized warnings.
+
+The report is evaluated on every queue and route row, not on a page of them, and it carries no
+cursor. Each evidence entry holds a summary in `evidences[].data` and in
+`evidence_snapshot.items[].payload.data`:
+
+| Evidence | Content |
+| --- | --- |
+| `consumer_lag` | `total_lag`, `consume_tps`, `inflight_total`, `queue_count`, `max_queue_lag`, `brokers` (per Broker: `broker_name`, `queue_count`, `lag`, `max_queue_lag`; largest lag first), and `worst_queues` (the 10 most lagging queues, largest first). |
+| `topic_description` | `broker_names`, `read_queue_count`, and `write_queue_count`. |
+| `topic_route` | `brokers`, `read_queue_count`, `write_queue_count`, and `queues` (one route row per Broker that hosts the Topic). |
+| `broker_description` (`broker_summary` in the snapshot) | The `rocketmq_describe_broker` output for the Broker that holds the most lag, summed over its queues. |
+
+To see more queues than `worst_queues` lists, page `rocketmq_get_consumer_lag`.
 
 ```json
 {"cluster":"production-a","topic":"orders","consumer_group":"orders-consumer"}

@@ -66,9 +66,13 @@ This is a replacement fragment, not a complete configuration. Remove unused samp
 | `security.sanitize_output` | `true` |
 | `security.max_concurrent_requests_per_cluster` | 8 |
 | `security.rate_limit_per_minute` | 60 per principal/cluster/operation policy |
+| `security.pseudonym_key_env` | Unset; names an environment variable holding a 32–1024 byte key so that restarts and replicas return the same client and message pseudonyms |
 | `audit.enabled` / `sink` | `true` / `file`; choose a writable audit path |
 | `cache.enabled` / `max_entries` | `true` / 256; per-query TTLs govern freshness |
+| `server.request_timeout_ms` | 25000; the time one request may spend on RocketMQ sources over every query it runs, from 1000 to below 30000 |
 | `server.stdio.log_to_stderr` | `true`; stdout is reserved for MCP frames |
+
+An unknown key in the configuration file or the permissions file stops startup. The error names the key and the table that holds it and never a configured value; only the `[logging]` table still ignores unknown keys.
 
 Start from the MCP directory after editing `conf/mcp.local.toml`:
 
@@ -93,6 +97,8 @@ HTTPS requires the compiled transport, a readable certificate/private-key pair, 
 | Outbound RocketMQ | Separate request-signing credentials from configured file/environment references; the incoming bearer token is never forwarded. |
 
 Production OAuth has no static `jwt_key_env` fallback. Key refresh failures preserve an already verified generation within the configured stale window. The protected-resource metadata endpoint is intentionally available without a bearer token for discovery. The MCP endpoint itself remains authenticated.
+
+A JWKS entry is used when it is an RSA key of 2048 to 8192 bits with exponent 65537 whose `use` is absent or `sig` and whose `alg` is absent or `RS256`. Other entries, such as encryption keys, and members such as `x5c` are ignored, so the documents of common identity providers work as published. A token naming an unknown `kid` triggers one JWKS fetch; while the key is still missing, the next fetch waits five seconds. A bearer token above 16 KiB is rejected before it is parsed.
 
 After configuring these materials, launch from the MCP directory:
 
@@ -131,7 +137,7 @@ Use a simple explicit-cluster query first. This is a `tools/call` request for an
 }
 ```
 
-`limit` is 1–200 and defaults to 50. Follow the opaque `data.next_cursor` while `has_more` is true; do not invent a cursor or treat it as a queue offset. Supply the same logical target and corresponding query parameters. See the [complete Tool Reference](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp/docs/tool-reference.md) for exact schemas and per-tool output.
+`limit` is 1–200 and defaults to 50. Follow the opaque `data.next_cursor` while `has_more` is true; do not invent a cursor or treat it as a queue offset. Supply the same logical target, corresponding query parameters and `limit`. A cursor continues one result that the server keeps for 60 seconds by default, so every page comes from the same observation. See the [complete Tool Reference](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp/docs/tool-reference.md) for exact schemas and per-tool output.
 
 Discovery checks scopes and Tool allow/deny policy; it does not establish that a particular cluster/tenant call is authorized. The two inventory tools allow an omitted cluster and then use the default cluster, or the only configured one. That cluster goes through the same per-cluster and tenant checks, rate limit and concurrency limit as an explicitly named cluster; an empty or whitespace-only cluster is rejected as `invalid_arguments` by every tool. Prefer explicit clusters in operational clients so that a call never depends on which cluster is the default.
 
@@ -139,15 +145,20 @@ Discovery checks scopes and Tool allow/deny policy; it does not establish that a
 
 Successful calls carry a `rocketmq-mcp.v2` envelope with request ID, logical cluster, observation time, freshness, cache status, partial flag, warnings and typed data. `hit`, `miss` and `bypass` distinguish query reuse. Failures are not cached. Query state and continuation cursors are separated into `standard` and `sensitive` visibility classes; state does not cross that class boundary.
 
-Output arrays are bounded to 1,000 rows and structured output to 1 MiB. Truncation and source failures can produce partial results. Inspect warnings and `partial` before presenting an observation as complete. Message metadata tools omit bodies, and connection identities are pseudonymous; missing sensitive values are not necessarily a backend failure.
+Output arrays are bounded to 1,000 rows and structured output to 1 MiB. Truncation and source failures can produce partial results. Inspect warnings and `partial` before presenting an observation as complete. Message metadata tools omit bodies, and connection identities are pseudonymous; missing sensitive values are not necessarily a backend failure. A pseudonym is a keyed hash of the identifier: it is stable within one server process, and across restarts and replicas only when `security.pseudonym_key_env` supplies a shared key.
 
 | Symptom/code | Next action |
 | --- | --- |
 | Missing tool | Inspect compiled feature, principal scope and Tool policy; planning additionally needs runtime permission at call time. |
 | `unauthorized_scope` / `cluster_not_allowed` / `tenant_mismatch` | Check verified identity and configured policy; changing the query alias cannot grant access. |
+| `invalid_arguments` | Read `violations` when present: up to three entries, each a JSON Pointer `path` into the arguments and a `constraint` such as `required`, `maximum` or `additional_property`. Fix those arguments against the Tool's input schema; a sent value is never echoed back. |
 | `not_found` | The request was valid but the target named by `entity` does not exist in the selected cluster. Do not retry; confirm the name with the matching list tool. |
 | `source_unavailable` | Check the MCP process's route to configured NameServer/Broker/Proxy/Controller endpoints and outbound read credentials. |
+| `backend_timeout` | The request used up `server.request_timeout_ms`. Retry a narrower query and check which source is slow. |
 | `rate_limited` | Reduce query rate and respect bounded retry; avoid multiplying retries across the AI client and MCP layer. |
+| `cursor_expired` | The kept result is gone. Request the first page again without `cursor`. |
+| `cursor_invalid` | Resend the cursor exactly as received, with the arguments and `limit` of the request that returned it. |
+| `result_too_large` | The result exceeds the 10,000 rows or 4 MiB kept for paging. Narrow the request, for example with `filter`. |
 | `output_too_large` or partial warning | Narrow the query, paginate where supported and preserve the warning in the diagnosis. |
 | Stale observation | Inspect observation time, TTL/cache status and selected cluster before inferring a current outage. |
 | stdio parse failure | Confirm protocol version and clean stdout; inspect stderr for redacted startup/transport diagnostics. |
