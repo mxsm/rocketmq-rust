@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_transport::api::DeferredClaimOutcome;
-use rocketmq_transport::api::DeferredResumeOutcome;
+use rocketmq_transport::api::DeferredClaimResult;
+use rocketmq_transport::api::DeferredResumeResult;
 
 use super::*;
 
@@ -54,7 +54,7 @@ async fn tcp_session_close_drops_prepared_owner_once_without_retrying() {
     let topic = CheetahString::from_static_str("TopicA");
     let mut cursor = PullScanCursor::new();
     let mut candidates = service.reserve_arrival_batch(&PullArrivalView::new(&topic, 0, 8), &mut cursor);
-    let DeferredClaimOutcome::Claimed(claim) = service
+    let DeferredClaimResult::Claimed(claim) = service
         .claim_candidate(
             candidates.pop().expect("one session-close Pull candidate"),
             DeferredWakeReason::MessageArrived,
@@ -128,7 +128,7 @@ async fn tcp_session_close_drops_prepared_owner_once_without_retrying() {
         .await
         .expect("session-close Pull receipt channel")
         .expect("closed session is a normal deferred resume outcome");
-    assert!(matches!(outcome, DeferredResumeOutcome::SessionClosed));
+    assert!(matches!(outcome, DeferredResumeResult::SessionClosed));
     assert_eq!(rereads.load(Ordering::SeqCst), 1, "closed sessions are never retried");
     assert_eq!(owner_drops.load(Ordering::SeqCst), 1);
     assert_released(&service);

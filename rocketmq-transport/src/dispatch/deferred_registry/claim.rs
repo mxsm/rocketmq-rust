@@ -61,7 +61,7 @@ pub struct DeferredResumeRetainedSize {
 
 /// Result of claiming one deferred request.
 #[must_use]
-pub enum DeferredClaimOutcome<R>
+pub enum DeferredClaimResult<R>
 where
     R: Send + 'static,
 {
@@ -84,7 +84,7 @@ where
 /// Result of a deferred resume attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[must_use]
-pub enum DeferredResumeOutcome {
+pub enum DeferredResumeResult {
     /// Canonical response delivery completed.
     Completed(ResponseReceipt),
     /// The request lifecycle was cancelled.
@@ -101,7 +101,7 @@ pub enum DeferredResumeOutcome {
 /// Transport can complete it before returning this source-free projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[must_use]
-pub enum DeferredResumeSubmitOutcome {
+pub enum DeferredResumeSubmissionStatus {
     /// The original session executor accepted the resume cell.
     Submitted,
     /// The request lifecycle was cancelled before submission.
@@ -234,12 +234,12 @@ where
     /// Returns an operational transport error for retained-size contract
     /// violations, residual runtime failures, response construction, or
     /// response I/O. Lifecycle, bounded-admission, and known executor-closure
-    /// states are source-free [`DeferredResumeOutcome`] variants.
+    /// states are source-free [`DeferredResumeResult`] variants.
     pub async fn resume<F, Fut>(
         self,
         handler_retained: DeferredResumeRetainedSize,
         handler: F,
-    ) -> Result<DeferredResumeOutcome, crate::error::TransportError>
+    ) -> Result<DeferredResumeResult, crate::error::TransportError>
     where
         F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = Result<RemotingResponse, rocketmq_error::SharedError>> + Send + 'static,
@@ -259,17 +259,17 @@ where
     /// Returns an operational transport error for retained-size contract
     /// violations or residual runtime failures. Lifecycle, bounded-admission,
     /// and known executor-closure states are source-free
-    /// [`DeferredResumeSubmitOutcome`] variants.
+    /// [`DeferredResumeSubmissionStatus`] variants.
     pub fn submit<F, Fut, O>(
         self,
         handler_retained: DeferredResumeRetainedSize,
         handler: F,
         terminal_observer: O,
-    ) -> Result<DeferredResumeSubmitOutcome, crate::error::TransportError>
+    ) -> Result<DeferredResumeSubmissionStatus, crate::error::TransportError>
     where
         F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = Result<RemotingResponse, rocketmq_error::SharedError>> + Send + 'static,
-        O: FnOnce(&Result<DeferredResumeOutcome, crate::error::TransportError>) + Send + 'static,
+        O: FnOnce(&Result<DeferredResumeResult, crate::error::TransportError>) + Send + 'static,
     {
         crate::dispatch::deferred_resume::submit_claimed(self, handler_retained, handler, terminal_observer)
     }

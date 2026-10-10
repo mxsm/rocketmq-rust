@@ -16,7 +16,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 use rocketmq_transport::api::ClaimedDeferred;
-use rocketmq_transport::api::DeferredResumeOutcome;
+use rocketmq_transport::api::DeferredResumeResult;
 use tokio::sync::Notify;
 
 use super::*;
@@ -104,7 +104,7 @@ async fn notification_deferred_execution_admission_rejects_before_handler_and_wr
             )
             .await
             .expect("execution rejection writes one canonical overload response"),
-        DeferredResumeOutcome::Completed(_)
+        DeferredResumeResult::Completed(_)
     ));
 
     let response = client
@@ -239,7 +239,7 @@ async fn notification_deferred_service_shutdown_stops_accepted_handler_without_a
         .await
         .expect("service-shutdown receipt channel")
         .expect("service shutdown is a normal deferred resume outcome");
-    assert!(matches!(outcome, DeferredResumeOutcome::Cancelled));
+    assert!(matches!(outcome, DeferredResumeResult::Cancelled));
     assert_eq!(handler_calls.load(Ordering::SeqCst), 1);
     assert_terminal(&service);
 
@@ -298,7 +298,7 @@ async fn notification_deferred_parent_cancel_stops_accepted_handler_without_a_fr
         .await
         .expect("parent-cancel receipt channel")
         .expect("parent cancellation is a normal deferred resume outcome");
-    assert!(matches!(outcome, DeferredResumeOutcome::Cancelled));
+    assert!(matches!(outcome, DeferredResumeResult::Cancelled));
     assert_eq!(handler_calls.load(Ordering::SeqCst), 1);
     assert_terminal(&service);
     drop(release);

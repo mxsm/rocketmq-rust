@@ -33,7 +33,7 @@ use rocketmq_transport::api::ClaimedDeferred;
 use rocketmq_transport::api::DeferredAdmission;
 use rocketmq_transport::api::DeferredAdmissionAcquireOutcome;
 use rocketmq_transport::api::DeferredAdmissionSnapshot;
-use rocketmq_transport::api::DeferredClaimOutcome;
+use rocketmq_transport::api::DeferredClaimResult;
 use rocketmq_transport::api::DeferredExpiryBatch;
 use rocketmq_transport::api::DeferredExpiryBatchStats;
 use rocketmq_transport::api::DeferredExpiryMargins;
@@ -46,9 +46,9 @@ use rocketmq_transport::api::DeferredRegistryOutcome;
 use rocketmq_transport::api::DeferredRegistryRecovery;
 use rocketmq_transport::api::DeferredRegistryShutdownOutcome;
 use rocketmq_transport::api::DeferredResponderOutcome;
-use rocketmq_transport::api::DeferredResumeOutcome;
+use rocketmq_transport::api::DeferredResumeResult;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
-use rocketmq_transport::api::DeferredResumeSubmitOutcome;
+use rocketmq_transport::api::DeferredResumeSubmissionStatus;
 use rocketmq_transport::api::DeferredRetainedSizeParts;
 use rocketmq_transport::api::DeferredWakeReason;
 use rocketmq_transport::api::RemotingRequest;
@@ -932,13 +932,13 @@ impl PullDeferredService {
         &self,
         candidate: PullCandidateReservation,
         reason: DeferredWakeReason,
-    ) -> Result<DeferredClaimOutcome<ResumePull>, TransportError> {
+    ) -> Result<DeferredClaimResult<ResumePull>, TransportError> {
         let id = candidate.id();
         match self.registry.claim(id, reason).await? {
-            DeferredClaimOutcome::Claimed(mut claimed) => {
+            DeferredClaimResult::Claimed(mut claimed) => {
                 candidate.commit();
                 drop(claimed.resume_data_mut().take_index_lease());
-                Ok(DeferredClaimOutcome::Claimed(claimed))
+                Ok(DeferredClaimResult::Claimed(claimed))
             }
             outcome => Ok(outcome),
         }
@@ -948,11 +948,11 @@ impl PullDeferredService {
         &self,
         id: DeferredId,
         reason: DeferredWakeReason,
-    ) -> Result<DeferredClaimOutcome<ResumePull>, TransportError> {
+    ) -> Result<DeferredClaimResult<ResumePull>, TransportError> {
         match self.registry.claim(id, reason).await? {
-            DeferredClaimOutcome::Claimed(mut claimed) => {
+            DeferredClaimResult::Claimed(mut claimed) => {
                 drop(claimed.resume_data_mut().take_index_lease());
-                Ok(DeferredClaimOutcome::Claimed(claimed))
+                Ok(DeferredClaimResult::Claimed(claimed))
             }
             outcome => Ok(outcome),
         }
@@ -967,7 +967,7 @@ impl PullDeferredService {
         claimed: ClaimedDeferred<ResumePull>,
         retained: DeferredResumeRetainedSize,
         handler: F,
-    ) -> Result<DeferredResumeOutcome, TransportError>
+    ) -> Result<DeferredResumeResult, TransportError>
     where
         F: FnOnce(ResumePull, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,
@@ -998,7 +998,7 @@ impl PullDeferredService {
         claimed: ClaimedDeferred<ResumePull>,
         retained: DeferredResumeRetainedSize,
         handler: F,
-    ) -> Result<DeferredResumeSubmitOutcome, TransportError>
+    ) -> Result<DeferredResumeSubmissionStatus, TransportError>
     where
         F: FnOnce(ResumePull, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,

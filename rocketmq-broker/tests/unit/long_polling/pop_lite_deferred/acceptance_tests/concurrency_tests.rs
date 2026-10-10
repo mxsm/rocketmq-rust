@@ -157,7 +157,7 @@ async fn pop_lite_deferred_different_clients_resume_and_write_in_parallel() {
                 .await
                 .expect("parallel receipt")
                 .expect("parallel canonical write"),
-            rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+            rocketmq_transport::api::DeferredResumeResult::Completed(_)
         ));
     }
     let mut opaqueness = HashSet::new();
@@ -244,7 +244,7 @@ async fn pop_lite_deferred_same_client_timeout_is_not_serialized_by_event_gate()
     event_started.notified().await;
     assert_eq!(service.resource_snapshot().active_client_gates, 1);
 
-    let DeferredClaimOutcome::Claimed(mut timeout_claim) = service
+    let DeferredClaimResult::Claimed(mut timeout_claim) = service
         .registry
         .claim(timeout_id, DeferredWakeReason::Timeout)
         .await
@@ -268,7 +268,7 @@ async fn pop_lite_deferred_same_client_timeout_is_not_serialized_by_event_gate()
             )
             .await
             .expect("same-client timeout writes while event remains active"),
-        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        rocketmq_transport::api::DeferredResumeResult::Completed(_)
     ));
 
     let timeout_response = client
@@ -288,7 +288,7 @@ async fn pop_lite_deferred_same_client_timeout_is_not_serialized_by_event_gate()
             .await
             .expect("event receipt observer")
             .expect("event response writes after release"),
-        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        rocketmq_transport::api::DeferredResumeResult::Completed(_)
     ));
     let event_response = client
         .receive_command()

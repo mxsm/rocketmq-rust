@@ -31,9 +31,9 @@ use super::authorized_dispatcher::admission_response;
 use super::deferred_registry::ClaimExecutionParts;
 use super::deferred_responder::DeferredResponseAttempt;
 use super::ClaimedDeferred;
-use super::DeferredResumeOutcome;
+use super::DeferredResumeResult;
 use super::DeferredResumeRetainedSize;
-use super::DeferredResumeSubmitOutcome;
+use super::DeferredResumeSubmissionStatus;
 use super::DeferredWakeReason;
 use super::RemotingResponse;
 use super::ResponseReceipt;
@@ -76,7 +76,7 @@ pub(super) enum ResumeOperationalFailure {
 }
 
 type ResumeResult = ResumeAttempt;
-type PublicResumeResult = Result<DeferredResumeOutcome, crate::error::TransportError>;
+type PublicResumeResult = Result<DeferredResumeResult, crate::error::TransportError>;
 type WorkFuture = Pin<Box<dyn Future<Output = ResumeResult> + Send + 'static>>;
 type ResumeTerminalObserver = Box<dyn FnOnce(&PublicResumeResult) + Send + 'static>;
 
@@ -160,7 +160,7 @@ pub(crate) fn submit_claimed<R, F, Fut, O>(
     handler_retained: DeferredResumeRetainedSize,
     handler: F,
     terminal_observer: O,
-) -> Result<DeferredResumeSubmitOutcome, crate::error::TransportError>
+) -> Result<DeferredResumeSubmissionStatus, crate::error::TransportError>
 where
     R: Send + 'static,
     F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
@@ -218,7 +218,7 @@ where
     match context.executor.try_execute_resume(Arc::clone(&cell)) {
         DeferredResumeEnqueueOutcome::Submitted(_task_id) => {
             drop(cell);
-            Ok(DeferredResumeSubmitOutcome::Submitted)
+            Ok(DeferredResumeSubmissionStatus::Submitted)
         }
         DeferredResumeEnqueueOutcome::AdmissionRejected { error, cell } => {
             if let Some(job) = cell.take() {
@@ -249,21 +249,21 @@ fn observe_unsubmitted(observer: Option<ResumeTerminalObserver>, result: &Public
 
 fn converge_resume_result(result: ResumeResult) -> PublicResumeResult {
     match result {
-        ResumeAttempt::Completed(receipt) => Ok(DeferredResumeOutcome::Completed(receipt)),
-        ResumeAttempt::Cancelled => Ok(DeferredResumeOutcome::Cancelled),
-        ResumeAttempt::SessionClosed => Ok(DeferredResumeOutcome::SessionClosed),
-        ResumeAttempt::AdmissionRejected => Ok(DeferredResumeOutcome::AdmissionRejected),
+        ResumeAttempt::Completed(receipt) => Ok(DeferredResumeResult::Completed(receipt)),
+        ResumeAttempt::Cancelled => Ok(DeferredResumeResult::Cancelled),
+        ResumeAttempt::SessionClosed => Ok(DeferredResumeResult::SessionClosed),
+        ResumeAttempt::AdmissionRejected => Ok(DeferredResumeResult::AdmissionRejected),
         ResumeAttempt::Operational(error) => Err(crate::error::TransportError::resume(error)),
         ResumeAttempt::TransportFailure(error) => Err(error),
     }
 }
 
-fn submit_outcome(result: PublicResumeResult) -> Result<DeferredResumeSubmitOutcome, crate::error::TransportError> {
+fn submit_outcome(result: PublicResumeResult) -> Result<DeferredResumeSubmissionStatus, crate::error::TransportError> {
     match result {
-        Ok(DeferredResumeOutcome::Completed(_)) => Ok(DeferredResumeSubmitOutcome::Submitted),
-        Ok(DeferredResumeOutcome::Cancelled) => Ok(DeferredResumeSubmitOutcome::Cancelled),
-        Ok(DeferredResumeOutcome::SessionClosed) => Ok(DeferredResumeSubmitOutcome::SessionClosed),
-        Ok(DeferredResumeOutcome::AdmissionRejected) => Ok(DeferredResumeSubmitOutcome::AdmissionRejected),
+        Ok(DeferredResumeResult::Completed(_)) => Ok(DeferredResumeSubmissionStatus::Submitted),
+        Ok(DeferredResumeResult::Cancelled) => Ok(DeferredResumeSubmissionStatus::Cancelled),
+        Ok(DeferredResumeResult::SessionClosed) => Ok(DeferredResumeSubmissionStatus::SessionClosed),
+        Ok(DeferredResumeResult::AdmissionRejected) => Ok(DeferredResumeSubmissionStatus::AdmissionRejected),
         Err(error) => Err(error),
     }
 }

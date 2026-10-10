@@ -39,7 +39,7 @@ use rocketmq_transport::api::ClaimedDeferred;
 use rocketmq_transport::api::DeferredAdmission;
 use rocketmq_transport::api::DeferredAdmissionAcquireOutcome;
 use rocketmq_transport::api::DeferredAdmissionSnapshot;
-use rocketmq_transport::api::DeferredClaimOutcome;
+use rocketmq_transport::api::DeferredClaimResult;
 use rocketmq_transport::api::DeferredExpiryBatch;
 use rocketmq_transport::api::DeferredExpiryBatchStats;
 use rocketmq_transport::api::DeferredExpiryMargins;
@@ -52,9 +52,9 @@ use rocketmq_transport::api::DeferredRegistryOutcome;
 use rocketmq_transport::api::DeferredRegistryRecovery;
 use rocketmq_transport::api::DeferredRegistryShutdownOutcome;
 use rocketmq_transport::api::DeferredResponderOutcome;
-use rocketmq_transport::api::DeferredResumeOutcome;
+use rocketmq_transport::api::DeferredResumeResult;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
-use rocketmq_transport::api::DeferredResumeSubmitOutcome;
+use rocketmq_transport::api::DeferredResumeSubmissionStatus;
 use rocketmq_transport::api::DeferredRetainedSizeParts;
 use rocketmq_transport::api::DeferredWakeReason;
 use rocketmq_transport::api::RemotingRequest;
@@ -500,7 +500,7 @@ impl NotificationDeferredService {
         for candidate in candidates {
             let id = candidate.id();
             match self.claim(id, DeferredWakeReason::MessageArrived).await {
-                Ok(DeferredClaimOutcome::Claimed(claim)) => claims.push(claim),
+                Ok(DeferredClaimResult::Claimed(claim)) => claims.push(claim),
                 Ok(outcome) if is_candidate_race(&outcome) => {}
                 Ok(_) | Err(_) => {}
             }
@@ -518,11 +518,11 @@ impl NotificationDeferredService {
         &self,
         id: DeferredId,
         reason: DeferredWakeReason,
-    ) -> Result<DeferredClaimOutcome<ResumeNotification>, TransportError> {
+    ) -> Result<DeferredClaimResult<ResumeNotification>, TransportError> {
         match self.registry.claim(id, reason).await? {
-            DeferredClaimOutcome::Claimed(mut claimed) => {
+            DeferredClaimResult::Claimed(mut claimed) => {
                 drop(claimed.resume_data_mut().take_index_lease());
-                Ok(DeferredClaimOutcome::Claimed(claimed))
+                Ok(DeferredClaimResult::Claimed(claimed))
             }
             outcome => Ok(outcome),
         }
@@ -531,7 +531,7 @@ impl NotificationDeferredService {
     pub(crate) async fn claim_arrival_candidate(
         &self,
         candidate: NotificationCandidateReservation,
-    ) -> Result<DeferredClaimOutcome<ResumeNotification>, TransportError> {
+    ) -> Result<DeferredClaimResult<ResumeNotification>, TransportError> {
         let result = self.claim(candidate.id(), DeferredWakeReason::MessageArrived).await;
         drop(candidate);
         result
@@ -804,7 +804,7 @@ impl NotificationDeferredService {
         claimed: ClaimedDeferred<ResumeNotification>,
         handler_retained: DeferredResumeRetainedSize,
         handler: F,
-    ) -> Result<DeferredResumeOutcome, TransportError>
+    ) -> Result<DeferredResumeResult, TransportError>
     where
         F: FnOnce(ResumeNotification, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,
@@ -829,7 +829,7 @@ impl NotificationDeferredService {
         claimed: ClaimedDeferred<ResumeNotification>,
         handler_retained: DeferredResumeRetainedSize,
         handler: F,
-    ) -> Result<DeferredResumeSubmitOutcome, TransportError>
+    ) -> Result<DeferredResumeSubmissionStatus, TransportError>
     where
         F: FnOnce(ResumeNotification, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,
@@ -1374,16 +1374,16 @@ impl StdError for NotificationDeferredRegisterFailure {
     }
 }
 
-const fn is_candidate_race<R>(outcome: &DeferredClaimOutcome<R>) -> bool
+const fn is_candidate_race<R>(outcome: &DeferredClaimResult<R>) -> bool
 where
     R: Send + 'static,
 {
     matches!(
         outcome,
-        DeferredClaimOutcome::NotFound
-            | DeferredClaimOutcome::AlreadyClaimed
-            | DeferredClaimOutcome::AlreadyCompleted
-            | DeferredClaimOutcome::SessionClosed
-            | DeferredClaimOutcome::DeadlineExpired
+        DeferredClaimResult::NotFound
+            | DeferredClaimResult::AlreadyClaimed
+            | DeferredClaimResult::AlreadyCompleted
+            | DeferredClaimResult::SessionClosed
+            | DeferredClaimResult::DeadlineExpired
     )
 }

@@ -86,7 +86,7 @@ async fn pop_lite_deferred_execution_admission_rejects_before_processor_and_writ
             )
             .await
             .expect("bounded execution rejection writes its canonical error response"),
-        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        rocketmq_transport::api::DeferredResumeResult::Completed(_)
     ));
 
     let response = client
@@ -165,7 +165,7 @@ async fn pop_lite_deferred_handler_failure_drops_body_owner_once_and_rolls_back_
             )
             .await
             .expect("handler failure writes its canonical typed error response"),
-        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        rocketmq_transport::api::DeferredResumeResult::Completed(_)
     ));
 
     let response = client

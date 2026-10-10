@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_transport::api::DeferredClaimOutcome;
+use rocketmq_transport::api::DeferredClaimResult;
 
 use super::*;
 
@@ -55,11 +55,11 @@ async fn message_arrival_and_timeout_have_exactly_one_claim_winner() {
         service.claim(registration.id, DeferredWakeReason::Timeout),
     );
     match (arrival, timeout) {
-        (Ok(DeferredClaimOutcome::Claimed(winner)), Ok(DeferredClaimOutcome::AlreadyClaimed)) => {
+        (Ok(DeferredClaimResult::Claimed(winner)), Ok(DeferredClaimResult::AlreadyClaimed)) => {
             assert_eq!(winner.reason(), DeferredWakeReason::MessageArrived);
             drop(winner);
         }
-        (Ok(DeferredClaimOutcome::AlreadyClaimed), Ok(DeferredClaimOutcome::Claimed(winner))) => {
+        (Ok(DeferredClaimResult::AlreadyClaimed), Ok(DeferredClaimResult::Claimed(winner))) => {
             assert_eq!(winner.reason(), DeferredWakeReason::Timeout);
             drop(winner);
         }
@@ -113,7 +113,7 @@ async fn stale_arrival_bounded_continuation_claims_every_matching_waiter() {
 
     let mut claims = Vec::new();
     for candidate in submitted.into_iter().flatten() {
-        let DeferredClaimOutcome::Claimed(claim) = service
+        let DeferredClaimResult::Claimed(claim) = service
             .claim_candidate(candidate, DeferredWakeReason::MessageArrived)
             .await
             .expect("each affine candidate has a normal claim outcome")
@@ -161,7 +161,7 @@ async fn producer_rejection_restores_candidate_without_spinning() {
     assert_eq!(calls, 1);
     assert_eq!(service.index_snapshot().live(), 1);
     assert_eq!(service.index_snapshot().candidates(), 0);
-    let DeferredClaimOutcome::Claimed(claim) = service
+    let DeferredClaimResult::Claimed(claim) = service
         .claim(registration.id, DeferredWakeReason::ForcedRefresh)
         .await
         .expect("restored waiter has a normal claim outcome")

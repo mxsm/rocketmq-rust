@@ -46,11 +46,11 @@ use claim::ClaimTicket;
 use claim::ClaimWaiter;
 pub use claim::ClaimedDeferred;
 use claim::DeferredClaimOperationalFailure;
-pub use claim::DeferredClaimOutcome;
 use claim::DeferredClaimRejection;
-pub use claim::DeferredResumeOutcome;
+pub use claim::DeferredClaimResult;
+pub use claim::DeferredResumeResult;
 pub use claim::DeferredResumeRetainedSize;
-pub use claim::DeferredResumeSubmitOutcome;
+pub use claim::DeferredResumeSubmissionStatus;
 pub use claim::DeferredWakeReason;
 use claim::TicketResolution;
 pub use errors::DeferredRegistryOutcome;
@@ -654,20 +654,20 @@ where
     ///
     /// Returns an operational transport error only when an internal registry
     /// invariant cannot be preserved. Missing, already-claimed, terminal, and
-    /// lifecycle states are source-free [`DeferredClaimOutcome`] variants.
+    /// lifecycle states are source-free [`DeferredClaimResult`] variants.
     pub async fn claim(
         &self,
         id: DeferredId,
         reason: DeferredWakeReason,
-    ) -> Result<DeferredClaimOutcome<R>, crate::error::TransportError> {
+    ) -> Result<DeferredClaimResult<R>, crate::error::TransportError> {
         let rejection = match self.inner.start_claim(id, reason, None) {
-            ClaimStart::Claimed(claimed) => return Ok(DeferredClaimOutcome::Claimed(claimed)),
+            ClaimStart::Claimed(claimed) => return Ok(DeferredClaimResult::Claimed(claimed)),
             ClaimStart::Rejected(rejection) => return converge_claim_rejection(rejection),
             ClaimStart::Wait(waiter) => {
                 let resolution = waiter.wait().await;
                 match resolution {
                     TicketResolution::Published => match self.inner.start_claim(id, reason, Some(&waiter)) {
-                        ClaimStart::Claimed(claimed) => return Ok(DeferredClaimOutcome::Claimed(claimed)),
+                        ClaimStart::Claimed(claimed) => return Ok(DeferredClaimResult::Claimed(claimed)),
                         ClaimStart::Rejected(rejection) => return converge_claim_rejection(rejection),
                         ClaimStart::Wait(_) => {
                             DeferredClaimRejection::Operational(DeferredClaimOperationalFailure::invariant())
@@ -933,17 +933,17 @@ impl Drop for DeferredRegistration {
 
 fn converge_claim_rejection<R>(
     rejection: DeferredClaimRejection,
-) -> Result<DeferredClaimOutcome<R>, crate::error::TransportError>
+) -> Result<DeferredClaimResult<R>, crate::error::TransportError>
 where
     R: Send + 'static,
 {
     match rejection {
-        DeferredClaimRejection::NotFound => Ok(DeferredClaimOutcome::NotFound),
-        DeferredClaimRejection::AlreadyClaimed => Ok(DeferredClaimOutcome::AlreadyClaimed),
-        DeferredClaimRejection::AlreadyCompleted => Ok(DeferredClaimOutcome::AlreadyCompleted),
-        DeferredClaimRejection::ParentCancelled => Ok(DeferredClaimOutcome::ParentCancelled),
-        DeferredClaimRejection::SessionClosed => Ok(DeferredClaimOutcome::SessionClosed),
-        DeferredClaimRejection::DeadlineExpired => Ok(DeferredClaimOutcome::DeadlineExpired),
+        DeferredClaimRejection::NotFound => Ok(DeferredClaimResult::NotFound),
+        DeferredClaimRejection::AlreadyClaimed => Ok(DeferredClaimResult::AlreadyClaimed),
+        DeferredClaimRejection::AlreadyCompleted => Ok(DeferredClaimResult::AlreadyCompleted),
+        DeferredClaimRejection::ParentCancelled => Ok(DeferredClaimResult::ParentCancelled),
+        DeferredClaimRejection::SessionClosed => Ok(DeferredClaimResult::SessionClosed),
+        DeferredClaimRejection::DeadlineExpired => Ok(DeferredClaimResult::DeadlineExpired),
         DeferredClaimRejection::Operational(error) => Err(crate::error::TransportError::dispatch(error)),
     }
 }

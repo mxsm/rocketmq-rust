@@ -40,13 +40,13 @@ use tokio::net::TcpStream;
 use super::*;
 use crate::dispatch::DeferredAdmission;
 use crate::dispatch::DeferredAdmissionAcquireOutcome;
-use crate::dispatch::DeferredClaimOutcome;
+use crate::dispatch::DeferredClaimResult;
 use crate::dispatch::DeferredParts;
 use crate::dispatch::DeferredRegistry;
 use crate::dispatch::DeferredRegistryOutcome;
 use crate::dispatch::DeferredRequest;
 use crate::dispatch::DeferredResponderOutcome;
-use crate::dispatch::DeferredResumeOutcome;
+use crate::dispatch::DeferredResumeResult;
 use crate::dispatch::DeferredResumeRetainedSize;
 use crate::dispatch::DeferredRetainedSizeParts;
 use crate::dispatch::DeferredWaitLimits;
@@ -1769,7 +1769,7 @@ async fn shutdown_drains_a_writer_claimed_deferred_resume_to_one_receipt_and_fra
         .claim(registered.id, DeferredWakeReason::MessageArrived)
         .await
         .expect("claim writer-drain deferred request operationally succeeds");
-    let DeferredClaimOutcome::Claimed(claim) = claim else {
+    let DeferredClaimResult::Claimed(claim) = claim else {
         panic!("writer-drain claim must transfer the deferred request");
     };
     let resume = claim.resume(
@@ -1803,7 +1803,7 @@ async fn shutdown_drains_a_writer_claimed_deferred_resume_to_one_receipt_and_fra
         resume
             .await
             .expect("writer-drain deferred response remains operationally healthy"),
-        DeferredResumeOutcome::Completed(_)
+        DeferredResumeResult::Completed(_)
     ));
 
     let response = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
@@ -1879,7 +1879,7 @@ async fn real_tcp_disconnect_cleans_deferred_state_before_drain_and_preserves_ot
     .await
     .expect("running claim deadline")
     .expect("running claim operationally succeeds");
-    let DeferredClaimOutcome::Claimed(running_claim) = running_claim else {
+    let DeferredClaimResult::Claimed(running_claim) = running_claim else {
         panic!("running claim after commit must transfer the deferred request");
     };
 
@@ -1896,7 +1896,7 @@ async fn real_tcp_disconnect_cleans_deferred_state_before_drain_and_preserves_ot
     .await
     .expect("held claim deadline")
     .expect("held claim operationally succeeds");
-    let DeferredClaimOutcome::Claimed(held_claim) = held_claim else {
+    let DeferredClaimResult::Claimed(held_claim) = held_claim else {
         panic!("held claim after commit must transfer the deferred request");
     };
 
@@ -1938,7 +1938,7 @@ async fn real_tcp_disconnect_cleans_deferred_state_before_drain_and_preserves_ot
         .await
         .expect("disconnect cleanup precedes executor drain")
         .expect("disconnect cleanup remains operationally healthy");
-    assert!(matches!(ticket_outcome, DeferredClaimOutcome::SessionClosed));
+    assert!(matches!(ticket_outcome, DeferredClaimResult::SessionClosed));
     assert_eq!(registry.test_index_counts(), (1, 1, 1));
     assert_eq!(registry.test_session_member_count(running.session_id), 0);
     assert_eq!(registry.test_session_member_count(other.session_id), 1);
@@ -1948,7 +1948,7 @@ async fn real_tcp_disconnect_cleans_deferred_state_before_drain_and_preserves_ot
             .claim(precommit.id, DeferredWakeReason::Timeout)
             .await
             .expect("post-cleanup claim remains operationally healthy"),
-        DeferredClaimOutcome::NotFound
+        DeferredClaimResult::NotFound
     ));
 
     let held_handler_called = Arc::new(AtomicUsize::new(0));
@@ -1965,7 +1965,7 @@ async fn real_tcp_disconnect_cleans_deferred_state_before_drain_and_preserves_ot
         })
         .await
         .expect("new resume submission remains operationally healthy after begin-close");
-    assert_eq!(held_outcome, DeferredResumeOutcome::SessionClosed);
+    assert_eq!(held_outcome, DeferredResumeResult::SessionClosed);
     assert_eq!(held_handler_called.load(Ordering::SeqCst), 0);
     assert_eq!(deferred_admission.snapshot().waiting_count(), 1);
 
@@ -1975,7 +1975,7 @@ async fn real_tcp_disconnect_cleans_deferred_state_before_drain_and_preserves_ot
         .await
         .expect("accepted resume drains")
         .expect("accepted resume remains operationally healthy after close");
-    assert_eq!(running_outcome, DeferredResumeOutcome::SessionClosed);
+    assert_eq!(running_outcome, DeferredResumeResult::SessionClosed);
     let eof = tokio::time::timeout(Duration::from_secs(1), first_client.receive_command())
         .await
         .expect("first session retires after drain");

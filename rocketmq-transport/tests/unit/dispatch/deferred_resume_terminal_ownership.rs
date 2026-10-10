@@ -48,13 +48,13 @@ use crate::dispatch::AuthenticationState;
 use crate::dispatch::ClaimedDeferred;
 use crate::dispatch::DeferredAdmission;
 use crate::dispatch::DeferredAdmissionAcquireOutcome;
-use crate::dispatch::DeferredClaimOutcome;
+use crate::dispatch::DeferredClaimResult;
 use crate::dispatch::DeferredParts;
 use crate::dispatch::DeferredRegistry;
 use crate::dispatch::DeferredRegistryOutcome;
 use crate::dispatch::DeferredRequest;
-use crate::dispatch::DeferredResumeOutcome;
-use crate::dispatch::DeferredResumeSubmitOutcome;
+use crate::dispatch::DeferredResumeResult;
+use crate::dispatch::DeferredResumeSubmissionStatus;
 use crate::dispatch::DeferredRetainedSizeParts;
 use crate::dispatch::DeferredTerminalReason;
 use crate::dispatch::DeferredWaitLimits;
@@ -114,13 +114,13 @@ where
         .await
         .expect("terminal ownership claim has no operational failure")
     {
-        DeferredClaimOutcome::Claimed(claim) => claim,
-        DeferredClaimOutcome::NotFound
-        | DeferredClaimOutcome::AlreadyClaimed
-        | DeferredClaimOutcome::AlreadyCompleted
-        | DeferredClaimOutcome::ParentCancelled
-        | DeferredClaimOutcome::SessionClosed
-        | DeferredClaimOutcome::DeadlineExpired => panic!("terminal ownership registration is claimable"),
+        DeferredClaimResult::Claimed(claim) => claim,
+        DeferredClaimResult::NotFound
+        | DeferredClaimResult::AlreadyClaimed
+        | DeferredClaimResult::AlreadyCompleted
+        | DeferredClaimResult::ParentCancelled
+        | DeferredClaimResult::SessionClosed
+        | DeferredClaimResult::DeadlineExpired => panic!("terminal ownership registration is claimable"),
     }
 }
 
@@ -302,10 +302,10 @@ impl PublishedTerminalWinner {
         }
     }
 
-    const fn resume_outcome(self) -> DeferredResumeOutcome {
+    const fn resume_outcome(self) -> DeferredResumeResult {
         match self {
-            Self::SessionClosed | Self::ReceiverDropped => DeferredResumeOutcome::SessionClosed,
-            Self::ProcessorUnavailable | Self::ServiceStopping => DeferredResumeOutcome::Cancelled,
+            Self::SessionClosed | Self::ReceiverDropped => DeferredResumeResult::SessionClosed,
+            Self::ProcessorUnavailable | Self::ServiceStopping => DeferredResumeResult::Cancelled,
         }
     }
 
@@ -482,7 +482,7 @@ async fn blocked_writer_is_owned_by_session_after_producer_submit_and_observer_r
             .await
             .expect("producer submit result")
             .expect("session accepts claimed execution"),
-        DeferredResumeSubmitOutcome::Submitted
+        DeferredResumeSubmissionStatus::Submitted
     );
     checked.notified().await;
     assert_eq!(terminal_calls.load(Ordering::Acquire), 0);
@@ -556,7 +556,7 @@ async fn submit_observer_is_exactly_once_for_session_and_receiver_close_and_sync
                         move |result| {
                             calls.fetch_add(1, Ordering::AcqRel);
                             let outcome = match result {
-                                Ok(DeferredResumeOutcome::SessionClosed) => 1,
+                                Ok(DeferredResumeResult::SessionClosed) => 1,
                                 Ok(other) => panic!("unexpected source-free resume outcome: {other:?}"),
                                 Err(_) => panic!("known close must not become an operational error"),
                             };
@@ -566,7 +566,7 @@ async fn submit_observer_is_exactly_once_for_session_and_receiver_close_and_sync
                     },
                 )
                 .expect("failure case is accepted by the session owner"),
-            DeferredResumeSubmitOutcome::Submitted
+            DeferredResumeSubmissionStatus::Submitted
         );
         checked.notified().await;
         if cancel_session {
@@ -618,7 +618,7 @@ async fn submit_observer_is_exactly_once_for_session_and_receiver_close_and_sync
             },
         )
         .expect("missing session executor is a normal lifecycle cancellation");
-    assert_eq!(outcome, DeferredResumeSubmitOutcome::Cancelled);
+    assert_eq!(outcome, DeferredResumeSubmissionStatus::Cancelled);
     assert_eq!(calls.load(Ordering::Acquire), 1);
     assert_eq!(handler_calls.load(Ordering::Acquire), 0);
     assert_eq!(admission.snapshot().waiting_count(), 0);

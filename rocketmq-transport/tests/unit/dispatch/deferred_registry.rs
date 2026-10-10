@@ -98,26 +98,26 @@ impl<R, E, F> DeferredRegistryTestExt for DeferredRegistryOutcome<R, E, F> {
 }
 
 fn expect_claimed<R>(
-    result: Result<DeferredClaimOutcome<R>, crate::error::TransportError>,
+    result: Result<DeferredClaimResult<R>, crate::error::TransportError>,
     message: &str,
 ) -> ClaimedDeferred<R>
 where
     R: Send + 'static,
 {
     match result {
-        Ok(DeferredClaimOutcome::Claimed(claimed)) => claimed,
-        Ok(DeferredClaimOutcome::NotFound) => panic!("{message}: request was not found"),
-        Ok(DeferredClaimOutcome::AlreadyClaimed) => panic!("{message}: request was already claimed"),
-        Ok(DeferredClaimOutcome::AlreadyCompleted) => panic!("{message}: response was already completed"),
-        Ok(DeferredClaimOutcome::ParentCancelled) => panic!("{message}: parent was cancelled"),
-        Ok(DeferredClaimOutcome::SessionClosed) => panic!("{message}: session was closed"),
-        Ok(DeferredClaimOutcome::DeadlineExpired) => panic!("{message}: deadline expired"),
+        Ok(DeferredClaimResult::Claimed(claimed)) => claimed,
+        Ok(DeferredClaimResult::NotFound) => panic!("{message}: request was not found"),
+        Ok(DeferredClaimResult::AlreadyClaimed) => panic!("{message}: request was already claimed"),
+        Ok(DeferredClaimResult::AlreadyCompleted) => panic!("{message}: response was already completed"),
+        Ok(DeferredClaimResult::ParentCancelled) => panic!("{message}: parent was cancelled"),
+        Ok(DeferredClaimResult::SessionClosed) => panic!("{message}: session was closed"),
+        Ok(DeferredClaimResult::DeadlineExpired) => panic!("{message}: deadline expired"),
         Err(error) => panic!("{message}: operational claim failure {error:?}"),
     }
 }
 
 fn expect_claim_failure<R>(
-    result: Result<DeferredClaimOutcome<R>, crate::error::TransportError>,
+    result: Result<DeferredClaimResult<R>, crate::error::TransportError>,
     message: &str,
 ) -> crate::error::TransportError
 where
@@ -898,7 +898,7 @@ async fn terminal_and_invalid_claim_cas_retire_all_registry_ownership() {
         .claim(terminal_id, DeferredWakeReason::Timeout)
         .await
         .expect("terminal claim is a normal outcome");
-    assert!(matches!(terminal_outcome, DeferredClaimOutcome::AlreadyCompleted));
+    assert!(matches!(terminal_outcome, DeferredClaimResult::AlreadyCompleted));
     assert_eq!(terminal_state.terminal_state(), Some(ResponseTerminalState::Cancelled));
     assert_eq!(terminal_registry.inner.index_counts(), (0, 0, 0));
     assert_eq!(terminal_harness.admission.snapshot().waiting_count(), 0);
@@ -1006,7 +1006,7 @@ async fn assert_first_claim_reason_wins(
     assert_eq!(claimed.reason(), first_reason);
     assert!(matches!(
         second.await.expect("duplicate claim is a normal outcome"),
-        DeferredClaimOutcome::AlreadyClaimed
+        DeferredClaimResult::AlreadyClaimed
     ));
     assert!(!registry.test_contains(id));
     assert_eq!(registry.test_session_member_count(harness.session.view().id()), 1);
@@ -1021,7 +1021,7 @@ async fn assert_first_claim_reason_wins(
             .claim(id, DeferredWakeReason::ForcedRefresh)
             .await
             .expect("missing claim is a normal outcome"),
-        DeferredClaimOutcome::NotFound
+        DeferredClaimResult::NotFound
     ));
     assert_registry_released(&registry, &harness.admission);
 }
@@ -1084,7 +1084,7 @@ async fn duplicate_claim_drops_its_upgraded_marker_after_releasing_the_registry_
         .await
         .expect("duplicate task publishes its result")
         .expect("the upgraded marker returns a normal outcome");
-    assert!(matches!(outcome, DeferredClaimOutcome::AlreadyCompleted));
+    assert!(matches!(outcome, DeferredClaimResult::AlreadyCompleted));
     assert_eq!(registry.inner.claim_marker_count(), 0);
     assert_eq!(harness.admission.snapshot().waiting_count(), 0);
 }
@@ -1111,7 +1111,7 @@ async fn provisional_waiter_observes_parent_removal_even_when_it_awaits_after_ro
     drop(registration);
     assert!(matches!(
         claim.await.expect("durable removal returns a normal outcome"),
-        DeferredClaimOutcome::ParentCancelled
+        DeferredClaimResult::ParentCancelled
     ));
     assert_eq!(registry.inner.index_counts(), (0, 0, 0));
 }
@@ -1312,7 +1312,7 @@ async fn claimed_session_cleanup_closes_marker_and_fresh_claim_is_not_found() {
             .claim(id, DeferredWakeReason::Timeout)
             .await
             .expect("fresh post-cleanup claim is a normal outcome"),
-        DeferredClaimOutcome::NotFound
+        DeferredClaimResult::NotFound
     ));
     drop(claimed);
     assert_eq!(
@@ -1484,7 +1484,7 @@ async fn cleanup_detaches_building_entry_and_notifies_ticket_before_builder_retu
     );
     assert!(matches!(
         claim.await.expect("cleanup returns a normal claim outcome"),
-        DeferredClaimOutcome::SessionClosed
+        DeferredClaimResult::SessionClosed
     ));
     assert_eq!(registry.inner.index_counts(), (0, 0, 0));
     assert_eq!(harness.admission.snapshot().waiting_count(), 1);
@@ -1657,7 +1657,7 @@ async fn simultaneous_parent_and_session_cleanup_cancel_entry_and_ticket_consist
     );
     assert!(matches!(
         claim.await.expect("parent cancellation is a normal claim outcome"),
-        DeferredClaimOutcome::ParentCancelled
+        DeferredClaimResult::ParentCancelled
     ));
     assert_eq!(state.terminal_state(), Some(ResponseTerminalState::Cancelled));
     assert_eq!(
@@ -1700,13 +1700,13 @@ async fn registry_shutdown_wakes_provisional_ticket_and_claims_stay_parent_cance
     assert_eq!(stats.notified_tickets(), 1);
     assert!(matches!(
         claim.await.expect("shutdown wake is a normal claim outcome"),
-        DeferredClaimOutcome::ParentCancelled
+        DeferredClaimResult::ParentCancelled
     ));
     let fresh = registry
         .claim(id, DeferredWakeReason::Timeout)
         .await
         .expect("closed registry returns a normal claim outcome");
-    assert!(matches!(fresh, DeferredClaimOutcome::ParentCancelled));
+    assert!(matches!(fresh, DeferredClaimResult::ParentCancelled));
     drop(registration);
     assert_eq!(harness.admission.snapshot().waiting_count(), 0);
 }
@@ -1805,7 +1805,7 @@ async fn resume_without_an_owned_processor_terminalizes_as_processor_unavailable
         })
         .await
         .expect("missing processor is a normal lifecycle outcome");
-    assert_eq!(outcome, DeferredResumeOutcome::Cancelled);
+    assert_eq!(outcome, DeferredResumeResult::Cancelled);
     assert_eq!(
         state.terminal_reason(),
         Some(crate::dispatch::DeferredTerminalReason::ProcessorUnavailable)
@@ -1855,7 +1855,7 @@ async fn claimed_owner_cutoff_cancels_without_reentering_the_handler() {
         })
         .await
         .expect("owner cutoff is a normal cancellation outcome");
-    assert_eq!(outcome, DeferredResumeOutcome::Cancelled);
+    assert_eq!(outcome, DeferredResumeResult::Cancelled);
     assert_eq!(
         state.terminal_reason(),
         Some(crate::dispatch::DeferredTerminalReason::OwnerDeadline)
