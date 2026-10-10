@@ -45,8 +45,8 @@ use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ShutdownReason;
 use rocketmq_security_api::SecurityBootstrap;
 use rocketmq_security_api::SecurityBootstrapConfig;
-use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
+use rocketmq_security_api::SecurityBootstrapValidation;
 use rocketmq_store::MessageStoreConfig;
 #[cfg(test)]
 use rocketmq_transport::api::ServerConfig;
@@ -209,7 +209,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
 
     let security_bootstrap =
         SecurityBootstrapConfig::from_env().context("failed to load broker security bootstrap configuration")?;
-    let validated_security = validate_broker_security(
+    let security_validation = validate_broker_security(
         &security_bootstrap,
         broker_config,
         message_store_config,
@@ -234,7 +234,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         &resolved_filter,
         telemetry_guard.subscriber_install_status(),
     );
-    log_security_bootstrap(validated_security);
+    log_security_bootstrap(security_validation);
 
     // Print logo
     println!("{}", LOGO);
@@ -304,7 +304,7 @@ fn validate_broker_security(
     message_store_config: &MessageStoreConfig,
     observability_config: &rocketmq_observability::ObservabilityConfig,
     probe_bind_addr: Option<SocketAddr>,
-) -> Result<SecurityBootstrapOutcome> {
+) -> Result<SecurityBootstrapValidation> {
     if security_bootstrap.requires_authentication()
         && (!broker_config.authentication_enabled || !broker_config.authorization_enabled)
     {
@@ -375,12 +375,12 @@ fn register_broker_release_identity(
     }
 }
 
-fn log_security_bootstrap(outcome: SecurityBootstrapOutcome) {
-    match outcome {
-        SecurityBootstrapOutcome::Disabled => {
+fn log_security_bootstrap(validation: SecurityBootstrapValidation) {
+    match validation {
+        SecurityBootstrapValidation::Disabled => {
             warn!("broker security bootstrap is disabled because no security profile is configured")
         }
-        SecurityBootstrapOutcome::Validated(validated) => match validated.profile() {
+        SecurityBootstrapValidation::Validated(validated) => match validated.profile() {
             SecurityBootstrapProfile::DevelopmentInsecureLoopback => warn!(
                 profile = validated.profile().as_str(),
                 listener_count = validated.listener_count(),
@@ -723,7 +723,7 @@ mod tests {
     fn disabled_security_bootstrap_allows_default_broker_listeners() {
         let broker = BrokerConfig::default();
         let observability = build_broker_telemetry_bootstrap_config(&broker).observability;
-        let outcome = validate_broker_security(
+        let validation = validate_broker_security(
             &rocketmq_security_api::SecurityBootstrap::Disabled,
             &broker,
             &MessageStoreConfig::default(),
@@ -732,7 +732,7 @@ mod tests {
         )
         .expect("disabled security bootstrap should not restrict Broker listeners");
 
-        assert_eq!(outcome, rocketmq_security_api::SecurityBootstrapOutcome::Disabled);
+        assert_eq!(validation, rocketmq_security_api::SecurityBootstrapValidation::Disabled);
     }
 
     #[test]

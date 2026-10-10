@@ -34,18 +34,18 @@ pub struct McpShutdownReport {
 /// pre-bind security boundary.
 ///
 /// The fields are private so callers cannot replace the resolved telemetry,
-/// process identity, or security outcome after validation.
+/// process identity, or security validation.
 pub struct ValidatedMcpBootstrap {
     config: McpConfig,
     telemetry_resolution: rocketmq_observability::TelemetryResolution,
-    security_outcome: rocketmq_security_api::SecurityBootstrapOutcome,
+    security_validation: rocketmq_security_api::SecurityBootstrapValidation,
 }
 
 impl std::fmt::Debug for ValidatedMcpBootstrap {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("ValidatedMcpBootstrap")
-            .field("security_outcome", &self.security_outcome)
+            .field("security_outcome", &self.security_validation)
             .field(
                 "telemetry_enabled",
                 &self.telemetry_resolution.bootstrap.observability.enabled,
@@ -59,9 +59,9 @@ impl std::fmt::Debug for ValidatedMcpBootstrap {
 }
 
 impl ValidatedMcpBootstrap {
-    /// Returns the non-sensitive security outcome for startup logging.
-    pub const fn security_outcome(&self) -> rocketmq_security_api::SecurityBootstrapOutcome {
-        self.security_outcome
+    /// Returns the non-sensitive security validation for startup logging.
+    pub const fn security_validation(&self) -> rocketmq_security_api::SecurityBootstrapValidation {
+        self.security_validation
     }
 }
 
@@ -174,12 +174,13 @@ impl McpApp {
     pub async fn bootstrap(
         config: McpConfig,
         process_telemetry: rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
-        security_bootstrap: rocketmq_security_api::SecurityBootstrapOutcome,
+        security_validation: rocketmq_security_api::SecurityBootstrapValidation,
         service_context: rocketmq_runtime::ChildServiceContext,
     ) -> crate::error::McpResult<Self> {
         let telemetry_resolution = resolve_mcp_telemetry(&config)?;
         ensure_process_telemetry_matches(&process_telemetry, &telemetry_resolution.process)?;
-        let handoff = prepare_mcp_bootstrap_from_validated_outcome(config, telemetry_resolution, security_bootstrap)?;
+        let handoff =
+            prepare_mcp_bootstrap_from_security_validation(config, telemetry_resolution, security_validation)?;
         Self::bootstrap_validated(handoff, service_context).await
     }
 
@@ -197,7 +198,7 @@ impl McpApp {
         let ValidatedMcpBootstrap {
             config,
             telemetry_resolution,
-            security_outcome: _,
+            security_validation: _,
         } = handoff;
         let rocketmq_observability::TelemetryResolution { bootstrap, process, .. } = telemetry_resolution;
         let telemetry = init_resolved_tracing(&config, bootstrap, &process, &service_context).await?;
@@ -556,7 +557,7 @@ fn prepare_mcp_bootstrap_from_resolution(
     telemetry_resolution: rocketmq_observability::TelemetryResolution,
 ) -> crate::error::McpResult<ValidatedMcpBootstrap> {
     validate_mcp_telemetry_resolution(&config, &telemetry_resolution)?;
-    let security_outcome = validate_mcp_security(
+    let security_validation = validate_mcp_security(
         security_bootstrap,
         config.server.transport,
         &config.server.http.bind,
@@ -566,20 +567,20 @@ fn prepare_mcp_bootstrap_from_resolution(
     Ok(ValidatedMcpBootstrap {
         config,
         telemetry_resolution,
-        security_outcome,
+        security_validation,
     })
 }
 
-fn prepare_mcp_bootstrap_from_validated_outcome(
+fn prepare_mcp_bootstrap_from_security_validation(
     config: McpConfig,
     telemetry_resolution: rocketmq_observability::TelemetryResolution,
-    security_outcome: rocketmq_security_api::SecurityBootstrapOutcome,
+    security_validation: rocketmq_security_api::SecurityBootstrapValidation,
 ) -> crate::error::McpResult<ValidatedMcpBootstrap> {
     validate_mcp_telemetry_resolution(&config, &telemetry_resolution)?;
     Ok(ValidatedMcpBootstrap {
         config,
         telemetry_resolution,
-        security_outcome,
+        security_validation,
     })
 }
 
@@ -595,7 +596,7 @@ pub fn validate_mcp_security(
     http_bind: &str,
     prometheus_bind_addr: Option<std::net::SocketAddr>,
     probe_bind_addr: Option<std::net::SocketAddr>,
-) -> crate::error::McpResult<rocketmq_security_api::SecurityBootstrapOutcome> {
+) -> crate::error::McpResult<rocketmq_security_api::SecurityBootstrapValidation> {
     if !security_bootstrap.is_enabled() {
         return security_bootstrap.validate(&[]).map_err(crate::McpError::from_source);
     }

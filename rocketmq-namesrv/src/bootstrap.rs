@@ -1948,8 +1948,8 @@ mod tests {
     use rocketmq_security_api::Principal;
     use rocketmq_security_api::SecurityBootstrap;
     use rocketmq_security_api::SecurityBootstrapConfig;
-    use rocketmq_security_api::SecurityBootstrapOutcome;
     use rocketmq_security_api::SecurityBootstrapProfile;
+    use rocketmq_security_api::SecurityBootstrapValidation;
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
@@ -2056,11 +2056,11 @@ mod tests {
     async fn layered_dispatch_fixture(
         runtime: &RuntimeContext,
         name: &'static str,
-        security_outcome: SecurityBootstrapOutcome,
+        security_validation: SecurityBootstrapValidation,
         namesrv_config: NamesrvConfig,
     ) -> LayeredDispatchFixture {
         let service = runtime.service_context(name);
-        let transport_security = crate::security::build_namesrv_transport_security(security_outcome);
+        let transport_security = crate::security::build_namesrv_transport_security(security_validation);
         let bootstrap = Builder::new(service.clone(), TelemetryHandle::noop())
             .set_name_server_config(namesrv_config)
             .set_transport_security(Arc::clone(&transport_security), None)
@@ -2133,17 +2133,17 @@ mod tests {
         drop(fixture.bootstrap);
     }
 
-    fn test_security_outcome(bootstrap: SecurityBootstrap, listener: SocketAddr) -> SecurityBootstrapOutcome {
+    fn test_security_validation(bootstrap: SecurityBootstrap, listener: SocketAddr) -> SecurityBootstrapValidation {
         bootstrap
             .validate(&[listener])
             .expect("test security bootstrap should validate its listener")
     }
 
-    fn secure_test_security_outcome() -> SecurityBootstrapOutcome {
+    fn secure_test_security_validation() -> SecurityBootstrapValidation {
         let root = tempfile::tempdir().expect("temporary security root");
         let material = root.path().join("material.pem");
         std::fs::write(&material, "test-material").expect("security material should be written");
-        let outcome = test_security_outcome(
+        let validation = test_security_validation(
             SecurityBootstrap::Enabled(
                 SecurityBootstrapConfig::new(SecurityBootstrapProfile::SecureEnforced)
                     .with_trust_anchor(&material)
@@ -2155,27 +2155,27 @@ mod tests {
             SocketAddr::from(([0, 0, 0, 0], 9876)),
         );
         assert!(matches!(
-            outcome,
-            SecurityBootstrapOutcome::Validated(validated)
+            validation,
+            SecurityBootstrapValidation::Validated(validated)
                 if validated.profile() == SecurityBootstrapProfile::SecureEnforced && validated.listener_count() == 1
         ));
-        outcome
+        validation
     }
 
-    fn development_test_security_outcome() -> SecurityBootstrapOutcome {
-        let outcome = test_security_outcome(
+    fn development_test_security_validation() -> SecurityBootstrapValidation {
+        let validation = test_security_validation(
             SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(
                 SecurityBootstrapProfile::DevelopmentInsecureLoopback,
             )),
             SocketAddr::from(([127, 0, 0, 1], 9876)),
         );
         assert!(matches!(
-            outcome,
-            SecurityBootstrapOutcome::Validated(validated)
+            validation,
+            SecurityBootstrapValidation::Validated(validated)
                 if validated.profile() == SecurityBootstrapProfile::DevelopmentInsecureLoopback
                     && validated.listener_count() == 1
         ));
-        outcome
+        validation
     }
 
     #[tokio::test]
@@ -2185,7 +2185,7 @@ mod tests {
         let secure_without_auth = layered_dispatch_fixture(
             &runtime,
             "secure-without-auth",
-            secure_test_security_outcome(),
+            secure_test_security_validation(),
             NamesrvConfig::default(),
         )
         .await;
@@ -2210,7 +2210,7 @@ mod tests {
         let secure_with_whitelist = layered_dispatch_fixture(
             &runtime,
             "secure-with-whitelist",
-            secure_test_security_outcome(),
+            secure_test_security_validation(),
             NamesrvConfig {
                 auth_config: AuthConfig {
                     authentication_enabled: true,
@@ -2233,7 +2233,7 @@ mod tests {
         let disabled = layered_dispatch_fixture(
             &runtime,
             "disabled-compatibility",
-            test_security_outcome(SecurityBootstrap::Disabled, SocketAddr::from(([0, 0, 0, 0], 9876))),
+            test_security_validation(SecurityBootstrap::Disabled, SocketAddr::from(([0, 0, 0, 0], 9876))),
             NamesrvConfig {
                 allow_insecure_public_listener: true,
                 ..NamesrvConfig::default()
@@ -2250,7 +2250,7 @@ mod tests {
         let development = layered_dispatch_fixture(
             &runtime,
             "development-loopback",
-            development_test_security_outcome(),
+            development_test_security_validation(),
             NamesrvConfig::default(),
         )
         .await;
