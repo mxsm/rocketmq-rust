@@ -41,10 +41,10 @@ use rocketmq_store_api::checkpoint::CHECKPOINT_SCHEMA_VERSION as RELEASE_CHECKPO
 use rocketmq_store_api::file_uri_to_path;
 use rocketmq_store_api::path_to_file_uri;
 use rocketmq_store_api::CheckpointDirectoryDigest;
-use rocketmq_store_api::ReleaseCheckpointCreateOutcome;
 use rocketmq_store_api::ReleaseCheckpointCreateRejection;
-use rocketmq_store_api::ReleaseCheckpointRestoreOutcome;
+use rocketmq_store_api::ReleaseCheckpointCreationResult;
 use rocketmq_store_api::ReleaseCheckpointRestoreRejection;
+use rocketmq_store_api::ReleaseCheckpointRestoreVerificationResult;
 use rocketmq_store_api::ReleaseCheckpointStore;
 use rocketmq_store_api::StoreComponent;
 use rocketmq_store_api::StoreContractViolation;
@@ -298,21 +298,21 @@ impl ReleaseCheckpointStore for RocksDbReleaseCheckpointService {
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         request: StoreReleaseCheckpointRequest,
-    ) -> Result<ReleaseCheckpointCreateOutcome, StoreError> {
+    ) -> Result<ReleaseCheckpointCreationResult, StoreError> {
         match self.create_release_checkpoint_inner(authorization, request).await {
-            Ok(manifest) => Ok(ReleaseCheckpointCreateOutcome::Created(manifest)),
-            Err(RocksDbReleaseCheckpointError::AuthorizationExpired) => Ok(ReleaseCheckpointCreateOutcome::Rejected(
+            Ok(manifest) => Ok(ReleaseCheckpointCreationResult::Created(manifest)),
+            Err(RocksDbReleaseCheckpointError::AuthorizationExpired) => Ok(ReleaseCheckpointCreationResult::Rejected(
                 ReleaseCheckpointCreateRejection::AuthorizationExpired,
             )),
-            Err(RocksDbReleaseCheckpointError::UnauthorizedCapability) => Ok(ReleaseCheckpointCreateOutcome::Rejected(
-                ReleaseCheckpointCreateRejection::CapabilityNotGranted,
-            )),
+            Err(RocksDbReleaseCheckpointError::UnauthorizedCapability) => Ok(
+                ReleaseCheckpointCreationResult::Rejected(ReleaseCheckpointCreateRejection::CapabilityNotGranted),
+            ),
             Err(RocksDbReleaseCheckpointError::CheckpointAlreadyExists) => Ok(
-                ReleaseCheckpointCreateOutcome::Rejected(ReleaseCheckpointCreateRejection::AlreadyExists),
+                ReleaseCheckpointCreationResult::Rejected(ReleaseCheckpointCreateRejection::AlreadyExists),
             ),
             Err(RocksDbReleaseCheckpointError::Artifact(source)) => {
                 if let Some((actual_bytes, maximum_bytes)) = checkpoint_capacity_rejection(&source) {
-                    Ok(ReleaseCheckpointCreateOutcome::Rejected(
+                    Ok(ReleaseCheckpointCreationResult::Rejected(
                         ReleaseCheckpointCreateRejection::CapacityExceeded {
                             actual_bytes,
                             maximum_bytes,
@@ -330,18 +330,22 @@ impl ReleaseCheckpointStore for RocksDbReleaseCheckpointService {
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         manifest: &StoreReleaseCheckpointManifest,
-    ) -> Result<ReleaseCheckpointRestoreOutcome, StoreError> {
+    ) -> Result<ReleaseCheckpointRestoreVerificationResult, StoreError> {
         match self
             .restore_verify_release_checkpoint_inner(authorization, manifest)
             .await
         {
-            Ok(verification) => Ok(ReleaseCheckpointRestoreOutcome::Verified(verification)),
-            Err(RocksDbReleaseCheckpointError::AuthorizationExpired) => Ok(ReleaseCheckpointRestoreOutcome::Rejected(
-                ReleaseCheckpointRestoreRejection::AuthorizationExpired,
-            )),
-            Err(RocksDbReleaseCheckpointError::UnauthorizedCapability) => Ok(
-                ReleaseCheckpointRestoreOutcome::Rejected(ReleaseCheckpointRestoreRejection::CapabilityNotGranted),
-            ),
+            Ok(verification) => Ok(ReleaseCheckpointRestoreVerificationResult::Verified(verification)),
+            Err(RocksDbReleaseCheckpointError::AuthorizationExpired) => {
+                Ok(ReleaseCheckpointRestoreVerificationResult::Rejected(
+                    ReleaseCheckpointRestoreRejection::AuthorizationExpired,
+                ))
+            }
+            Err(RocksDbReleaseCheckpointError::UnauthorizedCapability) => {
+                Ok(ReleaseCheckpointRestoreVerificationResult::Rejected(
+                    ReleaseCheckpointRestoreRejection::CapabilityNotGranted,
+                ))
+            }
             Err(error) => Err(rocksdb_checkpoint_error(StoreOperation::Read, error)),
         }
     }

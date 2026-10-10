@@ -32,10 +32,10 @@ use rocketmq_store_api::checkpoint::CheckpointManifest as StoreReleaseCheckpoint
 use rocketmq_store_api::checkpoint::CheckpointOffsets as ReleaseCheckpointOffsets;
 use rocketmq_store_api::checkpoint::CheckpointRequest as StoreReleaseCheckpointRequest;
 use rocketmq_store_api::checkpoint::CheckpointStorageIdentity as ReleaseCheckpointStorageIdentity;
-use rocketmq_store_api::ReleaseCheckpointCreateOutcome;
 use rocketmq_store_api::ReleaseCheckpointCreateRejection;
-use rocketmq_store_api::ReleaseCheckpointRestoreOutcome;
+use rocketmq_store_api::ReleaseCheckpointCreationResult;
 use rocketmq_store_api::ReleaseCheckpointRestoreRejection;
+use rocketmq_store_api::ReleaseCheckpointRestoreVerificationResult;
 use rocketmq_store_api::ReleaseCheckpointStore;
 use rocketmq_store_api::StoreComponent;
 use rocketmq_store_api::StoreError;
@@ -148,11 +148,11 @@ impl ReleaseCheckpointStore for StoreReleaseCheckpointService {
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         request: StoreReleaseCheckpointRequest,
-    ) -> Result<ReleaseCheckpointCreateOutcome, StoreError> {
+    ) -> Result<ReleaseCheckpointCreationResult, StoreError> {
         let storage_identity = match self.storage_identity_for(authorization, StoreOperation::Flush).await? {
             Some(identity) => identity,
             None => {
-                return Ok(ReleaseCheckpointCreateOutcome::Rejected(
+                return Ok(ReleaseCheckpointCreationResult::Rejected(
                     ReleaseCheckpointCreateRejection::AuthorizationExpired,
                 ));
             }
@@ -200,11 +200,11 @@ impl ReleaseCheckpointStore for StoreReleaseCheckpointService {
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         manifest: &StoreReleaseCheckpointManifest,
-    ) -> Result<ReleaseCheckpointRestoreOutcome, StoreError> {
+    ) -> Result<ReleaseCheckpointRestoreVerificationResult, StoreError> {
         let storage_identity = match self.storage_identity_for(authorization, StoreOperation::Read).await? {
             Some(identity) => identity,
             None => {
-                return Ok(ReleaseCheckpointRestoreOutcome::Rejected(
+                return Ok(ReleaseCheckpointRestoreVerificationResult::Rejected(
                     ReleaseCheckpointRestoreRejection::AuthorizationExpired,
                 ));
             }
