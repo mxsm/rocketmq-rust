@@ -45,7 +45,7 @@ impl DeferredExpiryMargins {
 /// Result of attaching expiry policy to deferred response ownership.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[must_use]
-pub enum DeferredExpiryOutcome {
+pub enum DeferredExpiryAttachmentStatus {
     /// Expiry policy was attached.
     Attached,
     /// Expiry policy was already attached and remains unchanged.

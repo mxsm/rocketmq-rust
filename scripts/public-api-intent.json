@@ -7158,8 +7158,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::dispatch::DeferredExpiryOutcome",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredExpiryOutcome",
+          "declaration": "pub use crate::dispatch::DeferredExpiryAttachmentStatus",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredExpiryAttachmentStatus",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",

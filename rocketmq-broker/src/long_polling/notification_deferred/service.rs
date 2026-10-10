@@ -40,10 +40,10 @@ use rocketmq_transport::api::DeferredAdmission;
 use rocketmq_transport::api::DeferredAdmissionAcquireOutcome;
 use rocketmq_transport::api::DeferredAdmissionSnapshot;
 use rocketmq_transport::api::DeferredClaimOutcome;
+use rocketmq_transport::api::DeferredExpiryAttachmentStatus;
 use rocketmq_transport::api::DeferredExpiryBatch;
 use rocketmq_transport::api::DeferredExpiryBatchStats;
 use rocketmq_transport::api::DeferredExpiryMargins;
-use rocketmq_transport::api::DeferredExpiryOutcome;
 use rocketmq_transport::api::DeferredId;
 use rocketmq_transport::api::DeferredParts;
 use rocketmq_transport::api::DeferredRegistration;
@@ -371,7 +371,7 @@ impl NotificationDeferredService {
         let protocol_at = deadline.protocol_at();
         let mut parts = DeferredParts::new(responder, permit);
         match parts.try_with_expiry(protocol_at, self.expiry_margins) {
-            Ok(DeferredExpiryOutcome::Attached) => {}
+            Ok(DeferredExpiryAttachmentStatus::Attached) => {}
             Ok(outcome) => {
                 return Ok(NotificationDeferredRegistrationStatus::Rejected(Box::new(
                     NotificationDeferredRegisterRejection::Expiry { outcome, parts },
@@ -1287,7 +1287,7 @@ pub(crate) enum NotificationDeferredRegisterRejection {
     ProvenanceMismatch,
     Responder(DeferredResponderOutcome),
     Expiry {
-        outcome: DeferredExpiryOutcome,
+        outcome: DeferredExpiryAttachmentStatus,
         parts: DeferredParts,
     },
     DuplicateRequest,
