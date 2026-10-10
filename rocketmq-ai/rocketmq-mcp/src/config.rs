@@ -708,6 +708,15 @@ impl ClusterConfig {
     }
 }
 
+/// Returns the cluster a request selects when it omits `cluster`: the one marked `default`,
+/// otherwise the only configured cluster.
+pub(crate) fn default_cluster(clusters: &[ClusterConfig]) -> Option<&ClusterConfig> {
+    clusters
+        .iter()
+        .find(|cluster| cluster.default.unwrap_or(false))
+        .or_else(|| (clusters.len() == 1).then(|| &clusters[0]))
+}
+
 impl std::fmt::Debug for ClusterConfig {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter

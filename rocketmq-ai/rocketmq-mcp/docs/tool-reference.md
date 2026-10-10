@@ -23,16 +23,28 @@ gets `rocketmq:read`; `diagnose`, `diagnostic`, and `operator` also get `rocketm
 | Diagnose | `rocketmq:diagnose` |
 | Plan | `rocketmq:plan` |
 
-`tools/list` discovery checks only the principal scope and the role's Tool allow/deny rule. It does
+`tools/list` discovery checks only the principal scope and the role's Tool allow/deny rules. It does
 not check configured clusters, the principal cluster claim, tenant binding, or runtime
 `allow_change_planning`; discovery therefore does not prove that a call will be accepted. At
-call-time, an explicit `cluster` is checked against server configuration, the role cluster rule,
+call-time, the effective `cluster` is checked against server configuration, the role cluster rule,
 the principal `rocketmq_clusters` claim when present, and the configured tenant binding. A planning
 call also checks the compiled feature and runtime `allow_change_planning=true` then.
 
-The two inventory Tools permit `cluster` omission. Their server-default/sole-configured-cluster
-fallback therefore has no per-cluster authorization or tenant check at call-time; do not treat an
-omitted-cluster inventory request as a stronger per-cluster authorization guarantee.
+Role rules from every role of the principal, including included roles, are combined. The more
+specific rule wins and a denial wins between equally specific rules:
+
+1. a Tool named in `deny_tools` is denied;
+2. otherwise a Tool named in `allow_tools` is allowed;
+3. otherwise `deny_tools = ["*"]` denies it;
+4. otherwise `allow_tools = ["*"]` allows it.
+
+A role that lists its Tools by name and adds `deny_tools = ["*"]` therefore grants exactly the
+listed Tools, and a role with `allow_tools = ["*"]` removes single Tools by naming them in
+`deny_tools`. A denied Tool is absent from `tools/list`, and the Resources it backs are denied too.
+
+The two inventory Tools permit `cluster` omission. The server-default/sole-configured cluster they
+then select is the effective cluster: it gets the same per-cluster authorization, tenant,
+rate-limit, and concurrency checks as an explicitly named cluster.
 
 Unless a Tool section says otherwise, input objects reject unknown fields and have no mutually
 exclusive fields. Examples are `tools/call.params.arguments` objects. Each response example is a
@@ -59,6 +71,12 @@ the nullable planning fields below; `limit` is the stated exception with a defau
 For `rocketmq_list_topics` and `rocketmq_list_consumer_groups`, an omitted or `null` `cluster`
 selects the explicit default cluster only when one is configured; otherwise it is valid only when
 the server configuration contains exactly one cluster. In every other case the request is invalid.
+The selected cluster is authorized exactly like an explicitly named one: the caller's cluster
+allow-list, the tenant binding, the rate limit, and the per-cluster concurrency limit all apply to
+it, and the response and the audit record carry its name.
+
+Every other Tool requires `cluster`. An empty or whitespace-only `cluster` is invalid for every
+Tool and never selects the default cluster.
 
 ## Common response and paging behavior
 
@@ -93,6 +111,37 @@ partial response.
   }
 }
 ```
+
+## Error responses
+
+A failed call returns `isError=true` and one text block holding a JSON object with
+`schema_version`, `request_id`, `correlation_id`, `tool`, `code`, `retryable`, `message`, and
+`suggestions`. It never carries addresses, credentials, or backend error text.
+
+| `code` | Retryable | Meaning |
+| --- | --- | --- |
+| `invalid_arguments` | no | The arguments violate the input schema or a validation rule. |
+| `not_found` | no | The request was valid, but the selected entity does not exist. The additional `entity` field names its kind: `topic`, `consumer_group`, `broker`, `message`, `proxy`, `controller`, or `cluster`. |
+| `source_unavailable` | yes | A RocketMQ source could not be reached or answered with a failure. |
+| `backend_timeout` | yes | The query exceeded its time budget. |
+| `rate_limited` | yes | The rate limit or the per-cluster concurrency limit was reached. |
+| `cancelled` | no | The client cancelled the request. |
+| `unauthorized_scope` | no | The principal lacks the scope the Tool's risk level requires. |
+| `permission_denied` | no | No role of the principal grants the Tool. |
+| `cluster_not_allowed` | no | The cluster is not configured or not in the caller's allow-list. |
+| `tenant_mismatch` | no | The principal's tenant does not match the cluster's tenant binding. |
+| `change_planning_disabled` | no | Planning is not enabled by server policy. |
+| `output_too_large` | no | The serialized response would exceed 1 MiB. |
+| `identifier_input_bound_exceeded`, `identifier_capacity_exceeded`, `identifier_collision_exhausted` | no | An identifier could not be given a safe alias. |
+| `internal_error` | no | The server failed internally; report the `request_id`. |
+
+A missing target is `not_found`, never `source_unavailable`: do not retry it, confirm the name with
+the Tool named in `suggestions` instead. `rocketmq_diagnose_consumer_lag` does not fail when the
+Topic or Consumer Group is missing: the report lists the lookup as `missing` evidence with
+`error_code` set to `not_found`, names the missing target as the root cause, and recommends the
+listing Tool. A Resource read reports a missing target as the same non-retryable
+`resource_unavailable` error that it returns for a Resource the caller may not read, so the two
+cases cannot be told apart.
 
 ## Default read-only catalog (24 Tools)
 

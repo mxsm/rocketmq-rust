@@ -18,7 +18,7 @@ use std::thread;
 
 // These tests exercise the registry-owned queue-slot trust boundary.
 use super::*;
-use crate::mapped_file::retirement::codec::DecodeOutcome;
+use crate::mapped_file::retirement::codec::LedgerFrameDecodeResult;
 use crate::mapped_file::retirement::codec::LedgerRecord;
 use crate::mapped_file::retirement::codec::RetirementReason;
 use crate::mapped_file::retirement::codec::COMMIT_SEAL_LENGTH;
@@ -468,14 +468,14 @@ fn real_writer_and_registry_preserve_the_full_direct_unlink_stage_chain() {
     let log = ledger.io_for_test().log();
     let first =
         match crate::mapped_file::retirement::codec::decode_next_frame(log, 91, 4).expect("intent frame is valid") {
-            DecodeOutcome::Frame(frame) => frame,
+            LedgerFrameDecodeResult::Frame(frame) => frame,
             other => panic!("expected intent frame, got {other:?}"),
         };
     let second_offset = first.encoded_len() + COMMIT_SEAL_LENGTH;
     let second = match crate::mapped_file::retirement::codec::decode_next_frame(&log[second_offset..], 92, 4)
         .expect("LogicalRemoved frame is valid")
     {
-        DecodeOutcome::Frame(frame) => frame,
+        LedgerFrameDecodeResult::Frame(frame) => frame,
         other => panic!("expected LogicalRemoved frame, got {other:?}"),
     };
     assert_eq!(
@@ -491,7 +491,7 @@ fn real_writer_and_registry_preserve_the_full_direct_unlink_stage_chain() {
     let third = match crate::mapped_file::retirement::codec::decode_next_frame(&log[third_offset..], 93, 4)
         .expect("NamespaceAbsent frame is valid")
     {
-        DecodeOutcome::Frame(frame) => frame,
+        LedgerFrameDecodeResult::Frame(frame) => frame,
         other => panic!("expected NamespaceAbsent frame, got {other:?}"),
     };
     assert_eq!(
@@ -510,7 +510,7 @@ fn real_writer_and_registry_preserve_the_full_direct_unlink_stage_chain() {
     let fourth = match crate::mapped_file::retirement::codec::decode_next_frame(&log[fourth_offset..], 94, 4)
         .expect("Completed frame is valid")
     {
-        DecodeOutcome::Frame(frame) => frame,
+        LedgerFrameDecodeResult::Frame(frame) => frame,
         other => panic!("expected Completed frame, got {other:?}"),
     };
     assert_eq!(
@@ -741,7 +741,7 @@ fn decode_records(log: &[u8], first_sequence: u64, generation: u64, count: usize
         let frame = match crate::mapped_file::retirement::codec::decode_next_frame(&log[offset..], sequence, generation)
             .expect("frame is valid")
         {
-            DecodeOutcome::Frame(frame) => frame,
+            LedgerFrameDecodeResult::Frame(frame) => frame,
             other => panic!("expected frame {sequence}, got {other:?}"),
         };
         offset += frame.encoded_len() + COMMIT_SEAL_LENGTH;

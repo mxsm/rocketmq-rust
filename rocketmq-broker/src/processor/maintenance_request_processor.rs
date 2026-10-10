@@ -51,10 +51,10 @@ use rocketmq_store_api::checkpoint::CheckpointOffsets;
 use rocketmq_store_api::checkpoint::CheckpointRequest;
 use rocketmq_store_api::checkpoint::CheckpointRestoreVerification;
 use rocketmq_store_api::checkpoint::CheckpointStorageIdentity;
-use rocketmq_store_api::ReleaseCheckpointCreateOutcome;
 use rocketmq_store_api::ReleaseCheckpointCreateRejection;
-use rocketmq_store_api::ReleaseCheckpointRestoreOutcome;
+use rocketmq_store_api::ReleaseCheckpointCreationResult;
 use rocketmq_store_api::ReleaseCheckpointRestoreRejection;
+use rocketmq_store_api::ReleaseCheckpointRestoreVerificationResult;
 use rocketmq_store_api::ReleaseCheckpointStore;
 use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::EmbeddedCaller;
@@ -259,12 +259,12 @@ impl MaintenanceRequestProcessor {
             .await
             .map_err(checkpoint_error)?;
         match outcome {
-            ReleaseCheckpointCreateOutcome::Created(manifest) => encode_success(
+            ReleaseCheckpointCreationResult::Created(manifest) => encode_success(
                 &self.command_factory,
                 &checkpoint_manifest_to_wire(manifest),
                 "encode Store release-checkpoint manifest",
             ),
-            ReleaseCheckpointCreateOutcome::Rejected(rejection) => {
+            ReleaseCheckpointCreationResult::Rejected(rejection) => {
                 Ok(checkpoint_create_rejection_response(&self.command_factory, rejection))
             }
         }
@@ -298,12 +298,12 @@ impl MaintenanceRequestProcessor {
             .await
             .map_err(checkpoint_error)?;
         match outcome {
-            ReleaseCheckpointRestoreOutcome::Verified(verification) => encode_success(
+            ReleaseCheckpointRestoreVerificationResult::Verified(verification) => encode_success(
                 &self.command_factory,
                 &checkpoint_verification_to_wire(verification),
                 "encode Store restore-verification proof",
             ),
-            ReleaseCheckpointRestoreOutcome::Rejected(rejection) => {
+            ReleaseCheckpointRestoreVerificationResult::Rejected(rejection) => {
                 Ok(checkpoint_restore_rejection_response(&self.command_factory, rejection))
             }
         }
@@ -996,7 +996,7 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_outcome_rejections_use_fixed_redaction_safe_broker_responses() {
+    fn checkpoint_result_rejections_use_fixed_redaction_safe_broker_responses() {
         let factory = application_remoting_command_factory();
         let create_cases = [
             ReleaseCheckpointCreateRejection::AuthorizationExpired,

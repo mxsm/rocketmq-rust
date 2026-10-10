@@ -51,8 +51,8 @@ pub(super) fn parse_generation<'a>(
             }
         })?;
         let frame = match outcome {
-            DecodeOutcome::EndOfInput => break,
-            DecodeOutcome::TrailingPartial(_) => {
+            LedgerFrameDecodeResult::EndOfInput => break,
+            LedgerFrameDecodeResult::TrailingPartial(_) => {
                 validate_unacknowledged_suffix_length(suffix.len())?;
                 tail = Some(LogTail {
                     offset: offset as u64,
@@ -61,7 +61,7 @@ pub(super) fn parse_generation<'a>(
                 });
                 break;
             }
-            DecodeOutcome::Frame(frame) => frame,
+            LedgerFrameDecodeResult::Frame(frame) => frame,
         };
         let frame_length = frame.encoded_len();
         let frame_end = offset

@@ -32,8 +32,11 @@ rust-version = "1.95.0"
 [features]
 default = []
 write-tools = ["dep:rocketmq-admin-core"]
+# Exports metrics over OTLP gRPC. Logs stay on stderr; traces and OTLP logs are not exported.
+otlp = ["rocketmq-observability/otlp-metrics"]
 
 [dependencies]
+rocketmq-observability = { version = "1.0.0", path = "../../rocketmq-observability" }
 rocketmq-runtime = { version = "1.0.0", path = "../../rocketmq-runtime" }
 rocketmq-transport = { version = "1.0.0", path = "../../rocketmq-transport", default-features = false, features = ["tls"] }
 rocketmq-admin-core = { version = "1.0.0", path = "../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", default-features = false, features = ["mutation-client-adapter"], optional = true }
@@ -62,7 +65,7 @@ insta = { version = "1.43", features = ["json"] }
 rcgen = "0.14"
 tempfile = "3.27.0"
 tower = { version = "0.5", features = ["util"] }
-tracing-subscriber = { version = "0.3", features = ["fmt"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [[bin]]
 name = "rocketmq-mcp-control"

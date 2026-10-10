@@ -5028,8 +5028,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::inspection::CommitLogRecordOutcome",
-          "identity": "rocketmq-store/src/public_api.rs:pub use crate::inspection::CommitLogRecordOutcome",
+          "declaration": "pub use crate::inspection::CommitLogRecordDecodeResult",
+          "identity": "rocketmq-store/src/public_api.rs:pub use crate::inspection::CommitLogRecordDecodeResult",
           "owner": "store",
           "path": "rocketmq-store/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -5352,8 +5352,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::platform::FilePreallocateOutcome",
-          "identity": "rocketmq-store/src/public_api.rs:pub use crate::platform::FilePreallocateOutcome",
+          "declaration": "pub use crate::platform::FilePreallocationResult",
+          "identity": "rocketmq-store/src/public_api.rs:pub use crate::platform::FilePreallocationResult",
           "owner": "store",
           "path": "rocketmq-store/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -5685,8 +5685,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::timer::timeline::TimelineAdmissionOutcome",
-          "identity": "rocketmq-store/src/public_api.rs:pub use crate::timer::timeline::TimelineAdmissionOutcome",
+          "declaration": "pub use crate::timer::timeline::TimelineAdmissionDecision",
+          "identity": "rocketmq-store/src/public_api.rs:pub use crate::timer::timeline::TimelineAdmissionDecision",
           "owner": "store",
           "path": "rocketmq-store/src/public_api.rs",
           "rationale": "preserve source-free timer admission decisions at the Store boundary",

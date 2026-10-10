@@ -144,21 +144,21 @@ impl LocalFileMessageStore {
         #[cfg(feature = "extended_timeline")]
         if let Some(admission) = self.extended_timeline_admission.as_ref() {
             match admission.check(&msg, current_millis() as i64) {
-                Ok(TimelineAdmissionOutcome::Accepted) => {}
+                Ok(TimelineAdmissionDecision::Accepted) => {}
                 Ok(
-                    TimelineAdmissionOutcome::MalformedTimer
-                    | TimelineAdmissionOutcome::HorizonOverflow
-                    | TimelineAdmissionOutcome::HorizonExceeded
-                    | TimelineAdmissionOutcome::RecordTooLarge,
+                    TimelineAdmissionDecision::MalformedTimer
+                    | TimelineAdmissionDecision::HorizonOverflow
+                    | TimelineAdmissionDecision::HorizonExceeded
+                    | TimelineAdmissionDecision::RecordTooLarge,
                 ) => return PutMessageResult::rejected_before_append(PutMessageStatus::WheelTimerMsgIllegal),
                 Ok(
-                    TimelineAdmissionOutcome::RoleInactive
-                    | TimelineAdmissionOutcome::MaterializationLag
-                    | TimelineAdmissionOutcome::GlobalCapacity
-                    | TimelineAdmissionOutcome::TopicQuota
-                    | TimelineAdmissionOutcome::TenantQuota
-                    | TimelineAdmissionOutcome::HotBucket
-                    | TimelineAdmissionOutcome::DiskHeadroom,
+                    TimelineAdmissionDecision::RoleInactive
+                    | TimelineAdmissionDecision::MaterializationLag
+                    | TimelineAdmissionDecision::GlobalCapacity
+                    | TimelineAdmissionDecision::TopicQuota
+                    | TimelineAdmissionDecision::TenantQuota
+                    | TimelineAdmissionDecision::HotBucket
+                    | TimelineAdmissionDecision::DiskHeadroom,
                 ) => return PutMessageResult::rejected_before_append(PutMessageStatus::WheelTimerFlowControl),
                 Err(error) => {
                     warn!(

@@ -57,7 +57,7 @@ use crate::base::transient_store_pool::PoolLease;
 use crate::base::transient_store_pool::TransientStorePool;
 use crate::config::FlushDiskType;
 use crate::mapped_file::file::FileOwner;
-use crate::mapped_file::file::FilePreallocateOutcome;
+use crate::mapped_file::file::FilePreallocationResult;
 use crate::mapped_file::file::MappedFileStorage;
 use crate::mapped_file::generation::GenerationRegion;
 use crate::mapped_file::generation::MappedFileMapping;
@@ -74,7 +74,7 @@ use crate::mapped_file::kernel::ReferenceResourceBase;
 use crate::mapped_file::kernel::ReferenceResourceCounter;
 pub use crate::mapped_file::kernel::OS_PAGE_SIZE;
 use crate::mapped_file::lifecycle::BorrowedMappedFileLease;
-use crate::mapped_file::lifecycle::LifecycleAcquireOutcome;
+use crate::mapped_file::lifecycle::MappedFileAdmissionResult;
 use crate::mapped_file::lifecycle::MappedFileLease;
 use crate::mapped_file::lifecycle::MappedFileLeaseProof;
 use crate::mapped_file::lifecycle::PhysicalDetachClaimResult;
@@ -166,15 +166,15 @@ fn errno_from_io_error(error: &io::Error) -> i32 {
 }
 
 #[cfg(test)]
-fn file_preallocate_degradation_event(outcome: FilePreallocateOutcome) -> Option<LinuxStorageDegradationEvent> {
+fn file_preallocate_degradation_event(outcome: FilePreallocationResult) -> Option<LinuxStorageDegradationEvent> {
     match outcome {
-        FilePreallocateOutcome::Allocated => None,
-        FilePreallocateOutcome::Unsupported { errno } => Some(LinuxStorageDegradationEvent::new(
+        FilePreallocationResult::Allocated => None,
+        FilePreallocationResult::Unsupported { errno } => Some(LinuxStorageDegradationEvent::new(
             LINUX_STORAGE_OP_FALLOCATE,
             LINUX_STORAGE_REASON_UNSUPPORTED,
             errno,
         )),
-        FilePreallocateOutcome::Failed { errno } => Some(LinuxStorageDegradationEvent::new(
+        FilePreallocationResult::Failed { errno } => Some(LinuxStorageDegradationEvent::new(
             LINUX_STORAGE_OP_FALLOCATE,
             LINUX_STORAGE_REASON_FAILED,
             errno,
@@ -433,16 +433,16 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         let _seal = self.seal_lock.lock();
         let lifecycle = self.reference_resource.lifecycle();
         let started = match lifecycle.seal_readable_and_wait_for_writers() {
-            LifecycleAcquireOutcome::Acquired(started) => started,
-            LifecycleAcquireOutcome::Rejected(_) => return Ok(false),
+            MappedFileAdmissionResult::Acquired(started) => started,
+            MappedFileAdmissionResult::Rejected(_) => return Ok(false),
         };
         if self.physical_owners.mapping.load_read_only().is_some() {
             return Ok(false);
         }
 
         let admission = match self.acquire_borrowed(MappedFileOperation::Maintenance) {
-            LifecycleAcquireOutcome::Acquired(admission) => admission,
-            LifecycleAcquireOutcome::Rejected(_) => return Ok(false),
+            MappedFileAdmissionResult::Acquired(admission) => admission,
+            MappedFileAdmissionResult::Rejected(_) => return Ok(false),
         };
         let mut writer = self.write_state.lock();
         self.commit_transient_buffer(&mut writer, &admission)?;
@@ -521,8 +521,8 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         }
 
         let admission = match self.acquire_owned(MappedFileOperation::Read) {
-            LifecycleAcquireOutcome::Acquired(admission) => admission,
-            LifecycleAcquireOutcome::Rejected(_) => return Ok(None),
+            MappedFileAdmissionResult::Acquired(admission) => admission,
+            MappedFileAdmissionResult::Rejected(_) => return Ok(None),
         };
         let Some(generation) = self.physical_owners.mapping.load_read_only() else {
             return Ok(None);
@@ -604,8 +604,8 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         let file_offset = u64::try_from(offset)
             .map_err(|_| MappedFileFailure::out_of_bounds(offset, len, self.raw_core.file_size()))?;
         let admission = match self.acquire_owned(MappedFileOperation::Read) {
-            LifecycleAcquireOutcome::Acquired(admission) => admission,
-            LifecycleAcquireOutcome::Rejected(_) => return Ok(None),
+            MappedFileAdmissionResult::Acquired(admission) => admission,
+            MappedFileAdmissionResult::Rejected(_) => return Ok(None),
         };
         let is_in_cache = self.record_cache_residency_admitted(&admission, offset as i64, len);
         let owner = self.file_owner_admitted(&admission)?;
@@ -626,7 +626,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
     pub(crate) fn try_acquire_owned_lease(
         &self,
         operation: MappedFileOperation,
-    ) -> LifecycleAcquireOutcome<MappedFileLease> {
+    ) -> MappedFileAdmissionResult<MappedFileLease> {
         self.acquire_owned(operation)
     }
 
@@ -671,8 +671,8 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         }
 
         let admission = match self.acquire_borrowed(MappedFileOperation::Maintenance) {
-            LifecycleAcquireOutcome::Acquired(admission) => admission,
-            LifecycleAcquireOutcome::Rejected(_) => return Ok(false),
+            MappedFileAdmissionResult::Acquired(admission) => admission,
+            MappedFileAdmissionResult::Rejected(_) => return Ok(false),
         };
         let _writer = self.write_state.lock();
         let mut swap_state = self.swap_state.lock();
@@ -817,12 +817,12 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
             MappedFileStorage::open_with_metrics(path_buf, file_size, Arc::clone(&metrics))?;
         if let Some(preallocate_outcome) = preallocate_outcome {
             match preallocate_outcome {
-                FilePreallocateOutcome::Allocated => {}
-                FilePreallocateOutcome::Unsupported { errno } => debug!(
+                FilePreallocationResult::Allocated => {}
+                FilePreallocationResult::Unsupported { errno } => debug!(
                     "File preallocation is unsupported for mapped file {} and will be skipped, errno={}",
                     file_name, errno
                 ),
-                FilePreallocateOutcome::Failed { errno } => warn!(
+                FilePreallocationResult::Failed { errno } => warn!(
                     "File preallocation failed for mapped file {} and will continue with set_len, errno={}",
                     file_name, errno
                 ),
@@ -925,12 +925,15 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
     }
 
     #[inline]
-    fn acquire_owned(&self, operation: MappedFileOperation) -> LifecycleAcquireOutcome<MappedFileLease> {
+    fn acquire_owned(&self, operation: MappedFileOperation) -> MappedFileAdmissionResult<MappedFileLease> {
         self.reference_resource.try_acquire(operation)
     }
 
     #[inline]
-    fn acquire_borrowed(&self, operation: MappedFileOperation) -> LifecycleAcquireOutcome<BorrowedMappedFileLease<'_>> {
+    fn acquire_borrowed(
+        &self,
+        operation: MappedFileOperation,
+    ) -> MappedFileAdmissionResult<BorrowedMappedFileLease<'_>> {
         self.reference_resource.lifecycle().try_acquire_borrowed(operation)
     }
 
@@ -1085,8 +1088,8 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
 
     fn try_write_at(&self, start: usize, data: &[u8]) -> Result<bool, MappedFileFailure> {
         let admission = match self.acquire_borrowed(MappedFileOperation::Write) {
-            LifecycleAcquireOutcome::Acquired(admission) => admission,
-            LifecycleAcquireOutcome::Rejected(_) => return Ok(false),
+            MappedFileAdmissionResult::Acquired(admission) => admission,
+            MappedFileAdmissionResult::Rejected(_) => return Ok(false),
         };
         let mut state = self.write_state.lock();
         if self.transient_store_pool.is_some() {
@@ -1148,8 +1151,8 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         readable_position: Option<i32>,
     ) -> Result<Option<Bytes>, MappedFileFailure> {
         let admission = match self.acquire_borrowed(MappedFileOperation::Read) {
-            LifecycleAcquireOutcome::Acquired(admission) => admission,
-            LifecycleAcquireOutcome::Rejected(_) => return Ok(None),
+            MappedFileAdmissionResult::Acquired(admission) => admission,
+            MappedFileAdmissionResult::Rejected(_) => return Ok(None),
         };
         self.copy_range_admitted(&admission, pos, size, readable_position)
     }
@@ -1432,8 +1435,8 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         F: FnOnce(&Self, &BorrowedMappedFileLease<'_>, i32, i32) -> Result<bool, MappedFileFailure>,
     {
         let admission = match self.acquire_borrowed(MappedFileOperation::Maintenance) {
-            LifecycleAcquireOutcome::Acquired(admission) => admission,
-            LifecycleAcquireOutcome::Rejected(_) => return Ok(self.get_flushed_position()),
+            MappedFileAdmissionResult::Acquired(admission) => admission,
+            MappedFileAdmissionResult::Rejected(_) => return Ok(self.get_flushed_position()),
         };
         let _writer = self.write_state.lock();
         if !self.is_able_to_flush(flush_least_pages) {
@@ -1476,7 +1479,8 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
     }
 
     fn rename_to(&mut self, file_name: &str) -> bool {
-        let LifecycleAcquireOutcome::Acquired(_admission) = self.acquire_owned(MappedFileOperation::Maintenance) else {
+        let MappedFileAdmissionResult::Acquired(_admission) = self.acquire_owned(MappedFileOperation::Maintenance)
+        else {
             return false;
         };
         let new_file = Path::new(file_name);
@@ -1547,8 +1551,8 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
             .lifecycle()
             .try_acquire_borrowed(MappedFileOperation::Write)
         {
-            LifecycleAcquireOutcome::Acquired(admission) => admission,
-            LifecycleAcquireOutcome::Rejected(_) => return Ok(None),
+            MappedFileAdmissionResult::Acquired(admission) => admission,
+            MappedFileAdmissionResult::Rejected(_) => return Ok(None),
         };
         let mut state = self.write_state.lock();
         let wrote_position = self.raw_core.wrote_position();
@@ -1652,8 +1656,8 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
     fn try_commit(&self, commit_least_pages: i32) -> Result<i32, StoreError> {
         let result = (|| -> Result<i32, MappedFileFailure> {
             let admission = match self.acquire_borrowed(MappedFileOperation::Maintenance) {
-                LifecycleAcquireOutcome::Acquired(admission) => admission,
-                LifecycleAcquireOutcome::Rejected(_) => return Ok(self.raw_core.committed_position()),
+                MappedFileAdmissionResult::Acquired(admission) => admission,
+                MappedFileAdmissionResult::Rejected(_) => return Ok(self.raw_core.committed_position()),
             };
             let mut state = self.write_state.lock();
             if self.transient_store_pool.is_none() {
@@ -1676,8 +1680,8 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
     fn try_select_mapped_buffer(&self, pos: i32, size: i32) -> Result<Option<SelectMappedBufferResult<M>>, StoreError> {
         let result = (|| -> Result<Option<SelectMappedBufferResult<M>>, MappedFileFailure> {
             let admission = match self.acquire_owned(MappedFileOperation::Read) {
-                LifecycleAcquireOutcome::Acquired(admission) => admission,
-                LifecycleAcquireOutcome::Rejected(_) => return Ok(None),
+                MappedFileAdmissionResult::Acquired(admission) => admission,
+                MappedFileAdmissionResult::Rejected(_) => return Ok(None),
             };
             let read_position = self.get_read_position();
             if self.raw_core.is_readable_range(pos, size, read_position) {
@@ -1791,8 +1795,8 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
     fn try_get_data(&self, pos: usize, size: usize) -> Result<Option<bytes::Bytes>, StoreError> {
         let result = (|| -> Result<Option<bytes::Bytes>, MappedFileFailure> {
             let admission = match self.acquire_borrowed(MappedFileOperation::Read) {
-                LifecycleAcquireOutcome::Acquired(admission) => admission,
-                LifecycleAcquireOutcome::Rejected(_) => return Ok(None),
+                MappedFileAdmissionResult::Acquired(admission) => admission,
+                MappedFileAdmissionResult::Rejected(_) => return Ok(None),
             };
             let read_position = self.get_read_position();
             if self.raw_core.is_readable_byte_range(pos, size, read_position) {
@@ -1895,8 +1899,8 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
     fn try_mlock(&self) -> Result<bool, StoreError> {
         let result = (|| -> Result<bool, MappedFileFailure> {
             let admission = match self.acquire_borrowed(MappedFileOperation::Maintenance) {
-                LifecycleAcquireOutcome::Acquired(admission) => admission,
-                LifecycleAcquireOutcome::Rejected(_) => return Ok(false),
+                MappedFileAdmissionResult::Acquired(admission) => admission,
+                MappedFileAdmissionResult::Rejected(_) => return Ok(false),
             };
             let _writer = self.write_state.lock();
             let Some(generation) = self.try_get_read_generation(&admission, MappedFileOperation::Maintenance)? else {
@@ -1919,8 +1923,8 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
     fn try_munlock(&self) -> Result<bool, StoreError> {
         let result = (|| -> Result<bool, MappedFileFailure> {
             let admission = match self.acquire_borrowed(MappedFileOperation::Maintenance) {
-                LifecycleAcquireOutcome::Acquired(admission) => admission,
-                LifecycleAcquireOutcome::Rejected(_) => return Ok(false),
+                MappedFileAdmissionResult::Acquired(admission) => admission,
+                MappedFileAdmissionResult::Rejected(_) => return Ok(false),
             };
             let _writer = self.write_state.lock();
             let Some(generation) = self.try_get_read_generation(&admission, MappedFileOperation::Maintenance)? else {
@@ -1945,8 +1949,8 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
             // Page touching performs volatile writes, so it belongs to writable admission even though
             // its business purpose is maintenance.
             let admission = match self.acquire_borrowed(MappedFileOperation::Write) {
-                LifecycleAcquireOutcome::Acquired(admission) => admission,
-                LifecycleAcquireOutcome::Rejected(_) => return Ok(false),
+                MappedFileAdmissionResult::Acquired(admission) => admission,
+                MappedFileAdmissionResult::Rejected(_) => return Ok(false),
             };
             self.warm_mapped_file_with_ops(
                 &admission,
@@ -2013,7 +2017,7 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
     #[inline]
     #[cfg(target_os = "linux")]
     fn is_loaded(&self, position: i64, size: usize) -> bool {
-        let LifecycleAcquireOutcome::Acquired(admission) = self.acquire_borrowed(MappedFileOperation::Read) else {
+        let MappedFileAdmissionResult::Acquired(admission) = self.acquire_borrowed(MappedFileOperation::Read) else {
             return false;
         };
         self.is_loaded_admitted(&admission, position, size)
@@ -2049,7 +2053,7 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
             offset += info.RegionSize;
         }*/
 
-        let LifecycleAcquireOutcome::Acquired(admission) = self.acquire_borrowed(MappedFileOperation::Read) else {
+        let MappedFileAdmissionResult::Acquired(admission) = self.acquire_borrowed(MappedFileOperation::Read) else {
             return false;
         };
         self.is_loaded_admitted(&admission, position, size)
@@ -2085,7 +2089,7 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
             offset += info.RegionSize;
         }*/
 
-        let LifecycleAcquireOutcome::Acquired(admission) = self.acquire_borrowed(MappedFileOperation::Read) else {
+        let MappedFileAdmissionResult::Acquired(admission) = self.acquire_borrowed(MappedFileOperation::Read) else {
             return false;
         };
         self.is_loaded_admitted(&admission, position, size)
@@ -2101,8 +2105,8 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
     ) -> Result<Option<SelectMappedBufferResult<M>>, StoreError> {
         let result = (|| -> Result<Option<SelectMappedBufferResult<M>>, MappedFileFailure> {
             let admission = match self.acquire_owned(MappedFileOperation::Read) {
-                LifecycleAcquireOutcome::Acquired(admission) => admission,
-                LifecycleAcquireOutcome::Rejected(_) => return Ok(None),
+                MappedFileAdmissionResult::Acquired(admission) => admission,
+                MappedFileAdmissionResult::Rejected(_) => return Ok(None),
             };
             let read_position = self.get_read_position();
             let Some(size) = self.raw_core.readable_tail_size(pos, read_position) else {
@@ -2182,8 +2186,8 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
     fn try_get_slice(&self, pos: usize, size: usize) -> Result<Option<Bytes>, StoreError> {
         let result = (|| -> Result<Option<Bytes>, MappedFileFailure> {
             let admission = match self.acquire_borrowed(MappedFileOperation::Read) {
-                LifecycleAcquireOutcome::Acquired(admission) => admission,
-                LifecycleAcquireOutcome::Rejected(_) => return Ok(None),
+                MappedFileAdmissionResult::Acquired(admission) => admission,
+                MappedFileAdmissionResult::Rejected(_) => return Ok(None),
             };
             let Some(end) = pos.checked_add(size) else {
                 return Ok(None);
@@ -2258,8 +2262,8 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
 
     fn with_mapped_slice_checked<R>(&self, callback: impl FnOnce(&[u8]) -> R) -> Result<Option<R>, MappedFileFailure> {
         let admission = match self.acquire_borrowed(MappedFileOperation::Read) {
-            LifecycleAcquireOutcome::Acquired(admission) => admission,
-            LifecycleAcquireOutcome::Rejected(_) => return Ok(None),
+            MappedFileAdmissionResult::Acquired(admission) => admission,
+            MappedFileAdmissionResult::Rejected(_) => return Ok(None),
         };
         let _writer = self.write_state.lock();
         let Some(generation) = self.try_get_read_generation(&admission, MappedFileOperation::Read)? else {
@@ -2294,8 +2298,8 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
     /// Returns the platform error reported by the advice operation.
     pub fn apply_memory_advice(&self, advice: MemoryAdvice) -> io::Result<bool> {
         let admission = match self.acquire_borrowed(MappedFileOperation::Maintenance) {
-            LifecycleAcquireOutcome::Acquired(admission) => admission,
-            LifecycleAcquireOutcome::Rejected(_) => return Ok(false),
+            MappedFileAdmissionResult::Acquired(admission) => admission,
+            MappedFileAdmissionResult::Rejected(_) => return Ok(false),
         };
         let _writer = self.write_state.lock();
         let generation = match self.try_get_read_generation(&admission, MappedFileOperation::Maintenance) {
@@ -2486,7 +2490,8 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         requested_len: usize,
     ) -> Option<(MappedMemoryLockRegion<M>, MappedFileLease)> {
         let (offset, len) = self.raw_core.lock_region_range(offset, requested_len)?;
-        let LifecycleAcquireOutcome::Acquired(admission) = self.acquire_owned(MappedFileOperation::Maintenance) else {
+        let MappedFileAdmissionResult::Acquired(admission) = self.acquire_owned(MappedFileOperation::Maintenance)
+        else {
             return None;
         };
         let region = match self
@@ -2703,8 +2708,8 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         use std::time::Instant;
 
         let admission = match self.acquire_borrowed(MappedFileOperation::Maintenance) {
-            LifecycleAcquireOutcome::Acquired(admission) => admission,
-            LifecycleAcquireOutcome::Rejected(_) => return Ok(0),
+            MappedFileAdmissionResult::Acquired(admission) => admission,
+            MappedFileAdmissionResult::Rejected(_) => return Ok(0),
         };
         let Some((start, len)) = self.raw_core.prepare_flush_range(start, end) else {
             return Ok(0);
@@ -3445,9 +3450,9 @@ mod tests {
 
     #[test]
     fn preallocate_degradation_events_include_operation_reason_and_errno() {
-        let unsupported = file_preallocate_degradation_event(FilePreallocateOutcome::Unsupported { errno: 95 })
+        let unsupported = file_preallocate_degradation_event(FilePreallocationResult::Unsupported { errno: 95 })
             .expect("unsupported preallocation should be observable");
-        let failed = file_preallocate_degradation_event(FilePreallocateOutcome::Failed { errno: 28 })
+        let failed = file_preallocate_degradation_event(FilePreallocationResult::Failed { errno: 28 })
             .expect("failed preallocation should be observable");
 
         assert_eq!(
@@ -3458,7 +3463,7 @@ mod tests {
             failed,
             LinuxStorageDegradationEvent::new(LINUX_STORAGE_OP_FALLOCATE, LINUX_STORAGE_REASON_FAILED, 28)
         );
-        assert!(file_preallocate_degradation_event(FilePreallocateOutcome::Allocated).is_none());
+        assert!(file_preallocate_degradation_event(FilePreallocationResult::Allocated).is_none());
     }
 
     #[test]

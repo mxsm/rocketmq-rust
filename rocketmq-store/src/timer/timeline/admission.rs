@@ -61,45 +61,45 @@ impl TimelineAdmissionController {
         &self,
         message: &MessageExtBrokerInner,
         now_ms: i64,
-    ) -> Result<TimelineAdmissionOutcome, StoreError> {
+    ) -> Result<TimelineAdmissionDecision, StoreError> {
         if message.property(MessageConst::TIMER_ENGINE_TYPE).as_deref()
             != Some(TimerEngineId::ExtendedTimeline.as_str())
         {
-            return Ok(TimelineAdmissionOutcome::Accepted);
+            return Ok(TimelineAdmissionDecision::Accepted);
         }
         if !self.role.accepts_admission() {
-            return Ok(TimelineAdmissionOutcome::RoleInactive);
+            return Ok(TimelineAdmissionDecision::RoleInactive);
         }
         let Some(due_time_ms) = message
             .property(MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS)
             .or_else(|| message.property(MessageConst::PROPERTY_TIMER_DELIVER_MS))
             .and_then(|value| value.parse::<i64>().ok())
         else {
-            return Ok(TimelineAdmissionOutcome::MalformedTimer);
+            return Ok(TimelineAdmissionDecision::MalformedTimer);
         };
         // The storage format supports the full configured horizon, while the admission
         // horizon is the independently controlled canary boundary for new work.
         let horizon_days = self.admission_horizon_days.min(self.config.horizon_days);
         let Some(horizon_ms) = i64::from(horizon_days).checked_mul(86_400_000) else {
-            return Ok(TimelineAdmissionOutcome::HorizonOverflow);
+            return Ok(TimelineAdmissionDecision::HorizonOverflow);
         };
         if due_time_ms <= now_ms || due_time_ms.saturating_sub(now_ms) > horizon_ms {
-            return Ok(TimelineAdmissionOutcome::HorizonExceeded);
+            return Ok(TimelineAdmissionDecision::HorizonExceeded);
         }
         let Some(real_topic) = message
             .property(MessageConst::PROPERTY_REAL_TOPIC)
             .filter(|topic| !topic.is_empty())
         else {
-            return Ok(TimelineAdmissionOutcome::MalformedTimer);
+            return Ok(TimelineAdmissionDecision::MalformedTimer);
         };
         let encoded_bytes = estimated_payload_bytes(message, &real_topic);
         if encoded_bytes > self.config.payload_record_bytes as u64 {
-            return Ok(TimelineAdmissionOutcome::RecordTooLarge);
+            return Ok(TimelineAdmissionDecision::RecordTooLarge);
         }
 
         let metrics = self.materializer.metrics();
         if metrics.materialization_lag > self.config.materialization_lag_reject_messages {
-            return Ok(TimelineAdmissionOutcome::MaterializationLag);
+            return Ok(TimelineAdmissionDecision::MaterializationLag);
         }
         // Unmaterialized source sizes are not yet in PayloadStore. Charging every one at the
         // configured record ceiling is intentionally conservative and prevents admission races.
@@ -115,7 +115,7 @@ impl TimelineAdmissionController {
             .saturating_add(unmaterialized_bytes)
             .saturating_add(encoded_bytes);
         if pending_messages > self.config.max_pending_messages || pending_bytes > self.config.max_pending_bytes {
-            return Ok(TimelineAdmissionOutcome::GlobalCapacity);
+            return Ok(TimelineAdmissionDecision::GlobalCapacity);
         }
 
         let keys = usage_summary_keys(&real_topic, due_time_ms);
@@ -128,7 +128,7 @@ impl TimelineAdmissionController {
             .saturating_add(encoded_bytes)
             > self.config.max_topic_pending_bytes
         {
-            return Ok(TimelineAdmissionOutcome::TopicQuota);
+            return Ok(TimelineAdmissionDecision::TopicQuota);
         }
         if tenant
             .1
@@ -136,7 +136,7 @@ impl TimelineAdmissionController {
             .saturating_add(encoded_bytes)
             > self.config.max_tenant_pending_bytes
         {
-            return Ok(TimelineAdmissionOutcome::TenantQuota);
+            return Ok(TimelineAdmissionDecision::TenantQuota);
         }
         if bucket.0.saturating_add(metrics.materialization_lag).saturating_add(1) > self.config.max_bucket_messages
             || bucket
@@ -145,7 +145,7 @@ impl TimelineAdmissionController {
                 .saturating_add(encoded_bytes)
                 > self.config.max_bucket_bytes
         {
-            return Ok(TimelineAdmissionOutcome::HotBucket);
+            return Ok(TimelineAdmissionDecision::HotBucket);
         }
 
         let free = fs2::available_space(&self.store_root).map_err(admission_io_error)?;
@@ -160,9 +160,9 @@ impl TimelineAdmissionController {
                 .max(minimum_ratio_bytes)
                 .saturating_add(encoded_bytes)
         {
-            return Ok(TimelineAdmissionOutcome::DiskHeadroom);
+            return Ok(TimelineAdmissionDecision::DiskHeadroom);
         }
-        Ok(TimelineAdmissionOutcome::Accepted)
+        Ok(TimelineAdmissionDecision::Accepted)
     }
 
     fn summary(&self, key: &[u8]) -> Result<(u64, u64), StoreError> {
@@ -221,7 +221,7 @@ fn prefixed_key(prefix: &[u8], suffix: &[u8]) -> Vec<u8> {
 ///
 /// Operational filesystem and timeline failures are returned separately as [`StoreError`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TimelineAdmissionOutcome {
+pub enum TimelineAdmissionDecision {
     /// The message may proceed to the source CommitLog append.
     Accepted,
     /// The current role cannot accept Timer work.

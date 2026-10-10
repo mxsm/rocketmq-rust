@@ -51,15 +51,15 @@ pub enum LifecycleAcquireRejection {
     LeaseCountOverflow,
 }
 
-/// Caller-owned acquisition outcome carrying the admitted value or rejection data.
+/// Caller-owned admission result carrying the admitted value or rejection data.
 #[derive(Debug)]
 #[must_use]
-pub enum LifecycleAcquireOutcome<T> {
+pub enum MappedFileAdmissionResult<T> {
     Acquired(T),
     Rejected(LifecycleAcquireRejection),
 }
 
-impl<T> LifecycleAcquireOutcome<T> {
+impl<T> MappedFileAdmissionResult<T> {
     pub fn into_result(self) -> Result<T, LifecycleAcquireRejection> {
         match self {
             Self::Acquired(value) => Ok(value),
@@ -217,15 +217,15 @@ impl SegmentLifecycle {
     pub(crate) fn try_acquire(
         self: &Arc<Self>,
         operation: MappedFileOperation,
-    ) -> LifecycleAcquireOutcome<MappedFileLease> {
+    ) -> MappedFileAdmissionResult<MappedFileLease> {
         match self.try_admit(operation) {
-            LeaseAcquireTransitionResult::Acquired => LifecycleAcquireOutcome::Acquired(MappedFileLease {
+            LeaseAcquireTransitionResult::Acquired => MappedFileAdmissionResult::Acquired(MappedFileLease {
                 lifecycle: Arc::clone(self),
                 operation,
                 armed: true,
             }),
             LeaseAcquireTransitionResult::Rejected(reason) => {
-                LifecycleAcquireOutcome::Rejected(map_acquire_rejection(reason, operation))
+                MappedFileAdmissionResult::Rejected(map_acquire_rejection(reason, operation))
             }
         }
     }
@@ -234,15 +234,15 @@ impl SegmentLifecycle {
     pub(crate) fn try_acquire_borrowed(
         &self,
         operation: MappedFileOperation,
-    ) -> LifecycleAcquireOutcome<BorrowedMappedFileLease<'_>> {
+    ) -> MappedFileAdmissionResult<BorrowedMappedFileLease<'_>> {
         match self.try_admit(operation) {
-            LeaseAcquireTransitionResult::Acquired => LifecycleAcquireOutcome::Acquired(BorrowedMappedFileLease {
+            LeaseAcquireTransitionResult::Acquired => MappedFileAdmissionResult::Acquired(BorrowedMappedFileLease {
                 lifecycle: self,
                 operation,
                 armed: true,
             }),
             LeaseAcquireTransitionResult::Rejected(reason) => {
-                LifecycleAcquireOutcome::Rejected(map_acquire_rejection(reason, operation))
+                MappedFileAdmissionResult::Rejected(map_acquire_rejection(reason, operation))
             }
         }
     }
@@ -292,7 +292,7 @@ impl SegmentLifecycle {
     ///
     /// The seal CAS changes the state while preserving both packed counters. A writer CAS is
     /// therefore ordered wholly before the seal and counted, or wholly after it and rejected.
-    pub(crate) fn seal_readable_and_wait_for_writers(&self) -> LifecycleAcquireOutcome<bool> {
+    pub(crate) fn seal_readable_and_wait_for_writers(&self) -> MappedFileAdmissionResult<bool> {
         // Publish waiter presence before the seal CAS. A final writer that observes the sealed
         // packed word acquires this publication through that CAS, so it cannot miss the waiter.
         self.seal_waiters.fetch_add(1, Ordering::Release);
@@ -303,7 +303,7 @@ impl SegmentLifecycle {
                 MappedFileAdmissionState::SealedReadable => break false,
                 MappedFileAdmissionState::Closing => {
                     self.seal_waiters.fetch_sub(1, Ordering::Release);
-                    return LifecycleAcquireOutcome::Rejected(LifecycleAcquireRejection::Unavailable {
+                    return MappedFileAdmissionResult::Rejected(LifecycleAcquireRejection::Unavailable {
                         state: MappedFileAdmissionState::Closing,
                         operation: MappedFileOperation::Maintenance,
                     });
@@ -312,19 +312,19 @@ impl SegmentLifecycle {
         };
         if self.transitions.active_writers() == 0 {
             self.seal_waiters.fetch_sub(1, Ordering::Release);
-            return LifecycleAcquireOutcome::Acquired(started);
+            return MappedFileAdmissionResult::Acquired(started);
         }
 
         let mut control = self.seal_wait_control.lock();
         if self.transitions.active_writers() == 0 {
             self.seal_waiters.fetch_sub(1, Ordering::Release);
-            return LifecycleAcquireOutcome::Acquired(started);
+            return MappedFileAdmissionResult::Acquired(started);
         }
         while self.transitions.active_writers() != 0 {
             self.writers_drained.wait(&mut control);
         }
         self.seal_waiters.fetch_sub(1, Ordering::Release);
-        LifecycleAcquireOutcome::Acquired(started)
+        MappedFileAdmissionResult::Acquired(started)
     }
 
     /// Installs the acyclic physical-owner detach callback before the mapped file is published.
@@ -386,16 +386,16 @@ impl SegmentLifecycle {
         lease: &L,
         operation: MappedFileOperation,
         publish: impl FnOnce() -> R,
-    ) -> LifecycleAcquireOutcome<R>
+    ) -> MappedFileAdmissionResult<R>
     where
         L: MappedFileLeaseProof + ?Sized,
     {
         let _control = self.close_control.lock();
         let state = self.transitions.state();
         if !std::ptr::eq(lease.lifecycle(), self) || lease.operation() != operation || !state.allows(operation) {
-            return LifecycleAcquireOutcome::Rejected(LifecycleAcquireRejection::Unavailable { state, operation });
+            return MappedFileAdmissionResult::Rejected(LifecycleAcquireRejection::Unavailable { state, operation });
         }
-        LifecycleAcquireOutcome::Acquired(publish())
+        MappedFileAdmissionResult::Acquired(publish())
     }
 
     /// Claims the unique physical-owner detach transition after Closing has drained.
@@ -656,7 +656,7 @@ mod tests {
         assert!(!closing.logical_cleanup_marked);
         assert!(matches!(
             lifecycle.try_acquire_borrowed(MappedFileOperation::Read),
-            LifecycleAcquireOutcome::Rejected(LifecycleAcquireRejection::Unavailable {
+            MappedFileAdmissionResult::Rejected(LifecycleAcquireRejection::Unavailable {
                 state: MappedFileAdmissionState::Closing,
                 operation: MappedFileOperation::Read,
             })
@@ -703,7 +703,7 @@ mod tests {
         }
         assert!(matches!(
             lifecycle.try_acquire(MappedFileOperation::Write),
-            LifecycleAcquireOutcome::Rejected(LifecycleAcquireRejection::Unavailable {
+            MappedFileAdmissionResult::Rejected(LifecycleAcquireRejection::Unavailable {
                 state: MappedFileAdmissionState::SealedReadable,
                 operation: MappedFileOperation::Write,
             })
@@ -712,7 +712,7 @@ mod tests {
 
         assert!(matches!(
             sealer.join().expect("sealer does not panic"),
-            LifecycleAcquireOutcome::Acquired(true)
+            MappedFileAdmissionResult::Acquired(true)
         ));
         assert_eq!(lifecycle.snapshot().active_leases, 0);
     }
@@ -724,7 +724,7 @@ mod tests {
             if seal_before_wait {
                 assert!(matches!(
                     lifecycle.seal_readable_and_wait_for_writers(),
-                    LifecycleAcquireOutcome::Acquired(true)
+                    MappedFileAdmissionResult::Acquired(true)
                 ));
             }
             let lease = lifecycle
@@ -889,7 +889,7 @@ mod tests {
         lifecycle.begin_close(u64::MAX);
         assert!(matches!(
             lifecycle.try_publish_before_close(&losing_candidate, MappedFileOperation::Read, || 9),
-            LifecycleAcquireOutcome::Rejected(LifecycleAcquireRejection::Unavailable {
+            MappedFileAdmissionResult::Rejected(LifecycleAcquireRejection::Unavailable {
                 state: MappedFileAdmissionState::Closing,
                 operation: MappedFileOperation::Read,
             })
