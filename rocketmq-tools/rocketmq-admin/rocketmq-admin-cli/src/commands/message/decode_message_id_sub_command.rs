@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_admin_core::client_adapter::services::message::DecodeMessageIdOutcome;
 use rocketmq_admin_core::client_adapter::services::message::DecodeMessageIdRequest;
 use rocketmq_admin_core::client_adapter::services::message::DecodeMessageIdResult;
+use rocketmq_admin_core::client_adapter::services::message::MessageIdDecodeStatus;
 use rocketmq_admin_core::client_adapter::services::message::MessageService;
 use rocketmq_error::Result as CanonicalResult;
 
@@ -41,7 +41,7 @@ impl DecodeMessageIdSubCommand {
     fn print_result(result: &DecodeMessageIdResult) {
         for entry in &result.entries {
             match &entry.outcome {
-                DecodeMessageIdOutcome::Decoded {
+                MessageIdDecodeStatus::Decoded {
                     broker_ip,
                     broker_port,
                     commit_log_offset,
@@ -56,7 +56,7 @@ impl DecodeMessageIdSubCommand {
                     println!("  Offset Hex: {}", offset_hex);
                     println!();
                 }
-                DecodeMessageIdOutcome::Invalid { error } => {
+                MessageIdDecodeStatus::Invalid { error } => {
                     eprintln!("Invalid message ID: {}. {}", entry.message_id, error);
                 }
             }

@@ -24,8 +24,8 @@ use rocketmq_runtime::common::time_utils::YYYY_MM_DD_HH_MM_SS_SSS;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
+use rocketmq_admin_core::client_adapter::services::message::MessageIdLookupStatus;
 use rocketmq_admin_core::client_adapter::services::message::MessageService;
-use rocketmq_admin_core::client_adapter::services::message::QueryMessageByIdOutcome;
 use rocketmq_admin_core::client_adapter::services::message::QueryMessageByIdRequest;
 
 const DEFAULT_TIMEOUT_MS: u64 = 3000;
@@ -375,7 +375,7 @@ impl CommandExecute for QueryMsgByIdSubCommand {
             }
 
             match &entry.outcome {
-                QueryMessageByIdOutcome::Found {
+                MessageIdLookupStatus::Found {
                     message,
                     broker_addr,
                     query_time_ms,
@@ -388,11 +388,11 @@ impl CommandExecute for QueryMsgByIdSubCommand {
                     };
                     Self::print_message_info(message.as_ref(), &config);
                 }
-                QueryMessageByIdOutcome::NotFound { reason, query_time_ms } => {
+                MessageIdLookupStatus::NotFound { reason, query_time_ms } => {
                     Self::print_message_not_found(entry.message_id.as_str(), *query_time_ms, reason)
                 }
-                QueryMessageByIdOutcome::Failed { .. } => {}
-                QueryMessageByIdOutcome::TimedOut => {
+                MessageIdLookupStatus::Failed { .. } => {}
+                MessageIdLookupStatus::TimedOut => {
                     eprintln!("Query timed out for message ID: {}", entry.message_id);
                 }
             }
