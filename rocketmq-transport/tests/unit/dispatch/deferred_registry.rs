@@ -81,18 +81,18 @@ trait DeferredRegistryTestExt {
     fn expect(self, message: &str) -> DeferredRegistration;
 }
 
-impl<R, E, F> DeferredRegistryTestExt for DeferredRegistryOutcome<R, E, F> {
+impl<R, E, F> DeferredRegistryTestExt for DeferredRegistrationResult<R, E, F> {
     fn expect(self, message: &str) -> DeferredRegistration {
         match self {
-            DeferredRegistryOutcome::Registered(registration) => registration,
-            DeferredRegistryOutcome::DuplicateRequest(_)
-            | DeferredRegistryOutcome::IdentityExhausted(_)
-            | DeferredRegistryOutcome::ParentCancelled
-            | DeferredRegistryOutcome::SessionClosed
-            | DeferredRegistryOutcome::DeadlineExpired
-            | DeferredRegistryOutcome::BuilderRejected { .. }
-            | DeferredRegistryOutcome::ContractViolation { .. }
-            | DeferredRegistryOutcome::OperationalFailure { .. } => panic!("{message}"),
+            DeferredRegistrationResult::Registered(registration) => registration,
+            DeferredRegistrationResult::DuplicateRequest(_)
+            | DeferredRegistrationResult::IdentityExhausted(_)
+            | DeferredRegistrationResult::ParentCancelled
+            | DeferredRegistrationResult::SessionClosed
+            | DeferredRegistrationResult::DeadlineExpired
+            | DeferredRegistrationResult::BuilderRejected { .. }
+            | DeferredRegistrationResult::ContractViolation { .. }
+            | DeferredRegistrationResult::OperationalFailure { .. } => panic!("{message}"),
         }
     }
 }
@@ -464,7 +464,7 @@ fn underreported_permit_is_rejected_before_id_index_and_builder_with_exact_parts
         Ok::<_, std::io::Error>(7)
     });
     assert!(!called.load(Ordering::SeqCst));
-    let DeferredRegistryOutcome::ContractViolation { violation, recovery } = outcome else {
+    let DeferredRegistrationResult::ContractViolation { violation, recovery } = outcome else {
         panic!("underreported permit must be a contract violation");
     };
     assert_eq!(violation, TransportContractViolation::DeferredRetainedSizeUnderreported);
@@ -489,7 +489,7 @@ fn underreported_permit_is_rejected_before_id_index_and_builder_with_exact_parts
         8,
         harness.parts_with_retained(direct_original, fixed_only),
     ));
-    let DeferredRegistryOutcome::ContractViolation { violation, recovery } = direct else {
+    let DeferredRegistrationResult::ContractViolation { violation, recovery } = direct else {
         panic!("direct underreported request must be a contract violation");
     };
     assert_eq!(violation, TransportContractViolation::DeferredRetainedSizeUnderreported);
@@ -533,7 +533,7 @@ fn duplicate_request_has_one_deterministic_owner_and_recovers_the_loser() {
         .expect("first request wins");
     let loser = registry.register(DeferredRequest::new(2, harness.parts::<u64>(original)));
     assert_eq!(harness.admission.snapshot().waiting_count(), 2);
-    let DeferredRegistryOutcome::DuplicateRequest(DeferredRegistryRecovery::Request(loser)) = loser else {
+    let DeferredRegistrationResult::DuplicateRequest(DeferredRegistryRecovery::Request(loser)) = loser else {
         panic!("same request must recover the losing request");
     };
     assert_eq!(loser.resume(), &2);
@@ -558,7 +558,7 @@ fn duplicate_register_with_recovers_the_uninvoked_builder_and_exact_parts() {
         observed.store(true, Ordering::SeqCst);
         Ok::<_, BuilderFailure>(2)
     });
-    let DeferredRegistryOutcome::DuplicateRequest(DeferredRegistryRecovery::Builder { builder, parts }) = outcome
+    let DeferredRegistrationResult::DuplicateRequest(DeferredRegistryRecovery::Builder { builder, parts }) = outcome
     else {
         panic!("duplicate builder registration must return the uninvoked builder and parts")
     };
@@ -585,7 +585,7 @@ fn identity_exhaustion_recovers_the_uninvoked_builder_and_exact_parts() {
         observed.store(true, Ordering::SeqCst);
         Ok::<_, BuilderFailure>(3)
     });
-    let DeferredRegistryOutcome::IdentityExhausted(DeferredRegistryRecovery::Builder { builder, parts }) = outcome
+    let DeferredRegistrationResult::IdentityExhausted(DeferredRegistryRecovery::Builder { builder, parts }) = outcome
     else {
         panic!("identity exhaustion must return the uninvoked builder and parts")
     };
@@ -620,7 +620,7 @@ fn typed_builder_failure_preserves_source_and_parts_while_outer_formatting_is_re
     let outcome = registry.register_with(harness.parts_with_cleanup::<u64>(original, &cleanup), |_| {
         Err(BuilderFailure("secret business key"))
     });
-    let DeferredRegistryOutcome::BuilderRejected { error: source, parts } = outcome else {
+    let DeferredRegistrationResult::BuilderRejected { error: source, parts } = outcome else {
         panic!("builder failure must retain its error and exact parts");
     };
     assert_eq!(source.0, "secret business key");
@@ -1125,7 +1125,7 @@ fn lifecycle_stop_after_builder_takes_priority_and_consumes_source_and_parts() {
         parent.cancel();
         Err(BuilderFailure("must be consumed"))
     });
-    assert!(matches!(outcome, DeferredRegistryOutcome::ParentCancelled));
+    assert!(matches!(outcome, DeferredRegistrationResult::ParentCancelled));
     assert_eq!(registry.inner.index_counts(), (0, 0, 0));
     assert_eq!(harness.admission.snapshot().waiting_count(), 0);
 }
@@ -1154,7 +1154,7 @@ fn simultaneous_lifecycle_stops_report_parent_before_session_and_deadline() {
     harness.parent.cancel();
 
     let outcome = registry.register_with(DeferredParts::new(responder, permit), |_| Ok::<_, BuilderFailure>(23));
-    assert!(matches!(outcome, DeferredRegistryOutcome::ParentCancelled));
+    assert!(matches!(outcome, DeferredRegistrationResult::ParentCancelled));
     assert_eq!(registry.inner.index_counts(), (0, 0, 0));
     assert_eq!(harness.admission.snapshot().waiting_count(), 0);
 }
@@ -1347,7 +1347,7 @@ fn registry_shutdown_is_typed_idempotent_and_rejects_new_ownership() {
         builder_called.store(true, Ordering::SeqCst);
         Ok::<_, BuilderFailure>(12)
     });
-    assert!(matches!(outcome, DeferredRegistryOutcome::ParentCancelled));
+    assert!(matches!(outcome, DeferredRegistrationResult::ParentCancelled));
     assert!(!called.load(Ordering::SeqCst));
     assert_registry_released(&registry, &harness.admission);
 }
@@ -1371,7 +1371,7 @@ fn closed_cleanup_owner_rejects_before_id_allocation_and_builder_execution() {
             Ok::<_, BuilderFailure>(13)
         },
     );
-    assert!(matches!(outcome, DeferredRegistryOutcome::SessionClosed));
+    assert!(matches!(outcome, DeferredRegistrationResult::SessionClosed));
     assert!(!called.load(Ordering::SeqCst));
     assert_eq!(sequence.load(Ordering::SeqCst), 900);
     assert_eq!(registry.inner.index_counts(), (0, 0, 0));
@@ -1492,7 +1492,7 @@ async fn cleanup_detaches_building_entry_and_notifies_ticket_before_builder_retu
 
     release.wait();
     let outcome = builder.join().expect("building registration thread");
-    assert!(matches!(outcome, DeferredRegistryOutcome::SessionClosed));
+    assert!(matches!(outcome, DeferredRegistrationResult::SessionClosed));
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     assert_eq!(harness.admission.snapshot().waiting_count(), 0);
 }

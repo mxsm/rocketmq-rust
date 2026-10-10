@@ -50,8 +50,8 @@ use crate::dispatch::DeferredAdmission;
 use crate::dispatch::DeferredAdmissionAcquireOutcome;
 use crate::dispatch::DeferredClaimOutcome;
 use crate::dispatch::DeferredParts;
+use crate::dispatch::DeferredRegistrationResult;
 use crate::dispatch::DeferredRegistry;
-use crate::dispatch::DeferredRegistryOutcome;
 use crate::dispatch::DeferredRequest;
 use crate::dispatch::DeferredResumeOutcome;
 use crate::dispatch::DeferredResumeSubmitOutcome;
@@ -86,22 +86,22 @@ fn acquired(outcome: DeferredAdmissionAcquireOutcome) -> crate::dispatch::Deferr
     }
 }
 
-fn registered<R>(outcome: DeferredRegistryOutcome<R>) -> crate::dispatch::DeferredRegistration
+fn registered<R>(outcome: DeferredRegistrationResult<R>) -> crate::dispatch::DeferredRegistration
 where
     R: Send + 'static,
 {
     match outcome {
-        DeferredRegistryOutcome::Registered(registration) => registration,
-        DeferredRegistryOutcome::DuplicateRequest(_)
-        | DeferredRegistryOutcome::IdentityExhausted(_)
-        | DeferredRegistryOutcome::ParentCancelled
-        | DeferredRegistryOutcome::SessionClosed
-        | DeferredRegistryOutcome::DeadlineExpired
-        | DeferredRegistryOutcome::ContractViolation { .. }
-        | DeferredRegistryOutcome::OperationalFailure { .. } => {
+        DeferredRegistrationResult::Registered(registration) => registration,
+        DeferredRegistrationResult::DuplicateRequest(_)
+        | DeferredRegistrationResult::IdentityExhausted(_)
+        | DeferredRegistrationResult::ParentCancelled
+        | DeferredRegistrationResult::SessionClosed
+        | DeferredRegistrationResult::DeadlineExpired
+        | DeferredRegistrationResult::ContractViolation { .. }
+        | DeferredRegistrationResult::OperationalFailure { .. } => {
             panic!("terminal ownership registration succeeds")
         }
-        DeferredRegistryOutcome::BuilderRejected { error, .. } => match error {},
+        DeferredRegistrationResult::BuilderRejected { error, .. } => match error {},
     }
 }
 

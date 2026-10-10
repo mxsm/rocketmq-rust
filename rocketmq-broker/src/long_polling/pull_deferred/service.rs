@@ -41,8 +41,8 @@ use rocketmq_transport::api::DeferredExpiryOutcome;
 use rocketmq_transport::api::DeferredId;
 use rocketmq_transport::api::DeferredParts;
 use rocketmq_transport::api::DeferredRegistration;
+use rocketmq_transport::api::DeferredRegistrationResult;
 use rocketmq_transport::api::DeferredRegistry;
-use rocketmq_transport::api::DeferredRegistryOutcome;
 use rocketmq_transport::api::DeferredRegistryRecovery;
 use rocketmq_transport::api::DeferredRegistryShutdownOutcome;
 use rocketmq_transport::api::DeferredResponderOutcome;
@@ -618,33 +618,33 @@ impl PullDeferredService {
             let lease = reservation.publish(id, Arc::clone(&criteria));
             Ok::<_, Infallible>(ResumePull::new(request, criteria, deadline, lease))
         }) {
-            DeferredRegistryOutcome::Registered(registration) => {
+            DeferredRegistrationResult::Registered(registration) => {
                 Ok(PullDeferredRegistrationStatus::Registered(Box::new(registration)))
             }
-            DeferredRegistryOutcome::DuplicateRequest(recovery) => {
+            DeferredRegistrationResult::DuplicateRequest(recovery) => {
                 release_deferred_registry_recovery(recovery);
                 Ok(PullDeferredRegistrationStatus::Rejected(Box::new(
                     PullDeferredRegisterRejection::RegistryRejected,
                 )))
             }
-            DeferredRegistryOutcome::IdentityExhausted(recovery) => {
+            DeferredRegistrationResult::IdentityExhausted(recovery) => {
                 release_deferred_registry_recovery(recovery);
                 Err(PullDeferredRegisterError::RegistryIdentityExhausted)
             }
-            DeferredRegistryOutcome::ParentCancelled
-            | DeferredRegistryOutcome::SessionClosed
-            | DeferredRegistryOutcome::DeadlineExpired => Ok(PullDeferredRegistrationStatus::Rejected(Box::new(
+            DeferredRegistrationResult::ParentCancelled
+            | DeferredRegistrationResult::SessionClosed
+            | DeferredRegistrationResult::DeadlineExpired => Ok(PullDeferredRegistrationStatus::Rejected(Box::new(
                 PullDeferredRegisterRejection::RegistryRejected,
             ))),
-            DeferredRegistryOutcome::BuilderRejected { error, parts } => {
+            DeferredRegistrationResult::BuilderRejected { error, parts } => {
                 drop(parts);
                 match error {}
             }
-            DeferredRegistryOutcome::ContractViolation { violation, recovery } => {
+            DeferredRegistrationResult::ContractViolation { violation, recovery } => {
                 release_deferred_registry_recovery(recovery);
                 Err(PullDeferredRegisterError::RegistryContract(violation))
             }
-            DeferredRegistryOutcome::OperationalFailure { error, recovery } => {
+            DeferredRegistrationResult::OperationalFailure { error, recovery } => {
                 release_deferred_registry_recovery(recovery);
                 Err(PullDeferredRegisterError::RegistryOperational(error))
             }

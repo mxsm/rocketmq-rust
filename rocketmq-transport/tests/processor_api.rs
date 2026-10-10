@@ -37,8 +37,8 @@ use rocketmq_transport::api::DeferredExpiryOutcome;
 use rocketmq_transport::api::DeferredId;
 use rocketmq_transport::api::DeferredParts;
 use rocketmq_transport::api::DeferredRegistration;
+use rocketmq_transport::api::DeferredRegistrationResult;
 use rocketmq_transport::api::DeferredRegistry;
-use rocketmq_transport::api::DeferredRegistryOutcome;
 use rocketmq_transport::api::DeferredRegistryRecovery;
 use rocketmq_transport::api::DeferredRegistryShutdownOutcome;
 use rocketmq_transport::api::DeferredRegistryShutdownStats;
@@ -268,7 +268,7 @@ fn assert_deferred_registry_contract<R, E, F>(
     id: Option<DeferredId>,
     parts: Option<DeferredParts>,
     request: Option<DeferredRequest<R>>,
-    outcome: Option<DeferredRegistryOutcome<R, E, F>>,
+    outcome: Option<DeferredRegistrationResult<R, E, F>>,
 ) where
     R: Send + 'static,
     E: std::error::Error + Send + Sync + 'static,
@@ -293,24 +293,24 @@ fn assert_deferred_registry_contract<R, E, F>(
     }
     if let Some(outcome) = outcome {
         match outcome {
-            DeferredRegistryOutcome::Registered(registration) => {
+            DeferredRegistrationResult::Registered(registration) => {
                 let _: DeferredId = registration.deferred_id();
                 let _: RequestId = registration.request_id();
             }
-            DeferredRegistryOutcome::DuplicateRequest(recovery) => inspect_registry_recovery(recovery),
-            DeferredRegistryOutcome::IdentityExhausted(recovery) => inspect_registry_recovery(recovery),
-            DeferredRegistryOutcome::ParentCancelled
-            | DeferredRegistryOutcome::SessionClosed
-            | DeferredRegistryOutcome::DeadlineExpired => {}
-            DeferredRegistryOutcome::BuilderRejected { error, parts } => {
+            DeferredRegistrationResult::DuplicateRequest(recovery) => inspect_registry_recovery(recovery),
+            DeferredRegistrationResult::IdentityExhausted(recovery) => inspect_registry_recovery(recovery),
+            DeferredRegistrationResult::ParentCancelled
+            | DeferredRegistrationResult::SessionClosed
+            | DeferredRegistrationResult::DeadlineExpired => {}
+            DeferredRegistrationResult::BuilderRejected { error, parts } => {
                 let _: E = error;
                 let _: DeferredResponder = parts.into_responder();
             }
-            DeferredRegistryOutcome::ContractViolation { violation, recovery } => {
+            DeferredRegistrationResult::ContractViolation { violation, recovery } => {
                 let _: TransportContractViolation = violation;
                 inspect_registry_recovery(recovery);
             }
-            DeferredRegistryOutcome::OperationalFailure { error, recovery } => {
+            DeferredRegistrationResult::OperationalFailure { error, recovery } => {
                 let _: TransportError = error;
                 let _: &(dyn std::error::Error + 'static) = &error;
                 assert!(std::error::Error::source(&error).is_some());
@@ -580,7 +580,7 @@ fn api_exposes_the_affine_transactional_deferred_registry_contract() {
     let _: fn(DeferredRegistryShutdownStats) -> usize = DeferredRegistryShutdownStats::in_progress_responses;
     let _: fn(DeferredRegistryShutdownStats) -> usize = DeferredRegistryShutdownStats::invariant_failures;
     assert_error_contract::<TransportError>();
-    let _: DeferredRegistryOutcome<String> = DeferredRegistryOutcome::ParentCancelled;
+    let _: DeferredRegistrationResult<String> = DeferredRegistrationResult::ParentCancelled;
     let _: DeferredClaimOutcome<String> = DeferredClaimOutcome::AlreadyClaimed;
     let _: DeferredExpiryOutcome = DeferredExpiryOutcome::AlreadyAttached;
     let _: DeferredResumeOutcome = DeferredResumeOutcome::SessionClosed;

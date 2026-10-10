@@ -41,7 +41,7 @@ use super::RequestProcessor;
 use super::ResponseAction;
 use super::TransportServer;
 use crate::dispatch::DeferredAdmissionAcquireOutcome;
-use crate::dispatch::DeferredRegistryOutcome;
+use crate::dispatch::DeferredRegistrationResult;
 use crate::dispatch::DeferredResponderOutcome;
 use crate::telemetry::TransportTelemetry;
 
@@ -92,17 +92,17 @@ impl RequestProcessor for ConstructionProbeProcessor {
                     request.original_identity().original_opaque(),
                     DeferredParts::new(responder, permit),
                 )) {
-                    DeferredRegistryOutcome::Registered(registration) => registration,
-                    DeferredRegistryOutcome::DuplicateRequest(_)
-                    | DeferredRegistryOutcome::IdentityExhausted(_)
-                    | DeferredRegistryOutcome::ParentCancelled
-                    | DeferredRegistryOutcome::SessionClosed
-                    | DeferredRegistryOutcome::DeadlineExpired
-                    | DeferredRegistryOutcome::ContractViolation { .. }
-                    | DeferredRegistryOutcome::OperationalFailure { .. } => {
+                    DeferredRegistrationResult::Registered(registration) => registration,
+                    DeferredRegistrationResult::DuplicateRequest(_)
+                    | DeferredRegistrationResult::IdentityExhausted(_)
+                    | DeferredRegistrationResult::ParentCancelled
+                    | DeferredRegistrationResult::SessionClosed
+                    | DeferredRegistrationResult::DeadlineExpired
+                    | DeferredRegistrationResult::ContractViolation { .. }
+                    | DeferredRegistrationResult::OperationalFailure { .. } => {
                         return Err(crate::error_helpers::argument_invalid());
                     }
-                    DeferredRegistryOutcome::BuilderRejected { error, .. } => match error {},
+                    DeferredRegistrationResult::BuilderRejected { error, .. } => match error {},
                 };
                 self.registrations
                     .send(registration.deferred_id())

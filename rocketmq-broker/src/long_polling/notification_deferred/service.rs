@@ -47,8 +47,8 @@ use rocketmq_transport::api::DeferredExpiryOutcome;
 use rocketmq_transport::api::DeferredId;
 use rocketmq_transport::api::DeferredParts;
 use rocketmq_transport::api::DeferredRegistration;
+use rocketmq_transport::api::DeferredRegistrationResult;
 use rocketmq_transport::api::DeferredRegistry;
-use rocketmq_transport::api::DeferredRegistryOutcome;
 use rocketmq_transport::api::DeferredRegistryRecovery;
 use rocketmq_transport::api::DeferredRegistryShutdownOutcome;
 use rocketmq_transport::api::DeferredResponderOutcome;
@@ -393,37 +393,37 @@ impl NotificationDeferredService {
             let index_lease = reservation.publish(id, deadline, Arc::clone(&criteria));
             Ok::<_, Infallible>(ResumeNotification::new(request, criteria, deadline, index_lease))
         }) {
-            DeferredRegistryOutcome::Registered(registration) => Ok(
+            DeferredRegistrationResult::Registered(registration) => Ok(
                 NotificationDeferredRegistrationStatus::Registered(Box::new(registration)),
             ),
-            DeferredRegistryOutcome::DuplicateRequest(recovery) => {
+            DeferredRegistrationResult::DuplicateRequest(recovery) => {
                 release_deferred_registry_recovery(recovery);
                 Ok(NotificationDeferredRegistrationStatus::Rejected(Box::new(
                     NotificationDeferredRegisterRejection::DuplicateRequest,
                 )))
             }
-            DeferredRegistryOutcome::IdentityExhausted(recovery) => {
+            DeferredRegistrationResult::IdentityExhausted(recovery) => {
                 release_deferred_registry_recovery(recovery);
                 Err(NotificationDeferredRegisterFailure::IdentityExhausted)
             }
-            DeferredRegistryOutcome::ParentCancelled => Ok(NotificationDeferredRegistrationStatus::Rejected(Box::new(
-                NotificationDeferredRegisterRejection::ParentCancelled,
-            ))),
-            DeferredRegistryOutcome::SessionClosed => Ok(NotificationDeferredRegistrationStatus::Rejected(Box::new(
-                NotificationDeferredRegisterRejection::SessionClosed,
-            ))),
-            DeferredRegistryOutcome::DeadlineExpired => Ok(NotificationDeferredRegistrationStatus::Rejected(Box::new(
-                NotificationDeferredRegisterRejection::DeadlineExpired,
-            ))),
-            DeferredRegistryOutcome::BuilderRejected { error, parts } => {
+            DeferredRegistrationResult::ParentCancelled => Ok(NotificationDeferredRegistrationStatus::Rejected(
+                Box::new(NotificationDeferredRegisterRejection::ParentCancelled),
+            )),
+            DeferredRegistrationResult::SessionClosed => Ok(NotificationDeferredRegistrationStatus::Rejected(
+                Box::new(NotificationDeferredRegisterRejection::SessionClosed),
+            )),
+            DeferredRegistrationResult::DeadlineExpired => Ok(NotificationDeferredRegistrationStatus::Rejected(
+                Box::new(NotificationDeferredRegisterRejection::DeadlineExpired),
+            )),
+            DeferredRegistrationResult::BuilderRejected { error, parts } => {
                 drop(parts);
                 match error {}
             }
-            DeferredRegistryOutcome::ContractViolation { violation, recovery } => {
+            DeferredRegistrationResult::ContractViolation { violation, recovery } => {
                 release_deferred_registry_recovery(recovery);
                 Err(NotificationDeferredRegisterFailure::RegistryContract(violation))
             }
-            DeferredRegistryOutcome::OperationalFailure { error, recovery } => {
+            DeferredRegistrationResult::OperationalFailure { error, recovery } => {
                 release_deferred_registry_recovery(recovery);
                 Err(NotificationDeferredRegisterFailure::RegistryOperational(error))
             }
