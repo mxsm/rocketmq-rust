@@ -553,7 +553,7 @@ impl ReferenceResourceCounter {
     pub fn try_acquire(
         &self,
         operation: MappedFileOperation,
-    ) -> super::lifecycle::LifecycleAcquireOutcome<MappedFileLease> {
+    ) -> super::lifecycle::MappedFileAdmissionResult<MappedFileLease> {
         self.base.lifecycle.try_acquire(operation)
     }
 
