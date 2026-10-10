@@ -21,8 +21,8 @@ use rocketmq_admin_core::{
     core::{
         AdminResult,
         broker::{
-            BrokerMutationAdmin, PatchBrokerConfigOutcome, PatchBrokerConfigRequest,
-            QueryBrokerConfigGenerationRequest, QueryBrokerConfigGenerationResult,
+            BrokerConfigPatchResult, BrokerMutationAdmin, PatchBrokerConfigRequest, QueryBrokerConfigGenerationRequest,
+            QueryBrokerConfigGenerationResult,
         },
         consumer::{
             ConsumerExactBatchDeleteRequest, ConsumerExactBatchMutationAdmin, ConsumerExactBatchUpsertMutationAdmin,
@@ -151,7 +151,7 @@ pub(crate) trait DashboardMutationSession: Send {
     fn patch_config_if_generation<'a>(
         &'a mut self,
         request: &'a PatchBrokerConfigRequest,
-    ) -> SessionFuture<'a, AdminResult<PatchBrokerConfigOutcome>>;
+    ) -> SessionFuture<'a, AdminResult<BrokerConfigPatchResult>>;
     fn topic_config_cas_state<'a>(
         &'a mut self,
         _request: &'a QueryTopicConfigCasRequest,
@@ -455,7 +455,7 @@ impl DashboardMutationSession for RealMutationSession {
     fn patch_config_if_generation<'a>(
         &'a mut self,
         request: &'a PatchBrokerConfigRequest,
-    ) -> SessionFuture<'a, AdminResult<PatchBrokerConfigOutcome>> {
+    ) -> SessionFuture<'a, AdminResult<BrokerConfigPatchResult>> {
         BrokerMutationAdmin::patch_config_if_generation(&mut self.inner, request)
     }
 

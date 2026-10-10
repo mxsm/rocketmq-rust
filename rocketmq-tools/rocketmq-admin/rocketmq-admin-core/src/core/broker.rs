@@ -895,7 +895,7 @@ pub struct PatchBrokerConfigRequest {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum PatchBrokerConfigOutcome {
+pub enum BrokerConfigPatchResult {
     Applied {
         previous_generation: u64,
         generation: u64,
@@ -916,7 +916,7 @@ pub trait BrokerMutationAdmin: Send {
     fn patch_config_if_generation<'a>(
         &'a mut self,
         request: &'a PatchBrokerConfigRequest,
-    ) -> AdminFuture<'a, PatchBrokerConfigOutcome>;
+    ) -> AdminFuture<'a, BrokerConfigPatchResult>;
 
     fn set_log_filter_ttl<'a>(&'a mut self, _request: &'a SetBrokerLogFilterTtlRequest) -> AdminFuture<'a, ()> {
         Box::pin(async {
