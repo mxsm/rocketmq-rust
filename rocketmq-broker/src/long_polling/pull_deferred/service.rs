@@ -31,7 +31,6 @@ use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessag
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_transport::api::ClaimedDeferred;
 use rocketmq_transport::api::DeferredAdmission;
-use rocketmq_transport::api::DeferredAdmissionAcquireOutcome;
 use rocketmq_transport::api::DeferredAdmissionSnapshot;
 use rocketmq_transport::api::DeferredClaimOutcome;
 use rocketmq_transport::api::DeferredExpiryBatch;
@@ -50,6 +49,7 @@ use rocketmq_transport::api::DeferredResumeOutcome;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
 use rocketmq_transport::api::DeferredResumeSubmitOutcome;
 use rocketmq_transport::api::DeferredRetainedSizeParts;
+use rocketmq_transport::api::DeferredWaitAdmissionResult;
 use rocketmq_transport::api::DeferredWakeReason;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RemotingResponse;
@@ -524,7 +524,7 @@ impl PullDeferredService {
             }
         };
         let permit = match self.admission.try_reserve(retained_size) {
-            DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
+            DeferredWaitAdmissionResult::Acquired(permit) => permit,
             outcome => {
                 drop(reservation);
                 return Ok(PullDeferredPreparationStatus::Rejected(
@@ -1332,7 +1332,7 @@ pub(crate) enum PullDeferredPrepareRejection {
         candidate: PullSuspensionCandidate,
     },
     Admission {
-        outcome: DeferredAdmissionAcquireOutcome,
+        outcome: DeferredWaitAdmissionResult,
         candidate: PullSuspensionCandidate,
     },
 }

@@ -14,10 +14,10 @@
 
 use super::*;
 
-use crate::dispatch::DeferredAdmissionAcquireOutcome;
 use crate::dispatch::DeferredClaimOutcome;
 use crate::dispatch::DeferredExpiryOutcome;
 use crate::dispatch::DeferredRegistryOutcome;
+use crate::dispatch::DeferredWaitAdmissionResult;
 
 fn assert_expiry_registry_released<R>(registry: &DeferredRegistry<R>, harness: &Harness)
 where
@@ -53,15 +53,15 @@ where
         .deferred_seed_for_test(telemetry, harness.session.view().id(), control)
         .into_responder(original);
     let permit = match harness.admission.try_reserve(retained) {
-        DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
-        DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
-        DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_) => {
+        DeferredWaitAdmissionResult::Closed => panic!("deferred admission unexpectedly closed"),
+        DeferredWaitAdmissionResult::Acquired(permit) => permit,
+        DeferredWaitAdmissionResult::WaiterCapacityExhausted(_) => {
             panic!("telemetry wait permit unexpectedly exhausted waiter capacity")
         }
-        DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_) => {
+        DeferredWaitAdmissionResult::RetainedByteCapacityExhausted(_) => {
             panic!("telemetry wait permit unexpectedly exhausted retained-byte capacity")
         }
-        DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
+        DeferredWaitAdmissionResult::ParentCapacityExhausted(_) => {
             panic!("telemetry wait permit unexpectedly exhausted parent capacity")
         }
     };

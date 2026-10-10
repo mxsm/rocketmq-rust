@@ -14,7 +14,6 @@
 
 use super::harness::*;
 use crate::dispatch::DeferredAdmission;
-use crate::dispatch::DeferredAdmissionAcquireOutcome;
 use crate::dispatch::DeferredClaimOutcome;
 use crate::dispatch::DeferredCommitErrorKind;
 use crate::dispatch::DeferredRegistration;
@@ -24,6 +23,7 @@ use crate::dispatch::DeferredResponderOutcome;
 use crate::dispatch::DeferredResponseOutcome;
 use crate::dispatch::DeferredResumeOutcome;
 use crate::dispatch::DeferredResumeRetainedSize;
+use crate::dispatch::DeferredWaitAdmissionResult;
 use crate::dispatch::DeferredWaitLimits;
 use crate::dispatch::DeferredWakeReason;
 use crate::dispatch::OriginalRequestIdentity;
@@ -37,20 +37,17 @@ use crate::runtime::processor::ResponseObservationOutcome;
 use crate::session_view::EmbeddedSessionRecord;
 use crate::telemetry::TransportTelemetry;
 
-fn expect_deferred_permit(
-    outcome: DeferredAdmissionAcquireOutcome,
-    context: &str,
-) -> crate::dispatch::DeferredWaitPermit {
+fn expect_deferred_permit(outcome: DeferredWaitAdmissionResult, context: &str) -> crate::dispatch::DeferredWaitPermit {
     match outcome {
-        DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
-        DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
-        DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_) => {
+        DeferredWaitAdmissionResult::Closed => panic!("deferred admission unexpectedly closed"),
+        DeferredWaitAdmissionResult::Acquired(permit) => permit,
+        DeferredWaitAdmissionResult::WaiterCapacityExhausted(_) => {
             panic!("{context}: waiter capacity exhausted")
         }
-        DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_) => {
+        DeferredWaitAdmissionResult::RetainedByteCapacityExhausted(_) => {
             panic!("{context}: retained-byte capacity exhausted")
         }
-        DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
+        DeferredWaitAdmissionResult::ParentCapacityExhausted(_) => {
             panic!("{context}: parent capacity exhausted")
         }
     }

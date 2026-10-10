@@ -87,17 +87,17 @@ impl PartsFixture {
         let retained = DeferredRegistry::<()>::try_retained_size(DeferredRetainedSizeParts::new(0))
             .expect("expiry acceptance retained size");
         let permit = match admission.try_reserve(retained) {
-            crate::dispatch::DeferredAdmissionAcquireOutcome::Closed => {
+            crate::dispatch::DeferredWaitAdmissionResult::Closed => {
                 panic!("deferred admission unexpectedly closed")
             }
-            crate::dispatch::DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
-            crate::dispatch::DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_) => {
+            crate::dispatch::DeferredWaitAdmissionResult::Acquired(permit) => permit,
+            crate::dispatch::DeferredWaitAdmissionResult::WaiterCapacityExhausted(_) => {
                 panic!("expiry acceptance waiter capacity was unexpectedly exhausted")
             }
-            crate::dispatch::DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_) => {
+            crate::dispatch::DeferredWaitAdmissionResult::RetainedByteCapacityExhausted(_) => {
                 panic!("expiry acceptance retained-byte capacity was unexpectedly exhausted")
             }
-            crate::dispatch::DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
+            crate::dispatch::DeferredWaitAdmissionResult::ParentCapacityExhausted(_) => {
                 panic!("expiry acceptance parent capacity was unexpectedly exhausted")
             }
         };
