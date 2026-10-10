@@ -50,33 +50,54 @@ impl ControlConfig {
     ///
     /// Returns a stable configuration error for unreadable, malformed, or unsafe input.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ControlError> {
-        let text = std::fs::read_to_string(path).map_err(|_| ControlError::invalid_config())?;
-        let config: Self = toml::from_str(&text).map_err(|_| ControlError::invalid_config())?;
-        config.validate()?;
+        Self::load_detailed(path).map_err(ControlError::from)
+    }
+
+    /// Loads and validates a control configuration and explains a rejection.
+    ///
+    /// # Errors
+    ///
+    /// Returns the stage and position of the first problem. The error holds no configured
+    /// value, so it can be logged.
+    pub fn load_detailed(path: impl AsRef<Path>) -> Result<Self, ConfigLoadError> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|error| ConfigLoadError(ConfigRejection::Read(ConfigReadFailure::from_kind(error.kind()))))?;
+        Self::from_toml(&text)
+    }
+
+    fn from_toml(text: &str) -> Result<Self, ConfigLoadError> {
+        let config: Self =
+            toml::from_str(text).map_err(|error| ConfigLoadError(ConfigRejection::from_toml(text, &error)))?;
+        config
+            .check()
+            .map_err(|violation| ConfigLoadError(ConfigRejection::Validate(violation)))?;
         Ok(config)
     }
 
     pub fn validate(&self) -> Result<(), ControlError> {
-        self.server.validate()?;
-        self.oauth.validate()?;
-        self.mutations.validate()?;
-        validate_cluster_registry(&self.clusters)?;
+        self.check().map_err(|_| ControlError::invalid_config())
+    }
+
+    fn check(&self) -> Result<(), ConfigViolation> {
+        self.server.check()?;
+        self.oauth.check()?;
+        self.mutations.check()?;
+        check_cluster_registry(&self.clusters)?;
         if self.mutations.mutations_enabled && !self.mutations.allowed_operations.is_empty() {
             let configured = self
                 .clusters
                 .iter()
                 .map(|cluster| &cluster.name)
                 .collect::<BTreeSet<_>>();
-            if self
-                .mutations
-                .allowed_clusters
-                .iter()
-                .any(|cluster| !configured.contains(cluster))
-            {
-                return Err(ControlError::invalid_config());
-            }
+            require(
+                self.mutations
+                    .allowed_clusters
+                    .iter()
+                    .all(|cluster| configured.contains(cluster)),
+                "mutations.allowed_clusters",
+            )?;
         }
-        self.audit.validate()
+        self.audit.check()
     }
 
     #[cfg(feature = "write-tools")]
@@ -123,15 +144,197 @@ impl MutationClusterConfig {
     }
 }
 
-fn validate_cluster_registry(clusters: &[MutationClusterConfig]) -> Result<(), ControlError> {
-    let mut names = BTreeSet::new();
-    for cluster in clusters {
-        if !names.insert(cluster.name.clone())
-            || !valid_namesrv_addr(&cluster.namesrv_addr)
-            || !valid_credential_env_pair(cluster)
-        {
-            return Err(ControlError::invalid_config());
+/// Why a control configuration was rejected.
+///
+/// The error is safe to log: it names the stage, the position in the file, and key or field
+/// names. It never retains a configured value, a path, or parser text that could quote one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigLoadError(ConfigRejection);
+
+impl ConfigLoadError {
+    /// Returns the closed name of the stage that rejected the configuration: `read`, `parse`,
+    /// or `validate`.
+    pub const fn stage(&self) -> &'static str {
+        match self.0 {
+            ConfigRejection::Read(_) => "read",
+            ConfigRejection::Parse { .. } => "parse",
+            ConfigRejection::Validate(_) => "validate",
         }
+    }
+}
+
+impl fmt::Display for ConfigLoadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.0 {
+            ConfigRejection::Read(failure) => formatter.write_str(failure.as_str()),
+            ConfigRejection::Parse { problem, key, position } => {
+                match (problem, key) {
+                    (ConfigParseProblem::Syntax, _) => formatter.write_str("file is not valid TOML")?,
+                    (ConfigParseProblem::UnknownKey, Some(key)) => write!(formatter, "unknown key `{key}`")?,
+                    (ConfigParseProblem::UnknownKey, None) => formatter.write_str("unknown key")?,
+                    (ConfigParseProblem::MissingKey, Some(key)) => {
+                        write!(formatter, "required key `{key}` is missing")?
+                    }
+                    (ConfigParseProblem::MissingKey, None) => formatter.write_str("a required key is missing")?,
+                    (ConfigParseProblem::InvalidValue, _) => {
+                        formatter.write_str("a value has the wrong type or is not allowed")?;
+                    }
+                }
+                match position {
+                    Some((line, column)) => write!(formatter, " at line {line}, column {column}"),
+                    None => Ok(()),
+                }
+            }
+            ConfigRejection::Validate(violation) => {
+                write!(formatter, "`{}` has a value that is not allowed", violation.field)?;
+                match violation.entry {
+                    Some(entry) => write!(formatter, " in `[[clusters]]` entry {entry}"),
+                    None => Ok(()),
+                }
+            }
+        }
+    }
+}
+
+impl std::error::Error for ConfigLoadError {}
+
+impl From<ConfigLoadError> for ControlError {
+    fn from(_: ConfigLoadError) -> Self {
+        Self::invalid_config()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ConfigRejection {
+    Read(ConfigReadFailure),
+    Parse {
+        problem: ConfigParseProblem,
+        key: Option<String>,
+        /// 1-based line and column of the problem.
+        position: Option<(usize, usize)>,
+    },
+    Validate(ConfigViolation),
+}
+
+impl ConfigRejection {
+    /// Classifies a deserialization failure without copying parser text.
+    ///
+    /// The parser message and its rendered form quote the file, which can hold addresses. Only
+    /// the position and a plain key name are kept.
+    fn from_toml(text: &str, error: &toml::de::Error) -> Self {
+        let message = error.message();
+        let (problem, key) = if toml::from_str::<toml::Table>(text).is_err() {
+            (ConfigParseProblem::Syntax, None)
+        } else if let Some(quoted) = message.strip_prefix("unknown field `") {
+            (ConfigParseProblem::UnknownKey, plain_key(quoted))
+        } else if let Some(quoted) = message.strip_prefix("missing field `") {
+            (ConfigParseProblem::MissingKey, plain_key(quoted))
+        } else {
+            (ConfigParseProblem::InvalidValue, None)
+        };
+        Self::Parse {
+            problem,
+            key,
+            position: error.span().map(|span| line_and_column(text, span.start)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigReadFailure {
+    NotFound,
+    PermissionDenied,
+    InvalidEncoding,
+    Unreadable,
+}
+
+impl ConfigReadFailure {
+    fn from_kind(kind: std::io::ErrorKind) -> Self {
+        match kind {
+            std::io::ErrorKind::NotFound => Self::NotFound,
+            std::io::ErrorKind::PermissionDenied => Self::PermissionDenied,
+            std::io::ErrorKind::InvalidData => Self::InvalidEncoding,
+            _ => Self::Unreadable,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotFound => "file was not found",
+            Self::PermissionDenied => "file is not readable by this process",
+            Self::InvalidEncoding => "file is not valid UTF-8",
+            Self::Unreadable => "file could not be read",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigParseProblem {
+    Syntax,
+    UnknownKey,
+    MissingKey,
+    InvalidValue,
+}
+
+/// A constraint that a loaded value violates, identified by its static field path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ConfigViolation {
+    field: &'static str,
+    /// 1-based position of the `[[clusters]]` table that holds the field.
+    entry: Option<usize>,
+}
+
+fn require(valid: bool, field: &'static str) -> Result<(), ConfigViolation> {
+    if valid {
+        Ok(())
+    } else {
+        Err(ConfigViolation { field, entry: None })
+    }
+}
+
+/// Returns the key that serde quoted at the start of `quoted` when it is a plain key name.
+///
+/// TOML accepts arbitrary text in a quoted key, so any other key is withheld.
+fn plain_key(quoted: &str) -> Option<String> {
+    let key = quoted.split('`').next()?;
+    let plain = (1..=64).contains(&key.len())
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'));
+    plain.then(|| key.to_owned())
+}
+
+fn line_and_column(text: &str, offset: usize) -> (usize, usize) {
+    let offset = offset.min(text.len());
+    let before = &text.as_bytes()[..offset];
+    let line_start = before
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |newline| newline + 1);
+    let line = before.iter().filter(|byte| **byte == b'\n').count() + 1;
+    let column = text
+        .get(line_start..offset)
+        .map_or(offset - line_start, |prefix| prefix.chars().count())
+        + 1;
+    (line, column)
+}
+
+fn check_cluster_registry(clusters: &[MutationClusterConfig]) -> Result<(), ConfigViolation> {
+    let mut names = BTreeSet::new();
+    for (index, cluster) in clusters.iter().enumerate() {
+        let field = if !names.insert(cluster.name.clone()) {
+            "clusters.name"
+        } else if !valid_namesrv_addr(&cluster.namesrv_addr) {
+            "clusters.namesrv_addr"
+        } else if let Some(field) = credential_env_violation(cluster) {
+            field
+        } else {
+            continue;
+        };
+        return Err(ConfigViolation {
+            field,
+            entry: Some(index + 1),
+        });
     }
     Ok(())
 }
@@ -152,7 +355,8 @@ fn valid_namesrv_addr(value: &str) -> bool {
         })
 }
 
-fn valid_credential_env_pair(cluster: &MutationClusterConfig) -> bool {
+/// Returns the credential variable field that breaks the both-or-neither rule or the name grammar.
+fn credential_env_violation(cluster: &MutationClusterConfig) -> Option<&'static str> {
     let valid_env = |value: &str| {
         (1..=128).contains(&value.len())
             && value
@@ -161,13 +365,27 @@ fn valid_credential_env_pair(cluster: &MutationClusterConfig) -> bool {
                 .all(|(index, byte)| byte == b'_' || byte.is_ascii_uppercase() || (index > 0 && byte.is_ascii_digit()))
     };
     match (&cluster.access_key_env, &cluster.secret_key_env) {
-        (None, None) => cluster.security_token_env.is_none(),
+        (None, None) => cluster
+            .security_token_env
+            .is_some()
+            .then_some("clusters.security_token_env"),
         (Some(access), Some(secret)) => {
-            valid_env(access)
-                && valid_env(secret)
-                && cluster.security_token_env.as_deref().map(valid_env).unwrap_or(true)
+            if !valid_env(access) {
+                Some("clusters.access_key_env")
+            } else if !valid_env(secret) {
+                Some("clusters.secret_key_env")
+            } else if cluster
+                .security_token_env
+                .as_deref()
+                .is_some_and(|token| !valid_env(token))
+            {
+                Some("clusters.security_token_env")
+            } else {
+                None
+            }
         }
-        _ => false,
+        (Some(_), None) => Some("clusters.secret_key_env"),
+        (None, Some(_)) => Some("clusters.access_key_env"),
     }
 }
 
@@ -181,19 +399,16 @@ pub struct ServerConfig {
 }
 
 impl ServerConfig {
-    fn validate(&self) -> Result<(), ControlError> {
-        let bind = self
-            .bind
-            .parse::<SocketAddr>()
-            .map_err(|_| ControlError::invalid_config())?;
-        if bind.ip().is_unspecified()
-            || !valid_endpoint(&self.endpoint)
-            || self.tls.cert_path.trim().is_empty()
-            || self.tls.key_path.trim().is_empty()
-        {
-            return Err(ControlError::invalid_config());
-        }
-        Ok(())
+    fn check(&self) -> Result<(), ConfigViolation> {
+        require(
+            self.bind
+                .parse::<SocketAddr>()
+                .is_ok_and(|bind| !bind.ip().is_unspecified()),
+            "server.bind",
+        )?;
+        require(valid_endpoint(&self.endpoint), "server.endpoint")?;
+        require(!self.tls.cert_path.trim().is_empty(), "server.tls.cert_path")?;
+        require(!self.tls.key_path.trim().is_empty(), "server.tls.key_path")
     }
 }
 
@@ -260,17 +475,17 @@ pub struct OAuthConfig {
 }
 
 impl OAuthConfig {
-    fn validate(&self) -> Result<(), ControlError> {
-        if !valid_https_endpoint(&self.issuer)
-            || !valid_https_endpoint(&self.jwks_url)
-            || self.audience.is_empty()
-            || self.audience.len() > 256
-            || self.audience.chars().any(char::is_control)
-            || self.jwks_ca_path.as_deref().is_some_and(|path| path.trim().is_empty())
-        {
-            return Err(ControlError::invalid_config());
-        }
-        Ok(())
+    fn check(&self) -> Result<(), ConfigViolation> {
+        require(valid_https_endpoint(&self.issuer), "oauth.issuer")?;
+        require(valid_https_endpoint(&self.jwks_url), "oauth.jwks_url")?;
+        require(
+            !self.audience.is_empty() && self.audience.len() <= 256 && !self.audience.chars().any(char::is_control),
+            "oauth.audience",
+        )?;
+        require(
+            !self.jwks_ca_path.as_deref().is_some_and(|path| path.trim().is_empty()),
+            "oauth.jwks_ca_path",
+        )
     }
 }
 
@@ -302,17 +517,21 @@ impl Default for MutationPolicyConfig {
 }
 
 impl MutationPolicyConfig {
-    fn validate(&self) -> Result<(), ControlError> {
+    fn check(&self) -> Result<(), ConfigViolation> {
         let operations = self.allowed_operations.iter().copied().collect::<BTreeSet<_>>();
         let clusters = self.allowed_clusters.iter().cloned().collect::<BTreeSet<_>>();
-        if operations.len() != self.allowed_operations.len()
-            || clusters.len() != self.allowed_clusters.len()
-            || self.operation_timeout_seconds == 0
-            || self.operation_timeout_seconds > 24
-        {
-            return Err(ControlError::invalid_config());
-        }
-        Ok(())
+        require(
+            operations.len() == self.allowed_operations.len(),
+            "mutations.allowed_operations",
+        )?;
+        require(
+            clusters.len() == self.allowed_clusters.len(),
+            "mutations.allowed_clusters",
+        )?;
+        require(
+            (1..=24).contains(&self.operation_timeout_seconds),
+            "mutations.operation_timeout_seconds",
+        )
     }
 
     pub fn operation_allowlist(&self) -> BTreeSet<ControlOperation> {
@@ -335,14 +554,13 @@ pub struct AuditConfig {
 }
 
 impl AuditConfig {
-    fn validate(&self) -> Result<(), ControlError> {
-        if self.path.trim().is_empty()
-            || !(16..=65_536).contains(&self.capacity)
-            || !(512..=16_384).contains(&self.max_record_bytes)
-        {
-            return Err(ControlError::invalid_config());
-        }
-        Ok(())
+    fn check(&self) -> Result<(), ConfigViolation> {
+        require(!self.path.trim().is_empty(), "audit.path")?;
+        require((16..=65_536).contains(&self.capacity), "audit.capacity")?;
+        require(
+            (512..=16_384).contains(&self.max_record_bytes),
+            "audit.max_record_bytes",
+        )
     }
 }
 
@@ -517,6 +735,148 @@ mod tests {
             include_str!("../conf/mcp-control.example.toml")
         );
         assert!(toml::from_str::<ControlConfig>(&encoded).is_err());
+    }
+
+    const EXAMPLE: &str = include_str!("../conf/mcp-control.example.toml");
+
+    fn rejection(text: &str) -> ConfigLoadError {
+        ControlConfig::from_toml(text).unwrap_err()
+    }
+
+    fn line_of(text: &str, prefix: &str) -> usize {
+        text.lines().position(|line| line.starts_with(prefix)).unwrap() + 1
+    }
+
+    #[test]
+    fn parse_rejections_locate_the_problem_without_quoting_the_file() {
+        assert!(ControlConfig::from_toml(EXAMPLE).is_ok());
+
+        let text = format!("{EXAMPLE}\ndevelopment_token = 'forbidden-10.0.0.9'\n");
+        let unknown = rejection(&text);
+        assert_eq!(unknown.stage(), "parse");
+        assert_eq!(
+            unknown.to_string(),
+            format!(
+                "unknown key `development_token` at line {}, column 1",
+                line_of(&text, "development_token")
+            )
+        );
+
+        // TOML accepts any text as a quoted key, so only plain key names are repeated.
+        let text = format!("{EXAMPLE}\n\"https://user:pass@10.0.0.9/\" = 1\n");
+        let hostile_key = rejection(&text).to_string();
+        assert_eq!(
+            hostile_key,
+            format!("unknown key at line {}, column 1", line_of(&text, "\"https://user"))
+        );
+
+        let missing = rejection(&EXAMPLE.replace("bind = \"127.0.0.1:8090\"", ""));
+        assert_eq!(missing.stage(), "parse");
+        assert!(missing.to_string().starts_with("required key `bind` is missing"));
+
+        for (replaced, replacement) in [
+            ("capacity = 4096", "capacity = \"many-10.0.0.9\""),
+            (
+                "public_base_url = \"https://control.example.test\"",
+                "public_base_url = \"http://10.0.0.9\"",
+            ),
+            ("allowed_operations = []", "allowed_operations = [\"drop-10.0.0.9\"]"),
+        ] {
+            let text = EXAMPLE.replace(replaced, replacement);
+            let key = replacement.split(' ').next().unwrap();
+            let invalid = rejection(&text);
+            assert_eq!(invalid.stage(), "parse");
+            assert!(
+                invalid.to_string().starts_with(&format!(
+                    "a value has the wrong type or is not allowed at line {}, column ",
+                    line_of(&text, key)
+                )),
+                "{key}: {invalid}"
+            );
+            assert!(!invalid.to_string().contains("10.0.0.9"));
+        }
+
+        let text = format!("{EXAMPLE}\nbroken = = 'token-10.0.0.9'\n");
+        let syntax = rejection(&text).to_string();
+        assert!(
+            syntax.starts_with(&format!(
+                "file is not valid TOML at line {}, column ",
+                line_of(&text, "broken")
+            )),
+            "{syntax}"
+        );
+        assert!(!syntax.contains("10.0.0.9"));
+    }
+
+    #[test]
+    fn validation_rejections_name_the_static_field_path() {
+        for (replaced, replacement, expected) in [
+            (
+                "bind = \"127.0.0.1:8090\"",
+                "bind = \"0.0.0.0:8090\"",
+                "`server.bind` has a value that is not allowed",
+            ),
+            (
+                "jwks_url = \"https://identity.example.test/.well-known/jwks.json\"",
+                "jwks_url = \"https://10.0.0.9/jwks\"",
+                "`oauth.jwks_url` has a value that is not allowed",
+            ),
+            (
+                "operation_timeout_seconds = 24",
+                "operation_timeout_seconds = 25",
+                "`mutations.operation_timeout_seconds` has a value that is not allowed",
+            ),
+            (
+                "max_record_bytes = 4096",
+                "max_record_bytes = 16",
+                "`audit.max_record_bytes` has a value that is not allowed",
+            ),
+            (
+                "secret_key_env = \"ROCKETMQ_CONTROL_SECRET_KEY\"",
+                "",
+                "`clusters.secret_key_env` has a value that is not allowed in `[[clusters]]` entry 1",
+            ),
+        ] {
+            let invalid = rejection(&EXAMPLE.replace(replaced, replacement));
+            assert_eq!(invalid.stage(), "validate");
+            assert_eq!(invalid.to_string(), expected);
+        }
+
+        let second_cluster = rejection(&format!(
+            "{EXAMPLE}\n[[clusters]]\nname = \"production-b\"\nnamesrv_addr = \"10.0.0.9\"\n"
+        ));
+        assert_eq!(
+            second_cluster.to_string(),
+            "`clusters.namesrv_addr` has a value that is not allowed in `[[clusters]]` entry 2"
+        );
+
+        let unregistered = rejection(
+            &EXAMPLE
+                .replace("mutations_enabled = false", "mutations_enabled = true")
+                .replace("allowed_operations = []", "allowed_operations = [\"topic_upsert\"]")
+                .replace("allowed_clusters = []", "allowed_clusters = [\"staging\"]"),
+        );
+        assert_eq!(
+            unregistered.to_string(),
+            "`mutations.allowed_clusters` has a value that is not allowed"
+        );
+    }
+
+    #[test]
+    fn unreadable_file_is_a_read_stage_rejection_and_keeps_the_stable_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("absent.toml");
+        let rejected = ControlConfig::load_detailed(&missing).unwrap_err();
+        assert_eq!(rejected.stage(), "read");
+        assert_eq!(rejected.to_string(), "file was not found");
+        assert_eq!(
+            ControlConfig::load(&missing).unwrap_err(),
+            ControlError::invalid_config()
+        );
+
+        let present = directory.path().join("control.toml");
+        std::fs::write(&present, EXAMPLE).unwrap();
+        assert!(ControlConfig::load(&present).is_ok());
     }
 
     #[test]

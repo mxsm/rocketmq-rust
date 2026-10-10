@@ -460,7 +460,12 @@ where
         Err(error) => Evidence {
             id: id.to_string(),
             source_tool: source_tool.to_string(),
-            status: EvidenceStatus::Unavailable,
+            // A completed lookup that found no such target is not a source outage.
+            status: if error.not_found_entity().is_some() {
+                EvidenceStatus::Missing
+            } else {
+                EvidenceStatus::Unavailable
+            },
             summary: error.to_string(),
             data: Value::Null,
         },

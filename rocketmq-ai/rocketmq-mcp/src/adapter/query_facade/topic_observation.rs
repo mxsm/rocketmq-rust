@@ -43,7 +43,7 @@ where
     ) -> Result<QueryResult<GetTopicStatsOutput>, ToolFailure> {
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.topic = normalized_identifier("topic", &args.topic)?;
-        let cluster = self.resolve_required_cluster(&args.cluster)?;
+        let cluster = self.resolve_cluster(&args.cluster)?;
         let request = SnapshotRequest::try_new_with_selection(
             SnapshotKind::TopicStats,
             cluster.name.clone(),
@@ -89,7 +89,7 @@ where
     ) -> Result<QueryResult<GetTopicConfigOutput>, ToolFailure> {
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.topic = normalized_identifier("topic", &args.topic)?;
-        let cluster = self.resolve_required_cluster(&args.cluster)?;
+        let cluster = self.resolve_cluster(&args.cluster)?;
         let key = self.cache_key("topic_config", &cluster.name, &format!("topic={}", args.topic));
         let ttl = Duration::from_millis(self.config.cache.topic_list_ttl_ms);
         self.cache

@@ -133,7 +133,7 @@ RocketMQ 签名凭据必须与 HTTP 身份分离。配置的 YAML 凭据文件�
 
 `limit` 范围 1–200，默认 50。`has_more` 为 true 时使用不透明的 `data.next_cursor` 继续，不自行构造游标，也不将其当作队列偏移量。提供相同逻辑目标和对应查询参数。精确模式和逐工具输出见[完整工具参考](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp/docs/tool-reference.md)。
 
-发现阶段检查 scope 和工具允许/拒绝策略，不代表某个集群/租户调用一定获准。两个清单工具允许省略集群并使用默认/唯一集群回退；当前实现对该省略路径不执行与显式路径相同的逐集群/租户检查。运维客户端应显式提供集群，并在部署策略中考虑此限制，不把省略参数表述为更强隔离保证。
+发现阶段检查 scope 和工具允许/拒绝策略，不代表某个集群/租户调用一定获准。两个清单工具允许省略集群，此时使用默认集群，或唯一配置的集群。该集群与显式指定的集群一样，要通过逐集群检查、租户检查、限流和并发限制；空字符串或只含空白的集群名会被所有工具以 `invalid_arguments` 拒绝。运维客户端建议显式提供集群，使调用不依赖哪个集群是默认集群。
 
 ## 理解观察、部分结果和故障
 
@@ -145,6 +145,7 @@ RocketMQ 签名凭据必须与 HTTP 身份分离。配置的 YAML 凭据文件�
 | --- | --- |
 | 工具缺失 | 检查编译 feature、主体 scope 和工具策略；规划还需在调用时满足运行时权限。 |
 | `unauthorized_scope` / `cluster_not_allowed` / `tenant_mismatch` | 检查已验证身份和配置策略，修改查询别名不能授予权限。 |
+| `not_found` | 请求合法，但 `entity` 指明的目标在所选集群中不存在。不要重试，用对应的清单工具确认名称。 |
 | `source_unavailable` | 检查 MCP 进程到配置 NameServer/Broker/Proxy/Controller 的网络路径及出站读取凭据。 |
 | `rate_limited` | 降低查询速率并采用有界重试，避免 AI 客户端与 MCP 层叠加重试。 |
 | `output_too_large` 或部分结果警告 | 缩小查询，支持时分页，并在诊断中保留警告。 |

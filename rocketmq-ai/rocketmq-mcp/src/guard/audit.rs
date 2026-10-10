@@ -35,10 +35,12 @@ use tokio::sync::Semaphore;
 
 use rocketmq_observability::metrics::mcp::McpAuditDropReason;
 use rocketmq_observability::metrics::mcp::McpAuditFailureKind;
+use rocketmq_observability::metrics::mcp::McpMetricsRecorder;
 
 use crate::config::AuditConfig;
 use crate::guard::sanitizer::sanitize_text;
 use crate::guard::RiskLevel;
+use crate::infrastructure::metrics::ComponentMetrics;
 use crate::McpError;
 
 pub const AUDIT_SCHEMA_VERSION: u16 = 1;
@@ -189,11 +191,13 @@ struct AuditCounters {
     flush_failures: AtomicU64,
     pending_records: AtomicU64,
     pending_bytes: AtomicU64,
+    telemetry: ComponentMetrics,
 }
 
 impl AuditCounters {
     fn record_backlog(&self) {
-        rocketmq_observability::metrics::mcp::record_audit_backlog(self.pending_records.load(Ordering::Relaxed));
+        self.telemetry
+            .record_audit_backlog(self.pending_records.load(Ordering::Relaxed));
     }
 }
 
@@ -253,6 +257,17 @@ pub struct AuditLog {
 }
 
 impl AuditLog {
+    /// Creates an unstarted audit log that reports backlog, drops, and failures through `metrics`.
+    pub(crate) fn with_metrics(metrics: McpMetricsRecorder) -> Self {
+        Self {
+            counters: Arc::new(AuditCounters {
+                telemetry: ComponentMetrics::new(metrics),
+                ..AuditCounters::default()
+            }),
+            ..Self::default()
+        }
+    }
+
     pub fn start(
         &self,
         config: &AuditConfig,
@@ -314,7 +329,9 @@ impl AuditLog {
             Err(_) => {
                 self.counters.dropped.fetch_add(1, Ordering::Relaxed);
                 self.counters.byte_capacity_drops.fetch_add(1, Ordering::Relaxed);
-                rocketmq_observability::metrics::mcp::record_audit_drop(McpAuditDropReason::ByteCapacity);
+                self.counters
+                    .telemetry
+                    .record_audit_drop(McpAuditDropReason::ByteCapacity);
                 tracing::warn!("rocketmq-mcp audit byte capacity is full; audit record dropped");
                 return;
             }
@@ -341,7 +358,9 @@ impl AuditLog {
             Err(mpsc::error::TrySendError::Full(_)) => {
                 self.counters.dropped.fetch_add(1, Ordering::Relaxed);
                 self.counters.count_capacity_drops.fetch_add(1, Ordering::Relaxed);
-                rocketmq_observability::metrics::mcp::record_audit_drop(McpAuditDropReason::CountCapacity);
+                self.counters
+                    .telemetry
+                    .record_audit_drop(McpAuditDropReason::CountCapacity);
                 tracing::warn!("rocketmq-mcp audit record capacity is full; audit record dropped");
             }
             Err(mpsc::error::TrySendError::Closed(_)) => self.drop_closed(),
@@ -478,7 +497,7 @@ impl AuditLog {
             Err(_) => {
                 self.counters.dropped.fetch_add(1, Ordering::Relaxed);
                 self.counters.sink_failures.fetch_add(1, Ordering::Relaxed);
-                rocketmq_observability::metrics::mcp::record_audit_failure(McpAuditFailureKind::Sink);
+                self.counters.telemetry.record_audit_failure(McpAuditFailureKind::Sink);
                 tracing::warn!("rocketmq-mcp audit record serialization failed");
                 return None;
             }
@@ -487,7 +506,7 @@ impl AuditLog {
         if encoded.len() > config.max_record_bytes {
             self.counters.dropped.fetch_add(1, Ordering::Relaxed);
             self.counters.oversized.fetch_add(1, Ordering::Relaxed);
-            rocketmq_observability::metrics::mcp::record_audit_drop(McpAuditDropReason::Oversized);
+            self.counters.telemetry.record_audit_drop(McpAuditDropReason::Oversized);
             tracing::warn!(
                 record_bytes = encoded.len(),
                 max_record_bytes = config.max_record_bytes,
@@ -507,7 +526,7 @@ impl AuditLog {
     fn drop_closed(&self) {
         self.counters.dropped.fetch_add(1, Ordering::Relaxed);
         self.counters.closed_drops.fetch_add(1, Ordering::Relaxed);
-        rocketmq_observability::metrics::mcp::record_audit_drop(McpAuditDropReason::Closed);
+        self.counters.telemetry.record_audit_drop(McpAuditDropReason::Closed);
         tracing::warn!("rocketmq-mcp audit queue is closed; audit record dropped");
     }
 
@@ -660,7 +679,7 @@ async fn run_audit_writer<S>(
             counters.written.fetch_add(1, Ordering::Relaxed);
         } else {
             counters.sink_failures.fetch_add(1, Ordering::Relaxed);
-            rocketmq_observability::metrics::mcp::record_audit_failure(McpAuditFailureKind::Sink);
+            counters.telemetry.record_audit_failure(McpAuditFailureKind::Sink);
             tracing::warn!("rocketmq-mcp asynchronous audit sink write failed");
         }
         drop(envelope.pending);
@@ -668,7 +687,7 @@ async fn run_audit_writer<S>(
 
     if sink.flush().await.is_err() {
         counters.flush_failures.fetch_add(1, Ordering::Relaxed);
-        rocketmq_observability::metrics::mcp::record_audit_failure(McpAuditFailureKind::Flush);
+        counters.telemetry.record_audit_failure(McpAuditFailureKind::Flush);
         tracing::warn!("rocketmq-mcp audit sink flush failed");
     }
     completion.0.finish(true);

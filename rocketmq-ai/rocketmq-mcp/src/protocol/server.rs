@@ -193,14 +193,17 @@ impl ServerHandler for RocketmqMcpServer {
             .unwrap_or("invalid_resource_uri");
         let mut span_recorder = ResourceSpanRecorder::new(self.app.metrics().clone(), operation);
         let span = span_recorder.span();
+        let metrics = self.app.metrics();
         let result = async {
-            let started_at = Instant::now();
             let access = match self.access_context(&context) {
                 Ok(access) => access,
                 Err(error) => {
                     span_recorder.denied();
-                    record_resource_error("resource_access_context", McpFailureLabel::PermissionDenied);
-                    record_resource_operation("resource_access_context", McpOperationStatus::Denied, started_at);
+                    metrics.record_error(
+                        McpOperationKind::Resource,
+                        "resource_access_context",
+                        McpFailureLabel::PermissionDenied,
+                    );
                     return Err(error);
                 }
             };
@@ -210,8 +213,11 @@ impl ServerHandler for RocketmqMcpServer {
                     self.app
                         .guard()
                         .record_resource_rejection(&access, "resource:unavailable", "invalid_resource_uri");
-                    record_resource_error("invalid_resource_uri", McpFailureLabel::InvalidRequest);
-                    record_resource_operation("invalid_resource_uri", McpOperationStatus::Failure, started_at);
+                    metrics.record_error(
+                        McpOperationKind::Resource,
+                        "invalid_resource_uri",
+                        McpFailureLabel::InvalidRequest,
+                    );
                     return Err(resource_unavailable(&request_id_string(&context.id)));
                 }
             };
@@ -225,8 +231,7 @@ impl ServerHandler for RocketmqMcpServer {
                 Ok(guarded_resource) => guarded_resource,
                 Err(error) => {
                     span_recorder.denied();
-                    record_resource_error(operation, guard_failure_label(&error));
-                    record_resource_operation(operation, McpOperationStatus::Denied, started_at);
+                    metrics.record_error(McpOperationKind::Resource, operation, guard_failure_label(&error));
                     return Err(resource_guard_error(error, &request_id_string(&context.id)));
                 }
             };
@@ -269,13 +274,9 @@ impl ServerHandler for RocketmqMcpServer {
                     error
                 }
             });
-            let status = if let Err(error) = &result {
-                record_resource_error(operation, resource_failure_label(error));
-                McpOperationStatus::Failure
-            } else {
-                McpOperationStatus::Success
-            };
-            record_resource_operation(operation, status, started_at);
+            if let Err(error) = &result {
+                metrics.record_error(McpOperationKind::Resource, operation, resource_failure_label(error));
+            }
             result
         }
         .instrument(span)
@@ -422,22 +423,9 @@ fn resource_failure_label(error: &ErrorData) -> McpFailureLabel {
             McpFailureLabel::SourceUnavailable
         }
         Some("output_too_large") => McpFailureLabel::OutputTooLarge,
-        Some("invalid_arguments" | "resource_not_found") => McpFailureLabel::InvalidRequest,
+        Some("invalid_arguments" | "resource_not_found" | "resource_unavailable") => McpFailureLabel::InvalidRequest,
         _ => McpFailureLabel::Internal,
     }
-}
-
-fn record_resource_error(operation: &'static str, failure: McpFailureLabel) {
-    rocketmq_observability::metrics::mcp::record_error(McpOperationKind::Resource, operation, failure);
-}
-
-fn record_resource_operation(operation: &'static str, status: McpOperationStatus, started_at: Instant) {
-    rocketmq_observability::metrics::mcp::record_operation(
-        McpOperationKind::Resource,
-        operation,
-        status,
-        started_at.elapsed(),
-    );
 }
 
 #[cfg(test)]

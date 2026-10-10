@@ -43,6 +43,78 @@ Interpret results conservatively:
 
 Never infer success from HTTP delivery alone; consume the closed structured result and `isError` value.
 
+## Logs and metrics
+
+The process installs its log subscriber before it reads the configuration and writes plain-text events to
+stderr, one event per line. Only events of this service are written at `info` and above. Dependency events
+stay off because they can carry network addresses and backend error text; `RUST_LOG` does not change that.
+A log line holds closed labels, counts, durations, the audit invocation number, and the authorized logical
+cluster alias. It never holds the operator, the request reason, addresses, tokens, target names, or backend
+error text.
+
+| Message | Level | Fields | Meaning |
+| --- | --- | --- | --- |
+| `rocketmq-mcp-control is starting` | info | `version`, `write_tools_compiled` | Logging is installed; the configuration is read next. |
+| `control configuration was rejected` | error | `stage`, then `reason` or `variable` | See the configuration table below. |
+| `control telemetry could not start` | error | `stage="telemetry"`, `operation` | The OTLP variables are invalid or the exporter could not start. |
+| `control server failed` | error | `stage`, `code` | `stage` is `audit`, `oauth_keys`, `tls`, `listener`, `mutation_tools`, or `serve`. |
+| `rocketmq-mcp-control authenticated HTTPS transport is ready` | info | `version`, `write_tools_compiled`, `mutations_runtime_enabled`, `registered_operations` | The listener accepts requests. The fields repeat the capability Resource. |
+| `request was rejected before authentication` | warn | `site="origin"`, `code`, `suppressed` | The Host or Origin header did not match the public origin. |
+| `request was rejected by authentication` | warn | `site="authentication"`, `code`, `reason`, `suppressed` | `reason` is `invalid_token`, `insufficient_scope`, or `keys_unavailable`. |
+| `mutation call was rejected before execution` | warn | `site="call"`, `tool`, `code`, `suppressed` | Authorization, argument, or admission failure. No Admin session was opened. |
+| `mutation finished` | info | `operation`, `cluster`, `mode`, `result`, `invocation_id`, `elapsed_ms` | A supervised dry run was `planned` or an execution was `applied`. |
+| `mutation finished without a clean result` | warn | the same fields plus `code` and `audit_recorded` | The result is `partial`, `conflict`, or `failed`, or the terminal audit record was not persisted. |
+| `durable audit record is unavailable` | error | `site="audit"`, `stage`, `suppressed` | `started`: no session began. `terminal`: the mutation ran without a terminal record. `supervisor`: the terminal state is unknown. |
+| `rocketmq-mcp-control stopped` | info | none | Normal shutdown. |
+| `rocketmq-mcp-control stopped with an error` | error | `code` | The stage was logged earlier. |
+| `control telemetry did not shut down cleanly` | warn | `metrics_flushed` | The final metrics export failed or did not finish within 10 seconds. |
+
+`invocation_id` is the `invocation_id` of the matching `started` and terminal records in the audit file, so a
+log line leads to the operator evidence without repeating it. `tool` is a reviewed tool name or `unknown`;
+the caller's text is never logged. Each `site` and `code` pair (`reason` for authentication, `stage` for
+audit) is logged at most once every 10 seconds, and `suppressed` on the next line is the number of identical
+events that were skipped. Metrics count every event.
+
+Configuration rejections name the stage and position. Values, paths, and quoted file content are never
+logged.
+
+| `stage` | `reason` or `variable` | Action |
+| --- | --- | --- |
+| `locate` | `variable="ROCKETMQ_MCP_CONTROL_CONFIG"` | Set the variable to the configuration file path. |
+| `read` | `file was not found`, `file is not readable by this process`, `file is not valid UTF-8`, or `file could not be read` | Correct the path, permissions, or encoding. |
+| `parse` | `file is not valid TOML`, ``unknown key `<key>` ``, ``required key `<key>` is missing``, or `a value has the wrong type or is not allowed`, followed by `at line <n>, column <n>` when known | Correct the file at that position. A quoted key that is not a plain name is reported without its text. |
+| `validate` | `` `<table.field>` has a value that is not allowed ``, followed by ``in `[[clusters]]` entry <n>`` for the nth cluster table | Correct that value. For `mutations.allowed_clusters`, every allowed cluster must also be a registered cluster. |
+
+Metrics are optional. Build with the `otlp` feature next to `write-tools`, then set
+`OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`. A build without `otlp` ignores both
+variables. In an `otlp` build, an endpoint without the `grpc` protocol stops startup. Only metrics are
+exported: traces and OTLP log records stay off, and no metrics listener is opened. The service name is
+`rocketmq-mcp-control`; `deployment.environment.name` and `rocketmq.cluster` keep the shared observability
+defaults, so set them at the collector when needed. Export failures after startup are dependency events and
+are therefore not logged; watch for missing data on the collector side. An unreachable collector does not
+block startup. At shutdown the process waits up to 10 seconds for the final export and logs a warning when it
+fails.
+
+The service records the shared MCP instruments.
+
+| Instrument | Attributes | Recorded for |
+| --- | --- | --- |
+| `rocketmq_mcp_requests_total`, `rocketmq_mcp_request_latency` | `operation_kind="tool"`, `operation`, `result` | Every tool call. `operation` is the tool name for a rejected call and the tool name plus `.dry_run` or `.execute` for a supervised mutation. `result` is `success`, `failure`, or `denied`. |
+| `rocketmq_mcp_errors_total` | `operation_kind="tool"`, `operation`, `result` | Every failed call, plus `operation="authentication"` and `operation="http_request"` for requests rejected before a tool was selected. |
+| `rocketmq_mcp_cache_operations_total` | `result` | Request-key admission: `miss` leads, `coalesced_waiter` follows an in-flight call, `hit` replays a completed one, `bypass` has no request key. |
+| `rocketmq_mcp_audit_failures_total` | `reason="sink"` | Every durable audit record that could not be persisted or confirmed. |
+
+`rocketmq_mcp_errors_total` folds the control codes into the shared failure classes:
+
+| `result` | Control codes |
+| --- | --- |
+| `permission_denied` | `unauthorized`, `permission_denied`, `cluster_not_allowed`, `operation_not_allowed`, `mutation_disabled` |
+| `invalid_request` | `request_rejected`, `confirmation_required`, `invalid_argument`, `precondition_conflict` |
+| `source_unavailable` | `operation_unavailable`, `audit_unavailable`, `partial_apply`, `verification_failed`, `timeout`, `shutdown_failed` |
+| `internal` | `execution_failed`, `cancelled`, `invalid_config` |
+
+The exact code of each call is in the log line and in the audit record.
+
 ## Failure and emergency handling
 
 If audit `started` is unavailable, the operation opens no session and performs no RocketMQ RPC. Treat audit

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::tools::executor::NotFoundEntity;
 use crate::tools::executor::ToolExecutionError;
 use crate::tools::executor::ToolRejection;
 use std::fmt;
@@ -206,7 +207,7 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
                 .iter()
                 .find(|summary| summary.group == group)
                 .cloned()
-                .ok_or_else(|| ToolFailure::Rejected(ToolRejection::InvalidArguments { _source: None }))?;
+                .ok_or_else(|| ToolFailure::not_found(NotFoundEntity::ConsumerGroup))?;
             Ok(QueryResult::from_payload(
                 QueryPayload::new(summary, result.partial, result.warnings, result.source_failures),
                 result.observed_at,
@@ -384,6 +385,15 @@ where
         }
     }
 
+    /// Reports cache events through `metrics`.
+    ///
+    /// Apply this before the facade serves queries: the query cache is replaced by an empty
+    /// one bound to `metrics`.
+    pub(crate) fn with_metrics(mut self, metrics: rocketmq_observability::metrics::mcp::McpMetricsRecorder) -> Self {
+        self.cache = self.cache.with_metrics(metrics);
+        self
+    }
+
     pub(crate) fn with_cancellation(mut self, cancellation: CancellationToken) -> Self {
         self.control.cancellation = cancellation;
         self
@@ -411,7 +421,7 @@ where
         &self,
         args: ClusterOverviewArgs,
     ) -> Result<QueryResult<ClusterOverviewOutput>, ToolFailure> {
-        let cluster = self.resolve_cluster(Some(&args.cluster))?;
+        let cluster = self.resolve_cluster(&args.cluster)?;
         let key = self.cache_key("cluster_overview", &cluster.name, "");
         let ttl = Duration::from_millis(self.config.cache.cluster_overview_ttl_ms);
         self.cache
@@ -449,7 +459,7 @@ where
     }
 
     pub(crate) async fn list_topics(&self, args: ListTopicsArgs) -> Result<QueryResult<ListTopicsOutput>, ToolFailure> {
-        let cluster = self.resolve_cluster(args.cluster.as_deref())?;
+        let cluster = self.resolve_cluster(args.cluster.as_deref().unwrap_or_default())?;
         let snapshot = self
             .topic_inventory_snapshot(cluster.clone(), args.filter.as_deref(), &args.page)
             .await?;
@@ -481,7 +491,7 @@ where
         mut args: DescribeTopicArgs,
     ) -> Result<QueryResult<DescribeTopicOutput>, ToolFailure> {
         args.topic = normalized_identifier("topic", &args.topic)?;
-        let cluster = self.resolve_cluster(Some(&args.cluster))?;
+        let cluster = self.resolve_cluster(&args.cluster)?;
         let snapshot = self
             .topic_route_snapshot(cluster.clone(), args.topic.clone(), &args.page)
             .await?;
@@ -497,7 +507,7 @@ where
         mut args: QueryTopicRouteArgs,
     ) -> Result<QueryResult<QueryTopicRouteOutput>, ToolFailure> {
         args.topic = normalized_identifier("topic", &args.topic)?;
-        let cluster = self.resolve_cluster(Some(&args.cluster))?;
+        let cluster = self.resolve_cluster(&args.cluster)?;
         let snapshot = self
             .topic_route_snapshot(cluster.clone(), args.topic.clone(), &args.page)
             .await?;
@@ -512,7 +522,7 @@ where
         &self,
         args: ListConsumerGroupsArgs,
     ) -> Result<QueryResult<ListConsumerGroupsOutput>, ToolFailure> {
-        let cluster = self.resolve_cluster(args.cluster.as_deref())?;
+        let cluster = self.resolve_cluster(args.cluster.as_deref().unwrap_or_default())?;
         let snapshot = self
             .consumer_group_inventory_snapshot(cluster.clone(), args.filter.as_deref(), false, &args.page)
             .await?;
@@ -598,7 +608,7 @@ where
     ) -> Result<QueryResult<QueryConsumerLagOutput>, ToolFailure> {
         args.topic = normalized_identifier("topic", &args.topic)?;
         args.consumer_group = normalized_identifier("consumer_group", &args.consumer_group)?;
-        let cluster = self.resolve_cluster(Some(&args.cluster))?;
+        let cluster = self.resolve_cluster(&args.cluster)?;
         let snapshot = self
             .consumer_lag_snapshot(
                 cluster.clone(),
@@ -621,7 +631,7 @@ where
         group: String,
     ) -> Result<QueryResult<crate::tools::consumer_tools::ConsumerGroupSummary>, ToolFailure> {
         let group = normalized_identifier("consumer_group", &group)?;
-        let cluster = self.resolve_cluster(Some(&cluster_name))?;
+        let cluster = self.resolve_cluster(&cluster_name)?;
         let page = PageRequest {
             limit: Some(1),
             cursor: None,
@@ -630,9 +640,7 @@ where
             .consumer_group_inventory_snapshot(cluster.clone(), Some(&group), true, &page)
             .await?;
         if snapshot.payload.data.is_empty() {
-            return Err(ToolFailure::Rejected(
-                crate::tools::executor::ToolRejection::InvalidArguments { _source: None },
-            ));
+            return Err(ToolFailure::not_found(NotFoundEntity::ConsumerGroup));
         }
         let selected = snapshot.payload.data.clone();
         let key = self.cache_key(
@@ -687,7 +695,7 @@ where
         mut args: DescribeBrokerArgs,
     ) -> Result<QueryResult<DescribeBrokerOutput>, ToolFailure> {
         args.broker_name = normalized_identifier("broker_name", &args.broker_name)?;
-        let cluster = self.resolve_cluster(Some(&args.cluster))?;
+        let cluster = self.resolve_cluster(&args.cluster)?;
         let key = self.cache_key(
             "describe_broker",
             &cluster.name,
@@ -716,7 +724,7 @@ where
     ) -> Result<QueryResult<BrokerDiagnosticsOutput>, ToolFailure> {
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.broker_name = normalized_logical_identifier("broker_name", &args.broker_name)?;
-        let cluster = self.resolve_required_cluster(&args.cluster)?;
+        let cluster = self.resolve_cluster(&args.cluster)?;
         let key = self.cache_key(
             "broker_diagnostics",
             &cluster.name,
@@ -745,7 +753,7 @@ where
     ) -> Result<QueryResult<BrokerConfigSummaryOutput>, ToolFailure> {
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.broker_name = normalized_logical_identifier("broker_name", &args.broker_name)?;
-        let cluster = self.resolve_required_cluster(&args.cluster)?;
+        let cluster = self.resolve_cluster(&args.cluster)?;
         let key = self.cache_key(
             "broker_config_summary",
             &cluster.name,
@@ -775,7 +783,7 @@ where
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.broker_name = normalized_logical_identifier("broker_name", &args.broker_name)?;
         args.logger = normalized_broker_logger(&args.logger)?;
-        let cluster = self.resolve_required_cluster(&args.cluster)?;
+        let cluster = self.resolve_cluster(&args.cluster)?;
         let key = self.cache_key(
             "broker_log_filter_state",
             &cluster.name,
@@ -804,7 +812,7 @@ where
     ) -> Result<QueryResult<ProxyDrainStateOutput>, ToolFailure> {
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.proxy_name = normalized_logical_identifier("proxy_name", &args.proxy_name)?;
-        let cluster = self.resolve_required_cluster(&args.cluster)?;
+        let cluster = self.resolve_cluster(&args.cluster)?;
         let proxy_endpoint = self
             .resolve_proxy_endpoint(&cluster.name, &args.proxy_name)?
             .to_string();
@@ -836,7 +844,7 @@ where
     ) -> Result<QueryResult<ListConsumerConnectionsOutput>, ToolFailure> {
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.consumer_group = normalized_identifier("consumer_group", &args.consumer_group)?;
-        let cluster = self.resolve_required_cluster(&args.cluster)?;
+        let cluster = self.resolve_cluster(&args.cluster)?;
         let snapshot = self
             .connection_snapshot(
                 SnapshotKind::ConsumerConnections,
@@ -869,7 +877,7 @@ where
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.topic = normalized_identifier("topic", &args.topic)?;
         args.producer_group = normalized_identifier("producer_group", &args.producer_group)?;
-        let cluster = self.resolve_required_cluster(&args.cluster)?;
+        let cluster = self.resolve_cluster(&args.cluster)?;
         let selector = format!("topic={}|producer_group={}", args.topic, args.producer_group);
         let snapshot = self
             .connection_snapshot(
@@ -904,7 +912,7 @@ where
     ) -> Result<QueryResult<MessageMetadataOutput>, ToolFailure> {
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.message_id = normalized_identifier("message_id", &args.message_id)?;
-        let cluster = self.resolve_required_cluster(&args.cluster)?;
+        let cluster = self.resolve_cluster(&args.cluster)?;
         let lookup_alias = self.aliases.message_alias(&args.message_id).map_err(alias_error)?;
         let key = self.cache_key("message_metadata", &cluster.name, &format!("message={lookup_alias}"));
         let ttl = Duration::from_millis(self.config.cache.broker_metrics_ttl_ms);
@@ -956,7 +964,7 @@ where
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.topic = normalized_identifier("topic", &args.topic)?;
         args.broker_names = normalized_broker_names(args.broker_names)?;
-        let cluster = self.resolve_required_cluster(&args.cluster)?;
+        let cluster = self.resolve_cluster(&args.cluster)?;
         let key = self.cache_key(
             "topic_config_state",
             &cluster.name,
@@ -986,7 +994,7 @@ where
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.group = normalized_identifier("group", &args.group)?;
         args.broker_names = normalized_broker_names(args.broker_names)?;
-        let cluster = self.resolve_required_cluster(&args.cluster)?;
+        let cluster = self.resolve_cluster(&args.cluster)?;
         let key = self.cache_key(
             "consumer_group_config_state",
             &cluster.name,
@@ -1019,7 +1027,7 @@ where
     ) -> Result<QueryResult<DiagnosisReport>, ToolFailure> {
         args.topic = normalized_identifier("topic", &args.topic)?;
         args.consumer_group = normalized_identifier("consumer_group", &args.consumer_group)?;
-        let cluster = self.resolve_cluster(Some(&args.cluster))?;
+        let cluster = self.resolve_cluster(&args.cluster)?;
         let key = self.cache_key(
             "diagnose_consumer_lag",
             &cluster.name,
@@ -1069,12 +1077,15 @@ where
                                         &args.topic,
                                         &error,
                                     ));
-                                    (
-                                        Err(ToolFailure::Operational(
+                                    // The description is derived from the route, so a missing Topic
+                                    // is missing for both; any other failure stays a source failure.
+                                    let description_error = match error.not_found_entity() {
+                                        Some(entity) => ToolFailure::not_found(entity),
+                                        None => ToolFailure::Operational(
                                             crate::tools::executor::ToolExecutionError::Backend(None),
-                                        )),
-                                        Err(error),
-                                    )
+                                        ),
+                                    };
+                                    (Err(description_error), Err(error))
                                 }
                             };
                             let broker_result = match top_lag_broker(lag_result.as_ref().ok()) {
@@ -1361,27 +1372,20 @@ where
         }
     }
 
-    fn resolve_cluster(&self, cluster: Option<&str>) -> Result<ResolvedCluster, ToolFailure> {
-        let cluster = cluster.map(str::trim).filter(|cluster| !cluster.is_empty());
-        let config = match cluster {
-            Some(name) => self
-                .config
-                .clusters
-                .iter()
-                .find(|candidate| candidate.name == name)
-                .ok_or_else(|| {
-                    ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { _source: None })
-                })?,
-            None => self
-                .config
-                .clusters
-                .iter()
-                .find(|candidate| candidate.default.unwrap_or(false))
-                .or_else(|| (self.config.clusters.len() == 1).then(|| &self.config.clusters[0]))
-                .ok_or_else(|| {
-                    ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { _source: None })
-                })?,
-        };
+    /// Resolves an explicitly named logical cluster.
+    ///
+    /// There is deliberately no default-cluster fallback: the Guard resolves and authorizes the
+    /// effective cluster, so a blank name fails here instead of selecting a cluster nobody authorized.
+    fn resolve_cluster(&self, cluster: &str) -> Result<ResolvedCluster, ToolFailure> {
+        let name = cluster.trim();
+        let config = self
+            .config
+            .clusters
+            .iter()
+            .find(|candidate| !name.is_empty() && candidate.name == name)
+            .ok_or_else(|| {
+                ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { _source: None })
+            })?;
 
         Ok(ResolvedCluster {
             name: config.name.clone(),
@@ -1403,24 +1407,13 @@ where
         })
     }
 
-    fn resolve_required_cluster(&self, cluster: &str) -> Result<ResolvedCluster, ToolFailure> {
-        if cluster.trim().is_empty() {
-            return Err(ToolFailure::Rejected(
-                crate::tools::executor::ToolRejection::InvalidArguments { _source: None },
-            ));
-        }
-        self.resolve_cluster(Some(cluster))
-    }
-
     fn resolve_proxy_endpoint<'a>(&'a self, cluster_name: &str, proxy_name: &str) -> Result<&'a str, ToolFailure> {
         self.config
             .clusters
             .iter()
             .find(|cluster| cluster.name == cluster_name)
             .and_then(|cluster| cluster.proxy_endpoint(proxy_name))
-            .ok_or_else(|| {
-                ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { _source: None })
-            })
+            .ok_or_else(|| ToolFailure::not_found(NotFoundEntity::Proxy))
     }
 
     fn cache_key(&self, kind: &str, cluster: &str, parameters: &str) -> String {
@@ -1764,9 +1757,7 @@ where
             }
             BrokerRuntimeTargetStatus::NotFound => {}
         }
-        return Err(ToolFailure::Rejected(
-            crate::tools::executor::ToolRejection::InvalidArguments { _source: None },
-        ));
+        return Err(ToolFailure::not_found(NotFoundEntity::Broker));
     }
     Ok(completeness.wrap(DescribeBrokerOutput {
         cluster: cluster.name.clone(),
@@ -1791,7 +1782,8 @@ fn completeness_for_error(source: QuerySource, logical_target: &str, error: &Too
         | ToolFailure::Rejected(crate::tools::executor::ToolRejection::ClusterNotAllowed) => {
             (SourceFailureCode::PermissionDenied, false)
         }
-        ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { .. }) => {
+        ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { .. })
+        | ToolFailure::Rejected(crate::tools::executor::ToolRejection::NotFound { .. }) => {
             (SourceFailureCode::NotFound, false)
         }
         ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(_))
@@ -2143,6 +2135,8 @@ mod tests {
         fail_group_enrichment: bool,
         truncated_connections: bool,
         yield_snapshot_queries: bool,
+        missing_topic: bool,
+        missing_consumer_group: bool,
     }
 
     impl AdminSessionFactory for FakeSessionFactory {
@@ -2171,6 +2165,8 @@ mod tests {
                 fail_group_enrichment: self.fail_group_enrichment,
                 truncated_connections: self.truncated_connections,
                 yield_snapshot_queries: self.yield_snapshot_queries,
+                missing_topic: self.missing_topic,
+                missing_consumer_group: self.missing_consumer_group,
             })
         }
     }
@@ -2196,6 +2192,8 @@ mod tests {
         fail_group_enrichment: bool,
         truncated_connections: bool,
         yield_snapshot_queries: bool,
+        missing_topic: bool,
+        missing_consumer_group: bool,
     }
 
     impl AdminSession for FakeSession {
@@ -2259,6 +2257,9 @@ mod tests {
             self.counters.route_queries.fetch_add(1, Ordering::SeqCst);
             if self.yield_snapshot_queries {
                 tokio::task::yield_now().await;
+            }
+            if self.missing_topic {
+                return Err(ToolFailure::not_found(NotFoundEntity::Topic));
             }
             let queues = if self.many_route_rows {
                 (0..5).map(|index| route_queue(&format!("broker-{index}"))).collect()
@@ -2341,6 +2342,12 @@ mod tests {
             self.counters.consumer_lag_queries.fetch_add(1, Ordering::SeqCst);
             if self.yield_snapshot_queries {
                 tokio::task::yield_now().await;
+            }
+            if self.missing_topic {
+                return Err(ToolFailure::not_found(NotFoundEntity::Topic));
+            }
+            if self.missing_consumer_group {
+                return Err(ToolFailure::not_found(NotFoundEntity::ConsumerGroup));
             }
             let queues = if self.many_lag_rows {
                 (0..5)
@@ -3486,10 +3493,7 @@ mod tests {
 
         assert_eq!(local.data.cluster, "local-dev");
         assert_eq!(secondary.data.cluster, "secondary");
-        assert!(matches!(
-            missing,
-            ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { .. })
-        ));
+        assert_eq!(missing.not_found_entity(), Some(NotFoundEntity::Proxy));
         assert_eq!(counters.starts.load(Ordering::SeqCst), starts);
         assert_eq!(counters.proxy_endpoint_mismatches.load(Ordering::SeqCst), 0);
     }
@@ -3735,16 +3739,156 @@ mod tests {
 
         let report = facade.diagnose_consumer_lag(diagnosis_request()).await.unwrap();
 
+        // The probe established that the selected Broker does not exist, which is not an outage.
         assert!(report
             .evidences
             .iter()
             .any(|evidence| evidence.id == "broker_description"
-                && evidence.status == crate::model::diagnosis::EvidenceStatus::Unavailable));
+                && evidence.status == crate::model::diagnosis::EvidenceStatus::Missing));
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
         assert_eq!(counters.route_queries.load(Ordering::SeqCst), 1);
         assert_eq!(counters.broker_queries.load(Ordering::SeqCst), 1);
         assert_eq!(counters.runtime_probes.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn missing_targets_are_reported_as_not_found_instead_of_a_source_failure() {
+        let topic_missing = QueryFacade::with_factory(
+            example_config(),
+            FakeSessionFactory {
+                missing_topic: true,
+                ..Default::default()
+            },
+        );
+        let error = topic_missing
+            .query_topic_route(QueryTopicRouteArgs {
+                cluster: "local-dev".to_string(),
+                topic: "orders".to_string(),
+                page: PageRequest::default(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.not_found_entity(), Some(NotFoundEntity::Topic));
+        let error = topic_missing
+            .describe_topic(DescribeTopicArgs {
+                cluster: "local-dev".to_string(),
+                topic: "orders".to_string(),
+                page: PageRequest::default(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.not_found_entity(), Some(NotFoundEntity::Topic));
+
+        let group_missing = QueryFacade::with_factory(
+            example_config(),
+            FakeSessionFactory {
+                missing_consumer_group: true,
+                ..Default::default()
+            },
+        );
+        let error = group_missing
+            .query_consumer_lag(QueryConsumerLagArgs {
+                cluster: "local-dev".to_string(),
+                topic: "orders".to_string(),
+                consumer_group: "order-service".to_string(),
+                page: PageRequest::default(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.not_found_entity(), Some(NotFoundEntity::ConsumerGroup));
+
+        let broker_missing = QueryFacade::with_factory(
+            example_config(),
+            FakeSessionFactory {
+                selected_broker_missing: true,
+                ..Default::default()
+            },
+        );
+        let error = broker_missing
+            .describe_broker(DescribeBrokerArgs {
+                cluster: "local-dev".to_string(),
+                broker_name: "broker-a".to_string(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.not_found_entity(), Some(NotFoundEntity::Broker));
+        assert_eq!(error.code(), "not_found");
+    }
+
+    #[tokio::test]
+    async fn diagnosis_reports_a_missing_topic_as_evidence_and_root_cause() {
+        let factory = FakeSessionFactory {
+            missing_topic: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+
+        let result = facade.diagnose_consumer_lag(diagnosis_request()).await.unwrap();
+        let report = &result.data;
+
+        assert!(result.partial);
+        assert!(result
+            .source_failures
+            .iter()
+            .all(|failure| failure.code == SourceFailureCode::NotFound && !failure.retryable));
+        assert_eq!(report.severity, crate::model::diagnosis::Severity::Unknown);
+        assert!(report.summary.contains("the topic does not exist"));
+        assert_eq!(report.root_causes.len(), 1);
+        assert_eq!(
+            report.root_causes[0].cause,
+            "The topic does not exist in the selected cluster"
+        );
+        assert_eq!(report.root_causes[0].evidence_refs, ["topic_route"]);
+        assert_eq!(report.recommendations.len(), 1);
+        assert!(report.recommendations[0].action.contains("rocketmq_list_topics"));
+        let snapshot = report.evidence_snapshot.as_ref().unwrap();
+        for id in ["consumer_lag", "topic_description", "topic_route"] {
+            let item = snapshot.items.iter().find(|item| item.id == id).unwrap();
+            assert_eq!(
+                item.status,
+                crate::model::diagnosis::EvidenceStatus::Missing,
+                "item={id}"
+            );
+            assert_eq!(item.error_code.as_deref(), Some("not_found"), "item={id}");
+            let evidence = report.evidences.iter().find(|evidence| evidence.id == id).unwrap();
+            assert_eq!(
+                evidence.status,
+                crate::model::diagnosis::EvidenceStatus::Missing,
+                "evidence={id}"
+            );
+        }
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn diagnosis_reports_a_missing_consumer_group_when_the_topic_exists() {
+        let facade = QueryFacade::with_factory(
+            example_config(),
+            FakeSessionFactory {
+                missing_consumer_group: true,
+                ..Default::default()
+            },
+        );
+
+        let result = facade.diagnose_consumer_lag(diagnosis_request()).await.unwrap();
+        let report = &result.data;
+
+        assert!(report.summary.contains("the consumer group does not exist"));
+        assert_eq!(report.root_causes.len(), 1);
+        assert_eq!(
+            report.root_causes[0].cause,
+            "The consumer group does not exist in the selected cluster"
+        );
+        assert_eq!(report.root_causes[0].evidence_refs, ["consumer_lag"]);
+        assert!(report.recommendations[0]
+            .action
+            .contains("rocketmq_list_consumer_groups"));
+        // The Topic was found, so its route is still usable evidence.
+        assert!(report.evidence_refs.contains(&"topic_route".to_string()));
+        assert!(report.missing_evidence.contains(&"consumer_lag".to_string()));
     }
 
     #[tokio::test]
@@ -4301,7 +4445,10 @@ mod tests {
         let counters = factory.counters.clone();
         let facade = QueryFacade::with_factory(example_config(), factory);
         let result = facade
-            .list_consumer_groups(ListConsumerGroupsArgs::default())
+            .list_consumer_groups(ListConsumerGroupsArgs {
+                cluster: Some("local-dev".to_string()),
+                ..Default::default()
+            })
             .await
             .unwrap();
 
@@ -4323,7 +4470,10 @@ mod tests {
         let counters = factory.counters.clone();
         let facade = QueryFacade::with_factory(example_config(), factory);
         let error = facade
-            .list_consumer_groups(ListConsumerGroupsArgs::default())
+            .list_consumer_groups(ListConsumerGroupsArgs {
+                cluster: Some("local-dev".to_string()),
+                ..Default::default()
+            })
             .await
             .unwrap_err();
         assert!(matches!(
@@ -4334,6 +4484,193 @@ mod tests {
         assert_eq!(counters.consumer_group_enrichment_queries.load(Ordering::SeqCst), 1);
         assert_eq!(counters.starts.load(Ordering::SeqCst), 2);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn blank_or_omitted_cluster_never_falls_back_to_the_default_cluster() {
+        let factory = FakeSessionFactory::default();
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+
+        for cluster in [None, Some(String::new()), Some("   ".to_string())] {
+            let error = facade
+                .list_topics(ListTopicsArgs {
+                    cluster: cluster.clone(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), "invalid_arguments", "cluster={cluster:?}");
+            let error = facade
+                .list_consumer_groups(ListConsumerGroupsArgs {
+                    cluster: cluster.clone(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), "invalid_arguments", "cluster={cluster:?}");
+        }
+        for cluster in ["", "   "] {
+            let error = facade
+                .cluster_overview(ClusterOverviewArgs {
+                    cluster: cluster.to_string(),
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), "invalid_arguments", "cluster={cluster:?}");
+            let error = facade
+                .describe_broker(DescribeBrokerArgs {
+                    cluster: cluster.to_string(),
+                    broker_name: "broker-a".to_string(),
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), "invalid_arguments", "cluster={cluster:?}");
+        }
+
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn tool_calls_never_reach_a_cluster_the_guard_did_not_authorize() {
+        use crate::guard::context::RequestContext;
+        use crate::tools::catalog::ClusterArg;
+        use crate::tools::catalog::ToolId;
+        use crate::tools::executor::ToolExecutor;
+
+        type Executor = ToolExecutor<QueryFacade<FakeSessionFactory>>;
+
+        async fn call(
+            executor: &Executor,
+            context: &RequestContext,
+            tool: ToolId,
+            arguments: rmcp::model::JsonObject,
+        ) -> rmcp::model::CallToolResult {
+            executor
+                .clone()
+                .with_request_context(context.clone())
+                .call(rmcp::model::CallToolRequestParams::new(tool.descriptor().name).with_arguments(arguments))
+                .await
+                .unwrap()
+        }
+
+        fn error_code(result: &rmcp::model::CallToolResult) -> String {
+            assert_eq!(result.is_error, Some(true));
+            let text = result
+                .content
+                .iter()
+                .find_map(|content| match content {
+                    rmcp::model::ContentBlock::Text(text) => Some(text.text.as_str()),
+                    _ => None,
+                })
+                .unwrap();
+            serde_json::from_str::<serde_json::Value>(text).unwrap()["code"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        }
+
+        // `local-dev` is the default cluster and is bound to `tenant-b`; `secondary` is unbound.
+        let mut config = example_config_with_secondary_proxy();
+        config.clusters[0].tenant = Some("tenant-b".to_string());
+        let guard = crate::guard::Guard::new(
+            crate::config::SecurityConfig {
+                profile: "diagnose".to_string(),
+                allow_change_planning: false,
+                sanitize_output: true,
+                rate_limit_per_minute: 60,
+                permissions_file: config.security.permissions_file.clone(),
+                max_concurrent_requests_per_cluster: 8,
+            },
+            crate::config::AuditConfig {
+                enabled: true,
+                sink: "memory".to_string(),
+                path: String::new(),
+                queue_capacity: 256,
+                max_record_bytes: 16 * 1024,
+                queue_max_bytes: 1024 * 1024,
+            },
+            &config.clusters,
+        )
+        .unwrap();
+        let factory = FakeSessionFactory::default();
+        let counters = factory.counters.clone();
+        let executor = ToolExecutor::new(QueryFacade::with_factory(config, factory), guard.clone());
+
+        let mut restricted = guard.local_request_context();
+        restricted.principal.allowed_clusters = Some(["secondary".to_string()].into_iter().collect());
+        let mut same_tenant_restricted = restricted.clone();
+        same_tenant_restricted.principal.tenant = Some("tenant-b".to_string());
+        let mut authorized = guard.local_request_context();
+        authorized.principal.tenant = Some("tenant-b".to_string());
+
+        let tools = [
+            (ToolId::DescribeBroker, serde_json::json!({ "broker_name": "broker-a" })),
+            (
+                ToolId::GetConsumerLag,
+                serde_json::json!({ "topic": "orders", "consumer_group": "group-a" }),
+            ),
+            (ToolId::GetTopicRoute, serde_json::json!({ "topic": "orders" })),
+            (ToolId::ListTopics, serde_json::json!({})),
+            (ToolId::GetClusterOverview, serde_json::json!({})),
+            (ToolId::DescribeTopic, serde_json::json!({ "topic": "orders" })),
+            (
+                ToolId::DiagnoseConsumerLag,
+                serde_json::json!({ "topic": "orders", "consumer_group": "group-a" }),
+            ),
+            (ToolId::ListConsumerGroups, serde_json::json!({})),
+        ];
+        for (tool, base) in tools {
+            let name = tool.descriptor().name;
+            for cluster in [Some(""), Some("   "), None] {
+                let mut arguments = base.as_object().unwrap().clone();
+                if let Some(cluster) = cluster {
+                    arguments.insert("cluster".to_string(), cluster.into());
+                }
+                let selects_default = cluster.is_none() && tool.cluster_arg() == ClusterArg::OptionalDefault;
+                let result = call(&executor, &restricted, tool, arguments.clone()).await;
+                assert_eq!(
+                    error_code(&result),
+                    if selects_default {
+                        "tenant_mismatch"
+                    } else {
+                        "invalid_arguments"
+                    },
+                    "tool={name} cluster={cluster:?}"
+                );
+                if selects_default {
+                    let result = call(&executor, &same_tenant_restricted, tool, arguments).await;
+                    assert_eq!(error_code(&result), "cluster_not_allowed", "tool={name}");
+                }
+            }
+        }
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 0);
+
+        // The same restricted principal still reaches the cluster it is allowed to read.
+        let arguments = serde_json::json!({ "cluster": "secondary" })
+            .as_object()
+            .unwrap()
+            .clone();
+        let result = call(&executor, &restricted, ToolId::ListTopics, arguments).await;
+        assert_eq!(result.is_error, Some(false));
+        assert_eq!(result.structured_content.as_ref().unwrap()["cluster"], "secondary");
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
+
+        // An authorized caller that omits `cluster` reads the default cluster, and the audit names it.
+        let result = call(
+            &executor,
+            &authorized,
+            ToolId::ListTopics,
+            rmcp::model::JsonObject::new(),
+        )
+        .await;
+        assert_eq!(result.is_error, Some(false));
+        assert_eq!(result.structured_content.as_ref().unwrap()["cluster"], "local-dev");
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 2);
+        let records = guard.audit_log().records();
+        let record = records.last().unwrap();
+        assert_eq!(record.cluster.as_deref(), Some("local-dev"));
+        assert_eq!(record.status, crate::guard::audit::AuditStatus::Success);
     }
 
     #[tokio::test]

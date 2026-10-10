@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::tools::executor::NotFoundEntity;
 use crate::tools::executor::ToolExecutionError;
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -43,6 +44,8 @@ use rocketmq_admin_core::core::topic::GetTopicRouteRequest;
 use rocketmq_admin_core::core::topic::TopicInventoryAdmin;
 use rocketmq_admin_core::core::topic::TopicInventoryRequest;
 use rocketmq_admin_core::core::topic::TopicQueryAdmin;
+use rocketmq_admin_core::core::AdminError;
+use rocketmq_admin_core::core::AdminFailure;
 use rocketmq_admin_core::read_client_adapter::ClientRuntime;
 use rocketmq_admin_core::read_client_adapter::ReadAdminBuilder;
 use rocketmq_admin_core::read_client_adapter::ReadAdminGuard;
@@ -443,7 +446,7 @@ impl AdminSession for AdminCoreSession {
             .admin_mut()?
             .list_brokers_with_evidence(&request)
             .await
-            .map_err(ToolFailure::backend)?;
+            .map_err(map_admin_error(NotFoundEntity::Cluster))?;
         Ok(QueryPayload::from_admin(result).map(|result| result.brokers.iter().map(map_broker_summary).collect()))
     }
 
@@ -457,7 +460,7 @@ impl AdminSession for AdminCoreSession {
             .admin_mut()?
             .get_topic_inventory(&request)
             .await
-            .map_err(ToolFailure::backend)?;
+            .map_err(map_admin_error(NotFoundEntity::Cluster))?;
         Ok(result.topics)
     }
 
@@ -466,13 +469,13 @@ impl AdminSession for AdminCoreSession {
         if let Some(session) = &mut self.test_session {
             return session.topic_route(topic).await;
         }
-        let request = GetTopicRouteRequest::try_new(topic).map_err(ToolFailure::backend)?;
+        let request = GetTopicRouteRequest::try_new(topic).map_err(map_admin_error(NotFoundEntity::Topic))?;
         let route = self
             .admin_mut()?
             .get_topic_route(&request)
             .await
-            .map_err(ToolFailure::backend)?
-            .ok_or_else(|| ToolFailure::Operational(ToolExecutionError::Backend(None)))?;
+            .map_err(map_admin_error(NotFoundEntity::Topic))?
+            .ok_or_else(|| ToolFailure::not_found(NotFoundEntity::Topic))?;
         let mut brokers = route
             .brokers
             .iter()
@@ -550,7 +553,7 @@ impl AdminSession for AdminCoreSession {
             .admin_mut()?
             .list_consumer_groups_with_evidence(&ListConsumerGroupsRequest)
             .await
-            .map_err(ToolFailure::backend)?;
+            .map_err(map_admin_error(NotFoundEntity::Cluster))?;
         Ok(QueryPayload::from_admin(result).map(|result| {
             result
                 .groups
@@ -577,7 +580,7 @@ impl AdminSession for AdminCoreSession {
             .admin_mut()?
             .list_consumer_group_inventory_with_evidence(&ListConsumerGroupsRequest)
             .await
-            .map_err(ToolFailure::backend)?;
+            .map_err(map_admin_error(NotFoundEntity::Cluster))?;
         Ok(QueryPayload::from_admin(result).map(|result| result.groups))
     }
 
@@ -595,7 +598,7 @@ impl AdminSession for AdminCoreSession {
             .admin_mut()?
             .enrich_consumer_groups_exact_with_evidence(&request)
             .await
-            .map_err(ToolFailure::backend)?;
+            .map_err(map_admin_error(NotFoundEntity::ConsumerGroup))?;
         Ok(QueryPayload::from_admin(result).map(|result| {
             result
                 .groups
@@ -622,12 +625,13 @@ impl AdminSession for AdminCoreSession {
         if let Some(session) = &mut self.test_session {
             return session.consumer_lag(topic, consumer_group).await;
         }
-        let request = QueryConsumerLagRequest::try_new(topic, consumer_group, false).map_err(ToolFailure::backend)?;
+        let request = QueryConsumerLagRequest::try_new(topic, consumer_group, false)
+            .map_err(map_admin_error(NotFoundEntity::ConsumerGroup))?;
         let result = self
             .admin_mut()?
             .query_consumer_lag_with_evidence(&request)
             .await
-            .map_err(ToolFailure::backend)?;
+            .map_err(map_admin_error(NotFoundEntity::ConsumerGroup))?;
         Ok(QueryPayload::from_admin(result).map(|result| {
             let mut queues = result
                 .rows
@@ -670,11 +674,11 @@ impl AdminSession for AdminCoreSession {
             self.cluster.rocketmq_cluster_name.clone(),
             broker_name.to_string(),
         )
-        .map_err(ToolFailure::backend)?;
+        .map_err(map_admin_error(NotFoundEntity::Broker))?;
         self.admin_mut()?
             .probe_broker_runtime_target(&request)
             .await
-            .map_err(ToolFailure::backend)
+            .map_err(map_admin_error(NotFoundEntity::Broker))
     }
 
     async fn broker_diagnostics(
@@ -687,12 +691,12 @@ impl AdminSession for AdminCoreSession {
         }
         let request =
             QueryBrokerDiagnosticsTargetRequest::try_new(self.cluster.rocketmq_cluster_name.clone(), broker_name)
-                .map_err(map_logical_admin_error)?;
+                .map_err(map_admin_error(NotFoundEntity::Broker))?;
         let result = self
             .admin_mut()?
             .query_broker_diagnostics_target_with_evidence(&request)
             .await
-            .map_err(map_logical_admin_error)?;
+            .map_err(map_admin_error(NotFoundEntity::Broker))?;
         let cluster = self.cluster.name.clone();
         Ok(QueryPayload::from_admin(result).map(|result| BrokerDiagnosticsOutput {
             cluster,
@@ -715,12 +719,12 @@ impl AdminSession for AdminCoreSession {
         }
         let request =
             QueryBrokerAllowlistedConfigTargetRequest::try_new(self.cluster.rocketmq_cluster_name.clone(), broker_name)
-                .map_err(map_logical_admin_error)?;
+                .map_err(map_admin_error(NotFoundEntity::Broker))?;
         let result = self
             .admin_mut()?
             .query_allowlisted_config_target_with_evidence(&request)
             .await
-            .map_err(map_logical_admin_error)?;
+            .map_err(map_admin_error(NotFoundEntity::Broker))?;
         let cluster = self.cluster.name.clone();
         Ok(QueryPayload::from_admin(result).map(|rows| BrokerConfigSummaryOutput {
             cluster,
@@ -750,12 +754,12 @@ impl AdminSession for AdminCoreSession {
             broker_name,
             logger,
         )
-        .map_err(map_logical_admin_error)?;
+        .map_err(map_admin_error(NotFoundEntity::Broker))?;
         let result = self
             .admin_mut()?
             .query_log_filter_state_target_with_evidence(&request)
             .await
-            .map_err(map_logical_admin_error)?;
+            .map_err(map_admin_error(NotFoundEntity::Broker))?;
         let cluster = self.cluster.name.clone();
         let payload = QueryPayload::from_admin(result);
         let mut sanitized = false;
@@ -817,7 +821,7 @@ impl AdminSession for AdminCoreSession {
             .admin_mut()?
             .query_drain_state(&request)
             .await
-            .map_err(ToolFailure::backend)?;
+            .map_err(map_admin_error(NotFoundEntity::Proxy))?;
         let (operation_id, warnings) = bounded_proxy_operation_id(state.operation_id);
         let output = ProxyDrainStateOutput {
             cluster: self.cluster.name.clone(),
@@ -872,7 +876,7 @@ impl AdminSession for AdminCoreSession {
             .admin_mut()?
             .query_consumer_connections_with_evidence(&request)
             .await
-            .map_err(ToolFailure::backend)?;
+            .map_err(map_admin_error(NotFoundEntity::ConsumerGroup))?;
         Ok(QueryPayload::from_admin(result).map(|result| SessionConnections {
             rows: result
                 .connections
@@ -912,7 +916,7 @@ impl AdminSession for AdminCoreSession {
             .admin_mut()?
             .query_topic_producer_connections_with_evidence(&request)
             .await
-            .map_err(ToolFailure::backend)?;
+            .map_err(map_admin_error(NotFoundEntity::Topic))?;
         Ok(QueryPayload::from_admin(result).map(|result| SessionConnections {
             rows: result
                 .connections
@@ -940,7 +944,7 @@ impl AdminSession for AdminCoreSession {
             .map_err(ToolFailure::invalid_arguments)?;
         let metadata = MessageMetadataQueryAdmin::query_message_metadata(self.admin_mut()?.inner_mut(), &request)
             .await
-            .map_err(ToolFailure::backend)?;
+            .map_err(map_admin_error(NotFoundEntity::Message))?;
         Ok(SessionMessageMetadata {
             message_id: metadata.message_id,
             unique_message_id: metadata.unique_message_id,
@@ -976,7 +980,7 @@ impl AdminSession for AdminCoreSession {
             .admin_mut()?
             .query_topic_config_state(&request)
             .await
-            .map_err(ToolFailure::backend)?;
+            .map_err(map_admin_error(NotFoundEntity::Topic))?;
         let cluster = self.cluster.name.clone();
         Ok(QueryPayload::from_admin(result).map(|result| TopicConfigStateOutput {
             cluster,
@@ -1014,7 +1018,7 @@ impl AdminSession for AdminCoreSession {
             .admin_mut()?
             .query_consumer_group_config_state(&request)
             .await
-            .map_err(ToolFailure::backend)?;
+            .map_err(map_admin_error(NotFoundEntity::ConsumerGroup))?;
         let cluster = self.cluster.name.clone();
         Ok(
             QueryPayload::from_admin(result).map(|result| ConsumerGroupConfigStateOutput {
@@ -1335,12 +1339,82 @@ fn map_broker_summary(row: &rocketmq_admin_core::core::broker::BrokerSummary) ->
     }
 }
 
-fn map_logical_admin_error(error: rocketmq_admin_core::core::AdminError) -> ToolFailure {
-    match error.failure() {
-        rocketmq_admin_core::core::AdminFailure::InvalidArgument
-        | rocketmq_admin_core::core::AdminFailure::NotFound => ToolFailure::invalid_arguments(error),
-        rocketmq_admin_core::core::AdminFailure::Backend | rocketmq_admin_core::core::AdminFailure::SessionClosed => {
-            ToolFailure::backend(error)
+/// Maps an Admin failure to the Tool contract for a query whose caller selected `selected`.
+///
+/// A missing entity becomes a non-retryable `not_found` instead of a retryable source failure.
+/// Its kind comes from the Admin error when the error names one, because a query can miss an
+/// entity other than the selected one (the Topic of a consumer lag query, for example), and
+/// from `selected` otherwise.
+fn map_admin_error(selected: NotFoundEntity) -> impl FnOnce(AdminError) -> ToolFailure {
+    move |error| match error.failure() {
+        AdminFailure::InvalidArgument => ToolFailure::invalid_arguments(error),
+        AdminFailure::NotFound => ToolFailure::not_found(named_entity(&error).unwrap_or(selected)),
+        AdminFailure::Backend | AdminFailure::SessionClosed => ToolFailure::backend(error),
+    }
+}
+
+/// Reads the entity kind from the resource label Admin Core attaches to its own not-found errors.
+fn named_entity(error: &AdminError) -> Option<NotFoundEntity> {
+    match error.resource()? {
+        "cluster" => Some(NotFoundEntity::Cluster),
+        "topic" | "topic route" | "topic route in selected cluster" => Some(NotFoundEntity::Topic),
+        "consumer group" | "consumer route in selected cluster" => Some(NotFoundEntity::ConsumerGroup),
+        "broker" => Some(NotFoundEntity::Broker),
+        "controller" => Some(NotFoundEntity::Controller),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn admin_failures_map_to_the_tool_contract() {
+        let map = |error: AdminError| map_admin_error(NotFoundEntity::Message)(error);
+
+        // Admin Core names the entity it missed, which can differ from the selected one.
+        for (error, entity) in [
+            (AdminError::cluster_not_found("cluster-a"), NotFoundEntity::Cluster),
+            (AdminError::topic_not_found("orders"), NotFoundEntity::Topic),
+            (AdminError::topic_route_not_found("orders"), NotFoundEntity::Topic),
+            (
+                AdminError::not_found("topic route in selected cluster", "cluster-a"),
+                NotFoundEntity::Topic,
+            ),
+            (
+                AdminError::consumer_group_not_found("order-service"),
+                NotFoundEntity::ConsumerGroup,
+            ),
+            (
+                AdminError::not_found("consumer route in selected cluster", "cluster-a"),
+                NotFoundEntity::ConsumerGroup,
+            ),
+            (AdminError::broker_not_found("broker-a"), NotFoundEntity::Broker),
+            (
+                AdminError::not_found("controller", "controller-a"),
+                NotFoundEntity::Controller,
+            ),
+            // A miss without a known label refers to the entity the caller selected.
+            (
+                AdminError::not_found("unlisted resource", "name"),
+                NotFoundEntity::Message,
+            ),
+        ] {
+            let failure = map(error);
+            assert_eq!(failure.not_found_entity(), Some(entity));
+            assert_eq!(failure.code(), "not_found");
         }
+
+        // A malformed identifier is the caller's to fix; it is not a source outage.
+        assert_eq!(
+            map(GetTopicRouteRequest::try_new("").unwrap_err()).code(),
+            "invalid_arguments"
+        );
+        assert_eq!(
+            map(AdminError::backend("query_consumer_lag", "connection reset")).code(),
+            "source_unavailable"
+        );
+        assert_eq!(map(AdminError::session_closed()).code(), "source_unavailable");
     }
 }
