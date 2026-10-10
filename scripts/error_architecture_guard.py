@@ -631,7 +631,7 @@ def check_required_mapping_adapters() -> list[Finding]:
             "CliErrorView::from_error",
             "CliVerbosity::Verbose",
             ".output(verbosity)",
-            "ProcessOutcome::Error(output.exit_code())",
+            "StoreInspectionExitStatus::Error(output.exit_code())",
             "Error::caused_by(&STORAGE_WRITE_FAILED, source)",
             ".with_secret_presence(fields::SOURCE_PRESENT)",
         ],
