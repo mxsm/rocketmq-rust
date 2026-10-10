@@ -19,8 +19,8 @@ pub use crate::error::TransportError;
 
 pub use crate::admission::AdmissionClass;
 pub use crate::admission::AdmissionController;
+pub use crate::admission::AdmissionDecision;
 pub use crate::admission::AdmissionLimits;
-pub use crate::admission::AdmissionOutcome;
 pub use crate::admission::AdmissionRejection;
 pub use crate::admission::AdmissionResource;
 pub use crate::admission::AdmissionScope;

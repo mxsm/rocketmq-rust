@@ -138,8 +138,8 @@ impl AdmissionHotPathHarness {
                 .controller
                 .try_acquire(AdmissionResource::Inflight, self.scope, bytes, AdmissionClass::Data)
             {
-                crate::admission::AdmissionOutcome::Acquired(permit) => permit,
-                crate::admission::AdmissionOutcome::Rejected(_) => panic!("registry lookup admission"),
+                crate::admission::AdmissionDecision::Acquired(permit) => permit,
+                crate::admission::AdmissionDecision::Rejected(_) => panic!("registry lookup admission"),
             };
         black_box(permit);
     }
