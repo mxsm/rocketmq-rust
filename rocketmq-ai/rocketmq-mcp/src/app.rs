@@ -15,6 +15,7 @@
 use std::sync::Arc;
 
 use crate::adapter::admin_session::AdminCoreSessionFactory;
+use crate::adapter::identifier_alias::IdentifierAliaser;
 use crate::adapter::query_facade::QueryFacade;
 use crate::config::McpConfig;
 use crate::config::TransportKind;
@@ -139,7 +140,19 @@ impl McpApp {
             telemetry_handle,
         )
         .map_err(|error| crate::error::McpError::infrastructure("initialize MCP client runtime", error))?;
-        let query = Arc::new(QueryFacade::new(config.clone(), client_runtime.clone()).with_metrics(metrics.clone()));
+        let aliases = match config.security.resolve_pseudonym_key()? {
+            Some(key) => IdentifierAliaser::with_key(key.as_bytes())?,
+            None => IdentifierAliaser::default(),
+        };
+        let query = Arc::new(
+            QueryFacade::new(
+                config.clone(),
+                client_runtime.clone(),
+                service_context.storage_io().clone(),
+            )
+            .with_identifier_aliases(aliases)
+            .with_metrics(metrics.clone()),
+        );
         let resources = crate::resources::registry::ResourceRegistry::new()?;
         Ok(Self {
             config,
@@ -158,7 +171,9 @@ impl McpApp {
         mut self,
         factory: crate::adapter::admin_session::ProtocolTestSessionFactory,
     ) -> Self {
-        let factory = AdminCoreSessionFactory::new(self.client_runtime.clone()).with_test_session_factory(factory);
+        let factory =
+            AdminCoreSessionFactory::new(self.client_runtime.clone(), self.service_context.storage_io().clone())
+                .with_test_session_factory(factory);
         self.query =
             Arc::new(QueryFacade::with_factory(self.config.clone(), factory).with_metrics(self.metrics.clone()));
         self

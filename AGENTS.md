@@ -22,6 +22,7 @@ build standalone Cargo or Node projects; follow the matching local guide when wo
 | `rocketmq-macros/tests/fixtures/renamed-consumer/` | [Renamed dependency fixture](rocketmq-macros/tests/fixtures/renamed-consumer/AGENTS.md) |
 | `rocketmq-ai/rocketmq-mcp/` | [Read-only MCP](rocketmq-ai/rocketmq-mcp/AGENTS.md) |
 | `rocketmq-ai/rocketmq-mcp-control/` | [Isolated mutation control](rocketmq-ai/rocketmq-mcp-control/AGENTS.md) |
+| `rocketmq-ai/rocketmq-mcp-auth/` | [Shared MCP JWKS verification](rocketmq-ai/rocketmq-mcp-auth/AGENTS.md) |
 | `rocketmq-ai/rocketmq-sre/` | [Standalone SRE workspace](rocketmq-ai/rocketmq-sre/AGENTS.md) |
 | `rocketmq-ai/rocketmq-sre/ui/` | [SRE frontend](rocketmq-ai/rocketmq-sre/ui/AGENTS.md) |
 | `rocketmq-ai/rocketmq-sre/sdk/typescript/` | [Read-only TypeScript SDK](rocketmq-ai/rocketmq-sre/sdk/typescript/AGENTS.md) |

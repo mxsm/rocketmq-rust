@@ -2,6 +2,9 @@
 name = "rocketmq-mcp"
 version = "1.0.0"
 transport = "stdio"
+# Time one request may spend on RocketMQ sources, over every query it runs. It must be at least
+# 1000 and less than 30000, the HTTPS transport's own request timeout.
+request_timeout_ms = 25000
 
 [logging]
 filter = "info"
@@ -88,6 +91,10 @@ sanitize_output = true
 rate_limit_per_minute = 60
 permissions_file = "permissions.example.toml"
 max_concurrent_requests_per_cluster = 8
+# Name of an environment variable holding the key for client and message pseudonyms (32 to 1024
+# bytes, for example from `openssl rand -hex 32`). Set the same key on every replica that must
+# return the same pseudonyms. Without it each process draws a random key.
+# pseudonym_key_env = "ROCKETMQ_MCP_PSEUDONYM_KEY"
 
 [audit]
 enabled = true

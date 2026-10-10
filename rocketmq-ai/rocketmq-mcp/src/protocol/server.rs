@@ -355,6 +355,7 @@ impl RocketmqMcpServer {
             .clone()
             .with_visibility_class(access.visibility_class())
             .with_cancellation(cancellation)
+            .with_request_budget()
     }
 
     fn access_context(&self, context: &RequestContext<RoleServer>) -> Result<AccessContext, ErrorData> {

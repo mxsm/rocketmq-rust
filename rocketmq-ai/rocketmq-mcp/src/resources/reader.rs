@@ -229,14 +229,17 @@ fn live_payload<T>(
 fn resource_error(error: ToolFailure) -> ErrorData {
     let code = error.code();
     match error {
-        ToolFailure::Rejected(ToolRejection::AliasInputBoundExceeded)
-        | ToolFailure::Rejected(ToolRejection::AliasCapacityExceeded)
-        | ToolFailure::Rejected(ToolRejection::AliasCollisionExhausted) => ErrorData::internal_error(
+        ToolFailure::Rejected(ToolRejection::AliasInputBoundExceeded) => ErrorData::internal_error(
             "RocketMQ resource is unavailable",
             Some(json!({ "code": code, "retryable": false })),
         ),
+        // Resource reads keep one uniform projection: a cursor or result-size rejection is not
+        // distinguished from a missing Resource.
         ToolFailure::Rejected(ToolRejection::InvalidArguments { .. })
-        | ToolFailure::Rejected(ToolRejection::NotFound { .. }) => {
+        | ToolFailure::Rejected(ToolRejection::NotFound { .. })
+        | ToolFailure::Rejected(ToolRejection::CursorExpired)
+        | ToolFailure::Rejected(ToolRejection::CursorInvalid)
+        | ToolFailure::Rejected(ToolRejection::ResultTooLarge) => {
             ErrorData::resource_not_found("resource not found", None)
         }
         ToolFailure::Rejected(ToolRejection::TimedOut { timeout_ms }) => ErrorData::internal_error(

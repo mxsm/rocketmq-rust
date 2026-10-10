@@ -97,31 +97,49 @@ pub enum TopicMessageType {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TopicReplacement {
+    /// Number of read queues on each Broker, 1 to 127.
     #[schemars(range(min = 1, max = 127))]
     pub read_queue_nums: u32,
+    /// Number of write queues on each Broker, 1 to 127.
     #[schemars(range(min = 1, max = 127))]
     pub write_queue_nums: u32,
+    /// Permission bits: 2 allows writing, 4 allows reading, 6 allows both, and 1 marks the permission as
+    /// inherited. At least one of reading or writing must be allowed.
     #[schemars(range(min = 1, max = 7))]
     pub perm: u32,
+    /// Whether the Topic is ordered. This Tool never edits the cluster's order configuration, which must
+    /// already agree with the value.
     pub order: bool,
+    /// Message type of the Topic.
     pub message_type: TopicMessageType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConsumerGroupReplacement {
+    /// Whether the group may consume messages.
     pub consume_enable: bool,
+    /// Whether the group may start consuming from the minimum offset of a queue.
     pub consume_from_min_enable: bool,
+    /// Whether the group may consume in broadcast mode.
     pub consume_broadcast_enable: bool,
+    /// Whether the group consumes messages in order.
     pub consume_message_orderly: bool,
+    /// Number of retry queues, 0 to 127.
     #[schemars(range(min = 0, max = 127))]
     pub retry_queue_nums: i32,
+    /// Maximum number of redeliveries of a message, -1 to 10000.
     #[schemars(range(min = -1, max = 10_000))]
     pub retry_max_times: i32,
+    /// Id of the Broker the group normally consumes from; 0 is the master.
     pub broker_id: u64,
+    /// Id of the Broker that consumers are redirected to when consuming from the master is slow.
     pub which_broker_when_consume_slowly: u64,
+    /// Whether consumers are notified when the membership of the group changes.
     pub notify_consumer_ids_changed_enable: bool,
+    /// System flag bits of the group; 0 for an ordinary group.
     pub group_sys_flag: i32,
+    /// Minutes after which an unacknowledged message counts as timed out, 1 to 10080.
     #[schemars(range(min = 1, max = 10_080))]
     pub consume_timeout_minute: i32,
 }
@@ -129,12 +147,19 @@ pub struct ConsumerGroupReplacement {
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpsertTopicArgs {
+    /// Version of this argument schema. Always `rocketmq-mcp-control.arguments.v1`.
     #[schemars(regex(pattern = "^rocketmq-mcp-control\\.arguments\\.v1$"))]
     pub schema_version: String,
+    /// Logical cluster name from the server configuration, never a NameServer or Broker address. Both the
+    /// caller and the server policy must allow it.
     #[schemars(length(min = 1, max = 64), regex(pattern = "^[a-zA-Z0-9_-]+$"))]
     pub cluster: String,
+    /// Topic to create or replace: letters, digits, `%`, `|`, `_` and `-`, at most 127 characters. System
+    /// Topics, retry Topics and dead-letter Topics are rejected.
     #[schemars(length(min = 1, max = 127), regex(pattern = "^[%|a-zA-Z0-9_-]+$"))]
     pub topic: String,
+    /// Logical names of the master Brokers to change, 1 to 64 distinct names; never addresses. Each must
+    /// belong to the selected cluster.
     #[schemars(
         length(min = 1, max = 64),
         inner(length(min = 1, max = 127), regex(pattern = "^[%|a-zA-Z0-9_-]+$"))
@@ -142,13 +167,22 @@ pub struct UpsertTopicArgs {
     pub broker_names: Vec<String>,
     #[serde(flatten)]
     pub replacement: TopicReplacement,
+    /// Plan only: read the current state and report what would change, without writing. When omitted, the
+    /// server's configured default applies, which is a dry run unless the operator changed it.
     #[serde(default = "default_dry_run")]
     pub dry_run: bool,
+    /// Explicit confirmation. Must be true to execute, that is when `dry_run` is false; a dry run does not
+    /// need it.
     #[serde(default)]
     pub confirm: bool,
+    /// Why the change is made; kept only in the durable audit log. Required to execute. 5 to 256 characters of
+    /// letters, digits, spaces and `._,#-`, without addresses, host names or tokens.
     #[serde(default)]
     #[schemars(length(min = 5, max = 256))]
     pub reason: Option<String>,
+    /// Optional idempotency key of 8 to 64 letters, digits and `._:-`. An execute call that repeats a key with
+    /// the same arguments returns the outcome already recorded for it instead of writing again; the same key
+    /// with different arguments is rejected.
     #[serde(default)]
     #[schemars(length(min = 8, max = 64), regex(pattern = "^[a-zA-Z0-9._:-]+$"))]
     pub request_key: Option<String>,
@@ -157,12 +191,19 @@ pub struct UpsertTopicArgs {
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpsertConsumerGroupArgs {
+    /// Version of this argument schema. Always `rocketmq-mcp-control.arguments.v1`.
     #[schemars(regex(pattern = "^rocketmq-mcp-control\\.arguments\\.v1$"))]
     pub schema_version: String,
+    /// Logical cluster name from the server configuration, never a NameServer or Broker address. Both the
+    /// caller and the server policy must allow it.
     #[schemars(length(min = 1, max = 64), regex(pattern = "^[a-zA-Z0-9_-]+$"))]
     pub cluster: String,
+    /// Consumer Group to create or replace: letters, digits, `%`, `|`, `_` and `-`, at most 255 characters.
+    /// RocketMQ's built-in system groups are rejected.
     #[schemars(length(min = 1, max = 255), regex(pattern = "^[%|a-zA-Z0-9_-]+$"))]
     pub consumer_group: String,
+    /// Logical names of the master Brokers to change, 1 to 64 distinct names; never addresses. Each must
+    /// belong to the selected cluster.
     #[schemars(
         length(min = 1, max = 64),
         inner(length(min = 1, max = 127), regex(pattern = "^[%|a-zA-Z0-9_-]+$"))
@@ -170,13 +211,22 @@ pub struct UpsertConsumerGroupArgs {
     pub broker_names: Vec<String>,
     #[serde(flatten)]
     pub replacement: ConsumerGroupReplacement,
+    /// Plan only: read the current state and report what would change, without writing. When omitted, the
+    /// server's configured default applies, which is a dry run unless the operator changed it.
     #[serde(default = "default_dry_run")]
     pub dry_run: bool,
+    /// Explicit confirmation. Must be true to execute, that is when `dry_run` is false; a dry run does not
+    /// need it.
     #[serde(default)]
     pub confirm: bool,
+    /// Why the change is made; kept only in the durable audit log. Required to execute. 5 to 256 characters of
+    /// letters, digits, spaces and `._,#-`, without addresses, host names or tokens.
     #[serde(default)]
     #[schemars(length(min = 5, max = 256))]
     pub reason: Option<String>,
+    /// Optional idempotency key of 8 to 64 letters, digits and `._:-`. An execute call that repeats a key with
+    /// the same arguments returns the outcome already recorded for it instead of writing again; the same key
+    /// with different arguments is rejected.
     #[serde(default)]
     #[schemars(length(min = 8, max = 64), regex(pattern = "^[a-zA-Z0-9._:-]+$"))]
     pub request_key: Option<String>,

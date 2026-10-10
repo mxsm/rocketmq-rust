@@ -21,7 +21,11 @@ use crate::tools::cluster_tools::BrokerSummary;
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct DescribeBrokerArgs {
+    /// Logical cluster name configured on this server. It is a name, not a NameServer address.
+    #[schemars(length(min = 1))]
     pub cluster: String,
+    /// Logical Broker name as reported by `rocketmq_get_cluster_overview`, for example `broker-a`. It is a name, not a
+    /// network address.
     pub broker_name: String,
 }
 
@@ -39,7 +43,11 @@ pub struct DescribeBrokerOutput {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct BrokerDiagnosticsArgs {
+    /// Logical cluster name configured on this server. It is a name, not a NameServer address.
+    #[schemars(length(min = 1))]
     pub cluster: String,
+    /// Logical Broker name as reported by `rocketmq_get_cluster_overview`, for example `broker-a`. It is a name, not a
+    /// network address.
     pub broker_name: String,
 }
 

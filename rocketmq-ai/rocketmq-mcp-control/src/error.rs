@@ -47,6 +47,7 @@ pub enum ControlErrorCode {
     OperationNotAllowed,
     MutationDisabled,
     OperationUnavailable,
+    RateLimited,
     ConfirmationRequired,
     InvalidArgument,
     AuditUnavailable,
@@ -70,6 +71,7 @@ impl ControlErrorCode {
             Self::OperationNotAllowed => "operation_not_allowed",
             Self::MutationDisabled => "mutation_disabled",
             Self::OperationUnavailable => "operation_unavailable",
+            Self::RateLimited => "rate_limited",
             Self::ConfirmationRequired => "confirmation_required",
             Self::InvalidArgument => "invalid_argument",
             Self::AuditUnavailable => "audit_unavailable",
@@ -84,6 +86,36 @@ impl ControlErrorCode {
     }
 }
 
+/// How many argument violations one error reports; the first ones are enough to correct a call.
+pub const MAX_REPORTED_VIOLATIONS: usize = 3;
+
+/// One argument that broke the Tool input schema: where it is and which kind of rule it broke.
+///
+/// It never repeats a value that was sent, and its path uses only names the input schema declares.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ArgumentViolation {
+    /// JSON Pointer to the argument; `*` stands for a property the input schema does not declare.
+    pub path: String,
+    pub constraint: ViolationConstraint,
+}
+
+/// The closed set of rule kinds that an argument violation reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ViolationConstraint {
+    Required,
+    Type,
+    MinLength,
+    MaxLength,
+    Minimum,
+    Maximum,
+    Enum,
+    Pattern,
+    AdditionalProperty,
+    Other,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ControlErrorEnvelope {
@@ -91,6 +123,10 @@ pub struct ControlErrorEnvelope {
     pub code: ControlErrorCode,
     pub message: Cow<'static, str>,
     pub retryable: bool,
+    /// Arguments of an `invalid_argument` call that break the Tool input schema; omitted when none is located.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = MAX_REPORTED_VIOLATIONS))]
+    pub violations: Vec<ArgumentViolation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -125,6 +161,7 @@ impl ControlError {
             ControlErrorCode::OperationNotAllowed => Self::operation_not_allowed(),
             ControlErrorCode::MutationDisabled => Self::mutation_disabled(),
             ControlErrorCode::OperationUnavailable => Self::operation_unavailable(),
+            ControlErrorCode::RateLimited => Self::rate_limited(),
             ControlErrorCode::ConfirmationRequired => Self::confirmation_required(),
             ControlErrorCode::InvalidArgument => Self::invalid_argument(),
             ControlErrorCode::AuditUnavailable => Self::audit_unavailable(),
@@ -144,6 +181,7 @@ impl ControlError {
             code: self.code,
             message: Cow::Borrowed(self.message),
             retryable: self.retryable,
+            violations: Vec::new(),
         }
     }
 
@@ -200,6 +238,15 @@ impl ControlError {
             ControlErrorCode::OperationUnavailable,
             "mutation operation is unavailable",
             false,
+        )
+    }
+
+    /// The caller, or the server as a whole, is running too many mutation calls right now.
+    pub const fn rate_limited() -> Self {
+        Self::new(
+            ControlErrorCode::RateLimited,
+            "mutation call rate limit was reached",
+            true,
         )
     }
 
@@ -285,6 +332,7 @@ mod tests {
             ControlError::partial_apply(),
             ControlError::verification_failed(),
             ControlError::audit_unavailable(),
+            ControlError::rate_limited(),
         ];
         let names = required.iter().map(|error| error.code().as_str()).collect::<Vec<_>>();
         assert_eq!(
@@ -300,6 +348,7 @@ mod tests {
                 "partial_apply",
                 "verification_failed",
                 "audit_unavailable",
+                "rate_limited",
             ]
         );
         for error in required {

@@ -109,12 +109,15 @@ impl ControlServer {
                 service_context.component("admin-factory"),
                 config.mutation_clusters(),
             )?);
-            Some(Arc::new(crate::tool_runtime::ToolRuntime::new(
-                audit,
-                factory,
-                std::time::Duration::from_secs(config.mutations.operation_timeout_seconds),
-                service_context.task_group().clone(),
-            )))
+            Some(Arc::new(
+                crate::tool_runtime::ToolRuntime::new(
+                    audit,
+                    factory,
+                    std::time::Duration::from_secs(config.mutations.operation_timeout_seconds),
+                    service_context.task_group().clone(),
+                )
+                .with_limits(config.limits),
+            ))
         };
         Ok(Self {
             catalog,
@@ -195,6 +198,34 @@ impl ControlServer {
     ) -> CallToolResult {
         self.signals.call_rejected(tool, error.code(), started.elapsed());
         tool_error(error)
+    }
+
+    /// Decodes and validates the arguments of an authorized call, recording a rejection.
+    ///
+    /// Authorization has already passed here, so the arguments located in a rejection reach only
+    /// a caller that may run this operation on this cluster.
+    #[cfg(feature = "write-tools")]
+    fn checked_arguments<T, V>(
+        &self,
+        tool: &'static str,
+        started: std::time::Instant,
+        raw: &serde_json::Value,
+        validate: impl FnOnce(&T) -> Result<V, crate::error::ControlError>,
+    ) -> Result<T, crate::error::ControlErrorEnvelope>
+    where
+        T: serde::de::DeserializeOwned + schemars::JsonSchema + 'static,
+    {
+        let checked = T::deserialize(raw)
+            .map_err(|_| crate::error::ControlError::invalid_argument())
+            .and_then(|arguments| validate(&arguments).map(|_| arguments));
+        checked.map_err(|error| {
+            self.signals.call_rejected(tool, error.code(), started.elapsed());
+            let mut envelope = error.envelope();
+            if error.code() == crate::error::ControlErrorCode::InvalidArgument {
+                envelope.violations = crate::argument_locator::locate::<T>(raw);
+            }
+            envelope
+        })
     }
 
     #[cfg(test)]
@@ -312,80 +343,72 @@ impl ServerHandler for ControlServer {
         #[cfg(feature = "write-tools")]
         {
             let dry_run_omitted = raw.as_object().is_some_and(|object| !object.contains_key("dry_run"));
+            let default_dry_run = self.guard.default_dry_run();
             let mutation = match operation {
                 Some(ControlOperation::TopicUpsert) => {
-                    let mut args: crate::tools::UpsertTopicArgs = match serde_json::from_value(raw) {
+                    let checked =
+                        self.checked_arguments::<crate::tools::UpsertTopicArgs, _>(tool, started, &raw, |args| {
+                            args.validate(default_dry_run, dry_run_omitted)
+                        });
+                    let mut args = match checked {
                         Ok(args) => args,
-                        Err(_) => {
-                            return Ok(self
-                                .rejected(tool, started, crate::error::ControlError::invalid_argument())
-                                .into())
-                        }
+                        Err(envelope) => return Ok(envelope_result(envelope).into()),
                     };
-                    if let Err(error) = args.validate(self.guard.default_dry_run(), dry_run_omitted) {
-                        return Ok(self.rejected(tool, started, error).into());
-                    }
-                    args.dry_run = args.effective_dry_run(self.guard.default_dry_run(), dry_run_omitted);
+                    args.dry_run = args.effective_dry_run(default_dry_run, dry_run_omitted);
                     crate::tool_runtime::MutationToolRequest::Topic(args)
                 }
                 Some(ControlOperation::ConsumerGroupUpsert) => {
-                    let mut args: crate::tools::UpsertConsumerGroupArgs = match serde_json::from_value(raw) {
+                    let checked = self.checked_arguments::<crate::tools::UpsertConsumerGroupArgs, _>(
+                        tool,
+                        started,
+                        &raw,
+                        |args| args.validate(default_dry_run, dry_run_omitted),
+                    );
+                    let mut args = match checked {
                         Ok(args) => args,
-                        Err(_) => {
-                            return Ok(self
-                                .rejected(tool, started, crate::error::ControlError::invalid_argument())
-                                .into())
-                        }
+                        Err(envelope) => return Ok(envelope_result(envelope).into()),
                     };
-                    if let Err(error) = args.validate(self.guard.default_dry_run(), dry_run_omitted) {
-                        return Ok(self.rejected(tool, started, error).into());
-                    }
-                    args.dry_run = args.effective_dry_run(self.guard.default_dry_run(), dry_run_omitted);
+                    args.dry_run = args.effective_dry_run(default_dry_run, dry_run_omitted);
                     crate::tool_runtime::MutationToolRequest::ConsumerGroup(args)
                 }
                 Some(ControlOperation::ConsumerOffsetReset) => {
-                    let mut args: crate::tools::ResetConsumerOffsetArgs = match serde_json::from_value(raw) {
+                    let checked = self.checked_arguments::<crate::tools::ResetConsumerOffsetArgs, _>(
+                        tool,
+                        started,
+                        &raw,
+                        |args| args.validate(default_dry_run, dry_run_omitted),
+                    );
+                    let mut args = match checked {
                         Ok(args) => args,
-                        Err(_) => {
-                            return Ok(self
-                                .rejected(tool, started, crate::error::ControlError::invalid_argument())
-                                .into())
-                        }
+                        Err(envelope) => return Ok(envelope_result(envelope).into()),
                     };
-                    if let Err(error) = args.validate(self.guard.default_dry_run(), dry_run_omitted) {
-                        return Ok(self.rejected(tool, started, error).into());
-                    }
-                    args.dry_run = args.effective_dry_run(self.guard.default_dry_run(), dry_run_omitted);
+                    args.dry_run = args.effective_dry_run(default_dry_run, dry_run_omitted);
                     crate::tool_runtime::MutationToolRequest::ConsumerOffset(args)
                 }
                 Some(ControlOperation::BrokerConfigPatch) => {
-                    let mut args: crate::tools::PatchBrokerConfigArgs = match serde_json::from_value(raw) {
+                    let checked =
+                        self.checked_arguments::<crate::tools::PatchBrokerConfigArgs, _>(tool, started, &raw, |args| {
+                            args.validate(default_dry_run, dry_run_omitted)
+                        });
+                    let mut args = match checked {
                         Ok(args) => args,
-                        Err(_) => {
-                            return Ok(self
-                                .rejected(tool, started, crate::error::ControlError::invalid_argument())
-                                .into())
-                        }
+                        Err(envelope) => return Ok(envelope_result(envelope).into()),
                     };
-                    if let Err(error) = args.validate(self.guard.default_dry_run(), dry_run_omitted) {
-                        return Ok(self.rejected(tool, started, error).into());
-                    }
-                    args.dry_run = args.effective_dry_run(self.guard.default_dry_run(), dry_run_omitted);
+                    args.dry_run = args.effective_dry_run(default_dry_run, dry_run_omitted);
                     crate::tool_runtime::MutationToolRequest::BrokerConfig(args)
                 }
                 Some(ControlOperation::ConsumerRequestMode) => {
-                    let mut args: crate::tools::SetConsumerRequestModeArgs = match serde_json::from_value(raw) {
+                    let checked = self.checked_arguments::<crate::tools::SetConsumerRequestModeArgs, _>(
+                        tool,
+                        started,
+                        &raw,
+                        |args| args.validate(default_dry_run, dry_run_omitted),
+                    );
+                    let mut args = match checked {
                         Ok(args) => args,
-                        Err(_) => {
-                            return Ok(self
-                                .rejected(tool, started, crate::error::ControlError::invalid_argument())
-                                .into())
-                        }
+                        Err(envelope) => return Ok(envelope_result(envelope).into()),
                     };
-                    if let Err(error) = args.validate(self.guard.default_dry_run(), dry_run_omitted) {
-                        return Ok(self.rejected(tool, started, error).into());
-                    }
-                    args.dry_run = args.effective_dry_run(self.guard.default_dry_run(), dry_run_omitted);
+                    args.dry_run = args.effective_dry_run(default_dry_run, dry_run_omitted);
                     crate::tool_runtime::MutationToolRequest::ConsumerRequestMode(args)
                 }
                 _ => {
@@ -471,7 +494,11 @@ fn tool_response(response: crate::tool_runtime::MutationToolResponse) -> CallToo
 }
 
 fn tool_error(error: crate::error::ControlError) -> CallToolResult {
-    let structured = serde_json::to_value(error.envelope()).unwrap_or_default();
+    envelope_result(error.envelope())
+}
+
+fn envelope_result(envelope: crate::error::ControlErrorEnvelope) -> CallToolResult {
+    let structured = serde_json::to_value(envelope).unwrap_or_default();
     let text = serde_json::to_string(&structured).unwrap_or_else(|_| "mutation failed".to_owned());
     let mut result = CallToolResult::error(vec![ContentBlock::text(text)]);
     result.structured_content = Some(structured);

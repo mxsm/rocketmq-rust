@@ -390,7 +390,13 @@ expression: exact_contract
     "code": "invalid_argument",
     "message": "mutation argument is invalid",
     "retryable": false,
-    "schema_version": "rocketmq-mcp-control.error.v2"
+    "schema_version": "rocketmq-mcp-control.error.v2",
+    "violations": [
+      {
+        "constraint": "maximum",
+        "path": "/retry_queue_nums"
+      }
+    ]
   },
   "group/cluster-denied": {
     "code": "cluster_not_allowed",
@@ -922,7 +928,13 @@ expression: exact_contract
     "code": "invalid_argument",
     "message": "mutation argument is invalid",
     "retryable": false,
-    "schema_version": "rocketmq-mcp-control.error.v2"
+    "schema_version": "rocketmq-mcp-control.error.v2",
+    "violations": [
+      {
+        "constraint": "maximum",
+        "path": "/timeout_millis"
+      }
+    ]
   },
   "mode/cluster-denied": {
     "code": "cluster_not_allowed",
@@ -1634,7 +1646,13 @@ expression: exact_contract
     "code": "invalid_argument",
     "message": "mutation argument is invalid",
     "retryable": false,
-    "schema_version": "rocketmq-mcp-control.error.v2"
+    "schema_version": "rocketmq-mcp-control.error.v2",
+    "violations": [
+      {
+        "constraint": "minimum",
+        "path": "/read_queue_nums"
+      }
+    ]
   },
   "topic/cluster-denied": {
     "code": "cluster_not_allowed",

@@ -51,26 +51,43 @@ pub enum ConsumerRequestMode {
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SetConsumerRequestModeArgs {
+    /// Version of this argument schema. Always `rocketmq-mcp-control.arguments.v1`.
     #[schemars(regex(pattern = "^rocketmq-mcp-control\\.arguments\\.v1$"))]
     pub schema_version: String,
+    /// Logical cluster name from the server configuration, never a NameServer or Broker address. Both the
+    /// caller and the server policy must allow it.
     #[schemars(length(min = 1, max = 64), regex(pattern = "^[a-zA-Z0-9_-]+$"))]
     pub cluster: String,
+    /// Topic that the request mode applies to. System Topics are rejected.
     #[schemars(length(min = 1, max = 127), regex(pattern = "^[%|a-zA-Z0-9_-]+$"))]
     pub topic: String,
+    /// Consumer Group that the request mode applies to. Built-in system groups are rejected.
     #[schemars(length(min = 1, max = 255), regex(pattern = "^[%|a-zA-Z0-9_-]+$"))]
     pub consumer_group: String,
+    /// How the group fetches messages of the Topic: `pull` or `pop`.
     pub mode: ConsumerRequestMode,
+    /// Number of queues that pop consumers share, 0 or more.
     #[schemars(range(min = 0))]
     pub pop_share_queue_num: i32,
+    /// Timeout of the change request sent to each Broker, 1 to 24000 milliseconds.
     #[schemars(range(min = 1, max = 24000))]
     pub timeout_millis: u64,
+    /// Plan only: read the current state and report what would change, without writing. When omitted, the
+    /// server's configured default applies, which is a dry run unless the operator changed it.
     #[serde(default = "default_dry_run")]
     pub dry_run: bool,
+    /// Explicit confirmation. Must be true to execute, that is when `dry_run` is false; a dry run does not
+    /// need it.
     #[serde(default)]
     pub confirm: bool,
+    /// Why the change is made; kept only in the durable audit log. Required to execute. 5 to 256 characters of
+    /// letters, digits, spaces and `._,#-`, without addresses, host names or tokens.
     #[serde(default)]
     #[schemars(length(min = 5, max = 256))]
     pub reason: Option<String>,
+    /// Optional idempotency key of 8 to 64 letters, digits and `._:-`. An execute call that repeats a key with
+    /// the same arguments returns the outcome already recorded for it instead of writing again; the same key
+    /// with different arguments is rejected.
     #[serde(default)]
     #[schemars(length(min = 8, max = 64), regex(pattern = "^[a-zA-Z0-9._:-]+$"))]
     pub request_key: Option<String>,

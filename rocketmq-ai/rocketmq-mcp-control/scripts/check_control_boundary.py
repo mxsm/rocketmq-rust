@@ -12,6 +12,10 @@ import sys
 
 
 PROJECT = pathlib.Path(__file__).resolve().parents[1]
+# JWKS retrieval and key selection live in a crate shared with the query MCP. It is production code
+# of this service, so the source rules below apply to it as well.
+SHARED_AUTH = PROJECT.parent / "rocketmq-mcp-auth"
+SHARED_AUTH_PACKAGE = "rocketmq-mcp-auth"
 
 
 def fail(message: str) -> None:
@@ -74,6 +78,15 @@ for forbidden in ("rocketmq-admin-core", "rocketmq-client-rust"):
     if forbidden in default_names:
         fail(f"default dependency closure contains {forbidden}")
 
+if SHARED_AUTH_PACKAGE not in default_names:
+    fail(f"default dependency closure is missing {SHARED_AUTH_PACKAGE}")
+for package in default_metadata["packages"]:
+    if package["name"] != SHARED_AUTH_PACKAGE:
+        continue
+    for dependency in package["dependencies"]:
+        if dependency["name"].startswith("rocketmq-") or dependency["name"] == "axum":
+            fail(f"{SHARED_AUTH_PACKAGE} must not depend on {dependency['name']}")
+
 write_metadata = metadata(["write-tools"])
 write_names = package_names(write_metadata)
 for required in ("rocketmq-admin-core", "rocketmq-client-rust"):
@@ -105,6 +118,15 @@ def is_test_only_source(path: pathlib.Path) -> bool:
 production_units = []
 for path in source_paths:
     if is_test_only_source(path):
+        continue
+    unit = path.read_text(encoding="utf-8")
+    unit = unit.split("#[cfg(test)]\nmod tests", maxsplit=1)[0]
+    production_units.append(unit)
+shared_auth_paths = sorted((SHARED_AUTH / "src").glob("**/*.rs"))
+if not shared_auth_paths:
+    fail(f"{SHARED_AUTH_PACKAGE} source is missing")
+for path in shared_auth_paths:
+    if path.name == "test_support.rs":
         continue
     unit = path.read_text(encoding="utf-8")
     unit = unit.split("#[cfg(test)]\nmod tests", maxsplit=1)[0]

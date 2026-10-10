@@ -11,12 +11,14 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ cluster overview"
     },
-    "description": "Summarize brokers, topic count, and consumer group count for one RocketMQ cluster.",
+    "description": "Summarizes one cluster: its Brokers with their state, plus the number of Topics and Consumer Groups. Use it first, to learn the Broker names and the size of a cluster. To see the names behind the counts, call rocketmq_list_topics or rocketmq_list_consumer_groups.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         }
       },
@@ -246,13 +248,15 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ topic list"
     },
-    "description": "List a bounded page of topics visible from one RocketMQ cluster.",
+    "description": "Lists the Topic names of one cluster, a page at a time, optionally keeping only names that contain a text. Use it to find the exact name of a Topic. A cluster with more than 10,000 Topics needs a filter. Next, pass a name to rocketmq_get_topic_route or rocketmq_get_topic_stats.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "cluster": {
           "default": null,
+          "description": "Logical cluster name configured on this server. When it is omitted or null, the cluster marked as default is used, or the only configured cluster.",
+          "minLength": 1,
           "type": [
             "string",
             "null"
@@ -260,6 +264,7 @@ expression: contracts
         },
         "cursor": {
           "default": null,
+          "description": "Continuation token. To read the next page, pass the `next_cursor` of the previous response unchanged, together with the same arguments and `limit`. Omit it for the first page.",
           "type": [
             "string",
             "null"
@@ -267,6 +272,7 @@ expression: contracts
         },
         "filter": {
           "default": null,
+          "description": "Keeps only the Topics whose name contains this text, ignoring ASCII case. At most 1,024 bytes. Omit it to list every Topic.",
           "type": [
             "string",
             "null"
@@ -274,6 +280,7 @@ expression: contracts
         },
         "limit": {
           "default": null,
+          "description": "Maximum number of items in the returned page, from 1 to 200. Defaults to 50.",
           "format": "uint32",
           "maximum": 200,
           "minimum": 1,
@@ -486,16 +493,19 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ topic description"
     },
-    "description": "Describe a topic with bounded queue route information.",
+    "description": "Returns where one Topic is hosted: the Brokers that serve it and each Broker's queue counts. It returns the same route data as rocketmq_get_topic_route plus a list of Broker names; prefer rocketmq_get_topic_route in new integrations.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         },
         "cursor": {
           "default": null,
+          "description": "Continuation token. To read the next page, pass the `next_cursor` of the previous response unchanged, together with the same arguments and `limit`. Omit it for the first page.",
           "type": [
             "string",
             "null"
@@ -503,6 +513,7 @@ expression: contracts
         },
         "limit": {
           "default": null,
+          "description": "Maximum number of items in the returned page, from 1 to 200. Defaults to 50.",
           "format": "uint32",
           "maximum": 200,
           "minimum": 1,
@@ -512,6 +523,7 @@ expression: contracts
           ]
         },
         "topic": {
+          "description": "Exact Topic name. `rocketmq_list_topics` lists the names.",
           "type": "string"
         }
       },
@@ -789,16 +801,19 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ topic route"
     },
-    "description": "Get bounded topic route data without exposing internal addresses by default.",
+    "description": "Returns where one Topic is hosted: the Brokers that serve it and each Broker's read and write queue counts and permission. Use it to check that a Topic exists and how it is spread over Brokers. For message counts and offsets use rocketmq_get_topic_stats; for configuration differences use rocketmq_get_topic_config.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         },
         "cursor": {
           "default": null,
+          "description": "Continuation token. To read the next page, pass the `next_cursor` of the previous response unchanged, together with the same arguments and `limit`. Omit it for the first page.",
           "type": [
             "string",
             "null"
@@ -806,6 +821,7 @@ expression: contracts
         },
         "limit": {
           "default": null,
+          "description": "Maximum number of items in the returned page, from 1 to 200. Defaults to 50.",
           "format": "uint32",
           "maximum": 200,
           "minimum": 1,
@@ -815,6 +831,7 @@ expression: contracts
           ]
         },
         "topic": {
+          "description": "Exact Topic name. `rocketmq_list_topics` lists the names.",
           "type": "string"
         }
       },
@@ -1085,13 +1102,15 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ consumer groups"
     },
-    "description": "List a bounded page of consumer groups and consumption summaries.",
+    "description": "Lists the Consumer Groups of one cluster, a page at a time, with client count, consume type, TPS and total lag for each. Use it to find the exact name of a group or to spot the groups that are behind. Next, call rocketmq_get_consumer_lag or rocketmq_diagnose_consumer_lag for one group.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "cluster": {
           "default": null,
+          "description": "Logical cluster name configured on this server. When it is omitted or null, the cluster marked as default is used, or the only configured cluster.",
+          "minLength": 1,
           "type": [
             "string",
             "null"
@@ -1099,6 +1118,7 @@ expression: contracts
         },
         "cursor": {
           "default": null,
+          "description": "Continuation token. To read the next page, pass the `next_cursor` of the previous response unchanged, together with the same arguments and `limit`. Omit it for the first page.",
           "type": [
             "string",
             "null"
@@ -1106,6 +1126,7 @@ expression: contracts
         },
         "filter": {
           "default": null,
+          "description": "Keeps only the Consumer Groups whose name contains this text, ignoring ASCII case. At most 1,024 bytes. Omit it to list every Consumer Group.",
           "type": [
             "string",
             "null"
@@ -1113,6 +1134,7 @@ expression: contracts
         },
         "limit": {
           "default": null,
+          "description": "Maximum number of items in the returned page, from 1 to 200. Defaults to 50.",
           "format": "uint32",
           "maximum": 200,
           "minimum": 1,
@@ -1341,19 +1363,23 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ consumer lag"
     },
-    "description": "Get bounded per-queue lag for a topic and consumer group.",
+    "description": "Returns the lag of one Consumer Group on one Topic: total lag, the largest queue lag, consume TPS, and a page of per-queue offsets. Use it when you know both the Topic and the group. For an explanation of the lag use rocketmq_diagnose_consumer_lag; for every Topic the group consumes use rocketmq_get_consumer_progress.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         },
         "consumer_group": {
+          "description": "Exact Consumer Group name. `rocketmq_list_consumer_groups` lists the names.",
           "type": "string"
         },
         "cursor": {
           "default": null,
+          "description": "Continuation token. To read the next page, pass the `next_cursor` of the previous response unchanged, together with the same arguments and `limit`. Omit it for the first page.",
           "type": [
             "string",
             "null"
@@ -1361,6 +1387,7 @@ expression: contracts
         },
         "limit": {
           "default": null,
+          "description": "Maximum number of items in the returned page, from 1 to 200. Defaults to 50.",
           "format": "uint32",
           "maximum": 200,
           "minimum": 1,
@@ -1370,6 +1397,7 @@ expression: contracts
           ]
         },
         "topic": {
+          "description": "Exact Topic name. `rocketmq_list_topics` lists the names.",
           "type": "string"
         }
       },
@@ -1632,15 +1660,18 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ broker description"
     },
-    "description": "Describe broker state without exposing internal addresses by default.",
+    "description": "Returns the state of one Broker: its instances with version, inbound and outbound TPS, and whether each is active. Use it for a first look at a Broker named by rocketmq_get_cluster_overview. For readiness, store and recovery detail use rocketmq_get_broker_diagnostics.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "broker_name": {
+          "description": "Logical Broker name as reported by `rocketmq_get_cluster_overview`, for example `broker-a`. It is a name, not a network address.",
           "type": "string"
         },
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         }
       },
@@ -1863,15 +1894,18 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ broker diagnostics"
     },
-    "description": "Get bounded readiness, store, recovery, and security diagnostics for one logical Broker.",
+    "description": "Returns readiness, store, recovery, HA and security diagnostics for one Broker. Use it when a Broker looks unhealthy, or after rocketmq_diagnose_consumer_lag points at it. For the plain state use rocketmq_describe_broker; for replication between master and slaves use rocketmq_get_ha_status.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "broker_name": {
+          "description": "Logical Broker name as reported by `rocketmq_get_cluster_overview`, for example `broker-a`. It is a name, not a network address.",
           "type": "string"
         },
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         }
       },
@@ -2703,15 +2737,18 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ broker configuration summary"
     },
-    "description": "Get the fixed allowlisted configuration summary for one logical Broker.",
+    "description": "Returns the allowlisted configuration values of one Broker. Use it to check how a Broker is configured. Keys outside the fixed allowlist are not returned.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "broker_name": {
+          "description": "Logical Broker name as reported by `rocketmq_get_cluster_overview`, for example `broker-a`. It is a name, not a network address.",
           "type": "string"
         },
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         }
       },
@@ -2931,18 +2968,22 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ broker log-filter state"
     },
-    "description": "Get the temporary state of one allowlisted rocketmq_broker logger target.",
+    "description": "Returns the temporary log-filter state of one logger on one Broker. Use it to check whether a raised log level is still in effect for a rocketmq_broker:: module. The logger argument is a Rust module path.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "broker_name": {
+          "description": "Logical Broker name as reported by `rocketmq_get_cluster_overview`, for example `broker-a`. It is a name, not a network address.",
           "type": "string"
         },
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         },
         "logger": {
+          "description": "Rust module path of the Broker logger to inspect. It must start with `rocketmq_broker::`, for example `rocketmq_broker::processor`, and be at most 128 bytes.",
           "type": "string"
         }
       },
@@ -3179,15 +3220,18 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ Proxy drain state"
     },
-    "description": "Get bounded drain progress for one configured logical Proxy alias.",
+    "description": "Returns the drain progress of one Proxy: its phase, whether admission and routing are still open, whether readiness is published, and how much work is pending. Use it while a Proxy is being drained for maintenance. The Proxy is named by its alias in the server configuration.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         },
         "proxy_name": {
+          "description": "Name of a Proxy as configured for this cluster on the server. It is a configured alias, not a network address.",
           "type": "string"
         }
       },
@@ -3443,18 +3487,22 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ consumer lag diagnosis"
     },
-    "description": "Diagnose consumer lag from read-only lag, topic route, and broker evidence.",
+    "description": "Explains the lag of one Consumer Group on one Topic. It reads the lag of every queue, the Topic route and the Broker that holds the most lag, then reports a severity, likely causes and recommendations. Use it when a group is behind and you need a cause. For the raw per-queue numbers use rocketmq_get_consumer_lag.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         },
         "consumer_group": {
+          "description": "Exact Consumer Group name. `rocketmq_list_consumer_groups` lists the names.",
           "type": "string"
         },
         "topic": {
+          "description": "Exact Topic name. `rocketmq_list_topics` lists the names.",
           "type": "string"
         }
       },
@@ -4009,19 +4057,23 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ consumer connections"
     },
-    "description": "List a bounded page of pseudonymous consumer connections for one exact group.",
+    "description": "Lists the clients connected for one Consumer Group, a page at a time: Broker, client pseudonym, language and version. Use it to check whether consumers are online and which versions they run. Client identifiers and addresses are replaced by pseudonyms.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         },
         "consumer_group": {
+          "description": "Exact Consumer Group name. `rocketmq_list_consumer_groups` lists the names.",
           "type": "string"
         },
         "cursor": {
           "default": null,
+          "description": "Continuation token. To read the next page, pass the `next_cursor` of the previous response unchanged, together with the same arguments and `limit`. Omit it for the first page.",
           "type": [
             "string",
             "null"
@@ -4029,6 +4081,7 @@ expression: contracts
         },
         "limit": {
           "default": null,
+          "description": "Maximum number of items in the returned page, from 1 to 200. Defaults to 50.",
           "format": "uint32",
           "maximum": 200,
           "minimum": 1,
@@ -4262,16 +4315,19 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ producer connections"
     },
-    "description": "List a bounded page of pseudonymous producer connections for one exact Topic and Producer group.",
+    "description": "Lists the clients connected for one Producer Group on one Topic, a page at a time: Broker, client pseudonym, language and version. Use it to check whether producers are online. Client identifiers and addresses are replaced by pseudonyms.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         },
         "cursor": {
           "default": null,
+          "description": "Continuation token. To read the next page, pass the `next_cursor` of the previous response unchanged, together with the same arguments and `limit`. Omit it for the first page.",
           "type": [
             "string",
             "null"
@@ -4279,6 +4335,7 @@ expression: contracts
         },
         "limit": {
           "default": null,
+          "description": "Maximum number of items in the returned page, from 1 to 200. Defaults to 50.",
           "format": "uint32",
           "maximum": 200,
           "minimum": 1,
@@ -4288,9 +4345,11 @@ expression: contracts
           ]
         },
         "producer_group": {
+          "description": "Exact Producer Group name.",
           "type": "string"
         },
         "topic": {
+          "description": "Exact Topic name. `rocketmq_list_topics` lists the names.",
           "type": "string"
         }
       },
@@ -4523,15 +4582,18 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ message metadata"
     },
-    "description": "Get fixed body-free metadata for one message as process-lifetime aliases.",
+    "description": "Returns the metadata of one message by its identifier: Topic, queue and offset, size, born and stored times, and reconsume count. Use it to confirm that a message was stored, and where. The body is never returned and message identifiers are replaced by pseudonyms.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         },
         "message_id": {
+          "description": "Identifier of the message to read, exactly as RocketMQ reported it.",
           "type": "string"
         }
       },
@@ -4747,21 +4809,25 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ Topic configuration state"
     },
-    "description": "Get version-CAS observations for one Topic at bounded logical Brokers.",
+    "description": "Returns one Topic's configuration version and queue settings on each selected Broker. Use it right before a change, to read the version a compare-and-set update must quote, and afterwards to confirm the change. To compare every Broker without naming them use rocketmq_get_topic_config.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "broker_names": {
+          "description": "Logical Broker names to read the Topic configuration from, 1 to 64 entries. They are names as reported by `rocketmq_get_cluster_overview`, not network addresses.",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         },
         "topic": {
+          "description": "Exact Topic name. `rocketmq_list_topics` lists the names.",
           "type": "string"
         }
       },
@@ -4961,21 +5027,25 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ consumer group configuration state"
     },
-    "description": "Get version-CAS observations for one Consumer Group at bounded logical Brokers.",
+    "description": "Returns one Consumer Group's configuration version and settings on each selected Broker, such as retry limits and whether consuming is enabled. Use it right before a change, to read the version a compare-and-set update must quote, and afterwards to confirm the change. For connections use rocketmq_get_consumer_group_details.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "broker_names": {
+          "description": "Logical Broker names to read the Consumer Group configuration from, 1 to 64 entries. They are names as reported by `rocketmq_get_cluster_overview`, not network addresses.",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         },
         "group": {
+          "description": "Exact Consumer Group name. `rocketmq_list_consumer_groups` lists the names.",
           "type": "string"
         }
       },
@@ -5214,16 +5284,19 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ Topic statistics"
     },
-    "description": "Get a bounded snapshot page of deterministic per-queue Topic statistics and aggregate totals.",
+    "description": "Returns per-queue statistics of one Topic, a page at a time: minimum and maximum offset, message count and last update time, plus totals over all queues. Use it to see how much data a Topic holds and whether it is still written to. For where the Topic is hosted use rocketmq_get_topic_route.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         },
         "cursor": {
           "default": null,
+          "description": "Continuation token. To read the next page, pass the `next_cursor` of the previous response unchanged, together with the same arguments and `limit`. Omit it for the first page.",
           "type": [
             "string",
             "null"
@@ -5231,6 +5304,7 @@ expression: contracts
         },
         "limit": {
           "default": null,
+          "description": "Maximum number of items in the returned page, from 1 to 200. Defaults to 50.",
           "format": "uint32",
           "maximum": 200,
           "minimum": 1,
@@ -5240,6 +5314,7 @@ expression: contracts
           ]
         },
         "topic": {
+          "description": "Exact Topic name. `rocketmq_list_topics` lists the names.",
           "type": "string"
         }
       },
@@ -5485,15 +5560,18 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ Topic configuration"
     },
-    "description": "Get fixed address-free Topic configuration observations and semantic differences across Brokers.",
+    "description": "Returns the configuration of one Topic on every Broker that hosts it: queue counts, permission, order and message type, and the fields on which the Brokers disagree. Use it to find inconsistent Topic configuration. For hosting and routing use rocketmq_get_topic_route.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         },
         "topic": {
+          "description": "Exact Topic name. `rocketmq_list_topics` lists the names.",
           "type": "string"
         }
       },
@@ -5723,15 +5801,18 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ consumer group details"
     },
-    "description": "Get fixed address-free configuration and connection observations for one consumer group.",
+    "description": "Returns how one Consumer Group is set up on each Broker: whether it is configured there, whether clients are connected, its consume type, and the total connection count. Use it to check that a group exists and is online. For lag use rocketmq_get_consumer_lag; for the connected clients use rocketmq_list_consumer_connections.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         },
         "consumer_group": {
+          "description": "Exact Consumer Group name. `rocketmq_list_consumer_groups` lists the names.",
           "type": "string"
         }
       },
@@ -6070,19 +6151,23 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ consumer progress"
     },
-    "description": "Get a bounded snapshot page of deterministic per-queue progress and complete aggregate totals.",
+    "description": "Returns the progress of one Consumer Group over every Topic it consumes: totals for lag and in-flight messages, and a page of per-queue rows. Use it when you know the group but not the Topic, or need the lag across all of its Topics. For one Topic use rocketmq_get_consumer_lag.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         },
         "consumer_group": {
+          "description": "Exact Consumer Group name. `rocketmq_list_consumer_groups` lists the names.",
           "type": "string"
         },
         "cursor": {
           "default": null,
+          "description": "Continuation token. To read the next page, pass the `next_cursor` of the previous response unchanged, together with the same arguments and `limit`. Omit it for the first page.",
           "type": [
             "string",
             "null"
@@ -6090,6 +6175,7 @@ expression: contracts
         },
         "limit": {
           "default": null,
+          "description": "Maximum number of items in the returned page, from 1 to 200. Defaults to 50.",
           "format": "uint32",
           "maximum": 200,
           "minimum": 1,
@@ -6390,23 +6476,27 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ HA status"
     },
-    "description": "Get bounded HA observations for logical master Brokers with optional configured Controller sync state.",
+    "description": "Returns the replication state of master Brokers: commit log offset, in-sync slave count and each slave connection, optionally with the sync state the Controllers hold. Use it to check whether slaves keep up with their master. For Controller leadership use rocketmq_get_controller_metadata.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "broker_names": {
           "default": [],
+          "description": "Logical names of the master Brokers to inspect, at most 64. Leave it empty to inspect every master Broker of the cluster. They are names, not network addresses.",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         },
         "controller_names": {
           "default": [],
+          "description": "Names of the Controllers to ask for the sync state, as configured for this cluster on the server: at most 32, without duplicates. Leave it empty to ask every configured Controller.",
           "items": {
             "type": "string"
           },
@@ -6414,6 +6504,7 @@ expression: contracts
         },
         "include_sync_state": {
           "default": false,
+          "description": "Also read the in-sync replica state from the Controllers. Defaults to false. It must be true when `controller_names` is not empty.",
           "type": "boolean"
         }
       },
@@ -6756,16 +6847,19 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ Controller metadata"
     },
-    "description": "Get bounded metadata for configured logical Controller aliases.",
+    "description": "Returns metadata of the configured Controllers: group, leader, peer count and log indexes. Use it to check which Controller leads and whether the Controller group is healthy. For Broker replication use rocketmq_get_ha_status.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         },
         "controller_names": {
           "default": [],
+          "description": "Names of the Controllers to read, as configured for this cluster on the server: at most 32, without duplicates. Leave it empty to read every configured Controller.",
           "items": {
             "type": "string"
           },
@@ -6993,12 +7087,14 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ NameServer configuration summary"
     },
-    "description": "Get fixed allowlisted configuration values and differences for configured NameServers.",
+    "description": "Returns the allowlisted configuration values of the cluster's NameServers and the values on which they differ. Use it to check that the NameServers are configured alike. Keys outside the fixed allowlist are not returned.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         }
       },
@@ -7262,7 +7358,7 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ create topic plan"
     },
-    "description": "Generate a non-mutating topic creation plan.",
+    "description": "Builds a plan for creating a Topic without changing the cluster. The plan lists the intended change, its impact and rollback suggestions, and expires after five minutes. Use it to review a change before an operator applies it by other means.",
     "inputSchema": {
       "$defs": {
         "CreateTopicDesiredState": {
@@ -7270,6 +7366,7 @@ expression: contracts
           "properties": {
             "perm": {
               "default": null,
+              "description": "Permission value for the new Topic, written as it should appear in the plan. Optional.",
               "type": [
                 "string",
                 "null"
@@ -7277,6 +7374,7 @@ expression: contracts
             },
             "read_queue_nums": {
               "default": null,
+              "description": "Number of read queues for the new Topic. Optional.",
               "format": "uint32",
               "minimum": 0,
               "type": [
@@ -7285,10 +7383,12 @@ expression: contracts
               ]
             },
             "topic": {
+              "description": "Name of the Topic to create.",
               "type": "string"
             },
             "write_queue_nums": {
               "default": null,
+              "description": "Number of write queues for the new Topic. Optional.",
               "format": "uint32",
               "minimum": 0,
               "type": [
@@ -7307,12 +7407,16 @@ expression: contracts
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         },
         "desired": {
-          "$ref": "#/$defs/CreateTopicDesiredState"
+          "$ref": "#/$defs/CreateTopicDesiredState",
+          "description": "The state the plan should lead to."
         },
         "reason": {
+          "description": "Why the change is wanted. It is copied into the plan.",
           "type": "string"
         }
       },
@@ -7547,19 +7651,22 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ topic configuration plan"
     },
-    "description": "Generate a non-mutating topic configuration update plan.",
+    "description": "Builds a plan for changing one configuration entry of a Topic without changing the cluster. The plan records the current Topic state, the intended change, its impact and rollback suggestions, and expires after five minutes. Use it to review a change before an operator applies it by other means.",
     "inputSchema": {
       "$defs": {
         "UpdateTopicConfigDesiredState": {
           "additionalProperties": false,
           "properties": {
             "config_key": {
+              "description": "Name of the Topic configuration entry to change.",
               "type": "string"
             },
             "config_value": {
+              "description": "Value the entry should have.",
               "type": "string"
             },
             "topic": {
+              "description": "Exact name of the Topic to change.",
               "type": "string"
             }
           },
@@ -7575,12 +7682,16 @@ expression: contracts
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         },
         "desired": {
-          "$ref": "#/$defs/UpdateTopicConfigDesiredState"
+          "$ref": "#/$defs/UpdateTopicConfigDesiredState",
+          "description": "The state the plan should lead to."
         },
         "reason": {
+          "description": "Why the change is wanted. It is copied into the plan.",
           "type": "string"
         }
       },
@@ -7815,16 +7926,18 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ topic permission plan"
     },
-    "description": "Generate a non-mutating topic permission update plan.",
+    "description": "Builds a plan for changing the permission of a Topic without changing the cluster. The plan records the current Topic state, the intended change, its impact and rollback suggestions, and expires after five minutes. Use it to review a change before an operator applies it by other means.",
     "inputSchema": {
       "$defs": {
         "UpdateTopicPermissionsDesiredState": {
           "additionalProperties": false,
           "properties": {
             "perm": {
+              "description": "Permission value the Topic should have.",
               "type": "string"
             },
             "topic": {
+              "description": "Exact name of the Topic to change.",
               "type": "string"
             }
           },
@@ -7839,12 +7952,16 @@ expression: contracts
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         },
         "desired": {
-          "$ref": "#/$defs/UpdateTopicPermissionsDesiredState"
+          "$ref": "#/$defs/UpdateTopicPermissionsDesiredState",
+          "description": "The state the plan should lead to."
         },
         "reason": {
+          "description": "Why the change is wanted. It is copied into the plan.",
           "type": "string"
         }
       },
@@ -8079,19 +8196,22 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ broker configuration plan"
     },
-    "description": "Generate a non-mutating broker configuration update plan.",
+    "description": "Builds a plan for changing one configuration entry of a Broker without changing the cluster. The plan records the current Broker state, the intended change, its impact and rollback suggestions, and expires after five minutes. Use it to review a change before an operator applies it by other means.",
     "inputSchema": {
       "$defs": {
         "UpdateBrokerConfigDesiredState": {
           "additionalProperties": false,
           "properties": {
             "broker_name": {
+              "description": "Logical Broker name as reported by `rocketmq_get_cluster_overview`, for example `broker-a`. It is a name, not a network address.",
               "type": "string"
             },
             "config_key": {
+              "description": "Name of the Broker configuration entry to change.",
               "type": "string"
             },
             "config_value": {
+              "description": "Value the entry should have.",
               "type": "string"
             }
           },
@@ -8107,12 +8227,16 @@ expression: contracts
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         },
         "desired": {
-          "$ref": "#/$defs/UpdateBrokerConfigDesiredState"
+          "$ref": "#/$defs/UpdateBrokerConfigDesiredState",
+          "description": "The state the plan should lead to."
         },
         "reason": {
+          "description": "Why the change is wanted. It is copied into the plan.",
           "type": "string"
         }
       },
@@ -8347,17 +8471,19 @@ expression: contracts
       "readOnlyHint": true,
       "title": "RocketMQ consumer offset reset plan"
     },
-    "description": "Generate a non-mutating consumer offset reset plan.",
+    "description": "Builds a plan for resetting the offsets of one Consumer Group on one Topic without changing the cluster. The plan records the current lag, the intended reset, its impact and rollback suggestions, and expires after five minutes. Use it to review a reset before an operator applies it by other means.",
     "inputSchema": {
       "$defs": {
         "ResetConsumerOffsetDesiredState": {
           "additionalProperties": false,
           "properties": {
             "consumer_group": {
+              "description": "Exact name of the Consumer Group whose offsets the plan resets.",
               "type": "string"
             },
             "target_offset": {
               "default": null,
+              "description": "Queue offset to reset to. Optional.",
               "format": "int64",
               "type": [
                 "integer",
@@ -8366,6 +8492,7 @@ expression: contracts
             },
             "timestamp_millis": {
               "default": null,
+              "description": "Point in time to reset to, in milliseconds since the Unix epoch. Optional.",
               "format": "int64",
               "type": [
                 "integer",
@@ -8373,6 +8500,7 @@ expression: contracts
               ]
             },
             "topic": {
+              "description": "Exact name of the Topic whose offsets the plan resets.",
               "type": "string"
             }
           },
@@ -8387,12 +8515,16 @@ expression: contracts
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
           "type": "string"
         },
         "desired": {
-          "$ref": "#/$defs/ResetConsumerOffsetDesiredState"
+          "$ref": "#/$defs/ResetConsumerOffsetDesiredState",
+          "description": "The state the plan should lead to."
         },
         "reason": {
+          "description": "Why the change is wanted. It is copied into the plan.",
           "type": "string"
         }
       },

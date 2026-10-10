@@ -24,6 +24,7 @@ expression: catalog.list_tools().tools
       "additionalProperties": false,
       "properties": {
         "broker_names": {
+          "description": "Logical names of the master Brokers to change, 1 to 64 distinct names; never addresses. Each must belong to the selected cluster.",
           "items": {
             "maxLength": 127,
             "minLength": 1,
@@ -35,6 +36,7 @@ expression: catalog.list_tools().tools
           "type": "array"
         },
         "cluster": {
+          "description": "Logical cluster name from the server configuration, never a NameServer or Broker address. Both the caller and the server policy must allow it.",
           "maxLength": 64,
           "minLength": 1,
           "pattern": "^[a-zA-Z0-9_-]+$",
@@ -42,25 +44,31 @@ expression: catalog.list_tools().tools
         },
         "confirm": {
           "default": false,
+          "description": "Explicit confirmation. Must be true to execute, that is when `dry_run` is false; a dry run does not need it.",
           "type": "boolean"
         },
         "dry_run": {
           "default": true,
+          "description": "Plan only: read the current state and report what would change, without writing. When omitted, the server's configured default applies, which is a dry run unless the operator changed it.",
           "type": "boolean"
         },
         "message_type": {
-          "$ref": "#/$defs/TopicMessageType"
+          "$ref": "#/$defs/TopicMessageType",
+          "description": "Message type of the Topic."
         },
         "order": {
+          "description": "Whether the Topic is ordered. This Tool never edits the cluster's order configuration, which must already agree with the value.",
           "type": "boolean"
         },
         "perm": {
+          "description": "Permission bits: 2 allows writing, 4 allows reading, 6 allows both, and 1 marks the permission as inherited. At least one of reading or writing must be allowed.",
           "format": "uint32",
           "maximum": 7,
           "minimum": 1,
           "type": "integer"
         },
         "read_queue_nums": {
+          "description": "Number of read queues on each Broker, 1 to 127.",
           "format": "uint32",
           "maximum": 127,
           "minimum": 1,
@@ -68,6 +76,7 @@ expression: catalog.list_tools().tools
         },
         "reason": {
           "default": null,
+          "description": "Why the change is made; kept only in the durable audit log. Required to execute. 5 to 256 characters of letters, digits, spaces and `._,#-`, without addresses, host names or tokens.",
           "maxLength": 256,
           "minLength": 5,
           "type": [
@@ -77,6 +86,7 @@ expression: catalog.list_tools().tools
         },
         "request_key": {
           "default": null,
+          "description": "Optional idempotency key of 8 to 64 letters, digits and `._:-`. An execute call that repeats a key with the same arguments returns the outcome already recorded for it instead of writing again; the same key with different arguments is rejected.",
           "maxLength": 64,
           "minLength": 8,
           "pattern": "^[a-zA-Z0-9._:-]+$",
@@ -86,16 +96,19 @@ expression: catalog.list_tools().tools
           ]
         },
         "schema_version": {
+          "description": "Version of this argument schema. Always `rocketmq-mcp-control.arguments.v1`.",
           "pattern": "^rocketmq-mcp-control\\.arguments\\.v1$",
           "type": "string"
         },
         "topic": {
+          "description": "Topic to create or replace: letters, digits, `%`, `|`, `_` and `-`, at most 127 characters. System Topics, retry Topics and dead-letter Topics are rejected.",
           "maxLength": 127,
           "minLength": 1,
           "pattern": "^[%|a-zA-Z0-9_-]+$",
           "type": "string"
         },
         "write_queue_nums": {
+          "description": "Number of write queues on each Broker, 1 to 127.",
           "format": "uint32",
           "maximum": 127,
           "minimum": 1,
@@ -127,6 +140,7 @@ expression: catalog.list_tools().tools
             "operation_not_allowed",
             "mutation_disabled",
             "operation_unavailable",
+            "rate_limited",
             "confirmation_required",
             "invalid_argument",
             "audit_unavailable",
@@ -286,24 +300,29 @@ expression: catalog.list_tools().tools
           "additionalProperties": false,
           "properties": {
             "message_type": {
-              "$ref": "#/$defs/TopicMessageType"
+              "$ref": "#/$defs/TopicMessageType",
+              "description": "Message type of the Topic."
             },
             "order": {
+              "description": "Whether the Topic is ordered. This Tool never edits the cluster's order configuration, which must already agree with the value.",
               "type": "boolean"
             },
             "perm": {
+              "description": "Permission bits: 2 allows writing, 4 allows reading, 6 allows both, and 1 marks the permission as inherited. At least one of reading or writing must be allowed.",
               "format": "uint32",
               "maximum": 7,
               "minimum": 1,
               "type": "integer"
             },
             "read_queue_nums": {
+              "description": "Number of read queues on each Broker, 1 to 127.",
               "format": "uint32",
               "maximum": 127,
               "minimum": 1,
               "type": "integer"
             },
             "write_queue_nums": {
+              "description": "Number of write queues on each Broker, 1 to 127.",
               "format": "uint32",
               "maximum": 127,
               "minimum": 1,
@@ -474,11 +493,13 @@ expression: catalog.list_tools().tools
       "additionalProperties": false,
       "properties": {
         "broker_id": {
+          "description": "Id of the Broker the group normally consumes from; 0 is the master.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
         },
         "broker_names": {
+          "description": "Logical names of the master Brokers to change, 1 to 64 distinct names; never addresses. Each must belong to the selected cluster.",
           "items": {
             "maxLength": 127,
             "minLength": 1,
@@ -490,6 +511,7 @@ expression: catalog.list_tools().tools
           "type": "array"
         },
         "cluster": {
+          "description": "Logical cluster name from the server configuration, never a NameServer or Broker address. Both the caller and the server policy must allow it.",
           "maxLength": 64,
           "minLength": 1,
           "pattern": "^[a-zA-Z0-9_-]+$",
@@ -497,27 +519,34 @@ expression: catalog.list_tools().tools
         },
         "confirm": {
           "default": false,
+          "description": "Explicit confirmation. Must be true to execute, that is when `dry_run` is false; a dry run does not need it.",
           "type": "boolean"
         },
         "consume_broadcast_enable": {
+          "description": "Whether the group may consume in broadcast mode.",
           "type": "boolean"
         },
         "consume_enable": {
+          "description": "Whether the group may consume messages.",
           "type": "boolean"
         },
         "consume_from_min_enable": {
+          "description": "Whether the group may start consuming from the minimum offset of a queue.",
           "type": "boolean"
         },
         "consume_message_orderly": {
+          "description": "Whether the group consumes messages in order.",
           "type": "boolean"
         },
         "consume_timeout_minute": {
+          "description": "Minutes after which an unacknowledged message counts as timed out, 1 to 10080.",
           "format": "int32",
           "maximum": 10080,
           "minimum": 1,
           "type": "integer"
         },
         "consumer_group": {
+          "description": "Consumer Group to create or replace: letters, digits, `%`, `|`, `_` and `-`, at most 255 characters. RocketMQ's built-in system groups are rejected.",
           "maxLength": 255,
           "minLength": 1,
           "pattern": "^[%|a-zA-Z0-9_-]+$",
@@ -525,17 +554,21 @@ expression: catalog.list_tools().tools
         },
         "dry_run": {
           "default": true,
+          "description": "Plan only: read the current state and report what would change, without writing. When omitted, the server's configured default applies, which is a dry run unless the operator changed it.",
           "type": "boolean"
         },
         "group_sys_flag": {
+          "description": "System flag bits of the group; 0 for an ordinary group.",
           "format": "int32",
           "type": "integer"
         },
         "notify_consumer_ids_changed_enable": {
+          "description": "Whether consumers are notified when the membership of the group changes.",
           "type": "boolean"
         },
         "reason": {
           "default": null,
+          "description": "Why the change is made; kept only in the durable audit log. Required to execute. 5 to 256 characters of letters, digits, spaces and `._,#-`, without addresses, host names or tokens.",
           "maxLength": 256,
           "minLength": 5,
           "type": [
@@ -545,6 +578,7 @@ expression: catalog.list_tools().tools
         },
         "request_key": {
           "default": null,
+          "description": "Optional idempotency key of 8 to 64 letters, digits and `._:-`. An execute call that repeats a key with the same arguments returns the outcome already recorded for it instead of writing again; the same key with different arguments is rejected.",
           "maxLength": 64,
           "minLength": 8,
           "pattern": "^[a-zA-Z0-9._:-]+$",
@@ -554,22 +588,26 @@ expression: catalog.list_tools().tools
           ]
         },
         "retry_max_times": {
+          "description": "Maximum number of redeliveries of a message, -1 to 10000.",
           "format": "int32",
           "maximum": 10000,
           "minimum": -1,
           "type": "integer"
         },
         "retry_queue_nums": {
+          "description": "Number of retry queues, 0 to 127.",
           "format": "int32",
           "maximum": 127,
           "minimum": 0,
           "type": "integer"
         },
         "schema_version": {
+          "description": "Version of this argument schema. Always `rocketmq-mcp-control.arguments.v1`.",
           "pattern": "^rocketmq-mcp-control\\.arguments\\.v1$",
           "type": "string"
         },
         "which_broker_when_consume_slowly": {
+          "description": "Id of the Broker that consumers are redirected to when consuming from the master is slow.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -619,48 +657,59 @@ expression: catalog.list_tools().tools
           "additionalProperties": false,
           "properties": {
             "broker_id": {
+              "description": "Id of the Broker the group normally consumes from; 0 is the master.",
               "format": "uint64",
               "minimum": 0,
               "type": "integer"
             },
             "consume_broadcast_enable": {
+              "description": "Whether the group may consume in broadcast mode.",
               "type": "boolean"
             },
             "consume_enable": {
+              "description": "Whether the group may consume messages.",
               "type": "boolean"
             },
             "consume_from_min_enable": {
+              "description": "Whether the group may start consuming from the minimum offset of a queue.",
               "type": "boolean"
             },
             "consume_message_orderly": {
+              "description": "Whether the group consumes messages in order.",
               "type": "boolean"
             },
             "consume_timeout_minute": {
+              "description": "Minutes after which an unacknowledged message counts as timed out, 1 to 10080.",
               "format": "int32",
               "maximum": 10080,
               "minimum": 1,
               "type": "integer"
             },
             "group_sys_flag": {
+              "description": "System flag bits of the group; 0 for an ordinary group.",
               "format": "int32",
               "type": "integer"
             },
             "notify_consumer_ids_changed_enable": {
+              "description": "Whether consumers are notified when the membership of the group changes.",
               "type": "boolean"
             },
             "retry_max_times": {
+              "description": "Maximum number of redeliveries of a message, -1 to 10000.",
               "format": "int32",
               "maximum": 10000,
               "minimum": -1,
               "type": "integer"
             },
             "retry_queue_nums": {
+              "description": "Number of retry queues, 0 to 127.",
               "format": "int32",
               "maximum": 127,
               "minimum": 0,
               "type": "integer"
             },
             "which_broker_when_consume_slowly": {
+              "description": "Id of the Broker that consumers are redirected to when consuming from the master is slow.",
               "format": "uint64",
               "minimum": 0,
               "type": "integer"
@@ -695,6 +744,7 @@ expression: catalog.list_tools().tools
             "operation_not_allowed",
             "mutation_disabled",
             "operation_unavailable",
+            "rate_limited",
             "confirmation_required",
             "invalid_argument",
             "audit_unavailable",
@@ -972,6 +1022,7 @@ expression: catalog.list_tools().tools
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name from the server configuration, never a NameServer or Broker address. Both the caller and the server policy must allow it.",
           "maxLength": 64,
           "minLength": 1,
           "pattern": "^[a-zA-Z0-9_-]+$",
@@ -979,9 +1030,11 @@ expression: catalog.list_tools().tools
         },
         "confirm": {
           "default": false,
+          "description": "Explicit confirmation. Must be true to execute, that is when `dry_run` is false; a dry run does not need it.",
           "type": "boolean"
         },
         "consumer_group": {
+          "description": "Consumer Group whose offsets are reset. Built-in system groups are rejected.",
           "maxLength": 255,
           "minLength": 1,
           "pattern": "^[%|a-zA-Z0-9_-]+$",
@@ -989,14 +1042,17 @@ expression: catalog.list_tools().tools
         },
         "dry_run": {
           "default": true,
+          "description": "Plan only: read the current state and report what would change, without writing. When omitted, the server's configured default applies, which is a dry run unless the operator changed it.",
           "type": "boolean"
         },
         "force": {
           "default": false,
+          "description": "Whether an offset may move forward. When false, a queue whose reset would advance its offset, or that has no offset yet, is left unchanged.",
           "type": "boolean"
         },
         "reason": {
           "default": null,
+          "description": "Why the change is made; kept only in the durable audit log. Required to execute. 5 to 256 characters of letters, digits, spaces and `._,#-`, without addresses, host names or tokens.",
           "maxLength": 256,
           "minLength": 5,
           "type": [
@@ -1006,6 +1062,7 @@ expression: catalog.list_tools().tools
         },
         "request_key": {
           "default": null,
+          "description": "Optional idempotency key of 8 to 64 letters, digits and `._:-`. An execute call that repeats a key with the same arguments returns the outcome already recorded for it instead of writing again; the same key with different arguments is rejected.",
           "maxLength": 64,
           "minLength": 8,
           "pattern": "^[a-zA-Z0-9._:-]+$",
@@ -1015,15 +1072,18 @@ expression: catalog.list_tools().tools
           ]
         },
         "schema_version": {
+          "description": "Version of this argument schema. Always `rocketmq-mcp-control.arguments.v1`.",
           "pattern": "^rocketmq-mcp-control\\.arguments\\.v1$",
           "type": "string"
         },
         "timestamp": {
+          "description": "Time to reset to, in RFC 3339 with a time zone, for example `2026-08-30T08:00:00+08:00`. Each queue is planned at the offset stored for that time.",
           "maxLength": 40,
           "minLength": 20,
           "type": "string"
         },
         "topic": {
+          "description": "Topic whose consumer offsets are reset. System Topics are rejected.",
           "maxLength": 127,
           "minLength": 1,
           "pattern": "^[%|a-zA-Z0-9_-]+$",
@@ -1055,6 +1115,7 @@ expression: catalog.list_tools().tools
             "operation_not_allowed",
             "mutation_disabled",
             "operation_unavailable",
+            "rate_limited",
             "confirmation_required",
             "invalid_argument",
             "audit_unavailable",
@@ -1363,26 +1424,32 @@ expression: catalog.list_tools().tools
           "properties": {
             "autoCreateSubscriptionGroup": {
               "default": null,
+              "description": "`true` or `false`: whether the Broker creates a missing Consumer Group on first use.",
               "type": "string"
             },
             "autoCreateTopicEnable": {
               "default": null,
+              "description": "`true` or `false`: whether the Broker creates a missing Topic on first use.",
               "type": "string"
             },
             "brokerPermission": {
               "default": null,
+              "description": "Permission bits as a decimal string from `1` to `7`: 2 allows writing, 4 allows reading, 6 allows both. At least one of reading or writing must be allowed.",
               "type": "string"
             },
             "defaultTopicQueueNums": {
               "default": null,
+              "description": "Queue count of automatically created Topics, as a decimal string from `1` to `128`.",
               "type": "string"
             },
             "messageIndexEnable": {
               "default": null,
+              "description": "`true` or `false`: whether the Broker builds the message index.",
               "type": "string"
             },
             "traceTopicEnable": {
               "default": null,
+              "description": "`true` or `false`: whether the Broker hosts the system message-trace Topic.",
               "type": "string"
             }
           },
@@ -1393,12 +1460,14 @@ expression: catalog.list_tools().tools
       "additionalProperties": false,
       "properties": {
         "broker_name": {
+          "description": "Logical name of the one Broker to patch; never an address.",
           "maxLength": 127,
           "minLength": 1,
           "pattern": "^[%|a-zA-Z0-9_-]+$",
           "type": "string"
         },
         "cluster": {
+          "description": "Logical cluster name from the server configuration, never a NameServer or Broker address. Both the caller and the server policy must allow it.",
           "maxLength": 64,
           "minLength": 1,
           "pattern": "^[a-zA-Z0-9_-]+$",
@@ -1406,17 +1475,21 @@ expression: catalog.list_tools().tools
         },
         "confirm": {
           "default": false,
+          "description": "Explicit confirmation. Must be true to execute, that is when `dry_run` is false; a dry run does not need it.",
           "type": "boolean"
         },
         "dry_run": {
           "default": true,
+          "description": "Plan only: read the current state and report what would change, without writing. When omitted, the server's configured default applies, which is a dry run unless the operator changed it.",
           "type": "boolean"
         },
         "properties": {
-          "$ref": "#/$defs/BrokerConfigProperties"
+          "$ref": "#/$defs/BrokerConfigProperties",
+          "description": "Settings to change, at least one. Each value is a string, and a setting left out keeps its current value."
         },
         "reason": {
           "default": null,
+          "description": "Why the change is made; kept only in the durable audit log. Required to execute. 5 to 256 characters of letters, digits, spaces and `._,#-`, without addresses, host names or tokens.",
           "maxLength": 256,
           "minLength": 5,
           "type": [
@@ -1426,6 +1499,7 @@ expression: catalog.list_tools().tools
         },
         "request_key": {
           "default": null,
+          "description": "Optional idempotency key of 8 to 64 letters, digits and `._:-`. An execute call that repeats a key with the same arguments returns the outcome already recorded for it instead of writing again; the same key with different arguments is rejected.",
           "maxLength": 64,
           "minLength": 8,
           "pattern": "^[a-zA-Z0-9._:-]+$",
@@ -1435,6 +1509,7 @@ expression: catalog.list_tools().tools
           ]
         },
         "schema_version": {
+          "description": "Version of this argument schema. Always `rocketmq-mcp-control.arguments.v1`.",
           "pattern": "^rocketmq-mcp-control\\.arguments\\.v1$",
           "type": "string"
         }
@@ -1632,6 +1707,7 @@ expression: catalog.list_tools().tools
             "operation_not_allowed",
             "mutation_disabled",
             "operation_unavailable",
+            "rate_limited",
             "confirmation_required",
             "invalid_argument",
             "audit_unavailable",
@@ -1803,6 +1879,7 @@ expression: catalog.list_tools().tools
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name from the server configuration, never a NameServer or Broker address. Both the caller and the server policy must allow it.",
           "maxLength": 64,
           "minLength": 1,
           "pattern": "^[a-zA-Z0-9_-]+$",
@@ -1810,9 +1887,11 @@ expression: catalog.list_tools().tools
         },
         "confirm": {
           "default": false,
+          "description": "Explicit confirmation. Must be true to execute, that is when `dry_run` is false; a dry run does not need it.",
           "type": "boolean"
         },
         "consumer_group": {
+          "description": "Consumer Group that the request mode applies to. Built-in system groups are rejected.",
           "maxLength": 255,
           "minLength": 1,
           "pattern": "^[%|a-zA-Z0-9_-]+$",
@@ -1820,18 +1899,22 @@ expression: catalog.list_tools().tools
         },
         "dry_run": {
           "default": true,
+          "description": "Plan only: read the current state and report what would change, without writing. When omitted, the server's configured default applies, which is a dry run unless the operator changed it.",
           "type": "boolean"
         },
         "mode": {
-          "$ref": "#/$defs/ConsumerRequestMode"
+          "$ref": "#/$defs/ConsumerRequestMode",
+          "description": "How the group fetches messages of the Topic: `pull` or `pop`."
         },
         "pop_share_queue_num": {
+          "description": "Number of queues that pop consumers share, 0 or more.",
           "format": "int32",
           "minimum": 0,
           "type": "integer"
         },
         "reason": {
           "default": null,
+          "description": "Why the change is made; kept only in the durable audit log. Required to execute. 5 to 256 characters of letters, digits, spaces and `._,#-`, without addresses, host names or tokens.",
           "maxLength": 256,
           "minLength": 5,
           "type": [
@@ -1841,6 +1924,7 @@ expression: catalog.list_tools().tools
         },
         "request_key": {
           "default": null,
+          "description": "Optional idempotency key of 8 to 64 letters, digits and `._:-`. An execute call that repeats a key with the same arguments returns the outcome already recorded for it instead of writing again; the same key with different arguments is rejected.",
           "maxLength": 64,
           "minLength": 8,
           "pattern": "^[a-zA-Z0-9._:-]+$",
@@ -1850,16 +1934,19 @@ expression: catalog.list_tools().tools
           ]
         },
         "schema_version": {
+          "description": "Version of this argument schema. Always `rocketmq-mcp-control.arguments.v1`.",
           "pattern": "^rocketmq-mcp-control\\.arguments\\.v1$",
           "type": "string"
         },
         "timeout_millis": {
+          "description": "Timeout of the change request sent to each Broker, 1 to 24000 milliseconds.",
           "format": "uint64",
           "maximum": 24000,
           "minimum": 1,
           "type": "integer"
         },
         "topic": {
+          "description": "Topic that the request mode applies to. System Topics are rejected.",
           "maxLength": 127,
           "minLength": 1,
           "pattern": "^[%|a-zA-Z0-9_-]+$",
@@ -1900,6 +1987,7 @@ expression: catalog.list_tools().tools
             "operation_not_allowed",
             "mutation_disabled",
             "operation_unavailable",
+            "rate_limited",
             "confirmation_required",
             "invalid_argument",
             "audit_unavailable",

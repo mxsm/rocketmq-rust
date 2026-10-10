@@ -15,6 +15,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::str::FromStr;
+use std::time::Duration;
 
 use clap::Parser;
 use rocketmq_admin_core::core::security::AdminCredentials;
@@ -25,6 +26,15 @@ use crate::error::McpError;
 
 const MAX_JWKS_CA_BYTES: usize = 1024 * 1024;
 const MAX_CLUSTER_CREDENTIAL_BYTES: usize = 64 * 1024;
+/// How long the HTTPS transport lets a request run before it answers with HTTP 408.
+pub(crate) const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// The request budget when `server.request_timeout_ms` is not configured.
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(25);
+/// A shorter budget is almost certainly seconds written where milliseconds are expected.
+const MIN_REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
+/// The shortest shared pseudonym key: 128 bits of entropy written as hexadecimal.
+const MIN_PSEUDONYM_KEY_BYTES: usize = 32;
+const MAX_PSEUDONYM_KEY_BYTES: usize = 1_024;
 
 #[derive(Debug, Clone, Parser)]
 pub struct Args {
@@ -44,6 +54,7 @@ pub struct Args {
 }
 
 #[derive(Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct McpConfig {
     pub server: ServerConfig,
     #[serde(default)]
@@ -167,6 +178,12 @@ impl McpConfig {
         if !self.server.http.endpoint.starts_with('/') {
             return Err(McpError::invalid_config(
                 "server.http.endpoint must start with '/'".to_string(),
+            ));
+        }
+        // A request has to fail with a structured Tool error before the transport gives up on it.
+        if !(MIN_REQUEST_TIMEOUT..HTTP_REQUEST_TIMEOUT).contains(&self.server.request_timeout()) {
+            return Err(McpError::invalid_config(
+                "server.request_timeout_ms must be at least 1000 and less than 30000".to_string(),
             ));
         }
 
@@ -329,6 +346,9 @@ impl McpConfig {
             ));
         }
 
+        // Fail at startup, not on the first request that needs a pseudonym.
+        self.security.resolve_pseudonym_key()?;
+
         self.server.http.auth.validate()?;
         if self.server.transport == TransportKind::StreamableHttp {
             self.server.http.validate_streamable_http()?;
@@ -448,22 +468,36 @@ fn parse_transport(value: &str) -> Result<TransportKind, String> {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     pub name: String,
     pub version: String,
     pub transport: TransportKind,
     #[serde(default)]
     pub log_level: Option<String>,
+    /// How long one request may spend on RocketMQ sources, in milliseconds; 25000 when absent.
+    #[serde(default)]
+    pub request_timeout_ms: Option<u64>,
     pub stdio: StdioConfig,
     pub http: HttpConfig,
 }
 
+impl ServerConfig {
+    /// The time one request may spend on RocketMQ sources, over all the queries it runs.
+    pub(crate) fn request_timeout(&self) -> Duration {
+        self.request_timeout_ms
+            .map_or(DEFAULT_REQUEST_TIMEOUT, Duration::from_millis)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct StdioConfig {
     pub log_to_stderr: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HttpConfig {
     pub bind: String,
     pub endpoint: String,
@@ -511,6 +545,7 @@ impl HttpConfig {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HttpTlsConfig {
     #[serde(default)]
     pub cert_path: String,
@@ -526,6 +561,7 @@ impl HttpTlsConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HttpAuthConfig {
     pub mode: HttpAuthMode,
     pub development_token_env: String,
@@ -663,6 +699,7 @@ pub enum JwtAlgorithm {
 }
 
 #[derive(Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ClusterConfig {
     pub name: String,
     pub namesrv_addr: String,
@@ -691,13 +728,6 @@ pub struct ClusterConfig {
 impl ClusterConfig {
     pub(crate) fn physical_cluster_name(&self) -> &str {
         self.rocketmq_cluster_name.as_deref().unwrap_or(&self.name)
-    }
-
-    pub(crate) fn resolve_admin_credentials(&self) -> crate::error::McpResult<Option<AdminCredentials>> {
-        self.credentials
-            .as_ref()
-            .map(|reference| reference.resolve(&self.name))
-            .transpose()
     }
 
     pub(crate) fn proxy_endpoint(&self, proxy_name: &str) -> Option<&str> {
@@ -842,7 +872,17 @@ impl ClusterCredentialReference {
         Ok(())
     }
 
-    fn resolve(&self, cluster: &str) -> crate::error::McpResult<AdminCredentials> {
+    /// Whether resolving this reference reads a mounted file rather than the environment.
+    pub(crate) fn reads_file(&self) -> bool {
+        self.file.is_some()
+    }
+
+    /// Reads the referenced credentials. Nothing is cached, so a rotated secret is seen by the
+    /// next call.
+    ///
+    /// A mounted file is read synchronously: async callers run this on a blocking executor when
+    /// [`Self::reads_file`] is true.
+    pub(crate) fn resolve(&self, cluster: &str) -> crate::error::McpResult<AdminCredentials> {
         self.validate_reference(cluster)?;
         let (access_key, secret_key, security_token) = if let Some(file) = self.file.as_deref() {
             resolve_credential_file(cluster, Path::new(file))?
@@ -913,6 +953,7 @@ fn cluster_credentials_error(cluster: &str, reason: impl std::fmt::Display) -> M
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct SecurityConfig {
     pub profile: String,
     pub allow_change_planning: bool,
@@ -920,9 +961,68 @@ pub struct SecurityConfig {
     pub rate_limit_per_minute: u32,
     pub permissions_file: String,
     pub max_concurrent_requests_per_cluster: usize,
+    /// Name of the environment variable that holds the key for client and message pseudonyms.
+    ///
+    /// Replicas that share the key report the same pseudonym for the same identifier. Without
+    /// it every process draws its own key, and pseudonyms change when it restarts.
+    #[serde(default)]
+    pub pseudonym_key_env: Option<String>,
+}
+
+/// A shared pseudonym key read from the environment.
+pub(crate) struct PseudonymKey(String);
+
+impl PseudonymKey {
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
+impl std::fmt::Debug for PseudonymKey {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("PseudonymKey([REDACTED])")
+    }
+}
+
+impl SecurityConfig {
+    /// Reads the shared pseudonym key that `pseudonym_key_env` names, if one is configured.
+    ///
+    /// Whitespace around the value is ignored, so that a key mounted with a trailing newline
+    /// matches the same key set without one.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the variable name is not usable, the variable is not set, or the key is
+    /// shorter than 32 bytes or longer than 1024.
+    pub(crate) fn resolve_pseudonym_key(&self) -> crate::error::McpResult<Option<PseudonymKey>> {
+        self.pseudonym_key_from(|name| std::env::var(name))
+    }
+
+    fn pseudonym_key_from(
+        &self,
+        read_variable: impl FnOnce(&str) -> Result<String, std::env::VarError>,
+    ) -> crate::error::McpResult<Option<PseudonymKey>> {
+        let Some(name) = self.pseudonym_key_env.as_deref() else {
+            return Ok(None);
+        };
+        if name.trim().is_empty() || name.contains('=') || name.contains('\0') {
+            return Err(McpError::invalid_config(
+                "security.pseudonym_key_env must contain a valid environment variable name".to_string(),
+            ));
+        }
+        let value = read_variable(name).map_err(McpError::from_source)?;
+        let key = value.trim();
+        if !(MIN_PSEUDONYM_KEY_BYTES..=MAX_PSEUDONYM_KEY_BYTES).contains(&key.len()) {
+            return Err(McpError::invalid_config(
+                "the shared pseudonym key must be between 32 and 1024 bytes long".to_string(),
+            ));
+        }
+        Ok(Some(PseudonymKey(key.to_owned())))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct AuditConfig {
     pub enabled: bool,
     pub sink: String,
@@ -943,6 +1043,7 @@ const fn default_audit_queue_max_bytes() -> usize {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct CacheConfig {
     pub enabled: bool,
     pub max_entries: usize,
@@ -965,6 +1066,7 @@ const fn default_cursor_snapshot_ttl_ms() -> u64 {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct DiagnosisConfig {
     pub consumer_lag_policy_profile: String,
     pub consumer_lag_threshold: i64,
@@ -1699,6 +1801,63 @@ headers = {{ "{HEADER_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}
     }
 
     #[test]
+    fn shared_pseudonym_key_is_read_from_the_named_variable_and_bounded() {
+        const KEY: &str = "0123456789abcdef0123456789abcdef";
+        let mut security = McpConfig::load(example_config_path()).unwrap().security;
+        let unreachable = |_: &str| -> Result<String, std::env::VarError> { panic!("no variable is configured") };
+        assert!(security.pseudonym_key_from(unreachable).unwrap().is_none());
+
+        security.pseudonym_key_env = Some("ROCKETMQ_MCP_PSEUDONYM_KEY".to_string());
+        let key = security
+            .pseudonym_key_from(|name| {
+                assert_eq!(name, "ROCKETMQ_MCP_PSEUDONYM_KEY");
+                // A mounted secret often ends with a newline.
+                Ok(format!("  {KEY}\n"))
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(key.as_bytes(), KEY.as_bytes());
+        assert_eq!(format!("{key:?}"), "PseudonymKey([REDACTED])");
+
+        for rejected in ["", "too-short", &"k".repeat(31), &"k".repeat(1_025)] {
+            let error = security.pseudonym_key_from(|_| Ok(rejected.to_string())).unwrap_err();
+            assert_configuration_error(&error);
+        }
+        security.pseudonym_key_from(|_| Ok("k".repeat(1_024))).unwrap().unwrap();
+
+        // The variable is not set.
+        let error = security
+            .pseudonym_key_from(|_| Err(std::env::VarError::NotPresent))
+            .unwrap_err();
+        assert_operational_error(&error);
+
+        for name in ["", " ", "KEY=VALUE"] {
+            security.pseudonym_key_env = Some(name.to_string());
+            let error = security.pseudonym_key_from(unreachable).unwrap_err();
+            assert_configuration_error(&error);
+        }
+    }
+
+    #[test]
+    fn request_timeout_defaults_to_25_seconds_and_stays_below_the_http_timeout() {
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.server.request_timeout_ms = None;
+        assert_eq!(config.server.request_timeout(), Duration::from_secs(25));
+        config.validate().unwrap();
+
+        for accepted in [1_000, 29_999] {
+            config.server.request_timeout_ms = Some(accepted);
+            config.validate().unwrap();
+            assert_eq!(config.server.request_timeout(), Duration::from_millis(accepted));
+        }
+        // 30 is seconds written as milliseconds; 30000 would race the HTTP timeout itself.
+        for rejected in [0, 30, 999, 30_000, u64::MAX] {
+            config.server.request_timeout_ms = Some(rejected);
+            assert_configuration_error(&config.validate().unwrap_err());
+        }
+    }
+
+    #[test]
     fn audit_capacity_requires_one_bounded_record_and_u32_byte_accounting() {
         let mut config = McpConfig::load(example_config_path()).unwrap();
         config.audit.max_record_bytes = 0;
@@ -1785,6 +1944,128 @@ headers = {{ "{HEADER_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("conf")
             .join("mcp.example.toml")
+    }
+
+    /// Loads the example configuration after replacing `from` with `to` once.
+    fn load_example_with(from: &str, to: &str) -> crate::error::McpResult<McpConfig> {
+        let (_temp, config_path) = write_example_config_with("", "");
+        let contents = std::fs::read_to_string(&config_path).unwrap();
+        let replaced = contents.replacen(from, to, 1);
+        assert_ne!(replaced, contents, "{from} is missing from the example");
+        std::fs::write(&config_path, replaced).unwrap();
+        McpConfig::load(&config_path)
+    }
+
+    #[test]
+    fn unknown_keys_are_rejected_for_every_config_section() {
+        const VALUE_SENTINEL: &str = "unknown-value-sentinel";
+        for (header, section) in [
+            ("[server]", "server"),
+            ("[server.stdio]", "server.stdio"),
+            ("[server.http]", "server.http"),
+            ("[server.http.tls]", "server.http.tls"),
+            ("[server.http.auth]", "server.http.auth"),
+            ("[[clusters]]", "clusters[0]"),
+            ("[security]", "security"),
+            ("[audit]", "audit"),
+            ("[cache]", "cache"),
+            ("[diagnosis]", "diagnosis"),
+        ] {
+            let error = load_example_with(header, &format!("{header}\nunknown_key = \"{VALUE_SENTINEL}\""))
+                .expect_err("an unknown key must be rejected");
+            assert_eq!(
+                error.to_string(),
+                format!("{CONFIGURATION_ERROR}: unknown key `unknown_key` in `{section}`"),
+                "{header}"
+            );
+            assert!(!format!("{error:?}").contains(VALUE_SENTINEL));
+        }
+
+        let top_level = load_example_with("[server]", &format!("unknown_key = \"{VALUE_SENTINEL}\"\n\n[server]"))
+            .expect_err("an unknown top-level key must be rejected");
+        assert_eq!(
+            top_level.to_string(),
+            format!("{CONFIGURATION_ERROR}: unknown key `unknown_key`")
+        );
+    }
+
+    #[test]
+    fn misspelled_tenant_is_rejected_instead_of_dropping_the_tenant_binding() {
+        let error = load_example_with("[[clusters]]", "[[clusters]]\ntenent = \"team-a\"")
+            .expect_err("a misspelled tenant binding must not load as an unbound cluster");
+        assert_eq!(
+            error.to_string(),
+            format!("{CONFIGURATION_ERROR}: unknown key `tenent` in `clusters[0]`")
+        );
+        assert!(!format!("{error:?}").contains("team-a"));
+    }
+
+    #[test]
+    fn unknown_key_text_is_withheld_unless_it_is_a_plain_name() {
+        let error = load_example_with("[security]", "[security]\n\"https://user:secret@10.0.0.9/\" = 1")
+            .expect_err("a quoted unknown key must be rejected");
+        assert_configuration_error(&error);
+    }
+
+    /// Returns the dedented text of a `key: |-` block scalar in a Kubernetes manifest.
+    fn manifest_block(manifest: &str, key: &str) -> String {
+        let indent = |line: &str| line.len() - line.trim_start().len();
+        let mut lines = manifest.lines();
+        let header = lines
+            .by_ref()
+            .find(|line| {
+                line.trim_start()
+                    .strip_prefix(key)
+                    .is_some_and(|rest| rest.starts_with(": |"))
+            })
+            .unwrap_or_else(|| panic!("the {key} block is missing"));
+        let body = lines
+            .take_while(|line| line.trim().is_empty() || indent(line) > indent(header))
+            .collect::<Vec<_>>();
+        let width = body
+            .iter()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| indent(line))
+            .min()
+            .unwrap_or_default();
+        body.iter()
+            .map(|line| line.get(width..).unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Strict parsing turns a stale key in a shipped configuration into a startup failure, so
+    /// every configuration this repository deploys is parsed with the real types.
+    #[test]
+    fn repository_deployment_configs_have_no_unknown_keys() {
+        fn parse<T: serde::de::DeserializeOwned>(source: &str, origin: &str) {
+            config::Config::builder()
+                .add_source(config::File::from_str(source, config::FileFormat::Toml))
+                .build()
+                .and_then(|config| config.try_deserialize::<T>())
+                .map(drop)
+                .unwrap_or_else(|error| panic!("{origin}: {error}"));
+        }
+
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let read = |relative: &str| {
+            std::fs::read_to_string(repository.join(relative)).unwrap_or_else(|error| panic!("{relative}: {error}"))
+        };
+
+        for directory in ["docker/smoke-config", "rocketmq-ai/rocketmq-sre/deploy/dev/config"] {
+            parse::<McpConfig>(&read(&format!("{directory}/mcp.toml")), directory);
+            parse::<crate::guard::policy::PermissionConfig>(&read(&format!("{directory}/permissions.toml")), directory);
+        }
+        // The static manifest is the canonical render of the Helm chart and stands in for its templates.
+        for manifest in [
+            "rocketmq-ai/rocketmq-sre/deploy/kind/mcp-config.yaml",
+            "rocketmq-ai/rocketmq-sre/deploy/kind/mcp-readiness-config.yaml",
+            "distribution/kubernetes/base/manifest.yaml",
+        ] {
+            let source = read(manifest);
+            parse::<McpConfig>(&manifest_block(&source, "mcp.toml"), manifest);
+            parse::<crate::guard::policy::PermissionConfig>(&manifest_block(&source, "permissions.toml"), manifest);
+        }
     }
 
     fn write_example_config_with(observability_root: &str, extra: &str) -> (tempfile::TempDir, std::path::PathBuf) {

@@ -300,6 +300,18 @@ impl ControlSignals {
         }
     }
 
+    /// Records whether admission control let one authorized call through.
+    #[cfg(feature = "write-tools")]
+    pub(crate) fn rate_limit_decided(&self, accepted: bool) {
+        use rocketmq_observability::metrics::mcp::McpRateLimitDecision;
+
+        self.metrics.record_rate_limit(if accepted {
+            McpRateLimitDecision::Accepted
+        } else {
+            McpRateLimitDecision::Rejected
+        });
+    }
+
     /// Records how the request-key cache admitted one mutation.
     #[cfg(feature = "write-tools")]
     pub(crate) fn cache_event(&self, event: rocketmq_observability::metrics::mcp::McpCacheEvent) {
@@ -504,7 +516,8 @@ const fn operation_status(code: ControlErrorCode) -> McpOperationStatus {
         | ControlErrorCode::PermissionDenied
         | ControlErrorCode::ClusterNotAllowed
         | ControlErrorCode::OperationNotAllowed
-        | ControlErrorCode::MutationDisabled => McpOperationStatus::Denied,
+        | ControlErrorCode::MutationDisabled
+        | ControlErrorCode::RateLimited => McpOperationStatus::Denied,
         ControlErrorCode::InvalidConfig
         | ControlErrorCode::RequestRejected
         | ControlErrorCode::OperationUnavailable
@@ -529,6 +542,7 @@ const fn failure_label(code: ControlErrorCode) -> McpFailureLabel {
         | ControlErrorCode::ClusterNotAllowed
         | ControlErrorCode::OperationNotAllowed
         | ControlErrorCode::MutationDisabled => McpFailureLabel::PermissionDenied,
+        ControlErrorCode::RateLimited => McpFailureLabel::RateLimited,
         ControlErrorCode::RequestRejected
         | ControlErrorCode::ConfirmationRequired
         | ControlErrorCode::InvalidArgument
@@ -612,8 +626,20 @@ pub(crate) mod testing {
         _guard: tracing::subscriber::DefaultGuard,
     }
 
+    /// Keeps a second dispatcher registered for the rest of the test process.
+    ///
+    /// While exactly one dispatcher exists, tracing asks the thread that reaches a call site
+    /// first whether that call site is enabled, and caches the answer for every thread. A test
+    /// thread without a capture would then switch a call site off for the one test that captures
+    /// it. With a second dispatcher registered, each event asks its own thread instead.
+    fn keep_call_sites_enabled_per_thread() {
+        static KEEPER: std::sync::OnceLock<tracing::Dispatch> = std::sync::OnceLock::new();
+        KEEPER.get_or_init(|| tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default()));
+    }
+
     impl LogCapture {
         pub(crate) fn start() -> Self {
+            keep_call_sites_enabled_per_thread();
             let buffer = SharedBuffer::default();
             let subscriber = tracing_subscriber::fmt()
                 .without_time()
@@ -628,6 +654,7 @@ pub(crate) mod testing {
 
         /// Captures only the events that `filter` lets through.
         pub(crate) fn with_filter(filter: &str) -> Self {
+            keep_call_sites_enabled_per_thread();
             let buffer = SharedBuffer::default();
             let subscriber = tracing_subscriber::fmt()
                 .with_env_filter(tracing_subscriber::EnvFilter::try_new(filter).unwrap())
@@ -778,7 +805,13 @@ mod tests {
         let trail = AuditTrail::new(Arc::new(MemoryAuditSink::new(16, 4096)));
         let context = AuditContext::try_new("alice@example.com", Some("planned operation")).unwrap();
         let invocation = trail
-            .start(&context, ControlOperation::TopicUpsert, &cluster, false)
+            .start(
+                &context,
+                ControlOperation::TopicUpsert,
+                &cluster,
+                false,
+                &crate::audit::AuditSubject::sample(ControlOperation::TopicUpsert),
+            )
             .await
             .unwrap();
 

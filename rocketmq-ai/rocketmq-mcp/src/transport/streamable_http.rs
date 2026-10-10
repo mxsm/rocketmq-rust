@@ -45,7 +45,6 @@ use rocketmq_transport::api::TlsServerConfig;
 use rocketmq_transport::api::TlsServerRuntime;
 
 const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
-const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub async fn serve(app: McpApp) -> crate::error::McpResult<()> {
     serve_with_shutdown(
@@ -163,7 +162,7 @@ fn build_router_with_auth(app: McpApp, cancellation_token: CancellationToken, au
         .layer(TraceLayer::new_for_http())
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
-            HTTP_REQUEST_TIMEOUT,
+            crate::config::HTTP_REQUEST_TIMEOUT,
         ))
         .layer(RequestBodyLimitLayer::new(MAX_HTTP_BODY_BYTES))
 }
@@ -430,6 +429,63 @@ mod tests {
         assert_ne!(tool_record.operator, "local-stdio");
 
         std::env::remove_var("ROCKETMQ_MCP_HTTP_TOKEN");
+    }
+
+    #[cfg(feature = "stdio")]
+    #[tokio::test(start_paused = true)]
+    async fn slow_backend_returns_structured_timeout_before_http_timeout() {
+        let _environment = development_token_environment_lock().lock().await;
+        std::env::set_var("ROCKETMQ_MCP_HTTP_TOKEN", "slow-backend-test-token");
+        let config = McpConfig::load(example_config_path()).unwrap();
+        let budget = config.server.request_timeout();
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("mcp-slow-backend-test");
+        // Nothing releases the gate: the Topic inventory read hangs like an unresponsive source.
+        let gate = std::sync::Arc::new(crate::adapter::admin_session::ProtocolTestGate::new(1));
+        let app = McpApp::new(
+            config,
+            runtime.service_context("mcp-app"),
+            rocketmq_observability::TelemetryHandle::noop(),
+        )
+        .unwrap()
+        .with_test_session_factory(crate::adapter::admin_session::ProtocolTestSessionFactory::new(Some(
+            gate,
+        )));
+        let router = build_router(app, CancellationToken::new()).unwrap();
+        let started = tokio::time::Instant::now();
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp")
+                    .header(AUTHORIZATION, "Bearer slow-backend-test-token")
+                    .header(HOST, "localhost")
+                    .header(ORIGIN, "https://localhost")
+                    .header("content-type", "application/json")
+                    .header("accept", "application/json, text/event-stream")
+                    .header("mcp-protocol-version", "2025-11-25")
+                    .body(Body::from(
+                        r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"rocketmq_list_topics","arguments":{"cluster":"local-dev"}}}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        std::env::remove_var("ROCKETMQ_MCP_HTTP_TOKEN");
+
+        // The Tool error is ready when the request budget ends, before the transport would answer 408.
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(started.elapsed(), budget);
+        assert!(budget < crate::config::HTTP_REQUEST_TIMEOUT);
+        let body = axum::body::to_bytes(response.into_body(), MAX_HTTP_BODY_BYTES)
+            .await
+            .unwrap();
+        let reply: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(reply["result"]["isError"], true);
+        let error: serde_json::Value =
+            serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(error["code"], "backend_timeout");
+        assert_eq!(error["retryable"], true);
     }
 
     #[tokio::test]

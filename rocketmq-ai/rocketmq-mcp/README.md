@@ -101,6 +101,10 @@ Start from the checked-in example:
 Important fields:
 
 - `server.transport`: `stdio` or `streamable-http`.
+- `server.request_timeout_ms`: time one request may spend on RocketMQ sources, default `25000`. Every query a
+  Tool or Resource runs shares this budget, so a composite Tool such as the cluster overview takes at most one
+  budget. When it ends the caller gets a `backend_timeout` Tool error. The value must be at least `1000` and less
+  than `30000`, the HTTPS transport's request timeout, so that the structured error always arrives first.
 - `server.http.bind`: socket address for the HTTPS transport, default `127.0.0.1:8089`.
 - `server.http.endpoint`: MCP endpoint path, default `/mcp`.
 - `server.http.public_base_url`: absolute public HTTPS origin used in protected-resource metadata and authentication challenges.
@@ -111,6 +115,7 @@ Important fields:
 - `server.http.auth.issuer`, `audience`, `required_scopes`, `jwt_algorithm`, and `jwks_url`: OAuth resource-server validation settings. OAuth accepts only RS256 tokens carrying a `kid`, and the JWKS endpoint must use HTTPS.
 - `server.http.auth.jwks_ca_path`: optional readable PEM CA bundle for a private HTTPS JWKS issuer. Relative paths are resolved from the configuration file, parsed as certificates, and never logged.
 - `server.http.auth.jwks_refresh_seconds` and `jwks_max_stale_seconds`: bounded refresh and last-known-good windows. A fetch or parse failure never clears an already verified key generation.
+- JWKS handling is shared with the control MCP through [`rocketmq-mcp-auth`](../rocketmq-mcp-auth/README.md). A JWKS entry is used when it is an RSA key of 2048 to 8192 bits with exponent 65537, its `use` is absent or `sig`, its `key_ops` is absent or lists `verify`, its `alg` is absent or `RS256`, and its `kid` is 1 to 128 printable ASCII characters. Other entries and members such as `x5c` are ignored. A token naming an unknown `kid` triggers one JWKS fetch; while the key is still missing or the fetch fails, the next fetch waits five seconds. A Bearer token above 16 KiB is rejected before it is parsed.
 - `server.http.auth.jwt_key_env`: retained only for configuration compatibility; OAuth does not use a static key fallback.
 - `server.http.auth.protected_resource_metadata_path`: unauthenticated OAuth protected-resource metadata endpoint.
 - `clusters[].name`: logical cluster name used by tools, resources, and prompts.
@@ -124,6 +129,11 @@ Important fields:
 - `security.permissions_file`: executable role, tool, and cluster policy. Claims roles and `rocketmq_clusters` are intersected with this policy.
 - `security.max_concurrent_requests_per_cluster`: bounded concurrent Tool and Resource work per configured cluster.
 - `security.rate_limit_per_minute`: per-principal, per-cluster, per-operation limit.
+- `security.pseudonym_key_env`: optional name of an environment variable that holds the key for client and message
+  pseudonyms, 32 to 1024 bytes after surrounding whitespace is removed (for example the output of
+  `openssl rand -hex 32`). Replicas that share the key return the same pseudonym for the same identifier. Without it
+  each process draws a random key, so pseudonyms change on restart and differ between replicas. The key itself never
+  belongs in the configuration file.
 - `audit.sink`: `memory`, `file`, or `tracing`.
 - `audit.queue_capacity`: maximum number of accepted records waiting for the asynchronous writer.
 - `audit.max_record_bytes`: maximum serialized NDJSON record size after redaction and deterministic field bounds.
@@ -134,6 +144,12 @@ Important fields:
 - `cache.*_ttl_ms`: per-query-family freshness windows for overview, topic, broker, and consumer-lag data.
 - `diagnosis.consumer_lag_policy_profile`: server-owned policy identifier reported with each diagnosis.
 - `diagnosis.consumer_lag_threshold`: server-owned threshold used by consumer-lag rules.
+
+Unknown keys are rejected at startup, in the configuration file and in the permissions file, so a misspelled key
+cannot silently turn a setting off. The startup error names the key and the table that holds it, for example
+``unknown key `tenent` in `clusters[0]` ``, and never includes a configured value. A key that is not a plain name is
+rejected without being echoed. The one exception is the `[logging]` table, which is parsed by the logging type shared
+with the other RocketMQ services and still ignores unknown keys.
 
 OpenTelemetry settings use the same merge order as the other RocketMQ services:
 service defaults, then the `[observability]` file section, then only telemetry

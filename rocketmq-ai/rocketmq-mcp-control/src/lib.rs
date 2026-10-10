@@ -22,6 +22,8 @@
 
 #![recursion_limit = "256"]
 
+#[cfg(any(feature = "write-tools", test))]
+mod argument_locator;
 pub mod audit;
 mod auth;
 pub mod catalog;

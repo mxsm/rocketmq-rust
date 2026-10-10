@@ -18,7 +18,6 @@ use std::time::Duration;
 
 use axum::extract::Request;
 use axum::extract::State;
-use axum::http::header::AUTHORIZATION;
 use axum::http::header::WWW_AUTHENTICATE;
 use axum::http::HeaderMap;
 use axum::http::HeaderValue;
@@ -28,6 +27,9 @@ use axum::response::IntoResponse;
 use axum::response::Response;
 use jsonwebtoken::Algorithm;
 use jsonwebtoken::Validation;
+use rocketmq_mcp_auth::bearer_token;
+use rocketmq_mcp_auth::KeyError;
+use rocketmq_mcp_auth::TokenRejection;
 use serde::Deserialize;
 
 use crate::config::HttpAuthConfig;
@@ -35,6 +37,7 @@ use crate::config::HttpAuthMode;
 use crate::config::HttpConfig;
 use crate::guard::context::Principal;
 use crate::guard::context::RequestContext;
+use crate::guard::jwks;
 use crate::guard::jwks::HttpJwksSource;
 use crate::guard::jwks::JwksSource;
 use crate::guard::jwks::JwksVerifier;
@@ -134,15 +137,16 @@ impl HttpAuthState<HttpJwksSource> {
                 }
             }
             HttpAuthMode::OAuthJwt => {
-                let source = Arc::new(HttpJwksSource::new(
-                    Arc::<str>::from(config.jwks_url.clone()),
-                    config.jwks_ca_path.as_deref().map(std::path::Path::new),
-                )?);
-                let verifier = JwksVerifier::new(
-                    source,
+                let policy = jwks::policy(
                     Duration::from_secs(config.jwks_refresh_seconds),
                     Duration::from_secs(config.jwks_max_stale_seconds),
                 );
+                let source = Arc::new(jwks::http_source(
+                    Arc::<str>::from(config.jwks_url.clone()),
+                    config.jwks_ca_path.as_deref().map(std::path::Path::new),
+                    &policy,
+                )?);
+                let verifier = JwksVerifier::new(source, policy);
                 HttpAuthenticator::OAuthJwt {
                     verifier,
                     validation: Arc::new(jwt_validation(config)),
@@ -161,18 +165,19 @@ impl HttpAuthState<HttpJwksSource> {
 impl<S> HttpAuthState<S>
 where
     S: JwksSource,
+    S::Error: std::error::Error + Send + Sync + 'static,
 {
     pub async fn warm_up(&self) -> McpResult<()> {
         if let HttpAuthenticator::OAuthJwt { verifier, .. } = &self.authenticator {
-            verifier.warm_up().await?;
+            verifier.warm_up().await.map_err(jwks::unavailable)?;
         }
         Ok(())
     }
 
     pub async fn authenticate(&self, headers: &HeaderMap) -> McpResult<Result<RequestContext, HttpAuthRejection>> {
-        let token = match bearer_token(headers) {
-            Ok(token) => token,
-            Err(rejection) => return Ok(Err(rejection)),
+        // The length limit applies before the token is compared, parsed, or matched to a key.
+        let Some(token) = bearer_token(headers, jwks::MAX_BEARER_TOKEN_BYTES) else {
+            return Ok(Err(HttpAuthRejection::unauthorized()));
         };
         let context = match &self.authenticator {
             HttpAuthenticator::DevelopmentToken {
@@ -196,9 +201,10 @@ where
                 validation,
                 required_scopes,
             } => {
-                let key = match verifier.decoding_key(token).await? {
+                let key = match verifier.decoding_key(token).await {
                     Ok(key) => key,
-                    Err(rejection) => return Ok(Err(rejection)),
+                    Err(KeyError::Rejected(rejection)) => return Ok(Err(rejection.into())),
+                    Err(KeyError::Unavailable(error)) => return Err(jwks::unavailable(error)),
                 };
                 let decoded = match jsonwebtoken::decode::<JwtClaims>(token, key.as_ref(), validation) {
                     Ok(decoded) => decoded,
@@ -278,18 +284,6 @@ fn jwt_validation(config: &HttpAuthConfig) -> Validation {
     validation
 }
 
-fn bearer_token(headers: &HeaderMap) -> Result<&str, HttpAuthRejection> {
-    let header = headers
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .ok_or(HttpAuthRejection::unauthorized())?;
-    header
-        .strip_prefix("Bearer ")
-        .or_else(|| header.strip_prefix("bearer "))
-        .filter(|token| !token.is_empty())
-        .ok_or(HttpAuthRejection::unauthorized())
-}
-
 pub struct HttpAuthRejection {
     kind: AuthRejectionKind,
     _source: Option<jsonwebtoken::errors::Error>,
@@ -356,6 +350,16 @@ impl HttpAuthRejection {
     }
 }
 
+/// Every token the key set cannot vouch for is an invalid token to the client.
+impl From<TokenRejection> for HttpAuthRejection {
+    fn from(rejection: TokenRejection) -> Self {
+        match rejection {
+            TokenRejection::MalformedHeader(source) => Self::invalid_token(source),
+            TokenRejection::Algorithm | TokenRejection::KeyId | TokenRejection::UnknownKey => Self::unauthorized(),
+        }
+    }
+}
+
 impl IntoResponse for HttpAuthRejection {
     fn into_response(self) -> Response {
         let mut response = (self.status_code(), self.to_string()).into_response();
@@ -404,11 +408,15 @@ fn operational_auth_response(_error: McpError) -> Response {
 
 #[cfg(test)]
 mod tests {
+    use axum::http::header::AUTHORIZATION;
     use jsonwebtoken::encode;
     use jsonwebtoken::EncodingKey;
     use jsonwebtoken::Header;
     use serde::Serialize;
+    use std::convert::Infallible;
     use std::error::Error;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
 
     use super::*;
     use crate::config::AuditConfig;
@@ -480,15 +488,20 @@ mod tests {
     async fn jwks_outage_is_operational_with_a_typed_source_and_safe_500() {
         struct FailedSource;
         impl JwksSource for FailedSource {
-            async fn fetch(&self) -> McpResult<Vec<u8>> {
-                Err(McpError::from_source(std::io::Error::other(
+            type Error = std::io::Error;
+
+            async fn fetch(&self) -> std::io::Result<Vec<u8>> {
+                Err(std::io::Error::other(
                     "sentinel-token JWKS https://private.invalid/key.json",
-                )))
+                ))
             }
         }
         let state = HttpAuthState {
             authenticator: HttpAuthenticator::OAuthJwt {
-                verifier: JwksVerifier::new(Arc::new(FailedSource), Duration::from_secs(60), Duration::from_secs(60)),
+                verifier: JwksVerifier::new(
+                    Arc::new(FailedSource),
+                    jwks::policy(Duration::from_secs(60), Duration::from_secs(60)),
+                ),
                 validation: Arc::new(Validation::new(Algorithm::RS256)),
                 required_scopes: BTreeSet::new(),
             },
@@ -643,12 +656,70 @@ mod tests {
         }
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn unknown_kid_does_not_refetch_within_the_cooldown() {
+        let source = Arc::new(CountingSource::default());
+        let state = oauth_state_with(source.clone(), ["rocketmq:read"]).await;
+        assert_eq!(source.fetches.load(Ordering::SeqCst), 1);
+
+        // Tokens naming keys the issuer never published cost one fetch, however many arrive.
+        for index in 0..32 {
+            let token = signed_token("rocketmq:read", &format!("unknown-{index}"));
+            assert!(matches!(
+                state.authenticate(&bearer_headers(&token)).await.unwrap(),
+                Err(HttpAuthRejection {
+                    kind: AuthRejectionKind::InvalidToken,
+                    ..
+                })
+            ));
+        }
+        assert_eq!(source.fetches.load(Ordering::SeqCst), 2);
+        // Tokens of the published key are not held up meanwhile.
+        let known = signed_token("rocketmq:read", "test-key");
+        assert!(state.authenticate(&bearer_headers(&known)).await.unwrap().is_ok());
+        assert_eq!(source.fetches.load(Ordering::SeqCst), 2);
+
+        // After the pause the next unknown key id is looked up again, once.
+        tokio::time::advance(Duration::from_secs(5)).await;
+        for index in 0..4 {
+            let token = signed_token("rocketmq:read", &format!("late-{index}"));
+            assert!(state.authenticate(&bearer_headers(&token)).await.unwrap().is_err());
+        }
+        assert_eq!(source.fetches.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn oversized_bearer_token_is_rejected_before_parsing() {
+        let state = oauth_state(["rocketmq:read"]).await;
+        // Both tokens are signed by the issuer and carry the required scope. Only the size differs.
+        let accepted = signed_token(&format!("rocketmq:read {}", "x".repeat(8 * 1024)), "test-key");
+        let oversized = signed_token(&format!("rocketmq:read {}", "x".repeat(16 * 1024)), "test-key");
+        assert!(accepted.len() <= jwks::MAX_BEARER_TOKEN_BYTES);
+        assert!(oversized.len() > jwks::MAX_BEARER_TOKEN_BYTES);
+
+        assert!(state.authenticate(&bearer_headers(&accepted)).await.unwrap().is_ok());
+        // No parser saw the oversized token, so the rejection carries no parse error.
+        assert!(matches!(
+            state.authenticate(&bearer_headers(&oversized)).await.unwrap(),
+            Err(HttpAuthRejection {
+                kind: AuthRejectionKind::InvalidToken,
+                _source: None,
+            })
+        ));
+    }
+
     async fn oauth_state(required_scopes: impl IntoIterator<Item = &'static str>) -> HttpAuthState<StaticSource> {
-        let verifier = JwksVerifier::new(
-            Arc::new(StaticSource),
-            Duration::from_secs(300),
-            Duration::from_secs(900),
-        );
+        oauth_state_with(Arc::new(StaticSource), required_scopes).await
+    }
+
+    async fn oauth_state_with<S>(
+        source: Arc<S>,
+        required_scopes: impl IntoIterator<Item = &'static str>,
+    ) -> HttpAuthState<S>
+    where
+        S: JwksSource<Error = Infallible>,
+    {
+        let verifier = JwksVerifier::new(source, jwks::policy(Duration::from_secs(300), Duration::from_secs(900)));
         verifier.warm_up().await.unwrap();
         let mut validation = Validation::new(Algorithm::RS256);
         validation.set_issuer(&["https://issuer.example.test"]);
@@ -675,6 +746,7 @@ mod tests {
                 rate_limit_per_minute: 60,
                 permissions_file: permission_path(),
                 max_concurrent_requests_per_cluster: 8,
+                pseudonym_key_env: None,
             },
             AuditConfig {
                 enabled: true,
@@ -728,15 +800,35 @@ mod tests {
         headers
     }
 
+    fn test_jwks() -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({"keys": [{
+            "kty": "RSA", "kid": "test-key", "alg": "RS256", "use": "sig",
+            "key_ops": ["verify"], "n": RSA_N, "e": "AQAB"
+        }]}))
+        .unwrap()
+    }
+
     struct StaticSource;
 
     impl JwksSource for StaticSource {
-        async fn fetch(&self) -> McpResult<Vec<u8>> {
-            Ok(serde_json::to_vec(&serde_json::json!({"keys": [{
-                "kty": "RSA", "kid": "test-key", "alg": "RS256", "use": "sig",
-                "key_ops": ["verify"], "n": RSA_N, "e": "AQAB"
-            }]}))
-            .unwrap())
+        type Error = Infallible;
+
+        async fn fetch(&self) -> Result<Vec<u8>, Infallible> {
+            Ok(test_jwks())
+        }
+    }
+
+    #[derive(Default)]
+    struct CountingSource {
+        fetches: AtomicUsize,
+    }
+
+    impl JwksSource for CountingSource {
+        type Error = Infallible;
+
+        async fn fetch(&self) -> Result<Vec<u8>, Infallible> {
+            self.fetches.fetch_add(1, Ordering::SeqCst);
+            Ok(test_jwks())
         }
     }
 

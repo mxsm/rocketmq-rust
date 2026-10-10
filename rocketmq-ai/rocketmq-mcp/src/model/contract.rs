@@ -232,9 +232,12 @@ impl QueryCompleteness {
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PageRequest {
+    /// Maximum number of items in the returned page, from 1 to 200. Defaults to 50.
     #[serde(default)]
     #[schemars(range(min = 1, max = 200))]
     pub limit: Option<u32>,
+    /// Continuation token. To read the next page, pass the `next_cursor` of the previous response unchanged, together
+    /// with the same arguments and `limit`. Omit it for the first page.
     #[serde(default)]
     pub cursor: Option<String>,
 }

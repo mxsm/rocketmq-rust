@@ -19,7 +19,10 @@ use serde::Serialize;
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ProxyDrainStateArgs {
+    /// Logical cluster name configured on this server. It is a name, not a NameServer address.
+    #[schemars(length(min = 1))]
     pub cluster: String,
+    /// Name of a Proxy as configured for this cluster on the server. It is a configured alias, not a network address.
     pub proxy_name: String,
 }
 

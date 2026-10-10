@@ -19,7 +19,11 @@ use serde::Serialize;
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct DiagnoseConsumerLagArgs {
+    /// Logical cluster name configured on this server. It is a name, not a NameServer address.
+    #[schemars(length(min = 1))]
     pub cluster: String,
+    /// Exact Topic name. `rocketmq_list_topics` lists the names.
     pub topic: String,
+    /// Exact Consumer Group name. `rocketmq_list_consumer_groups` lists the names.
     pub consumer_group: String,
 }

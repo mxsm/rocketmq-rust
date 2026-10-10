@@ -22,8 +22,13 @@ use crate::model::contract::PageRequest;
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ListConsumerGroupsArgs {
+    /// Logical cluster name configured on this server. When it is omitted or null, the cluster marked as default is
+    /// used, or the only configured cluster.
     #[serde(default)]
+    #[schemars(length(min = 1))]
     pub cluster: Option<String>,
+    /// Keeps only the Consumer Groups whose name contains this text, ignoring ASCII case. At most 1,024 bytes. Omit it
+    /// to list every Consumer Group.
     #[serde(default)]
     pub filter: Option<String>,
     #[serde(flatten)]
@@ -56,8 +61,12 @@ pub struct ListConsumerGroupsOutput {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct QueryConsumerLagArgs {
+    /// Logical cluster name configured on this server. It is a name, not a NameServer address.
+    #[schemars(length(min = 1))]
     pub cluster: String,
+    /// Exact Topic name. `rocketmq_list_topics` lists the names.
     pub topic: String,
+    /// Exact Consumer Group name. `rocketmq_list_consumer_groups` lists the names.
     pub consumer_group: String,
     #[serde(flatten)]
     pub page: PageRequest,
@@ -99,7 +108,10 @@ pub struct QueryConsumerLagOutput {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct GetConsumerGroupDetailsArgs {
+    /// Logical cluster name configured on this server. It is a name, not a NameServer address.
+    #[schemars(length(min = 1))]
     pub cluster: String,
+    /// Exact Consumer Group name. `rocketmq_list_consumer_groups` lists the names.
     pub consumer_group: String,
 }
 
@@ -178,7 +190,10 @@ pub struct GetConsumerGroupDetailsOutput {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct GetConsumerProgressArgs {
+    /// Logical cluster name configured on this server. It is a name, not a NameServer address.
+    #[schemars(length(min = 1))]
     pub cluster: String,
+    /// Exact Consumer Group name. `rocketmq_list_consumer_groups` lists the names.
     pub consumer_group: String,
     #[serde(flatten)]
     pub page: PageRequest,

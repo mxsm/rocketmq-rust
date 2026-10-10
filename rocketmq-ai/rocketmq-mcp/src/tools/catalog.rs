@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+use std::sync::LazyLock;
+use std::sync::OnceLock;
+
+use rmcp::model::JsonObject;
 use rmcp::model::ListToolsResult;
 use rmcp::model::Tool;
 use rmcp::model::ToolAnnotations;
@@ -168,168 +173,220 @@ impl ToolId {
                 self,
                 "rocketmq_get_cluster_overview",
                 "RocketMQ cluster overview",
-                "Summarize brokers, topic count, and consumer group count for one RocketMQ cluster.",
+                "Summarizes one cluster: its Brokers with their state, plus the number of Topics and Consumer \
+                 Groups. Use it first, to learn the Broker names and the size of a cluster. To see the names behind \
+                 the counts, call rocketmq_list_topics or rocketmq_list_consumer_groups.",
                 RiskLevel::ReadOnly,
             ),
             Self::ListTopics => ToolDescriptor::read_only(
                 self,
                 "rocketmq_list_topics",
                 "RocketMQ topic list",
-                "List a bounded page of topics visible from one RocketMQ cluster.",
+                "Lists the Topic names of one cluster, a page at a time, optionally keeping only names that contain \
+                 a text. Use it to find the exact name of a Topic. A cluster with more than 10,000 Topics needs a \
+                 filter. Next, pass a name to rocketmq_get_topic_route or rocketmq_get_topic_stats.",
                 RiskLevel::ReadOnly,
             ),
             Self::DescribeTopic => ToolDescriptor::read_only(
                 self,
                 "rocketmq_describe_topic",
                 "RocketMQ topic description",
-                "Describe a topic with bounded queue route information.",
+                "Returns where one Topic is hosted: the Brokers that serve it and each Broker's queue counts. It \
+                 returns the same route data as rocketmq_get_topic_route plus a list of Broker names; prefer \
+                 rocketmq_get_topic_route in new integrations.",
                 RiskLevel::ReadOnly,
             ),
             Self::GetTopicRoute => ToolDescriptor::read_only(
                 self,
                 "rocketmq_get_topic_route",
                 "RocketMQ topic route",
-                "Get bounded topic route data without exposing internal addresses by default.",
+                "Returns where one Topic is hosted: the Brokers that serve it and each Broker's read and write queue \
+                 counts and permission. Use it to check that a Topic exists and how it is spread over Brokers. For \
+                 message counts and offsets use rocketmq_get_topic_stats; for configuration differences use \
+                 rocketmq_get_topic_config.",
                 RiskLevel::ReadOnly,
             ),
             Self::ListConsumerGroups => ToolDescriptor::read_only(
                 self,
                 "rocketmq_list_consumer_groups",
                 "RocketMQ consumer groups",
-                "List a bounded page of consumer groups and consumption summaries.",
+                "Lists the Consumer Groups of one cluster, a page at a time, with client count, consume type, TPS \
+                 and total lag for each. Use it to find the exact name of a group or to spot the groups that are \
+                 behind. Next, call rocketmq_get_consumer_lag or rocketmq_diagnose_consumer_lag for one group.",
                 RiskLevel::ReadOnly,
             ),
             Self::GetConsumerLag => ToolDescriptor::read_only(
                 self,
                 "rocketmq_get_consumer_lag",
                 "RocketMQ consumer lag",
-                "Get bounded per-queue lag for a topic and consumer group.",
+                "Returns the lag of one Consumer Group on one Topic: total lag, the largest queue lag, consume TPS, \
+                 and a page of per-queue offsets. Use it when you know both the Topic and the group. For an \
+                 explanation of the lag use rocketmq_diagnose_consumer_lag; for every Topic the group consumes use \
+                 rocketmq_get_consumer_progress.",
                 RiskLevel::ReadOnly,
             ),
             Self::DescribeBroker => ToolDescriptor::read_only(
                 self,
                 "rocketmq_describe_broker",
                 "RocketMQ broker description",
-                "Describe broker state without exposing internal addresses by default.",
+                "Returns the state of one Broker: its instances with version, inbound and outbound TPS, and whether \
+                 each is active. Use it for a first look at a Broker named by rocketmq_get_cluster_overview. For \
+                 readiness, store and recovery detail use rocketmq_get_broker_diagnostics.",
                 RiskLevel::ReadOnly,
             ),
             Self::GetBrokerDiagnostics => ToolDescriptor::read_only(
                 self,
                 "rocketmq_get_broker_diagnostics",
                 "RocketMQ broker diagnostics",
-                "Get bounded readiness, store, recovery, and security diagnostics for one logical Broker.",
+                "Returns readiness, store, recovery, HA and security diagnostics for one Broker. Use it when a \
+                 Broker looks unhealthy, or after rocketmq_diagnose_consumer_lag points at it. For the plain state \
+                 use rocketmq_describe_broker; for replication between master and slaves use rocketmq_get_ha_status.",
                 RiskLevel::Diagnose,
             ),
             Self::GetBrokerConfigSummary => ToolDescriptor::read_only(
                 self,
                 "rocketmq_get_broker_config_summary",
                 "RocketMQ broker configuration summary",
-                "Get the fixed allowlisted configuration summary for one logical Broker.",
+                "Returns the allowlisted configuration values of one Broker. Use it to check how a Broker is \
+                 configured. Keys outside the fixed allowlist are not returned.",
                 RiskLevel::ReadOnly,
             ),
             Self::GetBrokerLogFilterState => ToolDescriptor::read_only(
                 self,
                 "rocketmq_get_broker_log_filter_state",
                 "RocketMQ broker log-filter state",
-                "Get the temporary state of one allowlisted rocketmq_broker logger target.",
+                "Returns the temporary log-filter state of one logger on one Broker. Use it to check whether a \
+                 raised log level is still in effect for a rocketmq_broker:: module. The logger argument is a Rust \
+                 module path.",
                 RiskLevel::Diagnose,
             ),
             Self::GetProxyDrainState => ToolDescriptor::read_only(
                 self,
                 "rocketmq_get_proxy_drain_state",
                 "RocketMQ Proxy drain state",
-                "Get bounded drain progress for one configured logical Proxy alias.",
+                "Returns the drain progress of one Proxy: its phase, whether admission and routing are still open, \
+                 whether readiness is published, and how much work is pending. Use it while a Proxy is being drained \
+                 for maintenance. The Proxy is named by its alias in the server configuration.",
                 RiskLevel::Diagnose,
             ),
             Self::DiagnoseConsumerLag => ToolDescriptor::read_only(
                 self,
                 "rocketmq_diagnose_consumer_lag",
                 "RocketMQ consumer lag diagnosis",
-                "Diagnose consumer lag from read-only lag, topic route, and broker evidence.",
+                "Explains the lag of one Consumer Group on one Topic. It reads the lag of every queue, the Topic \
+                 route and the Broker that holds the most lag, then reports a severity, likely causes and \
+                 recommendations. Use it when a group is behind and you need a cause. For the raw per-queue numbers \
+                 use rocketmq_get_consumer_lag.",
                 RiskLevel::Diagnose,
             ),
             Self::ListConsumerConnections => ToolDescriptor::read_only(
                 self,
                 "rocketmq_list_consumer_connections",
                 "RocketMQ consumer connections",
-                "List a bounded page of pseudonymous consumer connections for one exact group.",
+                "Lists the clients connected for one Consumer Group, a page at a time: Broker, client pseudonym, \
+                 language and version. Use it to check whether consumers are online and which versions they run. \
+                 Client identifiers and addresses are replaced by pseudonyms.",
                 RiskLevel::ReadOnly,
             ),
             Self::ListProducerConnections => ToolDescriptor::read_only(
                 self,
                 "rocketmq_list_producer_connections",
                 "RocketMQ producer connections",
-                "List a bounded page of pseudonymous producer connections for one exact Topic and Producer group.",
+                "Lists the clients connected for one Producer Group on one Topic, a page at a time: Broker, client \
+                 pseudonym, language and version. Use it to check whether producers are online. Client identifiers \
+                 and addresses are replaced by pseudonyms.",
                 RiskLevel::ReadOnly,
             ),
             Self::GetMessageMetadata => ToolDescriptor::read_only(
                 self,
                 "rocketmq_get_message_metadata",
                 "RocketMQ message metadata",
-                "Get fixed body-free metadata for one message as process-lifetime aliases.",
+                "Returns the metadata of one message by its identifier: Topic, queue and offset, size, born and \
+                 stored times, and reconsume count. Use it to confirm that a message was stored, and where. The body \
+                 is never returned and message identifiers are replaced by pseudonyms.",
                 RiskLevel::ReadOnly,
             ),
             Self::GetTopicConfigState => ToolDescriptor::read_only(
                 self,
                 "rocketmq_get_topic_config_state",
                 "RocketMQ Topic configuration state",
-                "Get version-CAS observations for one Topic at bounded logical Brokers.",
+                "Returns one Topic's configuration version and queue settings on each selected Broker. Use it right \
+                 before a change, to read the version a compare-and-set update must quote, and afterwards to confirm \
+                 the change. To compare every Broker without naming them use rocketmq_get_topic_config.",
                 RiskLevel::ReadOnly,
             ),
             Self::GetConsumerGroupConfigState => ToolDescriptor::read_only(
                 self,
                 "rocketmq_get_consumer_group_config_state",
                 "RocketMQ consumer group configuration state",
-                "Get version-CAS observations for one Consumer Group at bounded logical Brokers.",
+                "Returns one Consumer Group's configuration version and settings on each selected Broker, such as \
+                 retry limits and whether consuming is enabled. Use it right before a change, to read the version a \
+                 compare-and-set update must quote, and afterwards to confirm the change. For connections use \
+                 rocketmq_get_consumer_group_details.",
                 RiskLevel::ReadOnly,
             ),
             Self::GetTopicStats => ToolDescriptor::read_only(
                 self,
                 "rocketmq_get_topic_stats",
                 "RocketMQ Topic statistics",
-                "Get a bounded snapshot page of deterministic per-queue Topic statistics and aggregate totals.",
+                "Returns per-queue statistics of one Topic, a page at a time: minimum and maximum offset, message \
+                 count and last update time, plus totals over all queues. Use it to see how much data a Topic holds \
+                 and whether it is still written to. For where the Topic is hosted use rocketmq_get_topic_route.",
                 RiskLevel::ReadOnly,
             ),
             Self::GetTopicConfig => ToolDescriptor::read_only(
                 self,
                 "rocketmq_get_topic_config",
                 "RocketMQ Topic configuration",
-                "Get fixed address-free Topic configuration observations and semantic differences across Brokers.",
+                "Returns the configuration of one Topic on every Broker that hosts it: queue counts, permission, \
+                 order and message type, and the fields on which the Brokers disagree. Use it to find inconsistent \
+                 Topic configuration. For hosting and routing use rocketmq_get_topic_route.",
                 RiskLevel::ReadOnly,
             ),
             Self::GetConsumerGroupDetails => ToolDescriptor::read_only(
                 self,
                 "rocketmq_get_consumer_group_details",
                 "RocketMQ consumer group details",
-                "Get fixed address-free configuration and connection observations for one consumer group.",
+                "Returns how one Consumer Group is set up on each Broker: whether it is configured there, whether \
+                 clients are connected, its consume type, and the total connection count. Use it to check that a \
+                 group exists and is online. For lag use rocketmq_get_consumer_lag; for the connected clients use \
+                 rocketmq_list_consumer_connections.",
                 RiskLevel::ReadOnly,
             ),
             Self::GetConsumerProgress => ToolDescriptor::read_only(
                 self,
                 "rocketmq_get_consumer_progress",
                 "RocketMQ consumer progress",
-                "Get a bounded snapshot page of deterministic per-queue progress and complete aggregate totals.",
+                "Returns the progress of one Consumer Group over every Topic it consumes: totals for lag and \
+                 in-flight messages, and a page of per-queue rows. Use it when you know the group but not the Topic, \
+                 or need the lag across all of its Topics. For one Topic use rocketmq_get_consumer_lag.",
                 RiskLevel::ReadOnly,
             ),
             Self::GetHaStatus => ToolDescriptor::read_only(
                 self,
                 "rocketmq_get_ha_status",
                 "RocketMQ HA status",
-                "Get bounded HA observations for logical master Brokers with optional configured Controller sync state.",
+                "Returns the replication state of master Brokers: commit log offset, in-sync slave count and each \
+                 slave connection, optionally with the sync state the Controllers hold. Use it to check whether \
+                 slaves keep up with their master. For Controller leadership use rocketmq_get_controller_metadata.",
                 RiskLevel::Diagnose,
             ),
             Self::GetControllerMetadata => ToolDescriptor::read_only(
                 self,
                 "rocketmq_get_controller_metadata",
                 "RocketMQ Controller metadata",
-                "Get bounded metadata for configured logical Controller aliases.",
+                "Returns metadata of the configured Controllers: group, leader, peer count and log indexes. Use it \
+                 to check which Controller leads and whether the Controller group is healthy. For Broker replication \
+                 use rocketmq_get_ha_status.",
                 RiskLevel::Diagnose,
             ),
             Self::GetNameserverConfigSummary => ToolDescriptor::read_only(
                 self,
                 "rocketmq_get_nameserver_config_summary",
                 "RocketMQ NameServer configuration summary",
-                "Get fixed allowlisted configuration values and differences for configured NameServers.",
+                "Returns the allowlisted configuration values of the cluster's NameServers and the values on which \
+                 they differ. Use it to check that the NameServers are configured alike. Keys outside the fixed \
+                 allowlist are not returned.",
                 RiskLevel::ReadOnly,
             ),
             #[cfg(feature = "change-planning")]
@@ -337,7 +394,9 @@ impl ToolId {
                 self,
                 "rocketmq_plan_create_topic",
                 "RocketMQ create topic plan",
-                "Generate a non-mutating topic creation plan.",
+                "Builds a plan for creating a Topic without changing the cluster. The plan lists the intended \
+                 change, its impact and rollback suggestions, and expires after five minutes. Use it to review a \
+                 change before an operator applies it by other means.",
                 RiskLevel::Plan,
             ),
             #[cfg(feature = "change-planning")]
@@ -345,7 +404,9 @@ impl ToolId {
                 self,
                 "rocketmq_plan_update_topic_config",
                 "RocketMQ topic configuration plan",
-                "Generate a non-mutating topic configuration update plan.",
+                "Builds a plan for changing one configuration entry of a Topic without changing the cluster. The \
+                 plan records the current Topic state, the intended change, its impact and rollback suggestions, and \
+                 expires after five minutes. Use it to review a change before an operator applies it by other means.",
                 RiskLevel::Plan,
             ),
             #[cfg(feature = "change-planning")]
@@ -353,7 +414,9 @@ impl ToolId {
                 self,
                 "rocketmq_plan_update_topic_permissions",
                 "RocketMQ topic permission plan",
-                "Generate a non-mutating topic permission update plan.",
+                "Builds a plan for changing the permission of a Topic without changing the cluster. The plan records \
+                 the current Topic state, the intended change, its impact and rollback suggestions, and expires \
+                 after five minutes. Use it to review a change before an operator applies it by other means.",
                 RiskLevel::Plan,
             ),
             #[cfg(feature = "change-planning")]
@@ -361,7 +424,10 @@ impl ToolId {
                 self,
                 "rocketmq_plan_update_broker_config",
                 "RocketMQ broker configuration plan",
-                "Generate a non-mutating broker configuration update plan.",
+                "Builds a plan for changing one configuration entry of a Broker without changing the cluster. The \
+                 plan records the current Broker state, the intended change, its impact and rollback suggestions, \
+                 and expires after five minutes. Use it to review a change before an operator applies it by other \
+                 means.",
                 RiskLevel::Plan,
             ),
             #[cfg(feature = "change-planning")]
@@ -369,13 +435,33 @@ impl ToolId {
                 self,
                 "rocketmq_plan_reset_consumer_offset",
                 "RocketMQ consumer offset reset plan",
-                "Generate a non-mutating consumer offset reset plan.",
+                "Builds a plan for resetting the offsets of one Consumer Group on one Topic without changing the \
+                 cluster. The plan records the current lag, the intended reset, its impact and rollback suggestions, \
+                 and expires after five minutes. Use it to review a reset before an operator applies it by other \
+                 means.",
                 RiskLevel::Plan,
             ),
         }
     }
 
+    /// Returns the published definition of this Tool.
+    ///
+    /// A definition is built on first use and then kept: generating two schemas and unwrapping
+    /// their descriptions is too costly to repeat for every call that validates against them.
     pub fn definition(self) -> Tool {
+        static DEFINITIONS: LazyLock<Vec<OnceLock<Tool>>> =
+            LazyLock::new(|| ToolId::ALL.iter().map(|_| OnceLock::new()).collect());
+        let cached = Self::ALL
+            .iter()
+            .position(|tool_id| *tool_id == self)
+            .and_then(|index| DEFINITIONS.get(index));
+        match cached {
+            Some(definition) => definition.get_or_init(|| self.build_definition()).clone(),
+            None => self.build_definition(),
+        }
+    }
+
+    fn build_definition(self) -> Tool {
         let descriptor = self.descriptor();
         match self {
             Self::GetClusterOverview => {
@@ -516,7 +602,7 @@ impl ToolDescriptor {
         I: JsonSchema + 'static,
         O: JsonSchema + 'static,
     {
-        Tool::new(self.name, self.description, std::sync::Arc::new(Default::default()))
+        let mut tool = Tool::new(self.name, self.description, Arc::new(Default::default()))
             .with_title(self.title)
             .with_input_schema::<I>()
             .with_output_schema::<ToolResponse<O>>()
@@ -526,8 +612,43 @@ impl ToolDescriptor {
                     .destructive(self.annotations.destructive)
                     .idempotent(self.annotations.idempotent)
                     .open_world(self.annotations.open_world),
-            )
+            );
+        unwrap_descriptions(Arc::make_mut(&mut tool.input_schema));
+        if let Some(output_schema) = &mut tool.output_schema {
+            unwrap_descriptions(Arc::make_mut(output_schema));
+        }
+        tool
     }
+}
+
+/// Joins the wrapped lines of every `description` in a schema, keeping paragraph breaks.
+///
+/// schemars publishes a doc comment with its source line breaks. Left in, re-wrapping a comment
+/// would change the published schema and, with it, the Tool surface digest.
+fn unwrap_descriptions(schema: &mut JsonObject) {
+    for (keyword, value) in schema.iter_mut() {
+        match value {
+            serde_json::Value::String(text) if keyword == "description" && text.contains('\n') => {
+                *text = unwrap_lines(text);
+            }
+            // A value under these keywords is data, not a schema.
+            _ if matches!(keyword.as_str(), "default" | "const" | "enum" | "examples") => {}
+            serde_json::Value::Object(nested) => unwrap_descriptions(nested),
+            serde_json::Value::Array(items) => items
+                .iter_mut()
+                .filter_map(serde_json::Value::as_object_mut)
+                .for_each(unwrap_descriptions),
+            _ => {}
+        }
+    }
+}
+
+fn unwrap_lines(text: &str) -> String {
+    let paragraphs = text.split("\n\n").map(|paragraph| {
+        let lines = paragraph.lines().map(str::trim).filter(|line| !line.is_empty());
+        lines.collect::<Vec<_>>().join(" ")
+    });
+    paragraphs.collect::<Vec<_>>().join("\n\n")
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -578,6 +699,105 @@ mod tests {
                 descriptor.risk_level,
                 RiskLevel::ReadOnly | RiskLevel::Diagnose | RiskLevel::Plan
             ));
+        }
+    }
+
+    /// Collects the properties, at any depth of an input schema, that a model cannot read about.
+    fn undescribed_properties(schema: &serde_json::Value, undescribed: &mut Vec<String>) {
+        match schema {
+            serde_json::Value::Object(keywords) => {
+                for (keyword, value) in keywords {
+                    if let ("properties", serde_json::Value::Object(properties)) = (keyword.as_str(), value) {
+                        undescribed.extend(
+                            properties
+                                .iter()
+                                .filter(|(_, property)| {
+                                    property["description"]
+                                        .as_str()
+                                        .is_none_or(|text| text.trim().is_empty())
+                                })
+                                .map(|(name, _)| name.clone()),
+                        );
+                    }
+                    undescribed_properties(value, undescribed);
+                }
+            }
+            serde_json::Value::Array(values) => values
+                .iter()
+                .for_each(|value| undescribed_properties(value, undescribed)),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn every_input_property_has_a_description() {
+        for tool_id in ToolId::ALL {
+            let name = tool_id.descriptor().name;
+            let schema = serde_json::Value::Object(tool_id.definition().input_schema.as_ref().clone());
+            let mut undescribed = Vec::new();
+            undescribed_properties(&schema, &mut undescribed);
+            assert!(undescribed.is_empty(), "{name}: {undescribed:?}");
+            // A blank cluster can never select one, and the schema says so.
+            assert_eq!(schema["properties"]["cluster"]["minLength"], 1, "{name}");
+        }
+    }
+
+    #[test]
+    fn published_descriptions_do_not_keep_source_line_breaks() {
+        fn assert_unwrapped(tool: &str, value: &serde_json::Value) {
+            match value {
+                serde_json::Value::Object(members) => {
+                    for (keyword, nested) in members {
+                        match nested.as_str() {
+                            Some(text) if keyword == "description" => {
+                                let single_break = text.replace("\n\n", "").contains('\n');
+                                assert!(!single_break, "{tool}: wrapped description {text:?}");
+                            }
+                            _ => assert_unwrapped(tool, nested),
+                        }
+                    }
+                }
+                serde_json::Value::Array(items) => items.iter().for_each(|item| assert_unwrapped(tool, item)),
+                _ => {}
+            }
+        }
+
+        for tool_id in ToolId::ALL {
+            let definition = tool_id.definition();
+            assert_unwrapped(&definition.name, &serde_json::to_value(&definition).unwrap());
+            // The kept definition is the one a fresh build produces.
+            assert_eq!(definition, tool_id.build_definition());
+        }
+        assert_eq!(
+            unwrap_lines("first line\n  second line\n\nnext paragraph\nends here"),
+            "first line second line\n\nnext paragraph ends here"
+        );
+        let mut schema = serde_json::json!({
+            "description": "wrapped\ntext",
+            "default": {"description": "data\nstays"},
+            "properties": {"description": {"description": "nested\ntext", "enum": ["a\nb"]}}
+        });
+        unwrap_descriptions(schema.as_object_mut().unwrap());
+        assert_eq!(
+            schema,
+            serde_json::json!({
+                "description": "wrapped text",
+                "default": {"description": "data\nstays"},
+                "properties": {"description": {"description": "nested text", "enum": ["a\nb"]}}
+            })
+        );
+    }
+
+    #[test]
+    fn tool_descriptions_fit_a_tool_listing() {
+        for tool_id in ToolId::ALL {
+            let descriptor = tool_id.descriptor();
+            assert!(
+                (1..=400).contains(&descriptor.description.len()),
+                "{}: {} characters",
+                descriptor.name,
+                descriptor.description.len()
+            );
         }
     }
 

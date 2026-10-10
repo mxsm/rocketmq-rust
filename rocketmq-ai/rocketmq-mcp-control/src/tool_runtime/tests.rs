@@ -30,8 +30,11 @@ use crate::model::MUTATION_ARGUMENTS_SCHEMA_VERSION;
 enum Behavior {
     Success,
     Partial,
+    Conflict,
     VerificationFailed,
     Block,
+    /// Waits for the gate like `Block`, then fails the run.
+    FailAfterGate,
     Panic,
 }
 
@@ -76,14 +79,19 @@ impl UpsertSession for FakeSession {
             self.counters.runs.fetch_add(1, Ordering::SeqCst);
             match self.behavior {
                 Behavior::Block => self.gate.notified().await,
+                Behavior::FailAfterGate => {
+                    self.gate.notified().await;
+                    return Err(ControlError::execution_failed());
+                }
                 Behavior::Panic => panic!("synthetic adapter panic"),
-                Behavior::Success | Behavior::Partial | Behavior::VerificationFailed => {}
+                Behavior::Success | Behavior::Partial | Behavior::Conflict | Behavior::VerificationFailed => {}
             }
             let UpsertRequest::Topic(args) = request else {
                 return Err(ControlError::execution_failed());
             };
             let (status, targets) = match self.behavior {
                 Behavior::Partial => (tools::MutationStatus::Partial, Vec::new()),
+                Behavior::Conflict => (tools::MutationStatus::Conflict, Vec::new()),
                 Behavior::VerificationFailed => (
                     tools::MutationStatus::Failed,
                     vec![tools::MutationTarget {
@@ -101,7 +109,12 @@ impl UpsertSession for FakeSession {
                         retryable: true,
                     }],
                 ),
-                Behavior::Success | Behavior::Block | Behavior::Panic => (tools::MutationStatus::Applied, Vec::new()),
+                Behavior::Success | Behavior::Block | Behavior::FailAfterGate | Behavior::Panic if args.dry_run => {
+                    (tools::MutationStatus::Planned, Vec::new())
+                }
+                Behavior::Success | Behavior::Block | Behavior::FailAfterGate | Behavior::Panic => {
+                    (tools::MutationStatus::Applied, Vec::new())
+                }
             };
             Ok(UpsertResponse::Topic(topic_response(
                 &args,
@@ -278,9 +291,21 @@ fn authorized() -> AuthorizedMutation {
     )
 }
 
+/// Runs one call as `alice` on the test cluster.
+async fn execute_as_alice(runtime: &ToolRuntime, request: UpsertRequest) -> Result<UpsertResponse, ControlError> {
+    runtime
+        .execute(&principal("alice"), &authorized(), request, CancellationToken::new())
+        .await
+}
+
 #[tokio::test]
-async fn completed_partial_and_verification_failures_are_cached_with_exact_audit() {
-    for behavior in [Behavior::Success, Behavior::Partial, Behavior::VerificationFailed] {
+async fn settled_outcomes_are_replayed_and_unsettled_ones_run_again() {
+    for behavior in [
+        Behavior::Success,
+        Behavior::Partial,
+        Behavior::Conflict,
+        Behavior::VerificationFailed,
+    ] {
         let (runtime, counters, sink, _) = runtime(behavior, Duration::from_secs(1));
         let first = runtime
             .execute(
@@ -304,17 +329,25 @@ async fn completed_partial_and_verification_failures_are_cached_with_exact_audit
             serde_json::to_value(&second).unwrap(),
             serde_json::to_value(&first).unwrap()
         );
-        let (expected_result, expected_code) = match behavior {
-            Behavior::Success => (crate::audit::AuditResult::Applied, None),
+        let (expected_result, expected_code, attempts) = match behavior {
+            Behavior::Success => (crate::audit::AuditResult::Applied, None, 1),
             Behavior::Partial => (
                 crate::audit::AuditResult::Partial,
                 Some(crate::error::ControlErrorCode::PartialApply),
+                1,
             ),
+            Behavior::Conflict => (
+                crate::audit::AuditResult::Conflict,
+                Some(crate::error::ControlErrorCode::PreconditionConflict),
+                1,
+            ),
+            // The write may have happened, and only another read of the cluster can tell.
             Behavior::VerificationFailed => (
                 crate::audit::AuditResult::Failed,
                 Some(crate::error::ControlErrorCode::VerificationFailed),
+                2,
             ),
-            Behavior::Block | Behavior::Panic => unreachable!(),
+            Behavior::Block | Behavior::FailAfterGate | Behavior::Panic => unreachable!(),
         };
         assert_eq!(first.is_error(), !matches!(behavior, Behavior::Success));
         for response in [&first, &second] {
@@ -323,9 +356,15 @@ async fn completed_partial_and_verification_failures_are_cached_with_exact_audit
             };
             assert_eq!(response.error_code, expected_code);
         }
-        assert_eq!(counters.opens.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.runs.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.opens.load(Ordering::SeqCst), attempts);
+        assert_eq!(counters.runs.load(Ordering::SeqCst), attempts);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), attempts);
+        // Only a settled outcome stays behind for the key.
+        assert_eq!(
+            runtime.idempotency.lock().await.entries.len(),
+            usize::from(attempts == 1)
+        );
+        // Replayed or run again, each call keeps its own audit pair.
         let records = sink.records().await.unwrap();
         assert_eq!(records.len(), 4);
         assert_eq!(records[1].result, expected_result);
@@ -333,6 +372,99 @@ async fn completed_partial_and_verification_failures_are_cached_with_exact_audit
         assert_eq!(records[1].error_code, expected_code);
         assert_eq!(records[3].error_code, expected_code);
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn retry_after_leader_timeout_runs_preflight_again() {
+    let (runtime, counters, sink, gate) = runtime(Behavior::Block, Duration::from_millis(5));
+    let timed_out = execute_as_alice(&runtime, request(Some("request-1234"))).await;
+    assert_eq!(timed_out.unwrap_err().code(), crate::error::ControlErrorCode::Timeout);
+    // The session of the first attempt was shut down before its key was released.
+    assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
+    assert!(runtime.idempotency.lock().await.entries.is_empty());
+
+    // The backend answers now, and the same key reads the cluster again instead of repeating the timeout.
+    gate.notify_one();
+    let retried = execute_as_alice(&runtime, request(Some("request-1234"))).await.unwrap();
+    assert!(!retried.is_error());
+    assert_eq!(counters.opens.load(Ordering::SeqCst), 2);
+    assert_eq!(counters.runs.load(Ordering::SeqCst), 2);
+    assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 2);
+
+    // That attempt applied, so a third call replays it.
+    execute_as_alice(&runtime, request(Some("request-1234"))).await.unwrap();
+    assert_eq!(counters.opens.load(Ordering::SeqCst), 2);
+    let records = sink.records().await.unwrap();
+    assert_eq!(records.len(), 6);
+    assert_eq!(records[1].result, crate::audit::AuditResult::Failed);
+    assert_eq!(records[1].error_code, Some(crate::error::ControlErrorCode::Timeout));
+    assert_eq!(records[3].result, crate::audit::AuditResult::Applied);
+    assert_eq!(records[5].result, crate::audit::AuditResult::Applied);
+}
+
+#[tokio::test]
+async fn dry_run_with_a_request_key_is_never_cached() {
+    let (runtime, counters, sink, _) = runtime(Behavior::Success, Duration::from_secs(1));
+    let plan = || {
+        let mut plan = request(Some("request-1234"));
+        let UpsertRequest::Topic(args) = &mut plan else {
+            unreachable!();
+        };
+        args.dry_run = true;
+        args.confirm = false;
+        plan
+    };
+    execute_as_alice(&runtime, plan()).await.unwrap();
+    execute_as_alice(&runtime, plan()).await.unwrap();
+    assert_eq!(counters.opens.load(Ordering::SeqCst), 2);
+    assert!(runtime.idempotency.lock().await.entries.is_empty());
+
+    // The execute call that follows a plan may carry the key of that plan.
+    let executed = execute_as_alice(&runtime, request(Some("request-1234"))).await.unwrap();
+    assert!(!executed.is_error());
+    assert_eq!(counters.opens.load(Ordering::SeqCst), 3);
+    assert_eq!(runtime.idempotency.lock().await.entries.len(), 1);
+    assert_eq!(sink.records().await.unwrap().len(), 6);
+}
+
+#[tokio::test]
+async fn followers_of_a_failed_leader_receive_the_error_once() {
+    let (runtime, counters, sink, gate) = runtime(Behavior::FailAfterGate, Duration::from_secs(2));
+    let leader = tokio::spawn({
+        let runtime = runtime.clone();
+        async move { execute_as_alice(&runtime, request(Some("request-1234"))).await }
+    });
+    while counters.runs.load(Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+    let follower = tokio::spawn({
+        let runtime = runtime.clone();
+        async move { execute_as_alice(&runtime, request(Some("request-1234"))).await }
+    });
+    while sink.records().await.unwrap().len() < 2 {
+        tokio::task::yield_now().await;
+    }
+    gate.notify_waiters();
+    for call in [leader, follower] {
+        assert_eq!(
+            call.await.unwrap().unwrap_err().code(),
+            crate::error::ControlErrorCode::ExecutionFailed
+        );
+    }
+    // One attempt served both calls, and its failure was not kept for the key.
+    assert_eq!(counters.opens.load(Ordering::SeqCst), 1);
+    assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
+    assert!(runtime.idempotency.lock().await.entries.is_empty());
+
+    // The next call with the key is a new attempt, not a replay of that failure.
+    gate.notify_one();
+    let again = execute_as_alice(&runtime, request(Some("request-1234"))).await;
+    assert_eq!(
+        again.unwrap_err().code(),
+        crate::error::ControlErrorCode::ExecutionFailed
+    );
+    assert_eq!(counters.opens.load(Ordering::SeqCst), 2);
+    assert_eq!(sink.records().await.unwrap().len(), 6);
 }
 
 #[tokio::test]
@@ -622,8 +754,8 @@ async fn idempotency_ttl_expires_and_capacity_evicts_oldest_completed_entry() {
     };
     let result = Ok(UpsertResponse::Topic(topic_response(
         &sample_args,
-        tools::MutationMode::DryRun,
-        tools::MutationStatus::Planned,
+        tools::MutationMode::Execute,
+        tools::MutationStatus::Applied,
         BTreeMap::new(),
         None,
         Vec::new(),
@@ -1033,4 +1165,205 @@ async fn audit_failures_are_logged_by_stage_with_what_the_mutation_did() {
     for forbidden in ["alice", "planned operation", "orders", "broker-a"] {
         assert!(!text.contains(forbidden), "log exposed {forbidden}");
     }
+}
+
+fn limits(dry_runs_per_minute: u32, executes_per_minute: u32) -> crate::config::LimitsConfig {
+    crate::config::LimitsConfig {
+        dry_runs_per_minute,
+        executes_per_minute,
+        max_concurrent_calls: 8,
+    }
+}
+
+fn plan(key: Option<&str>) -> UpsertRequest {
+    let mut plan = request(key);
+    let UpsertRequest::Topic(args) = &mut plan else {
+        unreachable!();
+    };
+    args.dry_run = true;
+    args.confirm = false;
+    plan
+}
+
+#[tokio::test(start_paused = true)]
+async fn dry_run_flood_is_rate_limited_before_audit() {
+    let (runtime, counters, sink, _) = runtime(Behavior::Success, Duration::from_secs(1));
+    let runtime = runtime.with_limits(limits(3, 2));
+    for _ in 0..3 {
+        execute_as_alice(&runtime, plan(None)).await.unwrap();
+    }
+    for _ in 0..5 {
+        let refused = execute_as_alice(&runtime, plan(None)).await.unwrap_err();
+        assert_eq!(refused.code(), crate::error::ControlErrorCode::RateLimited);
+        assert_eq!(refused, ControlError::rate_limited());
+    }
+    // A refused call opened no session and, above all, cost no audit record.
+    assert_eq!(counters.opens.load(Ordering::SeqCst), 3);
+    assert_eq!(sink.records().await.unwrap().len(), 6);
+    assert!(runtime.idempotency.lock().await.entries.is_empty());
+
+    // Three dry runs a minute come back at one every twenty seconds.
+    tokio::time::advance(Duration::from_secs(20)).await;
+    execute_as_alice(&runtime, plan(None)).await.unwrap();
+    assert_eq!(
+        execute_as_alice(&runtime, plan(None)).await.unwrap_err().code(),
+        crate::error::ControlErrorCode::RateLimited
+    );
+    assert_eq!(sink.records().await.unwrap().len(), 8);
+}
+
+#[tokio::test(start_paused = true)]
+async fn execute_and_dry_run_have_separate_budgets() {
+    let (runtime, counters, sink, _) = runtime(Behavior::Success, Duration::from_secs(1));
+    let runtime = runtime.with_limits(limits(1, 2));
+    execute_as_alice(&runtime, plan(None)).await.unwrap();
+    assert_eq!(
+        execute_as_alice(&runtime, plan(None)).await.unwrap_err().code(),
+        crate::error::ControlErrorCode::RateLimited
+    );
+    // Planning used up its own budget, not the one for writes.
+    execute_as_alice(&runtime, request(None)).await.unwrap();
+    execute_as_alice(&runtime, request(None)).await.unwrap();
+    assert_eq!(
+        execute_as_alice(&runtime, request(None)).await.unwrap_err().code(),
+        crate::error::ControlErrorCode::RateLimited
+    );
+    // Another principal has its own budgets.
+    runtime
+        .execute(&principal("bob"), &authorized(), plan(None), CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(counters.opens.load(Ordering::SeqCst), 4);
+    assert_eq!(sink.records().await.unwrap().len(), 8);
+
+    // A replayed outcome still writes an audit pair, so it draws on the budget like any call.
+    tokio::time::advance(Duration::from_secs(60)).await;
+    execute_as_alice(&runtime, request(Some("request-1234"))).await.unwrap();
+    execute_as_alice(&runtime, request(Some("request-1234"))).await.unwrap();
+    assert_eq!(
+        execute_as_alice(&runtime, request(Some("request-1234")))
+            .await
+            .unwrap_err()
+            .code(),
+        crate::error::ControlErrorCode::RateLimited
+    );
+    assert_eq!(counters.opens.load(Ordering::SeqCst), 5);
+}
+
+#[tokio::test]
+async fn audit_records_say_which_object_was_changed_to_what() {
+    let (runtime, _, sink, _) = runtime(Behavior::VerificationFailed, Duration::from_secs(1));
+    execute_as_alice(&runtime, request(Some("request-1234"))).await.unwrap();
+    let records = sink.records().await.unwrap();
+    assert_eq!(records.len(), 2);
+    let sorted = ["broker-a".to_owned(), "broker-b".to_owned()];
+    for record in &records {
+        let target = record.target.as_ref().unwrap();
+        assert_eq!(target.topic.as_deref(), Some("orders"));
+        assert_eq!(target.consumer_group, None);
+        assert_eq!(target.broker, None);
+        let brokers = target.brokers.as_ref().unwrap();
+        assert_eq!(brokers.count, 2);
+        assert_eq!(brokers.names.as_deref(), Some(&sorted[..]));
+        assert_eq!(
+            record.request_key_digest.as_deref(),
+            Some(crate::audit::sha256_hex(b"request-1234").as_str())
+        );
+        assert_eq!(record.requested_digest, records[0].requested_digest);
+    }
+    // The `started` record is written before the attempt, so only the terminal record knows it.
+    assert_eq!(
+        (
+            records[0].before_digest.as_ref(),
+            records[0].changed,
+            records[0].target_results
+        ),
+        (None, None, None)
+    );
+    assert_eq!(records[1].before_digest, None);
+    assert_eq!(records[1].changed, Some(true));
+    assert_eq!(
+        records[1].target_results,
+        Some(crate::audit::AuditTargetResults {
+            applied: 0,
+            unchanged: 0,
+            conflict: 0,
+            failed: 1,
+        })
+    );
+
+    // The digest follows what is asked for, not how or why it is asked.
+    let digest = |request: &UpsertRequest| request.requested_digest().unwrap();
+    let base = request(Some("request-1234"));
+    let mut reworded = plan(None);
+    let UpsertRequest::Topic(args) = &mut reworded else {
+        unreachable!();
+    };
+    args.reason = Some("another approved reason".to_owned());
+    args.broker_names.reverse();
+    assert_eq!(digest(&base), digest(&reworded));
+    assert_eq!(Some(digest(&base)), records[0].requested_digest);
+    let mut changed = request(Some("request-1234"));
+    let UpsertRequest::Topic(args) = &mut changed else {
+        unreachable!();
+    };
+    args.replacement.write_queue_nums = 9;
+    assert_ne!(digest(&base), digest(&changed));
+}
+
+struct LeakyFactory;
+
+impl UpsertSessionFactory for LeakyFactory {
+    fn open<'a>(
+        &'a self,
+        _cluster: &'a ClusterName,
+    ) -> RuntimeFuture<'a, Result<Box<dyn UpsertSession>, ControlError>> {
+        Box::pin(async {
+            Err(ControlError::new(
+                crate::error::ControlErrorCode::ExecutionFailed,
+                "broker 10.0.0.1:10911 refused access key AKIDEXAMPLE",
+                true,
+            ))
+        })
+    }
+}
+
+#[tokio::test]
+async fn audit_records_never_contain_addresses_or_backend_errors() {
+    let sink = Arc::new(MemoryAuditSink::new(32, 4096));
+    let context = rocketmq_runtime::RuntimeContext::from_current("control-leak-test");
+    let owner = context.service_context("control-leak-test").task_group().clone();
+    let runtime = ToolRuntime::new(
+        AuditTrail::new(sink.clone()),
+        Arc::new(LeakyFactory),
+        Duration::from_secs(1),
+        owner,
+    );
+    let error = execute_as_alice(&runtime, request(Some("request-1234")))
+        .await
+        .unwrap_err();
+    assert_eq!(error, ControlError::execution_failed());
+
+    let records = sink.records().await.unwrap();
+    assert_eq!(records.len(), 2);
+    let durable = records
+        .iter()
+        .map(|record| serde_json::to_string(record).unwrap())
+        .collect::<String>();
+    for forbidden in ["10.0.0.1", "AKIDEXAMPLE", "refused", "request-1234"] {
+        assert!(!durable.contains(forbidden), "audit record holds {forbidden}");
+    }
+    // What the durable record does hold: the validated logical object and the closed error code.
+    for expected in ["\"topic\":\"orders\"", "\"broker-a\"", "\"execution_failed\""] {
+        assert!(durable.contains(expected), "audit record lacks {expected}");
+    }
+    // An attempt that ended without a result does not claim to know what it did.
+    assert_eq!(
+        (
+            records[1].before_digest.as_ref(),
+            records[1].changed,
+            records[1].target_results
+        ),
+        (None, None, None)
+    );
 }

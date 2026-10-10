@@ -122,9 +122,13 @@ pub(crate) enum ToolRejection {
         timeout_ms: u64,
     },
     Cancelled,
+    /// The paged result a cursor continued is gone; only a new first page can be served.
+    CursorExpired,
+    /// The cursor was not issued by this server for these arguments and this page size.
+    CursorInvalid,
+    /// The result does not fit the bounded snapshot budget, so it cannot be paged.
+    ResultTooLarge,
     AliasInputBoundExceeded,
-    AliasCapacityExceeded,
-    AliasCollisionExhausted,
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
@@ -192,9 +196,10 @@ impl ToolFailure {
             Self::Rejected(ToolRejection::OutputTooLarge { .. }) => "output_too_large",
             Self::Rejected(ToolRejection::TimedOut { .. }) => "backend_timeout",
             Self::Rejected(ToolRejection::Cancelled) => "cancelled",
+            Self::Rejected(ToolRejection::CursorExpired) => "cursor_expired",
+            Self::Rejected(ToolRejection::CursorInvalid) => "cursor_invalid",
+            Self::Rejected(ToolRejection::ResultTooLarge) => "result_too_large",
             Self::Rejected(ToolRejection::AliasInputBoundExceeded) => "identifier_input_bound_exceeded",
-            Self::Rejected(ToolRejection::AliasCapacityExceeded) => "identifier_capacity_exceeded",
-            Self::Rejected(ToolRejection::AliasCollisionExhausted) => "identifier_collision_exhausted",
         }
     }
 
@@ -242,9 +247,16 @@ impl ToolFailure {
             Self::Rejected(ToolRejection::Cancelled) => {
                 vec!["Retry the request if the cancellation was not intentional."]
             }
-            Self::Rejected(ToolRejection::AliasInputBoundExceeded)
-            | Self::Rejected(ToolRejection::AliasCapacityExceeded)
-            | Self::Rejected(ToolRejection::AliasCollisionExhausted) => {
+            Self::Rejected(ToolRejection::CursorExpired) => {
+                vec!["Send the request again without cursor to start from the first page."]
+            }
+            Self::Rejected(ToolRejection::CursorInvalid) => vec![
+                "Pass next_cursor back unchanged, with the same arguments and limit as the request that returned it.",
+            ],
+            Self::Rejected(ToolRejection::ResultTooLarge) => {
+                vec!["Narrow the request, for example with a more specific filter."]
+            }
+            Self::Rejected(ToolRejection::AliasInputBoundExceeded) => {
                 vec!["Report the request identifier to the server operator."]
             }
         }
@@ -252,12 +264,11 @@ impl ToolFailure {
 
     fn metric_failure_label(&self) -> McpFailureLabel {
         match self {
-            Self::Rejected(ToolRejection::InvalidArguments { .. }) | Self::Rejected(ToolRejection::NotFound { .. }) => {
-                McpFailureLabel::InvalidRequest
-            }
-            Self::Rejected(ToolRejection::AliasInputBoundExceeded)
-            | Self::Rejected(ToolRejection::AliasCapacityExceeded)
-            | Self::Rejected(ToolRejection::AliasCollisionExhausted) => McpFailureLabel::SourceUnavailable,
+            Self::Rejected(ToolRejection::InvalidArguments { .. })
+            | Self::Rejected(ToolRejection::NotFound { .. })
+            | Self::Rejected(ToolRejection::CursorExpired)
+            | Self::Rejected(ToolRejection::CursorInvalid) => McpFailureLabel::InvalidRequest,
+            Self::Rejected(ToolRejection::AliasInputBoundExceeded) => McpFailureLabel::SourceUnavailable,
             Self::Rejected(ToolRejection::PermissionDenied)
             | Self::Rejected(ToolRejection::UnauthorizedScope)
             | Self::Rejected(ToolRejection::TenantMismatch)
@@ -267,7 +278,9 @@ impl ToolFailure {
             Self::Operational(ToolExecutionError::Backend(_)) | Self::Rejected(ToolRejection::TimedOut { .. }) => {
                 McpFailureLabel::SourceUnavailable
             }
-            Self::Rejected(ToolRejection::OutputTooLarge { .. }) => McpFailureLabel::OutputTooLarge,
+            Self::Rejected(ToolRejection::OutputTooLarge { .. }) | Self::Rejected(ToolRejection::ResultTooLarge) => {
+                McpFailureLabel::OutputTooLarge
+            }
             Self::Operational(ToolExecutionError::Internal(_)) | Self::Rejected(ToolRejection::Cancelled) => {
                 McpFailureLabel::Internal
             }
@@ -298,11 +311,10 @@ impl ToolFailure {
                 format!("RocketMQ source timed out after {timeout_ms} ms")
             }
             Self::Rejected(ToolRejection::Cancelled) => "RocketMQ source query was cancelled".to_string(),
+            Self::Rejected(ToolRejection::CursorExpired) => "paged result has expired".to_string(),
+            Self::Rejected(ToolRejection::CursorInvalid) => "cursor is not valid for this request".to_string(),
+            Self::Rejected(ToolRejection::ResultTooLarge) => "result is too large to page".to_string(),
             Self::Rejected(ToolRejection::AliasInputBoundExceeded) => "identifier safety bound exceeded".to_string(),
-            Self::Rejected(ToolRejection::AliasCapacityExceeded) => "identifier capacity exhausted".to_string(),
-            Self::Rejected(ToolRejection::AliasCollisionExhausted) => {
-                "identifier collision attempts exhausted".to_string()
-            }
         }
     }
 
@@ -374,10 +386,44 @@ struct ToolErrorContent<'a> {
     /// Present only for `not_found`: the kind of entity that does not exist.
     #[serde(skip_serializing_if = "Option::is_none")]
     entity: Option<NotFoundEntity>,
+    /// Present only for `invalid_arguments` whose arguments could be located.
+    #[serde(skip_serializing_if = "<[ArgumentViolation]>::is_empty")]
+    violations: &'a [ArgumentViolation],
     retryable: bool,
     message: String,
     suggestions: Vec<&'static str>,
 }
+
+/// One argument that failed validation: where it is and which kind of rule it broke.
+///
+/// It never carries the offending value, and its path uses only names that the Tool's input
+/// schema declares, so nothing a caller sent is echoed back.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct ArgumentViolation {
+    /// JSON Pointer to the argument; `*` stands for a property the schema does not declare.
+    path: String,
+    constraint: ViolationConstraint,
+}
+
+/// The closed set of rule kinds that an argument violation reports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ViolationConstraint {
+    Required,
+    Type,
+    MinLength,
+    MaxLength,
+    Minimum,
+    Maximum,
+    Enum,
+    Pattern,
+    AdditionalProperty,
+    Other,
+}
+
+/// How many violations one error reports; the first ones are enough to correct a call.
+const MAX_REPORTED_VIOLATIONS: usize = 3;
+const UNDECLARED_PROPERTY: &str = "*";
 
 impl From<GuardRejection> for ToolFailure {
     fn from(error: GuardRejection) -> Self {
@@ -456,9 +502,21 @@ where
         request_id: &str,
         error: ToolFailure,
     ) -> CallToolResult {
+        self.located_error_result(operation, tool_name, request_id, error, &[])
+    }
+
+    /// Renders a Tool error together with the arguments that caused it.
+    fn located_error_result(
+        &self,
+        operation: &'static str,
+        tool_name: &str,
+        request_id: &str,
+        error: ToolFailure,
+        violations: &[ArgumentViolation],
+    ) -> CallToolResult {
         self.metrics
             .record_error(McpOperationKind::Tool, operation, error.metric_failure_label());
-        error_result(operation, tool_name, request_id, error)
+        located_error_result(operation, tool_name, request_id, error, violations)
     }
 
     async fn execute(
@@ -487,7 +545,19 @@ where
                 Ok(guarded_call) => guarded_call,
                 Err(error) => {
                     operation_recorder.denied();
-                    return Ok(self.error_result(descriptor.name, &tool_name, request_id, error.into()));
+                    // The Guard resolves the cluster before the input schema is checked, and that
+                    // is its only argument error: locate it here.
+                    let violations = match error {
+                        GuardRejection::InvalidArgument => cluster_violation(&arguments),
+                        _ => None,
+                    };
+                    return Ok(self.located_error_result(
+                        descriptor.name,
+                        &tool_name,
+                        request_id,
+                        error.into(),
+                        violations.as_slice(),
+                    ));
                 }
             };
         // The Guard authorized exactly this cluster, so the query reads it instead of
@@ -496,8 +566,14 @@ where
             arguments.insert("cluster".to_string(), Value::String(cluster.to_string()));
         }
 
-        if let Err(error) = validate_input(&descriptor, &arguments) {
-            return Ok(guarded_call.finish_result(self.error_result(descriptor.name, &tool_name, request_id, error)));
+        if let Err(violations) = validate_input(&descriptor, &arguments) {
+            return Ok(guarded_call.finish_result(self.located_error_result(
+                descriptor.name,
+                &tool_name,
+                request_id,
+                ToolFailure::Rejected(ToolRejection::InvalidArguments { _source: None }),
+                &violations,
+            )));
         }
 
         let result = match tool_id {
@@ -1133,14 +1209,108 @@ where
     serde_json::from_value(Value::Object(arguments)).map_err(ToolFailure::invalid_arguments)
 }
 
-fn validate_input(descriptor: &ToolDescriptor, arguments: &JsonObject) -> Result<(), ToolFailure> {
-    let definition = descriptor.id.definition();
-    validate_schema(
-        definition.input_schema.as_ref(),
-        &Value::Object(arguments.clone()),
-        "input",
-    )
-    .map_err(|_| ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { _source: None }))
+/// Checks the arguments against the Tool's input schema and locates what is wrong with them.
+///
+/// The error holds at most [`MAX_REPORTED_VIOLATIONS`] entries. It is empty when the arguments
+/// are invalid but nothing could be located.
+fn validate_input(descriptor: &ToolDescriptor, arguments: &JsonObject) -> Result<(), Vec<ArgumentViolation>> {
+    let schema = Value::Object(descriptor.id.definition().input_schema.as_ref().clone());
+    let Ok(validator) = jsonschema::validator_for(&schema) else {
+        return Err(Vec::new());
+    };
+    let instance = Value::Object(arguments.clone());
+    let mut errors = validator.iter_errors(&instance).peekable();
+    if errors.peek().is_none() {
+        return Ok(());
+    }
+    let mut declared = std::collections::BTreeSet::new();
+    collect_declared_properties(&schema, &mut declared);
+    Err(errors
+        .take(MAX_REPORTED_VIOLATIONS)
+        .map(|error| argument_violation(&error, &declared))
+        .collect())
+}
+
+/// Collects every property name the schema declares, at any depth.
+fn collect_declared_properties<'a>(schema: &'a Value, declared: &mut std::collections::BTreeSet<&'a str>) {
+    match schema {
+        Value::Object(keywords) => {
+            for (keyword, value) in keywords {
+                if let ("properties", Value::Object(properties)) = (keyword.as_str(), value) {
+                    declared.extend(properties.keys().map(String::as_str));
+                }
+                collect_declared_properties(value, declared);
+            }
+        }
+        Value::Array(values) => values
+            .iter()
+            .for_each(|value| collect_declared_properties(value, declared)),
+        _ => {}
+    }
+}
+
+/// Reduces a schema validation error to a location and a rule kind.
+///
+/// Property names reach the path only when the schema declares them. Anything else is caller
+/// text, including the names of the properties an `additionalProperties` rule rejects.
+fn argument_violation(
+    error: &jsonschema::ValidationError<'_>,
+    declared: &std::collections::BTreeSet<&str>,
+) -> ArgumentViolation {
+    use jsonschema::error::ValidationErrorKind as Kind;
+    use jsonschema::paths::LocationSegment;
+
+    let mut path = String::new();
+    let push_property = |path: &mut String, name: &str| {
+        path.push('/');
+        path.push_str(if declared.contains(name) {
+            name
+        } else {
+            UNDECLARED_PROPERTY
+        });
+    };
+    for segment in error.instance_path() {
+        match segment {
+            LocationSegment::Property(name) => push_property(&mut path, &name),
+            LocationSegment::Index(index) => {
+                path.push('/');
+                path.push_str(&index.to_string());
+            }
+        }
+    }
+    let constraint = match error.kind() {
+        Kind::Required { property } => {
+            push_property(&mut path, property.as_str().unwrap_or(UNDECLARED_PROPERTY));
+            ViolationConstraint::Required
+        }
+        Kind::AdditionalProperties { .. } | Kind::UnevaluatedProperties { .. } => {
+            push_property(&mut path, UNDECLARED_PROPERTY);
+            ViolationConstraint::AdditionalProperty
+        }
+        Kind::Type { .. } => ViolationConstraint::Type,
+        Kind::MinLength { .. } => ViolationConstraint::MinLength,
+        Kind::MaxLength { .. } => ViolationConstraint::MaxLength,
+        Kind::Minimum { .. } | Kind::ExclusiveMinimum { .. } => ViolationConstraint::Minimum,
+        Kind::Maximum { .. } | Kind::ExclusiveMaximum { .. } => ViolationConstraint::Maximum,
+        Kind::Enum { .. } | Kind::Constant { .. } => ViolationConstraint::Enum,
+        Kind::Pattern { .. } => ViolationConstraint::Pattern,
+        _ => ViolationConstraint::Other,
+    };
+    ArgumentViolation { path, constraint }
+}
+
+/// Locates what is wrong with `cluster` when the Guard rejected it.
+fn cluster_violation(arguments: &JsonObject) -> Option<ArgumentViolation> {
+    let constraint = match arguments.get("cluster") {
+        None | Some(Value::Null) => ViolationConstraint::Required,
+        Some(Value::String(cluster)) if cluster.trim().is_empty() => ViolationConstraint::MinLength,
+        Some(Value::String(_)) => return None,
+        Some(_) => ViolationConstraint::Type,
+    };
+    Some(ArgumentViolation {
+        path: "/cluster".to_string(),
+        constraint,
+    })
 }
 
 fn success_result<T>(
@@ -1310,7 +1480,18 @@ fn validate_schema(schema: &JsonObject, value: &Value, _label: &str) -> Result<(
     }
 }
 
+#[cfg(test)]
 fn error_result(operation: &'static str, tool_name: &str, request_id: &str, error: ToolFailure) -> CallToolResult {
+    located_error_result(operation, tool_name, request_id, error, &[])
+}
+
+fn located_error_result(
+    operation: &'static str,
+    tool_name: &str,
+    request_id: &str,
+    error: ToolFailure,
+    violations: &[ArgumentViolation],
+) -> CallToolResult {
     if error.has_private_detail() {
         tracing::warn!(
             correlation_id = request_id,
@@ -1326,6 +1507,7 @@ fn error_result(operation: &'static str, tool_name: &str, request_id: &str, erro
         tool: tool_name,
         code: error.code(),
         entity: error.not_found_entity(),
+        violations,
         retryable: error.retryable(),
         message: error.public_message(),
         suggestions: error.suggestions(),
@@ -2239,6 +2421,71 @@ mod tests {
         assert!(!error["suggestions"].as_array().unwrap().is_empty());
     }
 
+    #[tokio::test]
+    async fn invalid_arguments_report_field_paths_without_values() {
+        use serde_json::json;
+        let executor = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            test_guard("diagnose"),
+        );
+        let call = |arguments: serde_json::Value| {
+            let executor = &executor;
+            async move {
+                let request = CallToolRequestParams::new(ToolId::GetTopicRoute.descriptor().name)
+                    .with_arguments(arguments.as_object().unwrap().clone());
+                let text = content_text(&executor.call(request).await.unwrap());
+                // Neither a value nor the name of an undeclared property is echoed.
+                assert!(!text.contains("sentinel"), "{arguments}");
+                let error: serde_json::Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(error["code"], "invalid_arguments", "{arguments}");
+                error["violations"].clone()
+            }
+        };
+        let located = |path: &str, constraint: &str| json!([{ "path": path, "constraint": constraint }]);
+
+        for (arguments, expected) in [
+            (json!({"cluster": "local-dev"}), located("/topic", "required")),
+            (
+                json!({"cluster": "local-dev", "topic": "orders", "limit": "value-sentinel"}),
+                located("/limit", "type"),
+            ),
+            (
+                json!({"cluster": "local-dev", "topic": "orders", "limit": 0}),
+                located("/limit", "minimum"),
+            ),
+            (
+                json!({"cluster": "local-dev", "topic": "orders", "limit": 201}),
+                located("/limit", "maximum"),
+            ),
+            (
+                json!({"cluster": "local-dev", "topic": "orders", "name-sentinel": "value-sentinel"}),
+                located("/*", "additional_property"),
+            ),
+            // The Guard rejects these before the input schema is checked.
+            (json!({"topic": "orders"}), located("/cluster", "required")),
+            (
+                json!({"cluster": "  ", "topic": "orders"}),
+                located("/cluster", "min_length"),
+            ),
+            (json!({"cluster": 7, "topic": "orders"}), located("/cluster", "type")),
+        ] {
+            assert_eq!(call(arguments.clone()).await, expected, "{arguments}");
+        }
+
+        // Four arguments are wrong; the first three are enough to correct the call.
+        let many = call(json!({
+            "cluster": "local-dev",
+            "limit": "value-sentinel",
+            "cursor": 7,
+            "name-sentinel": true
+        }))
+        .await;
+        assert_eq!(many.as_array().unwrap().len(), MAX_REPORTED_VIOLATIONS);
+    }
+
     #[test]
     fn not_found_is_a_non_retryable_tool_error_that_names_the_entity() {
         for (entity, wire_entity, next_step) in [
@@ -2278,6 +2525,41 @@ mod tests {
         assert_eq!(error["code"], "source_unavailable");
         assert_eq!(error["retryable"], true);
         assert!(error.get("entity").is_none());
+    }
+
+    #[test]
+    fn cursor_and_result_size_errors_are_non_retryable_and_name_the_recovery() {
+        for (rejection, code, label, next_step) in [
+            (
+                ToolRejection::CursorExpired,
+                "cursor_expired",
+                McpFailureLabel::InvalidRequest,
+                "without cursor",
+            ),
+            (
+                ToolRejection::CursorInvalid,
+                "cursor_invalid",
+                McpFailureLabel::InvalidRequest,
+                "next_cursor back unchanged",
+            ),
+            (
+                ToolRejection::ResultTooLarge,
+                "result_too_large",
+                McpFailureLabel::OutputTooLarge,
+                "filter",
+            ),
+        ] {
+            let failure = ToolFailure::Rejected(rejection);
+            assert_eq!(failure.metric_failure_label(), label);
+            let result = error_result("rocketmq_list_topics", "rocketmq_list_topics", "request-1", failure);
+
+            assert_eq!(result.is_error, Some(true));
+            let error: serde_json::Value = serde_json::from_str(&content_text(&result)).unwrap();
+            assert_eq!(error["code"], code);
+            assert_eq!(error["retryable"], false);
+            assert!(error["suggestions"][0].as_str().unwrap().contains(next_step), "{code}");
+            assert!(error.get("entity").is_none());
+        }
     }
 
     #[tokio::test]
@@ -3108,6 +3390,7 @@ mod tests {
                 rate_limit_per_minute: 60,
                 permissions_file: permission_path(),
                 max_concurrent_requests_per_cluster: 8,
+                pseudonym_key_env: None,
             },
             AuditConfig {
                 enabled: true,

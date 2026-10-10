@@ -293,6 +293,7 @@ These projects live in this repository but outside the root workspace. Build eac
 | [rocketmq-dashboard-tauri](./rocketmq-dashboard/rocketmq-dashboard-tauri) | Cross-platform desktop dashboard built with Tauri and React. |
 | [rocketmq-mcp](./rocketmq-ai/rocketmq-mcp) | Read-only Model Context Protocol server for cluster diagnostics. |
 | [rocketmq-mcp-control](./rocketmq-ai/rocketmq-mcp-control) | Isolated, deny-by-default MCP server for supervised cluster changes. |
+| [rocketmq-mcp-auth](./rocketmq-ai/rocketmq-mcp-auth) | JWKS retrieval, caching and RS256 key selection shared by the two MCP servers. |
 | [rocketmq-sre](./rocketmq-ai/rocketmq-sre) | AI SRE platform for evidence collection, diagnostics, planning and controlled automation. |
 | [rocketmq-website](./rocketmq-website) | Docusaurus source of [rocketmqrust.com](https://rocketmqrust.com). |
 | [fuzz](./fuzz) | `cargo-fuzz` targets for protocol, configuration, controller snapshot and store recovery inputs. |

@@ -54,6 +54,7 @@ use serde::Serialize;
 use crate::adapter::admin_session_projection::bounded_proxy_operation_id;
 use crate::adapter::admin_session_projection::map_broker_diagnostics;
 use crate::adapter::admin_session_projection::safe_operation_id;
+use crate::config::ClusterCredentialReference;
 use crate::model::contract::observed_at_from_millis;
 use crate::model::contract::QueryPayload;
 use crate::tools::broker_tools::BrokerDiagnosticsOutput;
@@ -84,7 +85,9 @@ pub(crate) struct ResolvedCluster {
     pub name: String,
     pub rocketmq_cluster_name: String,
     pub namesrv_addr: String,
-    pub credentials: Option<AdminCredentials>,
+    /// Where the request-signing credentials come from, not the credentials themselves: only a
+    /// session that is actually created reads them.
+    pub credentials: Option<ClusterCredentialReference>,
     pub controller_targets: Vec<rocketmq_admin_core::read_client_adapter::ControllerObservationTarget>,
 }
 
@@ -361,6 +364,8 @@ pub(crate) trait AdminSessionFactory: Clone + Send + Sync + 'static {
 #[derive(Clone)]
 pub(crate) struct AdminCoreSessionFactory {
     client_runtime: Arc<ClientRuntime>,
+    /// The owning service's short-I/O lane; credential files are read on it.
+    blocking: rocketmq_runtime::BlockingExecutor,
     #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
     test_session_factory: Option<ProtocolTestSessionFactory>,
 }
@@ -376,12 +381,36 @@ impl std::fmt::Debug for AdminCoreSessionFactory {
 }
 
 impl AdminCoreSessionFactory {
-    pub(crate) fn new(client_runtime: Arc<ClientRuntime>) -> Self {
+    pub(crate) fn new(client_runtime: Arc<ClientRuntime>, blocking: rocketmq_runtime::BlockingExecutor) -> Self {
         Self {
             client_runtime,
+            blocking,
             #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
             test_session_factory: None,
         }
+    }
+
+    /// Reads the request-signing credentials for a session that is about to be created.
+    ///
+    /// Sessions are the only readers, so a request answered from the cache reads nothing and a
+    /// rotated secret reaches the next session. A mounted file is read on the blocking executor;
+    /// environment references are read in place.
+    async fn resolve_credentials(&self, cluster: &ResolvedCluster) -> Result<Option<AdminCredentials>, ToolFailure> {
+        let Some(reference) = cluster.credentials.clone() else {
+            return Ok(None);
+        };
+        let name = cluster.name.clone();
+        let resolved = if reference.reads_file() {
+            self.blocking
+                .spawn_io("rocketmq-mcp-credential-file-read", move || reference.resolve(&name))
+                .await
+                .map_err(ToolFailure::backend)?
+        } else {
+            reference.resolve(&name)
+        };
+        resolved
+            .map(Some)
+            .map_err(|error| ToolFailure::Operational(ToolExecutionError::Backend(Some(Arc::new(error)))))
     }
 
     #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
@@ -395,6 +424,8 @@ impl AdminSessionFactory for AdminCoreSessionFactory {
     type Session = AdminCoreSession;
 
     async fn start(&self, cluster: ResolvedCluster) -> Result<Self::Session, ToolFailure> {
+        // Boxed so that the read does not widen this future, which every workflow holds by value.
+        let credentials = Box::pin(self.resolve_credentials(&cluster)).await?;
         #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
         if let Some(factory) = &self.test_session_factory {
             return Ok(AdminCoreSession {
@@ -406,7 +437,7 @@ impl AdminSessionFactory for AdminCoreSessionFactory {
         let mut builder = ReadAdminBuilder::new(self.client_runtime.clone())
             .namesrv_addr(cluster.namesrv_addr.clone())
             .controller_targets(cluster.controller_targets.clone());
-        if let Some(credentials) = cluster.credentials.clone() {
+        if let Some(credentials) = credentials {
             builder = builder.credentials(credentials);
         }
         let admin = builder.build_with_guard().await.map_err(ToolFailure::backend)?;
@@ -1368,6 +1399,67 @@ fn named_entity(error: &AdminError) -> Option<NotFoundEntity> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn session_factory() -> AdminCoreSessionFactory {
+        static OWNER: std::sync::LazyLock<rocketmq_runtime::RuntimeOwner> = std::sync::LazyLock::new(|| {
+            rocketmq_runtime::RuntimeOwner::plan(rocketmq_runtime::RuntimeConfig {
+                thread_name: "rocketmq-mcp-session-test".to_string(),
+                ..Default::default()
+            })
+            .expect("runtime configuration is valid")
+            .build()
+            .expect("MCP session test runtime should start")
+        });
+        let context = OWNER.root_context().component("session");
+        let client_runtime = ClientRuntime::try_new(
+            context.component("client"),
+            rocketmq_admin_core::read_client_adapter::ClientRuntimeConfig::default(),
+            rocketmq_observability::TelemetryHandle::noop(),
+        )
+        .expect("MCP session test client runtime should start");
+        AdminCoreSessionFactory::new(client_runtime, context.storage_io().clone())
+    }
+
+    #[tokio::test]
+    async fn every_session_reads_its_credentials_again() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("reader.yml");
+        let factory = session_factory();
+        let mut cluster = ResolvedCluster {
+            name: "local-dev".to_string(),
+            rocketmq_cluster_name: "DefaultCluster".to_string(),
+            namesrv_addr: "127.0.0.1:9876".to_string(),
+            credentials: Some(ClusterCredentialReference {
+                access_key_env: None,
+                secret_key_env: None,
+                security_token_env: None,
+                file: Some(path.to_string_lossy().into_owned()),
+            }),
+            controller_targets: Vec::new(),
+        };
+        let credentials =
+            |access_key: &str, secret_key: &str| Some(AdminCredentials::try_new(access_key, secret_key, None).unwrap());
+
+        std::fs::write(&path, "access_key: first\nsecret_key: first-secret\n").unwrap();
+        assert_eq!(
+            factory.resolve_credentials(&cluster).await.unwrap(),
+            credentials("first", "first-secret")
+        );
+        // A rotated secret reaches the next session without a restart.
+        std::fs::write(&path, "access_key: second\nsecret_key: second-secret\n").unwrap();
+        assert_eq!(
+            factory.resolve_credentials(&cluster).await.unwrap(),
+            credentials("second", "second-secret")
+        );
+
+        std::fs::remove_file(&path).unwrap();
+        let error = factory.resolve_credentials(&cluster).await.unwrap_err();
+        assert_eq!(error.code(), "source_unavailable");
+        assert!(!format!("{error} {error:?}").contains("reader.yml"));
+
+        cluster.credentials = None;
+        assert_eq!(factory.resolve_credentials(&cluster).await.unwrap(), None);
+    }
 
     #[test]
     fn admin_failures_map_to_the_tool_contract() {

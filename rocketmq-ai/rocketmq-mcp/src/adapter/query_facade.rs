@@ -30,8 +30,7 @@ use crate::adapter::admin_session::ResolvedCluster;
 use crate::adapter::admin_session::SessionConnections;
 use crate::adapter::admin_session::SessionConsumerLag;
 use crate::adapter::admin_session::SessionTopicRoute;
-use crate::adapter::identifier_alias::IdentifierAliasFailure;
-use crate::adapter::identifier_alias::IdentifierAliasRejection;
+use crate::adapter::identifier_alias::AliasInputBoundExceeded;
 use crate::adapter::identifier_alias::IdentifierAliaser;
 use crate::config::McpConfig;
 use crate::guard::context::VisibilityClass;
@@ -46,7 +45,6 @@ use crate::infrastructure::snapshot::SnapshotView;
 use crate::infrastructure::snapshot::SnapshotWeight;
 use crate::model::contract::observed_at;
 use crate::model::contract::observed_at_from_millis;
-use crate::model::contract::paginate;
 use crate::model::contract::Page;
 use crate::model::contract::PageRequest;
 use crate::model::contract::QueryCompleteness;
@@ -58,6 +56,10 @@ use crate::model::contract::SourceFailureCode;
 use crate::model::contract::SCHEMA_VERSION;
 use crate::model::diagnosis::DiagnosisReport;
 use crate::service::diagnosis_collector::ConsumerLagEvidence;
+use crate::service::diagnosis_collector::ConsumerLagSummary;
+use crate::service::diagnosis_collector::QueueLagBreakdown;
+use crate::service::diagnosis_collector::TopicRouteSummary;
+use crate::service::diagnosis_collector::TopicSummary;
 use crate::service::diagnosis_rules;
 use crate::tools::broker_tools::BrokerDiagnosticsArgs;
 use crate::tools::broker_tools::BrokerDiagnosticsOutput;
@@ -101,19 +103,36 @@ mod topic_observation;
 
 #[derive(Debug, Clone)]
 pub(crate) struct WorkflowControl {
-    timeout: Duration,
+    /// How long one request may spend on RocketMQ sources.
+    budget: Duration,
+    /// When the budget of the request being served ends; `None` when no request started one.
+    deadline: Option<tokio::time::Instant>,
     cancellation: CancellationToken,
 }
 
 impl WorkflowControl {
-    pub(crate) fn new(timeout: Duration, cancellation: CancellationToken) -> Self {
-        Self { timeout, cancellation }
+    pub(crate) fn new(budget: Duration, cancellation: CancellationToken) -> Self {
+        Self {
+            budget,
+            deadline: None,
+            cancellation,
+        }
     }
-}
 
-impl Default for WorkflowControl {
-    fn default() -> Self {
-        Self::new(Duration::from_secs(30), CancellationToken::new())
+    /// The instant by which a workflow that starts now has to finish.
+    ///
+    /// Every workflow of one request ends at the request's deadline, so a Tool that runs several
+    /// workflows still answers within one budget. Without a request, each workflow gets a full
+    /// budget of its own.
+    fn deadline(&self) -> tokio::time::Instant {
+        self.deadline
+            .unwrap_or_else(|| tokio::time::Instant::now() + self.budget)
+    }
+
+    fn timed_out(&self) -> ToolFailure {
+        ToolFailure::Rejected(ToolRejection::TimedOut {
+            timeout_ms: self.budget.as_millis().try_into().unwrap_or(u64::MAX),
+        })
     }
 }
 
@@ -370,7 +389,8 @@ where
     F: AdminSessionFactory,
 {
     pub(crate) fn with_factory(config: McpConfig, factory: F) -> Self {
-        Self::with_factory_and_control(config, factory, WorkflowControl::default())
+        let control = WorkflowControl::new(config.server.request_timeout(), CancellationToken::new());
+        Self::with_factory_and_control(config, factory, control)
     }
 
     pub(crate) fn with_factory_and_control(config: McpConfig, factory: F, control: WorkflowControl) -> Self {
@@ -394,8 +414,23 @@ where
         self
     }
 
+    /// Replaces the process-local pseudonym key, for replicas that share one.
+    pub(crate) fn with_identifier_aliases(mut self, aliases: IdentifierAliaser) -> Self {
+        self.aliases = aliases;
+        self
+    }
+
     pub(crate) fn with_cancellation(mut self, cancellation: CancellationToken) -> Self {
         self.control.cancellation = cancellation;
+        self
+    }
+
+    /// Starts one request's budget on this copy of the facade.
+    ///
+    /// Call it once per request, on the copy that serves it: every workflow the copy runs then
+    /// shares the same deadline.
+    pub(crate) fn with_request_budget(mut self) -> Self {
+        self.control.deadline = Some(tokio::time::Instant::now() + self.control.budget);
         self
     }
 
@@ -432,22 +467,30 @@ where
                 || ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled),
                 || async {
                     let page = PageRequest::default();
-                    let topic_snapshot = self.topic_inventory_snapshot(cluster.clone(), None, &page).await?;
-                    let consumer_snapshot = self
-                        .consumer_group_inventory_snapshot(cluster.clone(), None, false, &page)
-                        .await?;
+                    // Boxed because every Tool and Resource dispatch holds the overview future by
+                    // value: keeping the inventory futures inline would deepen every request's stack.
+                    let topics = Box::pin(inventory_size(
+                        || self.topic_inventory_snapshot(cluster.clone(), None, &page),
+                        || self.read_topic_inventory(cluster.clone(), String::new()),
+                    ))
+                    .await?;
+                    let consumer_groups = Box::pin(inventory_size(
+                        || self.consumer_group_inventory_snapshot(cluster.clone(), None, false, &page),
+                        || self.read_consumer_group_inventory(cluster.clone(), String::new(), false),
+                    ))
+                    .await?;
                     self.run_workflow(cluster, move |session, cluster| {
                         Box::pin(async move {
                             let brokers = session.broker_rows().await?;
                             let mut completeness = brokers.completeness();
-                            completeness.merge(topic_snapshot.payload.completeness());
-                            completeness.merge(consumer_snapshot.payload.completeness());
+                            completeness.merge(topics.completeness());
+                            completeness.merge(consumer_groups.completeness());
                             Ok(completeness.wrap(ClusterOverviewOutput {
                                 cluster: cluster.name.clone(),
                                 namesrv_addr: cluster.namesrv_addr.clone(),
                                 brokers: brokers.data,
-                                topic_count: topic_snapshot.payload.data.len(),
-                                consumer_group_count: consumer_snapshot.payload.data.len(),
+                                topic_count: topics.data,
+                                consumer_group_count: consumer_groups.data,
                                 generated_at: observed_at(),
                             }))
                         })
@@ -1048,13 +1091,7 @@ where
                             let lag_result = match session.consumer_lag(&args.topic, &args.consumer_group).await {
                                 Ok(lag) => {
                                     completeness.merge(lag.completeness());
-                                    consumer_lag_output(
-                                        cluster,
-                                        args.topic.clone(),
-                                        args.consumer_group.clone(),
-                                        &PageRequest::default(),
-                                        lag.data,
-                                    )
+                                    Ok(consumer_lag_summary(cluster, &args, lag.data))
                                 }
                                 Err(error) => {
                                     completeness.merge(completeness_for_error(
@@ -1067,9 +1104,8 @@ where
                             };
                             let (topic_result, route_result) = match session.topic_route(&args.topic).await {
                                 Ok(route) => {
-                                    let route =
-                                        topic_route_output(cluster, &args.topic, route, &PageRequest::default())?;
-                                    (Ok(describe_topic_output(&route)), Ok(route))
+                                    let route = topic_route_summary(cluster, &args.topic, route);
+                                    (Ok(TopicSummary::from_route(&route)), Ok(route))
                                 }
                                 Err(error) => {
                                     completeness.merge(completeness_for_error(
@@ -1088,7 +1124,12 @@ where
                                     (Err(description_error), Err(error))
                                 }
                             };
-                            let broker_result = match top_lag_broker(lag_result.as_ref().ok()) {
+                            let top_lag_broker = lag_result
+                                .as_ref()
+                                .ok()
+                                .and_then(ConsumerLagSummary::top_lag_broker)
+                                .map(str::to_owned);
+                            let broker_result = match top_lag_broker {
                                 Some(broker_name) => {
                                     match describe_broker_in_session(session, cluster, broker_name.clone()).await {
                                         Ok(broker) => {
@@ -1153,19 +1194,27 @@ where
                 self.snapshot_response_ttl(self.config.cache.topic_list_ttl_ms),
                 |topics: &Vec<String>| SnapshotWeight::inventory(topics.len()),
                 &self.control.cancellation,
-                || {
-                    self.run_workflow(cluster, move |session, _| {
-                        Box::pin(async move {
-                            let mut topics = sorted_unique_topic_names(session.topic_inventory().await?);
-                            if !filter.is_empty() {
-                                topics.retain(|topic| topic.to_ascii_lowercase().contains(&filter));
-                            }
-                            Ok(QueryPayload::complete(topics))
-                        })
-                    })
-                },
+                || self.read_topic_inventory(cluster, filter),
             )
             .await
+    }
+
+    /// Reads the sorted Topic inventory, keeping the names that contain the normalized `filter`.
+    async fn read_topic_inventory(
+        &self,
+        cluster: ResolvedCluster,
+        filter: String,
+    ) -> Result<QueryPayload<Vec<String>>, ToolFailure> {
+        self.run_workflow(cluster, move |session, _| {
+            Box::pin(async move {
+                let mut topics = sorted_unique_topic_names(session.topic_inventory().await?);
+                if !filter.is_empty() {
+                    topics.retain(|topic| topic.to_ascii_lowercase().contains(&filter));
+                }
+                Ok(QueryPayload::complete(topics))
+            })
+        })
+        .await
     }
 
     async fn consumer_group_inventory_snapshot(
@@ -1201,27 +1250,37 @@ where
                 self.snapshot_response_ttl(self.config.cache.consumer_lag_ttl_ms),
                 |groups: &Vec<String>| SnapshotWeight::inventory(groups.len()),
                 &self.control.cancellation,
-                || {
-                    self.run_workflow(cluster, move |session, _| {
-                        Box::pin(async move {
-                            let groups = session.consumer_group_inventory().await?;
-                            Ok(groups.map(|mut groups| {
-                                groups.sort();
-                                groups.dedup();
-                                if !filter.is_empty() {
-                                    if exact {
-                                        groups.retain(|group| group == &filter);
-                                    } else {
-                                        groups.retain(|group| group.to_ascii_lowercase().contains(&filter));
-                                    }
-                                }
-                                groups
-                            }))
-                        })
-                    })
-                },
+                || self.read_consumer_group_inventory(cluster, filter, exact),
             )
             .await
+    }
+
+    /// Reads the sorted Consumer Group inventory, keeping the names selected by `filter`: the one
+    /// equal name when `exact`, otherwise every name that contains the normalized filter.
+    async fn read_consumer_group_inventory(
+        &self,
+        cluster: ResolvedCluster,
+        filter: String,
+        exact: bool,
+    ) -> Result<QueryPayload<Vec<String>>, ToolFailure> {
+        self.run_workflow(cluster, move |session, _| {
+            Box::pin(async move {
+                let groups = session.consumer_group_inventory().await?;
+                Ok(groups.map(|mut groups| {
+                    groups.sort();
+                    groups.dedup();
+                    if !filter.is_empty() {
+                        if exact {
+                            groups.retain(|group| group == &filter);
+                        } else {
+                            groups.retain(|group| group.to_ascii_lowercase().contains(&filter));
+                        }
+                    }
+                    groups
+                }))
+            })
+        })
+        .await
     }
 
     async fn topic_route_snapshot(
@@ -1340,16 +1399,12 @@ where
         T: Send,
         O: for<'a> FnOnce(&'a mut F::Session, &'a ResolvedCluster) -> WorkflowFuture<'a, T>,
     {
-        let deadline = tokio::time::Instant::now() + self.control.timeout;
+        let deadline = self.control.deadline();
         let mut session = tokio::select! {
             _ = self.control.cancellation.cancelled() => return Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled)),
             result = tokio::time::timeout_at(deadline, self.factory.start(cluster.clone())) => match result {
                 Ok(result) => result?,
-                Err(_) => {
-                    return Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::TimedOut{
-                        timeout_ms: self.control.timeout.as_millis().try_into().unwrap_or(u64::MAX),
-                    }));
-                }
+                Err(_) => return Err(self.control.timed_out()),
             },
         };
         let result = {
@@ -1358,9 +1413,7 @@ where
                 _ = self.control.cancellation.cancelled() => Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled)),
                 result = tokio::time::timeout_at(deadline, operation) => match result {
                     Ok(result) => result,
-                    Err(_) => Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::TimedOut{
-                        timeout_ms: self.control.timeout.as_millis().try_into().unwrap_or(u64::MAX),
-                    })),
+                    Err(_) => Err(self.control.timed_out()),
                 },
             }
         };
@@ -1391,9 +1444,7 @@ where
             name: config.name.clone(),
             rocketmq_cluster_name: config.physical_cluster_name().to_string(),
             namesrv_addr: config.namesrv_addr.clone(),
-            credentials: config.resolve_admin_credentials().map_err(|error| {
-                ToolFailure::Operational(ToolExecutionError::Backend(Some(std::sync::Arc::new(error))))
-            })?,
+            credentials: config.credentials.clone(),
             controller_targets: config
                 .controllers
                 .iter()
@@ -1426,11 +1477,13 @@ where
 }
 
 impl QueryFacade<AdminCoreSessionFactory> {
+    /// `blocking` is the owning service's short-I/O lane; sessions read credential files on it.
     pub(crate) fn new(
         config: McpConfig,
         client_runtime: std::sync::Arc<rocketmq_admin_core::read_client_adapter::ClientRuntime>,
+        blocking: rocketmq_runtime::BlockingExecutor,
     ) -> Self {
-        Self::with_factory(config, AdminCoreSessionFactory::new(client_runtime))
+        Self::with_factory(config, AdminCoreSessionFactory::new(client_runtime, blocking))
     }
 }
 
@@ -1664,52 +1717,35 @@ fn topic_route_output_from_snapshot(
     })
 }
 
-fn consumer_lag_output(
+/// Summarizes the lag of every queue as diagnosis evidence.
+fn consumer_lag_summary(
     cluster: &ResolvedCluster,
-    topic: String,
-    consumer_group: String,
-    page_request: &PageRequest,
+    args: &DiagnoseConsumerLagArgs,
     lag: SessionConsumerLag,
-) -> Result<QueryConsumerLagOutput, ToolFailure> {
-    let max_queue_lag = lag.queues.iter().map(|queue| queue.lag).max().unwrap_or_default();
-    let page = paginate(lag.queues, page_request).map_err(|_| {
-        ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { _source: None })
-    })?;
-    Ok(QueryConsumerLagOutput {
+) -> ConsumerLagSummary {
+    ConsumerLagSummary {
         cluster: cluster.name.clone(),
-        namesrv_addr: cluster.namesrv_addr.clone(),
-        topic,
-        consumer_group,
+        topic: args.topic.clone(),
+        consumer_group: args.consumer_group.clone(),
         total_lag: lag.total_lag,
-        max_queue_lag,
         consume_tps: lag.consume_tps,
         inflight_total: lag.inflight_total,
-        page,
+        queues: QueueLagBreakdown::from_queues(lag.queues),
         generated_at: observed_at(),
-    })
+    }
 }
 
-fn topic_route_output(
-    cluster: &ResolvedCluster,
-    topic: &str,
-    route: SessionTopicRoute,
-    page_request: &PageRequest,
-) -> Result<QueryTopicRouteOutput, ToolFailure> {
-    let read_queue_count = route.queues.iter().map(|queue| queue.read_queue_nums).sum();
-    let write_queue_count = route.queues.iter().map(|queue| queue.write_queue_nums).sum();
-    let page = paginate(route.queues, page_request).map_err(|_| {
-        ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { _source: None })
-    })?;
-    Ok(QueryTopicRouteOutput {
+/// Keeps every route row of a Topic as diagnosis evidence.
+fn topic_route_summary(cluster: &ResolvedCluster, topic: &str, route: SessionTopicRoute) -> TopicRouteSummary {
+    TopicRouteSummary {
         cluster: cluster.name.clone(),
-        namesrv_addr: cluster.namesrv_addr.clone(),
         topic: topic.to_string(),
+        read_queue_count: route.queues.iter().map(|queue| queue.read_queue_nums).sum(),
+        write_queue_count: route.queues.iter().map(|queue| queue.write_queue_nums).sum(),
         brokers: route.brokers,
-        read_queue_count,
-        write_queue_count,
-        page,
+        queues: route.queues,
         generated_at: observed_at(),
-    })
+    }
 }
 
 fn describe_topic_output(route: &QueryTopicRouteOutput) -> DescribeTopicOutput {
@@ -1768,6 +1804,28 @@ where
     }))
 }
 
+/// Sizes an inventory for the cluster overview, which reports counts and never pages.
+///
+/// The size normally comes from the snapshot that the listing Tools page through, so the overview
+/// and a listing share one upstream read. An inventory too large to keep as a snapshot is read a
+/// second time and counted without being kept: the overview stays available on clusters whose
+/// listings need a filter, at the cost of that second read.
+async fn inventory_size<Snapshot, Unretained>(
+    snapshot: impl FnOnce() -> Snapshot,
+    read_unretained: impl FnOnce() -> Unretained,
+) -> Result<QueryPayload<usize>, ToolFailure>
+where
+    Snapshot: Future<Output = Result<SnapshotView<Vec<String>>, ToolFailure>>,
+    Unretained: Future<Output = Result<QueryPayload<Vec<String>>, ToolFailure>>,
+{
+    let inventory = match snapshot().await {
+        Ok(snapshot) => snapshot.payload,
+        Err(ToolFailure::Rejected(ToolRejection::ResultTooLarge)) => read_unretained().await?,
+        Err(error) => return Err(error),
+    };
+    Ok(inventory.map(|names| names.len()))
+}
+
 fn completeness_for_error(source: QuerySource, logical_target: &str, error: &ToolFailure) -> QueryCompleteness {
     let (code, retryable) = match error {
         ToolFailure::Rejected(crate::tools::executor::ToolRejection::TimedOut { .. }) => {
@@ -1783,17 +1841,16 @@ fn completeness_for_error(source: QuerySource, logical_target: &str, error: &Too
             (SourceFailureCode::PermissionDenied, false)
         }
         ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { .. })
-        | ToolFailure::Rejected(crate::tools::executor::ToolRejection::NotFound { .. }) => {
-            (SourceFailureCode::NotFound, false)
-        }
+        | ToolFailure::Rejected(crate::tools::executor::ToolRejection::NotFound { .. })
+        | ToolFailure::Rejected(ToolRejection::CursorExpired)
+        | ToolFailure::Rejected(ToolRejection::CursorInvalid) => (SourceFailureCode::NotFound, false),
         ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(_))
         | ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled) => {
             (SourceFailureCode::SourceUnavailable, true)
         }
         ToolFailure::Rejected(crate::tools::executor::ToolRejection::OutputTooLarge { .. })
+        | ToolFailure::Rejected(ToolRejection::ResultTooLarge)
         | ToolFailure::Rejected(ToolRejection::AliasInputBoundExceeded)
-        | ToolFailure::Rejected(ToolRejection::AliasCapacityExceeded)
-        | ToolFailure::Rejected(ToolRejection::AliasCollisionExhausted)
         | ToolFailure::Rejected(crate::tools::executor::ToolRejection::ChangePlanningDisabled)
         | ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Internal(_)) => {
             (SourceFailureCode::InvalidResponse, false)
@@ -1804,16 +1861,6 @@ fn completeness_for_error(source: QuerySource, logical_target: &str, error: &Too
         warnings: vec!["source_failures_present".to_string()],
         source_failures: vec![SourceFailure::new(source, code, retryable, logical_target)],
     }
-}
-
-fn top_lag_broker(lag: Option<&QueryConsumerLagOutput>) -> Option<String> {
-    lag.and_then(|lag| {
-        lag.page
-            .items
-            .iter()
-            .max_by_key(|queue| queue.lag)
-            .map(|queue| queue.broker_name.clone())
-    })
 }
 
 fn normalized_filter(filter: Option<&str>) -> Option<String> {
@@ -1922,17 +1969,8 @@ fn project_connections(
     }))
 }
 
-fn alias_error(error: IdentifierAliasFailure) -> ToolFailure {
-    match error {
-        IdentifierAliasFailure::Rejected(rejection) => ToolFailure::Rejected(match rejection {
-            IdentifierAliasRejection::InputBoundExceeded => ToolRejection::AliasInputBoundExceeded,
-            IdentifierAliasRejection::CapacityExceeded => ToolRejection::AliasCapacityExceeded,
-            IdentifierAliasRejection::CollisionExhausted => ToolRejection::AliasCollisionExhausted,
-        }),
-        IdentifierAliasFailure::Operational(error) => {
-            ToolFailure::Operational(ToolExecutionError::Internal(Some(std::sync::Arc::new(error))))
-        }
-    }
+fn alias_error(_: AliasInputBoundExceeded) -> ToolFailure {
+    ToolFailure::Rejected(ToolRejection::AliasInputBoundExceeded)
 }
 
 fn normalized_broker_logger(logger: &str) -> Result<String, ToolFailure> {
@@ -1965,26 +2003,11 @@ fn valid_rust_module_path(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn alias_bounds_are_distinct_closed_tool_rejections() {
+    fn alias_input_bound_is_a_closed_tool_rejection() {
         use super::*;
-        for (rejection, code) in [
-            (
-                IdentifierAliasRejection::InputBoundExceeded,
-                "identifier_input_bound_exceeded",
-            ),
-            (
-                IdentifierAliasRejection::CapacityExceeded,
-                "identifier_capacity_exceeded",
-            ),
-            (
-                IdentifierAliasRejection::CollisionExhausted,
-                "identifier_collision_exhausted",
-            ),
-        ] {
-            let failure = alias_error(IdentifierAliasFailure::Rejected(rejection));
-            assert!(matches!(failure, ToolFailure::Rejected(_)));
-            assert_eq!(failure.code(), code);
-        }
+        let failure = alias_error(AliasInputBoundExceeded);
+        assert!(matches!(failure, ToolFailure::Rejected(_)));
+        assert_eq!(failure.code(), "identifier_input_bound_exceeded");
     }
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::AtomicUsize;
@@ -2126,6 +2149,12 @@ mod tests {
         hang_topic_inventory: bool,
         topic_inventory_gate: Option<Arc<TopicInventoryGate>>,
         fail_topic_inventory: bool,
+        /// Serves 10,001 Topics and 10,001 Consumer Groups: one more than a snapshot may hold.
+        oversized_inventories: bool,
+        /// Serves 60 Brokers with two queues each; `broker-55` holds nearly all of the lag.
+        skewed_lag: bool,
+        /// How long the Broker, Topic inventory and Consumer Group inventory reads take.
+        source_delay: Option<Duration>,
         many_groups: bool,
         case_colliding_groups: bool,
         empty_groups: bool,
@@ -2156,6 +2185,9 @@ mod tests {
                 hang_topic_inventory: self.hang_topic_inventory,
                 topic_inventory_gate: self.topic_inventory_gate.clone(),
                 fail_topic_inventory: self.fail_topic_inventory,
+                oversized_inventories: self.oversized_inventories,
+                skewed_lag: self.skewed_lag,
+                source_delay: self.source_delay,
                 many_groups: self.many_groups,
                 case_colliding_groups: self.case_colliding_groups,
                 empty_groups: self.empty_groups,
@@ -2183,6 +2215,9 @@ mod tests {
         hang_topic_inventory: bool,
         topic_inventory_gate: Option<Arc<TopicInventoryGate>>,
         fail_topic_inventory: bool,
+        oversized_inventories: bool,
+        skewed_lag: bool,
+        source_delay: Option<Duration>,
         many_groups: bool,
         case_colliding_groups: bool,
         empty_groups: bool,
@@ -2196,12 +2231,21 @@ mod tests {
         missing_consumer_group: bool,
     }
 
+    impl FakeSession {
+        async fn take_source_delay(&self) {
+            if let Some(delay) = self.source_delay {
+                tokio::time::sleep(delay).await;
+            }
+        }
+    }
+
     impl AdminSession for FakeSession {
         async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolFailure> {
             self.counters.broker_queries.fetch_add(1, Ordering::SeqCst);
             if self.hang_broker_query {
                 std::future::pending::<()>().await;
             }
+            self.take_source_delay().await;
             if self.failed_selected_broker {
                 return Ok(partial_payload(Vec::new(), QuerySource::BrokerRuntime, "broker-a"));
             }
@@ -2226,6 +2270,8 @@ mod tests {
             }
             let broker_name = if self.selected_broker_missing {
                 "broker-b"
+            } else if self.skewed_lag {
+                "broker-55"
             } else {
                 "broker-a"
             };
@@ -2242,6 +2288,7 @@ mod tests {
             if self.hang_topic_inventory {
                 std::future::pending::<()>().await;
             }
+            self.take_source_delay().await;
             if let Some(gate) = &self.topic_inventory_gate {
                 gate.wait_if_armed().await;
             }
@@ -2249,6 +2296,9 @@ mod tests {
                 return Err(ToolFailure::Operational(
                     crate::tools::executor::ToolExecutionError::Backend(None),
                 ));
+            }
+            if self.oversized_inventories {
+                return Ok((0..=10_000).map(|index| format!("topic-{index:05}")).collect());
             }
             Ok(vec!["payments".to_string(), "orders".to_string(), "orders".to_string()])
         }
@@ -2261,7 +2311,11 @@ mod tests {
             if self.missing_topic {
                 return Err(ToolFailure::not_found(NotFoundEntity::Topic));
             }
-            let queues = if self.many_route_rows {
+            let queues = if self.skewed_lag {
+                (0..60)
+                    .map(|index| route_queue(&format!("broker-{index:02}")))
+                    .collect()
+            } else if self.many_route_rows {
                 (0..5).map(|index| route_queue(&format!("broker-{index}"))).collect()
             } else {
                 vec![route_queue("broker-a")]
@@ -2290,7 +2344,10 @@ mod tests {
             if self.yield_snapshot_queries {
                 tokio::task::yield_now().await;
             }
-            let groups = if self.empty_groups {
+            self.take_source_delay().await;
+            let groups = if self.oversized_inventories {
+                (0..=10_000).map(|index| format!("group-{index:05}")).collect()
+            } else if self.empty_groups {
                 Vec::new()
             } else if self.case_colliding_groups {
                 vec!["OrderGroup".to_string(), "ordergroup".to_string()]
@@ -2348,6 +2405,25 @@ mod tests {
             }
             if self.missing_consumer_group {
                 return Err(ToolFailure::not_found(NotFoundEntity::ConsumerGroup));
+            }
+            if self.skewed_lag {
+                let queues = (0..60)
+                    .flat_map(|broker| (0..2).map(move |queue_id| (broker, queue_id)))
+                    .map(|(broker, queue_id)| {
+                        let mut row = queue_lag(&format!("broker-{broker:02}"));
+                        row.queue_id = queue_id;
+                        if (broker, queue_id) == (55, 1) {
+                            row.lag = 5_000;
+                        }
+                        row
+                    })
+                    .collect::<Vec<_>>();
+                return Ok(QueryPayload::complete(SessionConsumerLag {
+                    total_lag: queues.iter().map(|queue| queue.lag).sum(),
+                    queues,
+                    consume_tps: 0.5,
+                    inflight_total: 5,
+                }));
             }
             let queues = if self.many_lag_rows {
                 (0..5)
@@ -2697,6 +2773,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn replicas_with_a_shared_key_report_the_same_pseudonyms() {
+        const KEY: &[u8] = b"0123456789abcdef0123456789abcdef";
+        let client_aliases = |aliases: IdentifierAliaser| async move {
+            QueryFacade::with_factory(example_config(), FakeSessionFactory::default())
+                .with_identifier_aliases(aliases)
+                .list_consumer_connections(ListConsumerConnectionsArgs {
+                    cluster: "local-dev".to_string(),
+                    consumer_group: "group-a".to_string(),
+                    page: PageRequest::default(),
+                })
+                .await
+                .unwrap()
+                .data
+                .page
+                .items
+                .into_iter()
+                .map(|row| row.client_alias)
+                .collect::<Vec<_>>()
+        };
+
+        let first = client_aliases(IdentifierAliaser::with_key(KEY).unwrap()).await;
+        let second = client_aliases(IdentifierAliaser::with_key(KEY).unwrap()).await;
+        let unkeyed = client_aliases(IdentifierAliaser::default()).await;
+
+        assert_eq!(first.len(), 2);
+        assert_eq!(first, second);
+        // A replica without the key cannot be correlated with the others.
+        assert!(first.iter().all(|alias| !unkeyed.contains(alias)));
+    }
+
+    #[tokio::test]
     async fn new_read_tools_cache_safe_projections_and_single_snapshot_pages() {
         let factory = FakeSessionFactory::default();
         let counters = factory.counters.clone();
@@ -2826,7 +2933,7 @@ mod tests {
             assert!(matches!(
                 result,
                 Err(ToolFailure::Rejected(
-                    crate::tools::executor::ToolRejection::InvalidArguments { .. }
+                    crate::tools::executor::ToolRejection::CursorInvalid
                 ))
             ));
         }
@@ -2845,7 +2952,7 @@ mod tests {
         assert!(matches!(
             cross_visibility,
             Err(ToolFailure::Rejected(
-                crate::tools::executor::ToolRejection::InvalidArguments { .. }
+                crate::tools::executor::ToolRejection::CursorInvalid
             ))
         ));
         assert_eq!(counters.producer_connection_queries.load(Ordering::SeqCst), 1);
@@ -2966,6 +3073,37 @@ mod tests {
         )));
         assert_eq!(counters.starts.load(Ordering::SeqCst), 5);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 5);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn overview_shares_one_deadline_across_its_workflows() {
+        let slow_sources = || FakeSessionFactory {
+            source_delay: Some(Duration::from_secs(10)),
+            ..Default::default()
+        };
+        let overview = ClusterOverviewArgs {
+            cluster: "local-dev".to_string(),
+        };
+
+        // Three ten-second workflows do not fit the 25-second budget of one request.
+        let factory = slow_sources();
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory).with_request_budget();
+        let started = tokio::time::Instant::now();
+        let error = facade.cluster_overview(overview.clone()).await.unwrap_err();
+        assert!(matches!(
+            error,
+            ToolFailure::Rejected(ToolRejection::TimedOut { timeout_ms: 25_000 })
+        ));
+        assert_eq!(started.elapsed(), Duration::from_secs(25));
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 3);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 3);
+
+        // Each workflow alone fits: without a request deadline the same overview completes.
+        let unbudgeted = QueryFacade::with_factory(example_config(), slow_sources());
+        let started = tokio::time::Instant::now();
+        unbudgeted.cluster_overview(overview).await.unwrap();
+        assert_eq!(started.elapsed(), Duration::from_secs(30));
     }
 
     #[tokio::test]
@@ -3524,6 +3662,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn overview_counts_inventories_beyond_the_snapshot_budget() {
+        let factory = FakeSessionFactory {
+            oversized_inventories: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+
+        let overview = facade
+            .cluster_overview(ClusterOverviewArgs {
+                cluster: "local-dev".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(overview.topic_count, 10_001);
+        assert_eq!(overview.consumer_group_count, 10_001);
+        assert!(!overview.partial);
+        // An inventory that cannot enter a snapshot is read once more to be counted.
+        assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 2);
+        assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 2);
+        assert_eq!(counters.broker_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            counters.starts.load(Ordering::SeqCst),
+            counters.shutdowns.load(Ordering::SeqCst)
+        );
+    }
+
+    #[tokio::test]
+    async fn unfiltered_listing_beyond_the_budget_reports_result_too_large() {
+        let facade = QueryFacade::with_factory(
+            example_config(),
+            FakeSessionFactory {
+                oversized_inventories: true,
+                ..Default::default()
+            },
+        );
+
+        let error = facade
+            .list_topics(ListTopicsArgs {
+                cluster: Some("local-dev".to_string()),
+                filter: None,
+                page: PageRequest::default(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "result_too_large");
+
+        let narrowed = facade
+            .list_topics(ListTopicsArgs {
+                cluster: Some("local-dev".to_string()),
+                filter: Some("topic-0000".to_string()),
+                page: PageRequest::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(narrowed.page.total_count, 10);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn expired_cursor_reports_cursor_expired() {
+        let mut config = example_config();
+        config.cache.cursor_snapshot_ttl_ms = 1_000;
+        let facade = QueryFacade::with_factory(config, FakeSessionFactory::default());
+        let page = |cursor| ListTopicsArgs {
+            cluster: Some("local-dev".to_string()),
+            filter: None,
+            page: PageRequest { limit: Some(1), cursor },
+        };
+        let first = facade.list_topics(page(None)).await.unwrap();
+        let cursor = first.page.next_cursor.clone();
+        assert!(cursor.is_some());
+
+        tokio::time::advance(Duration::from_millis(1_001)).await;
+
+        let error = facade.list_topics(page(cursor)).await.unwrap_err();
+        assert_eq!(error.code(), "cursor_expired");
+    }
+
+    #[tokio::test]
     async fn query_facade_composes_partial_evidence_for_overview_lists_lag_broker_and_diagnosis() {
         let facade = QueryFacade::with_factory(
             example_config(),
@@ -3726,6 +3944,64 @@ mod tests {
         assert_eq!(counters.route_queries.load(Ordering::SeqCst), 1);
         assert_eq!(counters.broker_queries.load(Ordering::SeqCst), 1);
         assert_eq!(counters.runtime_probes.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn diagnosis_selects_the_globally_worst_broker() {
+        let factory = FakeSessionFactory {
+            skewed_lag: true,
+            ..Default::default()
+        };
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(example_config(), factory);
+
+        let report = facade.diagnose_consumer_lag(diagnosis_request()).await.unwrap();
+
+        let evidence = |id: &str| {
+            &report
+                .evidences
+                .iter()
+                .find(|evidence| evidence.id == id)
+                .unwrap_or_else(|| panic!("{id} evidence is missing"))
+                .data
+        };
+        let lag = evidence("consumer_lag");
+        assert_eq!(lag["queue_count"], 120);
+        assert_eq!(lag["total_lag"], 6_190);
+        assert_eq!(lag["max_queue_lag"], 5_000);
+        assert_eq!(lag["brokers"].as_array().unwrap().len(), 60);
+        assert_eq!(lag["brokers"][0]["broker_name"], "broker-55");
+        assert_eq!(lag["brokers"][0]["lag"], 5_010);
+        assert_eq!(lag["worst_queues"].as_array().unwrap().len(), 10);
+        assert_eq!(lag["worst_queues"][0]["broker_name"], "broker-55");
+        assert_eq!(lag["worst_queues"][0]["lag"], 5_000);
+        // broker-55 is the 56th Broker by name: beyond what a first page of 50 rows holds.
+        assert_eq!(evidence("broker_description")["broker_name"], "broker-55");
+        assert_eq!(evidence("topic_route")["queues"].as_array().unwrap().len(), 60);
+        assert!(!report.partial);
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.consumer_lag_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.route_queries.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn diagnosis_report_contains_no_cursor() {
+        let facade = QueryFacade::with_factory(
+            example_config(),
+            FakeSessionFactory {
+                skewed_lag: true,
+                ..Default::default()
+            },
+        );
+
+        let report = facade.diagnose_consumer_lag(diagnosis_request()).await.unwrap();
+
+        // 120 lag rows and 60 route rows are both more than one page of the paged Tools.
+        let serialized = serde_json::to_string(&report.data).unwrap();
+        for paging in ["rmq-v1-", "rmq-s2-", "next_cursor", "has_more"] {
+            assert!(!serialized.contains(paging), "{paging}");
+        }
     }
 
     #[tokio::test]
@@ -3975,8 +4251,8 @@ mod tests {
         assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 1);
     }
 
-    #[test]
-    fn production_query_facade_uses_the_admin_core_session_factory() {
+    /// Builds the facade the server runs, on one runtime owner shared by these tests.
+    fn production_facade(config: McpConfig) -> QueryFacade<AdminCoreSessionFactory> {
         static OWNER: std::sync::LazyLock<rocketmq_runtime::RuntimeOwner> = std::sync::LazyLock::new(|| {
             rocketmq_runtime::RuntimeOwner::plan(rocketmq_runtime::RuntimeConfig {
                 thread_name: "rocketmq-mcp-query-test".to_string(),
@@ -3986,13 +4262,72 @@ mod tests {
             .build()
             .expect("MCP query test runtime should start")
         });
+        let context = OWNER.root_context().component("query");
         let client_runtime = rocketmq_admin_core::read_client_adapter::ClientRuntime::try_new(
-            OWNER.root_context().component("client"),
+            context.component("client"),
             rocketmq_admin_core::read_client_adapter::ClientRuntimeConfig::default(),
             rocketmq_observability::TelemetryHandle::noop(),
         )
         .expect("MCP query test client runtime should start");
-        let _: QueryFacade<AdminCoreSessionFactory> = QueryFacade::new(example_config(), client_runtime);
+        QueryFacade::new(config, client_runtime, context.storage_io().clone())
+    }
+
+    fn credential_file_reference(path: &std::path::Path) -> crate::config::ClusterCredentialReference {
+        crate::config::ClusterCredentialReference {
+            access_key_env: None,
+            secret_key_env: None,
+            security_token_env: None,
+            file: Some(path.to_string_lossy().into_owned()),
+        }
+    }
+
+    #[test]
+    fn production_query_facade_uses_the_admin_core_session_factory() {
+        let _: QueryFacade<AdminCoreSessionFactory> = production_facade(example_config());
+    }
+
+    #[tokio::test]
+    async fn cache_hit_does_not_read_the_credential_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let credential_file = temp.path().join("reader.yml");
+        std::fs::write(&credential_file, "access_key: reader\nsecret_key: reader-secret\n").unwrap();
+        let mut config = example_config();
+        config.clusters[0].credentials = Some(credential_file_reference(&credential_file));
+        let factory = FakeSessionFactory::default();
+        let counters = factory.counters.clone();
+        let facade = QueryFacade::with_factory(config, factory);
+        let overview = || {
+            facade.cluster_overview(ClusterOverviewArgs {
+                cluster: "local-dev".to_string(),
+            })
+        };
+
+        assert_eq!(overview().await.unwrap().cache_status, CacheStatus::Miss);
+        let sessions = counters.starts.load(Ordering::SeqCst);
+
+        // Only a new session reads the file, and a cache hit starts none.
+        std::fs::remove_file(&credential_file).unwrap();
+        assert_eq!(overview().await.unwrap().cache_status, CacheStatus::Hit);
+        assert_eq!(counters.starts.load(Ordering::SeqCst), sessions);
+    }
+
+    #[tokio::test]
+    async fn unreadable_credential_file_fails_a_cache_miss_as_source_unavailable() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = example_config();
+        config.clusters[0].credentials = Some(credential_file_reference(&temp.path().join("absent-reader.yml")));
+        let facade = production_facade(config);
+
+        // The session cannot be created, so nothing is sent to the cluster.
+        let error = facade
+            .cluster_overview(ClusterOverviewArgs {
+                cluster: "local-dev".to_string(),
+            })
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code(), "source_unavailable");
+        assert!(!format!("{error} {error:?}").contains("absent-reader"));
     }
 
     #[tokio::test]
@@ -4292,11 +4627,11 @@ mod tests {
 
         assert!(matches!(
             error,
-            ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { .. })
+            ToolFailure::Rejected(crate::tools::executor::ToolRejection::CursorInvalid)
         ));
         assert!(matches!(
             error,
-            ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { .. })
+            ToolFailure::Rejected(crate::tools::executor::ToolRejection::CursorInvalid)
         ));
         assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 1);
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
@@ -4581,6 +4916,7 @@ mod tests {
                 rate_limit_per_minute: 60,
                 permissions_file: config.security.permissions_file.clone(),
                 max_concurrent_requests_per_cluster: 8,
+                pseudonym_key_env: None,
             },
             crate::config::AuditConfig {
                 enabled: true,
@@ -4985,7 +5321,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(
             error,
-            ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { .. })
+            ToolFailure::Rejected(crate::tools::executor::ToolRejection::CursorInvalid)
         ));
         assert_eq!(counters.starts.load(Ordering::SeqCst), starts);
     }

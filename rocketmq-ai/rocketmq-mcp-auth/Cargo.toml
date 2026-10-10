@@ -1,0 +1,49 @@
+# Copyright 2026 The RocketMQ Rust Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+[workspace]
+resolver = "2"
+
+[package]
+name = "rocketmq-mcp-auth"
+version = "1.0.0"
+authors = ["mxsm <mxsm@apache.org>"]
+edition = "2021"
+homepage = "https://github.com/mxsm/rocketmq-rust"
+repository = "https://github.com/mxsm/rocketmq-rust"
+license = "Apache-2.0"
+keywords = ["rocketmq", "mcp", "oauth", "jwks"]
+categories = ["authentication"]
+readme = "README.md"
+description = "JWKS retrieval, caching, and RS256 key selection shared by the RocketMQ MCP servers"
+rust-version = "1.95.0"
+
+[dependencies]
+base64 = "0.22"
+http = "1"
+# Keep RS256 on AWS-LC: the RustCrypto backend pulls rsa 0.9, which has no fix for RUSTSEC-2023-0071.
+jsonwebtoken = { version = "11.0", default-features = false, features = ["aws_lc_rs"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0.18"
+tokio = { version = "1.52", features = ["net", "sync", "time"] }
+tracing = "0.1.44"
+url = "2.5"
+
+[dev-dependencies]
+futures-util = "0.3"
+rcgen = "0.14"
+tempfile = "3.27.0"
+tokio = { version = "1.52", features = ["io-util", "macros", "rt", "test-util"] }

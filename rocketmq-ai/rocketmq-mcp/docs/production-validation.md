@@ -161,12 +161,12 @@ cluster mutation.
 | Symptom | Checks |
 | --- | --- |
 | HTTPS listener will not start | Verify absolute HTTPS `public_base_url`, loopback/network policy, certificate/key readability, and certificate validity. |
-| 401 or bearer challenge | Verify `Authorization: Bearer`, RS256 signature, `kid`, issuer, audience, expiry, required scopes, and JWKS reachability. |
+| 401 or bearer challenge | Verify `Authorization: Bearer`, RS256 signature, `kid`, issuer, audience, expiry, required scopes, and JWKS reachability. A Bearer token above 16 KiB is rejected without being parsed. |
 | 403 | Check role includes, `allow_tools`/`deny_tools`, required scope, exact tenant, `rocketmq_clusters`, configured cluster name, and allowed origins. |
 | 429 | Inspect per-principal rate and per-cluster concurrency limits, then inspect caller retry behavior. |
 | No cluster data | Verify NameServer reachability, broker reachability, cluster name resolution, least-privilege RocketMQ credentials, and that the test data exists. |
 | Empty or invalid stdio response | Ensure logs and banners go to stderr and that the wrapper does not write to stdout. |
-| JWKS rotation or refresh failure | Verify HTTPS CA trust, key `kid`/algorithm, refresh and stale windows, and last-known-good behavior; do not install a static-key fallback. |
+| JWKS rotation or refresh failure | Verify HTTPS CA trust, key `kid`/algorithm, refresh and stale windows, and last-known-good behavior; do not install a static-key fallback. A newly published `kid` is fetched on first use; while it is still missing, or the fetch fails, the next fetch waits five seconds. RSA keys below 2048 bits and keys published for another `use` or `alg` are skipped. |
 | Output is partial or rejected | Inspect `partial`, `warnings`, `output_rows_truncated`, and `output_too_large`; reduce query scope rather than removing bounds. |
 | Audit file or drain failure | Check directory permissions, sink health, count/byte drops, oversized records, flush failures, and pending records/bytes. |
 

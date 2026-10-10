@@ -11,6 +11,9 @@ This file applies to `rocketmq-ai/rocketmq-mcp/`.
 - Depend on `rocketmq-admin-core` only through `read-client-adapter`.
 - Do not enable `client-adapter`, `mutation-client-adapter`, `admin-full`, or `admin-mutation`.
 - Streamable HTTP is authenticated by default. Stdio is local-development only and writes protocol frames only to stdout.
+- OAuth JWKS retrieval, caching, and key selection come from `../rocketmq-mcp-auth/`, an optional dependency of
+  `streamable-http`. This server states its own limits in `src/guard/jwks.rs`; a private JWKS issuer stays
+  supported, so do not restrict its outbound addresses without a separate decision.
 - Tool and Resource output must use the shared authorization, audit, correlation, sanitization, row, and byte policy.
 - Prefer native async fn methods in traits. #[allow(async_fn_in_trait)] is permitted when required by the lint for an intentional public async trait API; do not add #[async_trait].
 
