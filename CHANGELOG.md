@@ -80,6 +80,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **ci:** Add `.config/nextest.toml` and a non-blocking Linux `Nextest Pilot` job that compares `cargo test` with `cargo nextest run` plus `cargo test --doc` on the same build, reconciles every round by tests run, ignored tests, doctests, and failed-test identities (`scripts/nextest_pilot_compare.py`), and publishes timings and JUnit output. Test groups keep the broker startup, multi-node cluster, and proxy ingress tests serialized under nextest, the broker transactional startup tests use a free HA port instead of the shared default, and `scripts/ci_scope.py` now selects Rust tests when the nextest configuration changes. Existing `cargo test` jobs are unchanged ([#10945](https://github.com/mxsm/rocketmq-rust/issues/10945)).
+
 - **feat(release):** Add a manual, default dry-run GitHub Actions workflow for the 27 core crates and 13 separate Docker Hub service images, with resumable publication, SBOMs, CRITICAL scans, verified Cosign signatures/attestations, and release documentation ([#11033](https://github.com/mxsm/rocketmq-rust/issues/11033)).
 
 - **feat(runtime):** Add `RuntimeError::kind()` with `RuntimeErrorKind`, `TaskGroup::owns_task` and `TaskId::group_id`, `TaskName`, `TaskGroupEventCounts`, `DrainRequestMethods`, and the `runtime_convergence_bench` benchmark for contended submission, budget permits, idle memory and blocking admission ([#10935](https://github.com/mxsm/rocketmq-rust/issues/10935)).

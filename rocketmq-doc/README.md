@@ -64,6 +64,7 @@ rocketmq-doc/
 - Contribution Guidelines
 - Error Architecture Contribution Guide
 - Error Architecture Runbooks
+- [cargo-nextest Evaluation](en/19-nextest-evaluation.md)
 - Code Review Process
 - Documentation Standards
 

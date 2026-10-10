@@ -58,7 +58,8 @@ def classify(paths: list[str], members: tuple[str, ...], *, full: bool = False) 
             "scripts/tests/test_auto_approve.cjs",
         } for path in paths),
         "rust": full or global_config or root_workflow
-        or any(path in {"rustfmt.toml", ".clippy.toml"} or under(path, members) for path in code),
+        or any(path in {"rustfmt.toml", ".clippy.toml", ".config/nextest.toml"} or under(path, members)
+               for path in code),
         "observability": full or feature_config or any(
             under(path, ("rocketmq-observability", "rocketmq-runtime", "rocketmq-error", "rocketmq-model"))
             or (path.startswith("rocketmq-broker/") and "observability" in path)
@@ -78,6 +79,12 @@ def classify(paths: list[str], members: tuple[str, ...], *, full: bool = False) 
             or path in {"scripts/error_architecture_guard.py", "scripts/check-error-hygiene.ps1",
                         "scripts/tests/test_error_architecture_guard.py"}
             for path in code
+        ),
+        # The nextest pilot is an evaluation job; run it only when its inputs change.
+        "nextest": full or any(
+            path in {".config/nextest.toml", ".github/workflows/rocketmq-rust-ci.yaml",
+                     "scripts/nextest_pilot_compare.py", "scripts/tests/test_nextest_pilot_compare.py"}
+            for path in paths
         ),
         "routing": full or any(
             path == "AGENTS.md" or path.endswith(("/AGENTS.md", "/Cargo.toml", "/package.json"))
