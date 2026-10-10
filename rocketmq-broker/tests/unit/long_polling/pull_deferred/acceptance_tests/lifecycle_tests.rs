@@ -193,7 +193,7 @@ async fn shutdown_before_dispatch_commit_releases_every_affine_owner() {
     assert_eq!(service.index_snapshot().live(), 1);
     assert!(matches!(
         service.shutdown(),
-        rocketmq_transport::api::DeferredRegistryShutdownOutcome::Completed(_)
+        rocketmq_transport::api::DeferredRegistryShutdownStatus::Completed(_)
     ));
     assert_released(&service);
     barrier.release_outcome.notify_one();

@@ -320,7 +320,7 @@ where
 /// Result of sealing a deferred registry and releasing registry-owned state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub enum DeferredRegistryShutdownOutcome {
+pub enum DeferredRegistryShutdownStatus {
     /// This caller won shutdown and completed the detached registry-owned batch.
     Completed(DeferredRegistryShutdownStats),
     /// Another or reentrant caller is currently completing shutdown.
@@ -719,7 +719,7 @@ where
     /// user state still seals the registry, so a later call reports
     /// `AlreadyClosed`.
     #[must_use]
-    pub fn shutdown(&self) -> DeferredRegistryShutdownOutcome {
+    pub fn shutdown(&self) -> DeferredRegistryShutdownStatus {
         self.inner.shutdown()
     }
 

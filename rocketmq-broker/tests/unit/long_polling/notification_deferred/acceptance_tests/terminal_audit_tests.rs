@@ -141,7 +141,7 @@ async fn notification_deferred_service_shutdown_drains_registered_candidate_with
     assert_eq!(prepared.candidate_count(), 1);
     assert_eq!(service.snapshot().index().candidates(), 1);
 
-    let DeferredRegistryShutdownOutcome::Completed(stats) = service.shutdown() else {
+    let DeferredRegistryShutdownStatus::Completed(stats) = service.shutdown() else {
         panic!("terminal audit owns Notification service shutdown");
     };
     assert_eq!(stats.detached_entries(), 1);
@@ -231,7 +231,7 @@ async fn notification_deferred_service_shutdown_stops_accepted_handler_without_a
 
     assert!(matches!(
         service.shutdown(),
-        DeferredRegistryShutdownOutcome::Completed(_)
+        DeferredRegistryShutdownStatus::Completed(_)
     ));
     release.notify_one();
     dropped.notified().await;
