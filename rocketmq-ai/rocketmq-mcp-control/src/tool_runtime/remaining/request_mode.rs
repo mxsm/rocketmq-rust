@@ -102,7 +102,7 @@ fn request_mode_executed(
     args: &tools::SetConsumerRequestModeArgs,
     requested: tools::RequestModeValue,
     before_targets: Vec<(String, Option<admin::RequestModeValue>)>,
-    outcome: admin::RequestModeMutationOutcome,
+    outcome: admin::RequestModeMutationReport,
 ) -> tools::RequestModeMutationToolResponse {
     let before = before_targets
         .into_iter()

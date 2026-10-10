@@ -496,7 +496,7 @@ fn group_dry_run(
 fn topic_executed(
     args: &tools::UpsertTopicArgs,
     before: BTreeMap<String, tools::VisibleState<tools::TopicReplacement>>,
-    outcome: admin::MetadataMutationOutcome,
+    outcome: admin::MetadataMutationReport,
     observed: Option<Vec<admin::MetadataPreflightTarget<admin::TopicReplacement>>>,
 ) -> tools::TopicMutationToolResponse {
     let aggregate_before = before.clone();
@@ -536,7 +536,7 @@ fn topic_executed(
 fn group_executed(
     args: &tools::UpsertConsumerGroupArgs,
     before: BTreeMap<String, tools::VisibleState<tools::ConsumerGroupReplacement>>,
-    outcome: admin::MetadataMutationOutcome,
+    outcome: admin::MetadataMutationReport,
     observed: Option<Vec<admin::MetadataPreflightTarget<admin::SubscriptionGroupReplacement>>>,
 ) -> tools::ConsumerGroupMutationToolResponse {
     let aggregate_before = before.clone();
@@ -569,7 +569,7 @@ fn group_executed(
 fn build_executed_targets<T: Clone + PartialEq>(
     before: BTreeMap<String, tools::VisibleState<T>>,
     after: BTreeMap<String, tools::VisibleState<T>>,
-    mut outcomes: BTreeMap<String, admin::MetadataMutationTargetOutcome>,
+    mut outcomes: BTreeMap<String, admin::MetadataMutationTargetReport>,
     failures: BTreeMap<String, (tools::FailureCode, bool)>,
     requested: T,
 ) -> Vec<tools::MutationTarget<T>> {

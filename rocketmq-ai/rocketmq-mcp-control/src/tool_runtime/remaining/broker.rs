@@ -91,7 +91,7 @@ fn broker_executed(
     args: &tools::PatchBrokerConfigArgs,
     patch: tools::BrokerConfigPatch,
     before_targets: Vec<admin::BrokerMutationConfigTarget>,
-    outcome: admin::BrokerMutationConfigOutcome,
+    outcome: admin::BrokerConfigMutationReport,
 ) -> tools::BrokerConfigMutationToolResponse {
     let before = before_targets
         .into_iter()

@@ -78,7 +78,7 @@ fn offset_executed(
     args: &tools::ResetConsumerOffsetArgs,
     timestamp_millis: i64,
     before_rows: Vec<admin::OffsetResetPreviewRow>,
-    outcome: admin::OffsetResetOutcome,
+    outcome: admin::OffsetResetReport,
 ) -> tools::OffsetMutationToolResponse {
     let before = before_rows.iter().map(offset_before).collect::<Vec<_>>();
     let deltas = before_rows
