@@ -213,7 +213,7 @@ pub(crate) enum RecordDisposition {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FailureRecordOutcome {
+pub(crate) enum RetryLedgerRecordResult {
     Recorded,
     AlreadyCommitted,
 }
@@ -374,7 +374,7 @@ impl TieredProgressTracker {
         record: DerivedRecordId,
         request: &TieredDispatchRequest,
         now_millis: u64,
-    ) -> Result<Result<FailureRecordOutcome, RetryCapacityRejection>, StoreError> {
+    ) -> Result<Result<RetryLedgerRecordResult, RetryCapacityRejection>, StoreError> {
         self.validate_epoch(record)?;
         let mut state_guard = self.state.lock().await;
         let mut candidate = state_guard.clone();
@@ -387,7 +387,7 @@ impl TieredProgressTracker {
         {
             CursorAdvanceDisposition::AlreadyCommitted => {
                 if !candidate.retries.contains_key(&record) {
-                    return Ok(Ok(FailureRecordOutcome::AlreadyCommitted));
+                    return Ok(Ok(RetryLedgerRecordResult::AlreadyCommitted));
                 }
                 None
             }
@@ -427,7 +427,7 @@ impl TieredProgressTracker {
         self.persist_candidate(&candidate).await?;
         *state_guard = candidate.clone();
         self.refresh_health(&candidate, now_millis, self.health_readiness(&candidate, now_millis));
-        Ok(Ok(FailureRecordOutcome::Recorded))
+        Ok(Ok(RetryLedgerRecordResult::Recorded))
     }
 
     pub(crate) async fn due_retries(&self, now_millis: u64) -> Vec<TieredRetryEntry> {

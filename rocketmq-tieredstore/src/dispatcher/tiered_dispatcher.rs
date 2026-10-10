@@ -35,8 +35,8 @@ use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 
 use crate::config::TieredStoreConfig;
-use crate::dispatcher::progress::FailureRecordOutcome;
 use crate::dispatcher::progress::RecordDisposition;
+use crate::dispatcher::progress::RetryLedgerRecordResult;
 use crate::dispatcher::progress::TieredProgressTracker;
 use crate::dispatcher::TieredDispatchRequest;
 use crate::file::ConsumeQueueUnit;
@@ -448,7 +448,7 @@ where
                 Err(error) => {
                     let now_millis = current_time_millis();
                     match progress.record_failure(record, &queued.request, now_millis).await? {
-                        Ok(FailureRecordOutcome::Recorded | FailureRecordOutcome::AlreadyCommitted) => {
+                        Ok(RetryLedgerRecordResult::Recorded | RetryLedgerRecordResult::AlreadyCommitted) => {
                             tracing::warn!(
                                 descriptor = ?error.descriptor().code(),
                                 operation = ?error.operation(),
