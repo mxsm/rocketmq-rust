@@ -82,7 +82,8 @@ def classify(paths: list[str], members: tuple[str, ...], *, full: bool = False) 
         ),
         # The nextest pilot is an evaluation job; run it only when its inputs change.
         "nextest": full or any(
-            path in {".config/nextest.toml", ".github/workflows/rocketmq-rust-ci.yaml"}
+            path in {".config/nextest.toml", ".github/workflows/rocketmq-rust-ci.yaml",
+                     "scripts/nextest_pilot_compare.py", "scripts/tests/test_nextest_pilot_compare.py"}
             for path in paths
         ),
         "routing": full or any(
