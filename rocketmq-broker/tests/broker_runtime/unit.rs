@@ -1178,10 +1178,15 @@ async fn shutdown_scheduled_tasks_waits_for_running_task_drop() {
         }
     }
 
+    let context = RuntimeContext::from_current("broker-scheduled-shutdown-test");
     let broker_config = Arc::new(BrokerConfig::default());
     let message_store_config = Arc::new(MessageStoreConfig::default());
-    let runtime = BrokerRuntime::new(broker_config, message_store_config);
-    let started = Arc::new(AtomicBool::new(false));
+    let runtime =
+        BrokerRuntime::new_with_service_context(broker_config, message_store_config, context.service_context("broker"));
+    let token = runtime.lifecycle.scheduled_tasks.group().cancellation_token();
+    let (started_tx, started_rx) = oneshot::channel();
+    let (cleaning_tx, cleaning_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
     let dropped = Arc::new(AtomicBool::new(false));
     runtime
         .lifecycle
@@ -1190,37 +1195,129 @@ async fn shutdown_scheduled_tasks_waits_for_running_task_drop() {
             rocketmq_runtime::ScheduledTaskConfig::fixed_delay("broker.test.pending-run", Duration::from_secs(60)),
             rocketmq_runtime::ScheduledExecutionPolicy::default(),
             {
-                let started = Arc::clone(&started);
                 let dropped = Arc::clone(&dropped);
+                let mut signals = Some((started_tx, cleaning_tx, release_rx));
                 move || {
-                    let started = Arc::clone(&started);
+                    let token = token.clone();
                     let dropped = Arc::clone(&dropped);
+                    let (started, cleaning, release) = signals.take().expect("only one scheduled run");
                     async move {
                         let _marker = DropMarker(dropped);
-                        started.store(true, Ordering::Release);
-                        future::pending::<()>().await
+                        started.send(()).expect("start observer");
+                        token.cancelled().await;
+                        cleaning.send(()).expect("cleanup observer");
+                        release.await.expect("release scheduled cleanup");
                     }
                 }
             },
         )
         .expect("scheduled shutdown test task should start");
-    tokio::time::timeout(Duration::from_secs(1), async {
-        while !started.load(Ordering::Acquire) {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("scheduled task should start");
+    tokio::time::timeout(Duration::from_secs(5), started_rx)
+        .await
+        .expect("scheduled task start deadline")
+        .expect("scheduled task should start");
 
-    runtime
-        .shutdown_scheduled_tasks_with_timeout(Duration::from_millis(10))
-        .await;
+    // A pending run must cooperate with cancellation to finish before the
+    // shared deadline. Hold its cleanup to prove shutdown actually awaits it.
+    let shutdown = runtime.shutdown_scheduled_tasks_with_timeout(Duration::from_secs(5));
+    tokio::pin!(shutdown);
+    assert!(futures::poll!(&mut shutdown).is_pending());
+    tokio::time::timeout(Duration::from_secs(5), cleaning_rx)
+        .await
+        .expect("scheduled cleanup start deadline")
+        .expect("scheduled cleanup should start");
+    assert!(futures::poll!(&mut shutdown).is_pending());
+    assert_eq!(runtime.lifecycle.scheduled_tasks.group().task_count(), 1);
+    assert!(!dropped.load(Ordering::Acquire));
 
+    release_tx.send(()).expect("release scheduled cleanup");
+    let report = shutdown.await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+    assert_eq!(report.cancelled, 1);
+    assert_eq!(report.timed_out, 0);
+    assert_eq!(report.aborted, 0);
     assert_eq!(runtime.lifecycle.scheduled_tasks.group().task_count(), 0);
     assert!(
         dropped.load(Ordering::Acquire),
-        "broker scheduled shutdown should wait until aborted tasks release their running future"
+        "broker scheduled shutdown should wait until completed tasks release their running future"
     );
+}
+
+#[tokio::test]
+async fn shutdown_scheduled_tasks_reports_unconfirmed_drop_at_deadline() {
+    struct GatedDrop {
+        release: std::sync::mpsc::Receiver<()>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl Drop for GatedDrop {
+        fn drop(&mut self) {
+            // The test runs on a separate runtime from this scheduled task.
+            // Channel disconnection also releases the gate if an assertion fails.
+            let _ = self.release.recv();
+            self.dropped.store(true, Ordering::Release);
+        }
+    }
+
+    let runtime = BrokerRuntime::new(
+        Arc::new(BrokerConfig::default()),
+        Arc::new(MessageStoreConfig::default()),
+    );
+    let (started_tx, started_rx) = oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let task_dropped = Arc::clone(&dropped);
+    let mut run = Some((started_tx, release_rx));
+    runtime
+        .lifecycle
+        .scheduled_tasks
+        .schedule(
+            rocketmq_runtime::ScheduledTaskConfig::fixed_delay("broker.test.unconfirmed-drop", Duration::from_secs(60)),
+            rocketmq_runtime::ScheduledExecutionPolicy::default(),
+            move || {
+                let (started, release) = run.take().expect("only one scheduled run");
+                let dropped = Arc::clone(&task_dropped);
+                async move {
+                    let _marker = GatedDrop { release, dropped };
+                    started.send(()).expect("start observer");
+                    future::pending::<()>().await;
+                }
+            },
+        )
+        .expect("scheduled deadline test task should start");
+    tokio::time::timeout(Duration::from_secs(5), started_rx)
+        .await
+        .expect("scheduled task start deadline")
+        .expect("scheduled task should start");
+
+    // Keep destruction blocked past the deadline, independent of how quickly
+    // the worker observes abort. A bounded shutdown must report remaining work.
+    let report = tokio::time::timeout(
+        Duration::from_secs(5),
+        runtime.shutdown_scheduled_tasks_with_timeout(Duration::ZERO),
+    )
+    .await
+    .expect("shutdown must not wait indefinitely for destruction");
+    assert!(!report.is_healthy(), "{}", report.to_json());
+    assert_eq!(report.timed_out, 1);
+    assert_eq!(report.leaked, 1);
+    assert_eq!(report.aborted, 0, "abort has not been confirmed");
+    assert_eq!(report.remaining_tasks.len(), 1);
+    assert_eq!(runtime.lifecycle.scheduled_tasks.group().task_count(), 1);
+    assert!(!dropped.load(Ordering::Acquire));
+
+    release_tx.send(()).expect("release scheduled task destruction");
+    assert!(
+        runtime
+            .lifecycle
+            .scheduled_tasks
+            .group()
+            .wait_task(report.remaining_tasks[0].id, Duration::from_secs(5))
+            .await,
+        "aborted task should finish destruction after release"
+    );
+    assert_eq!(runtime.lifecycle.scheduled_tasks.group().task_count(), 0);
+    assert!(dropped.load(Ordering::Acquire));
 }
 
 #[tokio::test]
