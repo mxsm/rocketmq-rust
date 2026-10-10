@@ -57,7 +57,10 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-const REQUEST_TIMEOUT_MILLIS: u64 = 3_000;
+// KV mutations await durability with a five-second server deadline. Allow that
+// deadline plus scheduling and transport time on busy CI runners.
+const REQUEST_TIMEOUT_MILLIS: u64 = 10_000;
+const READINESS_REQUEST_TIMEOUT_MILLIS: u64 = 3_000;
 const MASTER_ID: u64 = 0;
 const ORDER_TOPIC_NAMESPACE: &str = "ORDER_TOPIC_CONFIG";
 const STARTUP_RETRY_LIMIT: usize = 3;
@@ -145,11 +148,15 @@ impl NamesrvHarness {
     }
 
     async fn request(&self, request: RemotingCommand) -> anyhow::Result<RemotingCommand> {
+        let request_code = request.code();
+        let request_opaque = request.opaque();
         let outcome = self
             .client
             .invoke_request(Some(&self.addr), request, REQUEST_TIMEOUT_MILLIS)
             .await
-            .context("execute NameServer integration request")?;
+            .with_context(|| {
+                format!("execute NameServer integration request (code={request_code}, opaque={request_opaque})")
+            })?;
         match outcome {
             OutboundRequestOutcome::Response(response) => Ok(response),
             OutboundRequestOutcome::Rejected(rejection) => {
@@ -221,7 +228,10 @@ async fn wait_until_ready(
         );
         request.make_custom_header_to_net();
 
-        let failure = match client.invoke_request(Some(addr), request, REQUEST_TIMEOUT_MILLIS).await {
+        let failure = match client
+            .invoke_request(Some(addr), request, READINESS_REQUEST_TIMEOUT_MILLIS)
+            .await
+        {
             Ok(OutboundRequestOutcome::Response(response))
                 if ResponseCode::from(response.code()) == ResponseCode::Success =>
             {
