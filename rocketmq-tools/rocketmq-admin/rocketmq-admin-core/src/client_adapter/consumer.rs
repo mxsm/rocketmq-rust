@@ -40,7 +40,7 @@ use crate::client_adapter::lifecycle::AdminSession;
 use crate::client_adapter::services::consumer::ConsumerService;
 use crate::core::consumer;
 use crate::core::consumer::ConsumerAdmin;
-use crate::core::consumer::ConsumerBatchMutationOutcome;
+use crate::core::consumer::ConsumerBatchMutationReport;
 use crate::core::consumer::ConsumerDiagnosticAdmin;
 use crate::core::consumer::DeleteSubscriptionGroupsRequest;
 use crate::core::query::AdminQueryFailureCode;
@@ -592,7 +592,7 @@ impl ConsumerAdmin for AdminSession {
     fn delete_subscription_groups<'a>(
         &'a mut self,
         request: &'a DeleteSubscriptionGroupsRequest,
-    ) -> AdminFuture<'a, ConsumerBatchMutationOutcome> {
+    ) -> AdminFuture<'a, ConsumerBatchMutationReport> {
         Box::pin(async move {
             self.ensure_open()?;
             self.client_mut()
@@ -607,7 +607,7 @@ impl ConsumerAdmin for AdminSession {
                 )
                 .await
                 .map_err(|error| backend_error("delete_subscription_group_list", error))?;
-            Ok(ConsumerBatchMutationOutcome {
+            Ok(ConsumerBatchMutationReport {
                 message: format!(
                     "deleted {} subscription groups through one broker batch request",
                     request.group_names.len()

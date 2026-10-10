@@ -60,7 +60,7 @@ use crate::core::broker::SetBrokerLogFilterTtlRequest;
 use crate::core::clock::Clock;
 use crate::core::consumer;
 use crate::core::consumer::ConsumerBatchMutationAdmin;
-use crate::core::consumer::ConsumerBatchMutationOutcome;
+use crate::core::consumer::ConsumerBatchMutationReport;
 use crate::core::consumer::ConsumerExactBatchDeleteRequest;
 use crate::core::consumer::ConsumerExactBatchDeleteTarget;
 use crate::core::consumer::ConsumerExactBatchMutationAdmin;
@@ -850,7 +850,7 @@ impl ConsumerMutationAdmin for MutationAdminSession {
     fn patch_config_if_version<'a>(
         &'a mut self,
         request: &'a consumer::PatchSubscriptionGroupConfigRequest,
-    ) -> AdminFuture<'a, consumer::PatchSubscriptionGroupConfigOutcome> {
+    ) -> AdminFuture<'a, consumer::SubscriptionGroupConfigPatchResult> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             let request = consumer::PatchSubscriptionGroupConfigRequest::try_new(
@@ -878,14 +878,14 @@ impl ConsumerMutationAdmin for MutationAdminSession {
                 ClientSubscriptionGroupConfigPatchResult::Applied {
                     previous_version,
                     version,
-                } => consumer::PatchSubscriptionGroupConfigOutcome::Applied {
+                } => consumer::SubscriptionGroupConfigPatchResult::Applied {
                     previous_version,
                     version,
                 },
                 ClientSubscriptionGroupConfigPatchResult::VersionConflict {
                     expected_version,
                     actual_version,
-                } => consumer::PatchSubscriptionGroupConfigOutcome::VersionConflict {
+                } => consumer::SubscriptionGroupConfigPatchResult::VersionConflict {
                     expected_version,
                     actual_version,
                 },
@@ -949,7 +949,7 @@ impl ConsumerMutationAdmin for MutationAdminSession {
     fn delete_subscription_groups<'a>(
         &'a mut self,
         request: &'a DeleteSubscriptionGroupsRequest,
-    ) -> AdminFuture<'a, ConsumerBatchMutationOutcome> {
+    ) -> AdminFuture<'a, ConsumerBatchMutationReport> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             self.inner
@@ -965,7 +965,7 @@ impl ConsumerMutationAdmin for MutationAdminSession {
                 )
                 .await
                 .map_err(|error| backend_error("remove_subscription_groups", error))?;
-            Ok(ConsumerBatchMutationOutcome {
+            Ok(ConsumerBatchMutationReport {
                 message: format!(
                     "deleted {} subscription groups through one broker batch request",
                     request.group_names.len()
@@ -1465,15 +1465,15 @@ fn consumer_batch_target_outcome(
     kind: &str,
     success_message: &str,
     result: AdminResult<()>,
-) -> consumer::DashboardConsumerTargetOutcome {
+) -> consumer::DashboardConsumerTargetResult {
     match result {
-        Ok(()) => consumer::DashboardConsumerTargetOutcome {
+        Ok(()) => consumer::DashboardConsumerTargetResult {
             target,
             kind: kind.to_owned(),
             success: true,
             message: success_message.to_owned(),
         },
-        Err(error) => consumer::DashboardConsumerTargetOutcome {
+        Err(error) => consumer::DashboardConsumerTargetResult {
             target,
             kind: kind.to_owned(),
             success: false,

@@ -27,8 +27,8 @@ use rocketmq_admin_core::{
         consumer::{
             ConsumerExactBatchDeleteRequest, ConsumerExactBatchMutationAdmin, ConsumerExactBatchUpsertMutationAdmin,
             ConsumerExactBatchUpsertRequest, ConsumerMutationAdmin, DashboardConsumerBatchResult,
-            DashboardConsumerRunningInfo, DashboardConsumerRunningInfoRequest, PatchSubscriptionGroupConfigOutcome,
-            PatchSubscriptionGroupConfigRequest,
+            DashboardConsumerRunningInfo, DashboardConsumerRunningInfoRequest, PatchSubscriptionGroupConfigRequest,
+            SubscriptionGroupConfigPatchResult,
         },
         consumer_workspace::{
             ConsumerClientsResult, ConsumerConfigPresenceResult, ConsumerConfigurationResult,
@@ -215,7 +215,7 @@ pub(crate) trait DashboardMutationSession: Send {
     fn patch_consumer_config<'a>(
         &'a mut self,
         _request: &'a PatchSubscriptionGroupConfigRequest,
-    ) -> SessionFuture<'a, AdminResult<PatchSubscriptionGroupConfigOutcome>> {
+    ) -> SessionFuture<'a, AdminResult<SubscriptionGroupConfigPatchResult>> {
         Box::pin(async { Err(unsupported_consumer_session("patch_consumer_config")) })
     }
     fn shutdown(self: Box<Self>) -> SessionFuture<'static, ()>;
@@ -532,7 +532,7 @@ impl DashboardMutationSession for RealMutationSession {
     fn patch_consumer_config<'a>(
         &'a mut self,
         request: &'a PatchSubscriptionGroupConfigRequest,
-    ) -> SessionFuture<'a, AdminResult<PatchSubscriptionGroupConfigOutcome>> {
+    ) -> SessionFuture<'a, AdminResult<SubscriptionGroupConfigPatchResult>> {
         ConsumerMutationAdmin::patch_config_if_version(&mut self.inner, request)
     }
 
