@@ -34,10 +34,10 @@ use rocketmq_transport::api::DeferredAdmission;
 use rocketmq_transport::api::DeferredAdmissionAcquireOutcome;
 use rocketmq_transport::api::DeferredAdmissionSnapshot;
 use rocketmq_transport::api::DeferredClaimOutcome;
+use rocketmq_transport::api::DeferredExpiryAttachmentStatus;
 use rocketmq_transport::api::DeferredExpiryBatch;
 use rocketmq_transport::api::DeferredExpiryBatchStats;
 use rocketmq_transport::api::DeferredExpiryMargins;
-use rocketmq_transport::api::DeferredExpiryOutcome;
 use rocketmq_transport::api::DeferredId;
 use rocketmq_transport::api::DeferredParts;
 use rocketmq_transport::api::DeferredRegistration;
@@ -597,7 +597,7 @@ impl PullDeferredService {
         } = candidate;
         let mut parts = DeferredParts::new(responder, permit);
         match parts.try_with_expiry(deadline.protocol_at(), self.expiry_margins) {
-            Ok(DeferredExpiryOutcome::Attached) => {}
+            Ok(DeferredExpiryAttachmentStatus::Attached) => {}
             Ok(outcome) => {
                 return Ok(PullDeferredRegistrationStatus::Rejected(Box::new(
                     PullDeferredRegisterRejection::Expiry {
@@ -1458,7 +1458,7 @@ pub(crate) enum PullDeferredRegisterRejection {
         responder: Option<Box<DeferredResponderOutcome>>,
     },
     Expiry {
-        outcome: Box<DeferredExpiryOutcome>,
+        outcome: Box<DeferredExpiryAttachmentStatus>,
         parts: Box<DeferredParts>,
     },
     RegistryRejected,

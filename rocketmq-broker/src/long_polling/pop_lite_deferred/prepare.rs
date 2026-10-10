@@ -21,7 +21,7 @@ use std::sync::Arc;
 use rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_transport::api::DeferredAdmissionAcquireOutcome;
-use rocketmq_transport::api::DeferredExpiryOutcome;
+use rocketmq_transport::api::DeferredExpiryAttachmentStatus;
 use rocketmq_transport::api::DeferredId;
 use rocketmq_transport::api::DeferredParts;
 use rocketmq_transport::api::DeferredRegistration;
@@ -263,7 +263,7 @@ impl PopLiteDeferredService {
         let protocol_at = deadline.protocol_at();
         let mut parts = DeferredParts::new(responder, permit);
         match parts.try_with_expiry(protocol_at, self.expiry_margins) {
-            Ok(DeferredExpiryOutcome::Attached) => {}
+            Ok(DeferredExpiryAttachmentStatus::Attached) => {}
             Ok(outcome) => {
                 return Ok(PopLiteDeferredRegistrationStatus::Rejected(Box::new(
                     PopLiteDeferredRegisterRejection::Expiry { outcome, parts },
@@ -411,7 +411,7 @@ pub(crate) enum PopLiteDeferredRegisterRejection {
     ProvenanceMismatch,
     Responder(DeferredResponderOutcome),
     Expiry {
-        outcome: DeferredExpiryOutcome,
+        outcome: DeferredExpiryAttachmentStatus,
         parts: DeferredParts,
     },
     DuplicateRequest,

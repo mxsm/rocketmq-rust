@@ -1831,7 +1831,7 @@ async fn claimed_owner_cutoff_cancels_without_reentering_the_handler() {
                 DeferredExpiryMargins::new(Duration::from_secs(5), Duration::from_secs(5)),
             )
             .expect("attach claimed owner cutoff contract"),
-        DeferredExpiryOutcome::Attached
+        DeferredExpiryAttachmentStatus::Attached
     );
     let registration = registry
         .register(DeferredRequest::new(47, parts))

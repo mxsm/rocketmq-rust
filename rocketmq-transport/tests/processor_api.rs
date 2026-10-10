@@ -29,11 +29,11 @@ use rocketmq_transport::api::DefaultRequestProcessor;
 use rocketmq_transport::api::DeferredCancellationReason;
 use rocketmq_transport::api::DeferredClaimOutcome;
 use rocketmq_transport::api::DeferredExpiry;
+use rocketmq_transport::api::DeferredExpiryAttachmentStatus;
 use rocketmq_transport::api::DeferredExpiryBatch;
 use rocketmq_transport::api::DeferredExpiryBatchStats;
 use rocketmq_transport::api::DeferredExpiryKind;
 use rocketmq_transport::api::DeferredExpiryMargins;
-use rocketmq_transport::api::DeferredExpiryOutcome;
 use rocketmq_transport::api::DeferredId;
 use rocketmq_transport::api::DeferredParts;
 use rocketmq_transport::api::DeferredRegistration;
@@ -324,7 +324,7 @@ fn assert_deferred_registry_contract<R, E, F>(
         &mut DeferredParts,
         tokio::time::Instant,
         DeferredExpiryMargins,
-    ) -> Result<DeferredExpiryOutcome, TransportContractViolation> = DeferredParts::try_with_expiry;
+    ) -> Result<DeferredExpiryAttachmentStatus, TransportContractViolation> = DeferredParts::try_with_expiry;
     let _: fn(R, DeferredParts) -> DeferredRequest<R> = DeferredRequest::new;
     let _: fn(DeferredRetainedSizeParts) -> Result<DeferredRetainedSize, _> = DeferredRegistry::<R>::try_retained_size;
 }
@@ -582,7 +582,7 @@ fn api_exposes_the_affine_transactional_deferred_registry_contract() {
     assert_error_contract::<TransportError>();
     let _: DeferredRegistryOutcome<String> = DeferredRegistryOutcome::ParentCancelled;
     let _: DeferredClaimOutcome<String> = DeferredClaimOutcome::AlreadyClaimed;
-    let _: DeferredExpiryOutcome = DeferredExpiryOutcome::AlreadyAttached;
+    let _: DeferredExpiryAttachmentStatus = DeferredExpiryAttachmentStatus::AlreadyAttached;
     let _: DeferredResumeOutcome = DeferredResumeOutcome::SessionClosed;
     let _: DeferredResumeSubmitOutcome = DeferredResumeSubmitOutcome::AdmissionRejected;
     let _ = assert_claim_resume_contract::<String>;

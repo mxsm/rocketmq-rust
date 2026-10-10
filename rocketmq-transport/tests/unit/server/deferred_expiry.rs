@@ -44,8 +44,8 @@ use super::ResponseAction;
 use super::TransportServer;
 use crate::dispatch::DeferredAdmissionAcquireOutcome;
 use crate::dispatch::DeferredClaimOutcome;
+use crate::dispatch::DeferredExpiryAttachmentStatus;
 use crate::dispatch::DeferredExpiryMargins;
-use crate::dispatch::DeferredExpiryOutcome;
 use crate::dispatch::DeferredRegistryOutcome;
 use crate::dispatch::DeferredResponderOutcome;
 use crate::dispatch::DeferredResumeOutcome;
@@ -136,17 +136,17 @@ impl RequestProcessor for TcpDeferredExpiryProcessor {
             .try_with_expiry(protocol_at, self.policy.margins)
             .map_err(|_| crate::error_helpers::argument_invalid())?
         {
-            DeferredExpiryOutcome::Attached => {}
-            DeferredExpiryOutcome::AlreadyAttached => {
+            DeferredExpiryAttachmentStatus::Attached => {}
+            DeferredExpiryAttachmentStatus::AlreadyAttached => {
                 return Err(crate::error_helpers::argument_invalid());
             }
-            DeferredExpiryOutcome::OwnerBudgetInsufficient => {
+            DeferredExpiryAttachmentStatus::OwnerBudgetInsufficient => {
                 return Err(crate::error_helpers::argument_invalid());
             }
-            DeferredExpiryOutcome::ProtocolAlreadyExpired => {
+            DeferredExpiryAttachmentStatus::ProtocolAlreadyExpired => {
                 return Err(crate::error_helpers::argument_invalid());
             }
-            DeferredExpiryOutcome::OwnerAlreadyExpired => {
+            DeferredExpiryAttachmentStatus::OwnerAlreadyExpired => {
                 return Err(crate::error_helpers::argument_invalid());
             }
         }
