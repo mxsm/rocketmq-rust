@@ -251,7 +251,7 @@ fn round_trip(record: LedgerRecord, sequence: u64, generation: u64) -> LedgerRec
 }
 
 fn decode_typed(frame: &[u8], sequence: u64, generation: u64) -> Result<LedgerRecord, CodecViolation> {
-    let DecodeOutcome::Frame(frame) = decode_next_frame(frame, sequence, generation)? else {
+    let LedgerFrameDecodeResult::Frame(frame) = decode_next_frame(frame, sequence, generation)? else {
         return Err(CodecViolation::InvalidEnvelopeRelationship {
             detail: "test expected a complete frame",
         });
