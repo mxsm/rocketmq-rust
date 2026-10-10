@@ -22,7 +22,8 @@ dominate CI time. The recommendation is to keep `cargo test` as the required CI 
 | --- | --- |
 | `.config/nextest.toml` | Test groups that keep lock-dependent tests serialized, and a `ci` profile (no retries, no fail-fast, report-only slow-test warning, JUnit output). |
 | `Nextest Pilot (ubuntu-latest)` job in `.github/workflows/rocketmq-rust-ci.yaml` | Runs `cargo test` and `cargo nextest run` + `cargo test --doc` on the same build, `PILOT_RUNS` times each, reconciles the selected tests and failures, and writes timings to the job summary. Logs and JUnit files are uploaded as the `nextest-pilot-logs` artifact. |
-| `nextest` output of `scripts/ci_scope.py` | Selects the pilot for scheduled and manual runs, and for changes to `.config/nextest.toml` or the root CI workflow. Ordinary code changes do not run it. |
+| `scripts/nextest_pilot_compare.py` and `scripts/tests/test_nextest_pilot_compare.py` | Reconciles every measured round from the pilot's logs and exits non-zero on any divergence. Its tests run in the pilot job before the measurement. It also works on a downloaded `nextest-pilot-logs` artifact. |
+| `nextest` output of `scripts/ci_scope.py` | Selects the pilot for scheduled and manual runs, and for changes to `.config/nextest.toml`, the root CI workflow, or the reconciliation script and its tests. Ordinary code changes do not run it. |
 
 The pilot is `continue-on-error` and is not a required check. `Build & Test (ubuntu-latest)` still
 runs `cargo test` and remains the required test path. A change to `.config/nextest.toml` also
@@ -34,13 +35,17 @@ selects the Rust checks, so the configuration is always validated against a full
   reuse those artifacts, so compilation is measured separately and is not attributed to either one.
 - **Same tests.** `cargo test --workspace` runs unit, integration, binary, and doc tests.
   nextest does not run doctests, so the candidate is `cargo nextest run` followed by
-  `cargo test --doc`. The job compares, from the logs of the last run:
+  `cargo test --doc`. For **every** measured round, `scripts/nextest_pilot_compare.py` compares:
   - tests run by `cargo test` (excluding doctests) with tests run by nextest,
-  - ignored tests with tests nextest skipped, and
-  - doctests run inside `cargo test` with doctests run by `cargo test --doc`.
+  - ignored tests with tests nextest skipped,
+  - doctests run and ignored inside `cargo test` with those of `cargo test --doc`, and
+  - the **identities** of failed tests (nextest binary ID and test name) and of failed doctests
+    (crate and doctest name), as well as their counts.
 
-  It also compares failed test and doctest counts. Any difference in selection or failures fails
-  the pilot job. Failures shared by both runners do not, because `Build & Test` already reports them.
+  `cargo test` output is mapped to nextest binary IDs with `cargo nextest list --message-format json`,
+  and nextest failures are read from its JUnit report. A difference in any round, a missing log or
+  report, or a test target without a result line fails the pilot job. Failures shared by both runners
+  in a round do not, because `Build & Test` already reports them.
 - **Same features.** The feature selection matches `Build & Test`: default features on pull
   requests, `--all-features` on scheduled and manual runs and when Cargo manifests change.
 - **Warm, alternating runs.** One untimed `cargo test` run warms caches first. Some tests invoke
@@ -97,6 +102,16 @@ on the same machine are not coordinated, which matches `cargo test`.
   bind ports or share directories outside a temporary root. After the fixes in this section, three
   measured rounds for each feature set showed no failures that occurred only under nextest.
 
+### Machine size and serialized groups
+
+The `cluster-port-blocks` group runs its 11 tests one at a time. In the default-features run their
+durations add up to 53 s (the longest takes 8 s), while the whole nextest run took 85 s on a 4 vCPU
+runner. On a machine with more cores, the other tests finish sooner but this chain does not, so it
+sets a floor on nextest's wall time. `cargo test` runs the six `multi_node_cluster_test` tests in
+parallel within their binary, so on such a machine nextest can be slower than `cargo test`. The
+measurements in this document are from 4 vCPU runners only. Giving those tests port allocation that
+is safe across processes would let the group be removed; that is a test change outside this pilot.
+
 ## Local commands
 
 Install a pinned nextest release, for example with
@@ -116,11 +131,18 @@ cargo test --workspace --doc
 Repeat with `--all-features` on all three commands to cover the full feature set. JUnit output from
 the `ci` profile is written to `target/nextest/ci/junit.xml`.
 
-To check CI path selection for the configuration:
+To check CI path selection for the configuration and the reconciliation logic:
 
 ```bash
 python -m unittest discover -s scripts/tests -p test_ci_scope.py
+python -m unittest discover -s scripts/tests -p test_nextest_pilot_compare.py
 python scripts/ci_scope.py --paths .config/nextest.toml
+```
+
+To reconcile a downloaded `nextest-pilot-logs` artifact:
+
+```bash
+python scripts/nextest_pilot_compare.py --logs <artifact-dir> --runs 3
 ```
 
 ## Results
@@ -185,6 +207,8 @@ warm. A per-test breakdown of the cold run on Linux was not collected. `Build & 
   of about 55 s (35%) per run.
 - **Limit:** in CI that saving is small next to the 35-50 minute build and the 25-40 minute first,
   cold test run. On the measured `Build & Test` job, it would save well under 5% of the job time.
+  On machines with more cores, the serialized `cluster-port-blocks` group can make nextest slower
+  than `cargo test` (see [Machine size and serialized groups](#machine-size-and-serialized-groups)).
 
 Recommendation: **narrow the rollout and defer migrating the required job.**
 
@@ -192,7 +216,9 @@ Recommendation: **narrow the rollout and defer migrating the required job.**
 2. Keep `.config/nextest.toml` and the non-blocking pilot, which runs only on scheduled and manual
    runs and when its configuration changes, so nextest compatibility keeps being checked.
 3. Developers can use nextest locally, where builds are warm and the shorter test runs add up.
-4. Revisit migration if the build and cold-test costs come down. The first, cold test run is the
+4. Before any migration, make the cluster tests' port allocation safe across processes so that the
+   `cluster-port-blocks` group can be removed, and repeat the measurement on a larger machine.
+5. Revisit migration if the build and cold-test costs come down. The first, cold test run is the
    larger lever: it takes about 23 minutes (default features) to 38 minutes (all features) longer
    than a warm run, compared with about one minute saved by the runner. Profiling which
    Cargo-invoking tests account for that time on Linux is a useful follow-up.
