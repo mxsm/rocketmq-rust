@@ -5028,8 +5028,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::inspection::CommitLogRecordOutcome",
-          "identity": "rocketmq-store/src/public_api.rs:pub use crate::inspection::CommitLogRecordOutcome",
+          "declaration": "pub use crate::inspection::CommitLogRecordDecodeResult",
+          "identity": "rocketmq-store/src/public_api.rs:pub use crate::inspection::CommitLogRecordDecodeResult",
           "owner": "store",
           "path": "rocketmq-store/src/public_api.rs",
           "rationale": "deliberate root entry point",
