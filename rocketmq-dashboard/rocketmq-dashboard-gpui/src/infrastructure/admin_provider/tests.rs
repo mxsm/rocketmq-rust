@@ -22,7 +22,7 @@ use std::{
 use rocketmq_admin_core::core::{
     AdminResult,
     broker::{
-        PatchBrokerConfigOutcome, PatchBrokerConfigRequest, QueryBrokerConfigGenerationRequest,
+        BrokerConfigPatchResult, PatchBrokerConfigRequest, QueryBrokerConfigGenerationRequest,
         QueryBrokerConfigGenerationResult,
     },
     dashboard::{
@@ -65,7 +65,7 @@ struct FakeFactory {
     controls: Arc<FakeControls>,
     health: Result<(), AdminError>,
     query_barrier: Option<Arc<tokio::sync::Barrier>>,
-    patch_outcome: PatchBrokerConfigOutcome,
+    patch_outcome: BrokerConfigPatchResult,
 }
 
 impl DashboardSessionFactory for FakeFactory {
@@ -230,7 +230,7 @@ impl DashboardQuerySession for FakeQuerySession {
 
 struct FakeMutationSession {
     controls: Arc<FakeControls>,
-    patch_outcome: PatchBrokerConfigOutcome,
+    patch_outcome: BrokerConfigPatchResult,
 }
 
 impl FakeMutationSession {
@@ -256,7 +256,7 @@ impl DashboardMutationSession for FakeMutationSession {
     fn patch_config_if_generation<'a>(
         &'a mut self,
         _request: &'a PatchBrokerConfigRequest,
-    ) -> SessionFuture<'a, AdminResult<PatchBrokerConfigOutcome>> {
+    ) -> SessionFuture<'a, AdminResult<BrokerConfigPatchResult>> {
         Box::pin(async move {
             self.exercise().await;
             Ok(self.patch_outcome)
@@ -293,7 +293,7 @@ fn provider(
     controls: Arc<FakeControls>,
     health: Result<(), AdminError>,
     query_barrier: Option<Arc<tokio::sync::Barrier>>,
-    patch_outcome: PatchBrokerConfigOutcome,
+    patch_outcome: BrokerConfigPatchResult,
 ) -> Arc<GpuiAdminProvider> {
     GpuiAdminProvider::with_factory(
         runtime.root_context().component("provider"),
@@ -308,8 +308,8 @@ fn provider(
     )
 }
 
-fn applied() -> PatchBrokerConfigOutcome {
-    PatchBrokerConfigOutcome::Applied {
+fn applied() -> BrokerConfigPatchResult {
+    BrokerConfigPatchResult::Applied {
         previous_generation: 7,
         generation: 8,
     }
@@ -551,7 +551,7 @@ fn switch_shuts_both_sessions_and_rejects_stale_revision() {
 fn generation_conflict_is_returned_without_an_overwrite_retry() {
     let runtime = runtime();
     let controls = Arc::new(FakeControls::default());
-    let conflict = PatchBrokerConfigOutcome::GenerationConflict {
+    let conflict = BrokerConfigPatchResult::GenerationConflict {
         expected_generation: 7,
         actual_generation: 9,
     };

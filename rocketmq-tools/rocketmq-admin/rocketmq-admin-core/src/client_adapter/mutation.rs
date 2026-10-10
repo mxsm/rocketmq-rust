@@ -50,8 +50,8 @@ use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 
 use crate::client_adapter::producer::*;
+use crate::core::broker::BrokerConfigPatchResult;
 use crate::core::broker::BrokerMutationAdmin;
-use crate::core::broker::PatchBrokerConfigOutcome;
 use crate::core::broker::PatchBrokerConfigRequest;
 use crate::core::broker::QueryBrokerConfigGenerationRequest;
 use crate::core::broker::QueryBrokerConfigGenerationResult;
@@ -1562,7 +1562,7 @@ impl BrokerMutationAdmin for MutationAdminSession {
     fn patch_config_if_generation<'a>(
         &'a mut self,
         request: &'a PatchBrokerConfigRequest,
-    ) -> AdminFuture<'a, PatchBrokerConfigOutcome> {
+    ) -> AdminFuture<'a, BrokerConfigPatchResult> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             let broker_addr = require_non_empty("brokerAddr", &request.broker_addr)?;
@@ -1596,14 +1596,14 @@ impl BrokerMutationAdmin for MutationAdminSession {
                 ClientBrokerConfigPatchResult::Applied {
                     previous_generation,
                     generation,
-                } => PatchBrokerConfigOutcome::Applied {
+                } => BrokerConfigPatchResult::Applied {
                     previous_generation,
                     generation,
                 },
                 ClientBrokerConfigPatchResult::GenerationConflict {
                     expected_generation,
                     actual_generation,
-                } => PatchBrokerConfigOutcome::GenerationConflict {
+                } => BrokerConfigPatchResult::GenerationConflict {
                     expected_generation,
                     actual_generation,
                 },
