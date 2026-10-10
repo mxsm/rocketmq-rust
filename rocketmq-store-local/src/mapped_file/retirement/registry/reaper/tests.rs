@@ -29,9 +29,9 @@ use crate::mapped_file::retirement::platform::authorize_namespace_transition;
 use crate::mapped_file::retirement::platform::authorize_tombstone_removal;
 use crate::mapped_file::retirement::platform::AuthorizedNamespaceTransitionResult;
 use crate::mapped_file::retirement::platform::NamespaceAbsenceProof;
+use crate::mapped_file::retirement::platform::NamespaceOperationResult;
 use crate::mapped_file::retirement::platform::NamespaceTombstoneProof;
 use crate::mapped_file::retirement::platform::NamespaceTransition;
-use crate::mapped_file::retirement::platform::NamespaceTransitionOutcome;
 use crate::mapped_file::retirement::writer::model_io::ModelLedgerIo;
 use crate::mapped_file::retirement::writer::ManagedLedgerWriter;
 
@@ -130,10 +130,7 @@ fn absence_result(
         .expect("logical removal authorizes direct unlink");
     let (capability, request) = authorization.into_parts_for_test();
     let proof = NamespaceAbsenceProof::verified_for_test(&request, replacement);
-    AuthorizedNamespaceTransitionResult::for_test(
-        capability,
-        NamespaceTransitionOutcome::NamespaceAbsentVerified(proof),
-    )
+    AuthorizedNamespaceTransitionResult::for_test(capability, NamespaceOperationResult::NamespaceAbsentVerified(proof))
 }
 
 #[test]
@@ -159,10 +156,7 @@ fn tombstone_outcomes_require_both_durable_stages() {
     let tombstone = NamespaceTombstoneProof::verified_for_test(&request, None);
     let progress = commit_logical_namespace_outcome(
         &mut writer,
-        AuthorizedNamespaceTransitionResult::for_test(
-            logical_removed,
-            NamespaceTransitionOutcome::Tombstoned(tombstone),
-        ),
+        AuthorizedNamespaceTransitionResult::for_test(logical_removed, NamespaceOperationResult::Tombstoned(tombstone)),
         223,
     )
     .expect("tombstone observation is durably committed");
@@ -178,7 +172,7 @@ fn tombstone_outcomes_require_both_durable_stages() {
         &mut writer,
         AuthorizedNamespaceTransitionResult::for_test(
             tombstoned,
-            NamespaceTransitionOutcome::NamespaceAbsentVerified(absence),
+            NamespaceOperationResult::NamespaceAbsentVerified(absence),
         ),
         224,
     )
@@ -198,7 +192,7 @@ fn superseded_and_unsupported_outcomes_preserve_retry_authority() {
         &mut writer,
         AuthorizedNamespaceTransitionResult::for_test(
             logical_removed,
-            NamespaceTransitionOutcome::Superseded {
+            NamespaceOperationResult::Superseded {
                 expected_key: physical_key(11),
                 observed_key: replacement,
             },
@@ -216,7 +210,7 @@ fn superseded_and_unsupported_outcomes_preserve_retry_authority() {
         &mut writer,
         AuthorizedNamespaceTransitionResult::for_test(
             capability,
-            NamespaceTransitionOutcome::Unsupported {
+            NamespaceOperationResult::Unsupported {
                 platform: "windows",
                 reason: "writer matrix is not qualified",
             },

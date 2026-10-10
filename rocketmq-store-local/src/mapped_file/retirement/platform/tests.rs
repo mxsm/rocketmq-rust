@@ -22,13 +22,13 @@ use super::types::NamespaceEntry;
 use super::types::NamespaceFailureClass;
 use super::types::NamespaceMutationAuthorization;
 use super::types::NamespaceOperation;
+use super::types::NamespaceOperationResult;
 use super::types::NamespacePolicyViolation;
 use super::types::NamespaceRequestViolation;
 use super::types::NamespaceRetirementRequest;
 use super::types::NamespaceTicketBinding;
 use super::types::NamespaceTombstoneProof;
 use super::types::NamespaceTransition;
-use super::types::NamespaceTransitionOutcome;
 use crate::mapped_file::retirement::codec::RetirementReason;
 use crate::mapped_file::retirement::identity::FileIncarnationId;
 use crate::mapped_file::retirement::identity::PhysicalFileKey;
@@ -52,7 +52,7 @@ macro_rules! assert_not_clone {
 assert_not_clone!(NamespaceMutationAuthorization);
 assert_not_clone!(NamespaceTombstoneProof);
 assert_not_clone!(NamespaceAbsenceProof);
-assert_not_clone!(NamespaceTransitionOutcome);
+assert_not_clone!(NamespaceOperationResult);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FaultPoint {
@@ -199,7 +199,7 @@ fn request() -> NamespaceRetirementRequest {
         .expect("test reservation is valid")
 }
 
-fn run(model: &mut ModelNamespace, transition: NamespaceTransition) -> NamespaceTransitionOutcome {
+fn run(model: &mut ModelNamespace, transition: NamespaceTransition) -> NamespaceOperationResult {
     let request = request();
     let authorization = NamespaceMutationAuthorization::for_test(&request, transition);
     advance(&request, transition, model, authorization)
@@ -209,7 +209,7 @@ fn run_after_superseded(
     model: &mut ModelNamespace,
     transition: NamespaceTransition,
     replacement: PhysicalFileKey,
-) -> NamespaceTransitionOutcome {
+) -> NamespaceOperationResult {
     let request = request().with_recorded_replacement_key(Some(replacement));
     let authorization = NamespaceMutationAuthorization::for_test(&request, transition);
     advance(&request, transition, model, authorization)
@@ -261,7 +261,7 @@ fn authorization_for_another_request_causes_zero_namespace_calls() {
 
     assert_eq!(
         outcome,
-        NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::AuthorizationMismatch)
+        NamespaceOperationResult::Rejected(NamespacePolicyViolation::AuthorizationMismatch)
     );
     assert_eq!((model.rename_calls, model.unlink_calls, model.sync_calls), (0, 0, 0));
 }
@@ -276,7 +276,7 @@ fn authorization_for_another_transition_causes_zero_namespace_calls() {
 
     assert_eq!(
         outcome,
-        NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::AuthorizationMismatch)
+        NamespaceOperationResult::Rejected(NamespacePolicyViolation::AuthorizationMismatch)
     );
     assert_eq!((model.rename_calls, model.unlink_calls, model.sync_calls), (0, 0, 0));
 }
@@ -317,7 +317,7 @@ fn authorization_binds_reason_and_expected_length_without_namespace_calls() {
 
         assert_eq!(
             outcome,
-            NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::AuthorizationMismatch)
+            NamespaceOperationResult::Rejected(NamespacePolicyViolation::AuthorizationMismatch)
         );
         assert_eq!((model.rename_calls, model.unlink_calls, model.sync_calls), (0, 0, 0));
     }
@@ -332,7 +332,7 @@ fn an_expected_file_with_the_wrong_length_is_rejected_without_namespace_mutation
 
     assert_eq!(
         outcome,
-        NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::ExpectedLengthMismatch {
+        NamespaceOperationResult::Rejected(NamespacePolicyViolation::ExpectedLengthMismatch {
             entry: NamespaceEntry::Canonical,
             expected: 1024,
             actual: 512,
@@ -354,7 +354,7 @@ fn an_expected_tombstone_with_the_wrong_length_is_rejected_without_unlink() {
 
     assert_eq!(
         outcome,
-        NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::ExpectedLengthMismatch {
+        NamespaceOperationResult::Rejected(NamespacePolicyViolation::ExpectedLengthMismatch {
             entry: NamespaceEntry::Tombstone,
             expected: 1024,
             actual: 2048,
@@ -374,7 +374,7 @@ fn same_path_replacement_is_superseded_without_namespace_mutation() {
 
     assert!(matches!(
         outcome,
-        NamespaceTransitionOutcome::Superseded {
+        NamespaceOperationResult::Superseded {
             expected_key,
             observed_key,
         } if expected_key == PhysicalFileKey::unix(9, 11) && observed_key == replacement
@@ -391,7 +391,7 @@ fn durable_superseded_observation_with_exact_old_tombstone_advances_without_rena
 
     let outcome = run_after_superseded(&mut model, NamespaceTransition::MoveToTombstone, replacement);
 
-    let NamespaceTransitionOutcome::Tombstoned(proof) = outcome else {
+    let NamespaceOperationResult::Tombstoned(proof) = outcome else {
         panic!("the durable replacement observation must resume at the exact old tombstone");
     };
     assert_eq!(proof.replacement_key(), Some(replacement));
@@ -407,7 +407,7 @@ fn durable_superseded_observation_with_both_old_names_absent_advances_without_mu
 
     let outcome = run_after_superseded(&mut model, NamespaceTransition::MoveToTombstone, replacement);
 
-    let NamespaceTransitionOutcome::NamespaceAbsentVerified(proof) = outcome else {
+    let NamespaceOperationResult::NamespaceAbsentVerified(proof) = outcome else {
         panic!("the durable replacement observation must resume at verified old-name absence");
     };
     assert_eq!(proof.replacement_key(), Some(replacement));
@@ -425,7 +425,7 @@ fn a_different_replacement_cannot_reuse_the_durable_superseded_observation() {
 
     assert!(matches!(
         outcome,
-        NamespaceTransitionOutcome::Superseded { observed_key, .. } if observed_key == observed
+        NamespaceOperationResult::Superseded { observed_key, .. } if observed_key == observed
     ));
     assert_eq!((model.rename_calls, model.unlink_calls, model.sync_calls), (0, 0, 0));
 }
@@ -440,7 +440,7 @@ fn direct_unlink_also_rejects_a_preexisting_replacement_without_mutation() {
 
     assert!(matches!(
         outcome,
-        NamespaceTransitionOutcome::Superseded { observed_key, .. } if observed_key == replacement
+        NamespaceOperationResult::Superseded { observed_key, .. } if observed_key == replacement
     ));
     assert_eq!((model.rename_calls, model.unlink_calls, model.sync_calls), (0, 0, 0));
 }
@@ -454,7 +454,7 @@ fn tombstone_collision_is_rejected_without_namespace_mutation() {
 
     assert!(matches!(
         outcome,
-        NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::TombstoneCollision { .. })
+        NamespaceOperationResult::Rejected(NamespacePolicyViolation::TombstoneCollision { .. })
     ));
     assert_eq!((model.rename_calls, model.unlink_calls, model.sync_calls), (0, 0, 0));
 }
@@ -469,7 +469,7 @@ fn an_unknown_directory_is_never_removed_recursively() {
 
     assert!(matches!(
         outcome,
-        NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::UnexpectedEntryType {
+        NamespaceOperationResult::Rejected(NamespacePolicyViolation::UnexpectedEntryType {
             entry: NamespaceEntry::Canonical,
         })
     ));
@@ -486,12 +486,12 @@ fn rename_failures_before_and_after_the_boundary_retry_idempotently() {
         let first = run(&mut model, NamespaceTransition::MoveToTombstone);
         assert!(matches!(
             first,
-            NamespaceTransitionOutcome::Retryable(ref failure)
+            NamespaceOperationResult::Retryable(ref failure)
                 if failure.operation() == NamespaceOperation::Rename
         ));
 
         let second = run(&mut model, NamespaceTransition::MoveToTombstone);
-        assert!(matches!(second, NamespaceTransitionOutcome::Tombstoned(_)));
+        assert!(matches!(second, NamespaceOperationResult::Tombstoned(_)));
     }
 }
 
@@ -503,14 +503,14 @@ fn rename_sync_failure_reconciles_to_tombstoned_on_retry() {
     let first = run(&mut model, NamespaceTransition::MoveToTombstone);
     assert!(matches!(
         first,
-        NamespaceTransitionOutcome::Retryable(ref failure)
+        NamespaceOperationResult::Retryable(ref failure)
             if failure.operation() == NamespaceOperation::SyncParentOrHandle
     ));
     assert_eq!(model.canonical, EntryObservation::Missing);
     assert_eq!(model.tombstone, EntryObservation::ExpectedFile);
 
     let second = run(&mut model, NamespaceTransition::MoveToTombstone);
-    assert!(matches!(second, NamespaceTransitionOutcome::Tombstoned(_)));
+    assert!(matches!(second, NamespaceOperationResult::Tombstoned(_)));
 }
 
 #[test]
@@ -522,12 +522,12 @@ fn unlink_failures_before_and_after_the_boundary_retry_idempotently() {
         let first = run(&mut model, NamespaceTransition::DirectUnlink);
         assert!(matches!(
             first,
-            NamespaceTransitionOutcome::Retryable(ref failure)
+            NamespaceOperationResult::Retryable(ref failure)
                 if failure.operation() == NamespaceOperation::Unlink
         ));
 
         let second = run(&mut model, NamespaceTransition::DirectUnlink);
-        assert!(matches!(second, NamespaceTransitionOutcome::NamespaceAbsentVerified(_)));
+        assert!(matches!(second, NamespaceOperationResult::NamespaceAbsentVerified(_)));
     }
 }
 
@@ -539,13 +539,13 @@ fn unlink_sync_failure_reconciles_to_verified_absence_on_retry() {
     let first = run(&mut model, NamespaceTransition::DirectUnlink);
     assert!(matches!(
         first,
-        NamespaceTransitionOutcome::Retryable(ref failure)
+        NamespaceOperationResult::Retryable(ref failure)
             if failure.operation() == NamespaceOperation::SyncParentOrHandle
     ));
     assert_eq!(model.canonical, EntryObservation::Missing);
 
     let second = run(&mut model, NamespaceTransition::DirectUnlink);
-    assert!(matches!(second, NamespaceTransitionOutcome::NamespaceAbsentVerified(_)));
+    assert!(matches!(second, NamespaceOperationResult::NamespaceAbsentVerified(_)));
 }
 
 #[test]
@@ -555,10 +555,7 @@ fn a_live_unix_style_owner_survives_namespace_absence() {
 
     let outcome = run(&mut model, NamespaceTransition::DirectUnlink);
 
-    assert!(matches!(
-        outcome,
-        NamespaceTransitionOutcome::NamespaceAbsentVerified(_)
-    ));
+    assert!(matches!(outcome, NamespaceOperationResult::NamespaceAbsentVerified(_)));
     assert!(model.live_owner);
 }
 
@@ -571,7 +568,7 @@ fn a_live_windows_style_owner_withholds_delete_sharing_and_is_retryable() {
     let first = run(&mut model, NamespaceTransition::MoveToTombstone);
     assert!(matches!(
         first,
-        NamespaceTransitionOutcome::Retryable(ref failure)
+        NamespaceOperationResult::Retryable(ref failure)
             if failure.class() == NamespaceFailureClass::SharingViolation
     ));
     assert_eq!(model.canonical, EntryObservation::ExpectedFile);
@@ -579,7 +576,7 @@ fn a_live_windows_style_owner_withholds_delete_sharing_and_is_retryable() {
     model.live_owner = false;
     model.sharing_blocks_mutation = false;
     let second = run(&mut model, NamespaceTransition::MoveToTombstone);
-    assert!(matches!(second, NamespaceTransitionOutcome::Tombstoned(_)));
+    assert!(matches!(second, NamespaceOperationResult::Tombstoned(_)));
 }
 
 #[test]
@@ -590,9 +587,9 @@ fn tombstone_removal_is_idempotent_and_does_not_enumerate_unknown_entries() {
     model.unknown_entries = vec!["unknown-sidecar", "foreign-directory"];
 
     let first = run(&mut model, NamespaceTransition::RemoveTombstone);
-    assert!(matches!(first, NamespaceTransitionOutcome::NamespaceAbsentVerified(_)));
+    assert!(matches!(first, NamespaceOperationResult::NamespaceAbsentVerified(_)));
     let second = run(&mut model, NamespaceTransition::RemoveTombstone);
-    assert!(matches!(second, NamespaceTransitionOutcome::NamespaceAbsentVerified(_)));
+    assert!(matches!(second, NamespaceOperationResult::NamespaceAbsentVerified(_)));
     assert_eq!(model.unlink_calls, 1);
     assert_eq!(model.unknown_entries, ["unknown-sidecar", "foreign-directory"]);
 }
@@ -606,7 +603,7 @@ fn replacement_plus_exact_old_tombstone_removes_only_the_tombstone() {
 
     let outcome = run(&mut model, NamespaceTransition::RemoveTombstone);
 
-    let NamespaceTransitionOutcome::NamespaceAbsentVerified(proof) = outcome else {
+    let NamespaceOperationResult::NamespaceAbsentVerified(proof) = outcome else {
         panic!("old tombstone cleanup must produce a positive absence proof");
     };
     assert_eq!(proof.replacement_key(), Some(replacement));
@@ -624,7 +621,7 @@ fn replacement_plus_missing_old_tombstone_is_verified_without_mutation() {
 
     let outcome = run(&mut model, NamespaceTransition::RemoveTombstone);
 
-    let NamespaceTransitionOutcome::NamespaceAbsentVerified(proof) = outcome else {
+    let NamespaceOperationResult::NamespaceAbsentVerified(proof) = outcome else {
         panic!("two-name reconciliation must prove replacement plus tombstone absence");
     };
     assert_eq!(proof.replacement_key(), Some(replacement));
@@ -639,7 +636,7 @@ fn replacement_appearing_between_unlink_and_reverification_is_in_the_absence_pro
 
     let outcome = run(&mut model, NamespaceTransition::DirectUnlink);
 
-    let NamespaceTransitionOutcome::NamespaceAbsentVerified(proof) = outcome else {
+    let NamespaceOperationResult::NamespaceAbsentVerified(proof) = outcome else {
         panic!("post-unlink replacement must be preserved in the positive proof");
     };
     assert_eq!(proof.replacement_key(), Some(replacement));
