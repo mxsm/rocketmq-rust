@@ -285,7 +285,7 @@ impl SubscriptionGroupMutationPlan {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct MetadataMutationTargetOutcome {
+pub struct MetadataMutationTargetReport {
     pub broker_name: String,
     pub expected_state: ExpectedState,
     pub resulting_state: Option<ExpectedState>,
@@ -298,8 +298,8 @@ pub struct MetadataMutationTargetOutcome {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct MetadataMutationOutcome {
-    pub targets: Vec<MetadataMutationTargetOutcome>,
+pub struct MetadataMutationReport {
+    pub targets: Vec<MetadataMutationTargetReport>,
     pub failures: Vec<MutationTargetFailure>,
     pub order_reconciled: Option<bool>,
 }
@@ -417,7 +417,7 @@ impl OffsetResetPlan {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct OffsetResetTargetOutcome {
+pub struct OffsetResetTargetReport {
     pub broker_name: String,
     pub queue_id: i32,
     pub expected_offset: i64,
@@ -430,8 +430,8 @@ pub struct OffsetResetTargetOutcome {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct OffsetResetOutcome {
-    pub targets: Vec<OffsetResetTargetOutcome>,
+pub struct OffsetResetReport {
+    pub targets: Vec<OffsetResetTargetReport>,
     pub failures: Vec<MutationTargetFailure>,
 }
 
@@ -461,7 +461,7 @@ pub struct BrokerMutationConfigPlan {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct BrokerMutationConfigTargetOutcome {
+pub struct BrokerConfigMutationTargetReport {
     pub broker_name: String,
     pub before: BrokerMutationConfigState,
     pub after: Option<BrokerMutationConfigState>,
@@ -474,8 +474,8 @@ pub struct BrokerMutationConfigTargetOutcome {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct BrokerMutationConfigOutcome {
-    pub targets: Vec<BrokerMutationConfigTargetOutcome>,
+pub struct BrokerConfigMutationReport {
+    pub targets: Vec<BrokerConfigMutationTargetReport>,
     pub failures: Vec<MutationTargetFailure>,
 }
 
@@ -592,7 +592,7 @@ pub struct RequestModePreflightRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct RequestModeTargetOutcome {
+pub struct RequestModeMutationTargetReport {
     pub broker_name: String,
     pub expected: Option<RequestModeValue>,
     pub current: Option<RequestModeValue>,
@@ -605,8 +605,8 @@ pub struct RequestModeTargetOutcome {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct RequestModeMutationOutcome {
-    pub targets: Vec<RequestModeTargetOutcome>,
+pub struct RequestModeMutationReport {
+    pub targets: Vec<RequestModeMutationTargetReport>,
     pub failures: Vec<MutationTargetFailure>,
 }
 
@@ -634,7 +634,7 @@ pub trait SupervisedMutationAdmin: Send {
         })
     }
 
-    fn execute_topic<'a>(&'a mut self, plan: &'a TopicMutationPlan) -> AdminFuture<'a, MetadataMutationOutcome>;
+    fn execute_topic<'a>(&'a mut self, plan: &'a TopicMutationPlan) -> AdminFuture<'a, MetadataMutationReport>;
 
     fn preflight_subscription_group<'a>(
         &'a mut self,
@@ -662,14 +662,14 @@ pub trait SupervisedMutationAdmin: Send {
     fn execute_subscription_group<'a>(
         &'a mut self,
         plan: &'a SubscriptionGroupMutationPlan,
-    ) -> AdminFuture<'a, MetadataMutationOutcome>;
+    ) -> AdminFuture<'a, MetadataMutationReport>;
 
     fn preview_offset_reset<'a>(
         &'a mut self,
         request: &'a OffsetResetPreviewRequest,
     ) -> AdminFuture<'a, OffsetResetPlan>;
 
-    fn execute_offset_reset<'a>(&'a mut self, plan: &'a OffsetResetPlan) -> AdminFuture<'a, OffsetResetOutcome>;
+    fn execute_offset_reset<'a>(&'a mut self, plan: &'a OffsetResetPlan) -> AdminFuture<'a, OffsetResetReport>;
 
     fn preflight_broker_config<'a>(&'a mut self, cluster: &'a str) -> AdminFuture<'a, BrokerMutationConfigPlan>;
 
@@ -693,7 +693,7 @@ pub trait SupervisedMutationAdmin: Send {
         &'a mut self,
         plan: &'a BrokerMutationConfigPlan,
         patch: BrokerMutationConfigPatch,
-    ) -> AdminFuture<'a, MetadataMutationOutcome>;
+    ) -> AdminFuture<'a, MetadataMutationReport>;
 
     /// Executes and verifies one sealed Broker patch without re-resolving or
     /// expanding the target. The default fails closed for source compatibility.
@@ -701,7 +701,7 @@ pub trait SupervisedMutationAdmin: Send {
         &'a mut self,
         plan: &'a BrokerMutationConfigPlan,
         patch: BrokerMutationConfigPatch,
-    ) -> AdminFuture<'a, BrokerMutationConfigOutcome> {
+    ) -> AdminFuture<'a, BrokerConfigMutationReport> {
         let _ = (plan, patch);
         Box::pin(async move {
             Err(AdminError::backend(
@@ -719,7 +719,7 @@ pub trait SupervisedMutationAdmin: Send {
     fn execute_request_mode<'a>(
         &'a mut self,
         plan: &'a RequestModeMutationPlan,
-    ) -> AdminFuture<'a, RequestModeMutationOutcome>;
+    ) -> AdminFuture<'a, RequestModeMutationReport>;
 
     /// Executes the sealed request-mode plan with the caller's bounded wire
     /// timeout. The default fails closed rather than ignoring the value.
@@ -727,7 +727,7 @@ pub trait SupervisedMutationAdmin: Send {
         &'a mut self,
         plan: &'a RequestModeMutationPlan,
         timeout_millis: u64,
-    ) -> AdminFuture<'a, RequestModeMutationOutcome> {
+    ) -> AdminFuture<'a, RequestModeMutationReport> {
         let _ = (plan, timeout_millis);
         Box::pin(async move {
             Err(AdminError::backend(

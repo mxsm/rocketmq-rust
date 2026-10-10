@@ -855,8 +855,8 @@ fn failed_postread_preserves_applied_and_persisted_target_truth() {
         unreachable!();
     };
     let before = BTreeMap::from([("broker-a".to_owned(), tools::VisibleState::Absent)]);
-    let outcome = admin::MetadataMutationOutcome {
-        targets: vec![admin::MetadataMutationTargetOutcome {
+    let outcome = admin::MetadataMutationReport {
+        targets: vec![admin::MetadataMutationTargetReport {
             broker_name: "broker-a".to_owned(),
             expected_state: admin::ExpectedState::Absent,
             resulting_state: Some(admin::ExpectedState::Present { version: 1 }),
@@ -962,7 +962,7 @@ fn response_mapping_preserves_unchanged_conflict_partial_and_persistence_states(
         version: 2,
         value: replacement.clone(),
     };
-    let mapped = |outcomes: Vec<admin::MetadataMutationTargetOutcome>, brokers: &[&str]| {
+    let mapped = |outcomes: Vec<admin::MetadataMutationTargetReport>, brokers: &[&str]| {
         let before = brokers
             .iter()
             .map(|broker| ((*broker).to_owned(), state.clone()))
@@ -978,22 +978,21 @@ fn response_mapping_preserves_unchanged_conflict_partial_and_persistence_states(
         let targets = build_executed_targets(before, after, outcomes, BTreeMap::new(), replacement.clone());
         (execution_status(&targets), targets)
     };
-    let outcome =
-        |broker: &str,
-         applied: bool,
-         changed: bool,
-         persistence: admin::MutationPersistenceState,
-         failure: Option<admin::MutationFailureCode>| admin::MetadataMutationTargetOutcome {
-            broker_name: broker.to_owned(),
-            expected_state: admin::ExpectedState::Present { version: 1 },
-            resulting_state: Some(admin::ExpectedState::Present { version: 2 }),
-            applied,
-            changed,
-            persistence,
-            verification: admin::MutationVerificationState::NotPerformed,
-            failure,
-            retryable: false,
-        };
+    let outcome = |broker: &str,
+                   applied: bool,
+                   changed: bool,
+                   persistence: admin::MutationPersistenceState,
+                   failure: Option<admin::MutationFailureCode>| admin::MetadataMutationTargetReport {
+        broker_name: broker.to_owned(),
+        expected_state: admin::ExpectedState::Present { version: 1 },
+        resulting_state: Some(admin::ExpectedState::Present { version: 2 }),
+        applied,
+        changed,
+        persistence,
+        verification: admin::MutationVerificationState::NotPerformed,
+        failure,
+        retryable: false,
+    };
 
     let (status, targets) = mapped(
         vec![outcome(

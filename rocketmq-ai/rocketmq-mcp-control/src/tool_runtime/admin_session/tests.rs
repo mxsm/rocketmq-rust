@@ -78,7 +78,7 @@ impl SupervisedMutationBackend for ProductionPathBackend {
     fn execute_topic<'a>(
         &'a mut self,
         _plan: &'a Self::TopicPlan,
-    ) -> RuntimeFuture<'a, Result<admin::MetadataMutationOutcome, ControlError>> {
+    ) -> RuntimeFuture<'a, Result<admin::MetadataMutationReport, ControlError>> {
         unused()
     }
 
@@ -103,7 +103,7 @@ impl SupervisedMutationBackend for ProductionPathBackend {
     fn execute_group<'a>(
         &'a mut self,
         _plan: &'a Self::GroupPlan,
-    ) -> RuntimeFuture<'a, Result<admin::MetadataMutationOutcome, ControlError>> {
+    ) -> RuntimeFuture<'a, Result<admin::MetadataMutationReport, ControlError>> {
         unused()
     }
 
@@ -142,12 +142,12 @@ impl SupervisedMutationBackend for ProductionPathBackend {
     fn execute_offset<'a>(
         &'a mut self,
         _plan: &'a Self::OffsetPlan,
-    ) -> RuntimeFuture<'a, Result<admin::OffsetResetOutcome, ControlError>> {
+    ) -> RuntimeFuture<'a, Result<admin::OffsetResetReport, ControlError>> {
         self.evidence.offset_executes.fetch_add(1, Ordering::SeqCst);
         let verification_failure = self.evidence.offset_verification_failure.load(Ordering::SeqCst);
         Box::pin(async move {
-            Ok(admin::OffsetResetOutcome {
-                targets: vec![admin::OffsetResetTargetOutcome {
+            Ok(admin::OffsetResetReport {
+                targets: vec![admin::OffsetResetTargetReport {
                     broker_name: "broker-a".to_owned(),
                     queue_id: 0,
                     expected_offset: 9,
@@ -205,12 +205,12 @@ impl SupervisedMutationBackend for ProductionPathBackend {
         &'a mut self,
         _plan: &'a Self::BrokerPlan,
         patch: admin::BrokerMutationConfigPatch,
-    ) -> RuntimeFuture<'a, Result<admin::BrokerMutationConfigOutcome, ControlError>> {
+    ) -> RuntimeFuture<'a, Result<admin::BrokerConfigMutationReport, ControlError>> {
         self.evidence.broker_executes.fetch_add(1, Ordering::SeqCst);
         Box::pin(async move {
             assert_eq!(patch.trace_topic_enable, Some(true));
-            Ok(admin::BrokerMutationConfigOutcome {
-                targets: vec![admin::BrokerMutationConfigTargetOutcome {
+            Ok(admin::BrokerConfigMutationReport {
+                targets: vec![admin::BrokerConfigMutationTargetReport {
                     broker_name: "broker-a".to_owned(),
                     before: admin::BrokerMutationConfigState {
                         generation: 7,
@@ -280,7 +280,7 @@ impl SupervisedMutationBackend for ProductionPathBackend {
         &'a mut self,
         _plan: &'a Self::RequestModePlan,
         timeout_millis: u64,
-    ) -> RuntimeFuture<'a, Result<admin::RequestModeMutationOutcome, ControlError>> {
+    ) -> RuntimeFuture<'a, Result<admin::RequestModeMutationReport, ControlError>> {
         self.evidence.request_mode_executes.fetch_add(1, Ordering::SeqCst);
         self.evidence
             .request_mode_timeout
@@ -288,7 +288,7 @@ impl SupervisedMutationBackend for ProductionPathBackend {
         let verification_failure = self.evidence.request_mode_verification_failure.load(Ordering::SeqCst);
         let mixed_postread = self.evidence.request_mode_mixed_postread.load(Ordering::SeqCst);
         Box::pin(async move {
-            let successful = admin::RequestModeTargetOutcome {
+            let successful = admin::RequestModeMutationTargetReport {
                 broker_name: "broker-a".to_owned(),
                 expected: Some(admin::RequestModeValue {
                     mode: admin::RequestMode::Pull,
@@ -306,9 +306,9 @@ impl SupervisedMutationBackend for ProductionPathBackend {
                 retryable: false,
             };
             if mixed_postread {
-                return Ok(admin::RequestModeMutationOutcome {
+                return Ok(admin::RequestModeMutationReport {
                     targets: vec![
-                        admin::RequestModeTargetOutcome {
+                        admin::RequestModeMutationTargetReport {
                             broker_name: "broker-b".to_owned(),
                             expected: Some(admin::RequestModeValue {
                                 mode: admin::RequestMode::Pull,
@@ -327,9 +327,9 @@ impl SupervisedMutationBackend for ProductionPathBackend {
                     failures: Vec::new(),
                 });
             }
-            Ok(admin::RequestModeMutationOutcome {
+            Ok(admin::RequestModeMutationReport {
                 targets: vec![if verification_failure {
-                    admin::RequestModeTargetOutcome {
+                    admin::RequestModeMutationTargetReport {
                         current: None,
                         verification: admin::MutationVerificationState::Failed,
                         failure: Some(admin::MutationFailureCode::VerificationFailed),

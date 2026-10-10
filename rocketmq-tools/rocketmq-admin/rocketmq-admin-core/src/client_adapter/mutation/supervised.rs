@@ -40,7 +40,7 @@ impl SupervisedMutationAdmin for MutationAdminSession {
         })
     }
 
-    fn execute_topic<'a>(&'a mut self, plan: &'a TopicMutationPlan) -> AdminFuture<'a, MetadataMutationOutcome> {
+    fn execute_topic<'a>(&'a mut self, plan: &'a TopicMutationPlan) -> AdminFuture<'a, MetadataMutationReport> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             execute_topic_checked(&self.inner.inner, &self.plan_seal, plan).await
@@ -77,7 +77,7 @@ impl SupervisedMutationAdmin for MutationAdminSession {
     fn execute_subscription_group<'a>(
         &'a mut self,
         plan: &'a SubscriptionGroupMutationPlan,
-    ) -> AdminFuture<'a, MetadataMutationOutcome> {
+    ) -> AdminFuture<'a, MetadataMutationReport> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             execute_subscription_group_checked(&self.inner.inner, &self.plan_seal, plan).await
@@ -94,7 +94,7 @@ impl SupervisedMutationAdmin for MutationAdminSession {
         })
     }
 
-    fn execute_offset_reset<'a>(&'a mut self, plan: &'a OffsetResetPlan) -> AdminFuture<'a, OffsetResetOutcome> {
+    fn execute_offset_reset<'a>(&'a mut self, plan: &'a OffsetResetPlan) -> AdminFuture<'a, OffsetResetReport> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             execute_offset_reset_checked(&self.inner.inner, &self.plan_seal, plan).await
@@ -129,14 +129,14 @@ impl SupervisedMutationAdmin for MutationAdminSession {
         &'a mut self,
         plan: &'a BrokerMutationConfigPlan,
         patch: BrokerMutationConfigPatch,
-    ) -> AdminFuture<'a, MetadataMutationOutcome> {
+    ) -> AdminFuture<'a, MetadataMutationReport> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             self.ensure_plan_owned(&plan.seal)?;
             let properties = broker_patch_properties(patch)?;
-            let mut outcome = MetadataMutationOutcome {
+            let mut outcome = MetadataMutationReport {
                 failures: plan.failures.clone(),
-                ..MetadataMutationOutcome::default()
+                ..MetadataMutationReport::default()
             };
             for (broker_name, broker_addr, state) in &plan.targets {
                 match self
@@ -150,7 +150,7 @@ impl SupervisedMutationAdmin for MutationAdminSession {
                     .await
                 {
                     Ok(ClientBrokerConfigPatchResult::Applied { generation, .. }) => {
-                        outcome.targets.push(MetadataMutationTargetOutcome {
+                        outcome.targets.push(MetadataMutationTargetReport {
                             broker_name: broker_name.clone(),
                             expected_state: ExpectedState::Present {
                                 version: state.generation,
@@ -165,7 +165,7 @@ impl SupervisedMutationAdmin for MutationAdminSession {
                         });
                     }
                     Ok(ClientBrokerConfigPatchResult::GenerationConflict { actual_generation, .. }) => {
-                        outcome.targets.push(MetadataMutationTargetOutcome {
+                        outcome.targets.push(MetadataMutationTargetReport {
                             broker_name: broker_name.clone(),
                             expected_state: ExpectedState::Present {
                                 version: state.generation,
@@ -181,7 +181,7 @@ impl SupervisedMutationAdmin for MutationAdminSession {
                             retryable: false,
                         })
                     }
-                    Err(error) => outcome.targets.push(MetadataMutationTargetOutcome {
+                    Err(error) => outcome.targets.push(MetadataMutationTargetReport {
                         broker_name: broker_name.clone(),
                         expected_state: ExpectedState::Present {
                             version: state.generation,
@@ -204,7 +204,7 @@ impl SupervisedMutationAdmin for MutationAdminSession {
         &'a mut self,
         plan: &'a BrokerMutationConfigPlan,
         patch: BrokerMutationConfigPatch,
-    ) -> AdminFuture<'a, BrokerMutationConfigOutcome> {
+    ) -> AdminFuture<'a, BrokerConfigMutationReport> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             execute_broker_config_patch_verified_with_admin(&self.inner.inner, &self.plan_seal, plan, patch).await
@@ -224,7 +224,7 @@ impl SupervisedMutationAdmin for MutationAdminSession {
     fn execute_request_mode<'a>(
         &'a mut self,
         plan: &'a RequestModeMutationPlan,
-    ) -> AdminFuture<'a, RequestModeMutationOutcome> {
+    ) -> AdminFuture<'a, RequestModeMutationReport> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             execute_request_mode_checked(&self.inner.inner, &self.plan_seal, plan).await
@@ -235,7 +235,7 @@ impl SupervisedMutationAdmin for MutationAdminSession {
         &'a mut self,
         plan: &'a RequestModeMutationPlan,
         timeout_millis: u64,
-    ) -> AdminFuture<'a, RequestModeMutationOutcome> {
+    ) -> AdminFuture<'a, RequestModeMutationReport> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             if !(1..=24_000).contains(&timeout_millis) {
@@ -327,7 +327,7 @@ async fn execute_topic_checked<A: MQAdminMutationExt + ?Sized>(
     admin: &A,
     session_seal: &Arc<MutationPlanSeal>,
     plan: &TopicMutationPlan,
-) -> AdminResult<MetadataMutationOutcome> {
+) -> AdminResult<MetadataMutationReport> {
     ensure_same_plan_seal(session_seal, &plan.seal)?;
     if let Some(guard) = &plan.targeted_order_guard {
         let current = admin
@@ -339,9 +339,9 @@ async fn execute_topic_checked<A: MQAdminMutationExt + ?Sized>(
             return Ok(targeted_order_conflict(plan));
         }
     }
-    let mut outcome = MetadataMutationOutcome {
+    let mut outcome = MetadataMutationReport {
         failures: plan.failures.clone(),
-        ..MetadataMutationOutcome::default()
+        ..MetadataMutationReport::default()
     };
     for target in &plan.targets {
         let expected_state = map_expected_state_to_client(target.state);
@@ -377,7 +377,7 @@ async fn execute_topic_checked<A: MQAdminMutationExt + ?Sized>(
                 } else {
                     MutationVerificationState::NotPerformed
                 };
-                outcome.targets.push(MetadataMutationTargetOutcome {
+                outcome.targets.push(MetadataMutationTargetReport {
                     broker_name: target.broker_name.clone(),
                     expected_state: target.state,
                     resulting_state: Some(map_client_expected_state(result.state)),
@@ -536,12 +536,12 @@ fn validate_targeted_order_state<'a>(
     Ok(())
 }
 
-fn targeted_order_conflict(plan: &TopicMutationPlan) -> MetadataMutationOutcome {
-    MetadataMutationOutcome {
+fn targeted_order_conflict(plan: &TopicMutationPlan) -> MetadataMutationReport {
+    MetadataMutationReport {
         targets: plan
             .targets
             .iter()
-            .map(|target| MetadataMutationTargetOutcome {
+            .map(|target| MetadataMutationTargetReport {
                 broker_name: target.broker_name.clone(),
                 expected_state: target.state,
                 resulting_state: None,
@@ -620,11 +620,11 @@ async fn execute_subscription_group_checked<A: MQAdminMutationExt + ?Sized>(
     admin: &A,
     session_seal: &Arc<MutationPlanSeal>,
     plan: &SubscriptionGroupMutationPlan,
-) -> AdminResult<MetadataMutationOutcome> {
+) -> AdminResult<MetadataMutationReport> {
     ensure_same_plan_seal(session_seal, &plan.seal)?;
-    let mut outcome = MetadataMutationOutcome {
+    let mut outcome = MetadataMutationReport {
         failures: plan.failures.clone(),
-        ..MetadataMutationOutcome::default()
+        ..MetadataMutationReport::default()
     };
     for target in &plan.targets {
         match admin
@@ -659,7 +659,7 @@ async fn execute_subscription_group_checked<A: MQAdminMutationExt + ?Sized>(
                 } else {
                     MutationVerificationState::NotPerformed
                 };
-                outcome.targets.push(MetadataMutationTargetOutcome {
+                outcome.targets.push(MetadataMutationTargetReport {
                     broker_name: target.broker_name.clone(),
                     expected_state: target.state,
                     resulting_state: Some(map_client_expected_state(result.state)),
@@ -839,12 +839,12 @@ async fn execute_broker_config_patch_verified_with_admin<A: MQAdminMutationExt +
     session_seal: &Arc<MutationPlanSeal>,
     plan: &BrokerMutationConfigPlan,
     patch: BrokerMutationConfigPatch,
-) -> AdminResult<BrokerMutationConfigOutcome> {
+) -> AdminResult<BrokerConfigMutationReport> {
     ensure_same_plan_seal(session_seal, &plan.seal)?;
     let properties = broker_patch_properties(patch)?;
-    let mut outcome = BrokerMutationConfigOutcome {
+    let mut outcome = BrokerConfigMutationReport {
         failures: plan.failures.clone(),
-        ..BrokerMutationConfigOutcome::default()
+        ..BrokerConfigMutationReport::default()
     };
     for (broker_name, broker_addr, before) in &plan.targets {
         let planned_changed = broker_patch_changes(*before, patch);
@@ -857,7 +857,7 @@ async fn execute_broker_config_patch_verified_with_admin<A: MQAdminMutationExt +
                     Ok(observed) => {
                         let observed = map_client_broker_state(observed);
                         let verified = broker_patch_matches(observed, patch);
-                        outcome.targets.push(BrokerMutationConfigTargetOutcome {
+                        outcome.targets.push(BrokerConfigMutationTargetReport {
                             broker_name: broker_name.clone(),
                             before: *before,
                             after: Some(observed),
@@ -873,7 +873,7 @@ async fn execute_broker_config_patch_verified_with_admin<A: MQAdminMutationExt +
                             retryable: false,
                         });
                     }
-                    Err(error) => outcome.targets.push(BrokerMutationConfigTargetOutcome {
+                    Err(error) => outcome.targets.push(BrokerConfigMutationTargetReport {
                         broker_name: broker_name.clone(),
                         before: *before,
                         after: None,
@@ -887,7 +887,7 @@ async fn execute_broker_config_patch_verified_with_admin<A: MQAdminMutationExt +
                 }
             }
             Ok(ClientBrokerConfigPatchResult::GenerationConflict { .. }) => {
-                outcome.targets.push(BrokerMutationConfigTargetOutcome {
+                outcome.targets.push(BrokerConfigMutationTargetReport {
                     broker_name: broker_name.clone(),
                     before: *before,
                     after: None,
@@ -899,7 +899,7 @@ async fn execute_broker_config_patch_verified_with_admin<A: MQAdminMutationExt +
                     retryable: false,
                 });
             }
-            Err(error) => outcome.targets.push(BrokerMutationConfigTargetOutcome {
+            Err(error) => outcome.targets.push(BrokerConfigMutationTargetReport {
                 broker_name: broker_name.clone(),
                 before: *before,
                 after: None,
@@ -919,7 +919,7 @@ async fn execute_request_mode_checked<A: MQAdminMutationExt + ?Sized>(
     admin: &A,
     session_seal: &Arc<MutationPlanSeal>,
     plan: &RequestModeMutationPlan,
-) -> AdminResult<RequestModeMutationOutcome> {
+) -> AdminResult<RequestModeMutationReport> {
     execute_request_mode_checked_inner(admin, session_seal, plan, None).await
 }
 
@@ -928,7 +928,7 @@ async fn execute_request_mode_checked_with_timeout<A: MQAdminMutationExt + ?Size
     session_seal: &Arc<MutationPlanSeal>,
     plan: &RequestModeMutationPlan,
     timeout_millis: u64,
-) -> AdminResult<RequestModeMutationOutcome> {
+) -> AdminResult<RequestModeMutationReport> {
     execute_request_mode_checked_inner(admin, session_seal, plan, Some(timeout_millis)).await
 }
 
@@ -937,11 +937,11 @@ async fn execute_request_mode_checked_inner<A: MQAdminMutationExt + ?Sized>(
     session_seal: &Arc<MutationPlanSeal>,
     plan: &RequestModeMutationPlan,
     timeout_millis: Option<u64>,
-) -> AdminResult<RequestModeMutationOutcome> {
+) -> AdminResult<RequestModeMutationReport> {
     ensure_same_plan_seal(session_seal, &plan.seal)?;
-    let mut outcome = RequestModeMutationOutcome {
+    let mut outcome = RequestModeMutationReport {
         failures: plan.failures.clone(),
-        ..RequestModeMutationOutcome::default()
+        ..RequestModeMutationReport::default()
     };
     for (broker_name, broker_addr, current) in &plan.targets {
         let expected = current.map_or(ClientExpectedMessageRequestMode::Absent, |value| {
@@ -1009,7 +1009,7 @@ async fn execute_request_mode_checked_inner<A: MQAdminMutationExt + ?Sized>(
                     ),
                 };
                 let persistence = map_client_persistence(result.persistence);
-                outcome.targets.push(RequestModeTargetOutcome {
+                outcome.targets.push(RequestModeMutationTargetReport {
                     broker_name: broker_name.clone(),
                     expected: *current,
                     current: current_result,
@@ -1030,7 +1030,7 @@ async fn execute_request_mode_checked_inner<A: MQAdminMutationExt + ?Sized>(
                     retryable,
                 });
             }
-            Ok(result) => outcome.targets.push(RequestModeTargetOutcome {
+            Ok(result) => outcome.targets.push(RequestModeMutationTargetReport {
                 broker_name: broker_name.clone(),
                 expected: *current,
                 current: result.current.map(map_client_request_mode),
@@ -1041,7 +1041,7 @@ async fn execute_request_mode_checked_inner<A: MQAdminMutationExt + ?Sized>(
                 failure: Some(MutationFailureCode::Conflict),
                 retryable: false,
             }),
-            Err(error) => outcome.targets.push(RequestModeTargetOutcome {
+            Err(error) => outcome.targets.push(RequestModeMutationTargetReport {
                 broker_name: broker_name.clone(),
                 expected: *current,
                 current: None,
@@ -1198,15 +1198,15 @@ async fn preview_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
 async fn execute_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
     admin: &A,
     plan: &OffsetResetPlan,
-) -> AdminResult<OffsetResetOutcome> {
-    let mut outcome = OffsetResetOutcome {
+) -> AdminResult<OffsetResetReport> {
+    let mut outcome = OffsetResetReport {
         failures: plan.failures().to_vec(),
-        ..OffsetResetOutcome::default()
+        ..OffsetResetReport::default()
     };
     for target in &plan.targets {
         let row = &target.row;
         if !row.changed {
-            outcome.targets.push(OffsetResetTargetOutcome {
+            outcome.targets.push(OffsetResetTargetReport {
                 broker_name: row.broker_name.clone(),
                 queue_id: row.queue_id,
                 expected_offset: row.current_offset,
@@ -1240,7 +1240,7 @@ async fn execute_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
                     )
                     .await;
                 match verified {
-                    Ok(observed) => outcome.targets.push(OffsetResetTargetOutcome {
+                    Ok(observed) => outcome.targets.push(OffsetResetTargetReport {
                         broker_name: row.broker_name.clone(),
                         queue_id: row.queue_id,
                         expected_offset: row.current_offset,
@@ -1251,7 +1251,7 @@ async fn execute_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
                         failure: (observed != row.planned_offset).then_some(MutationFailureCode::VerificationFailed),
                         retryable: false,
                     }),
-                    Err(error) => outcome.targets.push(OffsetResetTargetOutcome {
+                    Err(error) => outcome.targets.push(OffsetResetTargetReport {
                         broker_name: row.broker_name.clone(),
                         queue_id: row.queue_id,
                         expected_offset: row.current_offset,
@@ -1264,7 +1264,7 @@ async fn execute_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
                     }),
                 }
             }
-            Ok(result) => outcome.targets.push(OffsetResetTargetOutcome {
+            Ok(result) => outcome.targets.push(OffsetResetTargetReport {
                 broker_name: row.broker_name.clone(),
                 queue_id: row.queue_id,
                 expected_offset: row.current_offset,
@@ -1275,7 +1275,7 @@ async fn execute_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
                 failure: Some(MutationFailureCode::Conflict),
                 retryable: false,
             }),
-            Err(error) => outcome.targets.push(OffsetResetTargetOutcome {
+            Err(error) => outcome.targets.push(OffsetResetTargetReport {
                 broker_name: row.broker_name.clone(),
                 queue_id: row.queue_id,
                 expected_offset: row.current_offset,
@@ -1295,7 +1295,7 @@ async fn execute_offset_reset_checked<A: MQAdminMutationExt + ?Sized>(
     admin: &A,
     session_seal: &Arc<MutationPlanSeal>,
     plan: &OffsetResetPlan,
-) -> AdminResult<OffsetResetOutcome> {
+) -> AdminResult<OffsetResetReport> {
     ensure_same_plan_seal(session_seal, &plan.seal)?;
     execute_offset_reset_with_admin(admin, plan).await
 }
@@ -1518,8 +1518,8 @@ fn client_failure(broker_name: String, queue_id: Option<i32>, error: &CanonicalE
 fn metadata_client_failure<T>(
     target: &ResolvedMetadataTarget<T>,
     error: &CanonicalError,
-) -> MetadataMutationTargetOutcome {
-    MetadataMutationTargetOutcome {
+) -> MetadataMutationTargetReport {
+    MetadataMutationTargetReport {
         broker_name: target.broker_name.clone(),
         expected_state: target.state,
         resulting_state: None,

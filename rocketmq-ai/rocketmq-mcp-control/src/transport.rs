@@ -560,21 +560,21 @@ mod tests {
             plan: &'a Self::TopicPlan,
         ) -> crate::tool_runtime::RuntimeFuture<
             'a,
-            Result<rocketmq_admin_core::core::supervised_mutation::MetadataMutationOutcome, ControlError>,
+            Result<rocketmq_admin_core::core::supervised_mutation::MetadataMutationReport, ControlError>,
         > {
             Box::pin(async move {
                 use rocketmq_admin_core::core::supervised_mutation::ExpectedState;
-                use rocketmq_admin_core::core::supervised_mutation::MetadataMutationOutcome;
-                use rocketmq_admin_core::core::supervised_mutation::MetadataMutationTargetOutcome;
+                use rocketmq_admin_core::core::supervised_mutation::MetadataMutationReport;
+                use rocketmq_admin_core::core::supervised_mutation::MetadataMutationTargetReport;
                 use rocketmq_admin_core::core::supervised_mutation::MutationPersistenceState;
                 use rocketmq_admin_core::core::supervised_mutation::MutationVerificationState;
                 self.counters.executes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 self.topic_executed = true;
-                Ok(MetadataMutationOutcome {
+                Ok(MetadataMutationReport {
                     targets: plan
                         .targets
                         .iter()
-                        .map(|target| MetadataMutationTargetOutcome {
+                        .map(|target| MetadataMutationTargetReport {
                             broker_name: target.broker_name.clone(),
                             expected_state: target.state,
                             resulting_state: Some(ExpectedState::Present { version: 1 }),
@@ -643,21 +643,21 @@ mod tests {
             plan: &'a Self::GroupPlan,
         ) -> crate::tool_runtime::RuntimeFuture<
             'a,
-            Result<rocketmq_admin_core::core::supervised_mutation::MetadataMutationOutcome, ControlError>,
+            Result<rocketmq_admin_core::core::supervised_mutation::MetadataMutationReport, ControlError>,
         > {
             Box::pin(async move {
                 use rocketmq_admin_core::core::supervised_mutation::ExpectedState;
-                use rocketmq_admin_core::core::supervised_mutation::MetadataMutationOutcome;
-                use rocketmq_admin_core::core::supervised_mutation::MetadataMutationTargetOutcome;
+                use rocketmq_admin_core::core::supervised_mutation::MetadataMutationReport;
+                use rocketmq_admin_core::core::supervised_mutation::MetadataMutationTargetReport;
                 use rocketmq_admin_core::core::supervised_mutation::MutationPersistenceState;
                 use rocketmq_admin_core::core::supervised_mutation::MutationVerificationState;
                 self.counters.executes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 self.group_executed = true;
-                Ok(MetadataMutationOutcome {
+                Ok(MetadataMutationReport {
                     targets: plan
                         .targets
                         .iter()
-                        .map(|target| MetadataMutationTargetOutcome {
+                        .map(|target| MetadataMutationTargetReport {
                             broker_name: target.broker_name.clone(),
                             expected_state: target.state,
                             resulting_state: Some(ExpectedState::Present { version: 1 }),
@@ -699,7 +699,7 @@ mod tests {
             _plan: &'a Self::OffsetPlan,
         ) -> crate::tool_runtime::RuntimeFuture<
             'a,
-            Result<rocketmq_admin_core::core::supervised_mutation::OffsetResetOutcome, ControlError>,
+            Result<rocketmq_admin_core::core::supervised_mutation::OffsetResetReport, ControlError>,
         > {
             Box::pin(async { Err(ControlError::operation_unavailable()) })
         }
@@ -730,7 +730,7 @@ mod tests {
             _patch: rocketmq_admin_core::core::supervised_mutation::BrokerMutationConfigPatch,
         ) -> crate::tool_runtime::RuntimeFuture<
             'a,
-            Result<rocketmq_admin_core::core::supervised_mutation::BrokerMutationConfigOutcome, ControlError>,
+            Result<rocketmq_admin_core::core::supervised_mutation::BrokerConfigMutationReport, ControlError>,
         > {
             Box::pin(async { Err(ControlError::operation_unavailable()) })
         }
@@ -763,7 +763,7 @@ mod tests {
             _timeout_millis: u64,
         ) -> crate::tool_runtime::RuntimeFuture<
             'a,
-            Result<rocketmq_admin_core::core::supervised_mutation::RequestModeMutationOutcome, ControlError>,
+            Result<rocketmq_admin_core::core::supervised_mutation::RequestModeMutationReport, ControlError>,
         > {
             Box::pin(async { Err(ControlError::operation_unavailable()) })
         }

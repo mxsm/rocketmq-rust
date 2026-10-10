@@ -60,7 +60,7 @@ pub(crate) trait SupervisedMutationBackend: Send {
     fn execute_topic<'a>(
         &'a mut self,
         plan: &'a Self::TopicPlan,
-    ) -> RuntimeFuture<'a, Result<admin::MetadataMutationOutcome, ControlError>>;
+    ) -> RuntimeFuture<'a, Result<admin::MetadataMutationReport, ControlError>>;
 
     fn preflight_group<'a>(
         &'a mut self,
@@ -77,7 +77,7 @@ pub(crate) trait SupervisedMutationBackend: Send {
     fn execute_group<'a>(
         &'a mut self,
         plan: &'a Self::GroupPlan,
-    ) -> RuntimeFuture<'a, Result<admin::MetadataMutationOutcome, ControlError>>;
+    ) -> RuntimeFuture<'a, Result<admin::MetadataMutationReport, ControlError>>;
 
     fn preview_offset<'a>(
         &'a mut self,
@@ -91,7 +91,7 @@ pub(crate) trait SupervisedMutationBackend: Send {
     fn execute_offset<'a>(
         &'a mut self,
         plan: &'a Self::OffsetPlan,
-    ) -> RuntimeFuture<'a, Result<admin::OffsetResetOutcome, ControlError>>;
+    ) -> RuntimeFuture<'a, Result<admin::OffsetResetReport, ControlError>>;
 
     fn preflight_broker<'a>(
         &'a mut self,
@@ -107,7 +107,7 @@ pub(crate) trait SupervisedMutationBackend: Send {
         &'a mut self,
         plan: &'a Self::BrokerPlan,
         patch: admin::BrokerMutationConfigPatch,
-    ) -> RuntimeFuture<'a, Result<admin::BrokerMutationConfigOutcome, ControlError>>;
+    ) -> RuntimeFuture<'a, Result<admin::BrokerConfigMutationReport, ControlError>>;
 
     fn preflight_request_mode<'a>(
         &'a mut self,
@@ -122,7 +122,7 @@ pub(crate) trait SupervisedMutationBackend: Send {
         &'a mut self,
         plan: &'a Self::RequestModePlan,
         timeout_millis: u64,
-    ) -> RuntimeFuture<'a, Result<admin::RequestModeMutationOutcome, ControlError>>;
+    ) -> RuntimeFuture<'a, Result<admin::RequestModeMutationReport, ControlError>>;
 
     fn shutdown(&mut self) -> RuntimeFuture<'_, Result<(), ControlError>>;
 }
@@ -157,7 +157,7 @@ impl SupervisedMutationBackend for MutationAdminSession {
     fn execute_topic<'a>(
         &'a mut self,
         plan: &'a Self::TopicPlan,
-    ) -> RuntimeFuture<'a, Result<admin::MetadataMutationOutcome, ControlError>> {
+    ) -> RuntimeFuture<'a, Result<admin::MetadataMutationReport, ControlError>> {
         Box::pin(async move {
             SupervisedMutationAdmin::execute_topic(self, plan)
                 .await
@@ -190,7 +190,7 @@ impl SupervisedMutationBackend for MutationAdminSession {
     fn execute_group<'a>(
         &'a mut self,
         plan: &'a Self::GroupPlan,
-    ) -> RuntimeFuture<'a, Result<admin::MetadataMutationOutcome, ControlError>> {
+    ) -> RuntimeFuture<'a, Result<admin::MetadataMutationReport, ControlError>> {
         Box::pin(async move {
             self.execute_subscription_group(plan)
                 .await
@@ -220,7 +220,7 @@ impl SupervisedMutationBackend for MutationAdminSession {
     fn execute_offset<'a>(
         &'a mut self,
         plan: &'a Self::OffsetPlan,
-    ) -> RuntimeFuture<'a, Result<admin::OffsetResetOutcome, ControlError>> {
+    ) -> RuntimeFuture<'a, Result<admin::OffsetResetReport, ControlError>> {
         Box::pin(async move {
             self.execute_offset_reset(plan)
                 .await
@@ -252,7 +252,7 @@ impl SupervisedMutationBackend for MutationAdminSession {
         &'a mut self,
         plan: &'a Self::BrokerPlan,
         patch: admin::BrokerMutationConfigPatch,
-    ) -> RuntimeFuture<'a, Result<admin::BrokerMutationConfigOutcome, ControlError>> {
+    ) -> RuntimeFuture<'a, Result<admin::BrokerConfigMutationReport, ControlError>> {
         Box::pin(async move {
             self.execute_broker_config_patch_verified(plan, patch)
                 .await
@@ -283,7 +283,7 @@ impl SupervisedMutationBackend for MutationAdminSession {
         &'a mut self,
         plan: &'a Self::RequestModePlan,
         timeout_millis: u64,
-    ) -> RuntimeFuture<'a, Result<admin::RequestModeMutationOutcome, ControlError>> {
+    ) -> RuntimeFuture<'a, Result<admin::RequestModeMutationReport, ControlError>> {
         Box::pin(async move {
             SupervisedMutationAdmin::execute_request_mode_with_timeout(self, plan, timeout_millis)
                 .await
