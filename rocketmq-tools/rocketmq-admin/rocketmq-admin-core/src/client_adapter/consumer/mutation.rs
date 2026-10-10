@@ -310,15 +310,15 @@ fn target_outcome(
     kind: &str,
     success_message: &str,
     result: AdminResult<()>,
-) -> consumer::DashboardConsumerTargetOutcome {
+) -> consumer::DashboardConsumerTargetResult {
     match result {
-        Ok(()) => consumer::DashboardConsumerTargetOutcome {
+        Ok(()) => consumer::DashboardConsumerTargetResult {
             target,
             kind: kind.to_string(),
             success: true,
             message: success_message.to_string(),
         },
-        Err(error) => consumer::DashboardConsumerTargetOutcome {
+        Err(error) => consumer::DashboardConsumerTargetResult {
             target,
             kind: kind.to_string(),
             success: false,

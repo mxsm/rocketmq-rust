@@ -19,11 +19,11 @@ use std::sync::Arc;
 use chrono::Utc;
 use rocketmq_admin_core::core::consumer::ConsumerMutationAdmin;
 use rocketmq_admin_core::core::consumer::ConsumerQueryAdmin;
-use rocketmq_admin_core::core::consumer::PatchSubscriptionGroupConfigOutcome;
 use rocketmq_admin_core::core::consumer::PatchSubscriptionGroupConfigRequest;
 use rocketmq_admin_core::core::consumer::QuerySubscriptionGroupConfigCasRequest;
 use rocketmq_admin_core::core::consumer::SubscriptionGroupConfigCasPatch;
 use rocketmq_admin_core::core::consumer::SubscriptionGroupConfigCasState;
+use rocketmq_admin_core::core::consumer::SubscriptionGroupConfigPatchResult;
 use rocketmq_admin_core::core::topic::GetTopicRouteRequest;
 use rocketmq_admin_core::core::topic::TopicQueryAdmin;
 use rocketmq_admin_core::mutation_client_adapter::MutationAdminBuilder;
@@ -260,14 +260,14 @@ impl ProductionSubscriptionGroupPatchClient {
                 .map_err(ExecutionAgentError::driver_source)?
         };
         Ok(match outcome {
-            PatchSubscriptionGroupConfigOutcome::Applied {
+            SubscriptionGroupConfigPatchResult::Applied {
                 previous_version,
                 version,
             } => SubscriptionGroupPatchApplyOutcome::Applied {
                 previous_version,
                 version,
             },
-            PatchSubscriptionGroupConfigOutcome::VersionConflict {
+            SubscriptionGroupConfigPatchResult::VersionConflict {
                 expected_version,
                 actual_version,
             } => SubscriptionGroupPatchApplyOutcome::VersionConflict {
