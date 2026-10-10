@@ -7221,8 +7221,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::dispatch::DeferredRegistryShutdownOutcome",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredRegistryShutdownOutcome",
+          "declaration": "pub use crate::dispatch::DeferredRegistryShutdownStatus",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredRegistryShutdownStatus",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",

@@ -160,7 +160,7 @@ async fn pop_lite_deferred_shutdown_drains_registered_waiter_without_processor_o
 
     assert!(matches!(
         service.shutdown(),
-        rocketmq_transport::api::DeferredRegistryShutdownOutcome::Completed(_)
+        rocketmq_transport::api::DeferredRegistryShutdownStatus::Completed(_)
     ));
     // The registration observer runs before the dispatcher commits
     // `ResponseAction::Deferred`. Registry shutdown drains registry-owned

@@ -36,7 +36,7 @@ use rocketmq_transport::api::DeferredExpiryBatch;
 use rocketmq_transport::api::DeferredExpiryBatchStats;
 use rocketmq_transport::api::DeferredExpiryMargins;
 use rocketmq_transport::api::DeferredRegistry;
-use rocketmq_transport::api::DeferredRegistryShutdownOutcome;
+use rocketmq_transport::api::DeferredRegistryShutdownStatus;
 use rocketmq_transport::api::DeferredResumeOutcome;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
 use rocketmq_transport::api::DeferredResumeSubmitOutcome;
@@ -395,7 +395,7 @@ impl PopLiteDeferredService {
         state.active.clear();
     }
 
-    pub(crate) fn shutdown(&self) -> DeferredRegistryShutdownOutcome {
+    pub(crate) fn shutdown(&self) -> DeferredRegistryShutdownStatus {
         self.seal();
         self.registry.shutdown()
     }

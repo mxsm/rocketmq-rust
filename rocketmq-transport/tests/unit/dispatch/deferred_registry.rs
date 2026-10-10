@@ -1331,14 +1331,14 @@ fn registry_shutdown_is_typed_idempotent_and_rejects_new_ownership() {
         .expect("shutdown registration");
     registration.commit().expect("shutdown commit");
     let outcome = registry.shutdown();
-    let DeferredRegistryShutdownOutcome::Completed(stats) = outcome else {
+    let DeferredRegistryShutdownStatus::Completed(stats) = outcome else {
         panic!("first shutdown must complete: {outcome:?}");
     };
     assert_eq!(stats.detached_entries(), 1);
     assert_eq!(stats.terminalized_responses(), 1);
     assert_eq!(stats.in_progress_responses(), 0);
     assert_eq!(stats.invariant_failures(), 0);
-    assert_eq!(registry.shutdown(), DeferredRegistryShutdownOutcome::AlreadyClosed);
+    assert_eq!(registry.shutdown(), DeferredRegistryShutdownStatus::AlreadyClosed);
     assert_registry_released(&registry, &harness.admission);
 
     let called = Arc::new(AtomicBool::new(false));
@@ -1570,13 +1570,13 @@ fn concurrent_registry_shutdown_reports_in_progress_until_registry_batch_drops()
     let winner_registry = registry.clone();
     let winner = std::thread::spawn(move || winner_registry.shutdown());
     entered.wait();
-    assert_eq!(registry.shutdown(), DeferredRegistryShutdownOutcome::InProgress);
+    assert_eq!(registry.shutdown(), DeferredRegistryShutdownStatus::InProgress);
     release.wait();
     assert!(matches!(
         winner.join().expect("shutdown winner thread"),
-        DeferredRegistryShutdownOutcome::Completed(_)
+        DeferredRegistryShutdownStatus::Completed(_)
     ));
-    assert_eq!(registry.shutdown(), DeferredRegistryShutdownOutcome::AlreadyClosed);
+    assert_eq!(registry.shutdown(), DeferredRegistryShutdownStatus::AlreadyClosed);
     assert_eq!(harness.admission.snapshot().waiting_count(), 0);
 }
 
@@ -1589,8 +1589,8 @@ struct PanickingShutdownLease {
 impl Drop for PanickingShutdownLease {
     fn drop(&mut self) {
         let observed = match self.registry.shutdown() {
-            DeferredRegistryShutdownOutcome::InProgress => 1,
-            DeferredRegistryShutdownOutcome::Completed(_) | DeferredRegistryShutdownOutcome::AlreadyClosed => 2,
+            DeferredRegistryShutdownStatus::InProgress => 1,
+            DeferredRegistryShutdownStatus::Completed(_) | DeferredRegistryShutdownStatus::AlreadyClosed => 2,
         };
         self.observed.store(observed, Ordering::SeqCst);
         if !self.panicked.swap(true, Ordering::SeqCst) {
@@ -1622,7 +1622,7 @@ fn panicking_registry_owned_drop_still_seals_shutdown_without_holding_the_lock()
     assert_eq!(observed.load(Ordering::SeqCst), 1);
     assert!(panicked.load(Ordering::SeqCst));
     assert_eq!(ticket.resolution(), TicketResolution::RemovedParentCancelled);
-    assert_eq!(registry.shutdown(), DeferredRegistryShutdownOutcome::AlreadyClosed);
+    assert_eq!(registry.shutdown(), DeferredRegistryShutdownStatus::AlreadyClosed);
     assert_eq!(registry.inner.index_counts(), (0, 0, 0));
     assert_eq!(harness.admission.snapshot().waiting_count(), 0);
 }
@@ -1693,7 +1693,7 @@ async fn registry_shutdown_wakes_provisional_ticket_and_claims_stay_parent_cance
         },
         () = tokio::task::yield_now() => {}
     }
-    let DeferredRegistryShutdownOutcome::Completed(stats) = registry.shutdown() else {
+    let DeferredRegistryShutdownStatus::Completed(stats) = registry.shutdown() else {
         panic!("shutdown winner completes");
     };
     assert_eq!(stats.detached_entries(), 1);
@@ -1719,8 +1719,8 @@ struct ReentrantShutdownLease {
 impl Drop for ReentrantShutdownLease {
     fn drop(&mut self) {
         let observed = match self.registry.shutdown() {
-            DeferredRegistryShutdownOutcome::InProgress => 1,
-            DeferredRegistryShutdownOutcome::Completed(_) | DeferredRegistryShutdownOutcome::AlreadyClosed => 2,
+            DeferredRegistryShutdownStatus::InProgress => 1,
+            DeferredRegistryShutdownStatus::Completed(_) | DeferredRegistryShutdownStatus::AlreadyClosed => 2,
         };
         self.observed.store(observed, Ordering::SeqCst);
     }
@@ -1743,10 +1743,10 @@ fn registry_shutdown_is_reentrant_without_holding_the_registry_lock() {
     registration.commit().expect("reentrant shutdown commit");
     assert!(matches!(
         registry.shutdown(),
-        DeferredRegistryShutdownOutcome::Completed(_)
+        DeferredRegistryShutdownStatus::Completed(_)
     ));
     assert_eq!(observed.load(Ordering::SeqCst), 1);
-    assert_eq!(registry.shutdown(), DeferredRegistryShutdownOutcome::AlreadyClosed);
+    assert_eq!(registry.shutdown(), DeferredRegistryShutdownStatus::AlreadyClosed);
     assert_eq!(harness.admission.snapshot().waiting_count(), 0);
 }
 

@@ -456,7 +456,7 @@ async fn shutdown_freezes_parent_over_session_for_ticket_state_and_one_metric() 
     harness.parent.cancel();
     assert!(matches!(
         registry.shutdown(),
-        DeferredRegistryShutdownOutcome::Completed(_)
+        DeferredRegistryShutdownStatus::Completed(_)
     ));
     let outcome = claim
         .await

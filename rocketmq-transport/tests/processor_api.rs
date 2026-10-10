@@ -40,8 +40,8 @@ use rocketmq_transport::api::DeferredRegistration;
 use rocketmq_transport::api::DeferredRegistry;
 use rocketmq_transport::api::DeferredRegistryOutcome;
 use rocketmq_transport::api::DeferredRegistryRecovery;
-use rocketmq_transport::api::DeferredRegistryShutdownOutcome;
 use rocketmq_transport::api::DeferredRegistryShutdownStats;
+use rocketmq_transport::api::DeferredRegistryShutdownStatus;
 use rocketmq_transport::api::DeferredRequest;
 use rocketmq_transport::api::DeferredResponder;
 use rocketmq_transport::api::DeferredResumeOutcome;
@@ -275,7 +275,7 @@ fn assert_deferred_registry_contract<R, E, F>(
 {
     let _: DeferredRegistry<R> = registry.clone();
     let _: fn() -> DeferredRegistry<R> = DeferredRegistry::<R>::new;
-    let _: fn(&DeferredRegistry<R>) -> DeferredRegistryShutdownOutcome = DeferredRegistry::<R>::shutdown;
+    let _: fn(&DeferredRegistry<R>) -> DeferredRegistryShutdownStatus = DeferredRegistry::<R>::shutdown;
     let _ = id;
     if let Some(parts) = parts {
         let _: RequestId = parts.request_id();
@@ -569,7 +569,7 @@ fn api_exposes_the_affine_transactional_deferred_registry_contract() {
     assert_debug_contract::<DeferredParts>();
     assert_debug_contract::<DeferredRequest<String>>();
     assert_debug_contract::<DeferredRegistry<String>>();
-    assert_debug_contract::<DeferredRegistryShutdownOutcome>();
+    assert_debug_contract::<DeferredRegistryShutdownStatus>();
     assert_debug_contract::<DeferredRegistryShutdownStats>();
     assert_debug_contract::<DeferredExpiry>();
     assert_debug_contract::<DeferredExpiryBatchStats>();

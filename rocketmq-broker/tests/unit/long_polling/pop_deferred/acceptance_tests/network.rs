@@ -688,7 +688,7 @@ async fn service_shutdown_drains_accepted_resume_to_parent_cancelled_without_a_f
     assert_eq!(service.admission_snapshot().waiting_count(), 0);
     assert!(matches!(
         service.shutdown(),
-        rocketmq_transport::api::DeferredRegistryShutdownOutcome::Completed(_)
+        rocketmq_transport::api::DeferredRegistryShutdownStatus::Completed(_)
     ));
     handler_release.notify_one();
     let outcome = receipt_rx

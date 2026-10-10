@@ -40,8 +40,8 @@ use super::DeferredExpiry;
 use super::DeferredId;
 use super::DeferredParts;
 use super::DeferredRegistry;
-use super::DeferredRegistryShutdownOutcome;
 use super::DeferredRegistryShutdownStats;
+use super::DeferredRegistryShutdownStatus;
 use super::DeferredRequest;
 use super::DeferredResponder;
 use super::DeferredRetainedSizeParts;
@@ -598,13 +598,13 @@ where
         removed_waiters
     }
 
-    pub(super) fn shutdown(&self) -> DeferredRegistryShutdownOutcome {
+    pub(super) fn shutdown(&self) -> DeferredRegistryShutdownStatus {
         let batch = {
             let mut state = self.state.lock();
             match state.lifecycle {
                 RegistryLifecycle::Open => state.lifecycle = RegistryLifecycle::Closing,
-                RegistryLifecycle::Closing => return DeferredRegistryShutdownOutcome::InProgress,
-                RegistryLifecycle::Closed => return DeferredRegistryShutdownOutcome::AlreadyClosed,
+                RegistryLifecycle::Closing => return DeferredRegistryShutdownStatus::InProgress,
+                RegistryLifecycle::Closed => return DeferredRegistryShutdownStatus::AlreadyClosed,
             }
             let mut batch = DetachedBatch::default();
             for (_, entry) in std::mem::take(&mut state.primary) {
@@ -624,7 +624,7 @@ where
         let completion = RegistryShutdownCompletion::new(self);
         let stats = batch.finish();
         completion.complete();
-        DeferredRegistryShutdownOutcome::Completed(stats)
+        DeferredRegistryShutdownStatus::Completed(stats)
     }
 
     pub(super) fn start_claim(
