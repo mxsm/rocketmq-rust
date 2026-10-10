@@ -179,7 +179,7 @@ enum SendFailure {
 /// This keeps normal admission and lifecycle outcomes distinct from a
 /// canonical operational failure without exporting writer progress through a
 /// public compatibility surface.
-pub(crate) enum CommandSendOutcome {
+pub(crate) enum CommandWriteResult {
     Written,
     DeadlineExpired,
     SessionClosed,
@@ -214,13 +214,13 @@ impl SendFailure {
         }
     }
 
-    fn into_command_outcome(self) -> CommandSendOutcome {
+    fn into_command_outcome(self) -> CommandWriteResult {
         match self {
-            Self::DeadlineExceeded { .. } => CommandSendOutcome::DeadlineExpired,
-            Self::SessionClosed => CommandSendOutcome::SessionClosed,
-            Self::Cancelled => CommandSendOutcome::Cancelled,
-            Self::QueueSaturated { .. } => CommandSendOutcome::QueueSaturated,
-            Self::Writer { progress, error } => CommandSendOutcome::OperationalFailure { progress, error },
+            Self::DeadlineExceeded { .. } => CommandWriteResult::DeadlineExpired,
+            Self::SessionClosed => CommandWriteResult::SessionClosed,
+            Self::Cancelled => CommandWriteResult::Cancelled,
+            Self::QueueSaturated { .. } => CommandWriteResult::QueueSaturated,
+            Self::Writer { progress, error } => CommandWriteResult::OperationalFailure { progress, error },
         }
     }
 }
@@ -1395,20 +1395,20 @@ impl Connection {
         command: RemotingCommand,
         deadline: RequestDeadline,
         target: impl Into<String>,
-    ) -> CommandSendOutcome {
+    ) -> CommandWriteResult {
         let target = target.into();
         if deadline.is_expired() {
-            return CommandSendOutcome::DeadlineExpired;
+            return CommandWriteResult::DeadlineExpired;
         }
         let class = self
             .response_class()
             .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
         let frame = match self.limits.encode_command(command) {
             Ok(frame) => frame,
-            Err(source) => return CommandSendOutcome::EncodingFailed(source),
+            Err(source) => return CommandWriteResult::EncodingFailed(source),
         };
         if deadline.is_expired() {
-            return CommandSendOutcome::DeadlineExpired;
+            return CommandWriteResult::DeadlineExpired;
         }
 
         self.send_payload_inner(
@@ -1422,7 +1422,7 @@ impl Connection {
             target,
         )
         .await
-        .map_or_else(SendFailure::into_command_outcome, |_| CommandSendOutcome::Written)
+        .map_or_else(SendFailure::into_command_outcome, |_| CommandWriteResult::Written)
     }
 
     /// Sends a RocketMQ command whose body is a validated, leased file region.
