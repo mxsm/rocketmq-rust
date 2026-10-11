@@ -8058,8 +8058,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::session_registry::SessionCloseOutcome",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::session_registry::SessionCloseOutcome",
+          "declaration": "pub use crate::session_registry::SessionCloseStatus",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::session_registry::SessionCloseStatus",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
