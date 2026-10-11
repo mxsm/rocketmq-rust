@@ -63,8 +63,8 @@ use crate::session_registry::ServerPushKind;
 use crate::session_registry::ServerPushOutcome;
 use crate::session_registry::ServerRequestCommand;
 use crate::session_registry::ServerRequestOutcome;
-use crate::session_registry::SessionCloseOutcome;
 use crate::session_registry::SessionCloseReason;
+use crate::session_registry::SessionCloseStatus;
 use crate::session_registry::SessionEvent;
 use crate::session_registry::SessionRegistry;
 use crate::session_view::SessionId;
@@ -659,8 +659,8 @@ async fn registry_capabilities_write_typed_push_and_close_the_same_canonical_ses
     assert!(
         matches!(
             (first_close, second_close),
-            (SessionCloseOutcome::Closed, SessionCloseOutcome::AlreadyClosed)
-                | (SessionCloseOutcome::AlreadyClosed, SessionCloseOutcome::Closed)
+            (SessionCloseStatus::Closed, SessionCloseStatus::AlreadyClosed)
+                | (SessionCloseStatus::AlreadyClosed, SessionCloseStatus::Closed)
         ),
         "concurrent closes must share full completion while exactly one caller initiates it"
     );
@@ -682,7 +682,7 @@ async fn registry_capabilities_write_typed_push_and_close_the_same_canonical_ses
             .close(SessionCloseReason::Administrative)
             .await
             .expect("repeated typed close should reuse completed shutdown"),
-        SessionCloseOutcome::AlreadyClosed
+        SessionCloseStatus::AlreadyClosed
     );
     let eof = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
         .await
@@ -847,7 +847,7 @@ async fn close_transition_rejects_retained_push_and_request_capabilities() {
         .await
         .expect("close task join")
         .expect("ordered close after listener release");
-    assert_eq!(close_outcome, SessionCloseOutcome::Closed);
+    assert_eq!(close_outcome, SessionCloseStatus::Closed);
     assert!(client.receive_command().await.is_none());
     running.begin_shutdown();
     running.finish().await;
@@ -959,8 +959,8 @@ async fn typed_close_waits_for_deferred_cleanup_executor_drain_and_writer_comple
     assert!(
         matches!(
             (first, second),
-            (SessionCloseOutcome::Closed, SessionCloseOutcome::AlreadyClosed)
-                | (SessionCloseOutcome::AlreadyClosed, SessionCloseOutcome::Closed)
+            (SessionCloseStatus::Closed, SessionCloseStatus::AlreadyClosed)
+                | (SessionCloseStatus::AlreadyClosed, SessionCloseStatus::Closed)
         ),
         "concurrent closes must share completion while exactly one caller initiates it"
     );
@@ -992,7 +992,7 @@ async fn typed_close_waits_for_deferred_cleanup_executor_drain_and_writer_comple
             .close(SessionCloseReason::Administrative)
             .await
             .expect("repeated typed close completion"),
-        SessionCloseOutcome::AlreadyClosed
+        SessionCloseStatus::AlreadyClosed
     );
     running.begin_shutdown();
     running.finish().await;
@@ -1335,7 +1335,7 @@ async fn typed_close_completes_healthily_with_a_written_pending_server_request()
             .close(SessionCloseReason::Administrative)
             .await
             .expect("pending server request must not make ordered close unhealthy"),
-        SessionCloseOutcome::Closed
+        SessionCloseStatus::Closed
     );
     let request_result = tokio::time::timeout(Duration::from_secs(1), request_task)
         .await
@@ -1465,7 +1465,7 @@ async fn aborting_a_written_server_request_retires_its_owner_and_rejects_late_re
             .close(SessionCloseReason::Administrative)
             .await
             .expect("gracefully close replacement session"),
-        SessionCloseOutcome::Closed
+        SessionCloseStatus::Closed
     );
     assert!(replacement.receive_command().await.is_none());
 

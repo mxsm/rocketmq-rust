@@ -231,10 +231,17 @@ impl From<SessionCloseReason> for crate::server::SessionCloseCause {
     }
 }
 
-/// Result of gracefully retiring one canonical session.
+/// Completion status of gracefully retiring one canonical session.
+///
+/// Both variants are returned only after the full server-owned close boundary completes: ordered
+/// cleanup, executor drain, and writer completion. Neither variant reports close still in progress.
+/// `Closed` identifies the caller that initiated close, and `AlreadyClosed` identifies a caller that
+/// observed a prior initiator's close.
+///
+/// Renamed from `SessionCloseOutcome`; the variants are unchanged.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[must_use]
-pub enum SessionCloseOutcome {
+pub enum SessionCloseStatus {
     /// This caller initiated and observed full close completion.
     Closed,
     /// A prior caller initiated close; this caller also observed full completion.
@@ -682,16 +689,16 @@ impl SessionCloseHandle {
     ///
     /// Operational finalization failures retain their typed source in
     /// [`TransportError`].
-    pub async fn close(&self, reason: SessionCloseReason) -> Result<SessionCloseOutcome, TransportError> {
+    pub async fn close(&self, reason: SessionCloseReason) -> Result<SessionCloseStatus, TransportError> {
         let (initiated, winning_cause) = self.session.request_close(reason.into());
         self.session
             .wait_for_close_completion()
             .await
             .map_err(|source| TransportError::close(winning_cause, source))?;
         Ok(if initiated {
-            SessionCloseOutcome::Closed
+            SessionCloseStatus::Closed
         } else {
-            SessionCloseOutcome::AlreadyClosed
+            SessionCloseStatus::AlreadyClosed
         })
     }
 
