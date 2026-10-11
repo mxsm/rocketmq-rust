@@ -1082,22 +1082,22 @@ impl Connection {
                 )
                 .with_response_queue_wait_observation(response_queue_wait_observation),
             ) {
-                crate::writer_runtime::WriterEnqueueOutcome::Enqueued => {
+                crate::writer_runtime::WriterEnqueueResult::Enqueued => {
                     queued.writer_diagnostics.record_accepted();
                     self.telemetry.record_outbound_accepted_plaintext_bytes(encoded_len);
                 }
                 rejection => {
                     queued.writer_diagnostics.record_rejected(Some(encoded_len));
                     return Err(match rejection {
-                        crate::writer_runtime::WriterEnqueueOutcome::Full(write) => {
+                        crate::writer_runtime::WriterEnqueueResult::Full(write) => {
                             drop(write);
                             SendFailure::QueueSaturated { target: target.clone() }
                         }
-                        crate::writer_runtime::WriterEnqueueOutcome::Closed(write) => {
+                        crate::writer_runtime::WriterEnqueueResult::Closed(write) => {
                             drop(write);
                             SendFailure::SessionClosed
                         }
-                        crate::writer_runtime::WriterEnqueueOutcome::Enqueued => unreachable!(),
+                        crate::writer_runtime::WriterEnqueueResult::Enqueued => unreachable!(),
                     });
                 }
             }
