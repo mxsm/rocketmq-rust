@@ -46,7 +46,6 @@ use crate::dispatch::DispatchProcessor;
 use crate::dispatch::DispatchProcessorError;
 use crate::dispatch::ExplicitProcessor;
 use crate::dispatch::InternalProcessorCandidate;
-use crate::dispatch::InternalProcessorOutcome;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RemotingResponse;
 use crate::dispatch::RequestContext;
@@ -459,14 +458,14 @@ where
                     &sink,
                 )
                 .await?;
-            let InternalProcessorCandidate { outcome, failure } = candidate;
-            let outcome = processor.resolve_outcome(&mut request, outcome)?;
+            let InternalProcessorCandidate { action, failure } = candidate;
+            let action = processor.resolve_response_action(&mut request, action)?;
             self.finish_candidate(
                 processor,
                 sink,
                 original,
                 request_started,
-                InternalProcessorCandidate { outcome, failure },
+                InternalProcessorCandidate { action, failure },
                 retained_bytes,
                 &mut metrics,
             )
@@ -488,9 +487,9 @@ where
         retained_bytes: usize,
         metrics: &mut crate::dispatch::DispatchMetricsGuard,
     ) -> Result<(), AuthorizedDispatchError> {
-        let InternalProcessorCandidate { outcome, failure } = candidate;
-        match outcome {
-            InternalProcessorOutcome::Handled(crate::dispatch::ResponseAction::Reply(response)) => {
+        let InternalProcessorCandidate { action, failure } = candidate;
+        match action {
+            crate::dispatch::ResponseAction::Reply(response) => {
                 let response_code = response.response_code();
                 if failure.is_some() {
                     metrics.complete_process_request_failed(response_code);
@@ -507,7 +506,7 @@ where
                 }
                 deliver_and_observe(sink, original, response, failure.is_some(), metrics).await
             }
-            InternalProcessorOutcome::Handled(crate::dispatch::ResponseAction::Deferred(registration)) => {
+            crate::dispatch::ResponseAction::Deferred(registration) => {
                 if original.is_one_way() {
                     drop(registration);
                     return Err(AuthorizedDispatchError::OneWayOutcome { outcome: "deferred" });
@@ -528,7 +527,7 @@ where
                     },
                 }
             }
-            InternalProcessorOutcome::Handled(crate::dispatch::ResponseAction::NoReply(marker)) => {
+            crate::dispatch::ResponseAction::NoReply(marker) => {
                 if original.is_one_way() {
                     drop(marker);
                     return Err(AuthorizedDispatchError::OneWayOutcome { outcome: "no_reply" });

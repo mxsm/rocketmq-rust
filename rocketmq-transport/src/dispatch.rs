@@ -97,7 +97,6 @@ pub(crate) use processor_adapter::EmbeddedResponseAction;
 pub(crate) use processor_adapter::ExplicitProcessor;
 pub(crate) use processor_adapter::InternalFailureOrigin;
 pub(crate) use processor_adapter::InternalProcessorCandidate;
-pub(crate) use processor_adapter::InternalProcessorOutcome;
 pub(crate) use processor_adapter::NetworkSession;
 pub use remoting_request::IngressRequestView;
 pub use remoting_request::RemotingRequest;
