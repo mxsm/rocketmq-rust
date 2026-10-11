@@ -707,7 +707,7 @@ async fn send_boundary_response(
                 None,
                 None,
                 None,
-                crate::runtime::processor::ResponseObservationOutcome::Failed {
+                crate::runtime::processor::ResponseLifecycleEvent::Failed {
                     completion: None,
                     progress: Some(WriteProgress::NotStarted),
                 },
@@ -735,13 +735,13 @@ async fn send_boundary_response(
             Some(write_elapsed),
             match result.as_ref() {
                 Ok(ResponseCompletionOutcome::Completed(receipt)) => {
-                    crate::runtime::processor::ResponseObservationOutcome::Written(*receipt)
+                    crate::runtime::processor::ResponseLifecycleEvent::DeliveryCompleted(*receipt)
                 }
-                Ok(outcome) => crate::runtime::processor::ResponseObservationOutcome::Failed {
+                Ok(outcome) => crate::runtime::processor::ResponseLifecycleEvent::Failed {
                     completion: Some(*outcome),
                     progress: response_outcome_progress(*outcome),
                 },
-                Err(error) => crate::runtime::processor::ResponseObservationOutcome::Failed {
+                Err(error) => crate::runtime::processor::ResponseLifecycleEvent::Failed {
                     completion: None,
                     progress: Some(error.write_progress()),
                 },
