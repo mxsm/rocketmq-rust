@@ -184,8 +184,9 @@ pub enum SessionCloseReason {
 
 /// Result of attempting one typed server push.
 #[must_use]
-pub enum ServerPushOutcome {
-    /// The canonical socket write completed.
+pub enum ServerPushResult {
+    /// The canonical local socket write and flush completed; this asserts
+    /// nothing about peer receipt or business completion.
     Sent(ServerPushReceipt),
     /// The bounded writer queue rejected the command before writing.
     QueueSaturated,
@@ -274,12 +275,12 @@ impl ServerPushSender {
         &self,
         command: ServerPushCommand,
         timeout: Duration,
-    ) -> Result<ServerPushOutcome, TransportError> {
+    ) -> Result<ServerPushResult, TransportError> {
         let session_id = self.session_id();
         let kind = command.kind();
         let _outbound_lease = match self.session.acquire_server_outbound() {
             Ok(lease) => lease,
-            Err(_) => return Ok(ServerPushOutcome::SessionClosed),
+            Err(_) => return Ok(ServerPushResult::SessionClosed),
         };
         let mut connection = self.session.connection();
         match server_command_disposition(
@@ -291,10 +292,10 @@ impl ServerPushSender {
                 )
                 .await,
         ) {
-            ServerCommandDisposition::Written => Ok(ServerPushOutcome::Sent(ServerPushReceipt { session_id, kind })),
-            ServerCommandDisposition::QueueSaturated => Ok(ServerPushOutcome::QueueSaturated),
-            ServerCommandDisposition::DeadlineExpired => Ok(ServerPushOutcome::DeadlineExpired),
-            ServerCommandDisposition::SessionClosed => Ok(ServerPushOutcome::SessionClosed),
+            ServerCommandDisposition::Written => Ok(ServerPushResult::Sent(ServerPushReceipt { session_id, kind })),
+            ServerCommandDisposition::QueueSaturated => Ok(ServerPushResult::QueueSaturated),
+            ServerCommandDisposition::DeadlineExpired => Ok(ServerPushResult::DeadlineExpired),
+            ServerCommandDisposition::SessionClosed => Ok(ServerPushResult::SessionClosed),
             ServerCommandDisposition::EncodingFailed(source) => Err(TransportError::push(source)),
             ServerCommandDisposition::OperationalFailure { error, .. } => Err(TransportError::push(error)),
         }

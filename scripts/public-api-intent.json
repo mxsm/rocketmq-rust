@@ -7977,8 +7977,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::session_registry::ServerPushOutcome",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::session_registry::ServerPushOutcome",
+          "declaration": "pub use crate::session_registry::ServerPushResult",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::session_registry::ServerPushResult",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
