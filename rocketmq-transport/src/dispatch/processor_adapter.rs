@@ -408,17 +408,14 @@ where
     fn reject_request(&self, request_code: i32) -> Result<Option<InternalProcessorCandidate>, DispatchProcessorError> {
         Ok(match self.processor.reject_request(request_code) {
             RejectRequestDecision::Proceed => None,
-            RejectRequestDecision::Reject(response) => Some(InternalProcessorCandidate::success(
-                ResponseAction::Reply(response),
-            )),
+            RejectRequestDecision::Reject(response) => {
+                Some(InternalProcessorCandidate::success(ResponseAction::Reply(response)))
+            }
         })
     }
 
     fn deadline_candidate(&self, response: RemotingResponse) -> InternalProcessorCandidate {
-        InternalProcessorCandidate::failure(
-            ResponseAction::Reply(response),
-            InternalFailureOrigin::Deadline,
-        )
+        InternalProcessorCandidate::failure(ResponseAction::Reply(response), InternalFailureOrigin::Deadline)
     }
 
     fn install_deferred_response(

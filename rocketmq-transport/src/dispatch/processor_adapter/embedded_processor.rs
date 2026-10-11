@@ -59,9 +59,9 @@ where
     pub(crate) fn embedded_reject_request(&self, request_code: i32) -> Option<InternalProcessorCandidate> {
         match self.processor.reject_request(request_code) {
             RejectRequestDecision::Proceed => None,
-            RejectRequestDecision::Reject(response) => Some(InternalProcessorCandidate::success(
-                ResponseAction::Reply(response),
-            )),
+            RejectRequestDecision::Reject(response) => {
+                Some(InternalProcessorCandidate::success(ResponseAction::Reply(response)))
+            }
         }
     }
 
@@ -74,9 +74,7 @@ where
             None => Ok(self.processor.process(request).await),
         };
         match processed {
-            Ok(Ok(outcome)) => Ok(InternalProcessorCandidate::success(
-                outcome,
-            )),
+            Ok(Ok(outcome)) => Ok(InternalProcessorCandidate::success(outcome)),
             Ok(Err(error)) => {
                 let context = error.context();
                 let view = PublicErrorView::try_new(error.descriptor(), context)
@@ -107,7 +105,7 @@ where
         action: ResponseAction,
     ) -> Result<EmbeddedResponseAction, TransportContractViolation> {
         if request.original_identity().is_one_way() {
-            return match outcome {
+            return match action {
                 ResponseAction::Reply(response) => {
                     let resolved = request.resolve_response_action(ResponseAction::Reply(response))?;
                     drop(resolved);
@@ -123,7 +121,7 @@ where
                 }
             };
         }
-        match request.resolve_response_action(outcome)? {
+        match request.resolve_response_action(action)? {
             ResponseAction::Reply(response) => Ok(EmbeddedResponseAction::Reply(response)),
             ResponseAction::Deferred(registration) => Ok(EmbeddedResponseAction::Deferred(registration)),
             ResponseAction::NoReply(marker) => Ok(EmbeddedResponseAction::NoReply(marker)),
