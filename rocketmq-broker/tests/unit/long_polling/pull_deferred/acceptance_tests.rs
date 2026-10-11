@@ -40,7 +40,7 @@ use rocketmq_store::MessageFilter;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::DeferredAdmission;
-use rocketmq_transport::api::DeferredClaimOutcome;
+use rocketmq_transport::api::DeferredClaimResult;
 use rocketmq_transport::api::DeferredExpiryMargins;
 use rocketmq_transport::api::DeferredId;
 use rocketmq_transport::api::DeferredWaitLimits;
@@ -577,7 +577,7 @@ async fn tcp_pending_arrival_and_timeout_reexecute_then_write_one_bound_frame() 
             barrier.release_outcome.notify_one();
             pending_claim.await.expect("pending timeout wake replays after commit")
         };
-        let DeferredClaimOutcome::Claimed(claim) = claim else {
+        let DeferredClaimResult::Claimed(claim) = claim else {
             panic!("prepared Pull wake must retain its claimed request");
         };
         assert_eq!(claim.reason(), wake_reason);
@@ -647,7 +647,7 @@ async fn tcp_pending_arrival_and_timeout_reexecute_then_write_one_bound_frame() 
                 .await
                 .expect("Pull resume receipt channel")
                 .expect("canonical Pull resume/write"),
-            rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+            rocketmq_transport::api::DeferredResumeResult::Completed(_)
         ));
         assert_eq!(response.opaque(), original_opaque);
         assert_eq!(response.code(), ResponseCode::PullNotFound as i32);
@@ -726,7 +726,7 @@ async fn tcp_partial_write_drops_owner_once_without_retrying() {
     let mut candidates = service.reserve_arrival_batch(&PullArrivalView::new(&topic, 0, 8), &mut cursor);
     let candidate = candidates.pop().expect("one partial-write Pull candidate");
     assert!(candidates.is_empty());
-    let DeferredClaimOutcome::Claimed(claim) = service
+    let DeferredClaimResult::Claimed(claim) = service
         .claim_candidate(candidate, DeferredWakeReason::MessageArrived)
         .await
         .expect("claim partial-write Pull")

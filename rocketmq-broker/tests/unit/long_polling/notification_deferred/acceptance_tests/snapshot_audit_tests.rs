@@ -115,7 +115,7 @@ async fn notification_deferred_snapshot_tracks_accepted_resume_count_and_bytes_u
             .await
             .expect("observed resume receipt channel")
             .expect("observed resume writes canonically"),
-        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        rocketmq_transport::api::DeferredResumeResult::Completed(_)
     ));
     let response = client
         .receive_command()

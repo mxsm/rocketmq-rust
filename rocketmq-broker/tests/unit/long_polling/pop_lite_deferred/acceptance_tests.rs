@@ -37,10 +37,10 @@ use rocketmq_runtime::ShutdownReport;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::DeferredAdmission;
-use rocketmq_transport::api::DeferredClaimOutcome;
+use rocketmq_transport::api::DeferredClaimResult;
 use rocketmq_transport::api::DeferredExpiryMargins;
 use rocketmq_transport::api::DeferredId;
-use rocketmq_transport::api::DeferredResumeOutcome;
+use rocketmq_transport::api::DeferredResumeResult;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
 use rocketmq_transport::api::DeferredWaitLimits;
 use rocketmq_transport::api::DeferredWakeReason;
@@ -409,7 +409,7 @@ async fn pop_lite_deferred_event_claim_writes_one_frame() {
             .await
             .expect("PopLite receipt channel")
             .expect("canonical PopLite write"),
-        DeferredResumeOutcome::Completed(_)
+        DeferredResumeResult::Completed(_)
     ));
 
     let response = client
@@ -473,7 +473,7 @@ async fn pop_lite_deferred_claim_failure_rolls_back_event_order_and_permits() {
         ),
         2
     );
-    let DeferredClaimOutcome::Claimed(claimed_elsewhere) = service
+    let DeferredClaimResult::Claimed(claimed_elsewhere) = service
         .registry
         .claim(id, DeferredWakeReason::Timeout)
         .await

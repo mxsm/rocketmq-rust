@@ -7104,8 +7104,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::dispatch::DeferredClaimOutcome",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredClaimOutcome",
+          "declaration": "pub use crate::dispatch::DeferredClaimResult",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredClaimResult",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -7275,8 +7275,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::dispatch::DeferredResumeOutcome",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredResumeOutcome",
+          "declaration": "pub use crate::dispatch::DeferredResumeResult",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredResumeResult",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -7293,8 +7293,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::dispatch::DeferredResumeSubmitOutcome",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredResumeSubmitOutcome",
+          "declaration": "pub use crate::dispatch::DeferredResumeSubmissionStatus",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredResumeSubmissionStatus",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",

@@ -97,7 +97,7 @@ async fn pop_lite_deferred_max_age_expires_as_business_timeout_and_drains() {
             )
             .await
             .expect("business timeout writes canonically"),
-        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        rocketmq_transport::api::DeferredResumeResult::Completed(_)
     ));
     let response = client
         .receive_command()
