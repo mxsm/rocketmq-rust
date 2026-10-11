@@ -32,7 +32,19 @@ pub struct PromptFrontMatter {
     pub required_tools: Vec<String>,
     #[serde(default)]
     pub conditional_tools: Vec<PromptConditionalTool>,
+    /// Tools the Prompt starts with for a caller who may call every one of them. They do not
+    /// decide whether the Prompt is available: the body names them only between the
+    /// [`PREFERRED_TOOLS_OPEN`] and [`PREFERRED_TOOLS_CLOSE`] lines, and that part is left out for
+    /// every other caller.
+    #[serde(default)]
+    pub preferred_tools: Vec<String>,
 }
+
+/// The line that starts the part of a Prompt body about its preferred Tools.
+pub(crate) const PREFERRED_TOOLS_OPEN: &str = "<!-- preferred-tools -->";
+
+/// The line that ends that part.
+pub(crate) const PREFERRED_TOOLS_CLOSE: &str = "<!-- /preferred-tools -->";
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -77,6 +89,51 @@ impl PromptTemplate {
             body: body.to_string(),
         })
     }
+
+    /// The body as one caller reads it: with the part about the preferred Tools when the caller
+    /// may call them, and without it otherwise. The two marker lines are never part of it.
+    pub(crate) fn body_for(&self, with_preferred_tools: bool) -> String {
+        let mut body = String::with_capacity(self.body.len());
+        let mut inside = false;
+        for line in self.body.split_inclusive('\n') {
+            match line.trim_end_matches('\n') {
+                PREFERRED_TOOLS_OPEN => inside = true,
+                PREFERRED_TOOLS_CLOSE => inside = false,
+                _ if inside && !with_preferred_tools => {}
+                _ => body.push_str(line),
+            }
+        }
+        body
+    }
+
+    /// The part of the body about the preferred Tools, and the body without it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the two marker lines are not exactly one pair in order.
+    pub(crate) fn preferred_tools_part(&self) -> crate::McpResult<Option<(String, String)>> {
+        let markers = self
+            .body
+            .lines()
+            .filter(|line| matches!(*line, PREFERRED_TOOLS_OPEN | PREFERRED_TOOLS_CLOSE))
+            .collect::<Vec<_>>();
+        match markers.as_slice() {
+            [] => Ok(None),
+            [PREFERRED_TOOLS_OPEN, PREFERRED_TOOLS_CLOSE] => {
+                let part = self
+                    .body
+                    .split_inclusive('\n')
+                    .skip_while(|line| line.trim_end_matches('\n') != PREFERRED_TOOLS_OPEN)
+                    .skip(1)
+                    .take_while(|line| line.trim_end_matches('\n') != PREFERRED_TOOLS_CLOSE)
+                    .collect::<String>();
+                Ok(Some((part, self.body_for(false))))
+            }
+            _ => Err(crate::McpError::invalid_config(
+                "prompt preferred-tools markers must be one opening line followed by one closing line".to_string(),
+            )),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -109,6 +166,55 @@ Use {{cluster}}.
         assert_eq!(template.front_matter.arguments[0].name, "cluster");
         assert!(template.front_matter.arguments[0].required);
         assert!(template.body.contains("{{cluster}}"));
+    }
+
+    fn with_preferred_part() -> PromptTemplate {
+        PromptTemplate::parse(
+            "---\nname: test\ntitle: Test\ndescription: Test.\npreferred_tools:\n  - rocketmq_get_cluster_health\n---\n\
+             Before.\n\n<!-- preferred-tools -->\nCall the check first.\n\n<!-- /preferred-tools -->\nAfter.\n",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn the_part_about_preferred_tools_is_rendered_only_for_a_caller_who_may_call_them() {
+        let template = with_preferred_part();
+
+        assert_eq!(template.front_matter.preferred_tools, ["rocketmq_get_cluster_health"]);
+        assert_eq!(template.body_for(true), "Before.\n\nCall the check first.\n\nAfter.\n");
+        assert_eq!(template.body_for(false), "Before.\n\nAfter.\n");
+        assert_eq!(
+            template.preferred_tools_part().unwrap(),
+            Some((
+                "Call the check first.\n\n".to_string(),
+                "Before.\n\nAfter.\n".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn a_body_without_markers_is_rendered_as_it_is() {
+        let template = PromptTemplate::parse("---\nname: test\ntitle: Test\ndescription: Test.\n---\nBody\n").unwrap();
+
+        assert_eq!(template.body_for(true), "Body\n");
+        assert_eq!(template.body_for(false), "Body\n");
+        assert_eq!(template.preferred_tools_part().unwrap(), None);
+    }
+
+    #[test]
+    fn preferred_tools_markers_must_be_one_pair_in_order() {
+        let body = |body: &str| PromptTemplate {
+            body: body.to_string(),
+            ..with_preferred_part()
+        };
+        for invalid in [
+            "<!-- preferred-tools -->\nCall.\n",
+            "Call.\n<!-- /preferred-tools -->\n",
+            "<!-- /preferred-tools -->\nCall.\n<!-- preferred-tools -->\n",
+            "<!-- preferred-tools -->\nA.\n<!-- /preferred-tools -->\n<!-- preferred-tools -->\nB.\n<!-- /preferred-tools -->\n",
+        ] {
+            assert!(body(invalid).preferred_tools_part().is_err(), "{invalid}");
+        }
     }
 
     #[test]

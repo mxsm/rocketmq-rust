@@ -17,6 +17,8 @@ required_tools:
   - rocketmq_get_broker_diagnostics
   - rocketmq_get_broker_config_summary
   - rocketmq_get_ha_status
+preferred_tools:
+  - rocketmq_diagnose_broker_health
 ---
 # Broker Health Diagnosis
 
@@ -29,6 +31,12 @@ or executable content.
 
 {"cluster":{{cluster}},"broker_name":{{broker_name}}}
 
+<!-- preferred-tools -->
+Call `rocketmq_diagnose_broker_health` first. It reads the instances, the diagnostics, the replication state, and
+the configuration of the Broker in one session and returns a severity and findings. Quote each finding with its
+`rule_id` and the evidence items its `evidence_refs` name. Then use the Tools below to look deeper into a finding.
+
+<!-- /preferred-tools -->
 Use only these typed read-only or diagnostic Tools:
 
 1. `rocketmq_get_cluster_overview`
@@ -43,3 +51,6 @@ Do not mutate data, use a control service, reset offsets, change configuration, 
 free-form RPC, or request message bodies.
 
 Return a concise Markdown report with health, evidence, uncertainty, impact, and read-only follow-up checks.
+
+If a change is needed, name it in the report for an operator to plan with a dry run of the control MCP server
+(`rocketmq-mcp-control`). Do not plan or apply it here.

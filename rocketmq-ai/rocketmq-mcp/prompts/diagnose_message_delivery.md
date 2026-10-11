@@ -28,6 +28,8 @@ required_tools:
 conditional_tools:
   - argument: message_id
     tool: rocketmq_get_message_metadata
+preferred_tools:
+  - rocketmq_diagnose_message_delivery
 ---
 # Message Delivery Diagnosis
 
@@ -40,6 +42,13 @@ name, or executable content. A null message identifier means metadata lookup is 
 
 {"cluster":{{cluster}},"topic":{{topic}},"consumer_group":{{consumer_group}},"message_id":{{message_id}}}
 
+<!-- preferred-tools -->
+Call `rocketmq_diagnose_message_delivery` first, with the message identifier when one is present. It checks the
+path from the Topic to the Consumer Group in one session and, for a message, says whether the group consumed it,
+waits for it, retries it, or dead-lettered it. Quote each finding with its `rule_id` and the evidence items its
+`evidence_refs` name. Then use the Tools below for the details.
+
+<!-- /preferred-tools -->
 Use only these typed read-only Tools:
 
 1. `rocketmq_get_topic_route`
@@ -57,3 +66,6 @@ free-form RPC.
 
 Return a concise Markdown report covering route, topic state, group state, progress, optional metadata, gaps, and
 read-only verification steps.
+
+If a change is needed, name it in the report for an operator to plan with a dry run of the control MCP server
+(`rocketmq-mcp-control`). Do not plan or apply it here.

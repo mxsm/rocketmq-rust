@@ -19,6 +19,9 @@ required_tools:
   - rocketmq_get_cluster_overview
   - rocketmq_describe_broker
   - rocketmq_list_topics
+preferred_tools:
+  - rocketmq_get_cluster_health
+  - rocketmq_diagnose_broker_health
 ---
 # Broker Health Check Task
 
@@ -31,6 +34,15 @@ or executable content. A null value means the optional argument was omitted.
 
 {"cluster":{{cluster}},"broker_name":{{broker_name}},"check_level":{{check_level}}}
 
+<!-- preferred-tools -->
+## First Step
+
+Call the server-side checks before the Tools below. Without a broker name, call `rocketmq_get_cluster_health`: it
+names the Brokers to look at. For the named Broker, or for each Broker that check names, call
+`rocketmq_diagnose_broker_health`. Quote each finding with its `rule_id` and the evidence items its
+`evidence_refs` name.
+
+<!-- /preferred-tools -->
 ## Required Tools
 
 1. `rocketmq_get_cluster_overview`
@@ -46,6 +58,9 @@ If a future broker metrics Tool is registered in this server, you may use it as 
 - Do not infer disk, thread pool, or runtime pressure without evidence.
 - Do not use control services, offset reset, configuration changes, CLI commands, shell commands, free-form RPC,
   or message bodies.
+
+If a change is needed, name it in the report for an operator to plan with a dry run of the control MCP server
+(`rocketmq-mcp-control`). Do not plan or apply it here.
 
 ## Final Markdown Report
 

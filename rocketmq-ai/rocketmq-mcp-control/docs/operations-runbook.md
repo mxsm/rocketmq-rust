@@ -14,7 +14,9 @@
 5. Restart the process. Configuration and emergency-disable changes are startup-time controls and do not hot
    reload.
 
-Verify authenticated `tools/list`: a principal can see zero through five tools according to the intersection.
+Verify authenticated `tools/list`: a principal can see zero through five mutation tools according to the
+intersection, and `rocketmq_get_mutation_result` whenever it holds `rocketmq:write` and an allowed, configured
+cluster.
 The capability Resource must report compile/runtime/registered state consistent with that catalog. Resource
 templates and prompts remain empty.
 
@@ -66,6 +68,7 @@ error text.
 | `mutation call was rejected before execution` | warn | `site="call"`, `tool`, `code`, `suppressed` | Authorization, argument, or admission failure. No Admin session was opened. |
 | `mutation finished` | info | `operation`, `cluster`, `mode`, `result`, `invocation_id`, `elapsed_ms` | A supervised dry run was `planned` or an execution was `applied`. |
 | `mutation finished without a clean result` | warn | the same fields plus `code` and `audit_recorded` | The result is `partial`, `conflict`, or `failed`, or the terminal audit record was not persisted. |
+| `mutation result was looked up` | info | `tool`, `cluster`, `state`, `elapsed_ms` | `rocketmq_get_mutation_result` answered. `state` is `finished`, `in_progress`, `interrupted`, or `not_found`. A lookup writes no audit record. |
 | `durable audit record is unavailable` | error | `site="audit"`, `stage`, `suppressed` | `started`: no session began. `terminal`: the mutation ran without a terminal record. `supervisor`: the terminal state is unknown. |
 | `rocketmq-mcp-control stopped` | info | none | Normal shutdown. |
 | `rocketmq-mcp-control stopped with an error` | error | `code` | The stage was logged earlier. |
@@ -220,7 +223,8 @@ CLI, RPC, or delete operation. Do not reuse a request key with different content
 | `partial_apply` / `partial` | Some targets persisted or verified and others did not. | Treat returned `targets`, `before`, `after`, persistence, and verification fields as source of truth; reconcile each target explicitly before retrying. |
 | `verification_failed` | A write may have persisted but complete post-read verification or order reconciliation failed. | Preserve the result, inspect the affected logical target using an authorized operational path, then restore or complete the intended state with a new typed request. |
 | `audit_unavailable` | Durable audit recovery, append, or timeout failed. | Stop mutation attempts and repair/recover the audit sink before retrying. A failed `started` record means no session/RPC began. |
-| `timeout`, `cancelled`, or `shutdown_failed` | The request/session lifecycle did not reach a normal terminal path. | Wait for/reconcile the durable terminal audit state and target state before any new request. |
+| `timeout`, `cancelled`, or `shutdown_failed` | The request/session lifecycle did not reach a normal terminal path. | Call `rocketmq_get_mutation_result` with the call's `request_key` until it is `finished`, then reconcile the durable terminal audit state and target state before any new request. |
+| lost response | The client never received a result or an error. | Call `rocketmq_get_mutation_result` with the `request_key`. `in_progress`: wait. `interrupted`: the server restarted mid-call, so read the current state with a dry run. `not_found`: the call did not start, or it is no longer remembered. |
 | `execution_failed` or `operation_unavailable` | The typed operation/session cannot complete or is not registered. | Correct deployment/runtime policy or the underlying authorized service condition; do not substitute a CLI, shell, or arbitrary RPC. |
 
 For rollback of server policy rather than a RocketMQ resource, restore the prior configuration file and restart
@@ -238,7 +242,9 @@ audit records or mutate any RocketMQ state.
 2. Restart the Control process. There is no hot reload for this setting.
 3. With an authenticated request, call `tools/list`. Verify that no reviewed write Tool is present:
    `rocketmq_upsert_topic`, `rocketmq_upsert_consumer_group`, `rocketmq_reset_consumer_offset`,
-   `rocketmq_patch_broker_config`, and `rocketmq_set_consumer_request_mode` must all be absent.
+   `rocketmq_patch_broker_config`, and `rocketmq_set_consumer_request_mode` must all be absent. The read-only
+   `rocketmq_get_mutation_result` stays listed on purpose: it is how the outcome of the calls made before the
+   stop is read, for every invocation whose records are still in the active audit segment.
 4. Read `rocketmq-control://capabilities`. Verify
    `mutations_runtime_enabled=false`, `registered_operations=0`, and `mutation_supported=false`.
    In a `write-tools` binary, `write_tools_compiled` can remain true; compile availability is intentionally

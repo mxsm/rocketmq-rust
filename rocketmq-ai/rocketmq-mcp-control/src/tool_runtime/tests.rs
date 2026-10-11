@@ -1366,3 +1366,374 @@ async fn audit_records_never_contain_addresses_or_backend_errors() {
         (None, None, None)
     );
 }
+
+fn cluster_a() -> ClusterName {
+    ClusterName::try_new("cluster-a").unwrap()
+}
+
+/// A mutation authorization for a named caller on the test cluster.
+fn authorized_as(operator: &str) -> AuthorizedMutation {
+    AuthorizedMutation::synthetic_as(ControlOperation::TopicUpsert, cluster_a(), operator)
+}
+
+/// The right of a named caller to read its own results on the test cluster.
+fn reader(operator: &str) -> crate::guard::AuthorizedResultLookup {
+    crate::guard::AuthorizedResultLookup::synthetic(cluster_a(), operator)
+}
+
+fn lookup_arguments(invocation_id: Option<u64>, request_key: Option<&str>) -> tools::GetMutationResultArgs {
+    tools::GetMutationResultArgs {
+        schema_version: MUTATION_ARGUMENTS_SCHEMA_VERSION.to_owned(),
+        cluster: "cluster-a".to_owned(),
+        invocation_id,
+        request_key: request_key.map(ToOwned::to_owned),
+    }
+}
+
+/// Reads one result as `operator` from the trail that `runtime` writes.
+async fn look_up(
+    runtime: &ToolRuntime,
+    operator: &str,
+    invocation_id: Option<u64>,
+    request_key: Option<&str>,
+) -> tools::MutationResultToolResponse {
+    ResultLookup::new(runtime.audit.clone(), 60)
+        .find(&reader(operator), &lookup_arguments(invocation_id, request_key))
+        .await
+        .unwrap()
+}
+
+/// Starts one call as `operator` on its own task and waits until `runs` sessions are running.
+async fn start_blocked_call(
+    runtime: &ToolRuntime,
+    counters: &Counters,
+    operator: &'static str,
+    key: Option<&'static str>,
+    runs: usize,
+) -> tokio::task::JoinHandle<Result<InvokedMutation, ControlError>> {
+    let call = tokio::spawn({
+        let runtime = runtime.clone();
+        async move {
+            runtime
+                .execute_invoked(
+                    &principal(operator),
+                    &authorized_as(operator),
+                    request(key),
+                    CancellationToken::new(),
+                )
+                .await
+        }
+    });
+    while counters.runs.load(Ordering::SeqCst) < runs {
+        tokio::task::yield_now().await;
+    }
+    call
+}
+
+async fn wait_for_records(sink: &MemoryAuditSink, count: usize) {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while sink.records().await.unwrap().len() < count {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the supervisor writes the terminal record");
+}
+
+#[tokio::test]
+async fn in_flight_invocation_reports_in_progress() {
+    let (runtime, counters, sink, gate) = runtime(Behavior::Block, Duration::from_secs(1));
+    let call = start_blocked_call(&runtime, &counters, "alice", Some("request-0001"), 1).await;
+
+    let running = look_up(&runtime, "alice", Some(1), None).await;
+    assert_eq!(running.state, tools::MutationResultState::InProgress);
+    assert_eq!(running.invocation_id, Some(1));
+    assert_eq!(running.operation, Some(ControlOperation::TopicUpsert));
+    assert_eq!(running.mode, Some(tools::MutationMode::Execute));
+    let target = running.target.clone().unwrap();
+    assert_eq!(target.topic.as_deref(), Some("orders"));
+    assert_eq!(target.broker_count, Some(2));
+    assert_eq!(
+        target.broker_names,
+        Some(vec!["broker-a".to_owned(), "broker-b".to_owned()])
+    );
+    // Nothing about the outcome is known yet, and nothing is made up.
+    assert_eq!(
+        (
+            running.status,
+            running.error_code,
+            running.duration_millis,
+            running.changed
+        ),
+        (None, None, None, None)
+    );
+    assert_eq!(running.target_results, None);
+    // The request key finds the same invocation.
+    assert_eq!(look_up(&runtime, "alice", None, Some("request-0001")).await, running);
+
+    gate.notify_waiters();
+    let invoked = call.await.unwrap().unwrap();
+    assert_eq!(invoked.invocation_id.get(), 1);
+    assert_eq!(sink.records().await.unwrap().len(), 2);
+    let finished = look_up(&runtime, "alice", Some(1), None).await;
+    assert_eq!(finished.state, tools::MutationResultState::Finished);
+    assert_eq!(finished.status, Some(tools::MutationStatus::Applied));
+}
+
+#[tokio::test]
+async fn result_is_available_after_the_waiter_disconnects() {
+    let (runtime, counters, sink, gate) = runtime(Behavior::Block, Duration::from_secs(1));
+    let call = start_blocked_call(&runtime, &counters, "alice", Some("request-0001"), 1).await;
+
+    // The caller goes away before any response exists; all it has is the key it sent.
+    call.abort();
+    assert!(call.await.unwrap_err().is_cancelled());
+    assert_eq!(
+        look_up(&runtime, "alice", None, Some("request-0001")).await.state,
+        tools::MutationResultState::InProgress
+    );
+
+    gate.notify_waiters();
+    wait_for_records(&sink, 2).await;
+    let found = look_up(&runtime, "alice", None, Some("request-0001")).await;
+    assert_eq!(found.state, tools::MutationResultState::Finished);
+    assert_eq!(found.status, Some(tools::MutationStatus::Applied));
+    assert_eq!(found.error_code, None);
+    assert!(found.duration_millis.is_some());
+    let invocation_id = found.invocation_id.unwrap();
+    assert_eq!(invocation_id, sink.records().await.unwrap()[0].invocation_id.get());
+    assert_eq!(look_up(&runtime, "alice", Some(invocation_id), None).await, found);
+
+    // A mutation that fails after its caller left is found as failed, with its code.
+    let (runtime, counters, sink, gate) = runtime_with(Behavior::FailAfterGate);
+    let call = start_blocked_call(&runtime, &counters, "alice", Some("request-0002"), 1).await;
+    call.abort();
+    gate.notify_waiters();
+    wait_for_records(&sink, 2).await;
+    let failed = look_up(&runtime, "alice", None, Some("request-0002")).await;
+    assert_eq!(failed.state, tools::MutationResultState::Finished);
+    assert_eq!(failed.status, Some(tools::MutationStatus::Failed));
+    assert_eq!(failed.error_code, Some(crate::error::ControlErrorCode::ExecutionFailed));
+    // The attempt reported nothing about its targets, so the answer does not claim it changed none.
+    assert_eq!(failed.changed, None);
+}
+
+fn runtime_with(
+    behavior: Behavior,
+) -> (
+    ToolRuntime,
+    Arc<Counters>,
+    Arc<MemoryAuditSink>,
+    Arc<tokio::sync::Notify>,
+) {
+    runtime(behavior, Duration::from_secs(1))
+}
+
+#[tokio::test]
+async fn result_lookup_is_scoped_to_the_calling_principal() {
+    let (runtime, _, _, _) = runtime_with(Behavior::Success);
+    let mut invocations = Vec::new();
+    for operator in ["alice", "bob"] {
+        let invoked = runtime
+            .execute_invoked(
+                &principal(operator),
+                &authorized_as(operator),
+                request(Some("shared-key-0001")),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        invocations.push(invoked.invocation_id.get());
+    }
+    let (alice_invocation, bob_invocation) = (invocations[0], invocations[1]);
+    assert_ne!(alice_invocation, bob_invocation);
+
+    // Each caller finds its own call, by identifier and by the key both of them used.
+    for (operator, own, foreign) in [
+        ("alice", alice_invocation, bob_invocation),
+        ("bob", bob_invocation, alice_invocation),
+    ] {
+        let by_id = look_up(&runtime, operator, Some(own), None).await;
+        assert_eq!(by_id.state, tools::MutationResultState::Finished, "{operator}");
+        assert_eq!(by_id.invocation_id, Some(own));
+        let by_key = look_up(&runtime, operator, None, Some("shared-key-0001")).await;
+        assert_eq!(by_key.invocation_id, Some(own), "{operator}");
+
+        // The other caller's invocation looks exactly like one that never existed.
+        let hidden = look_up(&runtime, operator, Some(foreign), None).await;
+        let missing = look_up(&runtime, operator, Some(9_999), None).await;
+        assert_eq!(hidden, missing, "{operator}");
+        assert_eq!(hidden.state, tools::MutationResultState::NotFound);
+        assert_eq!(
+            (hidden.invocation_id, hidden.operation, hidden.target),
+            (None, None, None)
+        );
+    }
+    assert_eq!(
+        look_up(&runtime, "carol", None, Some("shared-key-0001")).await.state,
+        tools::MutationResultState::NotFound
+    );
+
+    // The cluster is part of the scope as well.
+    let other_cluster =
+        crate::guard::AuthorizedResultLookup::synthetic(ClusterName::try_new("cluster-b").unwrap(), "alice");
+    let elsewhere = ResultLookup::new(runtime.audit.clone(), 60)
+        .find(&other_cluster, &lookup_arguments(Some(alice_invocation), None))
+        .await
+        .unwrap();
+    assert_eq!(elsewhere.state, tools::MutationResultState::NotFound);
+    assert_eq!(elsewhere.cluster, "cluster-b");
+}
+
+#[tokio::test]
+async fn result_lookup_survives_restart_for_the_active_segment() {
+    let (runtime, counters, sink, gate) = runtime_with(Behavior::Block);
+    let finished = start_blocked_call(&runtime, &counters, "alice", Some("request-0001"), 1).await;
+    gate.notify_waiters();
+    let finished = finished.await.unwrap().unwrap().invocation_id.get();
+    // A second call is still running when the process stops.
+    let running = start_blocked_call(&runtime, &counters, "alice", Some("request-0002"), 2).await;
+    let records = sink.records().await.unwrap();
+    assert_eq!(records.len(), 3);
+    let interrupted = records[2].invocation_id.get();
+
+    // A new process resumes from the records the sink still holds.
+    let resumed = ResultLookup::new(AuditTrail::resume(sink.clone()).await.unwrap(), 60);
+    let find = |invocation_id, request_key| {
+        let resumed = &resumed;
+        async move {
+            resumed
+                .find(&reader("alice"), &lookup_arguments(invocation_id, request_key))
+                .await
+                .unwrap()
+        }
+    };
+    let found = find(Some(finished), None).await;
+    assert_eq!(found.state, tools::MutationResultState::Finished);
+    assert_eq!(found.status, Some(tools::MutationStatus::Applied));
+    assert_eq!(found.target.unwrap().topic.as_deref(), Some("orders"));
+    assert_eq!(find(None, Some("request-0001")).await.invocation_id, Some(finished));
+
+    // Nothing recorded how the second call ended, and no task of the new process will finish it.
+    let lost = find(Some(interrupted), None).await;
+    assert_eq!(lost.state, tools::MutationResultState::Interrupted);
+    assert_eq!((lost.status, lost.changed), (None, None));
+    assert_eq!(find(None, Some("request-0002")).await, lost);
+    // The results stay scoped after the restart.
+    assert_eq!(
+        resumed
+            .find(&reader("bob"), &lookup_arguments(Some(finished), None))
+            .await
+            .unwrap()
+            .state,
+        tools::MutationResultState::NotFound
+    );
+
+    running.abort();
+    gate.notify_waiters();
+}
+
+#[tokio::test]
+async fn result_response_contains_no_operator_or_reason() {
+    const OPERATOR: &str = "alice-operator-7f3a";
+    let (runtime, counters, sink, gate) = runtime_with(Behavior::Block);
+    let call = start_blocked_call(&runtime, &counters, OPERATOR, Some("request-0001"), 1).await;
+    let running = look_up(&runtime, OPERATOR, Some(1), None).await;
+    gate.notify_waiters();
+    call.await.unwrap().unwrap();
+    let finished = look_up(&runtime, OPERATOR, Some(1), None).await;
+    let missing = look_up(&runtime, OPERATOR, Some(99), None).await;
+
+    // The durable records do hold both; the answers hold neither, nor the key that was sent.
+    let records = sink.records().await.unwrap();
+    assert_eq!(records[0].operator.as_deref(), Some(OPERATOR));
+    assert_eq!(records[0].reason.as_deref(), Some("planned operation"));
+    let published = tools::MutationResultToolResponse::json_schema_properties();
+    for answer in [&running, &finished, &missing] {
+        let rendered = serde_json::to_value(answer).unwrap();
+        let text = rendered.to_string();
+        for private in [
+            OPERATOR,
+            "planned operation",
+            "request-0001",
+            "operator",
+            "reason",
+            "request_key",
+        ] {
+            assert!(!text.contains(private), "the answer holds {private}: {text}");
+        }
+        // Every member the answer has is one the output schema declares.
+        for member in rendered.as_object().unwrap().keys() {
+            assert!(published.contains(member), "{member} is not in the output schema");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_replayed_response_is_returned_under_the_invocation_of_its_own_call() {
+    let (runtime, counters, sink, _) = runtime_with(Behavior::Success);
+    let mut invocations = Vec::new();
+    for _ in 0..2 {
+        let invoked = runtime
+            .execute_invoked(
+                &principal("alice"),
+                &authorized_as("alice"),
+                request(Some("request-0001")),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        invocations.push(invoked.invocation_id.get());
+    }
+    // One session ran; the second call was answered from the request-key cache.
+    assert_eq!(counters.runs.load(Ordering::SeqCst), 1);
+    let started = sink
+        .records()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|record| record.event == crate::audit::AuditEvent::Started)
+        .map(|record| record.invocation_id.get())
+        .collect::<Vec<_>>();
+    assert_eq!(invocations, started);
+    assert_ne!(invocations[0], invocations[1]);
+    // The key selects the newest call that carried it; each call is still found by its identifier.
+    assert_eq!(
+        look_up(&runtime, "alice", None, Some("request-0001"))
+            .await
+            .invocation_id,
+        Some(invocations[1])
+    );
+    for invocation in invocations {
+        let found = look_up(&runtime, "alice", Some(invocation), Some("request-0001")).await;
+        assert_eq!(found.state, tools::MutationResultState::Finished);
+        assert_eq!(found.invocation_id, Some(invocation));
+    }
+    // An identifier and a key that do not belong together find nothing.
+    assert_eq!(
+        look_up(&runtime, "alice", Some(1), Some("request-9999")).await.state,
+        tools::MutationResultState::NotFound
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn result_lookups_are_budgeted_per_caller() {
+    let (runtime, _, sink, _) = runtime_with(Behavior::Success);
+    let lookups = ResultLookup::new(runtime.audit.clone(), 2);
+    for _ in 0..2 {
+        lookups.admit(&reader("alice")).unwrap();
+    }
+    assert_eq!(
+        lookups.admit(&reader("alice")).unwrap_err().code(),
+        crate::error::ControlErrorCode::RateLimited
+    );
+    lookups.admit(&reader("bob")).unwrap();
+    tokio::time::advance(Duration::from_secs(30)).await;
+    lookups.admit(&reader("alice")).unwrap();
+    // A lookup is not a mutation: it leaves no durable record.
+    lookups
+        .find(&reader("alice"), &lookup_arguments(Some(1), None))
+        .await
+        .unwrap();
+    assert!(sink.records().await.unwrap().is_empty());
+}

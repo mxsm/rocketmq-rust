@@ -15,6 +15,10 @@ This file applies to `rocketmq-ai/rocketmq-mcp/`.
   `streamable-http`. This server states its own limits in `src/guard/jwks.rs`; a private JWKS issuer stays
   supported, so do not restrict its outbound addresses without a separate decision.
 - Tool and Resource output must use the shared authorization, audit, correlation, sanitization, row, and byte policy.
+  Argument completion is an output surface too: it needs the permission of the listing Tool that returns the same
+  names, and it is rate limited, audited, and sanitized.
+- A Tool that looks up a message by its identifier also needs the permission for `rocketmq_get_message_metadata`.
+  The identifier is redacted before audit hashing, and results name a message by its pseudonyms only.
 - Prefer native async fn methods in traits. #[allow(async_fn_in_trait)] is permitted when required by the lint for an intentional public async trait API; do not add #[async_trait].
 
 ## Development validation

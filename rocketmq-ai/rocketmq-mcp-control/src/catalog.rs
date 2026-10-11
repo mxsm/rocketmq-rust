@@ -24,6 +24,8 @@ use crate::config::MutationPolicyConfig;
 use crate::model::ControlOperation;
 use crate::tools::BrokerConfigMutationToolResponse;
 use crate::tools::ConsumerGroupMutationToolResponse;
+use crate::tools::GetMutationResultArgs;
+use crate::tools::MutationResultToolResponse;
 use crate::tools::OffsetMutationToolResponse;
 use crate::tools::PatchBrokerConfigArgs;
 use crate::tools::RequestModeMutationToolResponse;
@@ -32,6 +34,8 @@ use crate::tools::SetConsumerRequestModeArgs;
 use crate::tools::TopicMutationToolResponse;
 use crate::tools::UpsertConsumerGroupArgs;
 use crate::tools::UpsertTopicArgs;
+use crate::tools::GET_MUTATION_RESULT_TOOL;
+use crate::tools::INVOCATION_ID_MEMBER;
 use crate::tools::PATCH_BROKER_CONFIG_TOOL;
 use crate::tools::RESET_CONSUMER_OFFSET_TOOL;
 use crate::tools::SET_CONSUMER_REQUEST_MODE_TOOL;
@@ -156,10 +160,74 @@ fn tool_definition(operation: ControlOperation) -> Option<Tool> {
     tool.map(|mut tool| {
         unwrap_descriptions(Arc::make_mut(&mut tool.input_schema));
         if let Some(output_schema) = &mut tool.output_schema {
-            unwrap_descriptions(Arc::make_mut(output_schema));
+            let output_schema = Arc::make_mut(output_schema);
+            declare_invocation_id(output_schema);
+            unwrap_descriptions(output_schema);
         }
         tool
     })
+}
+
+/// Declares the `invocation_id` that every mutation response carries.
+///
+/// The server adds the member when it sends a response, so the response types do not hold it and
+/// the published schema declares it here, once for all mutation Tools.
+fn declare_invocation_id(output_schema: &mut JsonObject) {
+    let description = "Identifies this call in the durable audit log. Pass it to rocketmq_get_mutation_result to \
+                       read how the call ended.";
+    if let Some(properties) = output_schema
+        .get_mut("properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        properties.insert(
+            INVOCATION_ID_MEMBER.to_owned(),
+            serde_json::json!({
+                "description": description,
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 1,
+            }),
+        );
+    }
+    if let Some(required) = output_schema
+        .get_mut("required")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        required.push(serde_json::Value::from(INVOCATION_ID_MEMBER));
+    }
+}
+
+/// Returns the definition of the one read-only Tool of this server.
+///
+/// It is not a [`ControlOperation`]: it changes nothing, is not part of `allowed_operations`, and
+/// stays available when mutations are switched off. Its annotations say so, unlike those of the
+/// mutation Tools.
+pub fn result_tool_definition() -> Tool {
+    let title = "Get RocketMQ mutation result";
+    let mut tool = Tool::new(
+        GET_MUTATION_RESULT_TOOL,
+        "Reads how one of your own mutation calls on a cluster ended: finished with its status, still in \
+         progress, interrupted by a server restart, or not found. Use it when a mutation response was lost or \
+         timed out, selecting the call by the invocation_id of a response or by the request_key you sent. It \
+         changes nothing and never returns who made a call or why.",
+        std::sync::Arc::new(Default::default()),
+    )
+    .with_title(title)
+    .with_input_schema::<GetMutationResultArgs>()
+    .with_output_schema::<MutationResultToolResponse>()
+    .with_annotations(
+        ToolAnnotations::with_title(title)
+            .read_only(true)
+            .destructive(false)
+            .idempotent(true)
+            // It reads this server's own record of its calls, not the cluster.
+            .open_world(false),
+    );
+    unwrap_descriptions(Arc::make_mut(&mut tool.input_schema));
+    if let Some(output_schema) = &mut tool.output_schema {
+        unwrap_descriptions(Arc::make_mut(output_schema));
+    }
+    tool
 }
 
 /// Joins the wrapped lines of every `description` in a schema, keeping paragraph breaks.
@@ -364,6 +432,148 @@ mod tests {
                 ControlOperation::ConsumerRequestMode,
             ],
         ));
-        insta::assert_json_snapshot!("control_reviewed_tool_schemas", catalog.list_tools().tools);
+        // The mutation Tools in catalog order, then the one read-only Tool.
+        let mut tools = catalog.list_tools().tools;
+        tools.push(result_tool_definition());
+        insta::assert_json_snapshot!("control_reviewed_tool_schemas", tools);
+    }
+
+    #[test]
+    fn every_mutation_output_schema_declares_the_invocation_id() {
+        for tool in all_operations().list_tools().tools {
+            let schema = tool.output_schema.as_deref().expect("an output schema");
+            let declared = &schema["properties"][INVOCATION_ID_MEMBER];
+            assert_eq!(declared["type"], "integer", "{}", tool.name);
+            assert_eq!(declared["minimum"], 1, "{}", tool.name);
+            assert!(declared["description"]
+                .as_str()
+                .is_some_and(|text| text.contains(GET_MUTATION_RESULT_TOOL) && !text.contains('\n')));
+            let required = schema["required"].as_array().expect("required members");
+            assert_eq!(
+                required
+                    .iter()
+                    .filter(|member| member.as_str() == Some(INVOCATION_ID_MEMBER))
+                    .count(),
+                1,
+                "{}",
+                tool.name
+            );
+        }
+    }
+
+    /// Collects the property names a schema declares, at any depth.
+    fn property_names(schema: &serde_json::Value, names: &mut BTreeSet<String>) {
+        match schema {
+            serde_json::Value::Object(keywords) => {
+                for (keyword, value) in keywords {
+                    if let ("properties", serde_json::Value::Object(properties)) = (keyword.as_str(), value) {
+                        names.extend(properties.keys().cloned());
+                    }
+                    property_names(value, names);
+                }
+            }
+            serde_json::Value::Array(values) => values.iter().for_each(|value| property_names(value, names)),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn the_result_tool_is_read_only_closed_and_names_no_caller() {
+        let tool = result_tool_definition();
+        assert_eq!(tool.name, GET_MUTATION_RESULT_TOOL);
+        let annotations = tool.annotations.clone().expect("annotations");
+        assert_eq!(annotations.read_only_hint, Some(true));
+        assert_eq!(annotations.destructive_hint, Some(false));
+        assert_eq!(annotations.idempotent_hint, Some(true));
+        assert_eq!(annotations.open_world_hint, Some(false));
+
+        assert_eq!(
+            tool.input_schema.get("additionalProperties"),
+            Some(&serde_json::json!(false))
+        );
+        assert_eq!(
+            tool.input_schema.get("required"),
+            Some(&serde_json::json!(["schema_version", "cluster"]))
+        );
+        let mut described = 0;
+        for_each_input_property(&tool.input_schema, "", &mut |pointer, property| {
+            let description = property.get("description").and_then(serde_json::Value::as_str);
+            assert!(
+                description.is_some_and(|text| !text.trim().is_empty()),
+                "input {pointer} has no description"
+            );
+            described += 1;
+        });
+        assert_eq!(described, 4);
+        let mut inputs = BTreeSet::new();
+        property_names(
+            &serde_json::Value::Object(tool.input_schema.as_ref().clone()),
+            &mut inputs,
+        );
+        assert_eq!(
+            inputs.into_iter().collect::<Vec<_>>(),
+            ["cluster", "invocation_id", "request_key", "schema_version"]
+        );
+
+        let output = serde_json::Value::Object(tool.output_schema.as_deref().expect("an output schema").clone());
+        assert_eq!(output["additionalProperties"], false);
+        let mut outputs = BTreeSet::new();
+        property_names(&output, &mut outputs);
+        for private in [
+            "operator",
+            "reason",
+            "request_key",
+            "subject",
+            "digest",
+            "requested_digest",
+        ] {
+            assert!(!outputs.contains(private), "the answer declares {private}");
+        }
+        assert!(outputs
+            .iter()
+            .all(|name| !name.contains("addr") && !name.contains("endpoint")));
+        // Everything but the envelope is null in some state, and the schema has to allow that.
+        for nullable in [
+            "invocation_id",
+            "operation",
+            "mode",
+            "target",
+            "status",
+            "error_code",
+            "duration_millis",
+            "changed",
+            "target_results",
+        ] {
+            let alternatives = output["properties"][nullable]["anyOf"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{nullable} has no alternatives"));
+            assert!(
+                alternatives.contains(&serde_json::json!({"type": "null"})),
+                "{nullable} cannot be null"
+            );
+        }
+        let states = &output["$defs"]["MutationResultState"];
+        let mut declared_states = BTreeSet::new();
+        collect_strings(states, &mut declared_states);
+        for state in ["finished", "in_progress", "interrupted", "not_found"] {
+            assert!(declared_states.contains(state), "state {state} is not declared");
+        }
+        // The description sends a caller here for a lost response and stays within a Tool listing.
+        let description = tool.description.as_deref().expect("a description");
+        assert!(
+            description.contains("request_key") && description.len() <= 400,
+            "{description}"
+        );
+    }
+
+    fn collect_strings(value: &serde_json::Value, strings: &mut BTreeSet<String>) {
+        match value {
+            serde_json::Value::String(text) => {
+                strings.insert(text.clone());
+            }
+            serde_json::Value::Array(values) => values.iter().for_each(|value| collect_strings(value, strings)),
+            serde_json::Value::Object(members) => members.values().for_each(|value| collect_strings(value, strings)),
+            _ => {}
+        }
     }
 }

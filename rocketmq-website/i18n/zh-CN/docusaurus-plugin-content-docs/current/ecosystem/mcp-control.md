@@ -117,6 +117,8 @@ cargo run --locked --release --features write-tools
 | `partial` | `partial_apply`；逐目标检查，不将操作视为原子事务 |
 | `failed` | 仍可能包含已应用但持久化/事后读取验证失败的目标；检查 `error_code` 与目标证据 |
 
+每个结果还带有 `invocation_id`，它在审计日志和服务日志中标识这次调用。响应丢失或调用超时后，可用 `rocketmq_get_mutation_result` 按该标识或当时发送的 `request_key` 查询调用的结局：`finished`（附带状态）、`in_progress`、`interrupted`（服务在记录结局前重启）或 `not_found`。该工具只读，只回答调用方自己在已授权集群上发起的调用，需要 `rocketmq:write` 但不需要操作声明，不写审计记录，并且在停用变更之后仍然可用。错误信封不带标识，因此凡是之后可能需要查询的执行调用都应带上 `request_key`。
+
 冲突、部分及失败结果设置 MCP `isError=true`，同时保留结构化数据。失败不普遍等于无效果。`order_reconciliation_failed` 保留 Broker 已应用状态，不重写全局 order KV。
 
 有两类拒绝发生在任何写入之前。`invalid_argument` 错误可以携带 `violations`：最多三项，每项包含指向参数的 JSON Pointer `path` 和一个 `constraint`，例如 `required`、`maximum` 或 `additional_property`，不会包含已发送的值。超出该 subject 每分钟配额或服务并发上限的调用，会在写入 `started` 记录之前得到 `rate_limited`，因此不写审计记录，也不打开会话；稍后重试即可。

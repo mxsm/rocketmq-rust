@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod audit;
+mod completion;
 pub mod context;
 #[cfg(feature = "streamable-http")]
 pub mod http_auth;
@@ -189,7 +190,7 @@ impl Guard {
             risk_level,
             principal: context.principal.clone(),
             client: context.client.clone(),
-            cluster: effective_cluster.as_ref().ok().cloned(),
+            cluster: effective_cluster.as_ref().ok().cloned().flatten(),
             arguments_hash: hash_arguments(arguments),
             started_at: Instant::now(),
             _cluster_permit: None,
@@ -202,10 +203,15 @@ impl Guard {
                 return Err(error);
             }
         };
+        // `None` is a Tool that is not bound to a cluster: the role and the scope decide, the
+        // rate limit is counted without a cluster, and no cluster concurrency permit is taken.
+        let cluster = cluster.as_deref();
 
-        if let Err(error) = self.validate_cluster(context, &cluster) {
-            guarded.record_failure(error.to_string());
-            return Err(error);
+        if let Some(cluster) = cluster {
+            if let Err(error) = self.validate_cluster(context, cluster) {
+                guarded.record_failure(error.to_string());
+                return Err(error);
+            }
         }
 
         if let Err(error) = self.check_tool_availability(tool_name, risk_level) {
@@ -215,7 +221,7 @@ impl Guard {
 
         if let Err(error) = self
             .policy
-            .authorize_tool(&context.principal, tool_name, Some(&cluster), risk_level)
+            .authorize_tool(&context.principal, tool_name, cluster, risk_level)
         {
             guarded.record_failure(error.to_string());
             return Err(error);
@@ -223,7 +229,7 @@ impl Guard {
 
         if let Err(error) = self.rate_limiter.check(
             &context.principal.id,
-            Some(&cluster),
+            cluster,
             tool_name,
             self.security.rate_limit_per_minute,
         ) {
@@ -231,11 +237,13 @@ impl Guard {
             return Err(error);
         }
 
-        match self.acquire_cluster_permit(&cluster) {
-            Ok(permit) => guarded._cluster_permit = Some(permit),
-            Err(error) => {
-                guarded.record_failure(error.to_string());
-                return Err(error);
+        if let Some(cluster) = cluster {
+            match self.acquire_cluster_permit(cluster) {
+                Ok(permit) => guarded._cluster_permit = Some(permit),
+                Err(error) => {
+                    guarded.record_failure(error.to_string());
+                    return Err(error);
+                }
             }
         }
 
@@ -252,14 +260,20 @@ impl Guard {
     /// The allow-list, tenant, role, rate-limit, and concurrency decisions and the query itself
     /// all use this value, so a blank or omitted `cluster` can never select a cluster that was
     /// not authorized. Names that are not in the catalog are treated as requiring a cluster.
-    fn effective_cluster(&self, tool_name: &str, arguments: &JsonObject) -> Result<String, GuardRejection> {
+    ///
+    /// `Ok(None)` is a Tool that is not bound to a cluster. Its arguments are not read here; the
+    /// input schema, which has no `cluster`, rejects one that is sent.
+    fn effective_cluster(&self, tool_name: &str, arguments: &JsonObject) -> Result<Option<String>, GuardRejection> {
         let cluster_arg = ToolId::resolve(tool_name).map_or(ClusterArg::Required, ToolId::cluster_arg);
+        if cluster_arg == ClusterArg::None {
+            return Ok(None);
+        }
         match arguments.get("cluster") {
-            Some(Value::String(cluster)) if !cluster.trim().is_empty() => Ok(cluster.trim().to_string()),
+            Some(Value::String(cluster)) if !cluster.trim().is_empty() => Ok(Some(cluster.trim().to_string())),
             None | Some(Value::Null) if cluster_arg == ClusterArg::OptionalDefault => self
                 .default_cluster
                 .as_deref()
-                .map(ToString::to_string)
+                .map(|cluster| Some(cluster.to_string()))
                 .ok_or(GuardRejection::InvalidArgument),
             _ => Err(GuardRejection::InvalidArgument),
         }
@@ -664,7 +678,9 @@ mod tests {
     #[test]
     fn blank_cluster_is_rejected_for_every_tool() {
         let guard = two_cluster_guard(8);
-        for tool in ToolId::ALL {
+        // A Tool that is not bound to a cluster has no `cluster` to leave blank: its input schema
+        // rejects the property, which the executor tests cover.
+        for tool in ToolId::ALL.iter().filter(|tool| tool.cluster_arg() != ClusterArg::None) {
             let descriptor = tool.descriptor();
             for cluster in ["", "   "] {
                 let arguments = serde_json::json!({ "cluster": cluster }).as_object().unwrap().clone();

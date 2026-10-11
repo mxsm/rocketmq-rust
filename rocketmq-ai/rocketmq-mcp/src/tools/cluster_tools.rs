@@ -53,3 +53,32 @@ pub struct ClusterOverviewOutput {
     pub consumer_group_count: usize,
     pub generated_at: String,
 }
+
+/// `rocketmq_list_clusters` takes no argument: it is the one Tool that is not bound to a cluster.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ListClustersArgs {}
+
+/// One logical cluster the caller may query, with the names its other Tools accept.
+///
+/// It carries names only. NameServer addresses, Proxy and Controller endpoints, and the physical
+/// cluster name are server configuration and never leave it.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct ClusterEntry {
+    /// Logical cluster name. Pass it as the `cluster` argument of every other Tool.
+    pub name: String,
+    /// Whether a Tool that allows `cluster` to be omitted selects this cluster.
+    pub default: bool,
+    /// Proxy aliases of this cluster. Pass one as `proxy_name` to rocketmq_get_proxy_drain_state.
+    pub proxy_names: Vec<String>,
+    /// Controller aliases of this cluster. Pass some as `controller_names` to rocketmq_get_ha_status or
+    /// rocketmq_get_controller_metadata to narrow them to those Controllers.
+    pub controller_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct ListClustersOutput {
+    /// The clusters the caller may query, in configuration order. A cluster the caller has no
+    /// access to is left out, so the list can be shorter than the server's configuration.
+    pub clusters: Vec<ClusterEntry>,
+}

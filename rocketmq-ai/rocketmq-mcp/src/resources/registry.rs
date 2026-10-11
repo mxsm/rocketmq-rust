@@ -232,6 +232,23 @@ fn resource_templates() -> Vec<(ResourceKind, ResourceTemplate)> {
     ]
 }
 
+/// Returns the variables of a registered Resource template, in the order the template names
+/// them, or `None` when `uri_template` is not one this server publishes.
+pub(crate) fn template_variables(uri_template: &str) -> Option<Vec<String>> {
+    let registered = resource_templates()
+        .into_iter()
+        .any(|(_, template)| template.uri_template == uri_template);
+    registered.then(|| {
+        uri_template
+            .split('{')
+            .skip(1)
+            .filter_map(|expression| expression.split_once('}'))
+            .flat_map(|(expression, _)| expression.trim_start_matches('?').split(','))
+            .map(ToString::to_string)
+            .collect()
+    })
+}
+
 fn resource_descriptor(uri: RocketmqResourceUri) -> Resource {
     Resource::new(uri.as_string(), uri.name())
         .with_title(uri.kind.title())

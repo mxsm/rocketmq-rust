@@ -14,6 +14,12 @@
 
 //! Higher-level MCP services built from read-only evidence tools.
 
+pub mod broker_health_diagnosis;
+pub mod cluster_health;
+pub mod consumer_group_diagnosis;
 pub mod diagnosis_collector;
+pub mod diagnosis_evidence;
 pub mod diagnosis_rules;
 pub mod diagnosis_service;
+pub mod diagnosis_snapshot;
+pub mod message_delivery_diagnosis;

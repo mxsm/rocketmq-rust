@@ -561,6 +561,10 @@ impl AdminSession for AdminCoreSession {
         &mut self,
         consumer_group: &str,
     ) -> Result<QueryPayload<GetConsumerGroupDetailsOutput>, ToolFailure> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.consumer_group_details(consumer_group).await;
+        }
         self.query_consumer_group_details_observation(consumer_group).await
     }
 

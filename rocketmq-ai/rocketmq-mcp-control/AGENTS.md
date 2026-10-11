@@ -15,9 +15,15 @@ This file applies to `rocketmq-ai/rocketmq-mcp-control/`.
 - `write-tools` may enable only `rocketmq-admin-core/mutation-client-adapter`; it must never enable a read or full adapter.
 - The reviewed production tools are `rocketmq_upsert_topic`,
   `rocketmq_upsert_consumer_group`, `rocketmq_reset_consumer_offset`,
-  `rocketmq_patch_broker_config`, and `rocketmq_set_consumer_request_mode`.
+  `rocketmq_patch_broker_config`, and `rocketmq_set_consumer_request_mode`,
+  plus the read-only `rocketmq_get_mutation_result`.
   Keep delete, skip, resend, and any free-form mutation outside this project
   until separately reviewed.
+- `rocketmq_get_mutation_result` reads only what the audit trail remembers about the caller's own invocations on
+  the authorized cluster. It opens no session, sends no RPC, writes no durable audit record, and never returns the
+  operator, the reason, or a request key. It needs the write scope and cluster authorization before its arguments
+  are read, and no operation: it is registered whenever `write-tools` is compiled and stays available when
+  `mutations_enabled` is false. Its annotations are read-only; do not register it through the mutation path.
 - OAuth and closed operation/cluster authorization must complete before mutation argument parsing. A durable
   `started` audit record must then complete before session creation or RPC.
 - Do not add stdio, CLI, shell, subprocess, free-form RPC, arbitrary Admin commands, or stdout protocol output.
@@ -55,8 +61,9 @@ This file applies to `rocketmq-ai/rocketmq-mcp-control/`.
   before target state RPC, keep plans sealed to one Admin session, and preserve exact-target post-read verification.
 - Targeted Topic upserts must treat the complete order-Topic KV as a sealed no-write guard. Never merge, put,
   or delete that global KV from the targeted path; reject any selected entry that is not already exact.
-- Request-key reuse is bounded and process-local; every invocation, including followers and cache hits, keeps
-  its own durable audit pair.
+- Request-key reuse is bounded and process-local; every mutation invocation, including followers and cache
+  hits, keeps its own durable audit pair. A mutation response carries the `invocation_id` of the call that
+  returns it, so a replayed response is never sent under the invocation of the call that produced it.
 - Prefer native async trait methods where object safety is not required; do not add `async_trait`.
 
 ## Development validation

@@ -34,7 +34,7 @@ Optional features:
 - `streamable-http`: enables the Streamable HTTP transport.
 - `observability`: enables in-process metrics and traces without selecting a remote exporter.
 - `otlp`: enables metrics, traces, and logs through the implemented OTLP gRPC exporter.
-- `change-planning`: registers non-mutating change planning Tools and still requires runtime policy.
+- `change-planning`: deprecated. Registers non-mutating change planning Tools and still requires runtime policy.
 - `auth`: feature marker enabled by `streamable-http`; it is not a switch to bypass HTTP authentication.
 
 ## Safety Boundary
@@ -42,7 +42,7 @@ Optional features:
 The default profile is diagnostics-oriented and read-only:
 
 - `security.profile = "diagnose"` allows read-only and diagnosis tools.
-- `security.allow_change_planning = false` blocks planning Tools unless explicitly enabled.
+- `security.allow_change_planning = false` blocks planning Tools unless explicitly enabled. The setting is deprecated with the feature.
 - `security.sanitize_output = true` redacts configured sensitive output patterns.
 - `audit.enabled = true` records tool decisions and HTTP rejections through a bounded asynchronous writer.
 - `server.stdio.log_to_stderr = true` keeps stdout reserved for MCP protocol frames.
@@ -143,7 +143,11 @@ Important fields:
 - `cache.max_entries`: maximum number of in-memory entries; it must be greater than zero when caching is enabled.
 - `cache.*_ttl_ms`: per-query-family freshness windows for overview, topic, broker, and consumer-lag data.
 - `diagnosis.consumer_lag_policy_profile`: server-owned policy identifier reported with each diagnosis.
-- `diagnosis.consumer_lag_threshold`: server-owned threshold used by consumer-lag rules.
+- `diagnosis.consumer_lag_threshold`: backlog, in messages, up to which a Consumer Group is healthy. Default 1000.
+- `diagnosis.consume_delay_threshold_ms`: how far behind production a group may be. A larger backlog is graded by its size and by this delay; below it, the backlog is only `low`. Default 300000.
+- `diagnosis.pop_inflight_threshold`: in-flight messages from which a POP group counts as holding too many unacknowledged. Default 1000.
+- `diagnosis.retry_activity_window_ms`: a retry or dead-letter Topic that received a message within this window counts as growing. Default 600000.
+- `[[diagnosis.overrides]]`: thresholds for one `topic`, one `consumer_group`, or one pair of them. An entry sets only the thresholds it names and must name at least one. Every matching entry applies: a Topic entry first, then a Consumer Group entry, then the entry that names both. Names are matched exactly, and two entries may not select the same target.
 
 Unknown keys are rejected at startup, in the configuration file and in the permissions file, so a misspelled key
 cannot silently turn a setting off. The startup error names the key and the table that holds it, for example
@@ -309,8 +313,10 @@ For HTTP-capable clients, use the Streamable HTTPS URL `https://127.0.0.1:8089/m
 
 ## Tools
 
-The default feature set exposes 24 Tools:
+The default feature set exposes 30 Tools:
 
+- `rocketmq_list_clusters`: list the logical clusters the caller may query, with their Proxy and Controller aliases. It is the one Tool that takes no `cluster`.
+- `rocketmq_list_brokers`: list the Broker instances of one cluster without counting its Topics and Consumer Groups.
 - `rocketmq_get_cluster_overview`: summarize one configured cluster.
 - `rocketmq_list_topics`: list a filtered, cursor-paginated topic page.
 - `rocketmq_describe_topic`: describe a topic with bounded queue data.
@@ -322,7 +328,11 @@ The default feature set exposes 24 Tools:
 - `rocketmq_get_broker_config_summary`: get a fixed allowlisted broker configuration summary.
 - `rocketmq_get_broker_log_filter_state`: get temporary state for an allowlisted broker logger.
 - `rocketmq_get_proxy_drain_state`: get bounded drain progress for a configured logical Proxy.
-- `rocketmq_diagnose_consumer_lag`: aggregate read-only evidence and return a diagnosis report.
+- `rocketmq_diagnose_consumer_lag`: grade the backlog of one Consumer Group on one Topic and name its likely causes from lag, connection, configuration, permission, and retry evidence.
+- `rocketmq_diagnose_consumer_group`: explain the state of one Consumer Group over every Topic it consumes: connections, configuration, backlog, and retries.
+- `rocketmq_diagnose_broker_health`: check one Broker, its master and its replicas: availability, readiness, store, replication, and configuration.
+- `rocketmq_get_cluster_health`: check a cluster at a glance and name the Brokers to look at first.
+- `rocketmq_diagnose_message_delivery`: check the path from one Topic to one Consumer Group and, with a message identifier, where that message stands; never returns a message body.
 - `rocketmq_list_consumer_connections`: list bounded pseudonymous consumer connections.
 - `rocketmq_list_producer_connections`: list bounded pseudonymous producer connections.
 - `rocketmq_get_message_metadata`: get fixed body-free message metadata.
@@ -336,9 +346,9 @@ The default feature set exposes 24 Tools:
 - `rocketmq_get_controller_metadata`: get bounded metadata for configured logical Controllers.
 - `rocketmq_get_nameserver_config_summary`: get fixed allowlisted NameServer configuration summaries.
 
-Consumer-lag diagnoses use versioned Evidence Snapshots and a server-side rule policy. The Tool accepts only cluster, topic, and consumer group; historical `time_range` and caller-controlled thresholds are intentionally unavailable until a historical metrics source exists.
+The five diagnosis Tools return one report shape with versioned Evidence Snapshots and stable rule identifiers. Each reads its evidence in one admin session, and a read that fails makes the report partial instead of failing the diagnosis. Thresholds belong to the server: historical `time_range` and caller-controlled thresholds are intentionally unavailable until a historical metrics source exists. Naming a message in `rocketmq_diagnose_message_delivery` also needs the permission for `rocketmq_get_message_metadata`.
 
-The all-features surface has 29 Tools. Its five additional `change-planning` Tools never mutate the cluster:
+The all-features surface has 35 Tools. Its five additional `change-planning` Tools never mutate the cluster. They are deprecated and will be removed together with the feature: plan a change with a dry run of the control MCP server (`rocketmq-mcp-control`), which reads the state the change would be applied to and uses the arguments the execution takes. Each description names its replacement, and a server that has the feature compiled and `security.allow_change_planning = true` logs a deprecation warning at startup.
 
 - `rocketmq_plan_create_topic`
 - `rocketmq_plan_update_topic_config`
@@ -382,6 +392,30 @@ Cluster and broker path values are bounded logical aliases. Topic and consumer-g
 Prompt discovery and rendering recheck the caller's Tool, tenant, cluster, scope, and profile authorization. Prompt
 arguments use closed kinds and reject unknown, missing, null, non-string, blank, unsafe, or overlong values. Prompts
 provide guidance only: they neither execute Tools nor create cache, session, or mutation work.
+
+Four Prompts start with a server-side diagnosis Tool when the caller may call it: `broker_health_check` with
+`rocketmq_get_cluster_health` and `rocketmq_diagnose_broker_health`, `diagnose_broker_health` with
+`rocketmq_diagnose_broker_health`, `diagnose_message_delivery` with `rocketmq_diagnose_message_delivery`, and
+`analyze_consumer_connections` with `rocketmq_diagnose_consumer_group`. These Tools do not decide whether a Prompt
+is available: a caller who may not call them gets the same Prompt without that first step.
+
+## Argument completion
+
+The server declares the `completions` capability. `completion/complete` suggests values for the arguments of the
+five Prompts and the variables of the 15 Resource templates that name a cluster, a Topic, a Consumer Group, or a
+Broker. Other arguments, such as `message_id`, `check_level`, `filter`, `limit`, and `cursor`, have no candidates.
+
+- Candidates are the names that start with the typed value, ignoring ASCII case, in sorted order: at most 100, with
+  the number of matches in `total` and `hasMore` when there are more.
+- A completion needs the permission of the listing Tool that returns the same names: `rocketmq_list_clusters`,
+  `rocketmq_list_topics`, `rocketmq_list_consumer_groups`, or `rocketmq_list_brokers`, on the cluster the names
+  come from. Without it the result is empty, exactly as for an argument without candidates.
+- A Topic, Consumer Group, or Broker is completed inside the cluster already chosen in the request's
+  `context.arguments.cluster`. Without one the result is empty; the default cluster is not assumed.
+- Topic and Consumer Group candidates come from the inventory snapshot that the listing Tools page through, and
+  Broker candidates from the Broker list, so completing while typing does not query the cluster again.
+- Every answered or refused completion is audited as `completion:<class>` and counts against a per-principal rate
+  limit of its own, so typing does not spend the budget of Tool calls.
 
 ## Troubleshooting
 

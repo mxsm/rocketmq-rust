@@ -429,6 +429,12 @@ expression: catalog.list_tools().tools
             }
           ]
         },
+        "invocation_id": {
+          "description": "Identifies this call in the durable audit log. Pass it to rocketmq_get_mutation_result to read how the call ended.",
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
         "mode": {
           "$ref": "#/$defs/MutationMode"
         },
@@ -472,7 +478,8 @@ expression: catalog.list_tools().tools
         "requested",
         "after",
         "targets",
-        "warnings"
+        "warnings",
+        "invocation_id"
       ],
       "type": "object"
     },
@@ -958,6 +965,12 @@ expression: catalog.list_tools().tools
             }
           ]
         },
+        "invocation_id": {
+          "description": "Identifies this call in the durable audit log. Pass it to rocketmq_get_mutation_result to read how the call ended.",
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
         "mode": {
           "$ref": "#/$defs/MutationMode"
         },
@@ -1001,7 +1014,8 @@ expression: catalog.list_tools().tools
         "requested",
         "after",
         "targets",
-        "warnings"
+        "warnings",
+        "invocation_id"
       ],
       "type": "object"
     },
@@ -1358,6 +1372,12 @@ expression: catalog.list_tools().tools
             }
           ]
         },
+        "invocation_id": {
+          "description": "Identifies this call in the durable audit log. Pass it to rocketmq_get_mutation_result to read how the call ended.",
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
         "mode": {
           "$ref": "#/$defs/MutationMode"
         },
@@ -1401,7 +1421,8 @@ expression: catalog.list_tools().tools
         "requested",
         "after",
         "targets",
-        "warnings"
+        "warnings",
+        "invocation_id"
       ],
       "type": "object"
     },
@@ -1806,6 +1827,12 @@ expression: catalog.list_tools().tools
             }
           ]
         },
+        "invocation_id": {
+          "description": "Identifies this call in the durable audit log. Pass it to rocketmq_get_mutation_result to read how the call ended.",
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
         "mode": {
           "$ref": "#/$defs/MutationMode"
         },
@@ -1849,7 +1876,8 @@ expression: catalog.list_tools().tools
         "requested",
         "after",
         "targets",
-        "warnings"
+        "warnings",
+        "invocation_id"
       ],
       "type": "object"
     },
@@ -2233,6 +2261,12 @@ expression: catalog.list_tools().tools
             }
           ]
         },
+        "invocation_id": {
+          "description": "Identifies this call in the durable audit log. Pass it to rocketmq_get_mutation_result to read how the call ended.",
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
         "mode": {
           "$ref": "#/$defs/MutationMode"
         },
@@ -2276,7 +2310,8 @@ expression: catalog.list_tools().tools
         "requested",
         "after",
         "targets",
-        "warnings"
+        "warnings",
+        "invocation_id"
       ],
       "type": "object"
     },
@@ -2286,6 +2321,359 @@ expression: catalog.list_tools().tools
       "destructiveHint": true,
       "idempotentHint": true,
       "openWorldHint": true
+    }
+  },
+  {
+    "name": "rocketmq_get_mutation_result",
+    "title": "Get RocketMQ mutation result",
+    "description": "Reads how one of your own mutation calls on a cluster ended: finished with its status, still in progress, interrupted by a server restart, or not found. Use it when a mutation response was lost or timed out, selecting the call by the invocation_id of a response or by the request_key you sent. It changes nothing and never returns who made a call or why.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "cluster": {
+          "description": "Logical cluster name the mutation was called with, never a NameServer or Broker address. Both the caller and the server policy must allow it.",
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "type": "string"
+        },
+        "invocation_id": {
+          "default": null,
+          "description": "The `invocation_id` of the mutation response. Give it, `request_key`, or both; with both, the invocation must also have carried that key.",
+          "format": "uint64",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "request_key": {
+          "default": null,
+          "description": "The `request_key` the mutation was called with: 8 to 64 letters, digits and `._:-`. It selects the newest of your calls that carried it, which is how to find a call whose response never arrived.",
+          "maxLength": 64,
+          "minLength": 8,
+          "pattern": "^[a-zA-Z0-9._:-]+$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema_version": {
+          "description": "Version of this argument schema. Always `rocketmq-mcp-control.arguments.v1`.",
+          "pattern": "^rocketmq-mcp-control\\.arguments\\.v1$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "cluster"
+      ],
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "ControlErrorCode": {
+          "enum": [
+            "invalid_config",
+            "request_rejected",
+            "unauthorized",
+            "permission_denied",
+            "cluster_not_allowed",
+            "operation_not_allowed",
+            "mutation_disabled",
+            "operation_unavailable",
+            "rate_limited",
+            "confirmation_required",
+            "invalid_argument",
+            "audit_unavailable",
+            "precondition_conflict",
+            "partial_apply",
+            "verification_failed",
+            "timeout",
+            "cancelled",
+            "execution_failed",
+            "shutdown_failed"
+          ],
+          "type": "string"
+        },
+        "ControlOperation": {
+          "enum": [
+            "topic_upsert",
+            "consumer_group_upsert",
+            "consumer_offset_reset",
+            "broker_config_patch",
+            "consumer_request_mode"
+          ],
+          "type": "string"
+        },
+        "MutationLookupSchemaVersion": {
+          "const": "rocketmq-mcp-mutation-result.v1",
+          "type": "string"
+        },
+        "MutationMode": {
+          "enum": [
+            "dry_run",
+            "execute"
+          ],
+          "type": "string"
+        },
+        "MutationResultCounts": {
+          "additionalProperties": false,
+          "description": "How many targets of the mutation ended in each state.",
+          "properties": {
+            "applied": {
+              "description": "Written and changed.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "conflict": {
+              "description": "Refused because the state read before the change had changed.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "failed": {
+              "description": "Failed for any other reason, including an unverified write.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "unchanged": {
+              "description": "Left as they were: already in the requested state, or only planned by a dry run.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "applied",
+            "unchanged",
+            "conflict",
+            "failed"
+          ],
+          "type": "object"
+        },
+        "MutationResultState": {
+          "description": "What the server knows about the selected invocation.",
+          "oneOf": [
+            {
+              "const": "finished",
+              "description": "The mutation ended; `status` says how.",
+              "type": "string"
+            },
+            {
+              "const": "in_progress",
+              "description": "The mutation is still running. Ask again later.",
+              "type": "string"
+            },
+            {
+              "const": "interrupted",
+              "description": "The server stopped while the mutation was running, so its outcome was never recorded. The cluster may or may not have changed: read its current state before repeating the call.",
+              "type": "string"
+            },
+            {
+              "const": "not_found",
+              "description": "None of your recent calls on this cluster matches. The call may never have started, or it is older than what the server remembers.",
+              "type": "string"
+            }
+          ]
+        },
+        "MutationResultTarget": {
+          "additionalProperties": false,
+          "description": "The logical object of the mutation: names only, never addresses.",
+          "properties": {
+            "broker": {
+              "description": "The one Broker of a Broker configuration patch.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "broker_count": {
+              "description": "How many Brokers a Topic or Consumer Group upsert selected.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "broker_names": {
+              "description": "Their sorted names, when the list is short enough to be kept.",
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "consumer_group": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "topic": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "MutationStatus": {
+          "enum": [
+            "planned",
+            "applied",
+            "partial",
+            "conflict",
+            "failed"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "changed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Whether at least one target was written; null when the mutation ended without reporting it, for example after a timeout. Null does not mean that nothing changed."
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "duration_millis": {
+          "anyOf": [
+            {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How long it ran, in milliseconds; null unless `state` is `finished`."
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ControlErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The error code of a mutation that did not end as planned or applied; null otherwise."
+        },
+        "invocation_id": {
+          "anyOf": [
+            {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The invocation this answer is about; null when `state` is `not_found`."
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MutationMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Whether it was a dry run or an execution; null when `state` is `not_found`."
+        },
+        "operation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ControlOperation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Which mutation it was; null when `state` is `not_found`."
+        },
+        "schema_version": {
+          "$ref": "#/$defs/MutationLookupSchemaVersion"
+        },
+        "state": {
+          "$ref": "#/$defs/MutationResultState"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MutationStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How it ended; null unless `state` is `finished`."
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MutationResultTarget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What it was aimed at; null when `state` is `not_found` or the object was not recorded."
+        },
+        "target_results": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MutationResultCounts"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Per-target outcome counts; null when the mutation ended without reporting them."
+        }
+      },
+      "required": [
+        "schema_version",
+        "cluster",
+        "state",
+        "invocation_id",
+        "operation",
+        "mode",
+        "target",
+        "status",
+        "error_code",
+        "duration_millis",
+        "changed",
+        "target_results"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "title": "Get RocketMQ mutation result",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     }
   }
 ]
