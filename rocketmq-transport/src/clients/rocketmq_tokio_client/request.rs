@@ -37,7 +37,6 @@ use crate::request_outcome::OutboundRequestContract;
 use crate::request_outcome::OutboundRequestOutcome;
 use crate::request_outcome::OutboundRequestRejection;
 use crate::request_outcome::OutboundRequestStage;
-use crate::telemetry::TransportGoAwayOutcome;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
@@ -361,7 +360,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         let outcome = match client.send_read(request, deadline).await {
             Ok(OutboundRequestOutcome::Response(response)) => {
                 if response.code() == ResponseCode::GoAway.to_i32() {
-                    self.telemetry.record_go_away(TransportGoAwayOutcome::Received);
+                    self.telemetry.record_go_away_received();
                     self.remove_cached_session_if_matches(&identity, &client);
                     self.start_go_away_drain(identity, client);
                 }
