@@ -51,7 +51,7 @@ use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RemotingResponse;
 use crate::dispatch::RequestContext;
 use crate::dispatch::RequestTransport;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseOperationalFailure;
 use crate::dispatch::ResponseSink;
 use crate::dispatch::WriteProgress;
@@ -652,7 +652,7 @@ async fn deliver_and_observe(
     let write_started = Instant::now();
     let result = sink.send_response(bound).await;
     let write_elapsed = write_started.elapsed();
-    let failed = !matches!(result, Ok(ResponseCompletionOutcome::Completed(_)));
+    let failed = !matches!(result, Ok(ResponseCompletionResult::Completed(_)));
     if !failure_recorded {
         if failed {
             metrics.complete_write_channel_failed(response_code);
@@ -666,7 +666,7 @@ async fn deliver_and_observe(
         body_kind,
         write_elapsed,
         match result.as_ref() {
-            Ok(ResponseCompletionOutcome::Completed(receipt)) => Ok(*receipt),
+            Ok(ResponseCompletionResult::Completed(receipt)) => Ok(*receipt),
             Ok(outcome) => Err((Some(*outcome), response_outcome_progress(*outcome))),
             Err(error) => Err((None, Some(error.write_progress()))),
         },
@@ -734,7 +734,7 @@ async fn send_boundary_response(
             Some(body_kind),
             Some(write_elapsed),
             match result.as_ref() {
-                Ok(ResponseCompletionOutcome::Completed(receipt)) => {
+                Ok(ResponseCompletionResult::Completed(receipt)) => {
                     crate::runtime::processor::ResponseObservationOutcome::Written(*receipt)
                 }
                 Ok(outcome) => crate::runtime::processor::ResponseObservationOutcome::Failed {
@@ -749,12 +749,12 @@ async fn send_boundary_response(
         );
         return result
             .map(|outcome| match outcome {
-                ResponseCompletionOutcome::Completed(_) => BoundaryResponseAttempt::Delivered,
-                ResponseCompletionOutcome::SessionClosed => BoundaryResponseAttempt::SessionClosed,
-                ResponseCompletionOutcome::AlreadyCompleted(_)
-                | ResponseCompletionOutcome::DeadlineExpired
-                | ResponseCompletionOutcome::Cancelled
-                | ResponseCompletionOutcome::QueueSaturated => BoundaryResponseAttempt::CloseSession,
+                ResponseCompletionResult::Completed(_) => BoundaryResponseAttempt::Delivered,
+                ResponseCompletionResult::SessionClosed => BoundaryResponseAttempt::SessionClosed,
+                ResponseCompletionResult::AlreadyCompleted(_)
+                | ResponseCompletionResult::DeadlineExpired
+                | ResponseCompletionResult::Cancelled
+                | ResponseCompletionResult::QueueSaturated => BoundaryResponseAttempt::CloseSession,
             })
             .map_err(AuthorizedDispatchError::Response);
     }
@@ -768,13 +768,13 @@ async fn send_boundary_response(
         .map_err(AuthorizedDispatchError::BoundaryResponse)
 }
 
-const fn response_outcome_progress(outcome: ResponseCompletionOutcome) -> Option<WriteProgress> {
+const fn response_outcome_progress(outcome: ResponseCompletionResult) -> Option<WriteProgress> {
     match outcome {
-        ResponseCompletionOutcome::Completed(_) | ResponseCompletionOutcome::AlreadyCompleted(_) => None,
-        ResponseCompletionOutcome::DeadlineExpired
-        | ResponseCompletionOutcome::Cancelled
-        | ResponseCompletionOutcome::SessionClosed
-        | ResponseCompletionOutcome::QueueSaturated => Some(WriteProgress::NotStarted),
+        ResponseCompletionResult::Completed(_) | ResponseCompletionResult::AlreadyCompleted(_) => None,
+        ResponseCompletionResult::DeadlineExpired
+        | ResponseCompletionResult::Cancelled
+        | ResponseCompletionResult::SessionClosed
+        | ResponseCompletionResult::QueueSaturated => Some(WriteProgress::NotStarted),
     }
 }
 

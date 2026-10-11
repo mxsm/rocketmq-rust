@@ -44,7 +44,7 @@ use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RemotingResponse;
 use crate::dispatch::RequestContext;
 use crate::dispatch::RequestControlView;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseSink;
 use crate::error::TransportError;
 use crate::runtime::processor::RequestProcessor;
@@ -656,7 +656,7 @@ where
                 &send_result,
             );
             match send_result {
-                Ok(ResponseCompletionOutcome::Completed(_)) => {}
+                Ok(ResponseCompletionResult::Completed(_)) => {}
                 Ok(outcome) => return Ok(embedded_response_outcome(outcome)),
                 Err(error) => return Err(EmbeddedDispatchError::response(error)),
             }
@@ -668,15 +668,15 @@ where
     }
 }
 
-const fn embedded_response_outcome(outcome: ResponseCompletionOutcome) -> EmbeddedDispatchOutcome {
+const fn embedded_response_outcome(outcome: ResponseCompletionResult) -> EmbeddedDispatchOutcome {
     match outcome {
-        ResponseCompletionOutcome::Completed(_) | ResponseCompletionOutcome::AlreadyCompleted(_) => {
+        ResponseCompletionResult::Completed(_) | ResponseCompletionResult::AlreadyCompleted(_) => {
             EmbeddedDispatchOutcome::CompletionClosed
         }
-        ResponseCompletionOutcome::DeadlineExpired => EmbeddedDispatchOutcome::DeadlineExceeded,
-        ResponseCompletionOutcome::Cancelled => EmbeddedDispatchOutcome::Cancelled,
-        ResponseCompletionOutcome::SessionClosed => EmbeddedDispatchOutcome::SessionClosed,
-        ResponseCompletionOutcome::QueueSaturated => EmbeddedDispatchOutcome::AdmissionRejected,
+        ResponseCompletionResult::DeadlineExpired => EmbeddedDispatchOutcome::DeadlineExceeded,
+        ResponseCompletionResult::Cancelled => EmbeddedDispatchOutcome::Cancelled,
+        ResponseCompletionResult::SessionClosed => EmbeddedDispatchOutcome::SessionClosed,
+        ResponseCompletionResult::QueueSaturated => EmbeddedDispatchOutcome::AdmissionRejected,
     }
 }
 

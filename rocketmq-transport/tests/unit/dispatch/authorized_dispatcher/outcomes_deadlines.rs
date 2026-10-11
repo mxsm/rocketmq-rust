@@ -29,7 +29,7 @@ use crate::dispatch::DeferredWakeReason;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestControlView;
 use crate::dispatch::RequestMeta;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseSink;
 use crate::runtime::processor::ResponseObservation;
 use crate::runtime::processor::ResponseObservationMode;
@@ -1042,7 +1042,7 @@ async fn queued_deadline_expiry_attempts_one_plan_write_and_observes_not_started
         assert!(matches!(
             observations[1].outcome(),
             ResponseWriteOutcome::Failed {
-                completion: Some(ResponseCompletionOutcome::DeadlineExpired),
+                completion: Some(ResponseCompletionResult::DeadlineExpired),
                 progress: Some(WriteProgress::NotStarted),
             }
         ));

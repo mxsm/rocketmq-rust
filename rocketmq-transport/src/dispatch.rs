@@ -117,7 +117,7 @@ pub use request_origin::AuthenticationState;
 pub use request_origin::EmbeddedCaller;
 pub use request_origin::RequestOrigin;
 pub use response::RequestId;
-pub use response::ResponseCompletionOutcome;
+pub use response::ResponseCompletionResult;
 pub use response::ResponseDisposition;
 pub(crate) use response::ResponseOperationalFailure;
 pub use response::ResponseReceipt;

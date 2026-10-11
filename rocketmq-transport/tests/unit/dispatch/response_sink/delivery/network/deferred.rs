@@ -88,7 +88,7 @@ async fn production_seed_shares_the_canonical_slot_and_rejects_another_session_o
                     .expect("duplicate binding")
             )
             .await,
-        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+        Ok(ResponseCompletionResult::AlreadyCompleted(
             ResponseTerminalState::Completed
         ))
     ));
@@ -162,7 +162,7 @@ async fn dropping_a_waiting_deferred_send_completes_rsp_and_def_not_started() {
         .await;
     assert!(matches!(
         duplicate_error,
-        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+        Ok(ResponseCompletionResult::AlreadyCompleted(
             ResponseTerminalState::Failed {
                 progress: WriteProgress::NotStarted
             }
@@ -248,7 +248,7 @@ async fn dropping_a_writer_claimed_deferred_send_completes_rsp_and_def_possibly_
         .await;
     assert!(matches!(
         duplicate_error,
-        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+        Ok(ResponseCompletionResult::AlreadyCompleted(
             ResponseTerminalState::Failed {
                 progress: WriteProgress::PossiblyPartial
             }
@@ -319,7 +319,7 @@ async fn prestart_deadline_resumes_both_outer_claims_without_a_delegated_sending
     tokio::task::yield_now().await;
     assert!(matches!(
         send.await.expect("deferred send task"),
-        Ok(ResponseCompletionOutcome::DeadlineExpired)
+        Ok(ResponseCompletionResult::DeadlineExpired)
     ));
     assert_eq!(
         state_for_assert.terminal_state(),
@@ -338,7 +338,7 @@ async fn prestart_deadline_resumes_both_outer_claims_without_a_delegated_sending
         .await;
     assert!(matches!(
         duplicate_error,
-        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+        Ok(ResponseCompletionResult::AlreadyCompleted(
             ResponseTerminalState::Failed {
                 progress: WriteProgress::NotStarted
             }

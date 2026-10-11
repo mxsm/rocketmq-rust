@@ -23,7 +23,7 @@ use crate::dispatch::RemotingResponse;
 use crate::dispatch::RequestId;
 use crate::dispatch::ResponseAction;
 use crate::dispatch::ResponseBodyKind;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseOperationalFailure;
 use crate::dispatch::ResponseReceipt;
 use crate::dispatch::WriteProgress;
@@ -89,7 +89,7 @@ pub enum ResponseObservationOutcome {
     /// Response processing or delivery failed with redacted metadata.
     Failed {
         /// Source-free completion state when the failure was a normal rejection.
-        completion: Option<ResponseCompletionOutcome>,
+        completion: Option<ResponseCompletionResult>,
         /// Socket-write progress, when known.
         progress: Option<WriteProgress>,
     },
@@ -240,14 +240,14 @@ impl ResponseObservation {
         path: ResponseWritePath,
         write_elapsed: Duration,
         end_to_end_elapsed: Duration,
-        result: &Result<ResponseCompletionOutcome, ResponseOperationalFailure>,
+        result: &Result<ResponseCompletionResult, ResponseOperationalFailure>,
     ) -> Self {
         let mode = match path {
             ResponseWritePath::Inline => ResponseObservationMode::Inline,
             ResponseWritePath::Deferred => ResponseObservationMode::Deferred,
         };
         let outcome = match result {
-            Ok(ResponseCompletionOutcome::Completed(receipt)) => ResponseObservationOutcome::Written(*receipt),
+            Ok(ResponseCompletionResult::Completed(receipt)) => ResponseObservationOutcome::Written(*receipt),
             Ok(outcome) => ResponseObservationOutcome::Failed {
                 completion: Some(*outcome),
                 progress: response_completion_progress(*outcome),
@@ -284,7 +284,7 @@ pub enum ResponseWriteOutcome {
     /// Response delivery failed with stable, body-free metadata.
     Failed {
         /// Source-free completion state when the failure was a normal rejection.
-        completion: Option<ResponseCompletionOutcome>,
+        completion: Option<ResponseCompletionResult>,
         /// Socket-write progress, when the failure describes a write attempt.
         progress: Option<WriteProgress>,
     },
@@ -292,9 +292,9 @@ pub enum ResponseWriteOutcome {
 
 impl ResponseWriteOutcome {
     #[cfg(test)]
-    fn from_result(result: Result<ResponseCompletionOutcome, ResponseOperationalFailure>) -> Self {
+    fn from_result(result: Result<ResponseCompletionResult, ResponseOperationalFailure>) -> Self {
         match result {
-            Ok(ResponseCompletionOutcome::Completed(receipt)) => Self::Written(receipt),
+            Ok(ResponseCompletionResult::Completed(receipt)) => Self::Written(receipt),
             Ok(outcome) => Self::Failed {
                 completion: Some(outcome),
                 progress: response_completion_progress(outcome),
@@ -307,13 +307,13 @@ impl ResponseWriteOutcome {
     }
 }
 
-const fn response_completion_progress(outcome: ResponseCompletionOutcome) -> Option<WriteProgress> {
+const fn response_completion_progress(outcome: ResponseCompletionResult) -> Option<WriteProgress> {
     match outcome {
-        ResponseCompletionOutcome::Completed(_) | ResponseCompletionOutcome::AlreadyCompleted(_) => None,
-        ResponseCompletionOutcome::DeadlineExpired
-        | ResponseCompletionOutcome::Cancelled
-        | ResponseCompletionOutcome::SessionClosed
-        | ResponseCompletionOutcome::QueueSaturated => Some(WriteProgress::NotStarted),
+        ResponseCompletionResult::Completed(_) | ResponseCompletionResult::AlreadyCompleted(_) => None,
+        ResponseCompletionResult::DeadlineExpired
+        | ResponseCompletionResult::Cancelled
+        | ResponseCompletionResult::SessionClosed
+        | ResponseCompletionResult::QueueSaturated => Some(WriteProgress::NotStarted),
     }
 }
 
@@ -376,7 +376,7 @@ impl ResponseWriteObservation {
         path: ResponseWritePath,
         write_elapsed: Duration,
         end_to_end_elapsed: Duration,
-        result: Result<ResponseCompletionOutcome, ResponseOperationalFailure>,
+        result: Result<ResponseCompletionResult, ResponseOperationalFailure>,
     ) -> Self {
         Self {
             request_id,
@@ -574,7 +574,7 @@ mod tests {
             ResponseWritePath::Inline,
             Duration::from_millis(2),
             Duration::from_millis(5),
-            &Ok(ResponseCompletionOutcome::Completed(ResponseReceipt::new(
+            &Ok(ResponseCompletionResult::Completed(ResponseReceipt::new(
                 request_id,
                 ResponseDisposition::TransportWritten,
             ))),
@@ -618,7 +618,7 @@ mod tests {
             ResponseWritePath::Deferred,
             Duration::from_millis(3),
             Duration::from_millis(8),
-            Ok(ResponseCompletionOutcome::Completed(receipt)),
+            Ok(ResponseCompletionResult::Completed(receipt)),
         );
 
         assert_eq!(observation.request_id(), request_id);
@@ -667,14 +667,14 @@ mod tests {
             ResponseWritePath::Inline,
             Duration::ZERO,
             Duration::ZERO,
-            Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            Ok(ResponseCompletionResult::AlreadyCompleted(
                 ResponseTerminalState::Completed,
             )),
         );
         assert_eq!(
             already_completed.outcome(),
             ResponseWriteOutcome::Failed {
-                completion: Some(ResponseCompletionOutcome::AlreadyCompleted(
+                completion: Some(ResponseCompletionResult::AlreadyCompleted(
                     ResponseTerminalState::Completed,
                 )),
                 progress: None,
