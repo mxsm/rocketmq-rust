@@ -159,7 +159,7 @@ pub enum ResponseCompletionOutcome {
 
 /// Private completion carrier for a canonical writer attempt.
 #[must_use]
-pub(crate) enum ResponseSendOutcome {
+pub(crate) enum ResponseSendResult {
     /// The canonical writer completed the payload.
     Written,
     /// A source-free normal response state prevented the write.

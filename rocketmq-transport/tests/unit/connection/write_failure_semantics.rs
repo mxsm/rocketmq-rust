@@ -53,7 +53,7 @@ use crate::deadline::RequestDeadline;
 use crate::dispatch::RequestControlView;
 use crate::dispatch::RequestMeta;
 use crate::dispatch::ResponseCompletionOutcome;
-use crate::dispatch::ResponseSendOutcome;
+use crate::dispatch::ResponseSendResult;
 use crate::dispatch::WriteProgress;
 use crate::file_region::FileRegion;
 use crate::file_region::FileRegionSequence;
@@ -104,9 +104,9 @@ fn enqueue_raw_write(
     result
 }
 
-fn assert_operational_failure(outcome: ResponseSendOutcome, expected: WriteProgress, operation: &'static str) {
+fn assert_operational_failure(outcome: ResponseSendResult, expected: WriteProgress, operation: &'static str) {
     match outcome {
-        ResponseSendOutcome::OperationalFailure(error) => {
+        ResponseSendResult::OperationalFailure(error) => {
             assert_eq!(error.operation(), operation);
             assert_eq!(error.write_progress(), expected);
             let source = Error::source(&error).expect("operational response failure source");
@@ -116,23 +116,23 @@ fn assert_operational_failure(outcome: ResponseSendOutcome, expected: WriteProgr
                 other => panic!("unexpected response operation {other}"),
             }
         }
-        ResponseSendOutcome::Written => panic!("{operation} unexpectedly completed"),
-        ResponseSendOutcome::Rejected(completion) => {
+        ResponseSendResult::Written => panic!("{operation} unexpectedly completed"),
+        ResponseSendResult::Rejected(completion) => {
             panic!("{operation} unexpectedly returned normal completion {:?}", completion)
         }
     }
 }
 
-fn assert_normal_rejection(outcome: ResponseSendOutcome, expected: ResponseCompletionOutcome) {
+fn assert_normal_rejection(outcome: ResponseSendResult, expected: ResponseCompletionOutcome) {
     match outcome {
-        ResponseSendOutcome::Rejected(actual) => assert_eq!(actual, expected),
-        ResponseSendOutcome::Written => panic!("response unexpectedly completed"),
-        ResponseSendOutcome::OperationalFailure(_) => panic!("response unexpectedly failed operationally"),
+        ResponseSendResult::Rejected(actual) => assert_eq!(actual, expected),
+        ResponseSendResult::Written => panic!("response unexpectedly completed"),
+        ResponseSendResult::OperationalFailure(_) => panic!("response unexpectedly failed operationally"),
     }
 }
 
-fn assert_not_started_prewrite_operational(outcome: ResponseSendOutcome) {
-    let ResponseSendOutcome::OperationalFailure(error) = outcome else {
+fn assert_not_started_prewrite_operational(outcome: ResponseSendResult) {
+    let ResponseSendResult::OperationalFailure(error) = outcome else {
         panic!("pre-write failure must remain operational")
     };
     assert_eq!(error.operation(), "transport");
@@ -337,7 +337,7 @@ async fn typed_response_encode_failure_is_not_started_and_keeps_direct_writer_he
         connection
             .send_response(RemotingCommand::create_remoting_command(2))
             .await,
-        ResponseSendOutcome::Written
+        ResponseSendResult::Written
     ));
     let mut peer = Connection::new_with_plaintext_stream_and_limits(peer_transport, limits);
     let response = peer
@@ -489,7 +489,7 @@ async fn queued_response_api_records_queue_wait_but_generic_commands_do_not() {
         connection
             .send_response(RemotingCommand::create_response_command_with_code(0))
             .await,
-        ResponseSendOutcome::Written
+        ResponseSendResult::Written
     ));
 
     assert_eq!(capture.response_queue_waits(), 1);
@@ -1197,7 +1197,7 @@ async fn queued_control_does_not_reclassify_a_dropped_completion_after_its_later
         .await
         .expect_err("a dropped writer completion must remain a typed failure")
         .into_response();
-    let ResponseSendOutcome::OperationalFailure(error) = response else {
+    let ResponseSendResult::OperationalFailure(error) = response else {
         panic!("a dropped writer completion must remain operational")
     };
     assert_eq!(error.operation(), "transport");

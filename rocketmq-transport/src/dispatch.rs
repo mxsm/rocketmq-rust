@@ -121,7 +121,7 @@ pub use response::ResponseCompletionOutcome;
 pub use response::ResponseDisposition;
 pub(crate) use response::ResponseOperationalFailure;
 pub use response::ResponseReceipt;
-pub(crate) use response::ResponseSendOutcome;
+pub(crate) use response::ResponseSendResult;
 pub use response::ResponseTerminalState;
 pub use response::WriteProgress;
 pub(crate) use response_sink::ResponseDeliveryContext;

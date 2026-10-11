@@ -42,7 +42,7 @@ use crate::dispatch::RequestMeta;
 use crate::dispatch::ResponseBody;
 use crate::dispatch::ResponseCompletionOutcome;
 use crate::dispatch::ResponseOperationalFailure;
-use crate::dispatch::ResponseSendOutcome;
+use crate::dispatch::ResponseSendResult;
 use crate::dispatch::ResponseTerminalState;
 use crate::dispatch::ResponseTransitionResult;
 use crate::error_helpers::connection_failed_for_remote;
@@ -407,7 +407,7 @@ async fn direct_remoting_response_fails_closed_before_io_and_finishes_not_starte
         .await;
     assert!(matches!(
         outcome,
-        ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed)
+        ResponseSendResult::Rejected(ResponseCompletionOutcome::SessionClosed)
     ));
     expect_applied(claim.fail(WriteProgress::NotStarted));
     assert_eq!(
@@ -457,7 +457,7 @@ async fn queued_response_without_canonical_plan_context_fails_before_enqueue() {
         .await;
     assert!(matches!(
         outcome,
-        ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed)
+        ResponseSendResult::Rejected(ResponseCompletionOutcome::SessionClosed)
     ));
     assert_eq!(diagnostics.snapshot().accepted, 0);
     expect_applied(claim.fail(WriteProgress::NotStarted));
