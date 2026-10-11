@@ -12,216 +12,101 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use serde::Serialize;
+//! Writes diagnosis reports from an evidence snapshot and what the rules concluded.
+//!
+//! [`finish`] completes any report. [`build_lag_report`] writes the report of a backlog, which the
+//! diagnosis of one Topic and the diagnosis of a whole Consumer Group share.
+
 use serde_json::json;
 use serde_json::Value;
 
-#[cfg(test)]
-use crate::adapter::query_facade::ReadOnlyQuery;
 use crate::model::contract::observed_at;
-#[cfg(test)]
-use crate::model::contract::PageRequest;
-#[cfg(test)]
-use crate::model::contract::QueryResult;
 use crate::model::diagnosis::ConfidenceBand;
 use crate::model::diagnosis::DiagnosisReport;
-use crate::model::diagnosis::Evidence;
+use crate::model::diagnosis::EvidenceItem;
+use crate::model::diagnosis::EvidenceSnapshot;
 use crate::model::diagnosis::EvidenceStatus;
 use crate::model::diagnosis::ImpactItem;
 use crate::model::diagnosis::MetricWatchItem;
 use crate::model::diagnosis::Recommendation;
 use crate::model::diagnosis::RootCauseCandidate;
 use crate::model::diagnosis::Severity;
-use crate::service::diagnosis_collector::ConsumerLagSummary;
-#[cfg(test)]
-use crate::service::diagnosis_collector::QueueLagBreakdown;
-#[cfg(test)]
-use crate::tools::broker_tools::DescribeBrokerArgs;
-#[cfg(test)]
-use crate::tools::consumer_tools::QueryConsumerLagArgs;
-#[cfg(test)]
-use crate::tools::consumer_tools::QueryConsumerLagOutput;
-use crate::tools::diagnosis_tools::DiagnoseConsumerLagArgs;
-use crate::tools::executor::ToolFailure;
-#[cfg(test)]
-use crate::tools::topic_tools::DescribeTopicArgs;
-#[cfg(test)]
-use crate::tools::topic_tools::QueryTopicRouteArgs;
+use crate::service::diagnosis_collector::LagFigures;
+use crate::service::diagnosis_evidence::duration_text;
+use crate::service::diagnosis_rules::conclusion;
+use crate::service::diagnosis_rules::Finding;
+use crate::service::diagnosis_rules::Thresholds;
 
-#[cfg(test)]
-const DEFAULT_LAG_THRESHOLD: i64 = 1_000;
-const SKEW_RATIO_THRESHOLD: f64 = 0.70;
-pub(crate) const CONSUMER_LAG_EVIDENCE_VERSION: &str = "rocketmq-mcp.evidence.consumer-lag.v1";
-pub(crate) const CONSUMER_LAG_RULES_VERSION: &str = "rocketmq-mcp.rules.consumer-lag.v1";
+/// The parts of a report that a diagnosis writes itself.
+pub(crate) struct ReportBody {
+    pub report_type: &'static str,
+    pub rules_version: &'static str,
+    pub target: Value,
+    pub policy_profile: String,
+    pub severity: Severity,
+    pub confidence: f32,
+    pub summary: String,
+    pub impacts: Vec<ImpactItem>,
+    pub root_causes: Vec<RootCauseCandidate>,
+    pub recommendations: Vec<Recommendation>,
+    pub risks: Vec<String>,
+    pub follow_up_metrics: Vec<MetricWatchItem>,
+}
 
-#[cfg(test)]
-pub(crate) async fn diagnose_consumer_lag<A>(
-    adapter: &A,
-    args: DiagnoseConsumerLagArgs,
-) -> Result<DiagnosisReport, ToolFailure>
-where
-    A: ReadOnlyQuery,
-{
-    let lag_result = adapter
-        .query_consumer_lag(QueryConsumerLagArgs {
-            cluster: args.cluster.clone(),
-            topic: args.topic.clone(),
-            consumer_group: args.consumer_group.clone(),
-            page: PageRequest::default(),
-        })
-        .await
-        .map(|result| lag_summary(result.data));
-    let topic_result = adapter
-        .describe_topic(DescribeTopicArgs {
-            cluster: args.cluster.clone(),
-            topic: args.topic.clone(),
-            page: PageRequest::default(),
-        })
-        .await
-        .map(|result| result.data);
-    let route_result = adapter
-        .query_topic_route(QueryTopicRouteArgs {
-            cluster: args.cluster.clone(),
-            topic: args.topic.clone(),
-            page: PageRequest::default(),
-        })
-        .await
-        .map(|result| result.data);
-    let broker_result = match lag_result.as_ref().ok().and_then(ConsumerLagSummary::top_lag_broker) {
-        Some(broker_name) => Some(
-            adapter
-                .describe_broker(DescribeBrokerArgs {
-                    cluster: args.cluster.clone(),
-                    broker_name: broker_name.to_string(),
-                })
-                .await
-                .map(|result| result.data),
-        ),
-        None => None,
+/// Completes a report from its body and its evidence.
+///
+/// The snapshot is the only place a report holds evidence. Which items were collected, which are
+/// missing and whether the report is partial follow from it, so they cannot disagree with it.
+pub(crate) fn finish(body: ReportBody, snapshot: EvidenceSnapshot) -> DiagnosisReport {
+    let ids = |present: bool| {
+        snapshot
+            .items
+            .iter()
+            .filter(|item| is_present(item) == present)
+            .map(|item| item.id.clone())
+            .collect::<Vec<_>>()
     };
-
-    Ok(build_consumer_lag_report(
-        args,
-        lag_result,
-        topic_result,
-        route_result,
-        broker_result,
-    ))
-}
-
-#[cfg(test)]
-pub(crate) fn build_consumer_lag_report<Topic, Route, Broker>(
-    args: DiagnoseConsumerLagArgs,
-    lag_result: Result<ConsumerLagSummary, ToolFailure>,
-    topic_result: Result<Topic, ToolFailure>,
-    route_result: Result<Route, ToolFailure>,
-    broker_result: Option<Result<Broker, ToolFailure>>,
-) -> DiagnosisReport
-where
-    Topic: Serialize,
-    Route: Serialize,
-    Broker: Serialize,
-{
-    build_consumer_lag_report_with_threshold(
-        args,
-        DEFAULT_LAG_THRESHOLD,
-        lag_result,
-        topic_result,
-        route_result,
-        broker_result,
-    )
-}
-
-pub(crate) fn build_consumer_lag_report_with_threshold<Topic, Route, Broker>(
-    args: DiagnoseConsumerLagArgs,
-    threshold: i64,
-    lag_result: Result<ConsumerLagSummary, ToolFailure>,
-    topic_result: Result<Topic, ToolFailure>,
-    route_result: Result<Route, ToolFailure>,
-    broker_result: Option<Result<Broker, ToolFailure>>,
-) -> DiagnosisReport
-where
-    Topic: Serialize,
-    Route: Serialize,
-    Broker: Serialize,
-{
-    let threshold = threshold.max(0);
-    let lag = lag_result.as_ref().ok();
-    let severity = severity_for_lag(lag, threshold);
-    let confidence = confidence_for_evidence(lag, topic_result.as_ref().ok(), route_result.as_ref().ok());
-    let summary = summary_for_lag(&args, lag, threshold, severity);
-    let mut evidences = Vec::new();
-    evidences.push(evidence_from_result(
-        "consumer_lag",
-        "rocketmq_get_consumer_lag",
-        &lag_result,
-    ));
-    evidences.push(evidence_from_result(
-        "topic_description",
-        "rocketmq_describe_topic",
-        &topic_result,
-    ));
-    evidences.push(evidence_from_result(
-        "topic_route",
-        "rocketmq_get_topic_route",
-        &route_result,
-    ));
-    if let Some(result) = &broker_result {
-        evidences.push(evidence_from_result(
-            "broker_description",
-            "rocketmq_describe_broker",
-            result,
-        ));
-    } else {
-        evidences.push(Evidence {
-            id: "broker_description".to_string(),
-            source_tool: "rocketmq_describe_broker".to_string(),
-            status: EvidenceStatus::Missing,
-            summary: "No broker was selected because consumer lag evidence was unavailable.".to_string(),
-            data: Value::Null,
-        });
-    }
-    let partial = evidences
-        .iter()
-        .any(|evidence| evidence.status != EvidenceStatus::Present);
-    let missing_evidence = evidences
-        .iter()
-        .filter(|evidence| evidence.status != EvidenceStatus::Present)
-        .map(|evidence| evidence.id.clone())
-        .collect();
-    let evidence_refs = evidences
-        .iter()
-        .filter(|evidence| evidence.status == EvidenceStatus::Present)
-        .map(|evidence| evidence.id.clone())
-        .collect();
-
+    let missing_evidence = ids(false);
     DiagnosisReport {
-        report_type: "consumer_lag".to_string(),
-        evidence_version: CONSUMER_LAG_EVIDENCE_VERSION.to_string(),
-        rules_version: CONSUMER_LAG_RULES_VERSION.to_string(),
-        cluster: args.cluster.clone(),
-        target: json!({
-            "topic": args.topic,
-            "consumer_group": args.consumer_group,
-            "lag_threshold": threshold,
-        }),
-        severity,
-        confidence,
-        confidence_band: confidence_band(confidence),
-        policy_profile: "default".to_string(),
-        partial,
+        report_type: body.report_type.to_string(),
+        evidence_version: snapshot.evidence_version.clone(),
+        rules_version: body.rules_version.to_string(),
+        cluster: snapshot.cluster.clone(),
+        target: body.target,
+        severity: body.severity,
+        confidence: body.confidence,
+        confidence_band: confidence_band(body.confidence),
+        policy_profile: body.policy_profile,
+        partial: !missing_evidence.is_empty(),
         missing_evidence,
-        evidence_refs,
-        evidence_snapshot: None,
-        summary,
-        impacts: impacts_for_lag(lag, severity),
-        evidences,
-        root_causes: root_causes_for_lag(lag, threshold),
-        recommendations: recommendations_for_lag(lag, severity),
-        risks: risks_for_lag(lag, severity),
-        follow_up_metrics: follow_up_metrics(),
+        evidence_refs: ids(true),
+        summary: body.summary,
+        impacts: body.impacts,
+        root_causes: body.root_causes,
+        recommendations: body.recommendations,
+        risks: body.risks,
+        follow_up_metrics: body.follow_up_metrics,
+        evidence_snapshot: snapshot,
         generated_at: observed_at(),
     }
+}
+
+fn is_present(item: &EvidenceItem) -> bool {
+    item.status == EvidenceStatus::Present
+}
+
+/// How much of the evidence a complete diagnosis rests on was collected.
+///
+/// `base` is what the evidence the diagnosis cannot do without is worth, and `weights` what each
+/// other item adds once it is present. All are thousandths, so that the sum is exact.
+pub(crate) fn weighted_confidence(snapshot: &EvidenceSnapshot, base: u16, weights: &[(&str, u16)]) -> f32 {
+    let collected = snapshot
+        .items
+        .iter()
+        .filter(|item| is_present(item))
+        .filter_map(|item| weights.iter().find(|(id, _)| *id == item.id).map(|(_, weight)| *weight))
+        .sum::<u16>();
+    f32::from(base + collected) / 1_000.0
 }
 
 fn confidence_band(confidence: f32) -> ConfidenceBand {
@@ -234,69 +119,313 @@ fn confidence_band(confidence: f32) -> ConfidenceBand {
     }
 }
 
-fn severity_for_lag(lag: Option<&ConsumerLagSummary>, threshold: i64) -> Severity {
+/// The root causes that fired rules stand for, in the order given.
+pub(crate) fn fired_root_causes<'a>(
+    findings: &'a [(&'static str, Finding)],
+) -> impl Iterator<Item = RootCauseCandidate> + 'a {
+    findings.iter().map(|(rule_id, finding)| RootCauseCandidate {
+        rule_id: rule_id.to_string(),
+        cause: finding.cause.clone(),
+        confidence: finding.confidence,
+        evidence_refs: finding.evidence_refs.iter().map(|id| id.to_string()).collect(),
+        reasoning: finding.reasoning.clone(),
+    })
+}
+
+/// A conclusion that no rule drew, resting on one evidence item.
+pub(crate) fn conclude(
+    rule_id: &str,
+    evidence: &str,
+    cause: &str,
+    confidence: f32,
+    reasoning: &str,
+) -> RootCauseCandidate {
+    RootCauseCandidate {
+        rule_id: rule_id.to_string(),
+        cause: cause.to_string(),
+        confidence,
+        evidence_refs: vec![evidence.to_string()],
+        reasoning: reasoning.to_string(),
+    }
+}
+
+/// A condition that a health diagnosis found, and how bad it is on its own.
+pub(crate) struct HealthFinding {
+    pub rule_id: &'static str,
+    pub severity: Severity,
+    /// What the condition affects, as the area of an impact.
+    pub area: String,
+    pub finding: Finding,
+}
+
+/// Everything the report of a health diagnosis is written from.
+pub(crate) struct HealthReport<'a> {
+    pub report_type: &'static str,
+    pub rules_version: &'static str,
+    pub target: Value,
+    /// Who the report is about, as the summary names it: `Broker broker-a`.
+    pub subject: String,
+    pub policy_profile: &'a str,
+    /// The evidence the diagnosis cannot do without, or `None` when it was collected.
+    pub missing_primary: Option<&'static str>,
+    /// What a report without a finding says after "is Healthy: ".
+    pub healthy_summary: String,
+    pub confidence: f32,
+    pub findings: Vec<HealthFinding>,
+    /// What to keep in mind before acting on a finding.
+    pub risks: Vec<String>,
+    pub follow_up_metrics: Vec<MetricWatchItem>,
+    pub snapshot: EvidenceSnapshot,
+}
+
+/// How severities order when the worst of several is wanted. `Unknown` never wins: it is what a
+/// report is when nothing could be judged, not a grade of a finding.
+fn rank(severity: Severity) -> u8 {
+    match severity {
+        Severity::Unknown | Severity::Healthy => 0,
+        Severity::Low => 1,
+        Severity::Medium => 2,
+        Severity::High => 3,
+        Severity::Critical => 4,
+    }
+}
+
+/// Writes the report of a health diagnosis.
+///
+/// The report is as severe as its worst finding, `healthy` without one, and `unknown` when the
+/// evidence it cannot do without is missing. Findings are listed worst first.
+pub(crate) fn build_health_report(report: HealthReport<'_>) -> DiagnosisReport {
+    let HealthReport {
+        report_type,
+        rules_version,
+        target,
+        subject,
+        policy_profile,
+        missing_primary,
+        healthy_summary,
+        confidence,
+        mut findings,
+        risks,
+        follow_up_metrics,
+        snapshot,
+    } = report;
+    // Both sorts are stable, so equal findings keep the order of the rule table.
+    findings.sort_by(|left, right| right.finding.confidence.total_cmp(&left.finding.confidence));
+    findings.sort_by_key(|finding| std::cmp::Reverse(rank(finding.severity)));
+    let severity = match (missing_primary, findings.first()) {
+        (Some(_), _) => Severity::Unknown,
+        (None, None) => Severity::Healthy,
+        (None, Some(worst)) => worst.severity,
+    };
+    let summary = match (missing_primary, findings.as_slice()) {
+        (Some(missing), _) => format!("{subject} health is Unknown because {missing} evidence is missing."),
+        (None, []) => format!("{subject} is Healthy: {healthy_summary}"),
+        (None, [worst]) => format!("{subject} is {severity:?}: {}.", worst.finding.cause),
+        (None, [worst, others @ ..]) => format!(
+            "{subject} is {severity:?}: {}, and {} more findings.",
+            worst.finding.cause,
+            others.len()
+        ),
+    };
+    let mut recommendations = Vec::<Recommendation>::new();
+    for finding in &findings {
+        // Two findings often call for the same step; it is recommended once.
+        if recommendations
+            .iter()
+            .all(|listed| listed.action != finding.finding.recommendation.action)
+        {
+            recommendations.push(finding.finding.recommendation.clone());
+        }
+    }
+    if recommendations.is_empty() {
+        recommendations.push(match missing_primary {
+            Some(_) => Recommendation {
+                action: "Collect the evidence again.".to_string(),
+                priority: "high".to_string(),
+                rationale: "The report is Unknown because required evidence is missing.".to_string(),
+                risk: "Do not change configuration without evidence.".to_string(),
+                verification: "Re-run the diagnosis after the evidence is available.".to_string(),
+            },
+            None => Recommendation {
+                action: "Continue monitoring.".to_string(),
+                priority: "low".to_string(),
+                rationale: "No rule found a problem in the collected evidence.".to_string(),
+                risk: "No immediate operational change is recommended.".to_string(),
+                verification: "Confirm the next diagnosis is healthy too.".to_string(),
+            },
+        });
+    }
+    let risks = match (missing_primary, findings.is_empty()) {
+        (Some(_), _) => vec!["Evidence is incomplete; automated remediation is not safe.".to_string()],
+        (None, true) => vec!["No health risk was observed in the collected evidence.".to_string()],
+        (None, false) => risks,
+    };
+    finish(
+        ReportBody {
+            report_type,
+            rules_version,
+            target,
+            policy_profile: policy_profile.to_string(),
+            severity,
+            confidence,
+            summary,
+            // A finding that is not a problem has no impact.
+            impacts: findings
+                .iter()
+                .filter(|finding| rank(finding.severity) > 0)
+                .map(|finding| ImpactItem {
+                    area: finding.area.clone(),
+                    description: finding.finding.cause.clone(),
+                    severity: finding.severity,
+                })
+                .collect(),
+            root_causes: findings
+                .iter()
+                .map(|finding| RootCauseCandidate {
+                    rule_id: finding.rule_id.to_string(),
+                    cause: finding.finding.cause.clone(),
+                    confidence: finding.finding.confidence,
+                    evidence_refs: finding.finding.evidence_refs.iter().map(|id| id.to_string()).collect(),
+                    reasoning: finding.finding.reasoning.clone(),
+                })
+                .collect(),
+            recommendations,
+            risks,
+            follow_up_metrics,
+        },
+        snapshot,
+    )
+}
+
+/// What the rules made of a backlog.
+pub(crate) struct Assessment {
+    pub severity: Severity,
+    /// Whether the backlog is above the lag threshold.
+    pub backlog: bool,
+    /// The rules that fired, by identifier, most confident first. Without a backlog these are only
+    /// conditions that stop consumption.
+    pub findings: Vec<(&'static str, Finding)>,
+}
+
+/// Whose backlog a report is about, in the words the report uses.
+pub(crate) struct LagSubject {
+    /// Completes "Consumer ...": `group orders-consumer on topic orders`.
+    pub phrase: String,
+    /// The area an impact names: `orders:orders-consumer`.
+    pub area: String,
+    /// What delayed consumption affects: `topic orders`.
+    pub affected: String,
+    /// Completes "the group reports no consume progress...": ` on the topic`, or nothing.
+    pub progress_scope: &'static str,
+}
+
+/// Everything the report of a backlog is written from.
+pub(crate) struct LagReport<'a> {
+    pub report_type: &'static str,
+    pub rules_version: &'static str,
+    /// Who the report is about; the thresholds are added to it.
+    pub target: Value,
+    pub subject: LagSubject,
+    pub policy_profile: &'a str,
+    pub thresholds: &'a Thresholds,
+    /// The evidence item that holds the backlog, which a conclusion without a rule rests on.
+    pub lag_evidence: &'static str,
+    /// What each evidence item other than the backlog adds to the confidence, in thousandths.
+    pub confidence_weights: &'static [(&'static str, u16)],
+    pub snapshot: EvidenceSnapshot,
+    /// The backlog, when it was read.
+    pub lag: Option<LagFigures<'a>>,
+    pub assessment: Assessment,
+}
+
+/// Writes the report of a backlog.
+pub(crate) fn build_lag_report(report: LagReport<'_>) -> DiagnosisReport {
+    let LagReport {
+        report_type,
+        rules_version,
+        mut target,
+        subject,
+        policy_profile,
+        thresholds,
+        lag_evidence,
+        confidence_weights,
+        snapshot,
+        lag,
+        assessment,
+    } = report;
+    if let Value::Object(target) = &mut target {
+        // The values in effect after overrides, so that a reader can tell what "healthy" meant.
+        target.insert("lag_threshold".to_string(), json!(thresholds.lag));
+        target.insert(
+            "consume_delay_threshold_ms".to_string(),
+            json!(thresholds.consume_delay_ms),
+        );
+        target.insert("pop_inflight_threshold".to_string(), json!(thresholds.pop_inflight));
+        target.insert(
+            "retry_activity_window_ms".to_string(),
+            json!(thresholds.retry_activity_window_ms),
+        );
+    }
+    let severity = assessment.severity;
+    finish(
+        ReportBody {
+            report_type,
+            rules_version,
+            target,
+            policy_profile: policy_profile.to_string(),
+            severity,
+            confidence: lag_confidence(&snapshot, lag, confidence_weights),
+            summary: summary(&subject, lag, thresholds, severity),
+            impacts: impacts(&subject, lag, severity),
+            root_causes: root_causes(lag, lag_evidence, &assessment),
+            recommendations: recommendations(lag, &assessment),
+            risks: risks(&subject, lag, &assessment),
+            follow_up_metrics: follow_up_metrics(),
+        },
+        snapshot,
+    )
+}
+
+/// The backlog carries most of the weight, because nothing about it can be concluded without it.
+fn lag_confidence(snapshot: &EvidenceSnapshot, lag: Option<LagFigures<'_>>, weights: &[(&str, u16)]) -> f32 {
+    match lag {
+        None => 0.20,
+        Some(lag) if lag.queues.queue_count == 0 => weighted_confidence(snapshot, 500, weights),
+        Some(_) => weighted_confidence(snapshot, 600, weights),
+    }
+}
+
+fn summary(subject: &LagSubject, lag: Option<LagFigures<'_>>, thresholds: &Thresholds, severity: Severity) -> String {
     let Some(lag) = lag else {
-        return Severity::Unknown;
+        return format!(
+            "Consumer lag diagnosis for {} is Unknown because primary lag evidence is missing.",
+            subject.phrase
+        );
     };
     if lag.queues.queue_count == 0 {
-        return Severity::Unknown;
+        return format!(
+            "Consumer lag diagnosis for {} is Unknown because the group reports no consume progress{}.",
+            subject.phrase, subject.progress_scope
+        );
     }
-    if lag.total_lag <= threshold {
-        return Severity::Healthy;
+    if severity == Severity::Healthy {
+        return format!(
+            "Consumer {} is within the lag threshold: total_lag={} threshold={}.",
+            subject.phrase, lag.total_lag, thresholds.lag
+        );
     }
-    if lag.total_lag >= threshold.saturating_mul(20) {
-        return Severity::Critical;
-    }
-    if lag.total_lag >= threshold.saturating_mul(10) {
-        return Severity::High;
-    }
-    Severity::Medium
+    let delay = lag
+        .delay
+        .consume_delay_ms
+        .map(|delay| format!(" and is {} behind production", duration_text(delay)))
+        .unwrap_or_default();
+    format!(
+        "Consumer {} has {} total lag across {} queues{delay}; severity is {:?}.",
+        subject.phrase, lag.total_lag, lag.queues.queue_count, severity
+    )
 }
 
-fn confidence_for_evidence<Topic, Route>(
-    lag: Option<&ConsumerLagSummary>,
-    topic: Option<&Topic>,
-    route: Option<&Route>,
-) -> f32 {
-    if lag.is_none() {
-        return 0.20;
-    }
-    let mut confidence = 0.55;
-    if topic.is_some() {
-        confidence += 0.15;
-    }
-    if route.is_some() {
-        confidence += 0.15;
-    }
-    if lag.is_some_and(|lag| lag.queues.queue_count > 0) {
-        confidence += 0.10;
-    }
-    confidence
-}
-
-fn summary_for_lag(
-    args: &DiagnoseConsumerLagArgs,
-    lag: Option<&ConsumerLagSummary>,
-    threshold: i64,
-    severity: Severity,
-) -> String {
-    match lag {
-        Some(lag) if severity == Severity::Healthy => format!(
-            "Consumer group {} on topic {} is within the lag threshold: total_lag={} threshold={}.",
-            args.consumer_group, args.topic, lag.total_lag, threshold
-        ),
-        Some(lag) => format!(
-            "Consumer group {} on topic {} has {} total lag across {} queues; severity is {:?}.",
-            args.consumer_group, args.topic, lag.total_lag, lag.queues.queue_count, severity
-        ),
-        None => format!(
-            "Consumer lag diagnosis for group {} on topic {} is Unknown because primary lag evidence is missing.",
-            args.consumer_group, args.topic
-        ),
-    }
-}
-
-fn impacts_for_lag(lag: Option<&ConsumerLagSummary>, severity: Severity) -> Vec<ImpactItem> {
+fn impacts(subject: &LagSubject, lag: Option<LagFigures<'_>>, severity: Severity) -> Vec<ImpactItem> {
     let Some(lag) = lag else {
         return vec![ImpactItem {
             area: "consumer_lag".to_string(),
@@ -304,79 +433,72 @@ fn impacts_for_lag(lag: Option<&ConsumerLagSummary>, severity: Severity) -> Vec<
             severity,
         }];
     };
-
+    let delay = lag
+        .delay
+        .consume_delay_ms
+        .map(|delay| format!(" Consumption is {} behind production.", duration_text(delay)))
+        .unwrap_or_default();
     vec![ImpactItem {
-        area: format!("{}:{}", lag.topic, lag.consumer_group),
+        area: subject.area.clone(),
         description: format!(
-            "Total lag is {} across {} queues, with max queue lag {}.",
+            "Total lag is {} across {} queues, with max queue lag {}.{delay}",
             lag.total_lag, lag.queues.queue_count, lag.queues.max_queue_lag
         ),
         severity,
     }]
 }
 
-fn root_causes_for_lag(lag: Option<&ConsumerLagSummary>, threshold: i64) -> Vec<RootCauseCandidate> {
+/// The conclusions of the report, most confident first.
+///
+/// Without the backlog nothing is concluded about it; only what the rules established from the
+/// other evidence remains. A backlog within the threshold has nothing to explain, so what the
+/// rules found there is a risk, not a cause.
+fn root_causes(lag: Option<LagFigures<'_>>, lag_evidence: &str, assessment: &Assessment) -> Vec<RootCauseCandidate> {
     let Some(lag) = lag else {
-        return vec![RootCauseCandidate {
-            cause: "Unknown".to_string(),
-            confidence: 0.20,
-            evidence_refs: vec!["consumer_lag".to_string()],
-            reasoning: "Primary consumer lag evidence is unavailable.".to_string(),
-        }];
+        return fired_root_causes(&assessment.findings).collect();
     };
     if lag.queues.queue_count == 0 {
-        return vec![RootCauseCandidate {
-            cause: "Unknown".to_string(),
-            confidence: 0.30,
-            evidence_refs: vec!["consumer_lag".to_string()],
-            reasoning: "Consumer lag evidence contains no queue rows.".to_string(),
-        }];
+        // A group that cannot consume is the likely reason it reports no progress.
+        return fired_root_causes(&assessment.findings)
+            .chain([conclude(
+                conclusion::NO_QUEUE_ROWS,
+                lag_evidence,
+                "Unknown",
+                0.30,
+                "Consumer lag evidence contains no queue rows.",
+            )])
+            .collect();
     }
-    if lag.total_lag <= threshold {
-        return vec![RootCauseCandidate {
-            cause: "No active backlog above threshold".to_string(),
-            confidence: 0.80,
-            evidence_refs: vec!["consumer_lag".to_string()],
-            reasoning: "Observed total lag is at or below the configured threshold.".to_string(),
-        }];
+    if !assessment.backlog {
+        return vec![conclude(
+            conclusion::BACKLOG_WITHIN_THRESHOLD,
+            lag_evidence,
+            "No active backlog above threshold",
+            0.80,
+            "Observed total lag is at or below the configured threshold.",
+        )];
     }
-
-    let mut causes = Vec::new();
-    if lag.consume_tps < 1.0 {
-        causes.push(RootCauseCandidate {
-            cause: "Consumer throughput is too low for the backlog".to_string(),
-            confidence: 0.72,
-            evidence_refs: vec!["consumer_lag".to_string()],
-            reasoning: format!("consume_tps={} while total_lag={}.", lag.consume_tps, lag.total_lag),
-        });
+    if assessment.findings.is_empty() {
+        return vec![conclude(
+            conclusion::CAUSE_NOT_ISOLATED,
+            lag_evidence,
+            "Backlog exists but available evidence is insufficient for a specific cause",
+            0.45,
+            "Lag is above the threshold, but no rule isolated a cause from the collected evidence.",
+        )];
     }
-    if skew_ratio(lag) >= SKEW_RATIO_THRESHOLD && lag.queues.queue_count > 1 {
-        causes.push(RootCauseCandidate {
-            cause: "Lag is concentrated on a small subset of queues".to_string(),
-            confidence: 0.68,
-            evidence_refs: vec!["consumer_lag".to_string(), "topic_route".to_string()],
-            reasoning: format!(
-                "max_queue_lag={} accounts for {:.0}% of total_lag={}.",
-                lag.queues.max_queue_lag,
-                skew_ratio(lag) * 100.0,
-                lag.total_lag
-            ),
-        });
-    }
-    if causes.is_empty() {
-        causes.push(RootCauseCandidate {
-            cause: "Backlog exists but available evidence is insufficient for a specific cause".to_string(),
-            confidence: 0.45,
-            evidence_refs: vec!["consumer_lag".to_string()],
-            reasoning: "Lag is above threshold, but throughput and queue distribution do not isolate a cause."
-                .to_string(),
-        });
-    }
-    causes
+    fired_root_causes(&assessment.findings).collect()
 }
 
-fn recommendations_for_lag(lag: Option<&ConsumerLagSummary>, severity: Severity) -> Vec<Recommendation> {
-    match (lag, severity) {
+fn recommendations(lag: Option<LagFigures<'_>>, assessment: &Assessment) -> Vec<Recommendation> {
+    if !assessment.findings.is_empty() {
+        return assessment
+            .findings
+            .iter()
+            .map(|(_, finding)| finding.recommendation.clone())
+            .collect();
+    }
+    match (lag, assessment.severity) {
         (None, _) | (_, Severity::Unknown) => vec![Recommendation {
             action: "Collect consumer lag, topic route, and broker evidence again.".to_string(),
             priority: "high".to_string(),
@@ -413,16 +535,29 @@ fn recommendations_for_lag(lag: Option<&ConsumerLagSummary>, severity: Severity)
     }
 }
 
-fn risks_for_lag(lag: Option<&ConsumerLagSummary>, severity: Severity) -> Vec<String> {
-    match (lag, severity) {
+fn risks(subject: &LagSubject, lag: Option<LagFigures<'_>>, assessment: &Assessment) -> Vec<String> {
+    match (lag, assessment.severity) {
         (None, _) | (_, Severity::Unknown) => {
             vec!["Evidence is incomplete; automated remediation is not safe.".to_string()]
         }
-        (_, Severity::Healthy) => vec!["No backlog risk above the configured threshold was observed.".to_string()],
-        (Some(lag), _) => vec![
+        (_, Severity::Healthy) if assessment.findings.is_empty() => {
+            vec!["No backlog risk above the configured threshold was observed.".to_string()]
+        }
+        // The backlog is small today, and something stops the group from consuming.
+        (_, Severity::Healthy) => assessment
+            .findings
+            .iter()
+            .map(|(_, finding)| {
+                format!(
+                    "{}. Messages produced for this group accumulate while this lasts.",
+                    finding.cause
+                )
+            })
+            .collect(),
+        (Some(_), _) => vec![
             format!(
-                "Delayed consumption may affect downstream processing for topic {}.",
-                lag.topic
+                "Delayed consumption may affect downstream processing for {}.",
+                subject.affected
             ),
             "Resetting offsets would hide evidence and may cause message loss or replay.".to_string(),
         ],
@@ -446,300 +581,152 @@ fn follow_up_metrics() -> Vec<MetricWatchItem> {
             target: "consumer_group".to_string(),
             reason: "Shows whether consumer throughput recovers.".to_string(),
         },
+        MetricWatchItem {
+            name: "consume_delay_ms".to_string(),
+            target: "consumer_group/topic".to_string(),
+            reason: "Shows whether the group catches up with production.".to_string(),
+        },
     ]
-}
-
-fn evidence_from_result<T>(id: &str, source_tool: &str, result: &Result<T, ToolFailure>) -> Evidence
-where
-    T: Serialize,
-{
-    match result {
-        Ok(value) => Evidence {
-            id: id.to_string(),
-            source_tool: source_tool.to_string(),
-            status: EvidenceStatus::Present,
-            summary: format!("{source_tool} returned evidence."),
-            data: serde_json::to_value(value).unwrap_or(Value::Null),
-        },
-        Err(error) => Evidence {
-            id: id.to_string(),
-            source_tool: source_tool.to_string(),
-            // A completed lookup that found no such target is not a source outage.
-            status: if error.not_found_entity().is_some() {
-                EvidenceStatus::Missing
-            } else {
-                EvidenceStatus::Unavailable
-            },
-            summary: error.to_string(),
-            data: Value::Null,
-        },
-    }
-}
-
-/// Summarizes a lag Tool result whose page holds every queue.
-#[cfg(test)]
-fn lag_summary(output: QueryConsumerLagOutput) -> ConsumerLagSummary {
-    ConsumerLagSummary {
-        cluster: output.cluster,
-        topic: output.topic,
-        consumer_group: output.consumer_group,
-        total_lag: output.total_lag,
-        consume_tps: output.consume_tps,
-        inflight_total: output.inflight_total,
-        queues: QueueLagBreakdown::from_queues(output.page.items),
-        generated_at: output.generated_at,
-    }
-}
-
-fn skew_ratio(lag: &ConsumerLagSummary) -> f64 {
-    if lag.total_lag <= 0 {
-        return 0.0;
-    }
-    lag.queues.max_queue_lag as f64 / lag.total_lag as f64
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::adapter::query_facade::ReadOnlyQuery;
-    use crate::model::contract::Page;
-    use crate::tools::broker_tools::DescribeBrokerOutput;
-    use crate::tools::cluster_tools::BrokerSummary;
-    use crate::tools::cluster_tools::ClusterOverviewArgs;
-    use crate::tools::cluster_tools::ClusterOverviewOutput;
-    use crate::tools::consumer_tools::ListConsumerGroupsArgs;
-    use crate::tools::consumer_tools::ListConsumerGroupsOutput;
-    use crate::tools::consumer_tools::QueueLag;
-    use crate::tools::topic_tools::DescribeTopicOutput;
-    use crate::tools::topic_tools::ListTopicsArgs;
-    use crate::tools::topic_tools::ListTopicsOutput;
-    use crate::tools::topic_tools::QueryTopicRouteOutput;
-    use crate::tools::topic_tools::TopicRouteBroker;
-    use crate::tools::topic_tools::TopicRouteQueue;
-
     use super::*;
+    use crate::service::diagnosis_collector::fixtures;
+    use crate::service::diagnosis_collector::fixtures::queue;
+    use crate::service::diagnosis_collector::ConsumerLagEvidence;
+    use crate::service::diagnosis_rules::consumer_lag_report;
 
-    #[derive(Clone)]
-    struct FakeDiagnosisAdapter {
-        missing_lag: bool,
+    const THRESHOLDS: Thresholds = Thresholds {
+        lag: 1_000,
+        consume_delay_ms: 300_000,
+        pop_inflight: 1_000,
+        retry_activity_window_ms: 600_000,
+    };
+
+    fn report(evidence: &ConsumerLagEvidence, assessment: Assessment) -> DiagnosisReport {
+        consumer_lag_report(
+            &fixtures::args(),
+            "production-default",
+            &THRESHOLDS,
+            evidence.snapshot(&fixtures::args()),
+            evidence.lag.as_ref().ok().map(|lag| lag.figures()),
+            assessment,
+        )
     }
 
-    impl ReadOnlyQuery for FakeDiagnosisAdapter {
-        async fn cluster_overview(
-            &self,
-            _args: ClusterOverviewArgs,
-        ) -> Result<QueryResult<ClusterOverviewOutput>, ToolFailure> {
-            unimplemented!("not needed by this test")
-        }
-
-        async fn list_topics(&self, _args: ListTopicsArgs) -> Result<QueryResult<ListTopicsOutput>, ToolFailure> {
-            unimplemented!("not needed by this test")
-        }
-
-        async fn describe_topic(
-            &self,
-            args: DescribeTopicArgs,
-        ) -> Result<QueryResult<DescribeTopicOutput>, ToolFailure> {
-            Ok(QueryResult::bypass(DescribeTopicOutput {
-                cluster: args.cluster,
-                namesrv_addr: "127.0.0.1:9876".to_string(),
-                topic: args.topic,
-                broker_names: vec!["broker-a".to_string()],
-                read_queue_count: 4,
-                write_queue_count: 4,
-                brokers: vec![route_broker()],
-                page: Page {
-                    items: vec![route_queue()],
-                    count: 1,
-                    total_count: 1,
-                    has_more: false,
-                    next_cursor: None,
-                },
-                generated_at: "1".to_string(),
-            }))
-        }
-
-        async fn query_topic_route(
-            &self,
-            args: QueryTopicRouteArgs,
-        ) -> Result<QueryResult<QueryTopicRouteOutput>, ToolFailure> {
-            Ok(QueryResult::bypass(QueryTopicRouteOutput {
-                cluster: args.cluster,
-                namesrv_addr: "127.0.0.1:9876".to_string(),
-                topic: args.topic,
-                brokers: vec![route_broker()],
-                read_queue_count: 4,
-                write_queue_count: 4,
-                page: Page {
-                    items: vec![route_queue()],
-                    count: 1,
-                    total_count: 1,
-                    has_more: false,
-                    next_cursor: None,
-                },
-                generated_at: "1".to_string(),
-            }))
-        }
-
-        async fn list_consumer_groups(
-            &self,
-            _args: ListConsumerGroupsArgs,
-        ) -> Result<QueryResult<ListConsumerGroupsOutput>, ToolFailure> {
-            unimplemented!("not needed by this test")
-        }
-
-        async fn query_consumer_lag(
-            &self,
-            args: QueryConsumerLagArgs,
-        ) -> Result<QueryResult<QueryConsumerLagOutput>, ToolFailure> {
-            if self.missing_lag {
-                return Err(ToolFailure::Operational(
-                    crate::tools::executor::ToolExecutionError::Backend(None),
-                ));
-            }
-            Ok(QueryResult::bypass(QueryConsumerLagOutput {
-                cluster: args.cluster,
-                namesrv_addr: "127.0.0.1:9876".to_string(),
-                topic: args.topic,
-                consumer_group: args.consumer_group,
-                total_lag: 10_000,
-                max_queue_lag: 8_500,
-                consume_tps: 0.0,
-                inflight_total: 50,
-                page: Page {
-                    items: vec![
-                        QueueLag {
-                            topic: "orders".to_string(),
-                            broker_name: "broker-a".to_string(),
-                            queue_id: 0,
-                            broker_offset: 10_000,
-                            consumer_offset: 1_500,
-                            lag: 8_500,
-                            inflight: 50,
-                            last_observed_at: Some("1970-01-01T00:00:00.001Z".to_string()),
-                            client_ip: None,
-                        },
-                        QueueLag {
-                            topic: "orders".to_string(),
-                            broker_name: "broker-b".to_string(),
-                            queue_id: 1,
-                            broker_offset: 2_000,
-                            consumer_offset: 500,
-                            lag: 1_500,
-                            inflight: 0,
-                            last_observed_at: Some("1970-01-01T00:00:00.001Z".to_string()),
-                            client_ip: None,
-                        },
-                    ],
-                    count: 2,
-                    total_count: 2,
-                    has_more: false,
-                    next_cursor: None,
-                },
-                generated_at: "1".to_string(),
-            }))
-        }
-
-        async fn describe_broker(
-            &self,
-            args: DescribeBrokerArgs,
-        ) -> Result<QueryResult<DescribeBrokerOutput>, ToolFailure> {
-            Ok(QueryResult::bypass(DescribeBrokerOutput {
-                cluster: args.cluster,
-                namesrv_addr: "127.0.0.1:9876".to_string(),
-                broker_name: args.broker_name,
-                brokers: vec![broker_summary()],
-                generated_at: "1".to_string(),
-            }))
-        }
-
-        async fn diagnose_consumer_lag(
-            &self,
-            _args: DiagnoseConsumerLagArgs,
-        ) -> Result<QueryResult<DiagnosisReport>, ToolFailure> {
-            unimplemented!("the rule tests invoke the test-only composition helper")
+    fn no_findings(severity: Severity, backlog: bool) -> Assessment {
+        Assessment {
+            severity,
+            backlog,
+            findings: Vec::new(),
         }
     }
 
-    #[tokio::test]
-    async fn high_lag_report_contains_ranked_evidence() {
-        let report = diagnose_consumer_lag(&FakeDiagnosisAdapter { missing_lag: false }, request())
-            .await
-            .unwrap();
+    #[test]
+    fn confidence_follows_how_much_evidence_was_collected() {
+        let complete = || fixtures::evidence(fixtures::lag_summary(vec![queue("broker-a", 0, 5_000)], 500.0));
 
-        assert_eq!(report.severity, Severity::High);
-        assert!(report.confidence > 0.8);
-        assert!(report
-            .evidences
+        let all = report(&complete(), no_findings(Severity::Medium, true));
+        assert_eq!(all.confidence, 0.95);
+        assert_eq!(all.confidence_band, ConfidenceBand::High);
+
+        let mut evidence = complete();
+        evidence.group = fixtures::unavailable();
+        evidence.topic_config = fixtures::unavailable();
+        evidence.retry = fixtures::unavailable();
+        let some = report(&evidence, no_findings(Severity::Medium, true));
+        assert_eq!(some.confidence, 0.775);
+        assert_eq!(some.confidence_band, ConfidenceBand::Medium);
+        assert_eq!(
+            some.missing_evidence,
+            ["consumer_group", "topic_config", "retry_topic_stats"]
+        );
+
+        evidence.lag = fixtures::unavailable();
+        let none = report(&evidence, no_findings(Severity::Unknown, false));
+        assert_eq!(none.confidence, 0.20);
+        assert_eq!(none.confidence_band, ConfidenceBand::Low);
+        assert!(none.root_causes.is_empty());
+        assert!(none.summary.contains("primary lag evidence is missing"));
+    }
+
+    #[test]
+    fn a_group_without_consume_progress_is_unknown_and_says_so() {
+        let evidence = fixtures::evidence(fixtures::lag_summary(Vec::new(), 0.0));
+
+        let report = report(&evidence, no_findings(Severity::Unknown, false));
+
+        assert!(report.summary.contains("reports no consume progress on the topic"));
+        assert_eq!(report.root_causes.len(), 1);
+        assert_eq!(report.root_causes[0].rule_id, "no_queue_rows");
+        assert_eq!(
+            report.missing_evidence,
+            ["broker_summary"],
+            "there was no lag to pick a Broker by"
+        );
+        assert!(report.recommendations[0].action.starts_with("Collect consumer lag"));
+    }
+
+    #[test]
+    fn the_evidence_is_held_once_and_referred_to_by_identifier() {
+        let evidence = fixtures::evidence(fixtures::lag_summary(vec![queue("broker-a", 0, 5_000)], 500.0));
+
+        let report = serde_json::to_value(report(&evidence, no_findings(Severity::Medium, true))).unwrap();
+
+        assert!(report.get("evidences").is_none());
+        let items = report["evidence_snapshot"]["items"].as_array().unwrap();
+        let ids = items
             .iter()
-            .any(|evidence| evidence.status == EvidenceStatus::Present));
-        assert!(report
-            .root_causes
-            .iter()
-            .any(|cause| cause.cause.contains("throughput")));
-        assert!(report
-            .root_causes
-            .iter()
-            .any(|cause| cause.cause.contains("concentrated")));
-        assert!(!report.recommendations.is_empty());
+            .map(|item| item["id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            [
+                "consumer_lag",
+                "topic_route",
+                "broker_summary",
+                "consumer_group",
+                "topic_config",
+                "retry_topic_stats",
+                "dead_letter_topic_stats"
+            ]
+        );
+        assert_eq!(report["evidence_refs"], serde_json::json!(ids));
+        // The route rows of the Topic appear in exactly one item.
+        let serialized = report.to_string();
+        assert_eq!(serialized.matches("\"topic_sys_flag\"").count(), 1);
     }
 
-    #[tokio::test]
-    async fn missing_lag_evidence_returns_unknown_report() {
-        let report = diagnose_consumer_lag(&FakeDiagnosisAdapter { missing_lag: true }, request())
-            .await
-            .unwrap();
+    #[test]
+    fn a_finished_report_derives_its_evidence_lists_from_the_snapshot() {
+        let mut evidence = fixtures::evidence(fixtures::lag_summary(vec![queue("broker-a", 0, 5_000)], 500.0));
+        evidence.route = fixtures::unavailable();
+        let snapshot = evidence.snapshot(&fixtures::args());
 
-        assert_eq!(report.severity, Severity::Unknown);
-        assert!(report.confidence <= 0.2);
-        assert!(report.root_causes.iter().any(|cause| cause.cause == "Unknown"));
-        assert!(report
-            .evidences
-            .iter()
-            .any(|evidence| evidence.id == "consumer_lag" && evidence.status == EvidenceStatus::Unavailable));
-    }
+        let report = finish(
+            ReportBody {
+                report_type: "example",
+                rules_version: "rules.v1",
+                target: json!({}),
+                policy_profile: "profile".to_string(),
+                severity: Severity::Low,
+                confidence: 0.5,
+                summary: String::new(),
+                impacts: Vec::new(),
+                root_causes: Vec::new(),
+                recommendations: Vec::new(),
+                risks: Vec::new(),
+                follow_up_metrics: Vec::new(),
+            },
+            snapshot,
+        );
 
-    fn request() -> DiagnoseConsumerLagArgs {
-        DiagnoseConsumerLagArgs {
-            cluster: "local-dev".to_string(),
-            topic: "orders".to_string(),
-            consumer_group: "order-service".to_string(),
-        }
-    }
-
-    fn route_broker() -> TopicRouteBroker {
-        TopicRouteBroker {
-            cluster: "local-dev".to_string(),
-            broker_name: "broker-a".to_string(),
-            broker_addrs: [("0".to_string(), "127.0.0.1:10911".to_string())].into(),
-            zone_name: None,
-            enable_acting_master: false,
-        }
-    }
-
-    fn route_queue() -> TopicRouteQueue {
-        TopicRouteQueue {
-            broker_name: "broker-a".to_string(),
-            read_queue_nums: 4,
-            write_queue_nums: 4,
-            perm: 6,
-            topic_sys_flag: 0,
-        }
-    }
-
-    fn broker_summary() -> BrokerSummary {
-        BrokerSummary {
-            cluster: "local-dev".to_string(),
-            broker_name: "broker-a".to_string(),
-            broker_id: 0,
-            broker_addr: "127.0.0.1:10911".to_string(),
-            version: "5.3.0".to_string(),
-            in_tps: "1.0".to_string(),
-            out_tps: "1.0".to_string(),
-            timer_progress: "0".to_string(),
-            page_cache_lock_time_millis: "0".to_string(),
-            hour: "0".to_string(),
-            space: "0".to_string(),
-            broker_active: true,
-        }
+        assert!(report.partial);
+        assert_eq!(report.missing_evidence, ["topic_route"]);
+        assert_eq!(report.evidence_refs.len(), 6);
+        assert_eq!(report.cluster, "local-dev");
+        assert_eq!(report.evidence_version, report.evidence_snapshot.evidence_version);
+        assert_eq!(report.confidence_band, ConfidenceBand::Medium);
     }
 }

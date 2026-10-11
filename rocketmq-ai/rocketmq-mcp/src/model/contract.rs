@@ -361,6 +361,37 @@ impl<T> ToolResponse<T> {
     }
 }
 
+/// The response envelope of a Tool that is not bound to one logical cluster.
+///
+/// It is [`ToolResponse`] without `cluster` and without `source_failures`: such a Tool answers
+/// from this server's own state and reads no RocketMQ source.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
+pub struct ServerToolResponse<T> {
+    pub schema_version: String,
+    pub request_id: String,
+    pub observed_at: String,
+    pub freshness_ms: u64,
+    pub cache_status: CacheStatus,
+    pub partial: bool,
+    pub warnings: Vec<String>,
+    pub data: T,
+}
+
+impl<T> ServerToolResponse<T> {
+    pub fn live(request_id: impl Into<String>, data: T) -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION.to_string(),
+            request_id: request_id.into(),
+            observed_at: observed_at(),
+            freshness_ms: 0,
+            cache_status: CacheStatus::Bypass,
+            partial: false,
+            warnings: Vec::new(),
+            data,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum PaginationRejection {
     InvalidLimit,
@@ -415,6 +446,18 @@ pub fn observed_at() -> String {
 pub fn observed_at_from_millis(timestamp_millis: i64) -> Option<String> {
     chrono::DateTime::<Utc>::from_timestamp_millis(timestamp_millis)
         .map(|timestamp| timestamp.to_rfc3339_opts(SecondsFormat::Millis, true))
+}
+
+/// Reads back a timestamp that [`observed_at_from_millis`] wrote.
+pub(crate) fn millis_from_observed_at(observed_at: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(observed_at)
+        .ok()
+        .map(|timestamp| timestamp.timestamp_millis())
+}
+
+/// The current time as the Unix milliseconds that Broker timestamps are compared with.
+pub(crate) fn now_millis() -> i64 {
+    Utc::now().timestamp_millis()
 }
 
 fn encode_cursor(offset: usize) -> String {

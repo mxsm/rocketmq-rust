@@ -97,6 +97,22 @@ pub fn required_tools(
         .collect()
 }
 
+/// The Tools a Prompt starts with for a caller who may call every one of them.
+///
+/// They never decide whether the Prompt is available. A caller who may not call them gets the
+/// Prompt without the part of its body that names them.
+pub fn preferred_tools(template: &PromptTemplate) -> crate::McpResult<Vec<ToolId>> {
+    template
+        .front_matter
+        .preferred_tools
+        .iter()
+        .map(|name| {
+            ToolId::resolve(name)
+                .ok_or_else(|| crate::McpError::invalid_config(format!("prompt references unknown Tool `{name}`")))
+        })
+        .collect()
+}
+
 fn validate_registry(templates: &[PromptTemplate]) -> crate::McpResult<()> {
     let mut prompt_names = BTreeSet::new();
     for template in templates {
@@ -149,6 +165,37 @@ fn validate_registry(templates: &[PromptTemplate]) -> crate::McpResult<()> {
                 )));
             }
             validate_required_tool(&front.name, &requirement.tool, &mut required_tools)?;
+        }
+        validate_preferred_tools(template, &mut required_tools)?;
+    }
+    Ok(())
+}
+
+/// Checks that a Prompt names its preferred Tools in the marked part of its body and nowhere
+/// else, so that a caller who may not call one of them is never told about it.
+fn validate_preferred_tools(template: &PromptTemplate, seen: &mut BTreeSet<String>) -> crate::McpResult<()> {
+    let front = &template.front_matter;
+    let invalid = || {
+        crate::McpError::invalid_config(format!(
+            "prompt `{}` must name its preferred Tools in the marked part of its body, and only there",
+            front.name
+        ))
+    };
+    let Some((part, rest)) = template.preferred_tools_part()? else {
+        return if front.preferred_tools.is_empty() {
+            Ok(())
+        } else {
+            Err(invalid())
+        };
+    };
+    // The arguments are rendered where every caller reads them, not in a part that may be left out.
+    if front.preferred_tools.is_empty() || part.contains("{{") {
+        return Err(invalid());
+    }
+    for tool_name in &front.preferred_tools {
+        validate_required_tool(&front.name, tool_name, seen)?;
+        if !part.contains(tool_name.as_str()) || rest.contains(tool_name.as_str()) {
+            return Err(invalid());
         }
     }
     Ok(())
@@ -229,6 +276,31 @@ fn to_prompt(template: PromptTemplate) -> Prompt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_prompt_sends_a_needed_change_to_the_control_dry_run() {
+        let templates = prompt_templates().unwrap();
+        assert_eq!(templates.len(), 5);
+        for template in templates {
+            let name = &template.front_matter.name;
+            // One planning entry: the dry run of the control server, for an operator to use.
+            assert!(
+                template.body.contains("dry run of the control MCP server"),
+                "{name} does not say where a change is planned"
+            );
+            assert!(template.body.contains("Do not plan or apply it here."), "{name}");
+            // The planning Tools of this server are deprecated and no Prompt leads to them.
+            assert!(!template.body.contains("rocketmq_plan_"), "{name}");
+            assert!(
+                template
+                    .front_matter
+                    .required_tools
+                    .iter()
+                    .all(|tool| !tool.starts_with("rocketmq_plan_")),
+                "{name}"
+            );
+        }
+    }
 
     #[test]
     fn list_prompts_preserves_existing_and_adds_three_guides() {
@@ -368,6 +440,97 @@ mod tests {
             "Use }} then {{cluster}}.",
         );
         assert!(validate_registry(&[unmatched]).is_err());
+    }
+
+    #[test]
+    fn preferred_tools_are_named_only_in_the_part_a_caller_without_them_never_reads() {
+        let templates = prompt_templates().unwrap();
+        let preferred = |name: &str| {
+            templates
+                .iter()
+                .find(|template| template.front_matter.name == name)
+                .map(|template| template.front_matter.preferred_tools.clone())
+                .unwrap()
+        };
+        assert!(preferred("diagnose_consumer_lag").is_empty());
+        assert_eq!(
+            preferred("analyze_consumer_connections"),
+            ["rocketmq_diagnose_consumer_group"]
+        );
+        assert_eq!(preferred("diagnose_broker_health"), ["rocketmq_diagnose_broker_health"]);
+        assert_eq!(
+            preferred("broker_health_check"),
+            ["rocketmq_get_cluster_health", "rocketmq_diagnose_broker_health"]
+        );
+        assert_eq!(
+            preferred("diagnose_message_delivery"),
+            ["rocketmq_diagnose_message_delivery"]
+        );
+        for template in &templates {
+            let name = &template.front_matter.name;
+            let with = template.body_for(true);
+            let without = template.body_for(false);
+            assert!(!with.contains("preferred-tools"), "{name}");
+            assert!(!without.contains("preferred-tools"), "{name}");
+            for tool in &template.front_matter.preferred_tools {
+                assert!(with.contains(tool.as_str()), "{name} does not name {tool}");
+                assert!(!without.contains(tool.as_str()), "{name} names {tool} to every caller");
+            }
+        }
+    }
+
+    #[test]
+    fn registry_rejects_preferred_tools_that_are_unmarked_undeclared_or_named_elsewhere() {
+        let front =
+            "arguments:\n  - name: cluster\n    kind: cluster\nrequired_tools:\n  - rocketmq_get_cluster_overview";
+        let preferred = format!("{front}\npreferred_tools:\n  - rocketmq_get_cluster_health");
+        let marked = "Use {{cluster}}.\n<!-- preferred-tools -->\nCall rocketmq_get_cluster_health first.\n<!-- \
+                      /preferred-tools -->\nThen read the overview.";
+        assert!(validate_registry(&[test_template("valid", &preferred, marked)]).is_ok());
+
+        let invalid = [
+            // Declared, and the body marks no part.
+            (preferred.as_str(), "Use {{cluster}}."),
+            // Marked, and nothing is declared.
+            (front, marked),
+            // The marked part does not name the Tool.
+            (
+                preferred.as_str(),
+                "Use {{cluster}}.\n<!-- preferred-tools -->\nCall the check first.\n<!-- /preferred-tools -->",
+            ),
+            // The Tool is named where every caller reads it.
+            (
+                preferred.as_str(),
+                "Use {{cluster}} and rocketmq_get_cluster_health.\n<!-- preferred-tools -->\nCall \
+                 rocketmq_get_cluster_health first.\n<!-- /preferred-tools -->",
+            ),
+            // An argument is rendered in the part that may be left out.
+            (
+                preferred.as_str(),
+                "<!-- preferred-tools -->\nCall rocketmq_get_cluster_health for {{cluster}}.\n<!-- /preferred-tools -->",
+            ),
+            // The markers are not a pair.
+            (
+                preferred.as_str(),
+                "Use {{cluster}}.\n<!-- preferred-tools -->\nCall rocketmq_get_cluster_health first.",
+            ),
+        ];
+        for (front_matter, body) in invalid {
+            assert!(
+                validate_registry(&[test_template("invalid", front_matter, body)]).is_err(),
+                "{body}"
+            );
+        }
+
+        // A preferred Tool is not a required Tool as well.
+        let required_too = format!("{front}\npreferred_tools:\n  - rocketmq_get_cluster_overview");
+        assert!(validate_registry(&[test_template(
+            "required_too",
+            &required_too,
+            "Use {{cluster}}.\n<!-- preferred-tools -->\nCall rocketmq_get_cluster_overview first.\n<!-- \
+             /preferred-tools -->",
+        )])
+        .is_err());
     }
 
     #[test]

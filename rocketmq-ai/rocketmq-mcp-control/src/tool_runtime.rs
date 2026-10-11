@@ -29,6 +29,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::audit::AuditBrokerSet;
 use crate::audit::AuditContext;
+use crate::audit::AuditInvocationId;
 use crate::audit::AuditOutcome;
 use crate::audit::AuditResult;
 use crate::audit::AuditSubject;
@@ -233,6 +234,16 @@ impl MutationToolResponse {
     }
 }
 
+/// The response of one mutation call and the invocation its durable audit pair records.
+///
+/// The invocation belongs to the call, not to the response: a response replayed from the
+/// request-key cache is returned under the invocation of the call that asked for it.
+#[derive(Debug, Clone)]
+pub(crate) struct InvokedMutation {
+    pub(crate) invocation_id: AuditInvocationId,
+    pub(crate) response: MutationToolResponse,
+}
+
 pub(crate) trait MutationToolSession: Send {
     fn run<'a>(
         &'a mut self,
@@ -288,6 +299,7 @@ impl ToolRuntime {
         self
     }
 
+    #[cfg(test)]
     pub(crate) async fn execute(
         &self,
         principal: &Principal,
@@ -295,8 +307,26 @@ impl ToolRuntime {
         request: MutationToolRequest,
         cancellation: CancellationToken,
     ) -> Result<MutationToolResponse, ControlError> {
+        self.execute_invoked(principal, authorized, request, cancellation)
+            .await
+            .map(|invoked| invoked.response)
+    }
+
+    /// Runs one authorized mutation call and returns its response with its invocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns the closed error of a call that was refused, could not be audited, or ended
+    /// without a response. Such a call can still be found by its request key.
+    pub(crate) async fn execute_invoked(
+        &self,
+        principal: &Principal,
+        authorized: &AuthorizedMutation,
+        request: MutationToolRequest,
+        cancellation: CancellationToken,
+    ) -> Result<InvokedMutation, ControlError> {
         let started = tokio::time::Instant::now();
-        let receiver = self
+        let (invocation_id, receiver) = self
             .start_supervised(principal, authorized, request, cancellation, started)
             .await
             .inspect_err(|error| {
@@ -306,10 +336,14 @@ impl ToolRuntime {
                     started.elapsed(),
                 );
             })?;
-        receiver.await.map_err(|_| {
+        let response = receiver.await.map_err(|_| {
             self.signals.audit_failed(AuditStage::Supervisor);
             ControlError::audit_unavailable()
-        })?
+        })??;
+        Ok(InvokedMutation {
+            invocation_id,
+            response,
+        })
     }
 
     /// Persists the `started` record and hands the mutation to its supervisor.
@@ -323,7 +357,13 @@ impl ToolRuntime {
         request: MutationToolRequest,
         cancellation: CancellationToken,
         started: tokio::time::Instant,
-    ) -> Result<oneshot::Receiver<Result<MutationToolResponse, ControlError>>, ControlError> {
+    ) -> Result<
+        (
+            AuditInvocationId,
+            oneshot::Receiver<Result<MutationToolResponse, ControlError>>,
+        ),
+        ControlError,
+    > {
         // Admission comes first: a refused call must not cost an audit record or a cache slot.
         let permit = match self.admission.admit(&principal.subject, request.dry_run()) {
             Ok(permit) => permit,
@@ -451,7 +491,7 @@ impl ToolRuntime {
                 .inspect_err(|_| self.signals.audit_failed(AuditStage::Terminal))?;
             return Err(error);
         }
-        Ok(receiver)
+        Ok((invocation.id(), receiver))
     }
 }
 
@@ -525,12 +565,14 @@ mod admission;
 mod execution;
 mod idempotency;
 mod remaining;
+mod result_lookup;
 
 pub(crate) use admin_session::AdminMutationToolFactory;
 use admission::Admission;
 use idempotency::execute_admitted;
 use idempotency::IdempotencyIdentity;
 use idempotency::IdempotencyState;
+pub(crate) use result_lookup::ResultLookup;
 
 #[cfg(test)]
 pub(crate) use MutationToolRequest as UpsertRequest;

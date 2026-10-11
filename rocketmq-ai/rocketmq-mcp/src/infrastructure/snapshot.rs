@@ -299,6 +299,11 @@ retained_heap_fields!(crate::tools::broker_tools::DescribeBrokerOutput =>
     brokers,
     generated_at,
 );
+retained_heap_fields!(crate::tools::broker_tools::ListBrokersOutput =>
+    cluster,
+    brokers,
+    generated_at,
+);
 retained_heap_fields!(crate::tools::broker_tools::BrokerDiagnosticsRow => broker_name, warnings);
 retained_heap_fields!(crate::tools::broker_tools::BrokerDiagnosticsOutput =>
     cluster,
@@ -404,9 +409,18 @@ retained_heap_fields!(crate::model::diagnosis::EvidenceItem =>
 impl RetainedSize for crate::model::diagnosis::EvidencePayload {
     fn retained_heap_size(&self) -> usize {
         match self {
-            Self::ConsumerLag(value) | Self::TopicRoute(value) | Self::BrokerSummary(value) => {
-                value.retained_heap_size()
-            }
+            Self::ConsumerLag(value)
+            | Self::TopicRoute(value)
+            | Self::BrokerSummary(value)
+            | Self::ConsumerGroup(value)
+            | Self::TopicConfig(value)
+            | Self::TopicStats(value)
+            | Self::ConsumerProgress(value)
+            | Self::BrokerDiagnostics(value)
+            | Self::BrokerConfig(value)
+            | Self::HaStatus(value)
+            | Self::BrokerInventory(value)
+            | Self::MessageMetadata(value) => value.retained_heap_size(),
         }
     }
 }
@@ -419,8 +433,12 @@ retained_heap_fields!(crate::model::diagnosis::EvidenceSnapshot =>
     items,
 );
 retained_heap_fields!(crate::model::diagnosis::ImpactItem => area, description);
-retained_heap_fields!(crate::model::diagnosis::Evidence => id, source_tool, summary, data);
-retained_heap_fields!(crate::model::diagnosis::RootCauseCandidate => cause, evidence_refs, reasoning);
+retained_heap_fields!(crate::model::diagnosis::RootCauseCandidate =>
+    rule_id,
+    cause,
+    evidence_refs,
+    reasoning,
+);
 retained_heap_fields!(crate::model::diagnosis::Recommendation => action, priority, rationale, risk, verification);
 retained_heap_fields!(crate::model::diagnosis::MetricWatchItem => name, target, reason);
 retained_heap_fields!(crate::model::diagnosis::DiagnosisReport =>
@@ -435,7 +453,6 @@ retained_heap_fields!(crate::model::diagnosis::DiagnosisReport =>
     evidence_snapshot,
     summary,
     impacts,
-    evidences,
     root_causes,
     recommendations,
     risks,

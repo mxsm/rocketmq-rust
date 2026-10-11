@@ -119,9 +119,9 @@ check discovery and execution in this order:
 
 1. `tools/list`, `resources/list`, `resources/templates/list`, and `prompts/list` show only the caller-authorized
    surface.
-2. The 24 default read-only/diagnosis tools listed in the implementation baseline return the `rocketmq-mcp.v2`
-   envelope or a stable sanitized error. The all-features catalog contains those 24 plus five non-mutating plans.
-3. The five planning tools appear only when compiled and policy-enabled; every result has `mutates_cluster = false`.
+2. The 30 default read-only/diagnosis tools listed in the implementation baseline return the `rocketmq-mcp.v2`
+   envelope or a stable sanitized error. The all-features catalog contains those 30 plus five non-mutating plans.
+3. The five deprecated planning tools appear only when compiled and policy-enabled; every result has `mutates_cluster = false`.
    There is no Apply request to test.
 4. Read the five cluster roots, all ten parameterized forms (including broker diagnostics/configuration, Topic
    statistics/configuration, and Consumer Group progress), and the two system resources only when the principal has

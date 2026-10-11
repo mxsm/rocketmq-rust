@@ -42,6 +42,23 @@ pub struct DescribeBrokerOutput {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+pub struct ListBrokersArgs {
+    /// Logical cluster name configured on this server. It is a name, not a NameServer address.
+    #[schemars(length(min = 1))]
+    pub cluster: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct ListBrokersOutput {
+    pub cluster: String,
+    /// One row for each Broker instance of the cluster, masters and slaves alike. Pass a row's `broker_name` as the
+    /// `broker_name` argument of the Broker Tools.
+    pub brokers: Vec<BrokerSummary>,
+    pub generated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct BrokerDiagnosticsArgs {
     /// Logical cluster name configured on this server. It is a name, not a NameServer address.
     #[schemars(length(min = 1))]

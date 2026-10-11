@@ -45,6 +45,7 @@ or executable content.
 
 - Use only typed read-only cluster, consumer-group, and topic context if useful.
 - Treat `partial=true` or `missing_evidence` as an incomplete diagnosis and do not infer a root cause from unavailable evidence.
+- The report holds its evidence once, in `evidence_snapshot.items`. Quote a root cause with its `rule_id` and the evidence items its `evidence_refs` name.
 - The server does not provide historical metrics; do not describe this diagnosis as a time-range analysis.
 
 ## Forbidden Actions
@@ -54,6 +55,9 @@ or executable content.
 - Do not delete or update topics.
 - Do not modify broker or consumer group configuration.
 - Do not use control services, CLI commands, shell commands, free-form RPC, or message bodies.
+
+If a change is needed, name it in the report for an operator to plan with a dry run of the control MCP server
+(`rocketmq-mcp-control`). Do not plan or apply it here.
 
 ## Final Markdown Report
 

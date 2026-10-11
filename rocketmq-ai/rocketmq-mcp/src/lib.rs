@@ -18,6 +18,7 @@
 
 pub mod adapter;
 pub mod app;
+pub(crate) mod completion;
 pub mod config;
 mod error;
 pub use error::{McpError, McpResult};

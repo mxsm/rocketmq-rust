@@ -1,11 +1,12 @@
 # Reviewed mutation tool reference
 
-The `write-tools` build exposes at most five production tools. A tool is listed only when compile-time support,
-runtime mutation enablement, the server operation/cluster allowlists, a configured logical cluster, and the
-authenticated principal's `rocketmq:write` scope plus operation/cluster claims all intersect. Authorization is
-completed before the tool-specific JSON schema is parsed.
+The `write-tools` build exposes at most five production mutation tools. A mutation tool is listed only when
+compile-time support, runtime mutation enablement, the server operation/cluster allowlists, a configured logical
+cluster, and the authenticated principal's `rocketmq:write` scope plus operation/cluster claims all intersect.
+Authorization is completed before the tool-specific JSON schema is parsed. The same build exposes one read-only
+tool, [`rocketmq_get_mutation_result`](#rocketmq_get_mutation_result), which has rules of its own.
 
-All five tools use input schema version `rocketmq-mcp-control.arguments.v1`. Unknown fields are rejected. The
+All five mutation tools use input schema version `rocketmq-mcp-control.arguments.v1`. Unknown fields are rejected. The
 `cluster` is a closed logical alias; it is never a NameServer or broker address. `broker_names` contains 1--64
 unique logical masters and is validated against the complete selected-cluster topology before a target state
 RPC. Omitted `dry_run` uses the server default, and omitted `confirm` is false. Execution requires
@@ -112,6 +113,73 @@ Endpoints remain internal.
   "pop_share_queue_num": 4,
   "timeout_millis": 12000,
   "dry_run": true
+}
+```
+
+## `rocketmq_get_mutation_result`
+
+The one read-only tool. It answers how one of the caller's own mutation calls ended, for a response that was
+lost or a call that timed out. It reads what the audit trail remembers: it opens no Admin session, sends no
+RocketMQ RPC, and writes no durable audit record. Its annotations are `readOnlyHint=true`,
+`destructiveHint=false`, and `openWorldHint=false`.
+
+The tool is listed for a principal with `rocketmq:write` and at least one allowed, configured cluster. It needs
+no operation claim and is independent of `mutations_enabled`, so the result of an earlier call stays readable
+after an emergency stop. The write scope and the cluster are authorized before the arguments are read.
+
+| Argument | Required | Rules |
+| --- | --- | --- |
+| `schema_version` | yes | `rocketmq-mcp-control.arguments.v1`. |
+| `cluster` | yes | The logical cluster the mutation was called with. |
+| `invocation_id` | one of the two | The `invocation_id` of a mutation response; at least 1. |
+| `request_key` | one of the two | The `request_key` the mutation was called with. It selects the newest of the caller's calls on the cluster that carried it. |
+
+With both selectors, the identified invocation must also have carried the key. Unknown fields are rejected;
+`dry_run`, `confirm`, and `reason` are not arguments of this tool.
+
+The answer uses `rocketmq-mcp-mutation-result.v1` and is never an MCP error, whatever it says about the mutation:
+
+| `state` | Meaning | What to do |
+| --- | --- | --- |
+| `finished` | The terminal audit record is written. `status`, `error_code`, `duration_millis`, `changed`, and `target_results` repeat it. | Act on `status` as on a mutation result. `changed` and `target_results` are `null` when the call ended without a result, for example after `timeout`; `null` does not mean that nothing changed. |
+| `in_progress` | The `started` record is written and the mutation is still running in this process. | Ask again later. |
+| `interrupted` | A previous process wrote the `started` record and stopped before the terminal record. | Nothing records whether the cluster changed. Read the current state with a dry run before repeating the call. |
+| `not_found` | None of the caller's remembered calls on this cluster matches. | The call may never have started, belong to another principal or cluster, or be older than what the server remembers. |
+
+`invocation_id`, `operation`, `mode`, and `target` describe the invocation in every state but `not_found`.
+`target` holds logical names only: `topic`, `consumer_group`, `broker`, and for an upsert `broker_count` with
+`broker_names` when the list was short enough to be recorded. The answer never contains the operator, the reason,
+the request key, the requested values, or any digest.
+
+The server remembers the 2,048 newest invocations in memory, forgetting finished ones before running ones. At
+startup it rebuilds that memory from the active audit segment, so results in sealed segments are not served;
+read those from the audit files. Lookups are limited per principal to `limits.dry_runs_per_minute` calls per
+minute, in a budget separate from dry runs, and take none of the `limits.max_concurrent_calls` slots. A refused
+lookup gets `rate_limited`. Once the audit trail has failed to persist a record, a lookup gets
+`audit_unavailable` like every mutation.
+
+```json
+{
+  "schema_version": "rocketmq-mcp-control.arguments.v1",
+  "cluster": "cluster-a",
+  "request_key": "orders-topic-2026-09-25"
+}
+```
+
+```json
+{
+  "schema_version": "rocketmq-mcp-mutation-result.v1",
+  "cluster": "cluster-a",
+  "state": "finished",
+  "invocation_id": 41,
+  "operation": "topic_upsert",
+  "mode": "execute",
+  "target": {"topic": "orders", "broker_count": 2, "broker_names": ["broker-a", "broker-b"]},
+  "status": "applied",
+  "error_code": null,
+  "duration_millis": 184,
+  "changed": true,
+  "target_results": {"applied": 2, "unchanged": 0, "conflict": 0, "failed": 0}
 }
 ```
 
@@ -341,7 +409,13 @@ Every one of the five response schemas also requires a nullable, typed top-level
 
 Per-target failure codes remain available and more specific; for example, a mixed partial result keeps every
 target's failure while its aggregate `error_code` remains `partial_apply`. Cache hits return the same complete
-structured value as the original result.
+structured value as the original result, except for `invocation_id`.
+
+Every one of the five response schemas requires `invocation_id`, an integer of at least 1: the sequence number
+of the call's `started` record in the durable audit log, and the value the log lines of the call carry. It
+identifies the call, not the result, so a follower and a cache hit each return it for their own audit pair.
+Pass it to `rocketmq_get_mutation_result` to read how the call ended. An error envelope has no `invocation_id`;
+a call that ended in one is found by its `request_key`.
 
 ## Error envelope
 

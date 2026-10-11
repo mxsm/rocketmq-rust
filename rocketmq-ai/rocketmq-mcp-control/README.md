@@ -2,8 +2,9 @@
 
 `rocketmq-mcp-control` is an isolated, deny-by-default server for supervised RocketMQ mutations. It is a
 standalone Cargo project and is not part of the root workspace. The reviewed `write-tools` surface contains
-exactly five typed tools: Topic and Consumer Group upsert, consumer offset reset, Broker configuration patch,
-and consumer request mode. The default build contains neither Admin Core nor production mutation tools.
+exactly five typed mutation tools: Topic and Consumer Group upsert, consumer offset reset, Broker configuration
+patch, and consumer request mode. One read-only tool, `rocketmq_get_mutation_result`, reports how a caller's own
+mutation calls ended. The default build contains neither Admin Core nor production mutation tools.
 
 Read the [reviewed mutation Tool Reference](docs/tool-reference.md) before operating the server. The
 [operations runbook](docs/operations-runbook.md) covers rollout, rollback, logs and metrics, audit, and emergency
@@ -108,6 +109,18 @@ failed outcomes set MCP `isError=true` while retaining the structured result. Th
 `execution_failed`. An unchanged success is `applied` with `changed=false`; there is no separate no-op status.
 Responses never include addresses, credential
 references, OAuth subjects, reasons, request keys, or raw backend errors.
+
+Every result also carries `invocation_id`, the sequence number of the call's `started` audit record. It belongs
+to the call, not to the result: a result replayed for a repeated request key is returned under the invocation of
+the call that asked for it. `rocketmq_get_mutation_result` takes that identifier, or the `request_key` that was
+sent, and answers `finished` with the status, `in_progress`, `interrupted` when the server stopped before the
+outcome was recorded, or `not_found`. It serves a response that was lost or a call that timed out. A call that
+ends in an error envelope has no identifier to quote, so send a `request_key` with every execute call you may
+need to look up. The lookup answers only for the caller's own calls on the authorized cluster, from a bounded
+memory of the 2,048 newest invocations that is rebuilt from the active audit segment at startup. It needs the
+`rocketmq:write` scope and the cluster but no operation, stays available when `mutations_enabled = false`,
+opens no Admin session, and writes no audit record. Lookups have a per-principal budget of their own, sized by
+`limits.dry_runs_per_minute`.
 
 Targeted Topic upserts never update or delete the NameServer-wide order-Topic KV. Before any broker state read,
 the server reads and strictly parses the complete KV: selected ordered entries must already equal the requested

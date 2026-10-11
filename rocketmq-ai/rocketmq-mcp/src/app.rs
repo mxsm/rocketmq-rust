@@ -468,7 +468,19 @@ async fn init_resolved_tracing(
     if config.logging.filter.is_none() && config.server.log_level.is_some() {
         tracing::warn!("server.log_level is deprecated; use logging.filter instead");
     }
+    if change_planning_in_use(config) {
+        tracing::warn!(
+            "the change-planning feature and security.allow_change_planning are deprecated and will be removed; plan \
+             changes with a dry run of the control MCP server (rocketmq-mcp-control) instead"
+        );
+    }
     Ok(guard)
+}
+
+/// Whether this process serves the deprecated planning Tools: they are compiled in and the
+/// configuration allows them. Either alone serves none, so neither alone is worth a warning.
+fn change_planning_in_use(config: &McpConfig) -> bool {
+    cfg!(feature = "change-planning") && config.security.allow_change_planning
 }
 
 #[derive(thiserror::Error)]
@@ -714,6 +726,23 @@ fn register_mcp_release_identity(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn deprecated_change_planning_is_reported_only_when_it_is_compiled_and_allowed() {
+        let mut config = crate::config::McpConfig::load(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("conf")
+                .join("mcp.example.toml"),
+        )
+        .unwrap();
+        assert!(!config.security.allow_change_planning, "the example keeps planning off");
+        assert!(!super::change_planning_in_use(&config));
+        config.security.allow_change_planning = true;
+        assert_eq!(
+            super::change_planning_in_use(&config),
+            cfg!(feature = "change-planning")
+        );
+    }
+
     #[test]
     fn telemetry_rollback_retains_primary_and_cleanup_causes() {
         use std::error::Error;

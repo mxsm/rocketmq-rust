@@ -38,7 +38,7 @@ cargo build --locked --release
 cargo build --locked --release --features streamable-http
 ```
 
-`streamable-http` 包含认证 feature，不是无认证 HTTP 模式。`observability` 启用进程内信号，`otlp` 选择已实现的 OTLP gRPC 支持。`change-planning` 增加五个受运行时策略约束的规划工具。这些 feature 都不会将 Query MCP 变为 MCP Control。
+`streamable-http` 包含认证 feature，不是无认证 HTTP 模式。`observability` 启用进程内信号，`otlp` 选择已实现的 OTLP gRPC 支持。`change-planning` 增加五个受运行时策略约束的规划工具；该 feature 已弃用并将被移除，变更规划改用 [MCP Control](./mcp-control.md) 的 dry-run。这些 feature 都不会将 Query MCP 变为 MCP Control。
 
 二进制位于 `target/release/rocketmq-mcp`，Windows 为 `rocketmq-mcp.exe`。根工作区的 `cargo build` 不构建该独立包。原生依赖来自所选依赖图，参见 [features/平台](../reference/features-platforms.md)。
 
@@ -61,7 +61,7 @@ default = true
 | 设置 | 仓库示例 / 行为 |
 | --- | --- |
 | `security.profile` | `diagnose`，用于本地诊断权限范围 |
-| `security.allow_change_planning` | `false`，仅编译不能允许规划调用 |
+| `security.allow_change_planning` | `false`，仅编译不能允许规划调用。随 `change-planning` feature 一并弃用 |
 | `security.permissions_file` | `permissions.example.toml`，相对配置文件加载 |
 | `security.sanitize_output` | `true` |
 | `security.max_concurrent_requests_per_cluster` | 8 |
@@ -112,16 +112,21 @@ RocketMQ 签名凭据必须与 HTTP 身份分离。配置的 YAML 凭据文件�
 
 ## 发现并调用工具
 
-仓库协议版本为 `2025-11-25`，初始化拒绝其他版本。初始化后使用 `tools/list` 获取调用方可见目录。源码默认目录包含 24 个工具，但策略可以缩小发现结果。
+仓库协议版本为 `2025-11-25`，初始化拒绝其他版本。初始化后使用 `tools/list` 获取调用方可见目录。源码默认目录包含 30 个工具，但策略可以缩小发现结果。
 
 | 查询类型 | 默认工具名称 |
 | --- | --- |
-| 集群 / 清单 | `rocketmq_get_cluster_overview`、`rocketmq_list_topics`、`rocketmq_list_consumer_groups` |
+| 集群 / 清单 | `rocketmq_list_clusters`、`rocketmq_list_brokers`、`rocketmq_get_cluster_overview`、`rocketmq_list_topics`、`rocketmq_list_consumer_groups` |
 | 主题 | `rocketmq_describe_topic`、`rocketmq_get_topic_route`、`rocketmq_get_topic_config_state`、`rocketmq_get_topic_stats`、`rocketmq_get_topic_config` |
 | 消费者 / 连接 | `rocketmq_get_consumer_lag`、`rocketmq_list_consumer_connections`、`rocketmq_list_producer_connections`、`rocketmq_get_consumer_group_config_state`、`rocketmq_get_consumer_group_details`、`rocketmq_get_consumer_progress` |
 | Broker | `rocketmq_describe_broker`、`rocketmq_get_broker_diagnostics`、`rocketmq_get_broker_config_summary`、`rocketmq_get_broker_log_filter_state` |
 | 基础设施 | `rocketmq_get_proxy_drain_state`、`rocketmq_get_ha_status`、`rocketmq_get_controller_metadata`、`rocketmq_get_nameserver_config_summary` |
-| 消息 / 诊断 | `rocketmq_get_message_metadata`、`rocketmq_diagnose_consumer_lag` |
+| 消息 | `rocketmq_get_message_metadata` |
+| 诊断 | `rocketmq_diagnose_consumer_lag`、`rocketmq_diagnose_consumer_group`、`rocketmq_diagnose_message_delivery`、`rocketmq_diagnose_broker_health`、`rocketmq_get_cluster_health` |
+
+`rocketmq_diagnose_consumer_lag` 在一个 admin 会话内完成取证：每个队列的 lag、消费组的连接与配置、主题的路由与权限、lag 最多的 Broker，以及该消费组的重试主题和死信主题。它按积压量和消费延迟时长给积压定级，因此同样数量的待消费消息，在高流量主题上是 `low`，在低流量主题上可能是 `critical`。每个根因都带有稳定的 `rule_id`（例如 `no_online_consumer`、`consumption_disabled`、`read_permission_missing`、`retry_queue_growing`），并指明它依据的证据。某一路取证失败时，报告以部分结果返回并标明缺失的证据，诊断本身不会失败。阈值是 `[diagnosis]` 下由服务端持有的配置，`[[diagnosis.overrides]]` 可按主题或消费组覆盖。
+
+另有四个诊断工具返回同样结构的报告。`rocketmq_get_cluster_health` 对集群做一次概览检查，并指出应先查看的 Broker；`rocketmq_diagnose_broker_health` 检查一个 Broker 的主节点和副本；`rocketmq_diagnose_consumer_group` 解释一个消费组在其消费的全部主题上的积压；`rocketmq_diagnose_message_delivery` 检查从一个主题到一个消费组的投递路径，给出消息标识时还会说明该消费组是已消费这条消息、仍在等待、正在重试，还是已进入死信。健康类报告的严重级别取其中最严重的一条发现。指定消息时还需要 `rocketmq_get_message_metadata` 的权限；报告只用别名指代消息，不包含消息体。
 
 先使用明确指定集群的简单查询。下列 `tools/call` 请求用于已初始化 MCP 会话，不是独立 HTTP 命令：
 
@@ -140,6 +145,8 @@ RocketMQ 签名凭据必须与 HTTP 身份分离。配置的 YAML 凭据文件�
 `limit` 范围 1–200，默认 50。`has_more` 为 true 时使用不透明的 `data.next_cursor` 继续，不自行构造游标，也不将其当作队列偏移量。提供相同逻辑目标、对应查询参数和 `limit`。游标延续的是服务端保留的同一份结果（默认保留 60 秒），因此每一页都来自同一次观察。精确模式和逐工具输出见[完整工具参考](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp/docs/tool-reference.md)。
 
 发现阶段检查 scope 和工具允许/拒绝策略，不代表某个集群/租户调用一定获准。两个清单工具允许省略集群，此时使用默认集群，或唯一配置的集群。该集群与显式指定的集群一样，要通过逐集群检查、租户检查、限流和并发限制；空字符串或只含空白的集群名会被所有工具以 `invalid_arguments` 拒绝。运维客户端建议显式提供集群，使调用不依赖哪个集群是默认集群。
+
+服务端还响应 `completion/complete`，为 Prompt 参数和 Resource 模板变量补全集群、Topic、消费组或 Broker 名称。候选按前缀匹配，最多 100 个，并且需要对应清单工具的权限；Topic、消费组和 Broker 只在补全上下文中已给出的集群内补全。无权限或无法应答的补全返回空列表。
 
 ## 理解观察、部分结果和故障
 
@@ -163,7 +170,7 @@ RocketMQ 签名凭据必须与 HTTP 身份分离。配置的 YAML 凭据文件�
 | 观察过旧 | 检查观察时间、TTL/缓存状态和所选集群，再推断当前故障。 |
 | stdio 解析失败 | 确认协议版本和纯净 stdout，在 stderr 查看脱敏启动/传输诊断。 |
 
-启用规划工具后，可以生成创建主题、更新主题配置、更新主题权限、更新 Broker 配置和重置偏移量方案。工具没有 Apply 模式，也不调用变更 API。执行属于独立设计的运维/控制流程，不属于这个诊断进程。
+启用规划工具后，可以生成创建主题、更新主题配置、更新主题权限、更新 Broker 配置和重置偏移量方案。工具没有 Apply 模式，也不调用变更 API。执行属于独立设计的运维/控制流程，不属于这个诊断进程。这些规划工具已弃用：[MCP Control](./mcp-control.md) 的 dry-run 针对变更将要作用的状态规划同样的变更，每个规划工具的描述都给出了替代它的控制工具。
 
 本文核对了配置、注册和协议源码，并完成 TOML/JSON 及网站渲染检查；不宣称编写文档时测试过真实 MCP 客户端会话、OAuth/JWKS 部署或外部集群诊断。
 

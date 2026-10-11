@@ -63,6 +63,10 @@ pub struct ControlServer {
     signals: ControlSignals,
     #[cfg(feature = "write-tools")]
     tool_runtime: Option<Arc<crate::tool_runtime::ToolRuntime>>,
+    /// Reads how earlier mutation calls ended. It exists whenever the server has an audit trail,
+    /// whether or not a mutation is registered.
+    #[cfg(feature = "write-tools")]
+    result_lookup: Option<Arc<crate::tool_runtime::ResultLookup>>,
     #[cfg(test)]
     response_delay: Option<std::time::Duration>,
 }
@@ -83,6 +87,8 @@ impl ControlServer {
             signals: ControlSignals::default(),
             #[cfg(feature = "write-tools")]
             tool_runtime: None,
+            #[cfg(feature = "write-tools")]
+            result_lookup: None,
             #[cfg(test)]
             response_delay: None,
         }
@@ -102,6 +108,11 @@ impl ControlServer {
             .iter()
             .map(|cluster| cluster.name().clone())
             .collect();
+        // A lookup is budgeted like planning: it reads, and a caller polls it.
+        let result_lookup = Arc::new(crate::tool_runtime::ResultLookup::new(
+            audit.clone(),
+            config.limits.dry_runs_per_minute,
+        ));
         let tool_runtime = if catalog.registered_operations() == 0 {
             None
         } else {
@@ -126,6 +137,7 @@ impl ControlServer {
             configured_clusters,
             signals: ControlSignals::default(),
             tool_runtime,
+            result_lookup: Some(result_lookup),
             #[cfg(test)]
             response_delay: None,
         })
@@ -141,6 +153,10 @@ impl ControlServer {
     ) -> Self {
         let catalog = OperationCatalog::from_policy(policy);
         let capabilities = ControlCapabilities::from_catalog(policy.mutations_enabled, &catalog);
+        let result_lookup = Arc::new(crate::tool_runtime::ResultLookup::new(
+            audit.clone(),
+            crate::config::LimitsConfig::default().dry_runs_per_minute,
+        ));
         let tool_runtime = crate::tool_runtime::ToolRuntime::new(
             audit,
             factory,
@@ -154,6 +170,7 @@ impl ControlServer {
             configured_clusters,
             signals: ControlSignals::default(),
             tool_runtime: Some(Arc::new(tool_runtime)),
+            result_lookup: Some(result_lookup),
             response_delay: None,
         }
     }
@@ -163,14 +180,75 @@ impl ControlServer {
     }
 
     pub fn tools_list(&self) -> ListToolsResult {
-        self.catalog.list_tools()
+        #[cfg_attr(
+            not(feature = "write-tools"),
+            allow(unused_mut, reason = "the lookup Tool needs write-tools")
+        )]
+        let mut listed = self.catalog.list_tools();
+        #[cfg(feature = "write-tools")]
+        if self.result_lookup.is_some() {
+            listed.tools.push(crate::catalog::result_tool_definition());
+        }
+        listed
     }
 
     fn tools_list_for(&self, principal: &Principal) -> ListToolsResult {
-        self.catalog.list_tools_for(|operation| {
+        #[cfg_attr(
+            not(feature = "write-tools"),
+            allow(unused_mut, reason = "the lookup Tool needs write-tools")
+        )]
+        let mut listed = self.catalog.list_tools_for(|operation| {
             self.guard
                 .allows_discovery(principal, operation, &self.configured_clusters)
-        })
+        });
+        #[cfg(feature = "write-tools")]
+        if self.result_lookup.is_some() && self.guard.allows_result_discovery(principal, &self.configured_clusters) {
+            listed.tools.push(crate::catalog::result_tool_definition());
+        }
+        listed
+    }
+
+    /// Answers `rocketmq_get_mutation_result`.
+    ///
+    /// The scope and the cluster are authorized before the arguments are read, as for a mutation.
+    /// The call is then budgeted, logged and counted, and writes no durable audit record: it
+    /// changes nothing, and it must stay answerable when the audit sink is the thing that failed
+    /// to keep up with mutations.
+    #[cfg(feature = "write-tools")]
+    async fn mutation_result(
+        &self,
+        principal: &Principal,
+        cluster: &str,
+        raw: &serde_json::Value,
+        started: std::time::Instant,
+    ) -> CallToolResult {
+        let tool = crate::tools::GET_MUTATION_RESULT_TOOL;
+        let authorized = match self.guard.authorize_result_lookup(principal, cluster) {
+            Ok(authorized) => authorized,
+            Err(error) => return self.rejected(tool, started, error),
+        };
+        let Some(lookup) = &self.result_lookup else {
+            return self.rejected(tool, started, crate::error::ControlError::operation_unavailable());
+        };
+        let checked = self
+            .checked_arguments::<crate::tools::GetMutationResultArgs, _>(tool, started, raw, |args| args.validate());
+        let args = match checked {
+            Ok(args) => args,
+            Err(envelope) => return envelope_result(envelope),
+        };
+        let admitted = lookup.admit(&authorized);
+        self.signals.rate_limit_decided(admitted.is_ok());
+        if let Err(error) = admitted {
+            return self.rejected(tool, started, error);
+        }
+        match lookup.find(&authorized, &args).await {
+            Ok(response) => {
+                self.signals
+                    .result_looked_up(authorized.cluster(), response.state.as_str(), started.elapsed());
+                result_response(&response)
+            }
+            Err(error) => self.rejected(tool, started, error),
+        }
     }
 
     /// Binds the recorder for this server's logs and metrics, including its mutation runtime.
@@ -251,7 +329,7 @@ impl ServerHandler for ControlServer {
             .with_server_info(Implementation::new("rocketmq-mcp-control", env!("CARGO_PKG_VERSION")))
             .with_protocol_version(ProtocolVersion::V_2025_11_25)
             .with_instructions(
-                "Isolated RocketMQ control server. Five reviewed typed mutations are available only when compile-time, runtime, server-policy, and principal authorization all intersect.",
+                "Isolated RocketMQ control server. Five reviewed typed mutations are available only when compile-time, runtime, server-policy, and principal authorization all intersect. rocketmq_get_mutation_result reads how your own mutation calls ended.",
             )
     }
 
@@ -297,6 +375,10 @@ impl ServerHandler for ControlServer {
             .and_then(|object| object.get("cluster"))
             .and_then(serde_json::Value::as_str)
             .unwrap_or("");
+        #[cfg(feature = "write-tools")]
+        if request.name.as_ref() == crate::tools::GET_MUTATION_RESULT_TOOL {
+            return Ok(self.mutation_result(&principal, cluster, &raw, started).await.into());
+        }
         // `tool` labels logs and metrics, so it is a reviewed name and never the caller's text.
         let (tool, operation_name, operation) = match request.name.as_ref() {
             UPSERT_TOPIC_TOOL => (
@@ -425,10 +507,10 @@ impl ServerHandler for ControlServer {
             // From here the runtime records the call: a supervised mutation is logged when its
             // terminal audit record is written, even if this request is dropped first.
             let result = runtime
-                .execute(&principal, &authorized, mutation, context.ct.clone())
+                .execute_invoked(&principal, &authorized, mutation, context.ct.clone())
                 .await;
             Ok(match result {
-                Ok(response) => tool_response(response),
+                Ok(invoked) => tool_response(&invoked),
                 Err(error) => tool_error(error),
             }
             .into())
@@ -479,16 +561,30 @@ fn principal_from_context(context: &RequestContext<RoleServer>) -> Result<Princi
 }
 
 #[cfg(feature = "write-tools")]
-fn tool_response(response: crate::tool_runtime::MutationToolResponse) -> CallToolResult {
-    let structured = serde_json::to_value(&response).unwrap_or_else(|_| {
+fn tool_response(invoked: &crate::tool_runtime::InvokedMutation) -> CallToolResult {
+    let rendered = crate::tools::response_with_invocation(&invoked.response, invoked.invocation_id.get());
+    let structured = rendered.unwrap_or_else(|| {
         serde_json::to_value(crate::error::ControlError::execution_failed().envelope()).unwrap_or_default()
     });
     let text = serde_json::to_string(&structured).unwrap_or_else(|_| "mutation response unavailable".to_owned());
-    let mut result = if response.is_error() {
+    let mut result = if invoked.response.is_error() {
         CallToolResult::error(vec![ContentBlock::text(text)])
     } else {
         CallToolResult::success(vec![ContentBlock::text(text)])
     };
+    result.structured_content = Some(structured);
+    result
+}
+
+/// Renders the answer of a result lookup. The answer is a success whatever it says about the
+/// mutation: the lookup itself worked.
+#[cfg(feature = "write-tools")]
+fn result_response(response: &crate::tools::MutationResultToolResponse) -> CallToolResult {
+    let Ok(structured) = serde_json::to_value(response) else {
+        return tool_error(crate::error::ControlError::execution_failed());
+    };
+    let text = serde_json::to_string(&structured).unwrap_or_else(|_| "mutation result unavailable".to_owned());
+    let mut result = CallToolResult::success(vec![ContentBlock::text(text)]);
     result.structured_content = Some(structured);
     result
 }

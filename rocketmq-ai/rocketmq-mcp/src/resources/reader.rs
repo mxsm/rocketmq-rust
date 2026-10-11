@@ -28,6 +28,7 @@ use crate::resources::uri::RocketmqResourceUri;
 use crate::resources::uri::JSON_MIME_TYPE;
 use crate::tools::broker_tools::BrokerDiagnosticsArgs;
 use crate::tools::broker_tools::DescribeBrokerArgs;
+use crate::tools::broker_tools::ListBrokersArgs;
 use crate::tools::cluster_tools::ClusterOverviewArgs;
 use crate::tools::config_tools::BrokerConfigSummaryArgs;
 use crate::tools::config_tools::GetTopicConfigArgs;
@@ -107,8 +108,10 @@ where
             Ok(live_payload(uri, "route", output, |data| json!(data)))
         }
         ResourceKind::Brokers => {
+            // The Broker rows alone: the overview would also size the Topic and Consumer Group
+            // inventories, which this Resource does not publish.
             let output = query
-                .cluster_overview(ClusterOverviewArgs {
+                .list_brokers(ListBrokersArgs {
                     cluster: cluster.clone(),
                 })
                 .await?;
