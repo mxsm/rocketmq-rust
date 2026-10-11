@@ -58,8 +58,8 @@ use crate::dispatch::deferred_response::DeferredSystemCloseReason;
 use crate::dispatch::deferred_session_cleanup::CleanupEnrollment;
 use crate::dispatch::deferred_session_cleanup::RegistryCleanupTarget;
 use crate::dispatch::deferred_session_cleanup::TargetRecord;
-use crate::dispatch::ResponseStateOutcome;
 use crate::dispatch::ResponseStateSnapshot;
+use crate::dispatch::ResponseTransitionResult;
 
 const FIRST_DEFERRED_ID: u64 = 1;
 const EXHAUSTED_DEFERRED_ID: u64 = u64::MAX;
@@ -108,8 +108,8 @@ where
             return Err(DeferredCommitError::lifecycle(kind));
         }
         match transaction.request().register_response() {
-            Ok(ResponseStateOutcome::Applied(())) => {}
-            Ok(ResponseStateOutcome::AlreadyCompleted { .. }) => {
+            Ok(ResponseTransitionResult::Applied(())) => {}
+            Ok(ResponseTransitionResult::AlreadyCompleted { .. }) => {
                 return Err(commit_race_error(&control, expiry, &response_state)
                     .unwrap_or_else(DeferredCommitError::response_state));
             }
@@ -697,10 +697,10 @@ where
                         }
                     };
                     match claim_result {
-                        Ok(ResponseStateOutcome::Applied(())) => {
+                        Ok(ResponseTransitionResult::Applied(())) => {
                             ClaimStart::Claimed(take_claim_locked(self, &mut state, id, reason))
                         }
-                        Ok(ResponseStateOutcome::AlreadyCompleted { .. }) => {
+                        Ok(ResponseTransitionResult::AlreadyCompleted { .. }) => {
                             removed = remove_entry(&mut state, id);
                             ClaimStart::Rejected(DeferredClaimRejection::AlreadyCompleted)
                         }
@@ -1000,7 +1000,7 @@ impl<R> Entry<R> {
     fn terminalize_response(
         &mut self,
         cause: &CleanupCause,
-    ) -> Result<ResponseStateOutcome, crate::contract::TransportContractViolation> {
+    ) -> Result<ResponseTransitionResult, crate::contract::TransportContractViolation> {
         match &mut self.phase {
             EntryPhase::Prepared(request) | EntryPhase::Active(request) => match cause {
                 CleanupCause::SessionClosed => request
@@ -1033,12 +1033,12 @@ impl<R> Entry<R> {
 
 fn record_terminalization(
     stats: &mut DeferredRegistryShutdownStats,
-    result: Result<ResponseStateOutcome, crate::contract::TransportContractViolation>,
+    result: Result<ResponseTransitionResult, crate::contract::TransportContractViolation>,
     snapshot: ResponseStateSnapshot,
 ) {
     match result {
-        Ok(ResponseStateOutcome::Applied(())) => stats.record_terminalized(),
-        Ok(ResponseStateOutcome::AlreadyCompleted { .. }) => {}
+        Ok(ResponseTransitionResult::Applied(())) => stats.record_terminalized(),
+        Ok(ResponseTransitionResult::AlreadyCompleted { .. }) => {}
         Err(_) if snapshot == ResponseStateSnapshot::Sending => stats.record_in_progress(),
         Err(_) => stats.record_invariant_failure(),
     }
@@ -1046,12 +1046,12 @@ fn record_terminalization(
 
 fn record_state_terminalization(
     stats: &mut DeferredRegistryShutdownStats,
-    result: Result<ResponseStateOutcome, crate::contract::TransportContractViolation>,
+    result: Result<ResponseTransitionResult, crate::contract::TransportContractViolation>,
     snapshot: ResponseStateSnapshot,
 ) {
     match result {
-        Ok(ResponseStateOutcome::Applied(())) => stats.record_terminalized(),
-        Ok(ResponseStateOutcome::AlreadyCompleted { .. }) => {}
+        Ok(ResponseTransitionResult::Applied(())) => stats.record_terminalized(),
+        Ok(ResponseTransitionResult::AlreadyCompleted { .. }) => {}
         Err(_) if snapshot == ResponseStateSnapshot::Sending => stats.record_in_progress(),
         Err(_) => stats.record_invariant_failure(),
     }

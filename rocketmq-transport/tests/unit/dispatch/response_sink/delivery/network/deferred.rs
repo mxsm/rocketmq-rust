@@ -17,14 +17,14 @@ use crate::contract::TransportContractViolation;
 use crate::dispatch::DeferredResponseOutcome;
 use crate::dispatch::ResponseSendClaim;
 use crate::dispatch::ResponseState;
-use crate::dispatch::ResponseStateOutcome;
+use crate::dispatch::ResponseTransitionResult;
 
 fn expect_send_claim(
-    result: Result<ResponseStateOutcome<ResponseSendClaim>, TransportContractViolation>,
+    result: Result<ResponseTransitionResult<ResponseSendClaim>, TransportContractViolation>,
 ) -> ResponseSendClaim {
     match result {
-        Ok(ResponseStateOutcome::Applied(claim)) => claim,
-        Ok(ResponseStateOutcome::AlreadyCompleted { state, reason }) => {
+        Ok(ResponseTransitionResult::Applied(claim)) => claim,
+        Ok(ResponseTransitionResult::AlreadyCompleted { state, reason }) => {
             panic!("send claim unexpectedly observed {state:?} with reason {reason:?}")
         }
         Err(error) => panic!("send claim violated its state contract: {error:?}"),

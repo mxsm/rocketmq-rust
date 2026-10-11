@@ -177,7 +177,7 @@ where
     };
     drop(marker);
     match result {
-        Ok(crate::dispatch::ResponseStateOutcome::Applied(())) => match stop {
+        Ok(crate::dispatch::ResponseTransitionResult::Applied(())) => match stop {
             ResumeStop::ParentCancelled | ResumeStop::OwnerDeadline => super::ResumeAttempt::Cancelled,
             ResumeStop::SessionClosed => super::ResumeAttempt::SessionClosed,
             ResumeStop::ProcessorUnavailable | ResumeStop::ServiceStopping => source
@@ -185,7 +185,7 @@ where
                     super::ResumeAttempt::Operational(super::ResumeOperationalFailure::ExecutorClosing { source })
                 }),
         },
-        Ok(crate::dispatch::ResponseStateOutcome::AlreadyCompleted { reason, .. }) => match (reason, source) {
+        Ok(crate::dispatch::ResponseTransitionResult::AlreadyCompleted { reason, .. }) => match (reason, source) {
             (
                 Some(DeferredTerminalReason::ProcessorUnavailable | DeferredTerminalReason::ServiceStopping),
                 Some(source),
@@ -242,8 +242,8 @@ where
     }
     drop(resume);
     match terminal {
-        Ok(crate::dispatch::ResponseStateOutcome::Applied(())) => super::ResumeAttempt::AdmissionRejected,
-        Ok(crate::dispatch::ResponseStateOutcome::AlreadyCompleted { reason, .. }) => {
+        Ok(crate::dispatch::ResponseTransitionResult::Applied(())) => super::ResumeAttempt::AdmissionRejected,
+        Ok(crate::dispatch::ResponseTransitionResult::AlreadyCompleted { reason, .. }) => {
             reason.map_or(super::ResumeAttempt::Cancelled, resume_attempt_for_reason)
         }
         Err(error) => super::ResumeAttempt::Operational(super::ResumeOperationalFailure::Contract(error)),

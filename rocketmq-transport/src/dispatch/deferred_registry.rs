@@ -295,7 +295,9 @@ impl<R> DeferredRequest<R> {
         self.parts.expiry()
     }
 
-    fn register_response(&self) -> Result<super::ResponseStateOutcome, crate::contract::TransportContractViolation> {
+    fn register_response(
+        &self,
+    ) -> Result<super::ResponseTransitionResult, crate::contract::TransportContractViolation> {
         self.parts.responder.register()
     }
 }

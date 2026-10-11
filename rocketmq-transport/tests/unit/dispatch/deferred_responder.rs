@@ -43,8 +43,8 @@ use crate::dispatch::ResponseBody;
 use crate::dispatch::ResponseCompletionOutcome;
 use crate::dispatch::ResponseOperationalFailure;
 use crate::dispatch::ResponseSendOutcome;
-use crate::dispatch::ResponseStateOutcome;
 use crate::dispatch::ResponseTerminalState;
+use crate::dispatch::ResponseTransitionResult;
 use crate::error_helpers::connection_failed_for_remote;
 use crate::error_helpers::TransportStage;
 use crate::file_region::FileRegion;
@@ -71,10 +71,10 @@ fn remoting_response(opaque: i32) -> RemotingResponse {
         .expect("remoting response")
 }
 
-fn expect_applied<T>(result: Result<ResponseStateOutcome<T>, TransportContractViolation>) -> T {
+fn expect_applied<T>(result: Result<ResponseTransitionResult<T>, TransportContractViolation>) -> T {
     match result.expect("response state transition remains valid") {
-        ResponseStateOutcome::Applied(value) => value,
-        ResponseStateOutcome::AlreadyCompleted { .. } => panic!("response state unexpectedly terminal"),
+        ResponseTransitionResult::Applied(value) => value,
+        ResponseTransitionResult::AlreadyCompleted { .. } => panic!("response state unexpectedly terminal"),
     }
 }
 
@@ -289,7 +289,7 @@ async fn caller_receiver_drop_closes_once_and_reports_the_prior_reason() {
     assert_eq!(state.terminal_reason(), Some(DeferredTerminalReason::ReceiverDropped));
     assert!(matches!(
         state.cancel().expect("prior terminal is a normal outcome"),
-        ResponseStateOutcome::AlreadyCompleted {
+        ResponseTransitionResult::AlreadyCompleted {
             state: ResponseTerminalState::Closed,
             reason: Some(DeferredTerminalReason::ReceiverDropped),
         }
