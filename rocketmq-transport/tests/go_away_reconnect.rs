@@ -40,7 +40,7 @@ use rocketmq_security_api::Signature;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::DefaultRequestProcessor;
-use rocketmq_transport::api::OutboundRequestOutcome;
+use rocketmq_transport::api::OutboundRequestResult;
 use rocketmq_transport::api::RPCHook;
 use rocketmq_transport::api::RequestDeadline;
 use rocketmq_transport::api::TlsClientConfig;
@@ -323,17 +323,17 @@ async fn start_client_with_security(
     client
 }
 
-fn expect_response(outcome: OutboundRequestOutcome) -> RemotingCommand {
+fn expect_response(outcome: OutboundRequestResult) -> RemotingCommand {
     match outcome {
-        OutboundRequestOutcome::Response(response) => response,
-        OutboundRequestOutcome::Rejected(rejection) => {
+        OutboundRequestResult::Response(response) => response,
+        OutboundRequestResult::Rejected(rejection) => {
             panic!(
                 "request was rejected at {:?}: {:?}",
                 rejection.stage(),
                 rejection.reason()
             )
         }
-        OutboundRequestOutcome::Contract(contract) => {
+        OutboundRequestResult::Contract(contract) => {
             panic!(
                 "request contract failed at {:?}: {:?}",
                 contract.stage(),

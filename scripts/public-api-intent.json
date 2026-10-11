@@ -7680,8 +7680,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::request_outcome::OutboundRequestOutcome",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::request_outcome::OutboundRequestOutcome",
+          "declaration": "pub use crate::request_outcome::OutboundRequestResult",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::request_outcome::OutboundRequestResult",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "exhaustive response, normal rejection, and deterministic contract result for outbound requests",

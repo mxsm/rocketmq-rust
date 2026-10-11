@@ -34,8 +34,8 @@ use crate::error_helpers::client_not_started;
 use crate::error_helpers::connection_failed_without_source_for_remote;
 use crate::error_helpers::TransportStage;
 use crate::request_outcome::OutboundRequestContract;
-use crate::request_outcome::OutboundRequestOutcome;
 use crate::request_outcome::OutboundRequestRejection;
+use crate::request_outcome::OutboundRequestResult;
 use crate::request_outcome::OutboundRequestStage;
 use crate::telemetry::TransportGoAwayOutcome;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -123,7 +123,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         target: RequestTarget,
         request: RemotingCommand,
         deadline: RequestDeadline,
-    ) -> Result<OutboundRequestOutcome, TransportError> {
+    ) -> Result<OutboundRequestResult, TransportError> {
         match target {
             RequestTarget::Endpoint(endpoint) => {
                 self.invoke_request_with_deadline(Some(&endpoint), request, deadline)
@@ -213,7 +213,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         addr: Option<&CheetahString>,
         request: RemotingCommand,
         deadline: RequestDeadline,
-    ) -> Result<OutboundRequestOutcome, TransportError> {
+    ) -> Result<OutboundRequestResult, TransportError> {
         let nameserver_request = addr.is_none_or(CheetahString::is_empty);
         let start = time::Instant::now();
         let timeout_millis = deadline.budget_millis();
@@ -223,7 +223,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
             addr.map_or_else(|| "<nameserver>".to_string(), ToString::to_string)
         };
         if deadline.is_expired() {
-            return Ok(OutboundRequestOutcome::Rejected(
+            return Ok(OutboundRequestResult::Rejected(
                 OutboundRequestRejection::deadline_expired(
                     OutboundRequestStage::BeforeWrite,
                     timeout_millis,
@@ -275,17 +275,17 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                     .as_ref()
                     .is_some_and(|state| state.endpoints().is_empty())
             {
-                return Ok(OutboundRequestOutcome::Contract(
+                return Ok(OutboundRequestResult::Contract(
                     OutboundRequestContract::name_server_endpoint_missing(),
                 ));
             }
-            return Ok(OutboundRequestOutcome::Rejected(
+            return Ok(OutboundRequestResult::Rejected(
                 OutboundRequestRejection::endpoint_unavailable(OutboundRequestStage::BeforeWrite, !nameserver_request),
             ));
         };
 
         if self.is_stopping() {
-            return Ok(OutboundRequestOutcome::Rejected(
+            return Ok(OutboundRequestResult::Rejected(
                 OutboundRequestRejection::client_stopping(OutboundRequestStage::BeforeWrite, true),
             ));
         }
@@ -293,7 +293,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         let mut request = request;
         let initial_remote_address = client.remote_address();
         if deadline.is_expired() {
-            return Ok(OutboundRequestOutcome::Rejected(
+            return Ok(OutboundRequestResult::Rejected(
                 OutboundRequestRejection::deadline_expired(OutboundRequestStage::BeforeWrite, timeout_millis, true),
             ));
         }
@@ -312,7 +312,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                 ));
             }
             if deadline.is_expired() {
-                return Ok(OutboundRequestOutcome::Rejected(
+                return Ok(OutboundRequestResult::Rejected(
                     OutboundRequestRejection::deadline_expired(OutboundRequestStage::BeforeWrite, timeout_millis, true),
                 ));
             }
@@ -322,7 +322,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         };
         let apply_final_hooks = |mut response: RemotingCommand,
                                  remote_address: std::net::SocketAddr|
-         -> Result<OutboundRequestOutcome, TransportError> {
+         -> Result<OutboundRequestResult, TransportError> {
             if let Some((request, hooks)) = request_for_after.as_ref() {
                 if let Err(error) = self.cmd_handler.do_after_rpc_hooks_with_snapshot(
                     Some(hooks.as_ref()),
@@ -338,7 +338,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                 }
             }
             if deadline.is_expired() {
-                return Ok(OutboundRequestOutcome::Rejected(
+                return Ok(OutboundRequestResult::Rejected(
                     OutboundRequestRejection::deadline_expired(
                         OutboundRequestStage::ResponseReceived,
                         timeout_millis,
@@ -346,7 +346,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                     ),
                 ));
             }
-            Ok(OutboundRequestOutcome::Response(response))
+            Ok(OutboundRequestResult::Response(response))
         };
         let remote_address = client.remote_address();
         let identity = if nameserver_request {
@@ -359,7 +359,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         };
 
         let outcome = match client.send_read(request, deadline).await {
-            Ok(OutboundRequestOutcome::Response(response)) => {
+            Ok(OutboundRequestResult::Response(response)) => {
                 if response.code() == ResponseCode::GoAway.to_i32() {
                     self.telemetry.record_go_away(TransportGoAwayOutcome::Received);
                     self.remove_cached_session_if_matches(&identity, &client);
@@ -367,7 +367,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                 }
                 apply_final_hooks(response, remote_address)
             }
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 if rejection.reason() == crate::request_outcome::OutboundRequestRejectionReason::DeadlineExpired
                     && matches!(
                         rejection.stage(),
@@ -377,9 +377,9 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                     client.retire_after_timeout().await;
                     self.remove_cached_session_if_matches(&identity, &client);
                 }
-                Ok(OutboundRequestOutcome::Rejected(rejection))
+                Ok(OutboundRequestResult::Rejected(rejection))
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => Ok(OutboundRequestOutcome::Contract(contract)),
+            Ok(OutboundRequestResult::Contract(contract)) => Ok(OutboundRequestResult::Contract(contract)),
             Err(error) => {
                 if matches!(
                     error.descriptor().code(),
@@ -397,16 +397,16 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
             nameserver_metric_addr.as_ref(),
             nameserver_lease.as_ref(),
             latency,
-            matches!(&outcome, Ok(OutboundRequestOutcome::Response(_))),
+            matches!(&outcome, Ok(OutboundRequestResult::Response(_))),
         );
         match &outcome {
-            Ok(OutboundRequestOutcome::Response(_)) => debug!(
+            Ok(OutboundRequestResult::Response(_)) => debug!(
                 endpoint_kind = if nameserver_request { "nameserver" } else { "direct" },
                 nameserver_generation = ?nameserver_generation,
                 elapsed_ms = latency.as_millis() as u64,
                 "request completed"
             ),
-            Ok(OutboundRequestOutcome::Rejected(_) | OutboundRequestOutcome::Contract(_)) | Err(_) => warn!(
+            Ok(OutboundRequestResult::Rejected(_) | OutboundRequestResult::Contract(_)) | Err(_) => warn!(
                 endpoint_kind = if nameserver_request { "nameserver" } else { "direct" },
                 elapsed_ms = latency.as_millis() as u64,
                 "request did not produce a response"
@@ -420,9 +420,9 @@ fn classify_before_write_error(
     error: SharedError,
     deadline: RequestDeadline,
     remote_addr_present: bool,
-) -> Result<OutboundRequestOutcome, TransportError> {
+) -> Result<OutboundRequestResult, TransportError> {
     if error.descriptor() == &rocketmq_error::CORE_OPERATION_TIMED_OUT {
-        Ok(OutboundRequestOutcome::Rejected(
+        Ok(OutboundRequestResult::Rejected(
             OutboundRequestRejection::deadline_expired(
                 OutboundRequestStage::BeforeWrite,
                 deadline.budget_millis(),
@@ -430,7 +430,7 @@ fn classify_before_write_error(
             ),
         ))
     } else if error.descriptor() == &rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED {
-        Ok(OutboundRequestOutcome::Rejected(
+        Ok(OutboundRequestResult::Rejected(
             OutboundRequestRejection::client_stopping(OutboundRequestStage::BeforeWrite, remote_addr_present),
         ))
     } else {

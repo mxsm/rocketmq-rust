@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use rocketmq_transport::api::OutboundRequestOutcome;
+use rocketmq_transport::api::OutboundRequestResult;
 use rocketmq_transport::api::RequestDeadline;
 
 impl MQClientAPIImpl {
@@ -50,14 +50,14 @@ impl MQClientAPIImpl {
             )
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(consumer_request_error(
                     "get_max_offset",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(consumer_request_error("get_max_offset", RetryInput::Contract(contract)));
             }
             Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
@@ -105,14 +105,14 @@ impl MQClientAPIImpl {
             )
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(consumer_request_error(
                     "get_min_offset",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(consumer_request_error("get_min_offset", RetryInput::Contract(contract)));
             }
             Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
@@ -160,14 +160,14 @@ impl MQClientAPIImpl {
             )
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(consumer_request_error(
                     "get_earliest_msg_store_time",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(consumer_request_error(
                     "get_earliest_msg_store_time",
                     RetryInput::Contract(contract),
@@ -242,14 +242,14 @@ impl MQClientAPIImpl {
             )
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(consumer_request_error(
                     "search_offset_by_timestamp",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(consumer_request_error(
                     "search_offset_by_timestamp",
                     RetryInput::Contract(contract),
@@ -310,14 +310,14 @@ impl MQClientAPIImpl {
             )
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(consumer_request_error(
                     "set_message_request_mode",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(consumer_request_error(
                     "set_message_request_mode",
                     RetryInput::Contract(contract),
@@ -364,9 +364,9 @@ impl MQClientAPIImpl {
             )
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => return Err(RetryInput::Rejected(rejection)),
-            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(RetryInput::Contract(contract)),
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => return Err(RetryInput::Rejected(rejection)),
+            Ok(OutboundRequestResult::Contract(contract)) => return Err(RetryInput::Contract(contract)),
             Err(error) => return Err(RetryInput::Transport(error)),
         };
 
@@ -406,7 +406,7 @@ impl MQClientAPIImpl {
             .invoke_request(Some(addr), request, timeout_millis)
             .await
         {
-            Ok(OutboundRequestOutcome::Response(response)) => {
+            Ok(OutboundRequestResult::Response(response)) => {
                 let response_header = response.decode_command_custom_header::<ChangeInvisibleTimeResponseHeader>()?;
                 let ack_result = if ResponseCode::from(response.code()) == ResponseCode::Success {
                     AckResult {
@@ -438,14 +438,14 @@ impl MQClientAPIImpl {
                     .execute(async { ack_callback.on_success(ack_result) })
                     .await;
             }
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 let error = consumer_request_error("change_invisible_time", RetryInput::Rejected(rejection));
                 let _ = self
                     .callback_executor
                     .execute(async { ack_callback.on_exception(error) })
                     .await;
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 let error = consumer_request_error("change_invisible_time", RetryInput::Contract(contract));
                 let _ = self
                     .callback_executor
@@ -489,11 +489,11 @@ impl MQClientAPIImpl {
                 .invoke_request(Some(&addr), request, timeout_millis)
                 .await;
             let response = match outcome {
-                Ok(OutboundRequestOutcome::Response(response)) => response,
-                Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                Ok(OutboundRequestResult::Response(response)) => response,
+                Ok(OutboundRequestResult::Rejected(rejection)) => {
                     return Err(consumer_request_error("pop_message", RetryInput::Rejected(rejection)));
                 }
-                Ok(OutboundRequestOutcome::Contract(contract)) => {
+                Ok(OutboundRequestResult::Contract(contract)) => {
                     return Err(consumer_request_error("pop_message", RetryInput::Contract(contract)));
                 }
                 Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
@@ -536,14 +536,14 @@ impl MQClientAPIImpl {
                 .invoke_request(Some(&addr), request, timeout_millis)
                 .await;
             let response = match outcome {
-                Ok(OutboundRequestOutcome::Response(response)) => response,
-                Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                Ok(OutboundRequestResult::Response(response)) => response,
+                Ok(OutboundRequestResult::Rejected(rejection)) => {
                     return Err(consumer_request_error(
                         "pop_lite_message",
                         RetryInput::Rejected(rejection),
                     ));
                 }
-                Ok(OutboundRequestOutcome::Contract(contract)) => {
+                Ok(OutboundRequestResult::Contract(contract)) => {
                     return Err(consumer_request_error(
                         "pop_lite_message",
                         RetryInput::Contract(contract),
@@ -1018,11 +1018,11 @@ impl MQClientAPIImpl {
             .invoke_request(Some(addr), request, timeout_millis)
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(consumer_request_error("ack_message", RetryInput::Rejected(rejection)));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(consumer_request_error("ack_message", RetryInput::Contract(contract)));
             }
             Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
