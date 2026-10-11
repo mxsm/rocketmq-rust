@@ -128,7 +128,7 @@ fn assert_recovered(fixture: &PartsFixture, parts: DeferredParts) {
         responder
             .cancel()
             .expect("recovered responder remains affine and usable"),
-        crate::dispatch::DeferredResponseOutcome::Cancelled
+        crate::dispatch::DeferredResponseResult::Cancelled
     );
 }
 
@@ -224,7 +224,7 @@ async fn equal_owner_and_protocol_boundaries_fail_closed_to_owner() {
             .into_responder()
             .cancel()
             .expect("equal-boundary parts remain usable"),
-        crate::dispatch::DeferredResponseOutcome::Cancelled
+        crate::dispatch::DeferredResponseResult::Cancelled
     );
 }
 
