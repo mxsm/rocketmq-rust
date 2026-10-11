@@ -787,7 +787,18 @@ mod tests {
     async fn write_router_with_mutations_enabled(
         mutations_enabled: bool,
     ) -> (Router, Arc<ProtocolCounters>, Arc<MemoryAuditSink>) {
-        use crate::audit::AuditTrail;
+        let sink = Arc::new(MemoryAuditSink::new(64, 4096));
+        let (router, counters) =
+            write_router_over(mutations_enabled, crate::audit::AuditTrail::new(sink.clone())).await;
+        (router, counters, sink)
+    }
+
+    /// Builds the write router over an existing audit trail, as a restarted server would.
+    #[cfg(feature = "write-tools")]
+    async fn write_router_over(
+        mutations_enabled: bool,
+        trail: crate::audit::AuditTrail,
+    ) -> (Router, Arc<ProtocolCounters>) {
         use crate::model::ClusterName;
         use crate::model::ControlOperation;
 
@@ -811,11 +822,10 @@ mod tests {
             .task_group()
             .clone();
         let counters = Arc::new(ProtocolCounters::default());
-        let sink = Arc::new(MemoryAuditSink::new(64, 4096));
         let server = ControlServer::with_test_factory(
             &config.mutations,
             std::collections::BTreeSet::from([ClusterName::try_new("cluster-a").unwrap()]),
-            AuditTrail::new(sink.clone()),
+            trail,
             Arc::new(ProtocolFactory {
                 counters: counters.clone(),
             }),
@@ -827,7 +837,6 @@ mod tests {
         (
             build_router_with_auth(&config, server, CancellationToken::new(), auth),
             counters,
-            sink,
         )
     }
 
@@ -915,6 +924,13 @@ mod tests {
             .unwrap();
         let bytes = to_bytes(response.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
         serde_json::from_slice(&bytes).unwrap()
+    }
+
+    /// The response as one call returns it: under the invocation of that call.
+    #[cfg(feature = "write-tools")]
+    fn invoked(mut response: serde_json::Value, invocation_id: u64) -> serde_json::Value {
+        response[crate::tools::INVOCATION_ID_MEMBER] = serde_json::json!(invocation_id);
+        response
     }
 
     #[cfg(feature = "write-tools")]
@@ -1102,6 +1118,7 @@ mod tests {
                 "rocketmq_reset_consumer_offset",
                 "rocketmq_patch_broker_config",
                 "rocketmq_set_consumer_request_mode",
+                "rocketmq_get_mutation_result",
             ]
         );
         let both = token_with_claims(
@@ -1120,12 +1137,14 @@ mod tests {
             .unwrap();
         let body = to_bytes(tools.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
         let listed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 2);
+        // The two allowed mutations, and the result lookup that every writer of the cluster gets.
+        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 3);
         for tool in listed["result"]["tools"].as_array().unwrap() {
-            assert_eq!(tool["annotations"]["readOnlyHint"], false);
-            assert_eq!(tool["annotations"]["destructiveHint"], true);
+            let lookup = tool["name"] == crate::tools::GET_MUTATION_RESULT_TOOL;
+            assert_eq!(tool["annotations"]["readOnlyHint"], lookup, "{}", tool["name"]);
+            assert_eq!(tool["annotations"]["destructiveHint"], !lookup, "{}", tool["name"]);
             assert_eq!(tool["annotations"]["idempotentHint"], true);
-            assert_eq!(tool["annotations"]["openWorldHint"], true);
+            assert_eq!(tool["annotations"]["openWorldHint"], !lookup, "{}", tool["name"]);
         }
 
         let topic_only = token_with_claims(REQUIRED_WRITE_SCOPE, vec!["topic_upsert"], vec!["cluster-a"]);
@@ -1140,7 +1159,8 @@ mod tests {
             .unwrap();
         let one_body = to_bytes(one.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
         let one_value: serde_json::Value = serde_json::from_slice(&one_body).unwrap();
-        assert_eq!(one_value["result"]["tools"].as_array().unwrap().len(), 1);
+        assert_eq!(one_value["result"]["tools"].as_array().unwrap().len(), 2);
+        // Without an allowed cluster there is nothing to change and no result to read.
         let no_cluster = token_with_claims(
             REQUIRED_WRITE_SCOPE,
             vec!["topic_upsert", "consumer_group_upsert"],
@@ -1457,9 +1477,13 @@ mod tests {
             topic_dry_arguments.clone(),
         )
         .await;
+        // Every call writes a `started` and a terminal record, so invocations are 1, 3, 5, ...
         assert_eq!(
             topic_dry["result"]["structuredContent"],
-            expected_upsert_response("topic_upsert", "topic", "orders", topic_requested.clone(), false)
+            invoked(
+                expected_upsert_response("topic_upsert", "topic", "orders", topic_requested.clone(), false),
+                1
+            )
         );
         let mut topic_execute_arguments = topic_dry_arguments;
         let topic_object = topic_execute_arguments.as_object_mut().unwrap();
@@ -1476,7 +1500,10 @@ mod tests {
         )
         .await;
         let expected_topic_execute = expected_upsert_response("topic_upsert", "topic", "orders", topic_requested, true);
-        assert_eq!(topic_execute["result"]["structuredContent"], expected_topic_execute);
+        assert_eq!(
+            topic_execute["result"]["structuredContent"],
+            invoked(expected_topic_execute.clone(), 3)
+        );
         let topic_cache_hit = authenticated_tool_call(
             &router,
             &token,
@@ -1485,7 +1512,11 @@ mod tests {
             topic_execute_arguments,
         )
         .await;
-        assert_eq!(topic_cache_hit["result"]["structuredContent"], expected_topic_execute);
+        // A replayed response is returned under the invocation of the call that asked for it.
+        assert_eq!(
+            topic_cache_hit["result"]["structuredContent"],
+            invoked(expected_topic_execute, 5)
+        );
 
         let group_requested = serde_json::json!({
             "consume_enable": true,
@@ -1512,12 +1543,15 @@ mod tests {
         .await;
         assert_eq!(
             group_dry["result"]["structuredContent"],
-            expected_upsert_response(
-                "consumer_group_upsert",
-                "consumer_group",
-                "orders_consumers",
-                group_requested.clone(),
-                false,
+            invoked(
+                expected_upsert_response(
+                    "consumer_group_upsert",
+                    "consumer_group",
+                    "orders_consumers",
+                    group_requested.clone(),
+                    false,
+                ),
+                7
             )
         );
         let mut group_execute_arguments = group_dry_arguments;
@@ -1541,7 +1575,10 @@ mod tests {
             group_requested,
             true,
         );
-        assert_eq!(group_execute["result"]["structuredContent"], expected_group_execute);
+        assert_eq!(
+            group_execute["result"]["structuredContent"],
+            invoked(expected_group_execute.clone(), 9)
+        );
         let group_cache_hit = authenticated_tool_call(
             &router,
             &token,
@@ -1550,7 +1587,10 @@ mod tests {
             group_execute_arguments,
         )
         .await;
-        assert_eq!(group_cache_hit["result"]["structuredContent"], expected_group_execute);
+        assert_eq!(
+            group_cache_hit["result"]["structuredContent"],
+            invoked(expected_group_execute, 11)
+        );
 
         assert_eq!(counters.opens.load(std::sync::atomic::Ordering::SeqCst), 4);
         assert_eq!(counters.preflights.load(std::sync::atomic::Ordering::SeqCst), 6);
@@ -1940,7 +1980,8 @@ mod tests {
             assert_eq!(response.status(), StatusCode::OK, "valid case {index}");
             let body = to_bytes(response.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
             let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            assert_eq!(value["result"]["tools"].as_array().unwrap().len(), 1);
+            // The one allowed mutation and the result lookup.
+            assert_eq!(value["result"]["tools"].as_array().unwrap().len(), 2);
             assert!(!value.to_string().contains(subject));
         }
 
@@ -2287,6 +2328,13 @@ mod tests {
 
     #[cfg(feature = "write-tools")]
     include!("transport/acceptance_matrix.rs");
+
+    #[cfg(feature = "write-tools")]
+    mod mutation_result {
+        use super::*;
+
+        include!("transport/mutation_result.rs");
+    }
 }
 
 #[cfg(all(test, feature = "write-tools"))]

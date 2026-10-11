@@ -1255,10 +1255,7 @@ fn assert_public_contract(
 ) -> serde_json::Value {
     let first_payload = strict_payload(first, scenario);
     let second_payload = strict_payload(second, scenario);
-    assert_eq!(
-        first_payload, second_payload,
-        "replay mismatch for {tool:?}/{scenario:?}"
-    );
+    assert_same_response_under_own_invocations(first_payload, second_payload, &format!("{tool:?}/{scenario:?}"));
     let expected_code = scenario.expected_code().map(ControlErrorCode::as_str);
     match scenario.expected_status() {
         Some(status) if scenario != Scenario::SessionShutdownFailure => {
@@ -1309,6 +1306,34 @@ fn assert_public_contract(
         }
     }
     first_payload.clone()
+}
+
+/// Splits a payload into the invocation it was returned under and everything else.
+fn split_invocation(payload: &serde_json::Value) -> (Option<u64>, serde_json::Value) {
+    let mut rest = payload.clone();
+    let invocation = rest
+        .as_object_mut()
+        .and_then(|members| members.remove(tools::INVOCATION_ID_MEMBER))
+        .map(|invocation| invocation.as_u64().expect("an invocation id is a positive integer"));
+    (invocation, rest)
+}
+
+/// Asserts that two calls returned the same response, each under an invocation of its own.
+///
+/// A mutation response carries the invocation of the call that returns it, replayed or not. An
+/// error envelope carries none.
+fn assert_same_response_under_own_invocations(first: &serde_json::Value, second: &serde_json::Value, case: &str) {
+    let (first_invocation, first_rest) = split_invocation(first);
+    let (second_invocation, second_rest) = split_invocation(second);
+    assert_eq!(first_rest, second_rest, "replay mismatch for {case}");
+    match (first_invocation, second_invocation) {
+        (Some(first), Some(second)) => {
+            assert!(first >= 1 && second >= 1, "invocation ids start at one for {case}");
+            assert_ne!(first, second, "two calls shared one invocation for {case}");
+        }
+        (None, None) => assert!(first.get("status").is_none(), "a mutation response lacks its invocation for {case}"),
+        _ => panic!("only one of two equal responses carries an invocation for {case}"),
+    }
 }
 
 fn assert_response_truth(response: &serde_json::Value, scenario: Scenario) {
@@ -2018,7 +2043,11 @@ async fn request_keys_share_leaders_replay_results_and_reject_collisions_for_eve
             request_arguments,
         )
         .await;
-        assert_eq!(mcp_payload(&replay, false), mcp_payload(&first, false));
+        assert_same_response_under_own_invocations(
+            mcp_payload(&replay, false),
+            mcp_payload(&first, false),
+            &format!("{tool:?}/replay"),
+        );
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
         assert_eq!(counters.mutation_calls.load(Ordering::SeqCst), 1);
 

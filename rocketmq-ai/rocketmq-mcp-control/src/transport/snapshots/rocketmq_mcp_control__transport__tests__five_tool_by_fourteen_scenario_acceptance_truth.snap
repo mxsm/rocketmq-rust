@@ -36,6 +36,7 @@ expression: exact_contract
     },
     "cluster": "cluster-a",
     "error_code": "precondition_conflict",
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "broker_config_patch",
     "requested": {
@@ -97,6 +98,7 @@ expression: exact_contract
     },
     "cluster": "cluster-a",
     "error_code": null,
+    "invocation_id": 1,
     "mode": "dry_run",
     "operation": "broker_config_patch",
     "requested": {
@@ -168,6 +170,7 @@ expression: exact_contract
     },
     "cluster": "cluster-a",
     "error_code": null,
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "broker_config_patch",
     "requested": {
@@ -267,6 +270,7 @@ expression: exact_contract
     },
     "cluster": "cluster-a",
     "error_code": "verification_failed",
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "broker_config_patch",
     "requested": {
@@ -334,6 +338,7 @@ expression: exact_contract
     },
     "cluster": "cluster-a",
     "error_code": "execution_failed",
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "broker_config_patch",
     "requested": {
@@ -413,6 +418,7 @@ expression: exact_contract
     },
     "cluster": "cluster-a",
     "error_code": "precondition_conflict",
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_group_upsert",
     "requested": {
@@ -477,6 +483,7 @@ expression: exact_contract
     },
     "cluster": "cluster-a",
     "error_code": null,
+    "invocation_id": 1,
     "mode": "dry_run",
     "operation": "consumer_group_upsert",
     "requested": {
@@ -559,6 +566,7 @@ expression: exact_contract
     },
     "cluster": "cluster-a",
     "error_code": null,
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_group_upsert",
     "requested": {
@@ -684,6 +692,7 @@ expression: exact_contract
     },
     "cluster": "cluster-a",
     "error_code": "partial_apply",
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_group_upsert",
     "requested": {
@@ -793,6 +802,7 @@ expression: exact_contract
     },
     "cluster": "cluster-a",
     "error_code": "verification_failed",
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_group_upsert",
     "requested": {
@@ -863,6 +873,7 @@ expression: exact_contract
     },
     "cluster": "cluster-a",
     "error_code": "execution_failed",
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_group_upsert",
     "requested": {
@@ -952,6 +963,7 @@ expression: exact_contract
     },
     "cluster": "cluster-a",
     "error_code": "precondition_conflict",
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_request_mode",
     "requested": {
@@ -1000,6 +1012,7 @@ expression: exact_contract
     },
     "cluster": "cluster-a",
     "error_code": null,
+    "invocation_id": 1,
     "mode": "dry_run",
     "operation": "consumer_request_mode",
     "requested": {
@@ -1053,6 +1066,7 @@ expression: exact_contract
     },
     "cluster": "cluster-a",
     "error_code": null,
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_request_mode",
     "requested": {
@@ -1138,6 +1152,7 @@ expression: exact_contract
     },
     "cluster": "cluster-a",
     "error_code": "partial_apply",
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_request_mode",
     "requested": {
@@ -1208,6 +1223,7 @@ expression: exact_contract
     },
     "cluster": "cluster-a",
     "error_code": "verification_failed",
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_request_mode",
     "requested": {
@@ -1262,6 +1278,7 @@ expression: exact_contract
     },
     "cluster": "cluster-a",
     "error_code": "execution_failed",
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_request_mode",
     "requested": {
@@ -1329,6 +1346,7 @@ expression: exact_contract
     ],
     "cluster": "cluster-a",
     "error_code": "precondition_conflict",
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_offset_reset",
     "requested": {
@@ -1372,6 +1390,7 @@ expression: exact_contract
     ],
     "cluster": "cluster-a",
     "error_code": null,
+    "invocation_id": 1,
     "mode": "dry_run",
     "operation": "consumer_offset_reset",
     "requested": {
@@ -1421,6 +1440,7 @@ expression: exact_contract
     ],
     "cluster": "cluster-a",
     "error_code": null,
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_offset_reset",
     "requested": {
@@ -1499,6 +1519,7 @@ expression: exact_contract
     ],
     "cluster": "cluster-a",
     "error_code": "partial_apply",
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_offset_reset",
     "requested": {
@@ -1555,6 +1576,7 @@ expression: exact_contract
     ],
     "cluster": "cluster-a",
     "error_code": "verification_failed",
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_offset_reset",
     "requested": {
@@ -1604,6 +1626,7 @@ expression: exact_contract
     ],
     "cluster": "cluster-a",
     "error_code": "execution_failed",
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_offset_reset",
     "requested": {
@@ -1669,6 +1692,7 @@ expression: exact_contract
     },
     "cluster": "cluster-a",
     "error_code": "precondition_conflict",
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "topic_upsert",
     "requested": {
@@ -1721,6 +1745,7 @@ expression: exact_contract
     },
     "cluster": "cluster-a",
     "error_code": null,
+    "invocation_id": 1,
     "mode": "dry_run",
     "operation": "topic_upsert",
     "requested": {
@@ -1785,6 +1810,7 @@ expression: exact_contract
     },
     "cluster": "cluster-a",
     "error_code": null,
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "topic_upsert",
     "requested": {
@@ -1886,6 +1912,7 @@ expression: exact_contract
     },
     "cluster": "cluster-a",
     "error_code": "partial_apply",
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "topic_upsert",
     "requested": {
@@ -1971,6 +1998,7 @@ expression: exact_contract
     },
     "cluster": "cluster-a",
     "error_code": "verification_failed",
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "topic_upsert",
     "requested": {
@@ -2029,6 +2057,7 @@ expression: exact_contract
     },
     "cluster": "cluster-a",
     "error_code": "execution_failed",
+    "invocation_id": 1,
     "mode": "execute",
     "operation": "topic_upsert",
     "requested": {

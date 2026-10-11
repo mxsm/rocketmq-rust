@@ -34,12 +34,15 @@ ordering remain the source of truth for details not reproduced in this summary.
   correlation/request identifier. Internal addresses, credentials, bearer tokens, and sensitive assignments are
   not part of the public output.
 - Initialization rejects a protocol version other than `2025-11-25`.
+- Declared capabilities: `tools`, `resources`, `prompts`, and `completions`. `completion/complete` names
+  clusters, Topics, Consumer Groups, and Brokers for Prompt arguments and Resource template variables,
+  under the permission of the matching listing Tool.
 
 ## Tool surface
 
-### Default features: 24 tools
+### Default features: 30 tools
 
-These 24 tools are present in the default catalog (`read-only`, `diagnose`, and `stdio`). The `diagnose` feature
+These 30 tools are present in the default catalog (`read-only`, `diagnose`, and `stdio`). The `diagnose` feature
 is a capability marker that includes `read-only`; diagnosis execution is controlled by the configured profile and
 required authorization scope, not by a separate feature-gated tool implementation:
 
@@ -52,7 +55,11 @@ required authorization scope, not by a separate feature-gated tool implementatio
 | `rocketmq_list_consumer_groups` | ReadOnly | optional `cluster`, optional `filter`, optional page `limit`/`cursor` | Lists a bounded, filtered, cursor-paginated consumer-group page. |
 | `rocketmq_get_consumer_lag` | ReadOnly | `cluster`, `topic`, `consumer_group`, optional page `limit`/`cursor` | Returns bounded per-queue consumer progress and lag. |
 | `rocketmq_describe_broker` | ReadOnly | `cluster`, `broker_name` | Describes broker state for one broker name. |
-| `rocketmq_diagnose_consumer_lag` | Diagnose | `cluster`, `topic`, `consumer_group` | Aggregates read-only lag, topic-route, and broker evidence into a diagnosis report. |
+| `rocketmq_diagnose_consumer_lag` | Diagnose | `cluster`, `topic`, `consumer_group` | Grades the backlog of one Consumer Group on one Topic and names its likely causes from lag, connection, configuration, permission, and retry evidence. |
+| `rocketmq_diagnose_consumer_group` | Diagnose | `cluster`, `consumer_group` | Explains the state of one Consumer Group over every Topic it consumes from connection, configuration, progress, and retry evidence. |
+| `rocketmq_diagnose_broker_health` | Diagnose | `cluster`, `broker_name` | Checks the master and the replicas of one Broker from instance, diagnostics, replication, and configuration evidence. |
+| `rocketmq_get_cluster_health` | Diagnose | `cluster` | Checks a cluster at a glance from the instance rows and the replication state, and names the Brokers to look at. |
+| `rocketmq_diagnose_message_delivery` | Diagnose | `cluster`, `topic`, `consumer_group`, optional `message_id` | Checks the path from one Topic to one Consumer Group and, with `message_id`, where that message stands. Naming a message also needs the permission for `rocketmq_get_message_metadata`. |
 | `rocketmq_get_broker_diagnostics` | Diagnose | `cluster`, `broker_name` | Returns bounded readiness, store, recovery, and security diagnostics. |
 | `rocketmq_get_broker_config_summary` | ReadOnly | `cluster`, `broker_name` | Returns a fixed allowlisted broker configuration summary. |
 | `rocketmq_get_broker_log_filter_state` | Diagnose | `cluster`, `broker_name`, `logger` | Returns temporary state for an allowlisted broker logger. |
@@ -69,16 +76,28 @@ required authorization scope, not by a separate feature-gated tool implementatio
 | `rocketmq_get_ha_status` | Diagnose | `cluster`, optional bounded broker selection | Returns bounded HA and optional Controller synchronization observations. |
 | `rocketmq_get_controller_metadata` | Diagnose | `cluster` | Returns bounded metadata for configured logical Controllers. |
 | `rocketmq_get_nameserver_config_summary` | ReadOnly | `cluster` | Returns fixed allowlisted NameServer configuration summaries. |
+| `rocketmq_list_clusters` | ReadOnly | none | Lists the configured logical clusters the caller may query, with their Proxy and Controller aliases; reads configuration only. |
+| `rocketmq_list_brokers` | ReadOnly | `cluster` | Lists the Broker instances of one cluster from the Broker rows alone. |
 
 Page `limit` is bounded to 1–200 and defaults to 50. The outer output policy additionally caps arrays at 1,000
 rows and structured output at 1 MiB.
 
-Consumer-lag diagnosis uses a server-owned policy profile and threshold. The request has no historical `time_range`
-or caller-controlled threshold because the checked-in implementation has no historical metrics source.
+Consumer-lag diagnosis uses a server-owned policy profile and server-owned thresholds, which the configuration can
+replace for single Topics and Consumer Groups. The request has no historical `time_range` or caller-controlled
+threshold because the checked-in implementation has no historical metrics source. The Tool reference lists the
+evidence, the rules and the severity grades.
+
+The other four diagnosis Tools return the same report shape. Each reads its evidence in one admin session inside the
+request budget, and a read that fails is missing evidence in a partial report. A health report (Broker, cluster,
+message delivery) is as severe as its worst finding. No diagnosis result carries a message body or a message
+identifier: a message is named by its pseudonyms.
 
 ### Optional `change-planning`: five tools
 
-When compiled with `change-planning`, the all-features catalog has exactly 29 tools: the 24 defaults above
+The feature and its Tools are deprecated and will be removed. Changes are planned with a dry run of the control
+MCP server; see the Tool reference for the replacement of each Tool.
+
+When compiled with `change-planning`, the all-features catalog has exactly 35 tools: the 30 defaults above
 plus these five planning tools:
 
 | Tool | Plan type | Required request | Result boundary |
@@ -111,7 +130,7 @@ The fifteen cluster Resource forms below are the five listed roots plus ten para
 | `rocketmq://clusters/{cluster}/topics/{topic}/route` | Parameterized topic route. |
 | `rocketmq://clusters/{cluster}/topics/{topic}/stats{?limit,cursor}` | Parameterized topic statistics backed by one stable page snapshot. |
 | `rocketmq://clusters/{cluster}/topics/{topic}/config` | Parameterized address-free topic configuration summary. |
-| `rocketmq://clusters/{cluster}/brokers` | Listed cluster root; broker inventory. |
+| `rocketmq://clusters/{cluster}/brokers` | Listed cluster root; broker inventory, read like `rocketmq_list_brokers` and authorized as `rocketmq_get_cluster_overview`. |
 | `rocketmq://clusters/{cluster}/brokers/{broker}` | Parameterized broker details. |
 | `rocketmq://clusters/{cluster}/brokers/{broker}/diagnostics` | Parameterized broker diagnostics; requires Diagnose authorization. |
 | `rocketmq://clusters/{cluster}/brokers/{broker}/config-summary` | Parameterized allowlisted broker configuration summary. |
@@ -179,6 +198,11 @@ principals, visibility contexts, Resource/template surfaces, configuration/regis
 
 Prompt discovery requires every unconditional Tool on one allowed configured cluster. `prompts/get` revalidates the
 selected cluster and every conditional Tool. Availability authorization precedes prompt-specific schema errors.
+A Prompt can also declare preferred Tools (`preferred_tools`), the diagnosis Tool or Tools it starts with:
+`broker_health_check`, `diagnose_broker_health`, `diagnose_message_delivery`, and `analyze_consumer_connections` do.
+Preferred Tools never decide availability. `prompts/get` renders the part of the body that names them only for a
+caller who may call every one of them on the selected cluster, so no caller is told to start with a Tool it may not
+call.
 Arguments use closed kinds and reject unknown, missing, null, non-string, blank, overlong, control/newline,
 backtick, encoded delimiter, and template-delimiter values. Topic and group values use the closed RocketMQ ASCII
 contract; message identifiers use a separate closed safe-token contract. Rendering inserts JSON-quoted values into
@@ -197,7 +221,7 @@ The `Cargo.toml` feature graph at this revision is:
 | `observability` | No | Enables in-process RocketMQ observability support without selecting a remote exporter. |
 | `otlp` | No | Includes `observability` and OTLP metrics, traces, and logs through the OTLP gRPC exporter. |
 | `auth` | No | Internal authentication feature; selected by `streamable-http`. |
-| `change-planning` | No | Registers the five non-mutating planning tools. |
+| `change-planning` | No | Deprecated. Registers the five non-mutating planning tools. |
 
 Default feature set: `read-only`, `diagnose`, `stdio`. The default binary is intended for local stdio. HTTPS is
 available only with `streamable-http`; production OAuth requires that transport feature and its TLS/JWKS setup.

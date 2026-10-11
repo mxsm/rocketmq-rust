@@ -50,11 +50,15 @@ test-only RS256/JWK identity seam. It exercises all five reviewed tools over TLS
 5. Consumer request mode: baseline dry-run/execute, changed dry-run/execute, idempotent execution, and exact
    baseline restoration.
 
-The scenario makes 22 authenticated TLS MCP calls and verifies 44 durable
-`rocketmq-mcp-control.audit.v2` records: one `started` and one terminal record per call. It checks closed
+The scenario makes 22 authenticated TLS MCP mutation calls and verifies 44 durable
+`rocketmq-mcp-control.audit.v3` records: one `started` and one terminal record per call. It checks closed
 operation, mode, result/error-code relationship, safe cluster/operator/reason evidence, sequence ordering, and
 terminal duration. It also exercises a Broker outage and restart, a Control restart with audit recovery, and a
 post-restart successful dry-run.
+
+It also calls `rocketmq_get_mutation_result` four times: for the Topic execution by its `invocation_id` and by
+its request key, for a key that was never sent, and for the Topic execution again after the Control restart.
+These lookups are not among the 22 calls, so the 44-record check fails if a lookup writes an audit record.
 
 ## State restoration and failure handling
 

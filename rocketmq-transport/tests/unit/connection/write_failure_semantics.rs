@@ -65,14 +65,14 @@ use crate::write_strategy::QueuedWrite;
 use crate::write_strategy::QueuedWriteProgress;
 use crate::writer_runtime::run_session_writer;
 use crate::writer_runtime::writer_lanes;
-use crate::writer_runtime::WriterEnqueueOutcome;
+use crate::writer_runtime::WriterEnqueueResult;
 use crate::writer_runtime::WriterLanes;
 use crate::writer_runtime::WriterQueueConfig;
 
-fn expect_writer_enqueued(outcome: WriterEnqueueOutcome) {
+fn expect_writer_enqueued(outcome: WriterEnqueueResult) {
     match outcome {
-        WriterEnqueueOutcome::Enqueued => {}
-        WriterEnqueueOutcome::Full(write) | WriterEnqueueOutcome::Closed(write) => {
+        WriterEnqueueResult::Enqueued => {}
+        WriterEnqueueResult::Full(write) | WriterEnqueueResult::Closed(write) => {
             drop(write);
             panic!("writer lane accepts the blocker")
         }

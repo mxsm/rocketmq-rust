@@ -3753,7 +3753,7 @@ expression: surface
         "readOnlyHint": true,
         "title": "RocketMQ consumer lag diagnosis"
       },
-      "description": "Explains the lag of one Consumer Group on one Topic. It reads the lag of every queue, the Topic route and the Broker that holds the most lag, then reports a severity, likely causes and recommendations. Use it when a group is behind and you need a cause. For the raw per-queue numbers use rocketmq_get_consumer_lag.",
+      "description": "Explains the lag of one Consumer Group on one Topic. It reads the lag of every queue, the connections and configuration of the group, the route and permissions of the Topic, and the retry and dead-letter Topics, then reports a severity, likely causes and recommendations. Use it when a group is behind and you need a cause. For the raw per-queue numbers use rocketmq_get_consumer_lag.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -3799,6 +3799,7 @@ expression: surface
             "type": "string"
           },
           "DiagnosisReport": {
+            "description": "A diagnosis and the evidence it was evaluated on. `evidence_snapshot` is the only place the evidence appears; `evidence_refs`, `missing_evidence` and `root_causes[].evidence_refs` name its items by `id`.",
             "properties": {
               "cluster": {
                 "type": "string"
@@ -3817,23 +3818,10 @@ expression: surface
                 "type": "array"
               },
               "evidence_snapshot": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/EvidenceSnapshot"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "$ref": "#/$defs/EvidenceSnapshot"
               },
               "evidence_version": {
                 "type": "string"
-              },
-              "evidences": {
-                "items": {
-                  "$ref": "#/$defs/Evidence"
-                },
-                "type": "array"
               },
               "follow_up_metrics": {
                 "items": {
@@ -3907,39 +3895,14 @@ expression: surface
               "partial",
               "missing_evidence",
               "evidence_refs",
+              "evidence_snapshot",
               "summary",
               "impacts",
-              "evidences",
               "root_causes",
               "recommendations",
               "risks",
               "follow_up_metrics",
               "generated_at"
-            ],
-            "type": "object"
-          },
-          "Evidence": {
-            "properties": {
-              "data": true,
-              "id": {
-                "type": "string"
-              },
-              "source_tool": {
-                "type": "string"
-              },
-              "status": {
-                "$ref": "#/$defs/EvidenceStatus"
-              },
-              "summary": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "source_tool",
-              "status",
-              "summary",
-              "data"
             ],
             "type": "object"
           },
@@ -4004,7 +3967,16 @@ expression: surface
             "enum": [
               "consumer_lag",
               "topic_route",
-              "broker_summary"
+              "broker_summary",
+              "consumer_group",
+              "topic_config",
+              "topic_stats",
+              "consumer_progress",
+              "broker_diagnostics",
+              "broker_config",
+              "ha_status",
+              "broker_inventory",
+              "message_metadata"
             ],
             "type": "string"
           },
@@ -4043,6 +4015,132 @@ expression: surface
                   "data": true,
                   "kind": {
                     "const": "broker_summary",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "consumer_group",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "topic_config",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "topic_stats",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "consumer_progress",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "broker_diagnostics",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "broker_config",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "ha_status",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "broker_inventory",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "message_metadata",
                     "type": "string"
                   }
                 },
@@ -4199,9 +4297,14 @@ expression: surface
               },
               "reasoning": {
                 "type": "string"
+              },
+              "rule_id": {
+                "description": "Stable identifier of the rule that drew this conclusion. The wording of `cause` and `reasoning` may change between rule versions; this identifier does not.",
+                "type": "string"
               }
             },
             "required": [
+              "rule_id",
               "cause",
               "confidence",
               "evidence_refs",
@@ -7615,6 +7718,3033 @@ expression: surface
         "type": "object"
       },
       "title": "RocketMQ NameServer configuration summary"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "RocketMQ cluster list"
+      },
+      "description": "Lists the logical clusters you may query, with the Proxy and Controller aliases of each and which one is the default. Use it first, to learn the names that the cluster, proxy_name and controller_names arguments of the other Tools accept. It takes no argument and reads no cluster; for the Brokers of a cluster call rocketmq_list_brokers.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "type": "object"
+      },
+      "name": "rocketmq_list_clusters",
+      "outputSchema": {
+        "$defs": {
+          "CacheStatus": {
+            "enum": [
+              "bypass",
+              "hit",
+              "miss"
+            ],
+            "type": "string"
+          },
+          "ClusterEntry": {
+            "description": "One logical cluster the caller may query, with the names its other Tools accept.\n\nIt carries names only. NameServer addresses, Proxy and Controller endpoints, and the physical cluster name are server configuration and never leave it.",
+            "properties": {
+              "controller_names": {
+                "description": "Controller aliases of this cluster. Pass some as `controller_names` to rocketmq_get_ha_status or rocketmq_get_controller_metadata to narrow them to those Controllers.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "default": {
+                "description": "Whether a Tool that allows `cluster` to be omitted selects this cluster.",
+                "type": "boolean"
+              },
+              "name": {
+                "description": "Logical cluster name. Pass it as the `cluster` argument of every other Tool.",
+                "type": "string"
+              },
+              "proxy_names": {
+                "description": "Proxy aliases of this cluster. Pass one as `proxy_name` to rocketmq_get_proxy_drain_state.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "name",
+              "default",
+              "proxy_names",
+              "controller_names"
+            ],
+            "type": "object"
+          },
+          "ListClustersOutput": {
+            "properties": {
+              "clusters": {
+                "description": "The clusters the caller may query, in configuration order. A cluster the caller has no access to is left out, so the list can be shorter than the server's configuration.",
+                "items": {
+                  "$ref": "#/$defs/ClusterEntry"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "clusters"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cache_status": {
+            "$ref": "#/$defs/CacheStatus"
+          },
+          "data": {
+            "$ref": "#/$defs/ListClustersOutput"
+          },
+          "freshness_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id",
+          "observed_at",
+          "freshness_ms",
+          "cache_status",
+          "partial",
+          "warnings",
+          "data"
+        ],
+        "type": "object"
+      },
+      "title": "RocketMQ cluster list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "RocketMQ broker list"
+      },
+      "description": "Lists the Broker instances of one cluster: name, id, version, inbound and outbound TPS, and whether each is active. Use it to learn the Broker names that broker_name arguments accept. It does not count Topics or Consumer Groups, so it is lighter than rocketmq_get_cluster_overview; for one Broker in depth use rocketmq_get_broker_diagnostics.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "cluster": {
+            "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "cluster"
+        ],
+        "type": "object"
+      },
+      "name": "rocketmq_list_brokers",
+      "outputSchema": {
+        "$defs": {
+          "BrokerSummary": {
+            "properties": {
+              "broker_active": {
+                "type": "boolean"
+              },
+              "broker_id": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "broker_name": {
+                "type": "string"
+              },
+              "cluster": {
+                "type": "string"
+              },
+              "hour": {
+                "type": "string"
+              },
+              "in_tps": {
+                "type": "string"
+              },
+              "out_tps": {
+                "type": "string"
+              },
+              "page_cache_lock_time_millis": {
+                "type": "string"
+              },
+              "space": {
+                "type": "string"
+              },
+              "timer_progress": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cluster",
+              "broker_name",
+              "broker_id",
+              "version",
+              "in_tps",
+              "out_tps",
+              "timer_progress",
+              "page_cache_lock_time_millis",
+              "hour",
+              "space",
+              "broker_active"
+            ],
+            "type": "object"
+          },
+          "CacheStatus": {
+            "enum": [
+              "bypass",
+              "hit",
+              "miss"
+            ],
+            "type": "string"
+          },
+          "ListBrokersOutput": {
+            "properties": {
+              "brokers": {
+                "description": "One row for each Broker instance of the cluster, masters and slaves alike. Pass a row's `broker_name` as the `broker_name` argument of the Broker Tools.",
+                "items": {
+                  "$ref": "#/$defs/BrokerSummary"
+                },
+                "type": "array"
+              },
+              "cluster": {
+                "type": "string"
+              },
+              "generated_at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cluster",
+              "brokers",
+              "generated_at"
+            ],
+            "type": "object"
+          },
+          "QuerySource": {
+            "enum": [
+              "broker_runtime",
+              "broker_config",
+              "broker_log_filter",
+              "consumer_statistics",
+              "consumer_connection",
+              "producer_connection",
+              "topic_config",
+              "topic_stats",
+              "consumer_group_config",
+              "subscription_groups",
+              "topic_route",
+              "broker_ha_runtime",
+              "controller_sync_state",
+              "controller_metadata",
+              "nameserver_config"
+            ],
+            "type": "string"
+          },
+          "SourceFailure": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/SourceFailureCode"
+              },
+              "logical_target": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "source": {
+                "$ref": "#/$defs/QuerySource"
+              }
+            },
+            "required": [
+              "source",
+              "code",
+              "retryable",
+              "logical_target"
+            ],
+            "type": "object"
+          },
+          "SourceFailureCode": {
+            "enum": [
+              "source_unavailable",
+              "timeout",
+              "permission_denied",
+              "not_found",
+              "rate_limited",
+              "invalid_response"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cache_status": {
+            "$ref": "#/$defs/CacheStatus"
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/$defs/ListBrokersOutput"
+          },
+          "freshness_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source_failures": {
+            "items": {
+              "$ref": "#/$defs/SourceFailure"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id",
+          "cluster",
+          "observed_at",
+          "freshness_ms",
+          "cache_status",
+          "partial",
+          "warnings",
+          "data"
+        ],
+        "type": "object"
+      },
+      "title": "RocketMQ broker list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "RocketMQ consumer group diagnosis"
+      },
+      "description": "Checks one Consumer Group across every Topic it consumes: whether consumers are online, whether consumption is enabled, how large and how old the backlog is, which Topic, Broker or queue holds it, and whether messages are retried or dead-lettered. Use it first when a group misbehaves. For one Topic, rocketmq_diagnose_consumer_lag adds the route and the permissions of that Topic.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "cluster": {
+            "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "consumer_group": {
+            "description": "Exact Consumer Group name. `rocketmq_list_consumer_groups` lists the names.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cluster",
+          "consumer_group"
+        ],
+        "type": "object"
+      },
+      "name": "rocketmq_diagnose_consumer_group",
+      "outputSchema": {
+        "$defs": {
+          "CacheStatus": {
+            "enum": [
+              "bypass",
+              "hit",
+              "miss"
+            ],
+            "type": "string"
+          },
+          "ConfidenceBand": {
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "type": "string"
+          },
+          "DiagnosisReport": {
+            "description": "A diagnosis and the evidence it was evaluated on. `evidence_snapshot` is the only place the evidence appears; `evidence_refs`, `missing_evidence` and `root_causes[].evidence_refs` name its items by `id`.",
+            "properties": {
+              "cluster": {
+                "type": "string"
+              },
+              "confidence": {
+                "format": "float",
+                "type": "number"
+              },
+              "confidence_band": {
+                "$ref": "#/$defs/ConfidenceBand"
+              },
+              "evidence_refs": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "evidence_snapshot": {
+                "$ref": "#/$defs/EvidenceSnapshot"
+              },
+              "evidence_version": {
+                "type": "string"
+              },
+              "follow_up_metrics": {
+                "items": {
+                  "$ref": "#/$defs/MetricWatchItem"
+                },
+                "type": "array"
+              },
+              "generated_at": {
+                "type": "string"
+              },
+              "impacts": {
+                "items": {
+                  "$ref": "#/$defs/ImpactItem"
+                },
+                "type": "array"
+              },
+              "missing_evidence": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "partial": {
+                "type": "boolean"
+              },
+              "policy_profile": {
+                "type": "string"
+              },
+              "recommendations": {
+                "items": {
+                  "$ref": "#/$defs/Recommendation"
+                },
+                "type": "array"
+              },
+              "report_type": {
+                "type": "string"
+              },
+              "risks": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "root_causes": {
+                "items": {
+                  "$ref": "#/$defs/RootCauseCandidate"
+                },
+                "type": "array"
+              },
+              "rules_version": {
+                "type": "string"
+              },
+              "severity": {
+                "$ref": "#/$defs/Severity"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "target": true
+            },
+            "required": [
+              "report_type",
+              "evidence_version",
+              "rules_version",
+              "cluster",
+              "target",
+              "severity",
+              "confidence",
+              "confidence_band",
+              "policy_profile",
+              "partial",
+              "missing_evidence",
+              "evidence_refs",
+              "evidence_snapshot",
+              "summary",
+              "impacts",
+              "root_causes",
+              "recommendations",
+              "risks",
+              "follow_up_metrics",
+              "generated_at"
+            ],
+            "type": "object"
+          },
+          "EvidenceItem": {
+            "properties": {
+              "error_code": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "freshness_ms": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/EvidenceKind"
+              },
+              "observed_at": {
+                "type": "string"
+              },
+              "payload": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/EvidencePayload"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "query_hash": {
+                "type": "string"
+              },
+              "source_tool": {
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/$defs/EvidenceStatus"
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "source_tool",
+              "observed_at",
+              "freshness_ms",
+              "status",
+              "query_hash",
+              "summary"
+            ],
+            "type": "object"
+          },
+          "EvidenceKind": {
+            "enum": [
+              "consumer_lag",
+              "topic_route",
+              "broker_summary",
+              "consumer_group",
+              "topic_config",
+              "topic_stats",
+              "consumer_progress",
+              "broker_diagnostics",
+              "broker_config",
+              "ha_status",
+              "broker_inventory",
+              "message_metadata"
+            ],
+            "type": "string"
+          },
+          "EvidencePayload": {
+            "oneOf": [
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "consumer_lag",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "topic_route",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "broker_summary",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "consumer_group",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "topic_config",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "topic_stats",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "consumer_progress",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "broker_diagnostics",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "broker_config",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "ha_status",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "broker_inventory",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "message_metadata",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "EvidenceSnapshot": {
+            "properties": {
+              "cluster": {
+                "type": "string"
+              },
+              "evidence_version": {
+                "type": "string"
+              },
+              "items": {
+                "items": {
+                  "$ref": "#/$defs/EvidenceItem"
+                },
+                "type": "array"
+              },
+              "observed_at": {
+                "type": "string"
+              },
+              "query_hash": {
+                "type": "string"
+              },
+              "target": true
+            },
+            "required": [
+              "evidence_version",
+              "query_hash",
+              "cluster",
+              "target",
+              "observed_at",
+              "items"
+            ],
+            "type": "object"
+          },
+          "EvidenceStatus": {
+            "enum": [
+              "present",
+              "missing",
+              "unavailable",
+              "timeout",
+              "unauthorized",
+              "invalid"
+            ],
+            "type": "string"
+          },
+          "ImpactItem": {
+            "properties": {
+              "area": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "severity": {
+                "$ref": "#/$defs/Severity"
+              }
+            },
+            "required": [
+              "area",
+              "description",
+              "severity"
+            ],
+            "type": "object"
+          },
+          "MetricWatchItem": {
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "target": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "target",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "QuerySource": {
+            "enum": [
+              "broker_runtime",
+              "broker_config",
+              "broker_log_filter",
+              "consumer_statistics",
+              "consumer_connection",
+              "producer_connection",
+              "topic_config",
+              "topic_stats",
+              "consumer_group_config",
+              "subscription_groups",
+              "topic_route",
+              "broker_ha_runtime",
+              "controller_sync_state",
+              "controller_metadata",
+              "nameserver_config"
+            ],
+            "type": "string"
+          },
+          "Recommendation": {
+            "properties": {
+              "action": {
+                "type": "string"
+              },
+              "priority": {
+                "type": "string"
+              },
+              "rationale": {
+                "type": "string"
+              },
+              "risk": {
+                "type": "string"
+              },
+              "verification": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "action",
+              "priority",
+              "rationale",
+              "risk",
+              "verification"
+            ],
+            "type": "object"
+          },
+          "RootCauseCandidate": {
+            "properties": {
+              "cause": {
+                "type": "string"
+              },
+              "confidence": {
+                "format": "float",
+                "type": "number"
+              },
+              "evidence_refs": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "reasoning": {
+                "type": "string"
+              },
+              "rule_id": {
+                "description": "Stable identifier of the rule that drew this conclusion. The wording of `cause` and `reasoning` may change between rule versions; this identifier does not.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "rule_id",
+              "cause",
+              "confidence",
+              "evidence_refs",
+              "reasoning"
+            ],
+            "type": "object"
+          },
+          "Severity": {
+            "enum": [
+              "healthy",
+              "low",
+              "medium",
+              "high",
+              "critical",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "SourceFailure": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/SourceFailureCode"
+              },
+              "logical_target": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "source": {
+                "$ref": "#/$defs/QuerySource"
+              }
+            },
+            "required": [
+              "source",
+              "code",
+              "retryable",
+              "logical_target"
+            ],
+            "type": "object"
+          },
+          "SourceFailureCode": {
+            "enum": [
+              "source_unavailable",
+              "timeout",
+              "permission_denied",
+              "not_found",
+              "rate_limited",
+              "invalid_response"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cache_status": {
+            "$ref": "#/$defs/CacheStatus"
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/$defs/DiagnosisReport"
+          },
+          "freshness_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source_failures": {
+            "items": {
+              "$ref": "#/$defs/SourceFailure"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id",
+          "cluster",
+          "observed_at",
+          "freshness_ms",
+          "cache_status",
+          "partial",
+          "warnings",
+          "data"
+        ],
+        "type": "object"
+      },
+      "title": "RocketMQ consumer group diagnosis"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "RocketMQ broker health diagnosis"
+      },
+      "description": "Checks one Broker, its master and its replicas: whether every instance answers and is ready, whether the store accepts writes and keeps up, whether the replicas are in sync, and whether the instances are configured alike. Returns a severity, findings and recommendations. Use it when a Broker is suspected; rocketmq_get_broker_diagnostics returns the raw figures.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "broker_name": {
+            "description": "Logical Broker name as reported by `rocketmq_list_brokers`, for example `broker-a`. It is a name, not a network address, and it stands for the master and its replicas.",
+            "type": "string"
+          },
+          "cluster": {
+            "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "cluster",
+          "broker_name"
+        ],
+        "type": "object"
+      },
+      "name": "rocketmq_diagnose_broker_health",
+      "outputSchema": {
+        "$defs": {
+          "CacheStatus": {
+            "enum": [
+              "bypass",
+              "hit",
+              "miss"
+            ],
+            "type": "string"
+          },
+          "ConfidenceBand": {
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "type": "string"
+          },
+          "DiagnosisReport": {
+            "description": "A diagnosis and the evidence it was evaluated on. `evidence_snapshot` is the only place the evidence appears; `evidence_refs`, `missing_evidence` and `root_causes[].evidence_refs` name its items by `id`.",
+            "properties": {
+              "cluster": {
+                "type": "string"
+              },
+              "confidence": {
+                "format": "float",
+                "type": "number"
+              },
+              "confidence_band": {
+                "$ref": "#/$defs/ConfidenceBand"
+              },
+              "evidence_refs": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "evidence_snapshot": {
+                "$ref": "#/$defs/EvidenceSnapshot"
+              },
+              "evidence_version": {
+                "type": "string"
+              },
+              "follow_up_metrics": {
+                "items": {
+                  "$ref": "#/$defs/MetricWatchItem"
+                },
+                "type": "array"
+              },
+              "generated_at": {
+                "type": "string"
+              },
+              "impacts": {
+                "items": {
+                  "$ref": "#/$defs/ImpactItem"
+                },
+                "type": "array"
+              },
+              "missing_evidence": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "partial": {
+                "type": "boolean"
+              },
+              "policy_profile": {
+                "type": "string"
+              },
+              "recommendations": {
+                "items": {
+                  "$ref": "#/$defs/Recommendation"
+                },
+                "type": "array"
+              },
+              "report_type": {
+                "type": "string"
+              },
+              "risks": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "root_causes": {
+                "items": {
+                  "$ref": "#/$defs/RootCauseCandidate"
+                },
+                "type": "array"
+              },
+              "rules_version": {
+                "type": "string"
+              },
+              "severity": {
+                "$ref": "#/$defs/Severity"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "target": true
+            },
+            "required": [
+              "report_type",
+              "evidence_version",
+              "rules_version",
+              "cluster",
+              "target",
+              "severity",
+              "confidence",
+              "confidence_band",
+              "policy_profile",
+              "partial",
+              "missing_evidence",
+              "evidence_refs",
+              "evidence_snapshot",
+              "summary",
+              "impacts",
+              "root_causes",
+              "recommendations",
+              "risks",
+              "follow_up_metrics",
+              "generated_at"
+            ],
+            "type": "object"
+          },
+          "EvidenceItem": {
+            "properties": {
+              "error_code": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "freshness_ms": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/EvidenceKind"
+              },
+              "observed_at": {
+                "type": "string"
+              },
+              "payload": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/EvidencePayload"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "query_hash": {
+                "type": "string"
+              },
+              "source_tool": {
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/$defs/EvidenceStatus"
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "source_tool",
+              "observed_at",
+              "freshness_ms",
+              "status",
+              "query_hash",
+              "summary"
+            ],
+            "type": "object"
+          },
+          "EvidenceKind": {
+            "enum": [
+              "consumer_lag",
+              "topic_route",
+              "broker_summary",
+              "consumer_group",
+              "topic_config",
+              "topic_stats",
+              "consumer_progress",
+              "broker_diagnostics",
+              "broker_config",
+              "ha_status",
+              "broker_inventory",
+              "message_metadata"
+            ],
+            "type": "string"
+          },
+          "EvidencePayload": {
+            "oneOf": [
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "consumer_lag",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "topic_route",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "broker_summary",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "consumer_group",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "topic_config",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "topic_stats",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "consumer_progress",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "broker_diagnostics",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "broker_config",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "ha_status",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "broker_inventory",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "message_metadata",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "EvidenceSnapshot": {
+            "properties": {
+              "cluster": {
+                "type": "string"
+              },
+              "evidence_version": {
+                "type": "string"
+              },
+              "items": {
+                "items": {
+                  "$ref": "#/$defs/EvidenceItem"
+                },
+                "type": "array"
+              },
+              "observed_at": {
+                "type": "string"
+              },
+              "query_hash": {
+                "type": "string"
+              },
+              "target": true
+            },
+            "required": [
+              "evidence_version",
+              "query_hash",
+              "cluster",
+              "target",
+              "observed_at",
+              "items"
+            ],
+            "type": "object"
+          },
+          "EvidenceStatus": {
+            "enum": [
+              "present",
+              "missing",
+              "unavailable",
+              "timeout",
+              "unauthorized",
+              "invalid"
+            ],
+            "type": "string"
+          },
+          "ImpactItem": {
+            "properties": {
+              "area": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "severity": {
+                "$ref": "#/$defs/Severity"
+              }
+            },
+            "required": [
+              "area",
+              "description",
+              "severity"
+            ],
+            "type": "object"
+          },
+          "MetricWatchItem": {
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "target": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "target",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "QuerySource": {
+            "enum": [
+              "broker_runtime",
+              "broker_config",
+              "broker_log_filter",
+              "consumer_statistics",
+              "consumer_connection",
+              "producer_connection",
+              "topic_config",
+              "topic_stats",
+              "consumer_group_config",
+              "subscription_groups",
+              "topic_route",
+              "broker_ha_runtime",
+              "controller_sync_state",
+              "controller_metadata",
+              "nameserver_config"
+            ],
+            "type": "string"
+          },
+          "Recommendation": {
+            "properties": {
+              "action": {
+                "type": "string"
+              },
+              "priority": {
+                "type": "string"
+              },
+              "rationale": {
+                "type": "string"
+              },
+              "risk": {
+                "type": "string"
+              },
+              "verification": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "action",
+              "priority",
+              "rationale",
+              "risk",
+              "verification"
+            ],
+            "type": "object"
+          },
+          "RootCauseCandidate": {
+            "properties": {
+              "cause": {
+                "type": "string"
+              },
+              "confidence": {
+                "format": "float",
+                "type": "number"
+              },
+              "evidence_refs": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "reasoning": {
+                "type": "string"
+              },
+              "rule_id": {
+                "description": "Stable identifier of the rule that drew this conclusion. The wording of `cause` and `reasoning` may change between rule versions; this identifier does not.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "rule_id",
+              "cause",
+              "confidence",
+              "evidence_refs",
+              "reasoning"
+            ],
+            "type": "object"
+          },
+          "Severity": {
+            "enum": [
+              "healthy",
+              "low",
+              "medium",
+              "high",
+              "critical",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "SourceFailure": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/SourceFailureCode"
+              },
+              "logical_target": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "source": {
+                "$ref": "#/$defs/QuerySource"
+              }
+            },
+            "required": [
+              "source",
+              "code",
+              "retryable",
+              "logical_target"
+            ],
+            "type": "object"
+          },
+          "SourceFailureCode": {
+            "enum": [
+              "source_unavailable",
+              "timeout",
+              "permission_denied",
+              "not_found",
+              "rate_limited",
+              "invalid_response"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cache_status": {
+            "$ref": "#/$defs/CacheStatus"
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/$defs/DiagnosisReport"
+          },
+          "freshness_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source_failures": {
+            "items": {
+              "$ref": "#/$defs/SourceFailure"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id",
+          "cluster",
+          "observed_at",
+          "freshness_ms",
+          "cache_status",
+          "partial",
+          "warnings",
+          "data"
+        ],
+        "type": "object"
+      },
+      "title": "RocketMQ broker health diagnosis"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "RocketMQ cluster health"
+      },
+      "description": "Checks a cluster at a glance: which Broker instances are registered, which do not answer, which Brokers lack a master or a replica, and whether the replicas keep up. Returns a severity and findings that name the Brokers to look at. Use it first when you do not know where a problem is, then run rocketmq_diagnose_broker_health for a Broker it names.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "cluster": {
+            "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "cluster"
+        ],
+        "type": "object"
+      },
+      "name": "rocketmq_get_cluster_health",
+      "outputSchema": {
+        "$defs": {
+          "CacheStatus": {
+            "enum": [
+              "bypass",
+              "hit",
+              "miss"
+            ],
+            "type": "string"
+          },
+          "ConfidenceBand": {
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "type": "string"
+          },
+          "DiagnosisReport": {
+            "description": "A diagnosis and the evidence it was evaluated on. `evidence_snapshot` is the only place the evidence appears; `evidence_refs`, `missing_evidence` and `root_causes[].evidence_refs` name its items by `id`.",
+            "properties": {
+              "cluster": {
+                "type": "string"
+              },
+              "confidence": {
+                "format": "float",
+                "type": "number"
+              },
+              "confidence_band": {
+                "$ref": "#/$defs/ConfidenceBand"
+              },
+              "evidence_refs": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "evidence_snapshot": {
+                "$ref": "#/$defs/EvidenceSnapshot"
+              },
+              "evidence_version": {
+                "type": "string"
+              },
+              "follow_up_metrics": {
+                "items": {
+                  "$ref": "#/$defs/MetricWatchItem"
+                },
+                "type": "array"
+              },
+              "generated_at": {
+                "type": "string"
+              },
+              "impacts": {
+                "items": {
+                  "$ref": "#/$defs/ImpactItem"
+                },
+                "type": "array"
+              },
+              "missing_evidence": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "partial": {
+                "type": "boolean"
+              },
+              "policy_profile": {
+                "type": "string"
+              },
+              "recommendations": {
+                "items": {
+                  "$ref": "#/$defs/Recommendation"
+                },
+                "type": "array"
+              },
+              "report_type": {
+                "type": "string"
+              },
+              "risks": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "root_causes": {
+                "items": {
+                  "$ref": "#/$defs/RootCauseCandidate"
+                },
+                "type": "array"
+              },
+              "rules_version": {
+                "type": "string"
+              },
+              "severity": {
+                "$ref": "#/$defs/Severity"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "target": true
+            },
+            "required": [
+              "report_type",
+              "evidence_version",
+              "rules_version",
+              "cluster",
+              "target",
+              "severity",
+              "confidence",
+              "confidence_band",
+              "policy_profile",
+              "partial",
+              "missing_evidence",
+              "evidence_refs",
+              "evidence_snapshot",
+              "summary",
+              "impacts",
+              "root_causes",
+              "recommendations",
+              "risks",
+              "follow_up_metrics",
+              "generated_at"
+            ],
+            "type": "object"
+          },
+          "EvidenceItem": {
+            "properties": {
+              "error_code": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "freshness_ms": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/EvidenceKind"
+              },
+              "observed_at": {
+                "type": "string"
+              },
+              "payload": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/EvidencePayload"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "query_hash": {
+                "type": "string"
+              },
+              "source_tool": {
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/$defs/EvidenceStatus"
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "source_tool",
+              "observed_at",
+              "freshness_ms",
+              "status",
+              "query_hash",
+              "summary"
+            ],
+            "type": "object"
+          },
+          "EvidenceKind": {
+            "enum": [
+              "consumer_lag",
+              "topic_route",
+              "broker_summary",
+              "consumer_group",
+              "topic_config",
+              "topic_stats",
+              "consumer_progress",
+              "broker_diagnostics",
+              "broker_config",
+              "ha_status",
+              "broker_inventory",
+              "message_metadata"
+            ],
+            "type": "string"
+          },
+          "EvidencePayload": {
+            "oneOf": [
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "consumer_lag",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "topic_route",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "broker_summary",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "consumer_group",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "topic_config",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "topic_stats",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "consumer_progress",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "broker_diagnostics",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "broker_config",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "ha_status",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "broker_inventory",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "message_metadata",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "EvidenceSnapshot": {
+            "properties": {
+              "cluster": {
+                "type": "string"
+              },
+              "evidence_version": {
+                "type": "string"
+              },
+              "items": {
+                "items": {
+                  "$ref": "#/$defs/EvidenceItem"
+                },
+                "type": "array"
+              },
+              "observed_at": {
+                "type": "string"
+              },
+              "query_hash": {
+                "type": "string"
+              },
+              "target": true
+            },
+            "required": [
+              "evidence_version",
+              "query_hash",
+              "cluster",
+              "target",
+              "observed_at",
+              "items"
+            ],
+            "type": "object"
+          },
+          "EvidenceStatus": {
+            "enum": [
+              "present",
+              "missing",
+              "unavailable",
+              "timeout",
+              "unauthorized",
+              "invalid"
+            ],
+            "type": "string"
+          },
+          "ImpactItem": {
+            "properties": {
+              "area": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "severity": {
+                "$ref": "#/$defs/Severity"
+              }
+            },
+            "required": [
+              "area",
+              "description",
+              "severity"
+            ],
+            "type": "object"
+          },
+          "MetricWatchItem": {
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "target": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "target",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "QuerySource": {
+            "enum": [
+              "broker_runtime",
+              "broker_config",
+              "broker_log_filter",
+              "consumer_statistics",
+              "consumer_connection",
+              "producer_connection",
+              "topic_config",
+              "topic_stats",
+              "consumer_group_config",
+              "subscription_groups",
+              "topic_route",
+              "broker_ha_runtime",
+              "controller_sync_state",
+              "controller_metadata",
+              "nameserver_config"
+            ],
+            "type": "string"
+          },
+          "Recommendation": {
+            "properties": {
+              "action": {
+                "type": "string"
+              },
+              "priority": {
+                "type": "string"
+              },
+              "rationale": {
+                "type": "string"
+              },
+              "risk": {
+                "type": "string"
+              },
+              "verification": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "action",
+              "priority",
+              "rationale",
+              "risk",
+              "verification"
+            ],
+            "type": "object"
+          },
+          "RootCauseCandidate": {
+            "properties": {
+              "cause": {
+                "type": "string"
+              },
+              "confidence": {
+                "format": "float",
+                "type": "number"
+              },
+              "evidence_refs": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "reasoning": {
+                "type": "string"
+              },
+              "rule_id": {
+                "description": "Stable identifier of the rule that drew this conclusion. The wording of `cause` and `reasoning` may change between rule versions; this identifier does not.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "rule_id",
+              "cause",
+              "confidence",
+              "evidence_refs",
+              "reasoning"
+            ],
+            "type": "object"
+          },
+          "Severity": {
+            "enum": [
+              "healthy",
+              "low",
+              "medium",
+              "high",
+              "critical",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "SourceFailure": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/SourceFailureCode"
+              },
+              "logical_target": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "source": {
+                "$ref": "#/$defs/QuerySource"
+              }
+            },
+            "required": [
+              "source",
+              "code",
+              "retryable",
+              "logical_target"
+            ],
+            "type": "object"
+          },
+          "SourceFailureCode": {
+            "enum": [
+              "source_unavailable",
+              "timeout",
+              "permission_denied",
+              "not_found",
+              "rate_limited",
+              "invalid_response"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cache_status": {
+            "$ref": "#/$defs/CacheStatus"
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/$defs/DiagnosisReport"
+          },
+          "freshness_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source_failures": {
+            "items": {
+              "$ref": "#/$defs/SourceFailure"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id",
+          "cluster",
+          "observed_at",
+          "freshness_ms",
+          "cache_status",
+          "partial",
+          "warnings",
+          "data"
+        ],
+        "type": "object"
+      },
+      "title": "RocketMQ cluster health"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "RocketMQ message delivery diagnosis"
+      },
+      "description": "Checks the path from one Topic to one Consumer Group: whether Brokers accept writes and serve reads, whether consumers are online and enabled, and whether the group has progress and keeps up. With message_id it also says whether the group consumed that message, waits for it, retries it or dead-lettered it. Use it first when a message does not arrive. Never returns a body.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "cluster": {
+            "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "consumer_group": {
+            "description": "Exact name of the Consumer Group that should receive them. `rocketmq_list_consumer_groups` lists the names.",
+            "type": "string"
+          },
+          "message_id": {
+            "default": null,
+            "description": "Identifier of one message to locate, exactly as RocketMQ reported it. Omit it to check the path only. The report names the message by a pseudonym and never holds its body.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "topic": {
+            "description": "Exact name of the Topic the messages are produced to. `rocketmq_list_topics` lists the names.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cluster",
+          "topic",
+          "consumer_group"
+        ],
+        "type": "object"
+      },
+      "name": "rocketmq_diagnose_message_delivery",
+      "outputSchema": {
+        "$defs": {
+          "CacheStatus": {
+            "enum": [
+              "bypass",
+              "hit",
+              "miss"
+            ],
+            "type": "string"
+          },
+          "ConfidenceBand": {
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "type": "string"
+          },
+          "DiagnosisReport": {
+            "description": "A diagnosis and the evidence it was evaluated on. `evidence_snapshot` is the only place the evidence appears; `evidence_refs`, `missing_evidence` and `root_causes[].evidence_refs` name its items by `id`.",
+            "properties": {
+              "cluster": {
+                "type": "string"
+              },
+              "confidence": {
+                "format": "float",
+                "type": "number"
+              },
+              "confidence_band": {
+                "$ref": "#/$defs/ConfidenceBand"
+              },
+              "evidence_refs": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "evidence_snapshot": {
+                "$ref": "#/$defs/EvidenceSnapshot"
+              },
+              "evidence_version": {
+                "type": "string"
+              },
+              "follow_up_metrics": {
+                "items": {
+                  "$ref": "#/$defs/MetricWatchItem"
+                },
+                "type": "array"
+              },
+              "generated_at": {
+                "type": "string"
+              },
+              "impacts": {
+                "items": {
+                  "$ref": "#/$defs/ImpactItem"
+                },
+                "type": "array"
+              },
+              "missing_evidence": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "partial": {
+                "type": "boolean"
+              },
+              "policy_profile": {
+                "type": "string"
+              },
+              "recommendations": {
+                "items": {
+                  "$ref": "#/$defs/Recommendation"
+                },
+                "type": "array"
+              },
+              "report_type": {
+                "type": "string"
+              },
+              "risks": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "root_causes": {
+                "items": {
+                  "$ref": "#/$defs/RootCauseCandidate"
+                },
+                "type": "array"
+              },
+              "rules_version": {
+                "type": "string"
+              },
+              "severity": {
+                "$ref": "#/$defs/Severity"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "target": true
+            },
+            "required": [
+              "report_type",
+              "evidence_version",
+              "rules_version",
+              "cluster",
+              "target",
+              "severity",
+              "confidence",
+              "confidence_band",
+              "policy_profile",
+              "partial",
+              "missing_evidence",
+              "evidence_refs",
+              "evidence_snapshot",
+              "summary",
+              "impacts",
+              "root_causes",
+              "recommendations",
+              "risks",
+              "follow_up_metrics",
+              "generated_at"
+            ],
+            "type": "object"
+          },
+          "EvidenceItem": {
+            "properties": {
+              "error_code": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "freshness_ms": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/EvidenceKind"
+              },
+              "observed_at": {
+                "type": "string"
+              },
+              "payload": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/EvidencePayload"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "query_hash": {
+                "type": "string"
+              },
+              "source_tool": {
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/$defs/EvidenceStatus"
+              },
+              "summary": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "source_tool",
+              "observed_at",
+              "freshness_ms",
+              "status",
+              "query_hash",
+              "summary"
+            ],
+            "type": "object"
+          },
+          "EvidenceKind": {
+            "enum": [
+              "consumer_lag",
+              "topic_route",
+              "broker_summary",
+              "consumer_group",
+              "topic_config",
+              "topic_stats",
+              "consumer_progress",
+              "broker_diagnostics",
+              "broker_config",
+              "ha_status",
+              "broker_inventory",
+              "message_metadata"
+            ],
+            "type": "string"
+          },
+          "EvidencePayload": {
+            "oneOf": [
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "consumer_lag",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "topic_route",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "broker_summary",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "consumer_group",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "topic_config",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "topic_stats",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "consumer_progress",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "broker_diagnostics",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "broker_config",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "ha_status",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "broker_inventory",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "data": true,
+                  "kind": {
+                    "const": "message_metadata",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "EvidenceSnapshot": {
+            "properties": {
+              "cluster": {
+                "type": "string"
+              },
+              "evidence_version": {
+                "type": "string"
+              },
+              "items": {
+                "items": {
+                  "$ref": "#/$defs/EvidenceItem"
+                },
+                "type": "array"
+              },
+              "observed_at": {
+                "type": "string"
+              },
+              "query_hash": {
+                "type": "string"
+              },
+              "target": true
+            },
+            "required": [
+              "evidence_version",
+              "query_hash",
+              "cluster",
+              "target",
+              "observed_at",
+              "items"
+            ],
+            "type": "object"
+          },
+          "EvidenceStatus": {
+            "enum": [
+              "present",
+              "missing",
+              "unavailable",
+              "timeout",
+              "unauthorized",
+              "invalid"
+            ],
+            "type": "string"
+          },
+          "ImpactItem": {
+            "properties": {
+              "area": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "severity": {
+                "$ref": "#/$defs/Severity"
+              }
+            },
+            "required": [
+              "area",
+              "description",
+              "severity"
+            ],
+            "type": "object"
+          },
+          "MetricWatchItem": {
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "target": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "target",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "QuerySource": {
+            "enum": [
+              "broker_runtime",
+              "broker_config",
+              "broker_log_filter",
+              "consumer_statistics",
+              "consumer_connection",
+              "producer_connection",
+              "topic_config",
+              "topic_stats",
+              "consumer_group_config",
+              "subscription_groups",
+              "topic_route",
+              "broker_ha_runtime",
+              "controller_sync_state",
+              "controller_metadata",
+              "nameserver_config"
+            ],
+            "type": "string"
+          },
+          "Recommendation": {
+            "properties": {
+              "action": {
+                "type": "string"
+              },
+              "priority": {
+                "type": "string"
+              },
+              "rationale": {
+                "type": "string"
+              },
+              "risk": {
+                "type": "string"
+              },
+              "verification": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "action",
+              "priority",
+              "rationale",
+              "risk",
+              "verification"
+            ],
+            "type": "object"
+          },
+          "RootCauseCandidate": {
+            "properties": {
+              "cause": {
+                "type": "string"
+              },
+              "confidence": {
+                "format": "float",
+                "type": "number"
+              },
+              "evidence_refs": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "reasoning": {
+                "type": "string"
+              },
+              "rule_id": {
+                "description": "Stable identifier of the rule that drew this conclusion. The wording of `cause` and `reasoning` may change between rule versions; this identifier does not.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "rule_id",
+              "cause",
+              "confidence",
+              "evidence_refs",
+              "reasoning"
+            ],
+            "type": "object"
+          },
+          "Severity": {
+            "enum": [
+              "healthy",
+              "low",
+              "medium",
+              "high",
+              "critical",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "SourceFailure": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/SourceFailureCode"
+              },
+              "logical_target": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "source": {
+                "$ref": "#/$defs/QuerySource"
+              }
+            },
+            "required": [
+              "source",
+              "code",
+              "retryable",
+              "logical_target"
+            ],
+            "type": "object"
+          },
+          "SourceFailureCode": {
+            "enum": [
+              "source_unavailable",
+              "timeout",
+              "permission_denied",
+              "not_found",
+              "rate_limited",
+              "invalid_response"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "cache_status": {
+            "$ref": "#/$defs/CacheStatus"
+          },
+          "cluster": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/$defs/DiagnosisReport"
+          },
+          "freshness_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source_failures": {
+            "items": {
+              "$ref": "#/$defs/SourceFailure"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id",
+          "cluster",
+          "observed_at",
+          "freshness_ms",
+          "cache_status",
+          "partial",
+          "warnings",
+          "data"
+        ],
+        "type": "object"
+      },
+      "title": "RocketMQ message delivery diagnosis"
     }
   ]
 }

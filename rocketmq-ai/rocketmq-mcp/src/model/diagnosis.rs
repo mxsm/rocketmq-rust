@@ -23,6 +23,15 @@ pub enum EvidenceKind {
     ConsumerLag,
     TopicRoute,
     BrokerSummary,
+    ConsumerGroup,
+    TopicConfig,
+    TopicStats,
+    ConsumerProgress,
+    BrokerDiagnostics,
+    BrokerConfig,
+    HaStatus,
+    BrokerInventory,
+    MessageMetadata,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
@@ -53,6 +62,15 @@ pub enum EvidencePayload {
     ConsumerLag(Value),
     TopicRoute(Value),
     BrokerSummary(Value),
+    ConsumerGroup(Value),
+    TopicConfig(Value),
+    TopicStats(Value),
+    ConsumerProgress(Value),
+    BrokerDiagnostics(Value),
+    BrokerConfig(Value),
+    HaStatus(Value),
+    BrokerInventory(Value),
+    MessageMetadata(Value),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
@@ -79,6 +97,9 @@ pub struct EvidenceSnapshot {
     pub items: Vec<EvidenceItem>,
 }
 
+/// A diagnosis and the evidence it was evaluated on. `evidence_snapshot` is the only place the
+/// evidence appears; `evidence_refs`, `missing_evidence` and `root_causes[].evidence_refs` name its
+/// items by `id`.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
 pub struct DiagnosisReport {
     pub report_type: String,
@@ -93,10 +114,9 @@ pub struct DiagnosisReport {
     pub partial: bool,
     pub missing_evidence: Vec<String>,
     pub evidence_refs: Vec<String>,
-    pub evidence_snapshot: Option<EvidenceSnapshot>,
+    pub evidence_snapshot: EvidenceSnapshot,
     pub summary: String,
     pub impacts: Vec<ImpactItem>,
-    pub evidences: Vec<Evidence>,
     pub root_causes: Vec<RootCauseCandidate>,
     pub recommendations: Vec<Recommendation>,
     pub risks: Vec<String>,
@@ -120,16 +140,10 @@ pub struct ImpactItem {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
-pub struct Evidence {
-    pub id: String,
-    pub source_tool: String,
-    pub status: EvidenceStatus,
-    pub summary: String,
-    pub data: Value,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
 pub struct RootCauseCandidate {
+    /// Stable identifier of the rule that drew this conclusion. The wording of `cause` and
+    /// `reasoning` may change between rule versions; this identifier does not.
+    pub rule_id: String,
     pub cause: String,
     pub confidence: f32,
     pub evidence_refs: Vec<String>,

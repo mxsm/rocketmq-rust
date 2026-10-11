@@ -300,6 +300,24 @@ impl ControlSignals {
         }
     }
 
+    /// Records one answered result lookup. `state` is the closed state of the answer.
+    #[cfg(feature = "write-tools")]
+    pub(crate) fn result_looked_up(&self, cluster: &crate::model::ClusterName, state: &'static str, elapsed: Duration) {
+        self.metrics.record_operation(
+            McpOperationKind::Tool,
+            crate::tools::GET_MUTATION_RESULT_TOOL,
+            McpOperationStatus::Success,
+            elapsed,
+        );
+        tracing::info!(
+            tool = crate::tools::GET_MUTATION_RESULT_TOOL,
+            cluster = cluster.as_str(),
+            state,
+            elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
+            "mutation result was looked up"
+        );
+    }
+
     /// Records whether admission control let one authorized call through.
     #[cfg(feature = "write-tools")]
     pub(crate) fn rate_limit_decided(&self, accepted: bool) {

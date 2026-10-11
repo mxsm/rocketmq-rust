@@ -169,6 +169,14 @@ for required in (
     if required not in source:
         fail(f"reviewed write catalog is missing {required}")
 
+# The one read-only Tool. It reads the audit trail and must not reach the mutation session.
+if "rocketmq_get_mutation_result" not in source:
+    fail("reviewed read-only catalog is missing rocketmq_get_mutation_result")
+result_lookup = (PROJECT / "src" / "tool_runtime" / "result_lookup.rs").read_text(encoding="utf-8")
+for forbidden in ("MutationToolSession", "supervised_mutation", "admin_session", "rocketmq_admin_core"):
+    if forbidden in result_lookup:
+        fail(f"the result lookup reaches the mutation session through {forbidden}")
+
 for forbidden in (
     "rocketmq_delete_",
     "rocketmq_skip_",

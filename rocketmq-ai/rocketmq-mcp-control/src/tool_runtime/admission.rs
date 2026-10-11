@@ -146,6 +146,50 @@ impl Admission {
     }
 }
 
+/// The budget of result lookups, kept apart from the budgets and slots of mutation calls.
+///
+/// A lookup reads memory and writes no audit record, so it needs no concurrent slot: a caller
+/// must be able to ask how its mutation ended even while the server runs as many mutations as it
+/// admits. The budget only keeps one caller from polling without bound.
+pub(super) struct LookupBudget {
+    per_minute: u32,
+    principals: Mutex<BTreeMap<String, TokenBucket>>,
+}
+
+impl LookupBudget {
+    pub(super) fn new(per_minute: u32) -> Self {
+        Self {
+            per_minute,
+            principals: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    /// Charges one lookup to `principal`, or refuses it with `rate_limited`.
+    pub(super) fn take(&self, principal: &str) -> Result<(), ControlError> {
+        let now = tokio::time::Instant::now();
+        let mut principals = self.principals.lock().unwrap_or_else(PoisonError::into_inner);
+        if !principals.contains_key(principal) && principals.len() >= MAX_TRACKED_PRINCIPALS {
+            // A principal whose budget is full again loses nothing by being forgotten.
+            principals.retain(|_, bucket| {
+                bucket.refill(now);
+                !bucket.is_full()
+            });
+            if principals.len() >= MAX_TRACKED_PRINCIPALS {
+                return Err(ControlError::rate_limited());
+            }
+        }
+        let bucket = principals
+            .entry(principal.to_owned())
+            .or_insert_with(|| TokenBucket::full(now));
+        bucket.refill(now);
+        if bucket.take(self.per_minute) {
+            Ok(())
+        } else {
+            Err(ControlError::rate_limited())
+        }
+    }
+}
+
 /// One concurrent slot, returned when the call that holds it ends.
 pub(super) struct AdmissionPermit {
     admission: Arc<Admission>,
@@ -208,6 +252,23 @@ mod tests {
             assert!(!refused(admission.admit("alice", true)));
         }
         assert!(refused(admission.admit("alice", true)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn lookups_have_a_budget_of_their_own_and_need_no_slot() {
+        let admission = Admission::new(limits(60, 60, 1));
+        let _running = admission.admit("alice", false).unwrap();
+        assert!(refused(admission.admit("alice", true)), "the only slot is taken");
+
+        let lookups = LookupBudget::new(3);
+        for _ in 0..3 {
+            lookups.take("alice").unwrap();
+        }
+        assert_eq!(lookups.take("alice").unwrap_err().code(), ControlErrorCode::RateLimited);
+        lookups.take("bob").unwrap();
+        tokio::time::advance(Duration::from_secs(20)).await;
+        lookups.take("alice").unwrap();
+        assert!(lookups.take("alice").is_err());
     }
 
     #[tokio::test(start_paused = true)]

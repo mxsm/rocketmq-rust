@@ -36,6 +36,7 @@ use self::recovery::recover_audit_state;
 use self::recovery::terminal_event;
 use self::recovery::timestamp_unix_millis;
 use self::recovery::validate_terminal;
+use self::results::ResultIndex;
 
 pub use self::evidence::digest_canonical_json;
 pub use self::evidence::sha256_hex;
@@ -46,6 +47,10 @@ pub use self::evidence::AuditTarget;
 pub use self::evidence::AuditTargetResults;
 pub use self::evidence::MAX_INLINE_BROKER_NAMES_BYTES;
 pub use self::jsonl::JsonlAuditSink;
+pub use self::results::InvocationOutcome;
+pub use self::results::InvocationQuery;
+pub use self::results::InvocationState;
+pub use self::results::RecordedInvocation;
 
 pub const AUDIT_SCHEMA_VERSION: &str = "rocketmq-mcp-control.audit.v3";
 /// Smallest record bound the configuration accepts. Every version-3 record fits within it,
@@ -166,6 +171,7 @@ impl std::fmt::Debug for AuditRecord {
 mod evidence;
 mod jsonl;
 mod recovery;
+mod results;
 mod wire;
 
 #[derive(Clone, PartialEq, Eq)]
@@ -249,6 +255,8 @@ struct AuditTrailState {
     sequence: u64,
     /// Invocations with a `started` record and no terminal record yet.
     invocations: BTreeMap<AuditInvocationId, RecoveredInvocation>,
+    /// The newest invocations and how they ended, for result lookup.
+    results: ResultIndex,
 }
 
 #[derive(Clone)]
@@ -296,6 +304,7 @@ impl AuditTrail {
             state: Arc::new(Mutex::new(AuditTrailState {
                 sequence: 0,
                 invocations: BTreeMap::new(),
+                results: ResultIndex::default(),
             })),
             poisoned: Arc::new(AtomicBool::new(false)),
             identity: Arc::new(TrailIdentity),
@@ -385,6 +394,7 @@ impl AuditTrail {
         };
         self.append_record(&record).await?;
         state.sequence = sequence;
+        state.results.started(&record, InvocationState::InProgress);
         state.invocations.insert(
             invocation.id,
             RecoveredInvocation {
@@ -469,9 +479,32 @@ impl AuditTrail {
         };
         self.append_record(&record).await?;
         state.sequence = sequence;
+        state.results.finished(&record);
         // A finished invocation needs no state: its token cannot write a second terminal record.
         state.invocations.remove(&invocation.id);
         Ok(())
+    }
+
+    /// Returns what the trail remembers about one invocation that `operator` started on `cluster`.
+    ///
+    /// The trail remembers a bounded number of recent invocations, and after a restart those whose
+    /// records the sink still holds. `None` covers an invocation that never existed, one that was
+    /// forgotten, and one that belongs to another operator or cluster.
+    ///
+    /// # Errors
+    ///
+    /// Returns `audit_unavailable` once a record could not be made durable: the trail then no
+    /// longer knows how its invocations ended.
+    pub async fn lookup(
+        &self,
+        operator: &str,
+        cluster: &ClusterName,
+        query: &InvocationQuery,
+    ) -> Result<Option<RecordedInvocation>, ControlError> {
+        self.ensure_available()?;
+        let state = self.state.lock().await;
+        self.ensure_available()?;
+        Ok(state.results.find(operator, cluster, query))
     }
 
     /// Returns the records the sink still holds, which for the JSONL sink is its active segment.

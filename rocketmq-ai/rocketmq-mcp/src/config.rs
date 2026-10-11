@@ -369,15 +369,7 @@ impl McpConfig {
                 "cache.cursor_snapshot_max_entries must be between 1 and 10000".to_string(),
             ));
         }
-        validate_non_empty(
-            "diagnosis.consumer_lag_policy_profile",
-            &self.diagnosis.consumer_lag_policy_profile,
-        )?;
-        if self.diagnosis.consumer_lag_threshold < 0 {
-            return Err(McpError::invalid_config(
-                "diagnosis.consumer_lag_threshold must not be negative".to_string(),
-            ));
-        }
+        self.diagnosis.validate()?;
 
         Ok(())
     }
@@ -1069,7 +1061,57 @@ const fn default_cursor_snapshot_ttl_ms() -> u64 {
 #[serde(deny_unknown_fields)]
 pub struct DiagnosisConfig {
     pub consumer_lag_policy_profile: String,
+    /// Backlog, in messages, up to which a Consumer Group is healthy.
     pub consumer_lag_threshold: i64,
+    /// How far behind production a Consumer Group may be before its backlog counts as delayed.
+    #[serde(default = "default_consume_delay_threshold_ms")]
+    pub consume_delay_threshold_ms: u64,
+    /// In-flight messages from which a POP Consumer Group counts as holding too many unacknowledged.
+    #[serde(default = "default_pop_inflight_threshold")]
+    pub pop_inflight_threshold: i64,
+    /// How recently a retry or dead-letter Topic must have received a message to count as growing.
+    #[serde(default = "default_retry_activity_window_ms")]
+    pub retry_activity_window_ms: u64,
+    /// Thresholds for single Topics and Consumer Groups; see [`DiagnosisOverride`].
+    #[serde(default)]
+    pub overrides: Vec<DiagnosisOverride>,
+}
+
+/// Replaces diagnosis thresholds for one Topic, one Consumer Group, or one Topic and Consumer Group
+/// pair. A threshold the override leaves out keeps the value it would otherwise have.
+///
+/// Every override that selects a diagnosis applies, the least specific first: a Topic override,
+/// then a Consumer Group override, then the override that names both.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosisOverride {
+    #[serde(default)]
+    pub topic: Option<String>,
+    #[serde(default)]
+    pub consumer_group: Option<String>,
+    #[serde(default)]
+    pub consumer_lag_threshold: Option<i64>,
+    #[serde(default)]
+    pub consume_delay_threshold_ms: Option<u64>,
+    #[serde(default)]
+    pub pop_inflight_threshold: Option<i64>,
+    #[serde(default)]
+    pub retry_activity_window_ms: Option<u64>,
+}
+
+/// A diagnosis looks every override up, so the list stays short enough to scan.
+const MAX_DIAGNOSIS_OVERRIDES: usize = 1_000;
+
+const fn default_consume_delay_threshold_ms() -> u64 {
+    5 * 60 * 1_000
+}
+
+const fn default_pop_inflight_threshold() -> i64 {
+    1_000
+}
+
+const fn default_retry_activity_window_ms() -> u64 {
+    10 * 60 * 1_000
 }
 
 impl Default for DiagnosisConfig {
@@ -1077,8 +1119,104 @@ impl Default for DiagnosisConfig {
         Self {
             consumer_lag_policy_profile: "production-default".to_string(),
             consumer_lag_threshold: 1_000,
+            consume_delay_threshold_ms: default_consume_delay_threshold_ms(),
+            pop_inflight_threshold: default_pop_inflight_threshold(),
+            retry_activity_window_ms: default_retry_activity_window_ms(),
+            overrides: Vec::new(),
         }
     }
+}
+
+impl DiagnosisConfig {
+    fn validate(&self) -> crate::error::McpResult<()> {
+        validate_non_empty(
+            "diagnosis.consumer_lag_policy_profile",
+            &self.consumer_lag_policy_profile,
+        )?;
+        validate_diagnosis_thresholds(
+            "diagnosis",
+            Some(self.consumer_lag_threshold),
+            Some(self.consume_delay_threshold_ms),
+            Some(self.pop_inflight_threshold),
+            Some(self.retry_activity_window_ms),
+        )?;
+        if self.overrides.len() > MAX_DIAGNOSIS_OVERRIDES {
+            return Err(McpError::invalid_config(format!(
+                "diagnosis.overrides must not hold more than {MAX_DIAGNOSIS_OVERRIDES} entries"
+            )));
+        }
+        let mut selectors = std::collections::BTreeSet::new();
+        for (index, entry) in self.overrides.iter().enumerate() {
+            let field = format!("diagnosis.overrides[{index}]");
+            for (name, value) in [("topic", &entry.topic), ("consumer_group", &entry.consumer_group)] {
+                if value
+                    .as_deref()
+                    .is_some_and(|value| value.is_empty() || value != value.trim())
+                {
+                    return Err(McpError::invalid_config(format!(
+                        "{field}.{name} must be a name without surrounding whitespace"
+                    )));
+                }
+            }
+            if entry.topic.is_none() && entry.consumer_group.is_none() {
+                return Err(McpError::invalid_config(format!(
+                    "{field} must name a topic, a consumer_group, or both"
+                )));
+            }
+            if entry.consumer_lag_threshold.is_none()
+                && entry.consume_delay_threshold_ms.is_none()
+                && entry.pop_inflight_threshold.is_none()
+                && entry.retry_activity_window_ms.is_none()
+            {
+                return Err(McpError::invalid_config(format!(
+                    "{field} must set at least one threshold"
+                )));
+            }
+            validate_diagnosis_thresholds(
+                &field,
+                entry.consumer_lag_threshold,
+                entry.consume_delay_threshold_ms,
+                entry.pop_inflight_threshold,
+                entry.retry_activity_window_ms,
+            )?;
+            if !selectors.insert((entry.topic.as_deref(), entry.consumer_group.as_deref())) {
+                return Err(McpError::invalid_config(format!(
+                    "{field} selects the same topic and consumer_group as an earlier entry"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_diagnosis_thresholds(
+    field: &str,
+    consumer_lag_threshold: Option<i64>,
+    consume_delay_threshold_ms: Option<u64>,
+    pop_inflight_threshold: Option<i64>,
+    retry_activity_window_ms: Option<u64>,
+) -> crate::error::McpResult<()> {
+    if consumer_lag_threshold.is_some_and(|threshold| threshold < 0) {
+        return Err(McpError::invalid_config(format!(
+            "{field}.consumer_lag_threshold must not be negative"
+        )));
+    }
+    if consume_delay_threshold_ms == Some(0) {
+        return Err(McpError::invalid_config(format!(
+            "{field}.consume_delay_threshold_ms must be greater than zero"
+        )));
+    }
+    if pop_inflight_threshold.is_some_and(|threshold| threshold < 1) {
+        return Err(McpError::invalid_config(format!(
+            "{field}.pop_inflight_threshold must be greater than zero"
+        )));
+    }
+    if retry_activity_window_ms == Some(0) {
+        return Err(McpError::invalid_config(format!(
+            "{field}.retry_activity_window_ms must be greater than zero"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_non_empty(field: &str, value: &str) -> crate::error::McpResult<()> {
@@ -1627,6 +1765,136 @@ headers = {{ "{HEADER_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}
         config.clusters.clear();
         let err = config.validate().unwrap_err();
         assert_configuration_error(&err);
+    }
+
+    #[test]
+    fn diagnosis_thresholds_default_when_a_configuration_predates_them() {
+        let diagnosis = serde_json::from_value::<DiagnosisConfig>(serde_json::json!({
+            "consumer_lag_policy_profile": "production-default",
+            "consumer_lag_threshold": 1000,
+        }))
+        .unwrap();
+
+        assert_eq!(diagnosis, DiagnosisConfig::default());
+        assert_eq!(diagnosis.consume_delay_threshold_ms, 300_000);
+        assert_eq!(diagnosis.pop_inflight_threshold, 1_000);
+        assert_eq!(diagnosis.retry_activity_window_ms, 600_000);
+        assert!(diagnosis.overrides.is_empty());
+        // The example spells the defaults out.
+        assert_eq!(McpConfig::load(example_config_path()).unwrap().diagnosis, diagnosis);
+    }
+
+    #[test]
+    fn diagnosis_thresholds_and_overrides_are_read_from_the_file_and_validated() {
+        for (valid, invalid) in [
+            ("consume_delay_threshold_ms = 300000", "consume_delay_threshold_ms = 0"),
+            ("pop_inflight_threshold = 1000", "pop_inflight_threshold = 0"),
+            ("retry_activity_window_ms = 600000", "retry_activity_window_ms = 0"),
+        ] {
+            assert_configuration_error(&load_example_with(valid, invalid).expect_err(invalid));
+        }
+
+        let with_override = |entry: &str| {
+            load_example_with(
+                "retry_activity_window_ms = 600000",
+                &format!("retry_activity_window_ms = 600000\n\n[[diagnosis.overrides]]\n{entry}\n"),
+            )
+        };
+        let config = with_override("topic = \"orders\"\nconsumer_lag_threshold = 50000").unwrap();
+        assert_eq!(
+            config.diagnosis.overrides,
+            [DiagnosisOverride {
+                topic: Some("orders".to_string()),
+                consumer_lag_threshold: Some(50_000),
+                ..DiagnosisOverride::default()
+            }]
+        );
+        with_override("topic = \"orders\"\nlag_threshold = 50000").expect_err("an unknown key must be rejected");
+    }
+
+    #[test]
+    fn diagnosis_overrides_must_select_a_target_and_set_a_valid_threshold() {
+        let validate = |entry: DiagnosisOverride| {
+            let mut config = McpConfig::load(example_config_path()).unwrap();
+            config.diagnosis.overrides.push(entry);
+            config.validate()
+        };
+        let orders = || DiagnosisOverride {
+            topic: Some("orders".to_string()),
+            ..DiagnosisOverride::default()
+        };
+
+        validate(DiagnosisOverride {
+            consumer_lag_threshold: Some(0),
+            ..orders()
+        })
+        .unwrap();
+        validate(DiagnosisOverride {
+            consumer_group: Some("order-service".to_string()),
+            consume_delay_threshold_ms: Some(1),
+            ..orders()
+        })
+        .unwrap();
+
+        for invalid in [
+            // Selects nothing.
+            DiagnosisOverride {
+                consumer_lag_threshold: Some(1),
+                ..DiagnosisOverride::default()
+            },
+            // Sets nothing.
+            orders(),
+            DiagnosisOverride {
+                topic: Some(" orders".to_string()),
+                consumer_lag_threshold: Some(1),
+                ..DiagnosisOverride::default()
+            },
+            DiagnosisOverride {
+                consumer_group: Some(String::new()),
+                consumer_lag_threshold: Some(1),
+                ..orders()
+            },
+            DiagnosisOverride {
+                consumer_lag_threshold: Some(-1),
+                ..orders()
+            },
+            DiagnosisOverride {
+                consume_delay_threshold_ms: Some(0),
+                ..orders()
+            },
+            DiagnosisOverride {
+                pop_inflight_threshold: Some(0),
+                ..orders()
+            },
+            DiagnosisOverride {
+                retry_activity_window_ms: Some(0),
+                ..orders()
+            },
+        ] {
+            let error = validate(invalid.clone()).expect_err(&format!("{invalid:?}"));
+            assert_configuration_error(&error);
+        }
+    }
+
+    #[test]
+    fn diagnosis_overrides_may_not_select_the_same_target_twice() {
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        let orders = DiagnosisOverride {
+            topic: Some("orders".to_string()),
+            consumer_lag_threshold: Some(5),
+            ..DiagnosisOverride::default()
+        };
+        config.diagnosis.overrides = vec![
+            orders.clone(),
+            DiagnosisOverride {
+                consumer_group: Some("order-service".to_string()),
+                ..orders.clone()
+            },
+        ];
+        config.validate().unwrap();
+
+        config.diagnosis.overrides.push(orders);
+        assert_configuration_error(&config.validate().unwrap_err());
     }
 
     #[test]

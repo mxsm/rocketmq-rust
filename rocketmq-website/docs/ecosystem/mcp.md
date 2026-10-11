@@ -38,7 +38,7 @@ The default features are `read-only`, `diagnose` and `stdio`. In that same direc
 cargo build --locked --release --features streamable-http
 ```
 
-`streamable-http` includes the authentication feature; it is not an unauthenticated HTTP mode. `observability` enables in-process signals, while `otlp` selects the implemented OTLP gRPC support. `change-planning` adds five planning tools subject to runtime policy. None of these features turns Query MCP into MCP Control.
+`streamable-http` includes the authentication feature; it is not an unauthenticated HTTP mode. `observability` enables in-process signals, while `otlp` selects the implemented OTLP gRPC support. `change-planning` adds five planning tools subject to runtime policy; the feature is deprecated and will be removed, and a change is planned with a dry run of [MCP Control](./mcp-control.md) instead. None of these features turns Query MCP into MCP Control.
 
 The binary is `target/release/rocketmq-mcp`, or `rocketmq-mcp.exe` on Windows. Root-workspace `cargo build` does not build this standalone package. Native dependencies come from its selected dependency graph; see [features/platforms](../reference/features-platforms.md).
 
@@ -61,7 +61,7 @@ This is a replacement fragment, not a complete configuration. Remove unused samp
 | Setting | Checked-in example / behavior |
 | --- | --- |
 | `security.profile` | `diagnose` for local diagnosis scope |
-| `security.allow_change_planning` | `false`; compilation alone cannot allow planning calls |
+| `security.allow_change_planning` | `false`; compilation alone cannot allow planning calls. Deprecated with the `change-planning` feature |
 | `security.permissions_file` | `permissions.example.toml`, loaded relative to the config file |
 | `security.sanitize_output` | `true` |
 | `security.max_concurrent_requests_per_cluster` | 8 |
@@ -112,16 +112,21 @@ RocketMQ signing credentials must be separate from HTTP identity. A configured Y
 
 ## Discover and call tools
 
-The checked-in protocol version is `2025-11-25`; initialization rejects another version. After initialization, use `tools/list` for the caller-visible catalog. The source default catalog contains 24 tools, but policy can reduce discovery.
+The checked-in protocol version is `2025-11-25`; initialization rejects another version. After initialization, use `tools/list` for the caller-visible catalog. The source default catalog contains 30 tools, but policy can reduce discovery.
 
 | Query family | Default tool names |
 | --- | --- |
-| Cluster / inventory | `rocketmq_get_cluster_overview`, `rocketmq_list_topics`, `rocketmq_list_consumer_groups` |
+| Cluster / inventory | `rocketmq_list_clusters`, `rocketmq_list_brokers`, `rocketmq_get_cluster_overview`, `rocketmq_list_topics`, `rocketmq_list_consumer_groups` |
 | Topic | `rocketmq_describe_topic`, `rocketmq_get_topic_route`, `rocketmq_get_topic_config_state`, `rocketmq_get_topic_stats`, `rocketmq_get_topic_config` |
 | Consumers / connections | `rocketmq_get_consumer_lag`, `rocketmq_list_consumer_connections`, `rocketmq_list_producer_connections`, `rocketmq_get_consumer_group_config_state`, `rocketmq_get_consumer_group_details`, `rocketmq_get_consumer_progress` |
 | Broker | `rocketmq_describe_broker`, `rocketmq_get_broker_diagnostics`, `rocketmq_get_broker_config_summary`, `rocketmq_get_broker_log_filter_state` |
 | Infrastructure | `rocketmq_get_proxy_drain_state`, `rocketmq_get_ha_status`, `rocketmq_get_controller_metadata`, `rocketmq_get_nameserver_config_summary` |
-| Message / diagnosis | `rocketmq_get_message_metadata`, `rocketmq_diagnose_consumer_lag` |
+| Message | `rocketmq_get_message_metadata` |
+| Diagnosis | `rocketmq_diagnose_consumer_lag`, `rocketmq_diagnose_consumer_group`, `rocketmq_diagnose_message_delivery`, `rocketmq_diagnose_broker_health`, `rocketmq_get_cluster_health` |
+
+`rocketmq_diagnose_consumer_lag` reads its evidence in one admin session: the lag of every queue, the connections and configuration of the group, the route and permissions of the topic, the Broker that holds the most lag, and the retry and dead-letter topics of the group. It grades the backlog by its size and by how far behind production the group is, so the same number of waiting messages is `low` on a busy topic and `critical` on a quiet one. Each root cause carries a stable `rule_id`, for example `no_online_consumer`, `consumption_disabled`, `read_permission_missing` or `retry_queue_growing`, and names the evidence it rests on. A read that fails becomes missing evidence in a partial report instead of failing the diagnosis. The thresholds are server-owned settings under `[diagnosis]`, and `[[diagnosis.overrides]]` replaces them for single topics and consumer groups.
+
+Four more diagnosis tools return the same report shape. `rocketmq_get_cluster_health` checks a cluster at a glance and names the Brokers to look at first; `rocketmq_diagnose_broker_health` checks one Broker, its master and its replicas; `rocketmq_diagnose_consumer_group` explains the backlog of one consumer group over every topic it consumes; and `rocketmq_diagnose_message_delivery` checks the path from one topic to one consumer group and, given a message identifier, says whether the group consumed that message, still waits for it, retries it or dead-lettered it. A health report is as severe as its worst finding. Naming a message also requires the permission for `rocketmq_get_message_metadata`; the report names the message by a pseudonym and never contains its body.
 
 Use a simple explicit-cluster query first. This is a `tools/call` request for an already initialized MCP session, not a standalone HTTP command:
 
@@ -140,6 +145,8 @@ Use a simple explicit-cluster query first. This is a `tools/call` request for an
 `limit` is 1–200 and defaults to 50. Follow the opaque `data.next_cursor` while `has_more` is true; do not invent a cursor or treat it as a queue offset. Supply the same logical target, corresponding query parameters and `limit`. A cursor continues one result that the server keeps for 60 seconds by default, so every page comes from the same observation. See the [complete Tool Reference](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp/docs/tool-reference.md) for exact schemas and per-tool output.
 
 Discovery checks scopes and Tool allow/deny policy; it does not establish that a particular cluster/tenant call is authorized. The two inventory tools allow an omitted cluster and then use the default cluster, or the only configured one. That cluster goes through the same per-cluster and tenant checks, rate limit and concurrency limit as an explicitly named cluster; an empty or whitespace-only cluster is rejected as `invalid_arguments` by every tool. Prefer explicit clusters in operational clients so that a call never depends on which cluster is the default.
+
+The server also answers `completion/complete` for Prompt arguments and Resource template variables that name a cluster, Topic, Consumer Group or Broker. Candidates are prefix matches, at most 100, and need the permission of the matching listing tool; a Topic, group or Broker is completed only inside the cluster already present in the completion context. An unauthorized or unanswerable completion returns an empty list.
 
 ## Interpret observations, partial data and failures
 
@@ -163,7 +170,7 @@ Output arrays are bounded to 1,000 rows and structured output to 1 MiB. Truncati
 | Stale observation | Inspect observation time, TTL/cache status and selected cluster before inferring a current outage. |
 | stdio parse failure | Confirm protocol version and clean stdout; inspect stderr for redacted startup/transport diagnostics. |
 
-Planning tools, when enabled, generate create-topic, update-topic-config, update-topic-permissions, update-Broker-config and reset-offset plans. They contain no Apply mode and call no mutation API. Execution belongs to separately designed operator/control workflows, not this diagnostic process.
+Planning tools, when enabled, generate create-topic, update-topic-config, update-topic-permissions, update-Broker-config and reset-offset plans. They contain no Apply mode and call no mutation API. Execution belongs to separately designed operator/control workflows, not this diagnostic process. These planning tools are deprecated: a dry run of [MCP Control](./mcp-control.md) plans the same changes against the state they would be applied to, and each planning tool's description names the control tool that replaces it.
 
 This guide was checked against configuration, registration and protocol sources, with TOML/JSON and website rendering checks. It does not claim a live MCP-client session, OAuth/JWKS deployment or external-cluster diagnosis was tested during documentation writing.
 

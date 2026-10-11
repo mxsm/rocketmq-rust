@@ -29,6 +29,7 @@ use crate::adapter::admin_session::AdminSessionFactory;
 use crate::adapter::admin_session::ResolvedCluster;
 use crate::adapter::admin_session::SessionConnections;
 use crate::adapter::admin_session::SessionConsumerLag;
+use crate::adapter::admin_session::SessionMessageMetadata;
 use crate::adapter::admin_session::SessionTopicRoute;
 use crate::adapter::identifier_alias::AliasInputBoundExceeded;
 use crate::adapter::identifier_alias::IdentifierAliaser;
@@ -55,12 +56,6 @@ use crate::model::contract::SourceFailure;
 use crate::model::contract::SourceFailureCode;
 use crate::model::contract::SCHEMA_VERSION;
 use crate::model::diagnosis::DiagnosisReport;
-use crate::service::diagnosis_collector::ConsumerLagEvidence;
-use crate::service::diagnosis_collector::ConsumerLagSummary;
-use crate::service::diagnosis_collector::QueueLagBreakdown;
-use crate::service::diagnosis_collector::TopicRouteSummary;
-use crate::service::diagnosis_collector::TopicSummary;
-use crate::service::diagnosis_rules;
 use crate::tools::broker_tools::BrokerDiagnosticsArgs;
 use crate::tools::broker_tools::BrokerDiagnosticsOutput;
 use crate::tools::broker_tools::DescribeBrokerArgs;
@@ -97,9 +92,22 @@ use crate::tools::topic_tools::ListTopicsOutput;
 use crate::tools::topic_tools::QueryTopicRouteArgs;
 use crate::tools::topic_tools::QueryTopicRouteOutput;
 
+mod broker_health_diagnosis;
+mod broker_listing;
+mod cluster_directory;
+mod cluster_health;
+mod completion_names;
+mod consumer_group_diagnosis;
+mod consumer_lag_diagnosis;
 mod consumer_observation;
+mod diagnosis_support;
 mod infrastructure_observation;
+mod message_delivery_diagnosis;
 mod topic_observation;
+
+/// Lets a test adapter build the same cluster entries as the facade.
+#[cfg(test)]
+pub(crate) use cluster_directory::cluster_entries;
 
 #[derive(Debug, Clone)]
 pub(crate) struct WorkflowControl {
@@ -161,6 +169,25 @@ impl RetainedSize for ConnectionSnapshot {
 }
 
 pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
+    /// Returns every configured logical cluster with its Proxy and Controller aliases.
+    ///
+    /// The list comes from configuration, so it reads no source and cannot fail. It is not
+    /// filtered: the caller decides which entries a principal may see.
+    fn configured_clusters(&self) -> Vec<crate::tools::cluster_tools::ClusterEntry> {
+        Vec::new()
+    }
+
+    /// Returns the names of `class` in one cluster that can match `prefix`, for argument
+    /// completion. The caller keeps the names that start with `prefix`.
+    fn completion_names(
+        &self,
+        _cluster: &str,
+        _class: crate::completion::CompletionClass,
+        _prefix: &str,
+    ) -> impl Future<Output = Result<Vec<String>, ToolFailure>> + Send {
+        async { Ok(Vec::new()) }
+    }
+
     fn cluster_overview(
         &self,
         args: ClusterOverviewArgs,
@@ -263,6 +290,15 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         args: DescribeBrokerArgs,
     ) -> impl Future<Output = Result<QueryResult<DescribeBrokerOutput>, ToolFailure>> + Send;
 
+    /// Lists the Broker instances of one cluster without sizing its inventories.
+    fn list_brokers(
+        &self,
+        _args: crate::tools::broker_tools::ListBrokersArgs,
+    ) -> impl Future<Output = Result<QueryResult<crate::tools::broker_tools::ListBrokersOutput>, ToolFailure>> + Send
+    {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+    }
+
     fn broker_diagnostics(
         &self,
         _args: BrokerDiagnosticsArgs,
@@ -356,6 +392,38 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         &self,
         args: DiagnoseConsumerLagArgs,
     ) -> impl Future<Output = Result<QueryResult<DiagnosisReport>, ToolFailure>> + Send;
+
+    /// Diagnoses the path from one Topic to one Consumer Group, and one message on it.
+    fn diagnose_message_delivery(
+        &self,
+        _args: crate::tools::diagnosis_tools::DiagnoseMessageDeliveryArgs,
+    ) -> impl Future<Output = Result<QueryResult<DiagnosisReport>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+    }
+
+    /// Checks the health of a cluster at a glance.
+    fn cluster_health(
+        &self,
+        _args: crate::tools::diagnosis_tools::GetClusterHealthArgs,
+    ) -> impl Future<Output = Result<QueryResult<DiagnosisReport>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+    }
+
+    /// Diagnoses the health of one Broker: its master and its replicas.
+    fn diagnose_broker_health(
+        &self,
+        _args: crate::tools::diagnosis_tools::DiagnoseBrokerHealthArgs,
+    ) -> impl Future<Output = Result<QueryResult<DiagnosisReport>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+    }
+
+    /// Diagnoses one Consumer Group across every Topic it consumes.
+    fn diagnose_consumer_group(
+        &self,
+        _args: crate::tools::diagnosis_tools::DiagnoseConsumerGroupArgs,
+    ) -> impl Future<Output = Result<QueryResult<DiagnosisReport>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+    }
 }
 
 #[derive(Clone)]
@@ -970,28 +1038,7 @@ where
                     self.run_workflow(cluster, move |session, cluster| {
                         Box::pin(async move {
                             let metadata = session.message_metadata(&args.message_id).await?;
-                            let message_alias = aliases.message_alias(&metadata.message_id).map_err(alias_error)?;
-                            let unique_message_alias = metadata
-                                .unique_message_id
-                                .as_deref()
-                                .map(|message_id| aliases.unique_message_alias(message_id))
-                                .transpose()
-                                .map_err(alias_error)?;
-                            Ok(QueryPayload::complete(MessageMetadataOutput {
-                                cluster: cluster.name.clone(),
-                                message_alias,
-                                unique_message_alias,
-                                topic: metadata.topic,
-                                born_at: observed_at_from_millis(metadata.born_timestamp),
-                                stored_at: observed_at_from_millis(metadata.store_timestamp),
-                                queue_id: metadata.queue_id,
-                                queue_offset: metadata.queue_offset,
-                                store_size: metadata.store_size,
-                                reconsume_times: metadata.reconsume_times,
-                                sys_flag: metadata.sys_flag,
-                                flag: metadata.flag,
-                                prepared_transaction_offset: metadata.prepared_transaction_offset,
-                            }))
+                            message_metadata_output(&aliases, cluster, metadata).map(QueryPayload::complete)
                         })
                     })
                     .await
@@ -1056,114 +1103,6 @@ where
                             session
                                 .consumer_group_config_state(&args.group, &args.broker_names)
                                 .await
-                        })
-                    })
-                    .await
-                },
-            )
-            .await
-    }
-
-    pub(crate) async fn diagnose_consumer_lag(
-        &self,
-        mut args: DiagnoseConsumerLagArgs,
-    ) -> Result<QueryResult<DiagnosisReport>, ToolFailure> {
-        args.topic = normalized_identifier("topic", &args.topic)?;
-        args.consumer_group = normalized_identifier("consumer_group", &args.consumer_group)?;
-        let cluster = self.resolve_cluster(&args.cluster)?;
-        let key = self.cache_key(
-            "diagnose_consumer_lag",
-            &cluster.name,
-            &format!("topic={}|group={}", args.topic, args.consumer_group),
-        );
-        let ttl = Duration::from_millis(self.config.cache.consumer_lag_ttl_ms);
-        let policy = diagnosis_rules::ConsumerLagPolicy::from(&self.config.diagnosis);
-        self.cache
-            .get_or_try_init_cancellable(
-                key,
-                ttl,
-                &self.control.cancellation,
-                || ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled),
-                move || async {
-                    self.run_workflow(cluster, move |session, cluster| {
-                        Box::pin(async move {
-                            let mut completeness = QueryCompleteness::default();
-                            let lag_result = match session.consumer_lag(&args.topic, &args.consumer_group).await {
-                                Ok(lag) => {
-                                    completeness.merge(lag.completeness());
-                                    Ok(consumer_lag_summary(cluster, &args, lag.data))
-                                }
-                                Err(error) => {
-                                    completeness.merge(completeness_for_error(
-                                        QuerySource::ConsumerStatistics,
-                                        &args.consumer_group,
-                                        &error,
-                                    ));
-                                    Err(error)
-                                }
-                            };
-                            let (topic_result, route_result) = match session.topic_route(&args.topic).await {
-                                Ok(route) => {
-                                    let route = topic_route_summary(cluster, &args.topic, route);
-                                    (Ok(TopicSummary::from_route(&route)), Ok(route))
-                                }
-                                Err(error) => {
-                                    completeness.merge(completeness_for_error(
-                                        QuerySource::TopicRoute,
-                                        &args.topic,
-                                        &error,
-                                    ));
-                                    // The description is derived from the route, so a missing Topic
-                                    // is missing for both; any other failure stays a source failure.
-                                    let description_error = match error.not_found_entity() {
-                                        Some(entity) => ToolFailure::not_found(entity),
-                                        None => ToolFailure::Operational(
-                                            crate::tools::executor::ToolExecutionError::Backend(None),
-                                        ),
-                                    };
-                                    (Err(description_error), Err(error))
-                                }
-                            };
-                            let top_lag_broker = lag_result
-                                .as_ref()
-                                .ok()
-                                .and_then(ConsumerLagSummary::top_lag_broker)
-                                .map(str::to_owned);
-                            let broker_result = match top_lag_broker {
-                                Some(broker_name) => {
-                                    match describe_broker_in_session(session, cluster, broker_name.clone()).await {
-                                        Ok(broker) => {
-                                            completeness.merge(broker.completeness());
-                                            Some(Ok(broker.data))
-                                        }
-                                        Err(error) => {
-                                            completeness.merge(completeness_for_error(
-                                                QuerySource::BrokerRuntime,
-                                                &broker_name,
-                                                &error,
-                                            ));
-                                            Some(Err(error))
-                                        }
-                                    }
-                                }
-                                None => None,
-                            };
-
-                            let report = diagnosis_rules::evaluate(
-                                &args,
-                                ConsumerLagEvidence {
-                                    lag: lag_result,
-                                    topic: topic_result,
-                                    route: route_result,
-                                    broker: broker_result,
-                                },
-                                &policy,
-                            );
-                            if report.partial {
-                                completeness.partial = true;
-                                completeness.warnings.push("diagnosis_evidence_incomplete".to_string());
-                            }
-                            Ok(completeness.wrap(report))
                         })
                     })
                     .await
@@ -1353,7 +1292,7 @@ where
         operation: O,
     ) -> Result<SnapshotView<ConnectionSnapshot>, ToolFailure>
     where
-        O: for<'a> FnOnce(&'a mut F::Session) -> WorkflowFuture<'a, QueryPayload<SessionConnections>>,
+        O: for<'a> FnOnce(&'a mut F::Session) -> WorkflowFuture<'a, QueryPayload<SessionConnections>> + Send,
     {
         let request = SnapshotRequest::try_new_with_selection(
             kind,
@@ -1394,35 +1333,44 @@ where
             .then(|| Duration::from_millis(ttl_ms))
     }
 
-    async fn run_workflow<T, O>(&self, cluster: ResolvedCluster, operation: O) -> Result<T, ToolFailure>
+    /// Runs `operation` in one session, inside the request budget, and closes the session whatever
+    /// `operation` returns.
+    ///
+    /// The returned future is boxed. It holds the session and the future that opens it, which are
+    /// large for the production session type. Every facade method would otherwise carry them by
+    /// value into the one function that dispatches all Tools, whose stack frame in an unoptimized
+    /// build then grows by that size with every Tool.
+    fn run_workflow<'s, T, O>(&'s self, cluster: ResolvedCluster, operation: O) -> WorkflowFuture<'s, T>
     where
-        T: Send,
-        O: for<'a> FnOnce(&'a mut F::Session, &'a ResolvedCluster) -> WorkflowFuture<'a, T>,
+        T: Send + 's,
+        O: for<'a> FnOnce(&'a mut F::Session, &'a ResolvedCluster) -> WorkflowFuture<'a, T> + Send + 's,
     {
-        let deadline = self.control.deadline();
-        let mut session = tokio::select! {
-            _ = self.control.cancellation.cancelled() => return Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled)),
-            result = tokio::time::timeout_at(deadline, self.factory.start(cluster.clone())) => match result {
-                Ok(result) => result?,
-                Err(_) => return Err(self.control.timed_out()),
-            },
-        };
-        let result = {
-            let operation = operation(&mut session, &cluster);
-            tokio::select! {
-                _ = self.control.cancellation.cancelled() => Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled)),
-                result = tokio::time::timeout_at(deadline, operation) => match result {
-                    Ok(result) => result,
-                    Err(_) => Err(self.control.timed_out()),
+        Box::pin(async move {
+            let deadline = self.control.deadline();
+            let mut session = tokio::select! {
+                _ = self.control.cancellation.cancelled() => return Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled)),
+                result = tokio::time::timeout_at(deadline, self.factory.start(cluster.clone())) => match result {
+                    Ok(result) => result?,
+                    Err(_) => return Err(self.control.timed_out()),
                 },
+            };
+            let result = {
+                let operation = operation(&mut session, &cluster);
+                tokio::select! {
+                    _ = self.control.cancellation.cancelled() => Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled)),
+                    result = tokio::time::timeout_at(deadline, operation) => match result {
+                        Ok(result) => result,
+                        Err(_) => Err(self.control.timed_out()),
+                    },
+                }
+            };
+            let shutdown = session.shutdown().await;
+            match (result, shutdown) {
+                (Err(error), _) => Err(error),
+                (Ok(_), Err(error)) => Err(error),
+                (Ok(output), Ok(())) => Ok(output),
             }
-        };
-        let shutdown = session.shutdown().await;
-        match (result, shutdown) {
-            (Err(error), _) => Err(error),
-            (Ok(_), Err(error)) => Err(error),
-            (Ok(output), Ok(())) => Ok(output),
-        }
+        })
     }
 
     /// Resolves an explicitly named logical cluster.
@@ -1491,6 +1439,15 @@ impl<F> ReadOnlyQuery for QueryFacade<F>
 where
     F: AdminSessionFactory,
 {
+    async fn completion_names(
+        &self,
+        cluster: &str,
+        class: crate::completion::CompletionClass,
+        prefix: &str,
+    ) -> Result<Vec<String>, ToolFailure> {
+        QueryFacade::completion_names(self, cluster, class, prefix).await
+    }
+
     async fn cluster_overview(
         &self,
         args: ClusterOverviewArgs,
@@ -1568,6 +1525,13 @@ where
         args: DescribeBrokerArgs,
     ) -> Result<QueryResult<DescribeBrokerOutput>, ToolFailure> {
         QueryFacade::describe_broker(self, args).await
+    }
+
+    async fn list_brokers(
+        &self,
+        args: crate::tools::broker_tools::ListBrokersArgs,
+    ) -> Result<QueryResult<crate::tools::broker_tools::ListBrokersOutput>, ToolFailure> {
+        QueryFacade::list_brokers(self, args).await
     }
 
     async fn broker_diagnostics(
@@ -1660,6 +1624,38 @@ where
     ) -> Result<QueryResult<DiagnosisReport>, ToolFailure> {
         QueryFacade::diagnose_consumer_lag(self, args).await
     }
+
+    async fn diagnose_message_delivery(
+        &self,
+        args: crate::tools::diagnosis_tools::DiagnoseMessageDeliveryArgs,
+    ) -> Result<QueryResult<DiagnosisReport>, ToolFailure> {
+        QueryFacade::diagnose_message_delivery(self, args).await
+    }
+
+    async fn cluster_health(
+        &self,
+        args: crate::tools::diagnosis_tools::GetClusterHealthArgs,
+    ) -> Result<QueryResult<DiagnosisReport>, ToolFailure> {
+        QueryFacade::cluster_health(self, args).await
+    }
+
+    async fn diagnose_broker_health(
+        &self,
+        args: crate::tools::diagnosis_tools::DiagnoseBrokerHealthArgs,
+    ) -> Result<QueryResult<DiagnosisReport>, ToolFailure> {
+        QueryFacade::diagnose_broker_health(self, args).await
+    }
+
+    async fn diagnose_consumer_group(
+        &self,
+        args: crate::tools::diagnosis_tools::DiagnoseConsumerGroupArgs,
+    ) -> Result<QueryResult<DiagnosisReport>, ToolFailure> {
+        QueryFacade::diagnose_consumer_group(self, args).await
+    }
+
+    fn configured_clusters(&self) -> Vec<crate::tools::cluster_tools::ClusterEntry> {
+        QueryFacade::configured_clusters(self)
+    }
 }
 
 fn query_result_from_snapshot<S, T>(snapshot: &SnapshotView<S>, payload: QueryPayload<T>) -> QueryResult<T> {
@@ -1715,37 +1711,6 @@ fn topic_route_output_from_snapshot(
         page,
         generated_at: observed_at(),
     })
-}
-
-/// Summarizes the lag of every queue as diagnosis evidence.
-fn consumer_lag_summary(
-    cluster: &ResolvedCluster,
-    args: &DiagnoseConsumerLagArgs,
-    lag: SessionConsumerLag,
-) -> ConsumerLagSummary {
-    ConsumerLagSummary {
-        cluster: cluster.name.clone(),
-        topic: args.topic.clone(),
-        consumer_group: args.consumer_group.clone(),
-        total_lag: lag.total_lag,
-        consume_tps: lag.consume_tps,
-        inflight_total: lag.inflight_total,
-        queues: QueueLagBreakdown::from_queues(lag.queues),
-        generated_at: observed_at(),
-    }
-}
-
-/// Keeps every route row of a Topic as diagnosis evidence.
-fn topic_route_summary(cluster: &ResolvedCluster, topic: &str, route: SessionTopicRoute) -> TopicRouteSummary {
-    TopicRouteSummary {
-        cluster: cluster.name.clone(),
-        topic: topic.to_string(),
-        read_queue_count: route.queues.iter().map(|queue| queue.read_queue_nums).sum(),
-        write_queue_count: route.queues.iter().map(|queue| queue.write_queue_nums).sum(),
-        brokers: route.brokers,
-        queues: route.queues,
-        generated_at: observed_at(),
-    }
 }
 
 fn describe_topic_output(route: &QueryTopicRouteOutput) -> DescribeTopicOutput {
@@ -1969,6 +1934,36 @@ fn project_connections(
     }))
 }
 
+/// Publishes the metadata of a message: its identifiers become pseudonyms, and it has no body.
+fn message_metadata_output(
+    aliases: &IdentifierAliaser,
+    cluster: &ResolvedCluster,
+    metadata: SessionMessageMetadata,
+) -> Result<MessageMetadataOutput, ToolFailure> {
+    let message_alias = aliases.message_alias(&metadata.message_id).map_err(alias_error)?;
+    let unique_message_alias = metadata
+        .unique_message_id
+        .as_deref()
+        .map(|message_id| aliases.unique_message_alias(message_id))
+        .transpose()
+        .map_err(alias_error)?;
+    Ok(MessageMetadataOutput {
+        cluster: cluster.name.clone(),
+        message_alias,
+        unique_message_alias,
+        topic: metadata.topic,
+        born_at: observed_at_from_millis(metadata.born_timestamp),
+        stored_at: observed_at_from_millis(metadata.store_timestamp),
+        queue_id: metadata.queue_id,
+        queue_offset: metadata.queue_offset,
+        store_size: metadata.store_size,
+        reconsume_times: metadata.reconsume_times,
+        sys_flag: metadata.sys_flag,
+        flag: metadata.flag,
+        prepared_transaction_offset: metadata.prepared_transaction_offset,
+    })
+}
+
 fn alias_error(_: AliasInputBoundExceeded) -> ToolFailure {
     ToolFailure::Rejected(ToolRejection::AliasInputBoundExceeded)
 }
@@ -2002,6 +1997,12 @@ fn valid_rust_module_path(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    mod broker_health_diagnosis;
+    mod cluster_health;
+    mod consumer_group_diagnosis;
+    mod consumer_lag_diagnosis;
+    mod message_delivery_diagnosis;
+
     #[test]
     fn alias_input_bound_is_a_closed_tool_rejection() {
         use super::*;
@@ -2056,6 +2057,11 @@ mod tests {
         route_queries: AtomicUsize,
         consumer_lag_queries: AtomicUsize,
         runtime_probes: AtomicUsize,
+        consumer_group_details_queries: AtomicUsize,
+        consumer_progress_queries: AtomicUsize,
+        ha_status_queries: AtomicUsize,
+        topic_config_queries: AtomicUsize,
+        topic_stats_queries: AtomicUsize,
     }
 
     #[derive(Debug)]
@@ -2166,6 +2172,23 @@ mod tests {
         yield_snapshot_queries: bool,
         missing_topic: bool,
         missing_consumer_group: bool,
+        /// Every Broker reports that no consumer of the group is connected.
+        offline_consumers: bool,
+        /// The retry Topic of the group holds messages, the newest stored just now.
+        retried_messages: bool,
+        fail_topic_config: bool,
+        /// The Consumer Group details never arrive.
+        hang_supporting_evidence: bool,
+        /// The lag of the group never arrives.
+        hang_consumer_lag: bool,
+        /// The Topic route never arrives.
+        hang_topic_route: bool,
+        /// The message a lookup finds, in place of one on a queue the group reports no offset for.
+        message: Option<SessionMessageMetadata>,
+        /// No Broker holds the message a lookup asks for.
+        missing_message: bool,
+        /// How far the group read the one queue it reports lag for.
+        consumer_offset: i64,
     }
 
     impl AdminSessionFactory for FakeSessionFactory {
@@ -2199,6 +2222,15 @@ mod tests {
                 yield_snapshot_queries: self.yield_snapshot_queries,
                 missing_topic: self.missing_topic,
                 missing_consumer_group: self.missing_consumer_group,
+                offline_consumers: self.offline_consumers,
+                retried_messages: self.retried_messages,
+                fail_topic_config: self.fail_topic_config,
+                hang_supporting_evidence: self.hang_supporting_evidence,
+                hang_consumer_lag: self.hang_consumer_lag,
+                hang_topic_route: self.hang_topic_route,
+                message: self.message.clone(),
+                missing_message: self.missing_message,
+                consumer_offset: self.consumer_offset,
             })
         }
     }
@@ -2229,6 +2261,15 @@ mod tests {
         yield_snapshot_queries: bool,
         missing_topic: bool,
         missing_consumer_group: bool,
+        offline_consumers: bool,
+        retried_messages: bool,
+        fail_topic_config: bool,
+        hang_supporting_evidence: bool,
+        hang_consumer_lag: bool,
+        hang_topic_route: bool,
+        message: Option<SessionMessageMetadata>,
+        missing_message: bool,
+        consumer_offset: i64,
     }
 
     impl FakeSession {
@@ -2305,6 +2346,9 @@ mod tests {
 
         async fn topic_route(&mut self, _topic: &str) -> Result<SessionTopicRoute, ToolFailure> {
             self.counters.route_queries.fetch_add(1, Ordering::SeqCst);
+            if self.hang_topic_route {
+                std::future::pending::<()>().await;
+            }
             if self.yield_snapshot_queries {
                 tokio::task::yield_now().await;
             }
@@ -2324,6 +2368,201 @@ mod tests {
                 brokers: vec![route_broker(&self.cluster.name, "broker-a")],
                 queues,
             })
+        }
+
+        async fn consumer_group_details(
+            &mut self,
+            consumer_group: &str,
+        ) -> Result<QueryPayload<crate::tools::consumer_tools::GetConsumerGroupDetailsOutput>, ToolFailure> {
+            use crate::tools::consumer_tools as tool;
+
+            self.counters
+                .consumer_group_details_queries
+                .fetch_add(1, Ordering::SeqCst);
+            if self.hang_supporting_evidence {
+                std::future::pending::<()>().await;
+            }
+            if self.missing_consumer_group {
+                return Err(ToolFailure::not_found(NotFoundEntity::ConsumerGroup));
+            }
+            let broker_names = if self.skewed_lag {
+                (0..60).map(|index| format!("broker-{index:02}")).collect()
+            } else {
+                vec!["broker-a".to_string()]
+            };
+            let brokers = broker_names
+                .into_iter()
+                .map(|broker_name| tool::ConsumerGroupDetailsBrokerRow {
+                    broker_name,
+                    config_state: tool::ConsumerGroupConfigPresence::Present,
+                    config_version: Some(1),
+                    consume_enable: Some(true),
+                    consume_from_min_enable: Some(true),
+                    consume_broadcast_enable: Some(false),
+                    consume_message_orderly: Some(false),
+                    retry_queue_nums: Some(1),
+                    retry_max_times: Some(16),
+                    notify_consumer_ids_changed_enable: Some(true),
+                    consume_timeout_minutes: Some(15),
+                    connection_state: Some(if self.offline_consumers {
+                        tool::ConsumerConnectionState::Offline
+                    } else {
+                        tool::ConsumerConnectionState::Online
+                    }),
+                    connection_count: u64::from(!self.offline_consumers),
+                    consume_type: (!self.offline_consumers).then_some(tool::ConsumerConsumeType::Push),
+                    message_model: (!self.offline_consumers).then_some(tool::ConsumerMessageModel::Clustering),
+                    consume_from_where: None,
+                })
+                .collect::<Vec<_>>();
+            Ok(QueryPayload::complete(tool::GetConsumerGroupDetailsOutput {
+                cluster: self.cluster.name.clone(),
+                consumer_group: consumer_group.to_string(),
+                total_connection_count: brokers.iter().map(|row| row.connection_count).sum(),
+                brokers,
+                generated_at: observed_at(),
+            }))
+        }
+
+        /// Serves the replication view of each named master, or of `broker-a` when none is named: a
+        /// master without replicas.
+        async fn ha_status(
+            &mut self,
+            broker_names: &[String],
+            _include_sync_state: bool,
+            _controller_names: &[String],
+        ) -> Result<QueryPayload<crate::tools::infrastructure_tools::GetHaStatusOutput>, ToolFailure> {
+            use crate::tools::infrastructure_tools as tool;
+
+            self.counters.ha_status_queries.fetch_add(1, Ordering::SeqCst);
+            let masters = if broker_names.is_empty() {
+                vec!["broker-a".to_string()]
+            } else {
+                broker_names.to_vec()
+            };
+            Ok(QueryPayload::complete(tool::GetHaStatusOutput {
+                cluster: self.cluster.name.clone(),
+                brokers: masters
+                    .into_iter()
+                    .map(|broker_name| tool::BrokerHaObservation {
+                        broker_name,
+                        broker_id: 0,
+                        master_commit_log_max_offset: 0,
+                        in_sync_slave_count: 0,
+                        pending_group_transfer_request_count: 0,
+                        pending_group_transfer_oldest_wait_millis: 0,
+                        group_transfer_ack_notify_count: 0,
+                        connections: Vec::new(),
+                    })
+                    .collect(),
+                controller_sync_states: Vec::new(),
+            }))
+        }
+
+        /// Serves a backlog of 10,000 on two Topics, 9,000 of it on `orders`.
+        async fn consumer_progress(
+            &mut self,
+            _consumer_group: &str,
+        ) -> Result<QueryPayload<crate::adapter::admin_session::SessionConsumerProgress>, ToolFailure> {
+            use crate::tools::consumer_tools as tool;
+
+            self.counters.consumer_progress_queries.fetch_add(1, Ordering::SeqCst);
+            if self.hang_consumer_lag {
+                std::future::pending::<()>().await;
+            }
+            if self.fail_exact_read {
+                return Err(ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
+                ));
+            }
+            let queue = |topic: &str, lag: u64| tool::ConsumerProgressQueueRow {
+                topic: topic.to_string(),
+                broker_name: "broker-a".to_string(),
+                queue_id: 0,
+                broker_offset: i64::try_from(lag).unwrap(),
+                consumer_offset: 0,
+                pull_offset: 0,
+                lag,
+                inflight: 0,
+                last_observed_at: None,
+            };
+            Ok(QueryPayload::complete(
+                crate::adapter::admin_session::SessionConsumerProgress {
+                    state: tool::ConsumerProgressState::Observed,
+                    topic_count: 2,
+                    queue_count: 2,
+                    total_lag: 10_000,
+                    max_queue_lag: 9_000,
+                    total_inflight: 0,
+                    consume_tps: 0.5,
+                    queues: vec![queue("orders", 9_000), queue("payments", 1_000)],
+                    truncated: false,
+                },
+            ))
+        }
+
+        async fn topic_config(
+            &mut self,
+            topic: &str,
+        ) -> Result<QueryPayload<crate::tools::config_tools::GetTopicConfigOutput>, ToolFailure> {
+            self.counters.topic_config_queries.fetch_add(1, Ordering::SeqCst);
+            if self.missing_topic {
+                return Err(ToolFailure::not_found(NotFoundEntity::Topic));
+            }
+            if self.fail_topic_config {
+                return Err(ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
+                ));
+            }
+            Ok(QueryPayload::complete(
+                crate::tools::config_tools::GetTopicConfigOutput {
+                    cluster: self.cluster.name.clone(),
+                    topic: topic.to_string(),
+                    brokers: vec![crate::tools::config_tools::TopicConfigObservationRow {
+                        broker_name: "broker-a".to_string(),
+                        version: 1,
+                        read_queue_nums: 4,
+                        write_queue_nums: 4,
+                        perm: 6,
+                        order: false,
+                        message_type: "NORMAL".to_string(),
+                    }],
+                    inconsistent_fields: Vec::new(),
+                    generated_at: observed_at(),
+                },
+            ))
+        }
+
+        /// Serves every Topic but the retry and dead-letter Topics of a group. Of those, only the
+        /// retry Topic exists, and only when `retried_messages` is set.
+        async fn topic_stats(
+            &mut self,
+            topic: &str,
+        ) -> Result<QueryPayload<crate::adapter::admin_session::SessionTopicStats>, ToolFailure> {
+            self.counters.topic_stats_queries.fetch_add(1, Ordering::SeqCst);
+            let exists = if topic.starts_with("%RETRY%") {
+                self.retried_messages
+            } else {
+                !topic.starts_with("%DLQ%") && !self.missing_topic
+            };
+            if !exists {
+                return Err(ToolFailure::not_found(NotFoundEntity::Topic));
+            }
+            Ok(QueryPayload::complete(
+                crate::adapter::admin_session::SessionTopicStats {
+                    total_message_count: 12,
+                    queue_count: 1,
+                    queues: vec![crate::tools::topic_tools::TopicStatsQueueRow {
+                        broker_name: "broker-a".to_string(),
+                        queue_id: 0,
+                        min_offset: 0,
+                        max_offset: 12,
+                        message_count: 12,
+                        last_update_at: Some(observed_at()),
+                    }],
+                    truncated: false,
+                },
+            ))
         }
 
         async fn consumer_groups(&mut self) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolFailure> {
@@ -2397,6 +2636,9 @@ mod tests {
             _consumer_group: &str,
         ) -> Result<QueryPayload<SessionConsumerLag>, ToolFailure> {
             self.counters.consumer_lag_queries.fetch_add(1, Ordering::SeqCst);
+            if self.hang_consumer_lag {
+                std::future::pending::<()>().await;
+            }
             if self.yield_snapshot_queries {
                 tokio::task::yield_now().await;
             }
@@ -2434,7 +2676,9 @@ mod tests {
                     })
                     .collect()
             } else {
-                vec![queue_lag("broker-a")]
+                let mut row = queue_lag("broker-a");
+                row.consumer_offset = self.consumer_offset;
+                vec![row]
             };
             let lag = SessionConsumerLag {
                 queues,
@@ -2640,6 +2884,12 @@ mod tests {
                 return Err(ToolFailure::Operational(
                     crate::tools::executor::ToolExecutionError::Backend(None),
                 ));
+            }
+            if self.missing_message {
+                return Err(ToolFailure::not_found(NotFoundEntity::Message));
+            }
+            if let Some(message) = &self.message {
+                return Ok(message.clone());
             }
             Ok(SessionMessageMetadata {
                 message_id: "RAW-OFFSET-MESSAGE-ID".to_string(),
@@ -3933,17 +4183,21 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(report.evidence_version, "rocketmq-mcp.evidence.consumer-lag.v2");
-        assert_eq!(report.rules_version, "rocketmq-mcp.rules.consumer-lag.v2");
+        assert_eq!(report.evidence_version, "rocketmq-mcp.evidence.consumer-lag.v3");
+        assert_eq!(report.rules_version, "rocketmq-mcp.rules.consumer-lag.v3");
         assert_eq!(report.policy_profile, "production-default");
         assert!(!report.partial);
-        assert!(report.evidence_snapshot.is_some());
+        assert_eq!(report.evidence_snapshot.items.len(), 7);
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
         assert_eq!(counters.consumer_lag_queries.load(Ordering::SeqCst), 1);
         assert_eq!(counters.route_queries.load(Ordering::SeqCst), 1);
         assert_eq!(counters.broker_queries.load(Ordering::SeqCst), 1);
         assert_eq!(counters.runtime_probes.load(Ordering::SeqCst), 0);
+        assert_eq!(counters.consumer_group_details_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.topic_config_queries.load(Ordering::SeqCst), 1);
+        // The retry Topic and the dead-letter Topic of the group.
+        assert_eq!(counters.topic_stats_queries.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
@@ -3957,14 +4211,7 @@ mod tests {
 
         let report = facade.diagnose_consumer_lag(diagnosis_request()).await.unwrap();
 
-        let evidence = |id: &str| {
-            &report
-                .evidences
-                .iter()
-                .find(|evidence| evidence.id == id)
-                .unwrap_or_else(|| panic!("{id} evidence is missing"))
-                .data
-        };
+        let evidence = |id: &str| evidence_data(&report, id);
         let lag = evidence("consumer_lag");
         assert_eq!(lag["queue_count"], 120);
         assert_eq!(lag["total_lag"], 6_190);
@@ -3976,7 +4223,7 @@ mod tests {
         assert_eq!(lag["worst_queues"][0]["broker_name"], "broker-55");
         assert_eq!(lag["worst_queues"][0]["lag"], 5_000);
         // broker-55 is the 56th Broker by name: beyond what a first page of 50 rows holds.
-        assert_eq!(evidence("broker_description")["broker_name"], "broker-55");
+        assert_eq!(evidence("broker_summary")["broker_name"], "broker-55");
         assert_eq!(evidence("topic_route")["queues"].as_array().unwrap().len(), 60);
         assert!(!report.partial);
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
@@ -4016,11 +4263,10 @@ mod tests {
         let report = facade.diagnose_consumer_lag(diagnosis_request()).await.unwrap();
 
         // The probe established that the selected Broker does not exist, which is not an outage.
-        assert!(report
-            .evidences
-            .iter()
-            .any(|evidence| evidence.id == "broker_description"
-                && evidence.status == crate::model::diagnosis::EvidenceStatus::Missing));
+        assert_eq!(
+            evidence_item(&report, "broker_summary").status,
+            crate::model::diagnosis::EvidenceStatus::Missing
+        );
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
         assert_eq!(counters.route_queries.load(Ordering::SeqCst), 1);
@@ -4119,21 +4365,14 @@ mod tests {
         assert_eq!(report.root_causes[0].evidence_refs, ["topic_route"]);
         assert_eq!(report.recommendations.len(), 1);
         assert!(report.recommendations[0].action.contains("rocketmq_list_topics"));
-        let snapshot = report.evidence_snapshot.as_ref().unwrap();
-        for id in ["consumer_lag", "topic_description", "topic_route"] {
-            let item = snapshot.items.iter().find(|item| item.id == id).unwrap();
+        for id in ["consumer_lag", "topic_route", "topic_config"] {
+            let item = evidence_item(report, id);
             assert_eq!(
                 item.status,
                 crate::model::diagnosis::EvidenceStatus::Missing,
                 "item={id}"
             );
             assert_eq!(item.error_code.as_deref(), Some("not_found"), "item={id}");
-            let evidence = report.evidences.iter().find(|evidence| evidence.id == id).unwrap();
-            assert_eq!(
-                evidence.status,
-                crate::model::diagnosis::EvidenceStatus::Missing,
-                "evidence={id}"
-            );
         }
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
@@ -5767,6 +6006,24 @@ mod tests {
         secondary.proxies[0].endpoint = "proxy-secondary.internal:8081".to_string();
         config.clusters.push(secondary);
         config
+    }
+
+    fn evidence_item<'a>(report: &'a DiagnosisReport, id: &str) -> &'a crate::model::diagnosis::EvidenceItem {
+        report
+            .evidence_snapshot
+            .items
+            .iter()
+            .find(|item| item.id == id)
+            .unwrap_or_else(|| panic!("{id} evidence is missing"))
+    }
+
+    /// What one evidence item of a report holds.
+    fn evidence_data(report: &DiagnosisReport, id: &str) -> serde_json::Value {
+        let payload = evidence_item(report, id)
+            .payload
+            .as_ref()
+            .unwrap_or_else(|| panic!("{id} evidence holds nothing"));
+        serde_json::to_value(payload).unwrap()["data"].clone()
     }
 
     fn diagnosis_request() -> DiagnoseConsumerLagArgs {

@@ -34,6 +34,7 @@ use crate::guard::context::RequestContext;
 use crate::guard::Guard;
 use crate::guard::GuardRejection;
 use crate::model::contract::QueryResult;
+use crate::model::contract::ServerToolResponse;
 use crate::model::contract::ToolResponse;
 use crate::resources::uri::ResourceKind;
 use crate::resources::uri::RocketmqResourceUri;
@@ -536,7 +537,7 @@ where
         };
         let descriptor = tool_id.descriptor();
         let mut arguments = request.arguments.unwrap_or_default();
-        let audit_arguments = audit_arguments(tool_id, &arguments);
+        let audit_arguments = audit_arguments(&arguments);
         let guarded_call =
             match self
                 .guard
@@ -719,6 +720,26 @@ where
                     success_result(descriptor, request_id, cluster, summary, output, resource)
                 })
             }
+            ToolId::ListBrokers => {
+                let args = match decode_args::<broker_tools::ListBrokersArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                // No Resource link: the `brokers` Resource publishes the same rows but is authorized as
+                // the cluster overview, which a caller of this Tool need not hold.
+                self.adapter.list_brokers(args).await.and_then(|output| {
+                    let summary = summary_list_brokers(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
             ToolId::GetBrokerDiagnostics => {
                 let args = match decode_args::<broker_tools::BrokerDiagnosticsArgs>(arguments.clone()) {
                     Ok(args) => args,
@@ -822,6 +843,97 @@ where
                 self.adapter.diagnose_consumer_lag(args).await.and_then(|output| {
                     let summary = output.summary.clone();
                     success_result(descriptor, request_id, cluster, summary, output, resource)
+                })
+            }
+            ToolId::DiagnoseConsumerGroup => {
+                let args = match decode_args::<diagnosis_tools::DiagnoseConsumerGroupArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                let cluster = args.cluster.clone();
+                self.adapter.diagnose_consumer_group(args).await.and_then(|output| {
+                    let summary = output.summary.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::DiagnoseBrokerHealth => {
+                let args = match decode_args::<diagnosis_tools::DiagnoseBrokerHealthArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                let cluster = args.cluster.clone();
+                self.adapter.diagnose_broker_health(args).await.and_then(|output| {
+                    let summary = output.summary.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::GetClusterHealth => {
+                let args = match decode_args::<diagnosis_tools::GetClusterHealthArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                let cluster = args.cluster.clone();
+                self.adapter.cluster_health(args).await.and_then(|output| {
+                    let summary = output.summary.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::DiagnoseMessageDelivery => {
+                let args = match decode_args::<diagnosis_tools::DiagnoseMessageDeliveryArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                let cluster = args.cluster.clone();
+                // Looking up one message is what `rocketmq_get_message_metadata` does, so a call
+                // that names a message needs the permission for that Tool too.
+                if args.message_id.is_some()
+                    && !self
+                        .guard
+                        .allows_tool_on_cluster(&self.context, ToolId::GetMessageMetadata, &cluster)
+                {
+                    operation_recorder.denied();
+                    return Ok(guarded_call.finish_result(self.located_error_result(
+                        descriptor.name,
+                        &tool_name,
+                        request_id,
+                        ToolFailure::Rejected(ToolRejection::PermissionDenied),
+                        &[ArgumentViolation {
+                            path: "/message_id".to_string(),
+                            constraint: ViolationConstraint::Other,
+                        }],
+                    )));
+                }
+                self.adapter.diagnose_message_delivery(args).await.and_then(|output| {
+                    let summary = output.summary.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
                 })
             }
             ToolId::ListConsumerConnections => {
@@ -1052,6 +1164,27 @@ where
                     let cluster = output.cluster.clone();
                     success_unlinked_result(descriptor, request_id, cluster, summary, output)
                 })
+            }
+            ToolId::ListClusters => {
+                if let Err(error) = decode_args::<cluster_tools::ListClustersArgs>(arguments.clone()) {
+                    return Ok(guarded_call.finish_result(self.error_result(
+                        descriptor.name,
+                        &tool_name,
+                        request_id,
+                        error,
+                    )));
+                }
+                // The Guard checked the role and the scope. Which clusters the caller sees is the
+                // same decision a call to this Tool on that cluster would get.
+                let clusters = self
+                    .adapter
+                    .configured_clusters()
+                    .into_iter()
+                    .filter(|entry| self.guard.allows_tool_on_cluster(&self.context, tool_id, &entry.name))
+                    .collect();
+                let output = cluster_tools::ListClustersOutput { clusters };
+                let summary = summary_list_clusters(&output);
+                success_server_result(descriptor, request_id, summary, output)
             }
             #[cfg(feature = "change-planning")]
             ToolId::PlanCreateTopic => {
@@ -1287,6 +1420,12 @@ fn argument_violation(
             push_property(&mut path, UNDECLARED_PROPERTY);
             ViolationConstraint::AdditionalProperty
         }
+        // An object that declares no property at all rejects any property through a `false`
+        // schema, which the validator reports as such instead of as an additional property.
+        Kind::FalseSchema if error.schema_path().as_str().ends_with("/additionalProperties") => {
+            push_property(&mut path, UNDECLARED_PROPERTY);
+            ViolationConstraint::AdditionalProperty
+        }
         Kind::Type { .. } => ViolationConstraint::Type,
         Kind::MinLength { .. } => ViolationConstraint::MinLength,
         Kind::MaxLength { .. } => ViolationConstraint::MaxLength,
@@ -1361,14 +1500,27 @@ where
     )
 }
 
-fn render_success<T>(
+/// Renders the result of a Tool that is not bound to a cluster, in the envelope without `cluster`.
+fn success_server_result<T>(
     descriptor: ToolDescriptor,
-    mut summary: String,
-    envelope: ToolResponse<T>,
-    resource: Option<RocketmqResourceUri>,
+    request_id: &str,
+    summary: String,
+    output: T,
 ) -> Result<CallToolResult, ToolFailure>
 where
     T: Serialize,
+{
+    render_success(descriptor, summary, ServerToolResponse::live(request_id, output), None)
+}
+
+fn render_success<E>(
+    descriptor: ToolDescriptor,
+    mut summary: String,
+    envelope: E,
+    resource: Option<RocketmqResourceUri>,
+) -> Result<CallToolResult, ToolFailure>
+where
+    E: Serialize,
 {
     let resource_can_link = resource.as_ref().is_none_or(RocketmqResourceUri::is_safe);
     let sensitive_values = resource
@@ -1527,6 +1679,20 @@ fn summary_cluster_overview(output: &cluster_tools::ClusterOverviewOutput) -> St
     )
 }
 
+fn summary_list_clusters(output: &cluster_tools::ListClustersOutput) -> String {
+    match output.clusters.iter().find(|cluster| cluster.default) {
+        Some(default) => format!(
+            "{} cluster(s) are available to you; the default is {}.",
+            output.clusters.len(),
+            default.name
+        ),
+        None => format!(
+            "{} cluster(s) are available to you; none is the default.",
+            output.clusters.len()
+        ),
+    }
+}
+
 fn summary_list_topics(output: &topic_tools::ListTopicsOutput) -> String {
     format!(
         "Cluster {} returned {} of {} topics.",
@@ -1578,6 +1744,16 @@ fn summary_describe_broker(output: &broker_tools::DescribeBrokerOutput) -> Strin
     )
 }
 
+fn summary_list_brokers(output: &broker_tools::ListBrokersOutput) -> String {
+    let inactive = output.brokers.iter().filter(|broker| !broker.broker_active).count();
+    format!(
+        "Cluster {} has {} broker rows, {} of them inactive.",
+        output.cluster,
+        output.brokers.len(),
+        inactive
+    )
+}
+
 fn summary_broker_diagnostics(output: &broker_tools::BrokerDiagnosticsOutput) -> String {
     format!(
         "Broker {} on cluster {} returned {} diagnostic rows.",
@@ -1613,9 +1789,14 @@ fn summary_proxy_drain(output: &proxy_tools::ProxyDrainStateOutput) -> String {
     )
 }
 
-fn audit_arguments(tool_id: ToolId, arguments: &JsonObject) -> JsonObject {
+/// The arguments as the audit trail records them. A message identifier is never recorded,
+/// whichever Tool takes one.
+fn audit_arguments(arguments: &JsonObject) -> JsonObject {
     let mut audit_arguments = arguments.clone();
-    if tool_id == ToolId::GetMessageMetadata && audit_arguments.contains_key("message_id") {
+    if audit_arguments
+        .get("message_id")
+        .is_some_and(|message_id| !message_id.is_null())
+    {
         audit_arguments.insert("message_id".to_string(), Value::String("<redacted>".to_string()));
     }
     audit_arguments
@@ -1751,6 +1932,10 @@ fn remove_transient_state_fields(value: &mut Value) {
 
 #[cfg(test)]
 mod tests {
+    mod diagnosis_reports;
+    mod list_brokers;
+    mod list_clusters;
+
     use crate::config::AuditConfig;
     use crate::config::ClusterConfig;
     use crate::config::SecurityConfig;
@@ -1789,6 +1974,10 @@ mod tests {
     }
 
     impl ReadOnlyQuery for FakeAdapter {
+        fn configured_clusters(&self) -> Vec<cluster_tools::ClusterEntry> {
+            crate::adapter::query_facade::cluster_entries(&list_clusters::configured_clusters())
+        }
+
         async fn cluster_overview(
             &self,
             args: cluster_tools::ClusterOverviewArgs,
@@ -1870,6 +2059,33 @@ mod tests {
             _args: broker_tools::DescribeBrokerArgs,
         ) -> Result<QueryResult<broker_tools::DescribeBrokerOutput>, ToolFailure> {
             unimplemented!("not needed by this test")
+        }
+
+        async fn list_brokers(
+            &self,
+            args: broker_tools::ListBrokersArgs,
+        ) -> Result<QueryResult<broker_tools::ListBrokersOutput>, ToolFailure> {
+            if self.fail {
+                return Err(ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
+                ));
+            }
+            let mut result = QueryResult::bypass(broker_tools::ListBrokersOutput {
+                cluster: args.cluster,
+                brokers: vec![broker_summary()],
+                generated_at: "1".to_string(),
+            });
+            if self.partial {
+                result.partial = true;
+                result.warnings = vec!["source_failures_present".to_string()];
+                result.source_failures = vec![crate::model::contract::SourceFailure::new(
+                    crate::model::contract::QuerySource::BrokerRuntime,
+                    crate::model::contract::SourceFailureCode::Timeout,
+                    true,
+                    "broker-b",
+                )];
+            }
+            Ok(result)
         }
 
         async fn broker_diagnostics(
@@ -2257,6 +2473,46 @@ mod tests {
                     inconsistent_fields: Vec::new(),
                 },
             ))
+        }
+
+        async fn diagnose_consumer_group(
+            &self,
+            args: diagnosis_tools::DiagnoseConsumerGroupArgs,
+        ) -> Result<QueryResult<crate::model::diagnosis::DiagnosisReport>, ToolFailure> {
+            if self.fail {
+                return Err(ToolFailure::Operational(ToolExecutionError::Backend(None)));
+            }
+            Ok(diagnosis_report("consumer_group", &args.cluster, self.partial))
+        }
+
+        async fn diagnose_broker_health(
+            &self,
+            args: diagnosis_tools::DiagnoseBrokerHealthArgs,
+        ) -> Result<QueryResult<crate::model::diagnosis::DiagnosisReport>, ToolFailure> {
+            if self.fail {
+                return Err(ToolFailure::Operational(ToolExecutionError::Backend(None)));
+            }
+            Ok(diagnosis_report("broker_health", &args.cluster, self.partial))
+        }
+
+        async fn cluster_health(
+            &self,
+            args: diagnosis_tools::GetClusterHealthArgs,
+        ) -> Result<QueryResult<crate::model::diagnosis::DiagnosisReport>, ToolFailure> {
+            if self.fail {
+                return Err(ToolFailure::Operational(ToolExecutionError::Backend(None)));
+            }
+            Ok(diagnosis_report("cluster_health", &args.cluster, self.partial))
+        }
+
+        async fn diagnose_message_delivery(
+            &self,
+            args: diagnosis_tools::DiagnoseMessageDeliveryArgs,
+        ) -> Result<QueryResult<crate::model::diagnosis::DiagnosisReport>, ToolFailure> {
+            if self.fail {
+                return Err(ToolFailure::Operational(ToolExecutionError::Backend(None)));
+            }
+            Ok(diagnosis_report("message_delivery", &args.cluster, self.partial))
         }
 
         async fn diagnose_consumer_lag(
@@ -3113,35 +3369,52 @@ mod tests {
 
     #[tokio::test]
     async fn message_identifiers_are_redacted_before_audit_hashing() {
-        let guard = test_guard("read_only");
-        let executor = ToolExecutor::new(
-            FakeAdapter {
-                fail: false,
-                partial: false,
-            },
-            guard.clone(),
-        );
-        for message_id in ["RAW-MESSAGE-ID-A", "RAW-MESSAGE-ID-B"] {
-            let result = executor
-                .call(
-                    CallToolRequestParams::new(ToolId::GetMessageMetadata.descriptor().name).with_arguments(
-                        serde_json::json!({"cluster":"local-dev","message_id":message_id})
-                            .as_object()
-                            .unwrap()
-                            .clone(),
-                    ),
-                )
-                .await
-                .unwrap();
-            assert_eq!(result.is_error, Some(false));
-            assert!(!content_text(&result).contains(message_id));
+        // Every Tool that takes a message identifier, with the rest of its arguments.
+        let calls = [
+            (
+                "read_only",
+                ToolId::GetMessageMetadata,
+                serde_json::json!({"cluster":"local-dev"}),
+            ),
+            (
+                "diagnose",
+                ToolId::DiagnoseMessageDelivery,
+                serde_json::json!({"cluster":"local-dev","topic":"orders","consumer_group":"order-service"}),
+            ),
+        ];
+        for (profile, tool, other_arguments) in calls {
+            let tool = tool.descriptor().name;
+            let guard = test_guard(profile);
+            let executor = ToolExecutor::new(
+                FakeAdapter {
+                    fail: false,
+                    partial: false,
+                },
+                guard.clone(),
+            );
+            for message_id in ["RAW-MESSAGE-ID-A", "RAW-MESSAGE-ID-B"] {
+                let mut arguments = other_arguments.as_object().unwrap().clone();
+                arguments.insert("message_id".to_string(), serde_json::json!(message_id));
+                let result = executor
+                    .call(CallToolRequestParams::new(tool).with_arguments(arguments))
+                    .await
+                    .unwrap();
+                assert_eq!(result.is_error, Some(false), "{tool}");
+                assert!(!content_text(&result).contains(message_id), "{tool}");
+                assert!(
+                    !serde_json::to_string(&result.structured_content)
+                        .unwrap()
+                        .contains(message_id),
+                    "{tool}"
+                );
+            }
+            let records = guard.audit_log().records();
+            assert_eq!(records.len(), 2, "{tool}");
+            assert_eq!(records[0].arguments_hash, records[1].arguments_hash, "{tool}");
+            let audit_json = serde_json::to_string(&records).unwrap();
+            assert!(!audit_json.contains("RAW-MESSAGE-ID-A"), "{tool}");
+            assert!(!audit_json.contains("RAW-MESSAGE-ID-B"), "{tool}");
         }
-        let records = guard.audit_log().records();
-        assert_eq!(records.len(), 2);
-        assert_eq!(records[0].arguments_hash, records[1].arguments_hash);
-        let audit_json = serde_json::to_string(&records).unwrap();
-        assert!(!audit_json.contains("RAW-MESSAGE-ID-A"));
-        assert!(!audit_json.contains("RAW-MESSAGE-ID-B"));
     }
 
     #[tokio::test]
@@ -3377,18 +3650,68 @@ mod tests {
             .join("\n")
     }
 
+    /// A report as a diagnosis Tool returns it, reduced to what the envelope needs.
+    fn diagnosis_report(
+        report_type: &str,
+        cluster: &str,
+        partial: bool,
+    ) -> QueryResult<crate::model::diagnosis::DiagnosisReport> {
+        use crate::model::diagnosis as model;
+
+        let observed_at = "2026-10-10T00:00:00.000Z".to_string();
+        let mut result = QueryResult::bypass(model::DiagnosisReport {
+            report_type: report_type.to_string(),
+            evidence_version: "evidence.v1".to_string(),
+            rules_version: "rules.v1".to_string(),
+            cluster: cluster.to_string(),
+            target: serde_json::json!({}),
+            severity: model::Severity::Healthy,
+            confidence: 0.9,
+            confidence_band: model::ConfidenceBand::High,
+            policy_profile: "production-default".to_string(),
+            partial,
+            missing_evidence: Vec::new(),
+            evidence_refs: Vec::new(),
+            evidence_snapshot: model::EvidenceSnapshot {
+                evidence_version: "evidence.v1".to_string(),
+                query_hash: "0".repeat(64),
+                cluster: cluster.to_string(),
+                target: serde_json::json!({}),
+                observed_at: observed_at.clone(),
+                items: Vec::new(),
+            },
+            summary: format!("The {report_type} diagnosis found nothing to report."),
+            impacts: Vec::new(),
+            root_causes: Vec::new(),
+            recommendations: Vec::new(),
+            risks: Vec::new(),
+            follow_up_metrics: Vec::new(),
+            generated_at: observed_at,
+        });
+        if partial {
+            result.partial = true;
+            result.warnings = vec!["diagnosis_evidence_incomplete".to_string()];
+        }
+        result
+    }
+
     fn test_guard(profile: &str) -> Guard {
         test_guard_with_policy(profile, false)
     }
 
     fn test_guard_with_policy(profile: &str, allow_change_planning: bool) -> Guard {
+        test_guard_with_permissions(profile, allow_change_planning, permission_path())
+    }
+
+    /// A Guard over the `local-dev` cluster whose roles come from `permissions_file`.
+    fn test_guard_with_permissions(profile: &str, allow_change_planning: bool, permissions_file: String) -> Guard {
         Guard::new(
             SecurityConfig {
                 profile: profile.to_string(),
                 allow_change_planning,
                 sanitize_output: true,
                 rate_limit_per_minute: 60,
-                permissions_file: permission_path(),
+                permissions_file,
                 max_concurrent_requests_per_cluster: 8,
                 pseudonym_key_env: None,
             },

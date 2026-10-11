@@ -279,7 +279,7 @@ async fn owner_only_deadline_rejects_claim_without_protocol_expiry_or_response()
 
 #[tokio::test(start_paused = true)]
 async fn lifecycle_priority_is_parent_then_session_then_owner_deadline() {
-    enum ExpectedLifecycleOutcome {
+    enum ExpectedLifecycleRejectionKind {
         ParentCancelled,
         SessionClosed,
         DeadlineExpired,
@@ -289,19 +289,19 @@ async fn lifecycle_priority_is_parent_then_session_then_owner_deadline() {
         (
             true,
             true,
-            ExpectedLifecycleOutcome::ParentCancelled,
+            ExpectedLifecycleRejectionKind::ParentCancelled,
             DeferredTerminalReason::ParentCancelled,
         ),
         (
             false,
             true,
-            ExpectedLifecycleOutcome::SessionClosed,
+            ExpectedLifecycleRejectionKind::SessionClosed,
             DeferredTerminalReason::SessionClosed,
         ),
         (
             false,
             false,
-            ExpectedLifecycleOutcome::DeadlineExpired,
+            ExpectedLifecycleRejectionKind::DeadlineExpired,
             DeferredTerminalReason::OwnerDeadline,
         ),
     ];
@@ -316,13 +316,13 @@ async fn lifecycle_priority_is_parent_then_session_then_owner_deadline() {
         }
         let outcome = DeferredRegistry::<()>::new().register(DeferredRequest::new((), fixture.take_parts()));
         match expected_kind {
-            ExpectedLifecycleOutcome::ParentCancelled => {
+            ExpectedLifecycleRejectionKind::ParentCancelled => {
                 assert!(matches!(outcome, DeferredRegistrationResult::ParentCancelled));
             }
-            ExpectedLifecycleOutcome::SessionClosed => {
+            ExpectedLifecycleRejectionKind::SessionClosed => {
                 assert!(matches!(outcome, DeferredRegistrationResult::SessionClosed));
             }
-            ExpectedLifecycleOutcome::DeadlineExpired => {
+            ExpectedLifecycleRejectionKind::DeadlineExpired => {
                 assert!(matches!(outcome, DeferredRegistrationResult::DeadlineExpired));
             }
         }
