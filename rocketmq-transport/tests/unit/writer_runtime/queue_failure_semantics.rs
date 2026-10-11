@@ -40,7 +40,7 @@ use super::run_session_writer;
 use super::writer_lanes;
 use super::ActiveBatchDropGuard;
 use super::MicroBatchConfig;
-use super::WriterEnqueueOutcome;
+use super::WriterEnqueueResult;
 use super::WriterEvent;
 use super::WriterQueueConfig;
 use crate::admission::AdmissionClass;
@@ -65,14 +65,14 @@ use crate::write_strategy::QueuedWriteCancellation;
 use crate::write_strategy::QueuedWriteProgress;
 use crate::write_strategy::ResponseQueueWaitObservation;
 
-fn expect_enqueued(outcome: WriterEnqueueOutcome, context: &str) {
+fn expect_enqueued(outcome: WriterEnqueueResult, context: &str) {
     match outcome {
-        WriterEnqueueOutcome::Enqueued => {}
-        WriterEnqueueOutcome::Full(write) => {
+        WriterEnqueueResult::Enqueued => {}
+        WriterEnqueueResult::Full(write) => {
             drop(write);
             panic!("{context}: writer lane is full")
         }
-        WriterEnqueueOutcome::Closed(write) => {
+        WriterEnqueueResult::Closed(write) => {
             drop(write);
             panic!("{context}: writer lane is closed")
         }
