@@ -444,12 +444,13 @@ impl ServerRequestResponse {
 
 /// Result of one typed broker-to-client request.
 #[must_use]
-pub enum ServerRequestOutcome {
+pub enum ServerRequestResult {
     /// The exactly correlated client response was received.
     Responded(ServerRequestResponse),
     /// Pending-response or writer capacity was exhausted before writing.
     QueueSaturated,
-    /// The immutable deadline elapsed before the first socket write.
+    /// The immutable deadline elapsed before the first socket write, or while
+    /// waiting for its pending response.
     DeadlineExpired,
     /// The session closed before admission or while waiting for its response.
     ///
@@ -535,12 +536,12 @@ impl ServerRequestSender {
         &self,
         command: ServerRequestCommand,
         timeout: Duration,
-    ) -> Result<ServerRequestOutcome, TransportError> {
+    ) -> Result<ServerRequestResult, TransportError> {
         let session_id = self.session_id();
         let kind = command.kind();
         let outbound_lease = match self.session.acquire_server_outbound() {
             Ok(lease) => lease,
-            Err(_) => return Ok(ServerRequestOutcome::SessionClosed),
+            Err(_) => return Ok(ServerRequestResult::SessionClosed),
         };
         let deadline = RequestDeadline::after(timeout);
         let mut command = command.into_command();
@@ -555,9 +556,9 @@ impl ServerRequestSender {
             response_tx,
         ) {
             PendingRequestRegistrationResult::Registered(guard) => guard,
-            PendingRequestRegistrationResult::QueueSaturated => return Ok(ServerRequestOutcome::QueueSaturated),
-            PendingRequestRegistrationResult::DeadlineExpired => return Ok(ServerRequestOutcome::DeadlineExpired),
-            PendingRequestRegistrationResult::SessionClosed => return Ok(ServerRequestOutcome::SessionClosed),
+            PendingRequestRegistrationResult::QueueSaturated => return Ok(ServerRequestResult::QueueSaturated),
+            PendingRequestRegistrationResult::DeadlineExpired => return Ok(ServerRequestResult::DeadlineExpired),
+            PendingRequestRegistrationResult::SessionClosed => return Ok(ServerRequestResult::SessionClosed),
             PendingRequestRegistrationResult::OperationalFailure(source) => {
                 return Err(TransportError::request_failed(
                     crate::error::RequestOperation::Register,
@@ -579,9 +580,9 @@ impl ServerRequestSender {
             | ServerCommandDisposition::DeadlineExpired
             | ServerCommandDisposition::SessionClosed) => {
                 let outcome = match normal {
-                    ServerCommandDisposition::QueueSaturated => ServerRequestOutcome::QueueSaturated,
-                    ServerCommandDisposition::DeadlineExpired => ServerRequestOutcome::DeadlineExpired,
-                    ServerCommandDisposition::SessionClosed => ServerRequestOutcome::SessionClosed,
+                    ServerCommandDisposition::QueueSaturated => ServerRequestResult::QueueSaturated,
+                    ServerCommandDisposition::DeadlineExpired => ServerRequestResult::DeadlineExpired,
+                    ServerCommandDisposition::SessionClosed => ServerRequestResult::SessionClosed,
                     _ => unreachable!("normal server-request dispositions are exhaustive"),
                 };
                 fail_closed.complete();
@@ -616,11 +617,11 @@ impl ServerRequestSender {
             Ok(Ok(PendingRequestCompletion::Response(response))) => response,
             Ok(Ok(PendingRequestCompletion::DeadlineExpired)) => {
                 fail_closed.complete();
-                return Ok(ServerRequestOutcome::DeadlineExpired);
+                return Ok(ServerRequestResult::DeadlineExpired);
             }
             Ok(Ok(PendingRequestCompletion::Cancelled | PendingRequestCompletion::SessionClosed)) => {
                 fail_closed.complete();
-                return Ok(ServerRequestOutcome::SessionClosed);
+                return Ok(ServerRequestResult::SessionClosed);
             }
             Ok(Ok(PendingRequestCompletion::OperationalFailure(source))) => {
                 return Err(TransportError::request_failed(
@@ -652,7 +653,7 @@ impl ServerRequestSender {
             }
         };
         fail_closed.complete();
-        Ok(ServerRequestOutcome::Responded(ServerRequestResponse {
+        Ok(ServerRequestResult::Responded(ServerRequestResponse {
             session_id,
             kind,
             command: response,

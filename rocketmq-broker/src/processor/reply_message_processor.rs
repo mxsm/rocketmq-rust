@@ -50,7 +50,7 @@ use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
 use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::ServerRequestCommand;
-use rocketmq_transport::api::ServerRequestOutcome;
+use rocketmq_transport::api::ServerRequestResult;
 use rocketmq_transport::api::ServerRequestSender;
 use rocketmq_transport::api::TransportError;
 
@@ -146,7 +146,7 @@ impl ReplyPushPort for BrokerReplyPushPort {
             )
             .await
         {
-            Ok(ServerRequestOutcome::Responded(response)) => Ok(response.into_command()),
+            Ok(ServerRequestResult::Responded(response)) => Ok(response.into_command()),
             Ok(_) => Err(ReplyPushPortError::Rejected),
             Err(source) => Err(ReplyPushPortError::Call { source }),
         }

@@ -57,7 +57,7 @@ use rocketmq_store::BrokerAdminStore;
 use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::ServerRequestCommand;
-use rocketmq_transport::api::ServerRequestOutcome;
+use rocketmq_transport::api::ServerRequestResult;
 use tracing::warn;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
@@ -842,11 +842,11 @@ impl ConsumerRequestHandler {
             .request(command, Duration::from_millis(5_000))
             .await
         {
-            Ok(ServerRequestOutcome::Responded(result)) => Ok(Some(result.into_command())),
+            Ok(ServerRequestResult::Responded(result)) => Ok(Some(result.into_command())),
             Ok(
-                ServerRequestOutcome::QueueSaturated
-                | ServerRequestOutcome::DeadlineExpired
-                | ServerRequestOutcome::SessionClosed,
+                ServerRequestResult::QueueSaturated
+                | ServerRequestResult::DeadlineExpired
+                | ServerRequestResult::SessionClosed,
             ) => {
                 let (code, remark) = consumer_request_rejection_response();
                 response = response.set_code(code).set_remark(remark);

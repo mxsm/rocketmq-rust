@@ -8022,8 +8022,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::session_registry::ServerRequestOutcome",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::session_registry::ServerRequestOutcome",
+          "declaration": "pub use crate::session_registry::ServerRequestResult",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::session_registry::ServerRequestResult",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
