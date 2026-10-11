@@ -39,7 +39,6 @@ use crate::dispatch::EmbeddedResponseAction;
 use crate::dispatch::ExplicitProcessor;
 use crate::dispatch::InternalFailureOrigin;
 use crate::dispatch::InternalProcessorCandidate;
-use crate::dispatch::InternalProcessorOutcome;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RemotingResponse;
 use crate::dispatch::RequestContext;
@@ -509,7 +508,7 @@ where
             original,
             request_started,
             InternalProcessorCandidate::failure(
-                InternalProcessorOutcome::Handled(crate::dispatch::ResponseAction::Reply(response)),
+                crate::dispatch::ResponseAction::Reply(response),
                 InternalFailureOrigin::Deadline,
             ),
         )
@@ -589,7 +588,7 @@ async fn finish_rejected_candidate<P>(
 where
     P: RequestProcessor + Clone + Sync + 'static,
 {
-    let InternalProcessorOutcome::Handled(crate::dispatch::ResponseAction::Reply(response)) = candidate.outcome else {
+    let crate::dispatch::ResponseAction::Reply(response) = candidate.outcome else {
         return Err(EmbeddedDispatchError::one_way_contract(
             crate::contract::TransportContractViolation::OneWayInvalidRejection,
         ));
@@ -681,9 +680,9 @@ const fn embedded_response_outcome(outcome: ResponseCompletionOutcome) -> Embedd
 }
 
 fn reply_candidate(response: RemotingResponse) -> InternalProcessorCandidate {
-    InternalProcessorCandidate::success(InternalProcessorOutcome::Handled(
+    InternalProcessorCandidate::success(
         crate::dispatch::ResponseAction::Reply(response),
-    ))
+    )
 }
 
 fn map_processor_error(error: crate::dispatch::DispatchProcessorError) -> EmbeddedDispatchError {
