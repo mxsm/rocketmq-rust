@@ -53,8 +53,8 @@ use crate::dispatch::DeferredWaitLimits;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestMeta;
 use crate::dispatch::ResponseSink;
-use crate::dispatch::ResponseStateOutcome;
 use crate::dispatch::ResponseTerminalState;
+use crate::dispatch::ResponseTransitionResult;
 use crate::session_view::EmbeddedSessionRecord;
 use crate::telemetry::TransportTelemetry;
 
@@ -1516,8 +1516,8 @@ async fn session_cleanup_does_not_overwrite_sending_response() {
     );
     let state = claimed.response_state_for_test();
     let send = match state.begin_sending().expect("sending owner contract") {
-        ResponseStateOutcome::Applied(send) => send,
-        ResponseStateOutcome::AlreadyCompleted { state, reason } => {
+        ResponseTransitionResult::Applied(send) => send,
+        ResponseTransitionResult::AlreadyCompleted { state, reason } => {
             panic!("sending owner unexpectedly observed {state:?} with {reason:?}")
         }
     };

@@ -33,9 +33,9 @@ use crate::dispatch::RemotingResponse;
 use crate::dispatch::RequestControlView;
 use crate::dispatch::ResponseReceipt;
 use crate::dispatch::ResponseState;
-use crate::dispatch::ResponseStateOutcome;
 use crate::dispatch::ResponseStateSnapshot;
 use crate::dispatch::ResponseTerminalState;
+use crate::dispatch::ResponseTransitionResult;
 use crate::session_view::SessionId;
 
 /// Reason that caused a deferred request to become eligible for resume.
@@ -459,20 +459,20 @@ where
 
     pub(super) fn close_session_response(
         &self,
-    ) -> Result<ResponseStateOutcome, crate::contract::TransportContractViolation> {
+    ) -> Result<ResponseTransitionResult, crate::contract::TransportContractViolation> {
         self.state.close_with_reason(DeferredSystemCloseReason::SESSION_CLOSED)
     }
 
     pub(super) fn cancel_parent_response(
         &self,
-    ) -> Result<ResponseStateOutcome, crate::contract::TransportContractViolation> {
+    ) -> Result<ResponseTransitionResult, crate::contract::TransportContractViolation> {
         self.state
             .cancel_with_reason(DeferredSystemCancellationReason::PARENT_CANCELLED)
     }
 
     pub(super) fn cancel_owner_response(
         &self,
-    ) -> Result<ResponseStateOutcome, crate::contract::TransportContractViolation> {
+    ) -> Result<ResponseTransitionResult, crate::contract::TransportContractViolation> {
         self.state
             .cancel_with_reason(DeferredSystemCancellationReason::OWNER_DEADLINE)
     }
@@ -485,7 +485,7 @@ where
         self.state.snapshot()
     }
 
-    fn terminalize_release(&self) -> Result<ResponseStateOutcome, crate::contract::TransportContractViolation> {
+    fn terminalize_release(&self) -> Result<ResponseTransitionResult, crate::contract::TransportContractViolation> {
         if self.control.parent_is_cancelled() {
             self.cancel_parent_response()
         } else if self.control.session_is_closed() {

@@ -30,7 +30,7 @@ use super::ResponseCompletionOutcome;
 use super::ResponseReceipt;
 use super::ResponseSink;
 use super::ResponseState;
-use super::ResponseStateOutcome;
+use super::ResponseTransitionResult;
 use super::WriteProgress;
 use crate::admission::AdmissionClass;
 use crate::contract::TransportContractViolation;
@@ -235,11 +235,11 @@ impl DeferredResponder {
         self.state.terminal_reason()
     }
 
-    pub(crate) fn register(&self) -> Result<ResponseStateOutcome, TransportContractViolation> {
+    pub(crate) fn register(&self) -> Result<ResponseTransitionResult, TransportContractViolation> {
         self.state.register()
     }
 
-    pub(crate) fn claim(&self) -> Result<ResponseStateOutcome, TransportContractViolation> {
+    pub(crate) fn claim(&self) -> Result<ResponseTransitionResult, TransportContractViolation> {
         self.state.claim()
     }
 
@@ -272,10 +272,10 @@ impl DeferredResponder {
     pub(crate) fn cleanup_close_with_reason(
         &mut self,
         reason: DeferredSystemCloseReason,
-    ) -> Result<ResponseStateOutcome, TransportContractViolation> {
+    ) -> Result<ResponseTransitionResult, TransportContractViolation> {
         let result = self.state.close_with_reason(reason);
         self.active = false;
-        if matches!(result, Ok(ResponseStateOutcome::Applied(()))) {
+        if matches!(result, Ok(ResponseTransitionResult::Applied(()))) {
             if let Some(observation) = &self.observation {
                 observation.complete_cancelled(reason.terminal_reason());
             }
@@ -286,10 +286,10 @@ impl DeferredResponder {
     pub(crate) fn cleanup_cancel_with_reason(
         &mut self,
         reason: DeferredSystemCancellationReason,
-    ) -> Result<ResponseStateOutcome, TransportContractViolation> {
+    ) -> Result<ResponseTransitionResult, TransportContractViolation> {
         let result = self.state.cancel_with_reason(reason);
         self.active = false;
-        if matches!(result, Ok(ResponseStateOutcome::Applied(()))) {
+        if matches!(result, Ok(ResponseTransitionResult::Applied(()))) {
             if let Some(observation) = &self.observation {
                 observation.complete_cancelled(reason.terminal_reason());
             }
@@ -304,10 +304,10 @@ impl DeferredResponder {
     pub(crate) fn close_with_reason(
         mut self,
         reason: DeferredSystemCloseReason,
-    ) -> Result<ResponseStateOutcome, TransportContractViolation> {
+    ) -> Result<ResponseTransitionResult, TransportContractViolation> {
         let result = self.state.close_with_reason(reason);
         self.active = false;
-        if matches!(result, Ok(ResponseStateOutcome::Applied(()))) {
+        if matches!(result, Ok(ResponseTransitionResult::Applied(()))) {
             if let Some(observation) = &self.observation {
                 observation.complete_cancelled(reason.terminal_reason());
             }
@@ -318,10 +318,10 @@ impl DeferredResponder {
     pub(crate) fn cancel_with_system_reason(
         mut self,
         reason: DeferredSystemCancellationReason,
-    ) -> Result<ResponseStateOutcome, TransportContractViolation> {
+    ) -> Result<ResponseTransitionResult, TransportContractViolation> {
         let result = self.state.cancel_with_reason(reason);
         self.active = false;
-        if matches!(result, Ok(ResponseStateOutcome::Applied(()))) {
+        if matches!(result, Ok(ResponseTransitionResult::Applied(()))) {
             if let Some(observation) = &self.observation {
                 observation.complete_cancelled(reason.terminal_reason());
             }
@@ -361,8 +361,8 @@ impl DeferredResponder {
         let body_kind = response.body_kind();
         let write_started = std::time::Instant::now();
         let mut claim = match self.state.begin_sending() {
-            Ok(ResponseStateOutcome::Applied(claim)) => claim,
-            Ok(ResponseStateOutcome::AlreadyCompleted { state, reason }) => {
+            Ok(ResponseTransitionResult::Applied(claim)) => claim,
+            Ok(ResponseTransitionResult::AlreadyCompleted { state, reason }) => {
                 return Ok(DeferredResponseAttempt::AlreadyCompleted { state, reason })
             }
             Err(error) => return Err(crate::error::TransportError::response(error)),
@@ -451,14 +451,14 @@ impl DeferredResponder {
     pub fn cancel(mut self) -> Result<DeferredResponseOutcome, crate::error::TransportError> {
         let result = self.state.cancel();
         self.active = false;
-        if matches!(result, Ok(ResponseStateOutcome::Applied(()))) {
+        if matches!(result, Ok(ResponseTransitionResult::Applied(()))) {
             if let Some(observation) = &self.observation {
                 observation.complete_cancelled(DeferredTerminalReason::Explicit);
             }
         }
         match result {
-            Ok(ResponseStateOutcome::Applied(())) => Ok(DeferredResponseOutcome::Cancelled),
-            Ok(ResponseStateOutcome::AlreadyCompleted { .. }) => Ok(DeferredResponseOutcome::AlreadyCompleted),
+            Ok(ResponseTransitionResult::Applied(())) => Ok(DeferredResponseOutcome::Cancelled),
+            Ok(ResponseTransitionResult::AlreadyCompleted { .. }) => Ok(DeferredResponseOutcome::AlreadyCompleted),
             Err(error) => Err(crate::error::TransportError::response(error)),
         }
     }
@@ -480,25 +480,25 @@ impl DeferredResponder {
             DeferredCancellationReason::ReceiverDropped => self.state.cancel_receiver_dropped(),
         };
         self.active = false;
-        if matches!(result, Ok(ResponseStateOutcome::Applied(()))) {
+        if matches!(result, Ok(ResponseTransitionResult::Applied(()))) {
             if let Some(observation) = &self.observation {
                 observation.complete_cancelled(DeferredTerminalReason::ReceiverDropped);
             }
         }
         match result {
-            Ok(ResponseStateOutcome::Applied(())) => Ok(DeferredResponseOutcome::Cancelled),
-            Ok(ResponseStateOutcome::AlreadyCompleted { .. }) => Ok(DeferredResponseOutcome::AlreadyCompleted),
+            Ok(ResponseTransitionResult::Applied(())) => Ok(DeferredResponseOutcome::Cancelled),
+            Ok(ResponseTransitionResult::AlreadyCompleted { .. }) => Ok(DeferredResponseOutcome::AlreadyCompleted),
             Err(error) => Err(crate::error::TransportError::response(error)),
         }
     }
 }
 
 fn finish_deferred_claim(
-    result: Result<ResponseStateOutcome, TransportContractViolation>,
+    result: Result<ResponseTransitionResult, TransportContractViolation>,
 ) -> Result<Option<DeferredResponseAttempt>, crate::error::TransportError> {
     match result {
-        Ok(ResponseStateOutcome::Applied(())) => Ok(None),
-        Ok(ResponseStateOutcome::AlreadyCompleted { state, reason }) => {
+        Ok(ResponseTransitionResult::Applied(())) => Ok(None),
+        Ok(ResponseTransitionResult::AlreadyCompleted { state, reason }) => {
             Ok(Some(DeferredResponseAttempt::AlreadyCompleted { state, reason }))
         }
         Err(error) => Err(crate::error::TransportError::response(error)),
