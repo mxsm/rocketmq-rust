@@ -96,7 +96,7 @@ impl<P> ExplicitProcessor<P> {
 
 #[path = "processor_adapter/embedded_processor.rs"]
 mod embedded_processor;
-pub(crate) use embedded_processor::EmbeddedResolvedOutcome;
+pub(crate) use embedded_processor::EmbeddedResponseAction;
 
 impl<P> Clone for ExplicitProcessor<P>
 where

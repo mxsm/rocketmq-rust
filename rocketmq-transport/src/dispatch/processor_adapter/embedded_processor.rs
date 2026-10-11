@@ -42,7 +42,7 @@ use crate::runtime::processor::ResponseWritePath;
 use super::DispatchProcessorError;
 use super::ExplicitProcessor;
 
-pub(crate) enum EmbeddedResolvedOutcome {
+pub(crate) enum EmbeddedResponseAction {
     Reply(RemotingResponse),
     OneWay,
     Deferred(DeferredRegistration),
@@ -102,18 +102,18 @@ where
         }
     }
 
-    pub(crate) fn resolve_embedded_outcome(
+    pub(crate) fn resolve_embedded_response_action(
         &self,
         request: &mut RemotingRequest,
         outcome: InternalProcessorOutcome,
-    ) -> Result<EmbeddedResolvedOutcome, TransportContractViolation> {
+    ) -> Result<EmbeddedResponseAction, TransportContractViolation> {
         let InternalProcessorOutcome::Handled(outcome) = outcome;
         if request.original_identity().is_one_way() {
             return match outcome {
                 ResponseAction::Reply(response) => {
                     let resolved = request.resolve_response_action(ResponseAction::Reply(response))?;
                     drop(resolved);
-                    Ok(EmbeddedResolvedOutcome::OneWay)
+                    Ok(EmbeddedResponseAction::OneWay)
                 }
                 ResponseAction::Deferred(registration) => {
                     request.consume_oneway_deferred(registration)?;
@@ -126,9 +126,9 @@ where
             };
         }
         match request.resolve_response_action(outcome)? {
-            ResponseAction::Reply(response) => Ok(EmbeddedResolvedOutcome::Reply(response)),
-            ResponseAction::Deferred(registration) => Ok(EmbeddedResolvedOutcome::Deferred(registration)),
-            ResponseAction::NoReply(marker) => Ok(EmbeddedResolvedOutcome::NoReply(marker)),
+            ResponseAction::Reply(response) => Ok(EmbeddedResponseAction::Reply(response)),
+            ResponseAction::Deferred(registration) => Ok(EmbeddedResponseAction::Deferred(registration)),
+            ResponseAction::NoReply(marker) => Ok(EmbeddedResponseAction::NoReply(marker)),
         }
     }
 

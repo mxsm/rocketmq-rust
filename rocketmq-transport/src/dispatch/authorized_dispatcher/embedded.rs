@@ -35,7 +35,7 @@ use crate::dispatch::DeferredSessionCleanupOwner;
 use crate::dispatch::EmbeddedCaller;
 use crate::dispatch::EmbeddedDispatchError;
 use crate::dispatch::EmbeddedDispatchOutcome;
-use crate::dispatch::EmbeddedResolvedOutcome;
+use crate::dispatch::EmbeddedResponseAction;
 use crate::dispatch::ExplicitProcessor;
 use crate::dispatch::InternalFailureOrigin;
 use crate::dispatch::InternalProcessorCandidate;
@@ -529,9 +529,9 @@ where
         .map_err(map_processor_error)?;
     let InternalProcessorCandidate { outcome, failure } = candidate;
     let outcome = processor
-        .resolve_embedded_outcome(&mut request, outcome)
+        .resolve_embedded_response_action(&mut request, outcome)
         .map_err(map_resolve_error)?;
-    if matches!(&outcome, EmbeddedResolvedOutcome::OneWay) {
+    if matches!(&outcome, EmbeddedResponseAction::OneWay) {
         if let Some(failure) = failure {
             core.report_failure_category(failure.category());
         }
@@ -574,7 +574,7 @@ where
     let control = builder.control().clone();
     let mut request = builder.build().map_err(EmbeddedDispatchError::request_construction)?;
     let outcome = processor
-        .resolve_embedded_outcome(&mut request, candidate.outcome)
+        .resolve_embedded_response_action(&mut request, candidate.outcome)
         .map_err(map_resolve_error)?;
     finish_resolved(processor, control, original, request_started, outcome, false).await
 }
@@ -596,9 +596,9 @@ where
     };
     let outcome = if original.is_one_way() {
         drop(response);
-        EmbeddedResolvedOutcome::OneWay
+        EmbeddedResponseAction::OneWay
     } else {
-        EmbeddedResolvedOutcome::Reply(response)
+        EmbeddedResponseAction::Reply(response)
     };
     finish_resolved(processor, control, original, request_started, outcome, false).await
 }
@@ -608,17 +608,17 @@ async fn finish_resolved<P>(
     control: RequestControlView,
     original: OriginalRequestIdentity,
     request_started: Instant,
-    outcome: EmbeddedResolvedOutcome,
+    outcome: EmbeddedResponseAction,
     commit_deferred: bool,
 ) -> TerminalResult
 where
     P: RequestProcessor + Clone + Sync + 'static,
 {
     match outcome {
-        EmbeddedResolvedOutcome::OneWay => Ok(EmbeddedDispatchOutcome::OneWay {
+        EmbeddedResponseAction::OneWay => Ok(EmbeddedDispatchOutcome::OneWay {
             request_id: original.request_id(),
         }),
-        EmbeddedResolvedOutcome::Deferred(registration) => {
+        EmbeddedResponseAction::Deferred(registration) => {
             let request_id = registration.request_id();
             if commit_deferred {
                 if let Err(error) = registration.commit() {
@@ -634,11 +634,11 @@ where
             }
             Ok(EmbeddedDispatchOutcome::Deferred { request_id })
         }
-        EmbeddedResolvedOutcome::NoReply(marker) => Ok(EmbeddedDispatchOutcome::NoReply {
+        EmbeddedResponseAction::NoReply(marker) => Ok(EmbeddedDispatchOutcome::NoReply {
             request_id: marker.request_id(),
             reason: marker.reason(),
         }),
-        EmbeddedResolvedOutcome::Reply(response) => {
+        EmbeddedResponseAction::Reply(response) => {
             let response_code = response.response_code();
             let body_kind = response.body_kind();
             let bound = response

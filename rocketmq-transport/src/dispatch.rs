@@ -93,7 +93,7 @@ pub use handler_outcome::ResponseAction;
 pub(crate) use processor_adapter::DispatchMetricsGuard;
 pub(crate) use processor_adapter::DispatchProcessor;
 pub(crate) use processor_adapter::DispatchProcessorError;
-pub(crate) use processor_adapter::EmbeddedResolvedOutcome;
+pub(crate) use processor_adapter::EmbeddedResponseAction;
 pub(crate) use processor_adapter::ExplicitProcessor;
 pub(crate) use processor_adapter::InternalFailureOrigin;
 pub(crate) use processor_adapter::InternalProcessorCandidate;
