@@ -65,7 +65,7 @@ impl std::fmt::Debug for SessionCleanupEnrollment {
 
 /// Result of atomically installing a session-close callback.
 #[cfg(test)]
-pub(crate) enum SessionCleanupInstallOutcome<T, E> {
+pub(crate) enum SessionCleanupInstallResult<T, E> {
     /// The callback and caller value were installed.
     Installed(T),
     /// The canonical network session was already closing or closed.
@@ -90,7 +90,7 @@ impl SessionCleanupCapability {
         &self,
         cleanup: impl Fn() + Send + Sync + 'static,
         install: impl FnOnce(SessionCleanupEnrollment) -> Result<T, (E, SessionCleanupEnrollment)>,
-    ) -> Result<SessionCleanupInstallOutcome<T, E>, crate::contract::TransportContractViolation> {
+    ) -> Result<SessionCleanupInstallResult<T, E>, crate::contract::TransportContractViolation> {
         static NEXT_KEY: AtomicUsize = AtomicUsize::new(1);
 
         let key = NEXT_KEY
@@ -125,10 +125,10 @@ impl SessionCleanupCapability {
             },
         );
         match result {
-            Ok(value) => Ok(SessionCleanupInstallOutcome::Installed(value)),
-            Err(RegistryFailure::SessionClosed) => Ok(SessionCleanupInstallOutcome::SessionClosed),
+            Ok(value) => Ok(SessionCleanupInstallResult::Installed(value)),
+            Err(RegistryFailure::SessionClosed) => Ok(SessionCleanupInstallResult::SessionClosed),
             Err(RegistryFailure::CleanupInstallerRejected) => match install_error {
-                Some(error) => Ok(SessionCleanupInstallOutcome::Rejected(error)),
+                Some(error) => Ok(SessionCleanupInstallResult::Rejected(error)),
                 None => Err(crate::contract::TransportContractViolation::SessionCleanupInvariant),
             },
             Err(_) => Err(crate::contract::TransportContractViolation::SessionCleanupInvariant),
@@ -632,7 +632,7 @@ mod tests {
             )
             .expect("closed cleanup installation is a normal outcome");
 
-        assert!(matches!(outcome, SessionCleanupInstallOutcome::SessionClosed));
+        assert!(matches!(outcome, SessionCleanupInstallResult::SessionClosed));
         assert_eq!(installer_calls.load(Ordering::SeqCst), 0);
         assert_eq!(cleanup_calls.load(Ordering::SeqCst), 0);
         assert_eq!(owner.target_counts(), (0, 0));
@@ -654,7 +654,7 @@ mod tests {
             )
             .expect("installer rejection preserves a normal typed value");
 
-        let SessionCleanupInstallOutcome::Rejected(error) = outcome else {
+        let SessionCleanupInstallResult::Rejected(error) = outcome else {
             panic!("installer rejection must not expose the private enrollment")
         };
         assert_eq!(error, "installer-rejected");
@@ -679,7 +679,7 @@ mod tests {
                 Ok::<_, ((), SessionCleanupEnrollment)>,
             )
             .expect("cleanup installation contract");
-        let SessionCleanupInstallOutcome::Installed(enrollment) = outcome else {
+        let SessionCleanupInstallResult::Installed(enrollment) = outcome else {
             panic!("open cleanup capability must install")
         };
         assert_eq!(owner.target_counts(), (1, 1));
