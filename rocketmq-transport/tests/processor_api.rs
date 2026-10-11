@@ -79,7 +79,7 @@ use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
 use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::ResponseBodyKind;
-use rocketmq_transport::api::ResponseCompletionOutcome;
+use rocketmq_transport::api::ResponseCompletionResult;
 use rocketmq_transport::api::ResponseDisposition;
 use rocketmq_transport::api::ResponseReceipt;
 use rocketmq_transport::api::ResponseWriteObservation;
@@ -405,7 +405,7 @@ fn inspect_write_outcome(outcome: ResponseWriteOutcome) -> Option<ResponseReceip
     match outcome {
         ResponseWriteOutcome::Written(receipt) => Some(receipt),
         ResponseWriteOutcome::Failed { completion, progress } => {
-            let _: Option<ResponseCompletionOutcome> = completion;
+            let _: Option<ResponseCompletionResult> = completion;
             let _: Option<WriteProgress> = progress;
             None
         }
@@ -639,7 +639,7 @@ fn api_processor_side_contracts_are_typed_and_body_free() {
     let _ = ResponseWritePath::Inline;
     let _ = ResponseWritePath::Deferred;
     let failure = ResponseWriteOutcome::Failed {
-        completion: Some(ResponseCompletionOutcome::QueueSaturated),
+        completion: Some(ResponseCompletionResult::QueueSaturated),
         progress: Some(WriteProgress::PossiblyPartial),
     };
     assert!(inspect_write_outcome(failure).is_none());

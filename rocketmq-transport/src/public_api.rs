@@ -118,7 +118,7 @@ pub use crate::dispatch::RequestMeta;
 pub use crate::dispatch::RequestOrigin;
 pub use crate::dispatch::ResponseAction;
 pub use crate::dispatch::ResponseBodyKind;
-pub use crate::dispatch::ResponseCompletionOutcome;
+pub use crate::dispatch::ResponseCompletionResult;
 pub use crate::dispatch::ResponseDisposition;
 pub use crate::dispatch::ResponseReceipt;
 pub use crate::dispatch::ResponseTerminalState;

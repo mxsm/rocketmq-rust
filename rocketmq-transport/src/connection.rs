@@ -44,7 +44,7 @@ use crate::codec::PreparedResponse;
 use crate::deadline::RequestDeadline;
 use crate::dispatch::DeferredTransportDropHandle;
 use crate::dispatch::RequestControlView;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseOperationalFailure;
 use crate::dispatch::ResponseSendOutcome;
 use crate::dispatch::ResponseTransportDropHandle;
@@ -204,10 +204,10 @@ impl SendFailure {
 
     fn into_response(self) -> ResponseSendOutcome {
         match self {
-            Self::DeadlineExceeded { .. } => ResponseSendOutcome::Rejected(ResponseCompletionOutcome::DeadlineExpired),
-            Self::SessionClosed => ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed),
-            Self::Cancelled => ResponseSendOutcome::Rejected(ResponseCompletionOutcome::Cancelled),
-            Self::QueueSaturated { .. } => ResponseSendOutcome::Rejected(ResponseCompletionOutcome::QueueSaturated),
+            Self::DeadlineExceeded { .. } => ResponseSendOutcome::Rejected(ResponseCompletionResult::DeadlineExpired),
+            Self::SessionClosed => ResponseSendOutcome::Rejected(ResponseCompletionResult::SessionClosed),
+            Self::Cancelled => ResponseSendOutcome::Rejected(ResponseCompletionResult::Cancelled),
+            Self::QueueSaturated { .. } => ResponseSendOutcome::Rejected(ResponseCompletionResult::QueueSaturated),
             Self::Writer { progress, error } => {
                 ResponseSendOutcome::OperationalFailure(ResponseOperationalFailure::transport(progress, error))
             }
@@ -1235,10 +1235,10 @@ impl Connection {
         control: &RequestControlView,
     ) -> ResponseSendOutcome {
         if self.queued_writer().is_none() {
-            return ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed);
+            return ResponseSendOutcome::Rejected(ResponseCompletionResult::SessionClosed);
         }
         let Some(class) = self.response_class() else {
-            return ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed);
+            return ResponseSendOutcome::Rejected(ResponseCompletionResult::SessionClosed);
         };
         let (_, payload) = prepared.into_parts();
         self.send_payload_inner_with_response_observation(
@@ -1263,13 +1263,13 @@ impl Connection {
         deferred_drop: DeferredTransportDropHandle,
     ) -> ResponseSendOutcome {
         if self.queued_writer().is_none() {
-            return ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed);
+            return ResponseSendOutcome::Rejected(ResponseCompletionResult::SessionClosed);
         }
         if self.response_drop.is_none() {
-            return ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed);
+            return ResponseSendOutcome::Rejected(ResponseCompletionResult::SessionClosed);
         }
         let Some(class) = self.response_class() else {
-            return ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed);
+            return ResponseSendOutcome::Rejected(ResponseCompletionResult::SessionClosed);
         };
         let (_, payload) = prepared.into_parts();
         self.send_payload_inner_with_response_observation(

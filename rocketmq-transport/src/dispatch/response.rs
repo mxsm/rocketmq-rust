@@ -122,7 +122,7 @@ impl ResponseTerminalState {
 /// Typed operational failure from canonical response delivery.
 ///
 /// Normal lifecycle, deadline, and capacity rejections are represented by
-/// [`ResponseCompletionOutcome`] instead. Formatting this error exposes only
+/// [`ResponseCompletionResult`] instead. Formatting this error exposes only
 /// its closed operation and the source error's stable code.
 pub(crate) enum ResponseOperationalFailure {
     /// Encoding failed deterministically before any write began.
@@ -142,7 +142,7 @@ pub(crate) enum ResponseOperationalFailure {
 /// Source-free result at a canonical response completion boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[must_use]
-pub enum ResponseCompletionOutcome {
+pub enum ResponseCompletionResult {
     /// Canonical response delivery completed.
     Completed(ResponseReceipt),
     /// A prior terminal operation already completed the response.
@@ -163,12 +163,12 @@ pub(crate) enum ResponseSendOutcome {
     /// The canonical writer completed the payload.
     Written,
     /// A source-free normal response state prevented the write.
-    Rejected(ResponseCompletionOutcome),
+    Rejected(ResponseCompletionResult),
     /// Encoding or transport I/O failed with a typed cause.
     OperationalFailure(ResponseOperationalFailure),
 }
 
-impl ResponseCompletionOutcome {
+impl ResponseCompletionResult {
     /// Returns the stable low-cardinality outcome label.
     #[must_use]
     pub const fn as_str(self) -> &'static str {

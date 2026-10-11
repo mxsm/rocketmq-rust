@@ -31,7 +31,7 @@ use crate::dispatch::RemotingRequest;
 use crate::dispatch::RemotingResponse;
 use crate::dispatch::ResponseAction;
 use crate::dispatch::ResponseBodyKind;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseOperationalFailure;
 use crate::request_ordering::RequestOrdering;
 use crate::runtime::processor::RejectRequestDecision;
@@ -139,7 +139,7 @@ where
         body_kind: ResponseBodyKind,
         write_elapsed: Duration,
         end_to_end_elapsed: Duration,
-        result: &Result<ResponseCompletionOutcome, ResponseOperationalFailure>,
+        result: &Result<ResponseCompletionResult, ResponseOperationalFailure>,
     ) {
         self.processor.observe_response(ResponseObservation::from_write_result(
             original.request_id(),

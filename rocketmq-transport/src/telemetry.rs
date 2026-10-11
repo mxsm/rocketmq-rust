@@ -27,7 +27,7 @@ use crate::dispatch::DeferredTerminalReason;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestOrigin;
 use crate::dispatch::ResponseBodyKind;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 #[cfg(any(test, feature = "observability"))]
 use crate::dispatch::ResponseDisposition;
 use crate::dispatch::ResponseReceipt;
@@ -342,7 +342,7 @@ impl RequestObservation {
         response_code: i32,
         body_kind: ResponseBodyKind,
         write_elapsed: Duration,
-        result: Result<ResponseReceipt, (Option<ResponseCompletionOutcome>, Option<WriteProgress>)>,
+        result: Result<ResponseReceipt, (Option<ResponseCompletionResult>, Option<WriteProgress>)>,
     ) {
         let outcome = match result {
             Ok(receipt) => ResponseObservationOutcome::Written(receipt),

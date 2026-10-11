@@ -98,7 +98,7 @@ async fn admitted_non_oneway_deadline_response_is_observed_without_terminal_fail
         assert!(matches!(
             observations[0].outcome(),
             ResponseWriteOutcome::Failed {
-                completion: Some(crate::dispatch::ResponseCompletionOutcome::DeadlineExpired),
+                completion: Some(crate::dispatch::ResponseCompletionResult::DeadlineExpired),
                 progress: Some(crate::dispatch::WriteProgress::NotStarted),
             }
         ));
@@ -168,7 +168,7 @@ async fn dropping_public_future_closes_terminal_and_session_while_accepted_work_
         assert!(matches!(
             observations[0].outcome(),
             ResponseWriteOutcome::Failed {
-                completion: Some(crate::dispatch::ResponseCompletionOutcome::SessionClosed),
+                completion: Some(crate::dispatch::ResponseCompletionResult::SessionClosed),
                 progress: Some(crate::dispatch::WriteProgress::NotStarted),
             }
         ));

@@ -47,7 +47,7 @@ use crate::dispatch::RequestMeta;
 use crate::dispatch::RequestOrigin;
 use crate::dispatch::ResponseAction;
 use crate::dispatch::ResponseBody;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseDisposition;
 use crate::error::TransportError;
 use crate::runtime::processor::RejectRequestDecision;
@@ -525,7 +525,7 @@ async fn expired_reply_maps_once_to_deadline_with_one_failed_observation() {
         assert!(matches!(
             observations[0].outcome(),
             ResponseWriteOutcome::Failed {
-                completion: Some(ResponseCompletionOutcome::DeadlineExpired),
+                completion: Some(ResponseCompletionResult::DeadlineExpired),
                 progress: Some(crate::dispatch::WriteProgress::NotStarted),
             }
         ));
