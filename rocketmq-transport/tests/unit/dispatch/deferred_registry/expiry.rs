@@ -413,7 +413,7 @@ async fn deferred_expiry_session_close_between_scan_and_claim_wins_deterministic
     registry.inner.set_sweep_claim_checkpoint(Box::new(move || {
         assert_eq!(
             close.close(),
-            crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+            crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseStatus::Completed
         );
     }));
 
