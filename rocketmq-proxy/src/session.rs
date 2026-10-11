@@ -27,8 +27,8 @@ use rocketmq_transport::api::ServerPushCommand;
 use rocketmq_transport::api::ServerPushOutcome;
 use rocketmq_transport::api::ServerPushSender;
 use rocketmq_transport::api::SessionCloseHandle;
-use rocketmq_transport::api::SessionCloseOutcome;
 use rocketmq_transport::api::SessionCloseReason;
+use rocketmq_transport::api::SessionCloseStatus;
 use rocketmq_transport::api::SessionId;
 use rocketmq_transport::api::SessionLifecycleListener;
 use rocketmq_transport::api::SessionRegistry;
@@ -90,7 +90,7 @@ impl RemotingSessionCapability {
     ///
     /// An already-closed session is a normal outcome. Transport operations
     /// that cannot complete return [`TransportError`].
-    pub async fn close(&self, reason: SessionCloseReason) -> Result<SessionCloseOutcome, TransportError> {
+    pub async fn close(&self, reason: SessionCloseReason) -> Result<SessionCloseStatus, TransportError> {
         self.close.close(reason).await
     }
 }
@@ -146,7 +146,7 @@ impl RetiredRemotingSession {
     pub(crate) async fn retire(self) -> RetiredSessionRetirement {
         debug_assert_eq!(self.capability.session_id(), self.binding.session_id);
         match self.capability.close(SessionCloseReason::ClientBindingRetired).await {
-            Ok(SessionCloseOutcome::Closed | SessionCloseOutcome::AlreadyClosed) => {
+            Ok(SessionCloseStatus::Closed | SessionCloseStatus::AlreadyClosed) => {
                 return RetiredSessionRetirement::Graceful;
             }
             Err(_) => {}

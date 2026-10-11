@@ -39,7 +39,7 @@ use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::DeferredAdmission;
 use rocketmq_transport::api::DeferredExpiryMargins;
-use rocketmq_transport::api::DeferredRegistryShutdownOutcome;
+use rocketmq_transport::api::DeferredRegistryShutdownStatus;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
 use rocketmq_transport::api::DeferredWaitLimits;
 use rocketmq_transport::api::DeferredWakeReason;
@@ -334,7 +334,7 @@ async fn notification_deferred_tcp_prepare_register_claim_resume_writes_one_fram
             .await
             .expect("Notification receipt channel")
             .expect("canonical Notification write"),
-        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        rocketmq_transport::api::DeferredResumeResult::Completed(_)
     ));
 
     let response = client
@@ -427,7 +427,7 @@ async fn notification_deferred_filter_miss_stays_registered_then_later_match_cla
             .await
             .expect("filtered Notification receipt channel")
             .expect("canonical filtered Notification write"),
-        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        rocketmq_transport::api::DeferredResumeResult::Completed(_)
     ));
     let response = client
         .receive_command()
@@ -476,7 +476,7 @@ async fn notification_deferred_session_close_drains_registry_permit_and_index() 
     })
     .await
     .expect("session close drains Notification deferred state");
-    let DeferredRegistryShutdownOutcome::Completed(stats) = service.shutdown() else {
+    let DeferredRegistryShutdownStatus::Completed(stats) = service.shutdown() else {
         panic!("session-close verification should win service shutdown");
     };
     assert_eq!(

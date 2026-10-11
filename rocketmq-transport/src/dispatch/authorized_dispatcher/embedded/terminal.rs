@@ -23,13 +23,13 @@ use crate::dispatch::EmbeddedDispatchOutcome;
 use crate::dispatch::RequestControlView;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum TerminalPublishOutcome {
+pub(super) enum TerminalPublishStatus {
     Delivered,
     AlreadyCompleted,
     ReceiverDropped,
 }
 
-impl TerminalPublishOutcome {
+impl TerminalPublishStatus {
     pub(super) const fn receiver_dropped(self) -> bool {
         matches!(self, Self::ReceiverDropped)
     }
@@ -48,18 +48,18 @@ enum EmbeddedTerminalState {
 }
 
 impl EmbeddedTerminalSender {
-    pub(super) fn complete(&self, result: TerminalResult) -> TerminalPublishOutcome {
+    pub(super) fn complete(&self, result: TerminalResult) -> TerminalPublishStatus {
         let sender = {
             let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             match std::mem::replace(&mut *state, EmbeddedTerminalState::Sending) {
                 EmbeddedTerminalState::Open(sender) => sender,
                 EmbeddedTerminalState::Sending | EmbeddedTerminalState::Completed => {
                     *state = EmbeddedTerminalState::Completed;
-                    return TerminalPublishOutcome::AlreadyCompleted;
+                    return TerminalPublishStatus::AlreadyCompleted;
                 }
                 EmbeddedTerminalState::ReceiverDropped => {
                     *state = EmbeddedTerminalState::ReceiverDropped;
-                    return TerminalPublishOutcome::ReceiverDropped;
+                    return TerminalPublishStatus::ReceiverDropped;
                 }
             }
         };
@@ -71,9 +71,9 @@ impl EmbeddedTerminalSender {
             EmbeddedTerminalState::ReceiverDropped
         };
         if delivered {
-            TerminalPublishOutcome::Delivered
+            TerminalPublishStatus::Delivered
         } else {
-            TerminalPublishOutcome::ReceiverDropped
+            TerminalPublishStatus::ReceiverDropped
         }
     }
 

@@ -179,7 +179,7 @@ pub struct PendingRequestUsage {
     pub rejected_bytes: usize,
 }
 
-pub(crate) enum PendingRegistrationOutcome {
+pub(crate) enum PendingRequestRegistrationResult {
     Registered(PendingRequestGuard),
     DeadlineExpired,
     SessionClosed,
@@ -203,7 +203,7 @@ pub(crate) enum PendingRequestCompletion {
 /// from a response that does not belong to this table at all, which indicates a
 /// routing or generation mistake rather than ordinary cancellation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PendingResponseOutcome {
+pub(crate) enum PendingResponseDisposition {
     /// The response matched a registered request and completed it.
     Completed,
     /// No request is registered for the opaque: it already settled.
@@ -333,7 +333,7 @@ impl PendingRequestTable {
         opaque: i32,
         deadline: RequestDeadline,
         sender: tokio::sync::oneshot::Sender<PendingRequestCompletion>,
-    ) -> PendingRegistrationOutcome {
+    ) -> PendingRequestRegistrationResult {
         self.register_with_bytes(opaque, deadline, 0, sender)
     }
 
@@ -344,7 +344,7 @@ impl PendingRequestTable {
         deadline: RequestDeadline,
         retained_bytes: usize,
         sender: tokio::sync::oneshot::Sender<PendingRequestCompletion>,
-    ) -> PendingRegistrationOutcome {
+    ) -> PendingRequestRegistrationResult {
         self.register_for_owner_with_bytes(&self.inner.default_owner, opaque, deadline, retained_bytes, sender)
     }
 
@@ -355,7 +355,7 @@ impl PendingRequestTable {
         opaque: i32,
         deadline: RequestDeadline,
         sender: tokio::sync::oneshot::Sender<PendingRequestCompletion>,
-    ) -> PendingRegistrationOutcome {
+    ) -> PendingRequestRegistrationResult {
         self.register_for_owner_with_bytes(owner, opaque, deadline, 0, sender)
     }
 
@@ -366,18 +366,18 @@ impl PendingRequestTable {
         deadline: RequestDeadline,
         retained_bytes: usize,
         sender: tokio::sync::oneshot::Sender<PendingRequestCompletion>,
-    ) -> PendingRegistrationOutcome {
+    ) -> PendingRequestRegistrationResult {
         let deadline = deadline.capped(self.inner.max_request_age);
         if deadline.is_expired() {
-            return PendingRegistrationOutcome::DeadlineExpired;
+            return PendingRequestRegistrationResult::DeadlineExpired;
         }
         if owner.table_id != self.inner.table_id {
-            return PendingRegistrationOutcome::OperationalFailure(connection_failed_without_source(
+            return PendingRequestRegistrationResult::OperationalFailure(connection_failed_without_source(
                 TransportStage::Closed,
             ));
         }
         if !owner.accepting.load(Ordering::Acquire) {
-            return PendingRegistrationOutcome::SessionClosed;
+            return PendingRequestRegistrationResult::SessionClosed;
         }
         let permit = match self.inner.budget.try_acquire_data(retained_bytes) {
             Ok(permit) => permit,
@@ -389,9 +389,9 @@ impl PendingRequestTable {
                     Some(BudgetDimension::Count | BudgetDimension::Rate) => {
                         self.inner.rejected_count.fetch_add(1, Ordering::Relaxed);
                     }
-                    None => return PendingRegistrationOutcome::SessionClosed,
+                    None => return PendingRequestRegistrationResult::SessionClosed,
                 }
-                return PendingRegistrationOutcome::QueueSaturated;
+                return PendingRequestRegistrationResult::QueueSaturated;
             }
         };
         let reservation = self.inner.next_reservation.fetch_add(1, Ordering::Relaxed);
@@ -413,28 +413,30 @@ impl PendingRequestTable {
         let result = match self.inner.entries.entry(key) {
             Entry::Vacant(entry) => {
                 entry.insert(pending);
-                PendingRegistrationOutcome::Registered(PendingRequestGuard {
+                PendingRequestRegistrationResult::Registered(PendingRequestGuard {
                     table: self.clone(),
                     token: Some(token),
                     #[cfg(test)]
                     deadline,
                 })
             }
-            Entry::Occupied(_) => {
-                PendingRegistrationOutcome::OperationalFailure(connection_failed_without_source(TransportStage::Closed))
-            }
+            Entry::Occupied(_) => PendingRequestRegistrationResult::OperationalFailure(
+                connection_failed_without_source(TransportStage::Closed),
+            ),
         };
-        if matches!(&result, PendingRegistrationOutcome::Registered(_)) && !owner.accepting.load(Ordering::Acquire) {
+        if matches!(&result, PendingRequestRegistrationResult::Registered(_))
+            && !owner.accepting.load(Ordering::Acquire)
+        {
             if let Some(pending) = self.take_token(token) {
                 pending.complete(PendingRequestCompletion::SessionClosed);
             }
-            return PendingRegistrationOutcome::SessionClosed;
+            return PendingRequestRegistrationResult::SessionClosed;
         }
         result
     }
 
     #[cfg(test)]
-    pub(crate) fn complete_response(&self, opaque: i32, response: RemotingCommand) -> PendingResponseOutcome {
+    pub(crate) fn complete_response(&self, opaque: i32, response: RemotingCommand) -> PendingResponseDisposition {
         self.complete_response_for_owner(&self.inner.default_owner, opaque, response)
     }
 
@@ -443,18 +445,18 @@ impl PendingRequestTable {
         owner: &PendingRequestOwner,
         opaque: i32,
         response: RemotingCommand,
-    ) -> PendingResponseOutcome {
+    ) -> PendingResponseDisposition {
         if owner.table_id != self.inner.table_id {
-            return PendingResponseOutcome::ForeignOwner;
+            return PendingResponseDisposition::ForeignOwner;
         }
         let Some(pending) = self.take_key(PendingRequestKey {
             owner_id: owner.id,
             opaque,
         }) else {
-            return PendingResponseOutcome::Late;
+            return PendingResponseDisposition::Late;
         };
         pending.complete(PendingRequestCompletion::Response(response));
-        PendingResponseOutcome::Completed
+        PendingResponseDisposition::Completed
     }
 
     pub fn len(&self) -> usize {
@@ -725,7 +727,7 @@ mod owner_epoch_tests {
         let (sender, _receiver) = tokio::sync::oneshot::channel();
         let result = table.register_for_owner(&owner, 7, RequestDeadline::from_timeout_millis(30_000), sender);
 
-        assert!(matches!(result, PendingRegistrationOutcome::SessionClosed));
+        assert!(matches!(result, PendingRequestRegistrationResult::SessionClosed));
         assert!(table.is_empty());
     }
 }

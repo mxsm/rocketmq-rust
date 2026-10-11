@@ -893,13 +893,13 @@ mod tests {
             .into_responder(original);
         let response_state = Arc::clone(responder.response_state());
         let permit = match admission.try_reserve(retained) {
-            crate::dispatch::DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
-            crate::dispatch::DeferredAdmissionAcquireOutcome::Closed => {
+            crate::dispatch::DeferredWaitAdmissionResult::Acquired(permit) => permit,
+            crate::dispatch::DeferredWaitAdmissionResult::Closed => {
                 panic!("deferred admission unexpectedly closed")
             }
-            crate::dispatch::DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)
-            | crate::dispatch::DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)
-            | crate::dispatch::DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
+            crate::dispatch::DeferredWaitAdmissionResult::WaiterCapacityExhausted(_)
+            | crate::dispatch::DeferredWaitAdmissionResult::RetainedByteCapacityExhausted(_)
+            | crate::dispatch::DeferredWaitAdmissionResult::ParentCapacityExhausted(_) => {
                 panic!("cleanup panic wait permit must be acquired")
             }
         };
@@ -907,15 +907,15 @@ mod tests {
             44,
             crate::dispatch::DeferredParts::new(responder, permit),
         )) {
-            crate::dispatch::DeferredRegistryOutcome::Registered(registration) => registration,
-            crate::dispatch::DeferredRegistryOutcome::DuplicateRequest(_)
-            | crate::dispatch::DeferredRegistryOutcome::IdentityExhausted(_)
-            | crate::dispatch::DeferredRegistryOutcome::ParentCancelled
-            | crate::dispatch::DeferredRegistryOutcome::SessionClosed
-            | crate::dispatch::DeferredRegistryOutcome::DeadlineExpired
-            | crate::dispatch::DeferredRegistryOutcome::ContractViolation { .. }
-            | crate::dispatch::DeferredRegistryOutcome::OperationalFailure { .. }
-            | crate::dispatch::DeferredRegistryOutcome::BuilderRejected { .. } => {
+            crate::dispatch::DeferredRegistrationResult::Registered(registration) => registration,
+            crate::dispatch::DeferredRegistrationResult::DuplicateRequest(_)
+            | crate::dispatch::DeferredRegistrationResult::IdentityExhausted(_)
+            | crate::dispatch::DeferredRegistrationResult::ParentCancelled
+            | crate::dispatch::DeferredRegistrationResult::SessionClosed
+            | crate::dispatch::DeferredRegistrationResult::DeadlineExpired
+            | crate::dispatch::DeferredRegistrationResult::ContractViolation { .. }
+            | crate::dispatch::DeferredRegistrationResult::OperationalFailure { .. }
+            | crate::dispatch::DeferredRegistrationResult::BuilderRejected { .. } => {
                 panic!("cleanup panic registry enrollment must succeed")
             }
         };

@@ -21,7 +21,7 @@ use rocketmq_runtime::TaskGroup;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::DeferredAdmission;
 use rocketmq_transport::api::DeferredExpiryMargins;
-use rocketmq_transport::api::DeferredRegistryShutdownOutcome;
+use rocketmq_transport::api::DeferredRegistryShutdownStatus;
 use rocketmq_transport::api::DeferredWaitLimits;
 
 use super::*;
@@ -433,10 +433,10 @@ mod resource_snapshot_tests {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct BrokerDeferredRegistryShutdownSnapshot {
-    pub(crate) pop: DeferredRegistryShutdownOutcome,
-    pub(crate) pull: DeferredRegistryShutdownOutcome,
-    pub(crate) notification: DeferredRegistryShutdownOutcome,
-    pub(crate) pop_lite: DeferredRegistryShutdownOutcome,
+    pub(crate) pop: DeferredRegistryShutdownStatus,
+    pub(crate) pull: DeferredRegistryShutdownStatus,
+    pub(crate) notification: DeferredRegistryShutdownStatus,
+    pub(crate) pop_lite: DeferredRegistryShutdownStatus,
 }
 
 impl BrokerDeferredRegistryShutdownSnapshot {
@@ -466,11 +466,11 @@ impl BrokerDeferredRegistryShutdownReport {
     }
 }
 
-fn deferred_registry_shutdown_outcome_is_healthy(outcome: DeferredRegistryShutdownOutcome) -> bool {
+fn deferred_registry_shutdown_outcome_is_healthy(outcome: DeferredRegistryShutdownStatus) -> bool {
     match outcome {
-        DeferredRegistryShutdownOutcome::Completed(stats) => stats.invariant_failures() == 0,
-        DeferredRegistryShutdownOutcome::AlreadyClosed => true,
-        DeferredRegistryShutdownOutcome::InProgress => false,
+        DeferredRegistryShutdownStatus::Completed(stats) => stats.invariant_failures() == 0,
+        DeferredRegistryShutdownStatus::AlreadyClosed => true,
+        DeferredRegistryShutdownStatus::InProgress => false,
         _ => false,
     }
 }

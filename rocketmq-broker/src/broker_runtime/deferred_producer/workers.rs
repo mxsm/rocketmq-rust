@@ -22,7 +22,7 @@ use rocketmq_runtime::TaskKind;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::GetMessageResult;
-use rocketmq_transport::api::DeferredClaimOutcome;
+use rocketmq_transport::api::DeferredClaimResult;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
 use rocketmq_transport::api::DeferredWakeReason;
 use tracing::warn;
@@ -85,7 +85,7 @@ where
             let Ok(route) = self.handoff.acquire_pull_candidate(key.topic().clone(), key.queue_id()) else {
                 continue;
             };
-            let Ok(DeferredClaimOutcome::Claimed(claimed)) = self.pull.claim_candidate(candidate, reason).await else {
+            let Ok(DeferredClaimResult::Claimed(claimed)) = self.pull.claim_candidate(candidate, reason).await else {
                 continue;
             };
             let _route = route;
@@ -143,7 +143,7 @@ where
                             StoreReplayMatch::Miss => continue,
                             StoreReplayMatch::Match => {}
                         }
-                        let Ok(DeferredClaimOutcome::Claimed(claimed)) = self
+                        let Ok(DeferredClaimResult::Claimed(claimed)) = self
                             .pull
                             .claim_candidate(candidate, DeferredWakeReason::MessageArrived)
                             .await
@@ -198,7 +198,7 @@ where
                         ) else {
                             continue;
                         };
-                        let Ok(DeferredClaimOutcome::Claimed(claimed)) = producer
+                        let Ok(DeferredClaimResult::Claimed(claimed)) = producer
                             .pop
                             .claim_candidate(candidate, DeferredWakeReason::MessageArrived)
                             .await
@@ -282,7 +282,7 @@ where
                                     }
                                     StoreReplayMatch::Match => {}
                                 }
-                                if let Ok(DeferredClaimOutcome::Claimed(claimed)) = self
+                                if let Ok(DeferredClaimResult::Claimed(claimed)) = self
                                     .pop
                                     .claim_candidate(candidate, DeferredWakeReason::MessageArrived)
                                     .await
@@ -393,7 +393,7 @@ where
                             StoreReplayMatch::Miss => continue,
                             StoreReplayMatch::Match => {}
                         }
-                        let Ok(DeferredClaimOutcome::Claimed(claimed)) =
+                        let Ok(DeferredClaimResult::Claimed(claimed)) =
                             self.notification.claim_arrival_candidate(candidate).await
                         else {
                             continue;
@@ -434,7 +434,7 @@ where
             ) else {
                 continue;
             };
-            let Ok(DeferredClaimOutcome::Claimed(claimed)) = self.notification.claim_arrival_candidate(candidate).await
+            let Ok(DeferredClaimResult::Claimed(claimed)) = self.notification.claim_arrival_candidate(candidate).await
             else {
                 continue;
             };

@@ -68,7 +68,7 @@ pub(crate) use core::AuthorizedDispatcherCore;
 
 /// Result of submitting a command to the shared dispatch boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DispatchOutcome {
+pub(crate) enum DispatchSubmissionResult {
     /// The lifecycle-owned processor task was accepted.
     Accepted(TaskId),
     /// Authorization, deadline, or reject-policy admission produced a response.
@@ -79,7 +79,7 @@ pub(crate) enum DispatchOutcome {
     SessionClosed,
 }
 
-impl DispatchOutcome {
+impl DispatchSubmissionResult {
     pub(crate) const fn keeps_session_open(self) -> bool {
         matches!(self, Self::Accepted(_) | Self::Rejected)
     }
@@ -276,7 +276,7 @@ where
         retained_bytes: usize,
         partial_frame_permit: Option<PartialFramePermit>,
         session_cleanup: crate::dispatch::DeferredSessionCleanupRegistration,
-    ) -> Result<DispatchOutcome, TransportError> {
+    ) -> Result<DispatchSubmissionResult, TransportError> {
         self.core
             .dispatch_network(
                 authorized_session,
@@ -341,7 +341,7 @@ impl AuthorizedDispatchSession {
         ordering: RequestOrdering,
         response_session: crate::server::SessionHandle,
         execute: F,
-    ) -> Result<DispatchOutcome, TransportError>
+    ) -> Result<DispatchSubmissionResult, TransportError>
     where
         F: FnOnce(OperationContext, RemotingCommand) -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
@@ -360,7 +360,7 @@ impl AuthorizedDispatchSession {
             send_handler_boundary_response(&response_session, is_one_way, deadline_response(opaque))
                 .await
                 .map_err(|source| TransportError::dispatch(source))?;
-            return Ok(DispatchOutcome::Rejected);
+            return Ok(DispatchSubmissionResult::Rejected);
         }
         if !matches!(
             self.boundary.security.authorize_for_dispatch(
@@ -379,7 +379,7 @@ impl AuthorizedDispatchSession {
             )
             .await
             .map_err(|source| TransportError::dispatch(source))?;
-            return Ok(DispatchOutcome::Rejected);
+            return Ok(DispatchSubmissionResult::Rejected);
         }
 
         let deadline = context.deadline();
@@ -407,7 +407,7 @@ impl AuthorizedDispatchSession {
                         .await;
             },
         ) {
-            Ok(SessionDispatchAttempt::Accepted(task_id)) => Ok(DispatchOutcome::Accepted(task_id)),
+            Ok(SessionDispatchAttempt::Accepted(task_id)) => Ok(DispatchSubmissionResult::Accepted(task_id)),
             Ok(SessionDispatchAttempt::AdmissionRejected {
                 rejection,
                 retained_partial,
@@ -416,18 +416,18 @@ impl AuthorizedDispatchSession {
                 send_handler_boundary_response(&response_session, is_one_way, admission_response(opaque, &rejection))
                     .await
                     .map_err(|source| TransportError::dispatch(source))?;
-                Ok(DispatchOutcome::Rejected)
+                Ok(DispatchSubmissionResult::Rejected)
             }
             Ok(SessionDispatchAttempt::AdmissionRejected {
                 rejection: _,
                 retained_partial,
             }) => {
                 drop(retained_partial);
-                Ok(DispatchOutcome::CloseSession)
+                Ok(DispatchSubmissionResult::CloseSession)
             }
             Ok(SessionDispatchAttempt::SessionClosed { retained_partial }) => {
                 drop(retained_partial);
-                Ok(DispatchOutcome::SessionClosed)
+                Ok(DispatchSubmissionResult::SessionClosed)
             }
             Err(error) => Err(TransportError::dispatch(AuthorizedDispatchError::Closing(error))),
         }

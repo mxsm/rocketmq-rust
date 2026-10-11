@@ -35,8 +35,8 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_transport::api::AdmissionClass;
 use rocketmq_transport::api::AdmissionController;
+use rocketmq_transport::api::AdmissionDecision;
 use rocketmq_transport::api::AdmissionLimits;
-use rocketmq_transport::api::AdmissionOutcome;
 use rocketmq_transport::api::AdmissionResource;
 use rocketmq_transport::api::AdmissionScope;
 use rocketmq_transport::api::DefaultRequestProcessor;
@@ -144,8 +144,8 @@ fn benchmark_decode_admission(c: &mut Criterion) {
                         encoded.len(),
                         AdmissionClass::Data,
                     ) {
-                        AdmissionOutcome::Acquired(permit) => permit,
-                        AdmissionOutcome::Rejected(_) => panic!("partial frame admission rejected"),
+                        AdmissionDecision::Acquired(permit) => permit,
+                        AdmissionDecision::Rejected(_) => panic!("partial frame admission rejected"),
                     };
                     let mut buffer = BytesMut::from(encoded.as_ref());
                     let command = RemotingCommandCodec::new()
@@ -158,8 +158,8 @@ fn benchmark_decode_admission(c: &mut Criterion) {
                         encoded.len(),
                         AdmissionClass::for_request_code(command.code()),
                     ) {
-                        AdmissionOutcome::Acquired(permit) => permit,
-                        AdmissionOutcome::Rejected(_) => panic!("inflight admission rejected"),
+                        AdmissionDecision::Acquired(permit) => permit,
+                        AdmissionDecision::Rejected(_) => panic!("inflight admission rejected"),
                     };
                     drop(partial);
                     drop(inflight);

@@ -245,14 +245,14 @@ async fn terminal_distinguishes_an_external_stop_claim_from_receiver_drop() {
     assert!(matches!(outcome, EmbeddedDispatchOutcome::Cancelled));
     assert_eq!(
         sender.complete(Ok(EmbeddedDispatchOutcome::CompletionClosed)),
-        terminal::TerminalPublishOutcome::AlreadyCompleted
+        terminal::TerminalPublishStatus::AlreadyCompleted
     );
 
     let (sender, receiver) = terminal();
     drop(receiver);
     assert_eq!(
         sender.complete(Ok(EmbeddedDispatchOutcome::Cancelled)),
-        terminal::TerminalPublishOutcome::ReceiverDropped
+        terminal::TerminalPublishStatus::ReceiverDropped
     );
     fixture.shutdown().await;
 }

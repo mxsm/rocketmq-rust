@@ -212,7 +212,7 @@ async fn pop_lite_deferred_requeue_stays_affine_until_canonical_writer_terminal(
             .await
             .expect("terminal-owned receipt channel")
             .expect("terminal-owned canonical response"),
-        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        rocketmq_transport::api::DeferredResumeResult::Completed(_)
     ));
     let response = client
         .receive_command()
@@ -341,7 +341,7 @@ async fn pop_lite_deferred_staged_requeue_rolls_back_once_when_session_closes_be
         .await
         .expect("staged-cancel receipt channel")
         .expect("closed session is a normal deferred resume outcome");
-    assert!(matches!(outcome, DeferredResumeOutcome::SessionClosed));
+    assert!(matches!(outcome, DeferredResumeResult::SessionClosed));
     let terminal = service.resource_snapshot();
     assert_eq!(terminal.event_reservations.events, 0);
     assert_eq!(terminal.event_reservations.retained_bytes, 0);
@@ -428,7 +428,7 @@ async fn pop_lite_deferred_parent_shutdown_settles_staged_requeue_without_a_fram
         .await
         .expect("parent-cancel receipt channel")
         .expect("parent cancellation is a normal deferred resume outcome");
-    assert!(matches!(outcome, DeferredResumeOutcome::Cancelled));
+    assert!(matches!(outcome, DeferredResumeResult::Cancelled));
     let terminal = service.resource_snapshot();
     assert_eq!(terminal.event_reservations.events, 0);
     assert_eq!(terminal.active_client_gates, 0);
@@ -546,7 +546,7 @@ async fn pop_lite_deferred_session_close_rolls_back_claimed_events_and_gate() {
         .await
         .expect("session-close PopLite receipt channel")
         .expect("closed session is a normal deferred resume outcome");
-    assert!(matches!(outcome, DeferredResumeOutcome::SessionClosed));
+    assert!(matches!(outcome, DeferredResumeResult::SessionClosed));
     assert_eq!(body_drops.load(Ordering::SeqCst), 1);
     assert_eq!(dispatcher.pending_events(&client_id), vec![first, second]);
     assert_eq!(dispatcher.budget_snapshot().current_count, 2);

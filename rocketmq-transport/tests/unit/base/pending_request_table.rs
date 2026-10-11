@@ -19,26 +19,26 @@ use std::sync::Arc;
 use std::sync::Barrier;
 use std::time::Duration;
 
-use super::pending_request_table::PendingRegistrationOutcome;
 use super::pending_request_table::PendingRequestCompletion;
 use super::pending_request_table::PendingRequestGuard;
 use super::pending_request_table::PendingRequestLimits;
+use super::pending_request_table::PendingRequestRegistrationResult;
 use super::pending_request_table::PendingRequestTable;
-use super::pending_request_table::PendingResponseOutcome;
+use super::pending_request_table::PendingResponseDisposition;
 use crate::deadline::RequestDeadline;
 
-fn registered(outcome: PendingRegistrationOutcome) -> PendingRequestGuard {
+fn registered(outcome: PendingRequestRegistrationResult) -> PendingRequestGuard {
     match outcome {
-        PendingRegistrationOutcome::Registered(guard) => guard,
-        PendingRegistrationOutcome::DeadlineExpired => panic!("registration deadline expired"),
-        PendingRegistrationOutcome::SessionClosed => panic!("registration owner closed"),
-        PendingRegistrationOutcome::QueueSaturated => panic!("registration queue saturated"),
-        PendingRegistrationOutcome::OperationalFailure(_) => panic!("registration failed operationally"),
+        PendingRequestRegistrationResult::Registered(guard) => guard,
+        PendingRequestRegistrationResult::DeadlineExpired => panic!("registration deadline expired"),
+        PendingRequestRegistrationResult::SessionClosed => panic!("registration owner closed"),
+        PendingRequestRegistrationResult::QueueSaturated => panic!("registration queue saturated"),
+        PendingRequestRegistrationResult::OperationalFailure(_) => panic!("registration failed operationally"),
     }
 }
 
-fn is_rejected(outcome: &PendingRegistrationOutcome) -> bool {
-    !matches!(outcome, PendingRegistrationOutcome::Registered(_))
+fn is_rejected(outcome: &PendingRequestRegistrationResult) -> bool {
+    !matches!(outcome, PendingRequestRegistrationResult::Registered(_))
 }
 
 fn response(completion: PendingRequestCompletion) -> RemotingCommand {
@@ -65,7 +65,7 @@ async fn closed_dynamic_parent_is_reported_as_session_closed_without_capacity_re
     let (sender, receiver) = tokio::sync::oneshot::channel();
     assert!(matches!(
         table.register_with_bytes(1, RequestDeadline::from_timeout_millis(3_000), 8, sender),
-        PendingRegistrationOutcome::SessionClosed
+        PendingRequestRegistrationResult::SessionClosed
     ));
     assert!(receiver.await.is_err());
     assert_eq!(table.usage().rejected_count, 0);
@@ -85,14 +85,14 @@ async fn response_completion_is_exactly_once_and_releases_the_reservation() {
             7,
             RemotingCommand::create_response_command_with_code(ResponseCode::Success)
         ),
-        PendingResponseOutcome::Completed
+        PendingResponseDisposition::Completed
     );
     assert_eq!(
         table.complete_response(
             7,
             RemotingCommand::create_response_command_with_code(ResponseCode::SystemError)
         ),
-        PendingResponseOutcome::Late
+        PendingResponseDisposition::Late
     );
 
     let response = response(receiver.await.expect("completion should notify the waiter"));
@@ -201,7 +201,7 @@ async fn retired_opaque_cannot_be_reused_by_a_late_response() {
             9,
             RemotingCommand::create_response_command_with_code(ResponseCode::Success)
         ),
-        PendingResponseOutcome::Late
+        PendingResponseDisposition::Late
     );
 }
 
@@ -225,7 +225,7 @@ async fn admission_permit_is_released_after_completion() {
     let (next_sender, _next_receiver) = tokio::sync::oneshot::channel();
     assert!(matches!(
         table.register(2, RequestDeadline::from_timeout_millis(3_000), next_sender),
-        PendingRegistrationOutcome::Registered(_)
+        PendingRequestRegistrationResult::Registered(_)
     ));
 }
 
@@ -295,7 +295,7 @@ async fn closing_one_connection_owner_does_not_complete_another_owners_request()
             17,
             RemotingCommand::create_response_command_with_code(ResponseCode::Success),
         ),
-        PendingResponseOutcome::Completed
+        PendingResponseDisposition::Completed
     );
     assert_eq!(
         response(second_receiver.await.unwrap()).code(),
@@ -347,7 +347,7 @@ async fn timed_out_owner_rejects_reuse_but_rotated_owner_is_safe_from_late_respo
             29,
             RemotingCommand::create_response_command_with_code(ResponseCode::SystemError),
         ),
-        PendingResponseOutcome::Late
+        PendingResponseDisposition::Late
     );
     assert_eq!(
         table.complete_response_for_owner(
@@ -355,7 +355,7 @@ async fn timed_out_owner_rejects_reuse_but_rotated_owner_is_safe_from_late_respo
             29,
             RemotingCommand::create_response_command_with_code(ResponseCode::Success),
         ),
-        PendingResponseOutcome::Completed
+        PendingResponseDisposition::Completed
     );
     assert_eq!(
         response(rotated_receiver.await.unwrap()).code(),
@@ -458,11 +458,11 @@ fn close_and_registration_are_one_atomic_owner_epoch() {
         .filter_map(|registration| {
             let (result, receiver) = registration.join().unwrap();
             match result {
-                PendingRegistrationOutcome::Registered(guard) => Some((guard, receiver)),
-                PendingRegistrationOutcome::DeadlineExpired
-                | PendingRegistrationOutcome::SessionClosed
-                | PendingRegistrationOutcome::QueueSaturated
-                | PendingRegistrationOutcome::OperationalFailure(_) => None,
+                PendingRequestRegistrationResult::Registered(guard) => Some((guard, receiver)),
+                PendingRequestRegistrationResult::DeadlineExpired
+                | PendingRequestRegistrationResult::SessionClosed
+                | PendingRequestRegistrationResult::QueueSaturated
+                | PendingRequestRegistrationResult::OperationalFailure(_) => None,
             }
         })
         .collect::<Vec<_>>();
@@ -529,18 +529,18 @@ fn timeout_response_and_disconnect_race_completes_once_and_retires_the_owner() {
 
         match result {
             PendingRequestCompletion::Response(command) => {
-                assert_eq!(response_won, PendingResponseOutcome::Completed);
+                assert_eq!(response_won, PendingResponseDisposition::Completed);
                 assert_eq!(command.code(), ResponseCode::Success.to_i32());
                 assert_eq!(disconnected, 0);
             }
             PendingRequestCompletion::OperationalFailure(source)
                 if source.code() == rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code() =>
             {
-                assert_ne!(response_won, PendingResponseOutcome::Completed);
+                assert_ne!(response_won, PendingResponseDisposition::Completed);
                 assert_eq!(disconnected, 0);
             }
             PendingRequestCompletion::SessionClosed => {
-                assert_ne!(response_won, PendingResponseOutcome::Completed);
+                assert_ne!(response_won, PendingResponseDisposition::Completed);
                 assert_eq!(disconnected, 1);
             }
             PendingRequestCompletion::DeadlineExpired
@@ -574,12 +574,12 @@ async fn responses_report_completion_lateness_and_foreign_ownership_separately()
 
     assert_eq!(
         table.complete_response_for_owner(&owner, 51, response()),
-        PendingResponseOutcome::Completed,
+        PendingResponseDisposition::Completed,
         "the first response completes the registered request"
     );
     assert_eq!(
         table.complete_response_for_owner(&owner, 51, response()),
-        PendingResponseOutcome::Late,
+        PendingResponseDisposition::Late,
         "a repeated response arrives after the request already settled"
     );
 
@@ -589,7 +589,7 @@ async fn responses_report_completion_lateness_and_foreign_ownership_separately()
     let foreign_owner = other_table.new_owner();
     assert_eq!(
         table.complete_response_for_owner(&foreign_owner, 51, response()),
-        PendingResponseOutcome::ForeignOwner
+        PendingResponseDisposition::ForeignOwner
     );
     drop(guard);
 }

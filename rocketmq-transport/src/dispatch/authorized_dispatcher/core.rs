@@ -31,7 +31,7 @@ use super::admission_response;
 use super::authorization_denied_response;
 use super::deadline_response;
 use super::AuthorizedDispatchSession;
-use super::DispatchOutcome;
+use super::DispatchSubmissionResult;
 use crate::admission::AdmissionClass;
 use crate::admission::FullPolicy;
 use crate::admission::PartialFramePermit;
@@ -207,7 +207,7 @@ where
         retained_bytes: usize,
         partial_frame_permit: Option<PartialFramePermit>,
         session_cleanup: Option<crate::dispatch::DeferredSessionCleanupRegistration>,
-    ) -> Result<DispatchOutcome, AuthorizedDispatchError> {
+    ) -> Result<DispatchSubmissionResult, AuthorizedDispatchError> {
         if context.transport() != RequestTransport::Network {
             return Err(AuthorizedDispatchError::InvalidNetworkContext);
         }
@@ -334,7 +334,7 @@ where
                     }
                 },
             ) {
-                Ok(SessionDispatchAttempt::Accepted(task_id)) => Ok(DispatchOutcome::Accepted(task_id)),
+                Ok(SessionDispatchAttempt::Accepted(task_id)) => Ok(DispatchSubmissionResult::Accepted(task_id)),
                 Ok(SessionDispatchAttempt::AdmissionRejected {
                     rejection,
                     retained_partial,
@@ -358,11 +358,11 @@ where
                     retained_partial,
                 }) => {
                     drop(retained_partial);
-                    Ok(DispatchOutcome::CloseSession)
+                    Ok(DispatchSubmissionResult::CloseSession)
                 }
                 Ok(SessionDispatchAttempt::SessionClosed { retained_partial }) => {
                     drop(retained_partial);
-                    Ok(DispatchOutcome::SessionClosed)
+                    Ok(DispatchSubmissionResult::SessionClosed)
                 }
                 Err(error) => Err(AuthorizedDispatchError::Closing(error)),
             }
@@ -590,7 +590,7 @@ where
         command: RemotingCommand,
         retained_bytes: usize,
         partial_frame_permit: Option<PartialFramePermit>,
-    ) -> Result<DispatchOutcome, AuthorizedDispatchError> {
+    ) -> Result<DispatchSubmissionResult, AuthorizedDispatchError> {
         self.dispatch_network(
             authorized_session,
             self.open_network_session(),
@@ -682,11 +682,11 @@ enum BoundaryResponseAttempt {
 }
 
 impl BoundaryResponseAttempt {
-    const fn dispatch_outcome(self) -> DispatchOutcome {
+    const fn dispatch_outcome(self) -> DispatchSubmissionResult {
         match self {
-            Self::Delivered => DispatchOutcome::Rejected,
-            Self::CloseSession => DispatchOutcome::CloseSession,
-            Self::SessionClosed => DispatchOutcome::SessionClosed,
+            Self::Delivered => DispatchSubmissionResult::Rejected,
+            Self::CloseSession => DispatchSubmissionResult::CloseSession,
+            Self::SessionClosed => DispatchSubmissionResult::SessionClosed,
         }
     }
 }

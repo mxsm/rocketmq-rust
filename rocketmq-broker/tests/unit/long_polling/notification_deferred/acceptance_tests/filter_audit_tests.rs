@@ -150,7 +150,7 @@ async fn notification_deferred_miss_prefix_beyond_callback_batch_continuation_cl
             .await
             .expect("continuation resumes matching waiter")
             .expect("matching continuation writes canonically"),
-        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        rocketmq_transport::api::DeferredResumeResult::Completed(_)
     ));
     let response = client
         .receive_command()
@@ -216,7 +216,7 @@ async fn notification_deferred_properties_absent_matches_and_one_arrival_claims_
                 )
                 .await
                 .expect("wildcard/exact canonical resume"),
-            rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+            rocketmq_transport::api::DeferredResumeResult::Completed(_)
         ));
     }
     let mut opaque = BTreeSet::new();

@@ -44,7 +44,7 @@ async fn pre_admission_deadline_and_admission_rejection_record_one_terminal_span
         )
         .await
         .expect("expired request produces boundary response");
-    assert_eq!(outcome, DispatchOutcome::Rejected);
+    assert_eq!(outcome, DispatchSubmissionResult::Rejected);
     let response = harness.receive().await;
     assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
     assert_eq!(state.clones.load(Ordering::SeqCst), 0);
@@ -65,7 +65,7 @@ async fn pre_admission_deadline_and_admission_rejection_record_one_terminal_span
         .dispatch(&harness.authorized, session, harness.context(None), command, 256, None)
         .await
         .expect("queue rejection produces boundary response");
-    assert_eq!(outcome, DispatchOutcome::Rejected);
+    assert_eq!(outcome, DispatchSubmissionResult::Rejected);
     let response = harness.receive().await;
     assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemBusy);
     assert_eq!(state.clones.load(Ordering::SeqCst), 0);
@@ -116,7 +116,7 @@ async fn undelivered_boundary_responses_close_the_session_path_without_an_operat
         )
         .await
         .expect("queue saturation is a source-free boundary-response outcome");
-    assert_eq!(outcome, DispatchOutcome::CloseSession);
+    assert_eq!(outcome, DispatchSubmissionResult::CloseSession);
     assert_eq!(saturated_metrics.snapshot(), (1, 1, 1, 1));
     assert_eq!(saturated.admission_controller.snapshot().queued.rejected_count, 1);
     saturated.assert_no_response_frame().await;
@@ -143,7 +143,7 @@ async fn undelivered_boundary_responses_close_the_session_path_without_an_operat
         )
         .await
         .expect("closed response ownership is a source-free boundary outcome");
-    assert_eq!(outcome, DispatchOutcome::SessionClosed);
+    assert_eq!(outcome, DispatchSubmissionResult::SessionClosed);
     assert_eq!(closed_metrics.snapshot(), (1, 1, 1, 1));
     closed.assert_no_response_frame().await;
     closed.shutdown().await;
@@ -168,7 +168,7 @@ async fn authorization_denial_records_one_terminal_span_without_clone_hook_or_pr
         .dispatch(&harness.authorized, session, harness.context(None), command, 256, None)
         .await
         .expect("authorization denial produces boundary response");
-    assert_eq!(outcome, DispatchOutcome::Rejected);
+    assert_eq!(outcome, DispatchSubmissionResult::Rejected);
     let response = harness.receive().await;
 
     assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
@@ -219,7 +219,7 @@ async fn one_way_boundary_rejection_is_failed_without_a_response_write() {
         .await
         .expect("expired one-way request is rejected without a response write");
 
-    assert_eq!(outcome, DispatchOutcome::Rejected);
+    assert_eq!(outcome, DispatchSubmissionResult::Rejected);
     assert_eq!(state.clones.load(Ordering::SeqCst), 0);
     assert_eq!(state.processes.load(Ordering::SeqCst), 0);
     harness.assert_no_response().await;
@@ -250,7 +250,7 @@ async fn handler_route_one_way_boundary_rejections_do_not_write_frames() {
         )
         .await
         .expect("expired one-way handler request is rejected without a response write");
-    assert_eq!(outcome, DispatchOutcome::Rejected);
+    assert_eq!(outcome, DispatchSubmissionResult::Rejected);
     expired.assert_no_response().await;
     expired.shutdown().await;
 
@@ -272,7 +272,7 @@ async fn handler_route_one_way_boundary_rejections_do_not_write_frames() {
         )
         .await
         .expect("denied one-way handler request is rejected without a response write");
-    assert_eq!(outcome, DispatchOutcome::Rejected);
+    assert_eq!(outcome, DispatchSubmissionResult::Rejected);
     denied.assert_no_response().await;
     denied.shutdown().await;
 
@@ -302,7 +302,7 @@ async fn handler_route_one_way_boundary_rejections_do_not_write_frames() {
         )
         .await
         .expect("saturated one-way handler request is rejected without a response write");
-    assert_eq!(outcome, DispatchOutcome::Rejected);
+    assert_eq!(outcome, DispatchSubmissionResult::Rejected);
     saturated.assert_no_response().await;
     drop(queued);
     saturated.shutdown().await;

@@ -37,25 +37,25 @@ use rocketmq_runtime::TaskId;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_transport::api::ClaimedDeferred;
 use rocketmq_transport::api::DeferredAdmission;
-use rocketmq_transport::api::DeferredAdmissionAcquireOutcome;
 use rocketmq_transport::api::DeferredAdmissionSnapshot;
-use rocketmq_transport::api::DeferredClaimOutcome;
+use rocketmq_transport::api::DeferredClaimResult;
+use rocketmq_transport::api::DeferredExpiryAttachmentStatus;
 use rocketmq_transport::api::DeferredExpiryBatch;
 use rocketmq_transport::api::DeferredExpiryBatchStats;
 use rocketmq_transport::api::DeferredExpiryMargins;
-use rocketmq_transport::api::DeferredExpiryOutcome;
 use rocketmq_transport::api::DeferredId;
 use rocketmq_transport::api::DeferredParts;
 use rocketmq_transport::api::DeferredRegistration;
+use rocketmq_transport::api::DeferredRegistrationResult;
 use rocketmq_transport::api::DeferredRegistry;
-use rocketmq_transport::api::DeferredRegistryOutcome;
 use rocketmq_transport::api::DeferredRegistryRecovery;
-use rocketmq_transport::api::DeferredRegistryShutdownOutcome;
+use rocketmq_transport::api::DeferredRegistryShutdownStatus;
 use rocketmq_transport::api::DeferredResponderOutcome;
-use rocketmq_transport::api::DeferredResumeOutcome;
+use rocketmq_transport::api::DeferredResumeResult;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
-use rocketmq_transport::api::DeferredResumeSubmitOutcome;
+use rocketmq_transport::api::DeferredResumeSubmissionStatus;
 use rocketmq_transport::api::DeferredRetainedSizeParts;
+use rocketmq_transport::api::DeferredWaitAdmissionResult;
 use rocketmq_transport::api::DeferredWakeReason;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RemotingResponse;
@@ -357,11 +357,11 @@ impl PopDeferredWakeupObserver {
         (Self { sender: Some(sender) }, completion)
     }
 
-    pub(crate) fn complete_claim_result(self, result: &Result<DeferredClaimOutcome<ResumePop>, TransportError>) {
+    pub(crate) fn complete_claim_result(self, result: &Result<DeferredClaimResult<ResumePop>, TransportError>) {
         self.complete(pop_wakeup_outcome_from_claim_result(result));
     }
 
-    fn complete_resume_result(self, result: &Result<DeferredResumeOutcome, TransportError>) {
+    fn complete_resume_result(self, result: &Result<DeferredResumeResult, TransportError>) {
         self.complete(pop_wakeup_outcome_from_resume_result(result));
     }
 
@@ -515,7 +515,7 @@ impl PopDeferredService {
         let retained_size = DeferredRegistry::<ResumePop>::try_retained_size(retained_parts)
             .map_err(PopDeferredPrepareError::Contract)?;
         let permit = match self.admission.try_reserve(retained_size) {
-            DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
+            DeferredWaitAdmissionResult::Acquired(permit) => permit,
             outcome => {
                 return Ok(PopDeferredPreparationStatus::Rejected(
                     PopDeferredPrepareRejection::Admission(outcome),
@@ -576,7 +576,7 @@ impl PopDeferredService {
         } = prepared;
         let mut parts = DeferredParts::new(responder, permit);
         match parts.try_with_expiry(deadline.protocol_at(), self.expiry_margins) {
-            Ok(DeferredExpiryOutcome::Attached) => {}
+            Ok(DeferredExpiryAttachmentStatus::Attached) => {}
             Ok(outcome) => {
                 return Ok(PopDeferredRegistrationStatus::Rejected(Box::new(
                     PopDeferredRegisterRejection::Expiry { outcome, parts },
@@ -593,33 +593,33 @@ impl PopDeferredService {
             let index_lease = reservation.publish(id, deadline, Arc::clone(&criteria));
             Ok::<_, Infallible>(ResumePop::new(request, criteria, deadline, index_lease))
         }) {
-            DeferredRegistryOutcome::Registered(registration) => {
+            DeferredRegistrationResult::Registered(registration) => {
                 Ok(PopDeferredRegistrationStatus::Registered(Box::new(registration)))
             }
-            DeferredRegistryOutcome::DuplicateRequest(recovery) => {
+            DeferredRegistrationResult::DuplicateRequest(recovery) => {
                 release_deferred_registry_recovery(recovery);
                 Ok(PopDeferredRegistrationStatus::Rejected(Box::new(
                     PopDeferredRegisterRejection::RegistryRejected,
                 )))
             }
-            DeferredRegistryOutcome::IdentityExhausted(recovery) => {
+            DeferredRegistrationResult::IdentityExhausted(recovery) => {
                 release_deferred_registry_recovery(recovery);
                 Err(PopDeferredRegisterError::RegistryIdentityExhausted)
             }
-            DeferredRegistryOutcome::ParentCancelled
-            | DeferredRegistryOutcome::SessionClosed
-            | DeferredRegistryOutcome::DeadlineExpired => Ok(PopDeferredRegistrationStatus::Rejected(Box::new(
+            DeferredRegistrationResult::ParentCancelled
+            | DeferredRegistrationResult::SessionClosed
+            | DeferredRegistrationResult::DeadlineExpired => Ok(PopDeferredRegistrationStatus::Rejected(Box::new(
                 PopDeferredRegisterRejection::RegistryRejected,
             ))),
-            DeferredRegistryOutcome::BuilderRejected { error, parts } => {
+            DeferredRegistrationResult::BuilderRejected { error, parts } => {
                 drop(parts);
                 match error {}
             }
-            DeferredRegistryOutcome::ContractViolation { violation, recovery } => {
+            DeferredRegistrationResult::ContractViolation { violation, recovery } => {
                 release_deferred_registry_recovery(recovery);
                 Err(PopDeferredRegisterError::RegistryContract(violation))
             }
-            DeferredRegistryOutcome::OperationalFailure { error, recovery } => {
+            DeferredRegistrationResult::OperationalFailure { error, recovery } => {
                 release_deferred_registry_recovery(recovery);
                 Err(PopDeferredRegisterError::RegistryOperational(error))
             }
@@ -630,11 +630,11 @@ impl PopDeferredService {
         &self,
         id: DeferredId,
         reason: DeferredWakeReason,
-    ) -> Result<DeferredClaimOutcome<ResumePop>, TransportError> {
+    ) -> Result<DeferredClaimResult<ResumePop>, TransportError> {
         match self.registry.claim(id, reason).await? {
-            DeferredClaimOutcome::Claimed(mut claimed) => {
+            DeferredClaimResult::Claimed(mut claimed) => {
                 drop(claimed.resume_data_mut().take_index_lease());
-                Ok(DeferredClaimOutcome::Claimed(claimed))
+                Ok(DeferredClaimResult::Claimed(claimed))
             }
             outcome => Ok(outcome),
         }
@@ -674,7 +674,7 @@ impl PopDeferredService {
         &self,
         candidate: PopCandidateReservation,
         reason: DeferredWakeReason,
-    ) -> Result<DeferredClaimOutcome<ResumePop>, TransportError> {
+    ) -> Result<DeferredClaimResult<ResumePop>, TransportError> {
         let result = self.claim(candidate.id(), reason).await;
         drop(candidate);
         result
@@ -684,7 +684,7 @@ impl PopDeferredService {
     pub(crate) async fn claim_forced_candidate(
         &self,
         candidate: PopCandidateReservation,
-    ) -> Result<DeferredClaimOutcome<ResumePop>, TransportError> {
+    ) -> Result<DeferredClaimResult<ResumePop>, TransportError> {
         self.claim_candidate(candidate, DeferredWakeReason::ForcedRefresh).await
     }
 
@@ -713,7 +713,7 @@ impl PopDeferredService {
         claimed: ClaimedDeferred<ResumePop>,
         handler_retained: DeferredResumeRetainedSize,
         handler: F,
-    ) -> Result<DeferredResumeOutcome, TransportError>
+    ) -> Result<DeferredResumeResult, TransportError>
     where
         F: FnOnce(ResumePop, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,
@@ -745,7 +745,7 @@ impl PopDeferredService {
         handler_retained: DeferredResumeRetainedSize,
         observer: PopDeferredWakeupObserver,
         handler: F,
-    ) -> Result<DeferredResumeOutcome, TransportError>
+    ) -> Result<DeferredResumeResult, TransportError>
     where
         F: FnOnce(ResumePop, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,
@@ -762,7 +762,7 @@ impl PopDeferredService {
         claimed: ClaimedDeferred<ResumePop>,
         handler_retained: DeferredResumeRetainedSize,
         handler: F,
-    ) -> Result<DeferredResumeSubmitOutcome, TransportError>
+    ) -> Result<DeferredResumeSubmissionStatus, TransportError>
     where
         F: FnOnce(ResumePop, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,
@@ -782,7 +782,7 @@ impl PopDeferredService {
         handler_retained: DeferredResumeRetainedSize,
         observer: PopDeferredWakeupObserver,
         handler: F,
-    ) -> Result<DeferredResumeSubmitOutcome, TransportError>
+    ) -> Result<DeferredResumeSubmissionStatus, TransportError>
     where
         F: FnOnce(ResumePop, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,
@@ -819,7 +819,7 @@ impl PopDeferredService {
             };
             let id = candidate.id();
             match self.claim(id, reason).await {
-                Ok(DeferredClaimOutcome::Claimed(claimed)) => {
+                Ok(DeferredClaimResult::Claimed(claimed)) => {
                     drop(candidate);
                     return Ok(Some(claimed));
                 }
@@ -1102,7 +1102,7 @@ impl PopDeferredService {
     }
 
     #[must_use]
-    pub(crate) fn shutdown(&self) -> DeferredRegistryShutdownOutcome {
+    pub(crate) fn shutdown(&self) -> DeferredRegistryShutdownStatus {
         self.seal();
         self.registry.shutdown()
     }
@@ -1320,7 +1320,7 @@ pub(crate) enum PopDeferredPrepareRejection {
     ServiceClosed,
     DeadlineElapsed,
     Index(PopIndexRejection),
-    Admission(DeferredAdmissionAcquireOutcome),
+    Admission(DeferredWaitAdmissionResult),
 }
 
 impl PopDeferredPrepareRejection {
@@ -1418,7 +1418,7 @@ pub(crate) enum PopDeferredRegisterRejection {
     ServiceClosed,
     Responder(DeferredResponderOutcome),
     Expiry {
-        outcome: DeferredExpiryOutcome,
+        outcome: DeferredExpiryAttachmentStatus,
         parts: DeferredParts,
     },
     RegistryRejected,
@@ -1498,43 +1498,41 @@ impl StdError for PopDeferredRegisterError {
 }
 
 fn pop_wakeup_outcome_from_claim_result(
-    result: &Result<DeferredClaimOutcome<ResumePop>, TransportError>,
+    result: &Result<DeferredClaimResult<ResumePop>, TransportError>,
 ) -> PopWakeupCompletionStatus {
     match result {
-        Ok(DeferredClaimOutcome::Claimed(_)) => PopWakeupCompletionStatus::ProcessingCompleted,
+        Ok(DeferredClaimResult::Claimed(_)) => PopWakeupCompletionStatus::ProcessingCompleted,
         Ok(
-            DeferredClaimOutcome::NotFound
-            | DeferredClaimOutcome::AlreadyClaimed
-            | DeferredClaimOutcome::AlreadyCompleted,
+            DeferredClaimResult::NotFound | DeferredClaimResult::AlreadyClaimed | DeferredClaimResult::AlreadyCompleted,
         ) => PopWakeupCompletionStatus::AlreadyCompleted,
-        Ok(DeferredClaimOutcome::SessionClosed) => PopWakeupCompletionStatus::InactiveChannel,
-        Ok(DeferredClaimOutcome::ParentCancelled) => PopWakeupCompletionStatus::ServiceCancelled,
-        Ok(DeferredClaimOutcome::DeadlineExpired) | Err(_) => PopWakeupCompletionStatus::ProcessingFailed,
+        Ok(DeferredClaimResult::SessionClosed) => PopWakeupCompletionStatus::InactiveChannel,
+        Ok(DeferredClaimResult::ParentCancelled) => PopWakeupCompletionStatus::ServiceCancelled,
+        Ok(DeferredClaimResult::DeadlineExpired) | Err(_) => PopWakeupCompletionStatus::ProcessingFailed,
     }
 }
 
-const fn is_skippable_candidate_outcome<R>(outcome: &DeferredClaimOutcome<R>) -> bool
+const fn is_skippable_candidate_outcome<R>(outcome: &DeferredClaimResult<R>) -> bool
 where
     R: Send + 'static,
 {
     matches!(
         outcome,
-        DeferredClaimOutcome::NotFound
-            | DeferredClaimOutcome::AlreadyClaimed
-            | DeferredClaimOutcome::AlreadyCompleted
-            | DeferredClaimOutcome::SessionClosed
-            | DeferredClaimOutcome::DeadlineExpired
+        DeferredClaimResult::NotFound
+            | DeferredClaimResult::AlreadyClaimed
+            | DeferredClaimResult::AlreadyCompleted
+            | DeferredClaimResult::SessionClosed
+            | DeferredClaimResult::DeadlineExpired
     )
 }
 
 fn pop_wakeup_outcome_from_resume_result(
-    result: &Result<DeferredResumeOutcome, TransportError>,
+    result: &Result<DeferredResumeResult, TransportError>,
 ) -> PopWakeupCompletionStatus {
     match result {
-        Ok(DeferredResumeOutcome::Completed(_)) => PopWakeupCompletionStatus::ProcessingCompleted,
-        Ok(DeferredResumeOutcome::SessionClosed) => PopWakeupCompletionStatus::InactiveChannel,
-        Ok(DeferredResumeOutcome::Cancelled) => PopWakeupCompletionStatus::ServiceCancelled,
-        Ok(DeferredResumeOutcome::AdmissionRejected) | Err(_) => PopWakeupCompletionStatus::ProcessingFailed,
+        Ok(DeferredResumeResult::Completed(_)) => PopWakeupCompletionStatus::ProcessingCompleted,
+        Ok(DeferredResumeResult::SessionClosed) => PopWakeupCompletionStatus::InactiveChannel,
+        Ok(DeferredResumeResult::Cancelled) => PopWakeupCompletionStatus::ServiceCancelled,
+        Ok(DeferredResumeResult::AdmissionRejected) | Err(_) => PopWakeupCompletionStatus::ProcessingFailed,
     }
 }
 
@@ -1545,15 +1543,15 @@ mod tests {
     #[test]
     fn retired_candidate_outcomes_are_local_but_parent_cancellation_is_not() {
         for outcome in [
-            DeferredClaimOutcome::<ResumePop>::NotFound,
-            DeferredClaimOutcome::AlreadyClaimed,
-            DeferredClaimOutcome::AlreadyCompleted,
-            DeferredClaimOutcome::SessionClosed,
-            DeferredClaimOutcome::DeadlineExpired,
+            DeferredClaimResult::<ResumePop>::NotFound,
+            DeferredClaimResult::AlreadyClaimed,
+            DeferredClaimResult::AlreadyCompleted,
+            DeferredClaimResult::SessionClosed,
+            DeferredClaimResult::DeadlineExpired,
         ] {
             assert!(is_skippable_candidate_outcome(&outcome));
         }
-        let outcome = DeferredClaimOutcome::<ResumePop>::ParentCancelled;
+        let outcome = DeferredClaimResult::<ResumePop>::ParentCancelled;
         assert!(!is_skippable_candidate_outcome(&outcome));
     }
 }
