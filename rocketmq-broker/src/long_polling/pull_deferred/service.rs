@@ -44,7 +44,7 @@ use rocketmq_transport::api::DeferredRegistrationResult;
 use rocketmq_transport::api::DeferredRegistry;
 use rocketmq_transport::api::DeferredRegistryRecovery;
 use rocketmq_transport::api::DeferredRegistryShutdownStatus;
-use rocketmq_transport::api::DeferredResponderOutcome;
+use rocketmq_transport::api::DeferredResponderTakeResult;
 use rocketmq_transport::api::DeferredResumeResult;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
 use rocketmq_transport::api::DeferredResumeSubmissionStatus;
@@ -570,7 +570,7 @@ impl PullDeferredService {
             )));
         }
         let responder = match request.take_deferred_responder() {
-            DeferredResponderOutcome::Taken(responder) => responder,
+            DeferredResponderTakeResult::Taken(responder) => responder,
             outcome => {
                 return Ok(PullDeferredRegistrationStatus::Rejected(Box::new(
                     PullDeferredRegisterRejection::PreTake {
@@ -1455,7 +1455,7 @@ pub(crate) enum PullDeferredRegisterRejection {
     PreTake {
         kind: PullDeferredRegisterRejectionKind,
         prepared: Box<PreparedPullRegistration>,
-        responder: Option<Box<DeferredResponderOutcome>>,
+        responder: Option<Box<DeferredResponderTakeResult>>,
     },
     Expiry {
         outcome: Box<DeferredExpiryAttachmentStatus>,

@@ -41,7 +41,7 @@ use crate::telemetry::TransportTelemetry;
 
 /// Result of transferring a request's affine deferred response right.
 #[must_use]
-pub enum DeferredResponderOutcome {
+pub enum DeferredResponderTakeResult {
     /// The deferred response right was transferred.
     Taken(DeferredResponder),
     /// One-way ingress can never produce a response.
