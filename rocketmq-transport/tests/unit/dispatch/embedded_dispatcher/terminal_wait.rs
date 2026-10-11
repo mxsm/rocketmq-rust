@@ -265,7 +265,7 @@ async fn terminal_wait_commits_resumes_and_returns_the_final_plan_with_compositi
         .await
         .expect("terminal dispatch join")
         .expect("terminal embedded response");
-    let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+    let EmbeddedDispatchResult::Reply(plan) = outcome else {
         panic!("terminal wait must return the final remoting response")
     };
     assert_eq!(plan.test_head().opaque(), 811);
@@ -309,7 +309,7 @@ async fn terminal_wait_deadline_closes_the_committed_registry_entry_and_releases
         .await
         .expect("terminal deadline join")
         .expect("terminal deadline is a normal outcome");
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::DeadlineExceeded));
+    assert!(matches!(outcome, EmbeddedDispatchResult::DeadlineExceeded));
     assert_released(&fixture, controller.as_ref(), &admission, &registry);
     fixture.shutdown().await;
 }
@@ -368,7 +368,7 @@ async fn parent_cancel_during_commit_fails_closed_and_rolls_back_every_owner() {
             request(false).0,
         )
         .await;
-    assert!(matches!(result, Ok(EmbeddedDispatchOutcome::Cancelled)));
+    assert!(matches!(result, Ok(EmbeddedDispatchResult::Cancelled)));
     let _ = observer.registered_id().await;
     assert_released(&fixture, controller.as_ref(), &admission, &registry);
     fixture.shutdown().await;

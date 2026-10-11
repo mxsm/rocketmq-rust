@@ -41,7 +41,7 @@ The transport captures immutable ingress identity, applies admission and securit
 
 ## Embedded dispatch
 
-Broker/Proxy in-process calls use `AuthorizedCommandDispatcher::dispatch_embedded` or `dispatch_embedded_wait_response`. Embedded callers receive `EmbeddedDispatchOutcome` and never reconstruct a network channel or materialize a compatibility command facade.
+Broker/Proxy in-process calls use `AuthorizedCommandDispatcher::dispatch_embedded` or `dispatch_embedded_wait_response`. Embedded callers receive `EmbeddedDispatchResult` and never reconstruct a network channel or materialize a compatibility command facade.
 
 ## Naming policy
 

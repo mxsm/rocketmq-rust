@@ -103,7 +103,7 @@ pub use crate::dispatch::DeferredWaitLimits;
 pub use crate::dispatch::DeferredWaitPermit;
 pub use crate::dispatch::DeferredWakeReason;
 pub use crate::dispatch::EmbeddedCaller;
-pub use crate::dispatch::EmbeddedDispatchOutcome;
+pub use crate::dispatch::EmbeddedDispatchResult;
 pub use crate::dispatch::EmbeddedResponse;
 pub use crate::dispatch::EmbeddedResponseBody;
 pub use crate::dispatch::IngressRequestView;

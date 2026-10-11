@@ -924,7 +924,7 @@ mod tests {
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
-    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::ResponseBodyKind;
     use rocketmq_transport::api::ServerConfig;
     use rocketmq_transport::api::TransportClientConfig;
@@ -1346,7 +1346,7 @@ mod tests {
             .dispatch(None, RemotingCommand::create_remoting_command(-98_453).set_opaque(320))
             .await
             .expect("embedded QueryAssignment response");
-        let EmbeddedDispatchOutcome::Reply(response) = outcome else {
+        let EmbeddedDispatchResult::Reply(response) = outcome else {
             panic!("QueryAssignment unknown request must return a reply response");
         };
 
@@ -1397,7 +1397,7 @@ mod tests {
             .dispatch(None, request)
             .await
             .expect("embedded QueryAssignment success response");
-        let EmbeddedDispatchOutcome::Reply(response) = outcome else {
+        let EmbeddedDispatchResult::Reply(response) = outcome else {
             panic!("QueryAssignment success must return a reply response");
         };
 

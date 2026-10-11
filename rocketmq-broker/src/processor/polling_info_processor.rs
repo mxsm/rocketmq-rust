@@ -281,7 +281,7 @@ mod tests {
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
-    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::ResponseBodyKind;
     use rocketmq_transport::api::ServerConfig;
     use rocketmq_transport::api::TransportSecurity;
@@ -430,7 +430,7 @@ mod tests {
             .dispatch(None, request)
             .await
             .expect("embedded PollingInfo header-error response");
-        let EmbeddedDispatchOutcome::Reply(response) = outcome else {
+        let EmbeddedDispatchResult::Reply(response) = outcome else {
             panic!("PollingInfo header error must return a reply response");
         };
 

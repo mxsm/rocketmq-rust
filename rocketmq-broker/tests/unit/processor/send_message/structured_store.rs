@@ -44,7 +44,7 @@ use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
-use rocketmq_transport::api::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::EmbeddedDispatchResult;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestDeadline;
@@ -398,7 +398,7 @@ async fn structured_send_store_await_preserves_hook_order_and_response_side_cont
         state.release.add_permits(1);
         dispatch.await.expect("structured Send reply")
     };
-    let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+    let EmbeddedDispatchResult::Reply(plan) = outcome else {
         panic!("structured Send must return one reply")
     };
     assert_eq!(plan.response_code(), ProtocolResponseCode::Success as i32);
@@ -438,7 +438,7 @@ async fn structured_send_store_error_is_one_visible_reply() {
         StoreBehavior::ImmediateError,
         Arc::clone(&state),
     );
-    let EmbeddedDispatchOutcome::Reply(plan) = fixture
+    let EmbeddedDispatchResult::Reply(plan) = fixture
         .harness
         .dispatch(None, request(false))
         .await
@@ -471,7 +471,7 @@ async fn structured_send_rejected_status_runs_after_hook_before_canonical_write(
         StoreBehavior::PutRejected,
         Arc::clone(&state),
     );
-    let EmbeddedDispatchOutcome::Reply(plan) = fixture
+    let EmbeddedDispatchResult::Reply(plan) = fixture
         .harness
         .dispatch(None, request(false))
         .await
@@ -522,11 +522,11 @@ async fn structured_send_after_write_completions_are_correlated_by_request_id() 
     .expect("both structured Send requests must complete after release");
     assert!(matches!(
         first.expect("first structured Send"),
-        EmbeddedDispatchOutcome::Reply(_)
+        EmbeddedDispatchResult::Reply(_)
     ));
     assert!(matches!(
         second.expect("second structured Send"),
-        EmbeddedDispatchOutcome::Reply(_)
+        EmbeddedDispatchResult::Reply(_)
     ));
 
     {
@@ -590,7 +590,7 @@ async fn structured_send_one_way_completes_the_after_hook_without_a_write_observ
         dispatch.await.expect("one-way structured Send dispatch")
     };
 
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::OneWay { .. }));
+    assert!(matches!(outcome, EmbeddedDispatchResult::OneWay { .. }));
     assert_eq!(
         state.events.lock().as_slice(),
         ["before_hook", "store_entered", "store_completed", "after_hook"]
@@ -617,7 +617,7 @@ async fn structured_send_parent_cancel_stops_waiting_and_suppresses_reply() {
             .await
             .expect("parent cancellation is a source-free dispatch outcome")
     };
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::Cancelled));
+    assert!(matches!(outcome, EmbeddedDispatchResult::Cancelled));
     // Future ownership is released promptly and no reply is constructed. The
     // test deliberately makes no assertion that a real backend rolled back an
     // operation it may already have accepted.
@@ -637,7 +637,7 @@ async fn structured_send_expired_deadline_suppresses_store_and_reply() {
         .dispatch(Some(RequestDeadline::after(Duration::ZERO)), request(false))
         .await
         .expect("deadline is a source-free dispatch outcome");
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::DeadlineExceeded));
+    assert!(matches!(outcome, EmbeddedDispatchResult::DeadlineExceeded));
     assert_eq!(state.store_future_drops.load(Ordering::SeqCst), 0);
     assert!(state.events.lock().is_empty());
     assert!(state.built.lock().is_none());

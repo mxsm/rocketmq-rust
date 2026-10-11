@@ -67,8 +67,7 @@ struct LifecycleReadiness {
 
 struct DefaultBackend {
     service_manager: Arc<dyn ServiceManager>,
-    remoting_backend:
-        Option<Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>>,
+    remoting_backend: Option<Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>>,
     context: Option<ChildServiceContext>,
 }
 
@@ -152,8 +151,7 @@ pub struct ProxyRuntimeBuilder {
     hooks: Option<ProxyHookChain>,
     metrics: Option<ProxyMetrics>,
     telemetry: rocketmq_observability::TelemetryHandle,
-    remoting_backend:
-        Option<Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>>,
+    remoting_backend: Option<Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>>,
     service_context: ChildServiceContext,
     diagnostics_sources: rocketmq_observability::RuntimeDiagnosticsSources,
 }
@@ -224,7 +222,7 @@ impl ProxyRuntimeBuilder {
 
     pub fn with_remoting_backend(
         mut self,
-        remoting_backend: Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
+        remoting_backend: Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>,
     ) -> Self {
         self.remoting_backend = Some(remoting_backend);
         self
@@ -321,8 +319,7 @@ pub struct ProxyRuntime<P = DefaultMessagingProcessor> {
     auth_runtime: Option<ProxyAuthRuntime>,
     auth_metadata_service: Option<Arc<dyn MetadataService>>,
     transport_telemetry: rocketmq_transport::api::TransportTelemetry,
-    remoting_backend:
-        Option<Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>>,
+    remoting_backend: Option<Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>>,
     backend_context: Option<ChildServiceContext>,
     service_context: ChildServiceContext,
 }
@@ -388,7 +385,7 @@ where
         metrics: ProxyMetrics,
         transport_telemetry: rocketmq_transport::api::TransportTelemetry,
         remoting_backend: Option<
-            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
+            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>,
         >,
         backend_context: Option<ChildServiceContext>,
         service_context: ChildServiceContext,
@@ -428,7 +425,7 @@ where
         transport_telemetry: rocketmq_transport::api::TransportTelemetry,
         grpc_guards: crate::grpc::service::GrpcExecutionResources,
         remoting_backend: Option<
-            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
+            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>,
         >,
         backend_context: Option<ChildServiceContext>,
         service_context: ChildServiceContext,
@@ -670,7 +667,7 @@ async fn finalize_proxy_run(
     primary_result: ProxyResult<()>,
     dependency_health: Option<&mut DependencyHealthMonitor>,
     remoting_backend: Option<
-        &Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
+        &Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>,
     >,
     backend_context: Option<&ChildServiceContext>,
     auth_runtime: Option<&ProxyAuthRuntime>,
@@ -710,7 +707,7 @@ async fn finalize_proxy_run(
 async fn shutdown_proxy_components(
     dependency_health: Option<&mut DependencyHealthMonitor>,
     remoting_backend: Option<
-        &Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
+        &Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>,
     >,
     backend_context: Option<&ChildServiceContext>,
     auth_runtime: Option<&ProxyAuthRuntime>,
@@ -850,7 +847,7 @@ mod tests {
     }
 
     impl ProxyRemotingBackend for ShutdownOrderBackend {
-        type Response = rocketmq_transport::api::EmbeddedDispatchOutcome;
+        type Response = rocketmq_transport::api::EmbeddedDispatchResult;
 
         fn process(
             &self,
@@ -952,7 +949,7 @@ mod tests {
             .await
             .unwrap();
         let backend_shutdown_called = Arc::new(AtomicBool::new(false));
-        let backend: Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>> =
+        let backend: Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>> =
             Arc::new(ShutdownOrderBackend {
                 context: backend_context.clone(),
                 called: Arc::clone(&backend_shutdown_called),

@@ -717,7 +717,7 @@ mod tests {
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
-    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::TransportSecurity;
     use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
@@ -756,7 +756,7 @@ mod tests {
         runtime
     }
 
-    async fn dispatch_request<P>(processor: P, command: RemotingCommand) -> EmbeddedDispatchOutcome
+    async fn dispatch_request<P>(processor: P, command: RemotingCommand) -> EmbeddedDispatchResult
     where
         P: RequestProcessor + Clone + Sync + 'static,
     {
@@ -810,7 +810,7 @@ mod tests {
         )
         .set_opaque(6_606);
 
-        let EmbeddedDispatchOutcome::Reply(plan) = dispatch_request(processor, request).await else {
+        let EmbeddedDispatchResult::Reply(plan) = dispatch_request(processor, request).await else {
             panic!("end transaction must return an inline remoting response");
         };
 

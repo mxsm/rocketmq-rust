@@ -682,7 +682,7 @@ mod tests {
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
-    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::TransportSecurity;
     use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
@@ -744,7 +744,7 @@ mod tests {
     async fn dispatch_request(
         processor: ConsumerManageProcessor<BrokerMessageStore>,
         command: RemotingCommand,
-    ) -> EmbeddedDispatchOutcome {
+    ) -> EmbeddedDispatchResult {
         let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             processor,
             Vec::new(),
@@ -771,7 +771,7 @@ mod tests {
         let request = RemotingCommand::create_request_command(RequestCode::GetConsumerListByGroup, EmptyHeader {})
             .set_opaque(4_204);
 
-        let EmbeddedDispatchOutcome::Reply(plan) = dispatch_request(processor, request).await else {
+        let EmbeddedDispatchResult::Reply(plan) = dispatch_request(processor, request).await else {
             panic!("consumer manager must return an inline remoting response");
         };
 

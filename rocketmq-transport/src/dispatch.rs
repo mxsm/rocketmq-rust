@@ -85,7 +85,7 @@ pub(crate) use deferred_session_cleanup::SessionCleanupCapability;
 #[cfg(test)]
 pub(crate) use deferred_session_cleanup::SessionCleanupEnrollment;
 pub(crate) use embedded_dispatch::EmbeddedDispatchError;
-pub use embedded_dispatch::EmbeddedDispatchOutcome;
+pub use embedded_dispatch::EmbeddedDispatchResult;
 pub(crate) use handler_outcome::InlineResponseSlot;
 pub use handler_outcome::ProtocolNoResponse;
 pub use handler_outcome::ProtocolNoResponseReason;
