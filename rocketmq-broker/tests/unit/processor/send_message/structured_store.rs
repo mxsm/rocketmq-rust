@@ -55,6 +55,7 @@ use rocketmq_transport::api::ResponseObservation;
 use rocketmq_transport::api::TransportSecurity;
 use rocketmq_transport::test_support::EmbeddedRequestHarness;
 use tokio::sync::Notify;
+use tokio::sync::Semaphore;
 
 use super::append_message_with_control_reply;
 use super::StoreHookCompletion;
@@ -87,7 +88,7 @@ struct ProbeState {
     events: Mutex<Vec<&'static str>>,
     entered: Notify,
     entered_count: AtomicUsize,
-    release: Notify,
+    release: Semaphore,
     store_future_drops: Arc<AtomicUsize>,
     built: Mutex<Option<BuiltResponse>>,
     built_replies: Mutex<HashSet<RequestId>>,
@@ -100,7 +101,7 @@ impl ProbeState {
             events: Mutex::new(Vec::new()),
             entered: Notify::new(),
             entered_count: AtomicUsize::new(0),
-            release: Notify::new(),
+            release: Semaphore::new(0),
             store_future_drops: Arc::new(AtomicUsize::new(0)),
             built: Mutex::new(None),
             built_replies: Mutex::new(HashSet::new()),
@@ -139,7 +140,14 @@ impl MessageAppender<()> for ProbeAppender {
             state.entered.notify_one();
             match behavior {
                 StoreBehavior::GatedSuccess => {
-                    state.release.notified().await;
+                    // Entry is reported before this await, so release must retain
+                    // one permit per append even if its waiter is not registered yet.
+                    state
+                        .release
+                        .acquire()
+                        .await
+                        .expect("store release gate stays open")
+                        .forget();
                     state.events.lock().push("store_completed");
                     let append_result = AppendMessageResult {
                         status: AppendMessageStatus::PutOk,
@@ -387,7 +395,7 @@ async fn structured_send_store_await_preserves_hook_order_and_response_side_cont
             result = &mut dispatch => panic!("store completed before its explicit release: {result:?}"),
         }
         assert_eq!(state.events.lock().as_slice(), ["before_hook", "store_entered"]);
-        state.release.notify_one();
+        state.release.add_permits(1);
         dispatch.await.expect("structured Send reply")
     };
     let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
@@ -495,7 +503,7 @@ async fn structured_send_after_write_completions_are_correlated_by_request_id() 
         StoreBehavior::GatedSuccess,
         Arc::clone(&state),
     );
-    let (first, second) = {
+    let (first, second) = tokio::time::timeout(Duration::from_secs(10), async {
         let first = fixture.harness.dispatch(None, request(false));
         let second = fixture.harness.dispatch(None, request(false));
         let both = async { tokio::join!(first, second) };
@@ -507,9 +515,11 @@ async fn structured_send_after_write_completions_are_correlated_by_request_id() 
                 result = &mut both => panic!("stores completed before explicit release: {result:?}"),
             }
         }
-        state.release.notify_waiters();
+        state.release.add_permits(2);
         both.await
-    };
+    })
+    .await
+    .expect("both structured Send requests must complete after release");
     assert!(matches!(
         first.expect("first structured Send"),
         EmbeddedDispatchOutcome::Reply(_)
@@ -530,6 +540,37 @@ async fn structured_send_after_write_completions_are_correlated_by_request_id() 
 }
 
 #[tokio::test]
+async fn structured_store_release_before_wait_is_retained_for_each_append() {
+    let state = ProbeState::new();
+    let mut first = ProbeAppender {
+        behavior: StoreBehavior::GatedSuccess,
+        state: Arc::clone(&state),
+    };
+    let mut second = ProbeAppender {
+        behavior: StoreBehavior::GatedSuccess,
+        state: Arc::clone(&state),
+    };
+    let first = first.append_message(());
+    let second = second.append_message(());
+    // Force release before either future can register a waiter. Both appends
+    // must still finish, including when they consume the permits sequentially.
+    state.release.add_permits(2);
+    let (first, second) = tokio::time::timeout(Duration::from_secs(10), async { tokio::join!(first, second) })
+        .await
+        .expect("store release must survive late waiter registration");
+    assert_eq!(
+        first.expect("first append receipt").result().put_message_status(),
+        PutMessageStatus::PutOk
+    );
+    assert_eq!(
+        second.expect("second append receipt").result().put_message_status(),
+        PutMessageStatus::PutOk
+    );
+    assert_eq!(state.store_future_drops.load(Ordering::SeqCst), 2);
+    assert_eq!(state.release.available_permits(), 0);
+}
+
+#[tokio::test]
 async fn structured_send_one_way_completes_the_after_hook_without_a_write_observer() {
     let state = ProbeState::new();
     let fixture = Fixture::new(
@@ -545,7 +586,7 @@ async fn structured_send_one_way_completes_the_after_hook_without_a_write_observ
             () = entered => {}
             result = &mut dispatch => panic!("one-way store completed before its explicit release: {result:?}"),
         }
-        state.release.notify_one();
+        state.release.add_permits(1);
         dispatch.await.expect("one-way structured Send dispatch")
     };
 
