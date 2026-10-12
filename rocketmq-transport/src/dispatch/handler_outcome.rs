@@ -19,7 +19,7 @@ use std::fmt;
 use crate::contract::TransportContractViolation;
 
 use super::DeferredRegistration;
-use super::DeferredResponderOutcome;
+use super::DeferredResponderTakeResult;
 use super::DeferredResponseSeed;
 use super::OriginalRequestIdentity;
 use super::RemotingResponse;
@@ -253,21 +253,21 @@ impl InlineResponseSlot {
         }
     }
 
-    pub(crate) fn take_deferred_responder(&mut self, original: OriginalRequestIdentity) -> DeferredResponderOutcome {
+    pub(crate) fn take_deferred_responder(&mut self, original: OriginalRequestIdentity) -> DeferredResponderTakeResult {
         if original.is_one_way() {
-            return DeferredResponderOutcome::OneWayRequest;
+            return DeferredResponderTakeResult::OneWayRequest;
         }
         match self.state {
-            InlineResponseState::Open => DeferredResponderOutcome::Unavailable,
+            InlineResponseState::Open => DeferredResponderTakeResult::Unavailable,
             InlineResponseState::OpenWithDeferred => {
                 let Some(seed) = self.deferred_seed.take() else {
-                    return DeferredResponderOutcome::Unavailable;
+                    return DeferredResponderTakeResult::Unavailable;
                 };
                 self.state = InlineResponseState::DeferredTaken;
-                DeferredResponderOutcome::Taken(seed.into_responder(original))
+                DeferredResponderTakeResult::Taken(seed.into_responder(original))
             }
-            InlineResponseState::DeferredTaken => DeferredResponderOutcome::AlreadyTaken,
-            InlineResponseState::Completed => DeferredResponderOutcome::OutcomeCompleted,
+            InlineResponseState::DeferredTaken => DeferredResponderTakeResult::AlreadyTaken,
+            InlineResponseState::Completed => DeferredResponderTakeResult::OutcomeCompleted,
         }
     }
 

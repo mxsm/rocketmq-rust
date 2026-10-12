@@ -23,6 +23,7 @@ use rmcp::model::ToolAnnotations;
 use schemars::JsonSchema;
 
 use crate::guard::RiskLevel;
+use crate::model::contract::ServerToolResponse;
 use crate::model::contract::ToolResponse;
 use crate::tools::broker_tools;
 #[cfg(feature = "change-planning")]
@@ -44,6 +45,9 @@ pub enum ClusterArg {
     Required,
     /// `cluster` may be omitted; the configured default cluster is then authorized and queried.
     OptionalDefault,
+    /// The Tool takes no `cluster`. It answers from this server's own state, so the Guard checks
+    /// the role and the scope only, and the Tool decides cluster by cluster what the caller sees.
+    None,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +76,12 @@ pub enum ToolId {
     GetHaStatus,
     GetControllerMetadata,
     GetNameserverConfigSummary,
+    ListClusters,
+    ListBrokers,
+    DiagnoseConsumerGroup,
+    DiagnoseBrokerHealth,
+    GetClusterHealth,
+    DiagnoseMessageDelivery,
     #[cfg(feature = "change-planning")]
     PlanCreateTopic,
     #[cfg(feature = "change-planning")]
@@ -110,6 +120,12 @@ impl ToolId {
         Self::GetHaStatus,
         Self::GetControllerMetadata,
         Self::GetNameserverConfigSummary,
+        Self::ListClusters,
+        Self::ListBrokers,
+        Self::DiagnoseConsumerGroup,
+        Self::DiagnoseBrokerHealth,
+        Self::GetClusterHealth,
+        Self::DiagnoseMessageDelivery,
         #[cfg(feature = "change-planning")]
         Self::PlanCreateTopic,
         #[cfg(feature = "change-planning")]
@@ -132,9 +148,11 @@ impl ToolId {
     /// Returns how this Tool binds a request to one logical cluster.
     ///
     /// The Guard resolves the effective cluster from this shape before authorization, so it
-    /// must match the input schema: `OptionalDefault` exactly when `cluster` is not required.
+    /// must match the input schema: `OptionalDefault` exactly when `cluster` is not required,
+    /// and `None` exactly when the schema has no `cluster`.
     pub const fn cluster_arg(self) -> ClusterArg {
         match self {
+            Self::ListClusters => ClusterArg::None,
             Self::ListTopics | Self::ListConsumerGroups => ClusterArg::OptionalDefault,
             Self::GetClusterOverview
             | Self::DescribeTopic
@@ -157,7 +175,12 @@ impl ToolId {
             | Self::GetConsumerProgress
             | Self::GetHaStatus
             | Self::GetControllerMetadata
-            | Self::GetNameserverConfigSummary => ClusterArg::Required,
+            | Self::GetNameserverConfigSummary
+            | Self::ListBrokers
+            | Self::DiagnoseConsumerGroup
+            | Self::DiagnoseBrokerHealth
+            | Self::GetClusterHealth
+            | Self::DiagnoseMessageDelivery => ClusterArg::Required,
             #[cfg(feature = "change-planning")]
             Self::PlanCreateTopic
             | Self::PlanUpdateTopicConfig
@@ -273,10 +296,10 @@ impl ToolId {
                 self,
                 "rocketmq_diagnose_consumer_lag",
                 "RocketMQ consumer lag diagnosis",
-                "Explains the lag of one Consumer Group on one Topic. It reads the lag of every queue, the Topic \
-                 route and the Broker that holds the most lag, then reports a severity, likely causes and \
-                 recommendations. Use it when a group is behind and you need a cause. For the raw per-queue numbers \
-                 use rocketmq_get_consumer_lag.",
+                "Explains the lag of one Consumer Group on one Topic. It reads the lag of every queue, the \
+                 connections and configuration of the group, the route and permissions of the Topic, and the retry \
+                 and dead-letter Topics, then reports a severity, likely causes and recommendations. Use it when a \
+                 group is behind and you need a cause. For the raw per-queue numbers use rocketmq_get_consumer_lag.",
                 RiskLevel::Diagnose,
             ),
             Self::ListConsumerConnections => ToolDescriptor::read_only(
@@ -389,14 +412,75 @@ impl ToolId {
                  allowlist are not returned.",
                 RiskLevel::ReadOnly,
             ),
+            Self::ListClusters => ToolDescriptor::read_only(
+                self,
+                "rocketmq_list_clusters",
+                "RocketMQ cluster list",
+                "Lists the logical clusters you may query, with the Proxy and Controller aliases of each and which \
+                 one is the default. Use it first, to learn the names that the cluster, proxy_name and \
+                 controller_names arguments of the other Tools accept. It takes no argument and reads no cluster; \
+                 for the Brokers of a cluster call rocketmq_list_brokers.",
+                RiskLevel::ReadOnly,
+            )
+            .answering_from_server_state(),
+            Self::ListBrokers => ToolDescriptor::read_only(
+                self,
+                "rocketmq_list_brokers",
+                "RocketMQ broker list",
+                "Lists the Broker instances of one cluster: name, id, version, inbound and outbound TPS, and whether \
+                 each is active. Use it to learn the Broker names that broker_name arguments accept. It does not \
+                 count Topics or Consumer Groups, so it is lighter than rocketmq_get_cluster_overview; for one \
+                 Broker in depth use rocketmq_get_broker_diagnostics.",
+                RiskLevel::ReadOnly,
+            ),
+            Self::DiagnoseConsumerGroup => ToolDescriptor::read_only(
+                self,
+                "rocketmq_diagnose_consumer_group",
+                "RocketMQ consumer group diagnosis",
+                "Checks one Consumer Group across every Topic it consumes: whether consumers are online, whether \
+                 consumption is enabled, how large and how old the backlog is, which Topic, Broker or queue holds \
+                 it, and whether messages are retried or dead-lettered. Use it first when a group misbehaves. For \
+                 one Topic, rocketmq_diagnose_consumer_lag adds the route and the permissions of that Topic.",
+                RiskLevel::Diagnose,
+            ),
+            Self::DiagnoseBrokerHealth => ToolDescriptor::read_only(
+                self,
+                "rocketmq_diagnose_broker_health",
+                "RocketMQ broker health diagnosis",
+                "Checks one Broker, its master and its replicas: whether every instance answers and is ready, \
+                 whether the store accepts writes and keeps up, whether the replicas are in sync, and whether the \
+                 instances are configured alike. Returns a severity, findings and recommendations. Use it when a \
+                 Broker is suspected; rocketmq_get_broker_diagnostics returns the raw figures.",
+                RiskLevel::Diagnose,
+            ),
+            Self::GetClusterHealth => ToolDescriptor::read_only(
+                self,
+                "rocketmq_get_cluster_health",
+                "RocketMQ cluster health",
+                "Checks a cluster at a glance: which Broker instances are registered, which do not answer, which \
+                 Brokers lack a master or a replica, and whether the replicas keep up. Returns a severity and \
+                 findings that name the Brokers to look at. Use it first when you do not know where a problem is, \
+                 then run rocketmq_diagnose_broker_health for a Broker it names.",
+                RiskLevel::Diagnose,
+            ),
+            Self::DiagnoseMessageDelivery => ToolDescriptor::read_only(
+                self,
+                "rocketmq_diagnose_message_delivery",
+                "RocketMQ message delivery diagnosis",
+                "Checks the path from one Topic to one Consumer Group: whether Brokers accept writes and serve \
+                 reads, whether consumers are online and enabled, and whether the group has progress and keeps \
+                 up. With message_id it also says whether the group consumed that message, waits for it, retries \
+                 it or dead-lettered it. Use it first when a message does not arrive. Never returns a body.",
+                RiskLevel::Diagnose,
+            ),
             #[cfg(feature = "change-planning")]
             Self::PlanCreateTopic => ToolDescriptor::read_only(
                 self,
                 "rocketmq_plan_create_topic",
                 "RocketMQ create topic plan",
-                "Builds a plan for creating a Topic without changing the cluster. The plan lists the intended \
-                 change, its impact and rollback suggestions, and expires after five minutes. Use it to review a \
-                 change before an operator applies it by other means.",
+                "Deprecated and due for removal: plan the change with a dry run of rocketmq_upsert_topic on the \
+                 control MCP server instead. Builds a plan for creating a Topic without changing the cluster. The \
+                 plan lists the intended change, its impact and rollback suggestions, and expires after five minutes.",
                 RiskLevel::Plan,
             ),
             #[cfg(feature = "change-planning")]
@@ -404,9 +488,10 @@ impl ToolId {
                 self,
                 "rocketmq_plan_update_topic_config",
                 "RocketMQ topic configuration plan",
-                "Builds a plan for changing one configuration entry of a Topic without changing the cluster. The \
-                 plan records the current Topic state, the intended change, its impact and rollback suggestions, and \
-                 expires after five minutes. Use it to review a change before an operator applies it by other means.",
+                "Deprecated and due for removal: plan the change with a dry run of rocketmq_upsert_topic on the \
+                 control MCP server instead. Builds a plan for changing one configuration entry of a Topic without \
+                 changing the cluster. The plan records the current Topic state, the intended change, its impact and \
+                 rollback suggestions, and expires after five minutes.",
                 RiskLevel::Plan,
             ),
             #[cfg(feature = "change-planning")]
@@ -414,9 +499,10 @@ impl ToolId {
                 self,
                 "rocketmq_plan_update_topic_permissions",
                 "RocketMQ topic permission plan",
-                "Builds a plan for changing the permission of a Topic without changing the cluster. The plan records \
-                 the current Topic state, the intended change, its impact and rollback suggestions, and expires \
-                 after five minutes. Use it to review a change before an operator applies it by other means.",
+                "Deprecated and due for removal: plan the change with a dry run of rocketmq_upsert_topic on the \
+                 control MCP server instead. Builds a plan for changing the permission of a Topic without changing \
+                 the cluster. The plan records the current Topic state, the intended change, its impact and rollback \
+                 suggestions, and expires after five minutes.",
                 RiskLevel::Plan,
             ),
             #[cfg(feature = "change-planning")]
@@ -424,10 +510,10 @@ impl ToolId {
                 self,
                 "rocketmq_plan_update_broker_config",
                 "RocketMQ broker configuration plan",
-                "Builds a plan for changing one configuration entry of a Broker without changing the cluster. The \
-                 plan records the current Broker state, the intended change, its impact and rollback suggestions, \
-                 and expires after five minutes. Use it to review a change before an operator applies it by other \
-                 means.",
+                "Deprecated and due for removal: plan the change with a dry run of rocketmq_patch_broker_config on \
+                 the control MCP server instead. Builds a plan for changing one configuration entry of a Broker \
+                 without changing the cluster. The plan records the current Broker state, the intended change, its \
+                 impact and rollback suggestions, and expires after five minutes.",
                 RiskLevel::Plan,
             ),
             #[cfg(feature = "change-planning")]
@@ -435,10 +521,10 @@ impl ToolId {
                 self,
                 "rocketmq_plan_reset_consumer_offset",
                 "RocketMQ consumer offset reset plan",
-                "Builds a plan for resetting the offsets of one Consumer Group on one Topic without changing the \
-                 cluster. The plan records the current lag, the intended reset, its impact and rollback suggestions, \
-                 and expires after five minutes. Use it to review a reset before an operator applies it by other \
-                 means.",
+                "Deprecated and due for removal: plan the reset with a dry run of rocketmq_reset_consumer_offset \
+                 on the control MCP server instead. Builds a plan for resetting the offsets of one Consumer Group on \
+                 one Topic without changing the cluster. The plan records the current lag, the intended reset, its \
+                 impact and rollback suggestions, and expires after five minutes.",
                 RiskLevel::Plan,
             ),
         }
@@ -542,6 +628,22 @@ impl ToolId {
                 infrastructure_tools::GetNameserverConfigSummaryArgs,
                 infrastructure_tools::GetNameserverConfigSummaryOutput,
             >(),
+            Self::ListClusters => {
+                descriptor.build_server_scoped::<cluster_tools::ListClustersArgs, cluster_tools::ListClustersOutput>()
+            }
+            Self::ListBrokers => descriptor.build::<broker_tools::ListBrokersArgs, broker_tools::ListBrokersOutput>(),
+            Self::DiagnoseConsumerGroup => {
+                descriptor.build::<diagnosis_tools::DiagnoseConsumerGroupArgs, crate::model::diagnosis::DiagnosisReport>()
+            }
+            Self::DiagnoseBrokerHealth => {
+                descriptor.build::<diagnosis_tools::DiagnoseBrokerHealthArgs, crate::model::diagnosis::DiagnosisReport>()
+            }
+            Self::GetClusterHealth => {
+                descriptor.build::<diagnosis_tools::GetClusterHealthArgs, crate::model::diagnosis::DiagnosisReport>()
+            }
+            Self::DiagnoseMessageDelivery => {
+                descriptor.build::<diagnosis_tools::DiagnoseMessageDeliveryArgs, crate::model::diagnosis::DiagnosisReport>()
+            }
             #[cfg(feature = "change-planning")]
             Self::PlanCreateTopic => descriptor.build::<change_tools::CreateTopicArgs, change_tools::ChangePlan>(),
             #[cfg(feature = "change-planning")]
@@ -597,15 +699,40 @@ impl ToolDescriptor {
         }
     }
 
+    /// Marks a Tool that reads this server's own state instead of a RocketMQ cluster.
+    const fn answering_from_server_state(mut self) -> Self {
+        self.annotations.open_world = false;
+        self
+    }
+
+    /// Builds the definition of a Tool that reads one cluster and answers in [`ToolResponse`].
     fn build<I, O>(self) -> Tool
     where
         I: JsonSchema + 'static,
         O: JsonSchema + 'static,
     {
+        self.build_with_envelope::<I, ToolResponse<O>>()
+    }
+
+    /// Builds the definition of a Tool that is not bound to a cluster and answers in
+    /// [`ServerToolResponse`], the envelope without `cluster`.
+    fn build_server_scoped<I, O>(self) -> Tool
+    where
+        I: JsonSchema + 'static,
+        O: JsonSchema + 'static,
+    {
+        self.build_with_envelope::<I, ServerToolResponse<O>>()
+    }
+
+    fn build_with_envelope<I, E>(self) -> Tool
+    where
+        I: JsonSchema + 'static,
+        E: JsonSchema + 'static,
+    {
         let mut tool = Tool::new(self.name, self.description, Arc::new(Default::default()))
             .with_title(self.title)
             .with_input_schema::<I>()
-            .with_output_schema::<ToolResponse<O>>()
+            .with_output_schema::<E>()
             .with_annotations(
                 ToolAnnotations::with_title(self.title)
                     .read_only(self.annotations.read_only)
@@ -738,7 +865,9 @@ mod tests {
             undescribed_properties(&schema, &mut undescribed);
             assert!(undescribed.is_empty(), "{name}: {undescribed:?}");
             // A blank cluster can never select one, and the schema says so.
-            assert_eq!(schema["properties"]["cluster"]["minLength"], 1, "{name}");
+            if tool_id.cluster_arg() != ClusterArg::None {
+                assert_eq!(schema["properties"]["cluster"]["minLength"], 1, "{name}");
+            }
         }
     }
 
@@ -825,9 +954,9 @@ mod tests {
             ]
         );
         #[cfg(not(feature = "change-planning"))]
-        assert_eq!(names.len(), 24);
+        assert_eq!(names.len(), 30);
         #[cfg(feature = "change-planning")]
-        assert_eq!(names.len(), 29);
+        assert_eq!(names.len(), 35);
     }
 
     #[test]
@@ -835,21 +964,115 @@ mod tests {
         for tool_id in ToolId::ALL {
             let definition = tool_id.definition();
             let schema = serde_json::to_value(definition.input_schema.as_ref()).expect("input schema serializes");
-            assert!(
-                schema["properties"].get("cluster").is_some(),
-                "{} must take a cluster argument",
-                definition.name
-            );
             let cluster_is_required = schema["required"]
                 .as_array()
                 .is_some_and(|required| required.iter().any(|name| name == "cluster"));
-            let expected = if cluster_is_required {
+            let expected = if schema["properties"].get("cluster").is_none() {
+                ClusterArg::None
+            } else if cluster_is_required {
                 ClusterArg::Required
             } else {
                 ClusterArg::OptionalDefault
             };
             assert_eq!(tool_id.cluster_arg(), expected, "tool={}", definition.name);
         }
+    }
+
+    /// Collects the property names a schema declares, at any depth.
+    fn property_names(schema: &serde_json::Value, names: &mut Vec<String>) {
+        match schema {
+            serde_json::Value::Object(keywords) => {
+                for (keyword, value) in keywords {
+                    if let ("properties", serde_json::Value::Object(properties)) = (keyword.as_str(), value) {
+                        names.extend(properties.keys().cloned());
+                    }
+                    property_names(value, names);
+                }
+            }
+            serde_json::Value::Array(values) => values.iter().for_each(|value| property_names(value, names)),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn server_scoped_tools_take_no_cluster_and_answer_without_one() {
+        let server_scoped = ToolId::ALL
+            .iter()
+            .copied()
+            .filter(|tool_id| tool_id.cluster_arg() == ClusterArg::None)
+            .collect::<Vec<_>>();
+        assert_eq!(server_scoped, [ToolId::ListClusters]);
+        for tool_id in server_scoped {
+            let definition = tool_id.definition();
+            let descriptor = tool_id.descriptor();
+            assert_eq!(descriptor.risk_level, RiskLevel::ReadOnly);
+            assert!(descriptor.annotations.read_only && !descriptor.annotations.destructive);
+            // It reads this server's configuration, not an external system.
+            assert!(!descriptor.annotations.open_world);
+            assert_eq!(
+                definition.input_schema.get("additionalProperties"),
+                Some(&serde_json::Value::Bool(false))
+            );
+            let output = serde_json::to_value(definition.output_schema.as_deref().unwrap()).unwrap();
+            let envelope = output["properties"].as_object().unwrap();
+            assert!(envelope.contains_key("data") && envelope.contains_key("request_id"));
+            assert!(!envelope.contains_key("cluster"), "{}", definition.name);
+            let mut properties = Vec::new();
+            property_names(&output, &mut properties);
+            assert!(properties.contains(&"proxy_names".to_string()));
+            for forbidden in ["addr", "endpoint"] {
+                assert!(
+                    properties
+                        .iter()
+                        .all(|name| !name.to_ascii_lowercase().contains(forbidden)),
+                    "{} has a {forbidden} property",
+                    definition.name
+                );
+            }
+        }
+        // Every other Tool still answers in the envelope that names its cluster.
+        let overview = ToolId::GetClusterOverview.definition();
+        let output = serde_json::to_value(overview.output_schema.as_deref().unwrap()).unwrap();
+        assert!(output["properties"].as_object().unwrap().contains_key("cluster"));
+    }
+
+    #[cfg(feature = "change-planning")]
+    #[test]
+    fn planning_tools_are_marked_deprecated_and_name_their_replacement() {
+        let replacements = [
+            (ToolId::PlanCreateTopic, "rocketmq_upsert_topic"),
+            (ToolId::PlanUpdateTopicConfig, "rocketmq_upsert_topic"),
+            (ToolId::PlanUpdateTopicPermissions, "rocketmq_upsert_topic"),
+            (ToolId::PlanUpdateBrokerConfig, "rocketmq_patch_broker_config"),
+            (ToolId::PlanResetConsumerOffset, "rocketmq_reset_consumer_offset"),
+        ];
+        let planning = ToolId::ALL
+            .iter()
+            .filter(|tool_id| tool_id.descriptor().risk_level == RiskLevel::Plan)
+            .count();
+        assert_eq!(planning, replacements.len());
+        for (tool_id, replacement) in replacements {
+            let descriptor = tool_id.descriptor();
+            // The note comes first, where a model reading a Tool listing cannot miss it.
+            assert!(
+                descriptor.description.starts_with("Deprecated and due for removal:"),
+                "{}",
+                descriptor.name
+            );
+            assert!(
+                descriptor
+                    .description
+                    .contains(&format!("a dry run of {replacement} on the control MCP server")),
+                "{} does not name {replacement}",
+                descriptor.name
+            );
+        }
+        // No other Tool is deprecated.
+        assert!(ToolId::ALL
+            .iter()
+            .map(|tool_id| tool_id.descriptor())
+            .filter(|descriptor| descriptor.risk_level != RiskLevel::Plan)
+            .all(|descriptor| !descriptor.description.contains("Deprecated")));
     }
 
     #[test]

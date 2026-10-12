@@ -26,6 +26,9 @@ use crate::model::MutationArguments;
 #[path = "tools/remaining.rs"]
 mod remaining;
 pub use remaining::*;
+#[path = "tools/result.rs"]
+mod result;
+pub use result::*;
 
 pub const MUTATION_RESULT_SCHEMA_VERSION: &str = "rocketmq-mcp-mutation.v1";
 pub const UPSERT_TOPIC_TOOL: &str = "rocketmq_upsert_topic";
@@ -411,6 +414,34 @@ pub(super) fn validate_user_name(value: &str, kind: NameKind) -> Result<(), Cont
     Ok(())
 }
 
+/// Validates the alias of a configured target, such as a Proxy.
+///
+/// An alias has the grammar of a cluster name. It therefore cannot be an address or a host name,
+/// and may be kept in a durable audit record.
+pub(super) fn validate_alias(alias: &str) -> Result<(), ControlError> {
+    validate_identifier(alias, 1)
+}
+
+/// Validates the identifier of an operation that one call starts and a later call ends.
+///
+/// The identifier is the caller's text: it is sent to the target and digested for the audit
+/// record, and no response, log or record carries it.
+pub(super) fn validate_operation_id(operation_id: &str) -> Result<(), ControlError> {
+    validate_identifier(operation_id, 8)
+}
+
+fn validate_identifier(value: &str, min_length: usize) -> Result<(), ControlError> {
+    let valid = (min_length..=64).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
+    if valid {
+        Ok(())
+    } else {
+        Err(ControlError::invalid_argument())
+    }
+}
+
 fn contains_encoded_octet(value: &str) -> bool {
     value
         .as_bytes()
@@ -465,6 +496,22 @@ pub enum FailureCode {
     PersistenceFailed,
     VerificationFailed,
     OrderReconciliationFailed,
+}
+
+/// Name of the member that carries the invocation of a mutation response.
+pub const INVOCATION_ID_MEMBER: &str = "invocation_id";
+
+/// Renders a mutation response as it is sent: with the invocation of the call that returns it.
+///
+/// The response types do not hold the invocation. A response replayed from the request-key cache
+/// was built for another call, and every call is recorded under an invocation of its own.
+#[cfg(any(feature = "write-tools", test))]
+pub(crate) fn response_with_invocation(response: &impl Serialize, invocation_id: u64) -> Option<serde_json::Value> {
+    let mut rendered = serde_json::to_value(response).ok()?;
+    rendered
+        .as_object_mut()?
+        .insert(INVOCATION_ID_MEMBER.to_owned(), serde_json::Value::from(invocation_id));
+    Some(rendered)
 }
 
 #[cfg(any(feature = "write-tools", test))]
@@ -904,6 +951,9 @@ mod tests {
             }],
             warnings: vec!["topic order configuration was not reconciled".to_owned()],
         };
-        insta::assert_json_snapshot!("control_mutation_response", response);
+        // The snapshot is the response as it is sent: with the invocation of the call.
+        let sent = response_with_invocation(&response, 42).unwrap();
+        assert_eq!(sent[INVOCATION_ID_MEMBER], 42);
+        insta::assert_json_snapshot!("control_mutation_response", sent);
     }
 }

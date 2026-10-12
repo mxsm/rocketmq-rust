@@ -165,9 +165,29 @@ for required in (
     "rocketmq_reset_consumer_offset",
     "rocketmq_patch_broker_config",
     "rocketmq_set_consumer_request_mode",
+    "rocketmq_begin_proxy_drain",
+    "rocketmq_cancel_proxy_drain",
+    "rocketmq_set_broker_log_filter_ttl",
+    "rocketmq_restore_broker_log_filter",
 ):
     if required not in source:
         fail(f"reviewed write catalog is missing {required}")
+
+# A drain names a Proxy by a configured alias. No Tool argument may carry an address.
+for tool_arguments in ("proxy_drain.rs", "log_filter.rs"):
+    unit = (PROJECT / "src" / "tools" / "remaining" / tool_arguments).read_text(encoding="utf-8")
+    unit = unit.split("#[cfg(test)]\nmod tests", maxsplit=1)[0]
+    for forbidden in ("_addr", "endpoint", "namesrv"):
+        if forbidden in unit:
+            fail(f"{tool_arguments} declares an address-shaped member through {forbidden}")
+
+# The one read-only Tool. It reads the audit trail and must not reach the mutation session.
+if "rocketmq_get_mutation_result" not in source:
+    fail("reviewed read-only catalog is missing rocketmq_get_mutation_result")
+result_lookup = (PROJECT / "src" / "tool_runtime" / "result_lookup.rs").read_text(encoding="utf-8")
+for forbidden in ("MutationToolSession", "supervised_mutation", "admin_session", "rocketmq_admin_core"):
+    if forbidden in result_lookup:
+        fail(f"the result lookup reaches the mutation session through {forbidden}")
 
 for forbidden in (
     "rocketmq_delete_",

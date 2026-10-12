@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(feature = "write-tools")]
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 #[cfg(feature = "write-tools")]
 use std::sync::Arc;
@@ -46,8 +48,12 @@ use crate::model::ControlCapabilities;
 use crate::model::ControlOperation;
 use crate::model::Principal;
 use crate::telemetry::ControlSignals;
+use crate::tools::BEGIN_PROXY_DRAIN_TOOL;
+use crate::tools::CANCEL_PROXY_DRAIN_TOOL;
 use crate::tools::PATCH_BROKER_CONFIG_TOOL;
 use crate::tools::RESET_CONSUMER_OFFSET_TOOL;
+use crate::tools::RESTORE_BROKER_LOG_FILTER_TOOL;
+use crate::tools::SET_BROKER_LOG_FILTER_TTL_TOOL;
 use crate::tools::SET_CONSUMER_REQUEST_MODE_TOOL;
 use crate::tools::UPSERT_CONSUMER_GROUP_TOOL;
 use crate::tools::UPSERT_TOPIC_TOOL;
@@ -63,6 +69,14 @@ pub struct ControlServer {
     signals: ControlSignals,
     #[cfg(feature = "write-tools")]
     tool_runtime: Option<Arc<crate::tool_runtime::ToolRuntime>>,
+    /// Reads how earlier mutation calls ended. It exists whenever the server has an audit trail,
+    /// whether or not a mutation is registered.
+    #[cfg(feature = "write-tools")]
+    result_lookup: Option<Arc<crate::tool_runtime::ResultLookup>>,
+    /// The Proxy aliases that each cluster configures. A drain names one of them; the endpoints
+    /// stay with the session factory.
+    #[cfg(feature = "write-tools")]
+    proxy_aliases: BTreeMap<ClusterName, BTreeSet<String>>,
     #[cfg(test)]
     response_delay: Option<std::time::Duration>,
 }
@@ -83,6 +97,10 @@ impl ControlServer {
             signals: ControlSignals::default(),
             #[cfg(feature = "write-tools")]
             tool_runtime: None,
+            #[cfg(feature = "write-tools")]
+            result_lookup: None,
+            #[cfg(feature = "write-tools")]
+            proxy_aliases: BTreeMap::new(),
             #[cfg(test)]
             response_delay: None,
         }
@@ -102,6 +120,19 @@ impl ControlServer {
             .iter()
             .map(|cluster| cluster.name().clone())
             .collect();
+        let proxy_aliases = config
+            .mutation_clusters()
+            .iter()
+            .map(|cluster| {
+                let aliases = cluster.proxies().map(|(alias, _)| alias.to_owned()).collect();
+                (cluster.name().clone(), aliases)
+            })
+            .collect();
+        // A lookup is budgeted like planning: it reads, and a caller polls it.
+        let result_lookup = Arc::new(crate::tool_runtime::ResultLookup::new(
+            audit.clone(),
+            config.limits.dry_runs_per_minute,
+        ));
         let tool_runtime = if catalog.registered_operations() == 0 {
             None
         } else {
@@ -126,6 +157,8 @@ impl ControlServer {
             configured_clusters,
             signals: ControlSignals::default(),
             tool_runtime,
+            result_lookup: Some(result_lookup),
+            proxy_aliases,
             #[cfg(test)]
             response_delay: None,
         })
@@ -141,6 +174,10 @@ impl ControlServer {
     ) -> Self {
         let catalog = OperationCatalog::from_policy(policy);
         let capabilities = ControlCapabilities::from_catalog(policy.mutations_enabled, &catalog);
+        let result_lookup = Arc::new(crate::tool_runtime::ResultLookup::new(
+            audit.clone(),
+            crate::config::LimitsConfig::default().dry_runs_per_minute,
+        ));
         let tool_runtime = crate::tool_runtime::ToolRuntime::new(
             audit,
             factory,
@@ -154,8 +191,18 @@ impl ControlServer {
             configured_clusters,
             signals: ControlSignals::default(),
             tool_runtime: Some(Arc::new(tool_runtime)),
+            result_lookup: Some(result_lookup),
+            proxy_aliases: BTreeMap::new(),
             response_delay: None,
         }
+    }
+
+    /// Names the Proxies that a drain on `cluster` may address.
+    #[cfg(all(test, feature = "write-tools"))]
+    pub(crate) fn with_proxy_aliases(mut self, cluster: ClusterName, aliases: &[&str]) -> Self {
+        self.proxy_aliases
+            .insert(cluster, aliases.iter().map(|alias| (*alias).to_owned()).collect());
+        self
     }
 
     pub const fn capabilities(&self) -> &ControlCapabilities {
@@ -163,14 +210,75 @@ impl ControlServer {
     }
 
     pub fn tools_list(&self) -> ListToolsResult {
-        self.catalog.list_tools()
+        #[cfg_attr(
+            not(feature = "write-tools"),
+            allow(unused_mut, reason = "the lookup Tool needs write-tools")
+        )]
+        let mut listed = self.catalog.list_tools();
+        #[cfg(feature = "write-tools")]
+        if self.result_lookup.is_some() {
+            listed.tools.push(crate::catalog::result_tool_definition());
+        }
+        listed
     }
 
     fn tools_list_for(&self, principal: &Principal) -> ListToolsResult {
-        self.catalog.list_tools_for(|operation| {
+        #[cfg_attr(
+            not(feature = "write-tools"),
+            allow(unused_mut, reason = "the lookup Tool needs write-tools")
+        )]
+        let mut listed = self.catalog.list_tools_for(|operation| {
             self.guard
                 .allows_discovery(principal, operation, &self.configured_clusters)
-        })
+        });
+        #[cfg(feature = "write-tools")]
+        if self.result_lookup.is_some() && self.guard.allows_result_discovery(principal, &self.configured_clusters) {
+            listed.tools.push(crate::catalog::result_tool_definition());
+        }
+        listed
+    }
+
+    /// Answers `rocketmq_get_mutation_result`.
+    ///
+    /// The scope and the cluster are authorized before the arguments are read, as for a mutation.
+    /// The call is then budgeted, logged and counted, and writes no durable audit record: it
+    /// changes nothing, and it must stay answerable when the audit sink is the thing that failed
+    /// to keep up with mutations.
+    #[cfg(feature = "write-tools")]
+    async fn mutation_result(
+        &self,
+        principal: &Principal,
+        cluster: &str,
+        raw: &serde_json::Value,
+        started: std::time::Instant,
+    ) -> CallToolResult {
+        let tool = crate::tools::GET_MUTATION_RESULT_TOOL;
+        let authorized = match self.guard.authorize_result_lookup(principal, cluster) {
+            Ok(authorized) => authorized,
+            Err(error) => return self.rejected(tool, started, error),
+        };
+        let Some(lookup) = &self.result_lookup else {
+            return self.rejected(tool, started, crate::error::ControlError::operation_unavailable());
+        };
+        let checked = self
+            .checked_arguments::<crate::tools::GetMutationResultArgs, _>(tool, started, raw, |args| args.validate());
+        let args = match checked {
+            Ok(args) => args,
+            Err(envelope) => return envelope_result(envelope),
+        };
+        let admitted = lookup.admit(&authorized);
+        self.signals.rate_limit_decided(admitted.is_ok());
+        if let Err(error) = admitted {
+            return self.rejected(tool, started, error);
+        }
+        match lookup.find(&authorized, &args).await {
+            Ok(response) => {
+                self.signals
+                    .result_looked_up(authorized.cluster(), response.state.as_str(), started.elapsed());
+                result_response(&response)
+            }
+            Err(error) => self.rejected(tool, started, error),
+        }
     }
 
     /// Binds the recorder for this server's logs and metrics, including its mutation runtime.
@@ -198,6 +306,19 @@ impl ControlServer {
     ) -> CallToolResult {
         self.signals.call_rejected(tool, error.code(), started.elapsed());
         tool_error(error)
+    }
+
+    /// Rejects one argument that the input schema accepts and the server configuration does not.
+    #[cfg(feature = "write-tools")]
+    fn rejected_argument(&self, tool: &'static str, started: std::time::Instant, path: &'static str) -> CallToolResult {
+        let error = crate::error::ControlError::invalid_argument();
+        self.signals.call_rejected(tool, error.code(), started.elapsed());
+        let mut envelope = error.envelope();
+        envelope.violations = vec![crate::error::ArgumentViolation {
+            path: path.to_owned(),
+            constraint: crate::error::ViolationConstraint::Other,
+        }];
+        envelope_result(envelope)
     }
 
     /// Decodes and validates the arguments of an authorized call, recording a rejection.
@@ -251,7 +372,7 @@ impl ServerHandler for ControlServer {
             .with_server_info(Implementation::new("rocketmq-mcp-control", env!("CARGO_PKG_VERSION")))
             .with_protocol_version(ProtocolVersion::V_2025_11_25)
             .with_instructions(
-                "Isolated RocketMQ control server. Five reviewed typed mutations are available only when compile-time, runtime, server-policy, and principal authorization all intersect.",
+                "Isolated RocketMQ control server. Nine reviewed typed mutations are available only when compile-time, runtime, server-policy, and principal authorization all intersect. rocketmq_get_mutation_result reads how your own mutation calls ended.",
             )
     }
 
@@ -297,6 +418,10 @@ impl ServerHandler for ControlServer {
             .and_then(|object| object.get("cluster"))
             .and_then(serde_json::Value::as_str)
             .unwrap_or("");
+        #[cfg(feature = "write-tools")]
+        if request.name.as_ref() == crate::tools::GET_MUTATION_RESULT_TOOL {
+            return Ok(self.mutation_result(&principal, cluster, &raw, started).await.into());
+        }
         // `tool` labels logs and metrics, so it is a reviewed name and never the caller's text.
         let (tool, operation_name, operation) = match request.name.as_ref() {
             UPSERT_TOPIC_TOOL => (
@@ -323,6 +448,26 @@ impl ServerHandler for ControlServer {
                 SET_CONSUMER_REQUEST_MODE_TOOL,
                 ControlOperation::ConsumerRequestMode.as_str(),
                 Some(ControlOperation::ConsumerRequestMode),
+            ),
+            BEGIN_PROXY_DRAIN_TOOL => (
+                BEGIN_PROXY_DRAIN_TOOL,
+                ControlOperation::ProxyDrainBegin.as_str(),
+                Some(ControlOperation::ProxyDrainBegin),
+            ),
+            CANCEL_PROXY_DRAIN_TOOL => (
+                CANCEL_PROXY_DRAIN_TOOL,
+                ControlOperation::ProxyDrainCancel.as_str(),
+                Some(ControlOperation::ProxyDrainCancel),
+            ),
+            SET_BROKER_LOG_FILTER_TTL_TOOL => (
+                SET_BROKER_LOG_FILTER_TTL_TOOL,
+                ControlOperation::BrokerLogFilterSet.as_str(),
+                Some(ControlOperation::BrokerLogFilterSet),
+            ),
+            RESTORE_BROKER_LOG_FILTER_TOOL => (
+                RESTORE_BROKER_LOG_FILTER_TOOL,
+                ControlOperation::BrokerLogFilterRestore.as_str(),
+                Some(ControlOperation::BrokerLogFilterRestore),
             ),
             _ => ("unknown", "unknown", None),
         };
@@ -411,6 +556,60 @@ impl ServerHandler for ControlServer {
                     args.dry_run = args.effective_dry_run(default_dry_run, dry_run_omitted);
                     crate::tool_runtime::MutationToolRequest::ConsumerRequestMode(args)
                 }
+                Some(drain @ (ControlOperation::ProxyDrainBegin | ControlOperation::ProxyDrainCancel)) => {
+                    let checked =
+                        self.checked_arguments::<crate::tools::ProxyDrainArgs, _>(tool, started, &raw, |args| {
+                            args.validate(default_dry_run, dry_run_omitted)
+                        });
+                    let mut args = match checked {
+                        Ok(args) => args,
+                        Err(envelope) => return Ok(envelope_result(envelope).into()),
+                    };
+                    // The aliases of a cluster are a closed set, like the clusters themselves. One
+                    // that is not configured is refused here, before the call is recorded and
+                    // before a session exists that could reach anything.
+                    let configured = self
+                        .proxy_aliases
+                        .get(authorized.cluster())
+                        .is_some_and(|aliases| aliases.contains(&args.proxy_name));
+                    if !configured {
+                        return Ok(self.rejected_argument(tool, started, "/proxy_name").into());
+                    }
+                    args.dry_run = args.effective_dry_run(default_dry_run, dry_run_omitted);
+                    if drain == ControlOperation::ProxyDrainBegin {
+                        crate::tool_runtime::MutationToolRequest::ProxyDrainBegin(args)
+                    } else {
+                        crate::tool_runtime::MutationToolRequest::ProxyDrainCancel(args)
+                    }
+                }
+                Some(ControlOperation::BrokerLogFilterSet) => {
+                    let checked = self.checked_arguments::<crate::tools::SetBrokerLogFilterTtlArgs, _>(
+                        tool,
+                        started,
+                        &raw,
+                        |args| args.validate(default_dry_run, dry_run_omitted),
+                    );
+                    let mut args = match checked {
+                        Ok(args) => args,
+                        Err(envelope) => return Ok(envelope_result(envelope).into()),
+                    };
+                    args.dry_run = args.effective_dry_run(default_dry_run, dry_run_omitted);
+                    crate::tool_runtime::MutationToolRequest::BrokerLogFilterSet(args)
+                }
+                Some(ControlOperation::BrokerLogFilterRestore) => {
+                    let checked = self.checked_arguments::<crate::tools::RestoreBrokerLogFilterArgs, _>(
+                        tool,
+                        started,
+                        &raw,
+                        |args| args.validate(default_dry_run, dry_run_omitted),
+                    );
+                    let mut args = match checked {
+                        Ok(args) => args,
+                        Err(envelope) => return Ok(envelope_result(envelope).into()),
+                    };
+                    args.dry_run = args.effective_dry_run(default_dry_run, dry_run_omitted);
+                    crate::tool_runtime::MutationToolRequest::BrokerLogFilterRestore(args)
+                }
                 _ => {
                     return Ok(self
                         .rejected(tool, started, crate::error::ControlError::operation_not_allowed())
@@ -425,10 +624,10 @@ impl ServerHandler for ControlServer {
             // From here the runtime records the call: a supervised mutation is logged when its
             // terminal audit record is written, even if this request is dropped first.
             let result = runtime
-                .execute(&principal, &authorized, mutation, context.ct.clone())
+                .execute_invoked(&principal, &authorized, mutation, context.ct.clone())
                 .await;
             Ok(match result {
-                Ok(response) => tool_response(response),
+                Ok(invoked) => tool_response(&invoked),
                 Err(error) => tool_error(error),
             }
             .into())
@@ -479,16 +678,30 @@ fn principal_from_context(context: &RequestContext<RoleServer>) -> Result<Princi
 }
 
 #[cfg(feature = "write-tools")]
-fn tool_response(response: crate::tool_runtime::MutationToolResponse) -> CallToolResult {
-    let structured = serde_json::to_value(&response).unwrap_or_else(|_| {
+fn tool_response(invoked: &crate::tool_runtime::InvokedMutation) -> CallToolResult {
+    let rendered = crate::tools::response_with_invocation(&invoked.response, invoked.invocation_id.get());
+    let structured = rendered.unwrap_or_else(|| {
         serde_json::to_value(crate::error::ControlError::execution_failed().envelope()).unwrap_or_default()
     });
     let text = serde_json::to_string(&structured).unwrap_or_else(|_| "mutation response unavailable".to_owned());
-    let mut result = if response.is_error() {
+    let mut result = if invoked.response.is_error() {
         CallToolResult::error(vec![ContentBlock::text(text)])
     } else {
         CallToolResult::success(vec![ContentBlock::text(text)])
     };
+    result.structured_content = Some(structured);
+    result
+}
+
+/// Renders the answer of a result lookup. The answer is a success whatever it says about the
+/// mutation: the lookup itself worked.
+#[cfg(feature = "write-tools")]
+fn result_response(response: &crate::tools::MutationResultToolResponse) -> CallToolResult {
+    let Ok(structured) = serde_json::to_value(response) else {
+        return tool_error(crate::error::ControlError::execution_failed());
+    };
+    let text = serde_json::to_string(&structured).unwrap_or_else(|_| "mutation result unavailable".to_owned());
+    let mut result = CallToolResult::success(vec![ContentBlock::text(text)]);
     result.structured_content = Some(structured);
     result
 }

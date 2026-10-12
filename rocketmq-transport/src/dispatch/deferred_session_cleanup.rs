@@ -65,7 +65,7 @@ impl std::fmt::Debug for SessionCleanupEnrollment {
 
 /// Result of atomically installing a session-close callback.
 #[cfg(test)]
-pub(crate) enum SessionCleanupInstallOutcome<T, E> {
+pub(crate) enum SessionCleanupInstallResult<T, E> {
     /// The callback and caller value were installed.
     Installed(T),
     /// The canonical network session was already closing or closed.
@@ -90,7 +90,7 @@ impl SessionCleanupCapability {
         &self,
         cleanup: impl Fn() + Send + Sync + 'static,
         install: impl FnOnce(SessionCleanupEnrollment) -> Result<T, (E, SessionCleanupEnrollment)>,
-    ) -> Result<SessionCleanupInstallOutcome<T, E>, crate::contract::TransportContractViolation> {
+    ) -> Result<SessionCleanupInstallResult<T, E>, crate::contract::TransportContractViolation> {
         static NEXT_KEY: AtomicUsize = AtomicUsize::new(1);
 
         let key = NEXT_KEY
@@ -125,10 +125,10 @@ impl SessionCleanupCapability {
             },
         );
         match result {
-            Ok(value) => Ok(SessionCleanupInstallOutcome::Installed(value)),
-            Err(RegistryFailure::SessionClosed) => Ok(SessionCleanupInstallOutcome::SessionClosed),
+            Ok(value) => Ok(SessionCleanupInstallResult::Installed(value)),
+            Err(RegistryFailure::SessionClosed) => Ok(SessionCleanupInstallResult::SessionClosed),
             Err(RegistryFailure::CleanupInstallerRejected) => match install_error {
-                Some(error) => Ok(SessionCleanupInstallOutcome::Rejected(error)),
+                Some(error) => Ok(SessionCleanupInstallResult::Rejected(error)),
                 None => Err(crate::contract::TransportContractViolation::SessionCleanupInvariant),
             },
             Err(_) => Err(crate::contract::TransportContractViolation::SessionCleanupInvariant),
@@ -200,7 +200,7 @@ impl DeferredSessionCleanupOwner {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DeferredSessionCleanupCloseOutcome {
+pub(crate) enum DeferredSessionCleanupCloseStatus {
     Completed,
     InProgress,
     AlreadyClosed,
@@ -208,20 +208,20 @@ pub(crate) enum DeferredSessionCleanupCloseOutcome {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct DeferredSessionCleanupReport {
-    pub(crate) outcome: DeferredSessionCleanupCloseOutcome,
+    pub(crate) outcome: DeferredSessionCleanupCloseStatus,
     pub(crate) registered_waiters: usize,
     pub(crate) removed_waiters: usize,
     pub(crate) remaining_wait_permits: usize,
     pub(crate) panicked_targets: usize,
 }
 
-impl PartialEq<DeferredSessionCleanupCloseOutcome> for DeferredSessionCleanupReport {
-    fn eq(&self, other: &DeferredSessionCleanupCloseOutcome) -> bool {
+impl PartialEq<DeferredSessionCleanupCloseStatus> for DeferredSessionCleanupReport {
+    fn eq(&self, other: &DeferredSessionCleanupCloseStatus) -> bool {
         self.outcome == *other
     }
 }
 
-impl PartialEq<DeferredSessionCleanupReport> for DeferredSessionCleanupCloseOutcome {
+impl PartialEq<DeferredSessionCleanupReport> for DeferredSessionCleanupCloseStatus {
     fn eq(&self, other: &DeferredSessionCleanupReport) -> bool {
         *self == other.outcome
     }
@@ -230,7 +230,7 @@ impl PartialEq<DeferredSessionCleanupReport> for DeferredSessionCleanupCloseOutc
 impl DeferredSessionCleanupReport {
     pub(crate) const fn empty_completed() -> Self {
         Self {
-            outcome: DeferredSessionCleanupCloseOutcome::Completed,
+            outcome: DeferredSessionCleanupCloseStatus::Completed,
             registered_waiters: 0,
             removed_waiters: 0,
             remaining_wait_permits: 0,
@@ -239,7 +239,7 @@ impl DeferredSessionCleanupReport {
     }
 
     pub(crate) const fn is_healthy(self) -> bool {
-        matches!(self.outcome, DeferredSessionCleanupCloseOutcome::Completed) && self.panicked_targets == 0
+        matches!(self.outcome, DeferredSessionCleanupCloseStatus::Completed) && self.panicked_targets == 0
     }
 }
 
@@ -381,10 +381,10 @@ impl CleanupCoordinator {
             match state.lifecycle {
                 CleanupLifecycle::Open => state.lifecycle = CleanupLifecycle::Closing,
                 CleanupLifecycle::Closing => {
-                    return cleanup_report(DeferredSessionCleanupCloseOutcome::InProgress, &state, 0);
+                    return cleanup_report(DeferredSessionCleanupCloseStatus::InProgress, &state, 0);
                 }
                 CleanupLifecycle::Closed => {
-                    return cleanup_report(DeferredSessionCleanupCloseOutcome::AlreadyClosed, &state, 0);
+                    return cleanup_report(DeferredSessionCleanupCloseStatus::AlreadyClosed, &state, 0);
                 }
             }
             (
@@ -411,7 +411,7 @@ impl CleanupCoordinator {
         completion.complete();
         let remaining_wait_permits = self.live_enrollment_count();
         DeferredSessionCleanupReport {
-            outcome: DeferredSessionCleanupCloseOutcome::Completed,
+            outcome: DeferredSessionCleanupCloseStatus::Completed,
             registered_waiters,
             removed_waiters,
             remaining_wait_permits,
@@ -501,7 +501,7 @@ fn live_enrollment_count(state: &CleanupState) -> usize {
 }
 
 fn cleanup_report(
-    outcome: DeferredSessionCleanupCloseOutcome,
+    outcome: DeferredSessionCleanupCloseStatus,
     state: &CleanupState,
     removed_waiters: usize,
 ) -> DeferredSessionCleanupReport {
@@ -614,7 +614,7 @@ mod tests {
     fn closed_capability_is_source_free_and_never_runs_the_installer() {
         let owner = DeferredSessionCleanupOwner::new(SessionId::from_session_owner(40));
         let capability = SessionCleanupCapability::new(owner.registration());
-        assert_eq!(owner.close(), DeferredSessionCleanupCloseOutcome::Completed);
+        assert_eq!(owner.close(), DeferredSessionCleanupCloseStatus::Completed);
         let cleanup_calls = Arc::new(AtomicUsize::new(0));
         let observed_cleanup = Arc::clone(&cleanup_calls);
         let installer_calls = Arc::new(AtomicUsize::new(0));
@@ -632,7 +632,7 @@ mod tests {
             )
             .expect("closed cleanup installation is a normal outcome");
 
-        assert!(matches!(outcome, SessionCleanupInstallOutcome::SessionClosed));
+        assert!(matches!(outcome, SessionCleanupInstallResult::SessionClosed));
         assert_eq!(installer_calls.load(Ordering::SeqCst), 0);
         assert_eq!(cleanup_calls.load(Ordering::SeqCst), 0);
         assert_eq!(owner.target_counts(), (0, 0));
@@ -654,13 +654,13 @@ mod tests {
             )
             .expect("installer rejection preserves a normal typed value");
 
-        let SessionCleanupInstallOutcome::Rejected(error) = outcome else {
+        let SessionCleanupInstallResult::Rejected(error) = outcome else {
             panic!("installer rejection must not expose the private enrollment")
         };
         assert_eq!(error, "installer-rejected");
         assert_eq!(owner.target_counts(), (0, 0));
         assert_eq!(cleanup_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(owner.close(), DeferredSessionCleanupCloseOutcome::Completed);
+        assert_eq!(owner.close(), DeferredSessionCleanupCloseStatus::Completed);
         assert_eq!(cleanup_calls.load(Ordering::SeqCst), 0);
     }
 
@@ -679,12 +679,12 @@ mod tests {
                 Ok::<_, ((), SessionCleanupEnrollment)>,
             )
             .expect("cleanup installation contract");
-        let SessionCleanupInstallOutcome::Installed(enrollment) = outcome else {
+        let SessionCleanupInstallResult::Installed(enrollment) = outcome else {
             panic!("open cleanup capability must install")
         };
         assert_eq!(owner.target_counts(), (1, 1));
         let report = owner.close();
-        assert_eq!(report.outcome, DeferredSessionCleanupCloseOutcome::Completed);
+        assert_eq!(report.outcome, DeferredSessionCleanupCloseStatus::Completed);
         assert_eq!(report.registered_waiters, 1);
         assert_eq!(report.removed_waiters, 1);
         assert_eq!(cleanup_calls.load(Ordering::SeqCst), 1);
@@ -708,7 +708,7 @@ mod tests {
         assert_eq!(factory_calls.load(Ordering::SeqCst), 1);
         assert_eq!(owner.target_counts(), (1, 2));
         let report = owner.close();
-        assert_eq!(report.outcome, DeferredSessionCleanupCloseOutcome::Completed);
+        assert_eq!(report.outcome, DeferredSessionCleanupCloseStatus::Completed);
         assert_eq!(report.registered_waiters, 2);
         assert_eq!(report.removed_waiters, 0);
         assert_eq!(report.remaining_wait_permits, 2);
@@ -718,7 +718,7 @@ mod tests {
         drop(second);
         assert_eq!(owner.target_counts(), (0, 0));
         assert_eq!(owner.remaining_wait_permits(), 0);
-        assert_eq!(owner.close(), DeferredSessionCleanupCloseOutcome::AlreadyClosed);
+        assert_eq!(owner.close(), DeferredSessionCleanupCloseStatus::AlreadyClosed);
     }
 
     #[test]
@@ -757,12 +757,12 @@ mod tests {
             Arc::clone(&factory_calls),
         );
 
-        assert_eq!(first_owner.close(), DeferredSessionCleanupCloseOutcome::Completed);
+        assert_eq!(first_owner.close(), DeferredSessionCleanupCloseStatus::Completed);
         assert_eq!(first_calls.load(Ordering::SeqCst), 1);
         assert_eq!(second_calls.load(Ordering::SeqCst), 1);
         assert_eq!(third_calls.load(Ordering::SeqCst), 0);
         assert_eq!(second_owner.target_counts(), (1, 1));
-        assert_eq!(second_owner.close(), DeferredSessionCleanupCloseOutcome::Completed);
+        assert_eq!(second_owner.close(), DeferredSessionCleanupCloseStatus::Completed);
         assert_eq!(third_calls.load(Ordering::SeqCst), 1);
         drop((first, second, third));
         assert_eq!(first_owner.target_counts(), (0, 0));
@@ -798,7 +798,7 @@ mod tests {
         );
         worker.join().expect("panic is contained by worker");
         assert_eq!(owner.target_counts(), (0, 0));
-        assert_eq!(owner.close(), DeferredSessionCleanupCloseOutcome::Completed);
+        assert_eq!(owner.close(), DeferredSessionCleanupCloseStatus::Completed);
     }
 
     struct PanickingTarget {
@@ -816,8 +816,8 @@ mod tests {
 
         fn remove_session(&self, session_id: SessionId) -> usize {
             let observed = match self.registration.coordinator.close(session_id).outcome {
-                DeferredSessionCleanupCloseOutcome::InProgress => 1,
-                DeferredSessionCleanupCloseOutcome::Completed | DeferredSessionCleanupCloseOutcome::AlreadyClosed => 2,
+                DeferredSessionCleanupCloseStatus::InProgress => 1,
+                DeferredSessionCleanupCloseStatus::Completed | DeferredSessionCleanupCloseStatus::AlreadyClosed => 2,
             };
             self.observed.store(observed, Ordering::SeqCst);
             panic!("cleanup target panic");
@@ -924,7 +924,7 @@ mod tests {
         assert_eq!(admission.snapshot().waiting_count(), 1);
 
         let report = owner.close();
-        assert_eq!(report.outcome, DeferredSessionCleanupCloseOutcome::Completed);
+        assert_eq!(report.outcome, DeferredSessionCleanupCloseStatus::Completed);
         assert_eq!(report.panicked_targets, 1);
         assert!(!report.is_healthy());
         assert_eq!(observed.load(Ordering::SeqCst), 1);
@@ -934,7 +934,7 @@ mod tests {
             Some(crate::dispatch::ResponseTerminalState::Closed)
         );
         assert_eq!(admission.snapshot().waiting_count(), 0);
-        assert_eq!(owner.close(), DeferredSessionCleanupCloseOutcome::AlreadyClosed);
+        assert_eq!(owner.close(), DeferredSessionCleanupCloseStatus::AlreadyClosed);
         drop(held);
         assert_eq!(owner.target_counts(), (0, 0));
     }

@@ -36,7 +36,7 @@ use rocketmq_store::BrokerAdminStore;
 use rocketmq_transport::api::ServerPushCommand;
 use rocketmq_transport::api::ServerPushSender;
 use rocketmq_transport::api::ServerRequestCommand;
-use rocketmq_transport::api::ServerRequestOutcome;
+use rocketmq_transport::api::ServerRequestResult;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -461,7 +461,7 @@ impl Broker2Client {
                     )
                     .await
                 {
-                    Ok(ServerRequestOutcome::Responded(response)) => {
+                    Ok(ServerRequestResult::Responded(response)) => {
                         if response.code() == ResponseCode::Success as i32 {
                             if let Some(body_bytes) = response.body() {
                                 if let Some(body) = GetConsumerStatusBody::decode(body_bytes.as_ref()) {
@@ -476,9 +476,9 @@ impl Broker2Client {
                         }
                     }
                     Ok(
-                        ServerRequestOutcome::QueueSaturated
-                        | ServerRequestOutcome::DeadlineExpired
-                        | ServerRequestOutcome::SessionClosed,
+                        ServerRequestResult::QueueSaturated
+                        | ServerRequestResult::DeadlineExpired
+                        | ServerRequestResult::SessionClosed,
                     ) => {}
                     Err(e) => {
                         error!(

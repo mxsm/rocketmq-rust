@@ -9,6 +9,8 @@
 [roles.read_only]
 allowed_clusters = ["*"]
 allow_tools = [
+  "rocketmq_list_clusters",
+  "rocketmq_list_brokers",
   "rocketmq_get_cluster_overview",
   "rocketmq_list_topics",
   "rocketmq_describe_topic",
@@ -35,6 +37,10 @@ include = ["read_only"]
 allowed_clusters = ["*"]
 allow_tools = [
   "rocketmq_diagnose_consumer_lag",
+  "rocketmq_diagnose_consumer_group",
+  "rocketmq_diagnose_broker_health",
+  "rocketmq_get_cluster_health",
+  "rocketmq_diagnose_message_delivery",
   "rocketmq_get_broker_diagnostics",
   "rocketmq_get_broker_log_filter_state",
   "rocketmq_get_proxy_drain_state",

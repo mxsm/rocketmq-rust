@@ -14,6 +14,8 @@
 
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResponse;
+use rmcp::model::CompleteRequestParams;
+use rmcp::model::CompleteResult;
 use rmcp::model::GetPromptRequestParams;
 use rmcp::model::GetPromptResponse;
 use rmcp::model::Implementation;
@@ -125,6 +127,7 @@ impl ServerHandler for RocketmqMcpServer {
                 .enable_tools()
                 .enable_resources()
                 .enable_prompts()
+                .enable_completions()
                 .build(),
         )
         .with_server_info(Implementation::new(
@@ -309,6 +312,18 @@ impl ServerHandler for RocketmqMcpServer {
         .map(Into::into)
     }
 
+    async fn complete(
+        &self,
+        request: CompleteRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CompleteResult, ErrorData> {
+        let access = self.access_context(&context)?;
+        let query = self.request_query(&access, context.ct.clone());
+        let result = crate::completion::complete(&query, self.app.guard(), &access, &request).await;
+        self.app.trace_cache_metrics();
+        Ok(result)
+    }
+
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -483,6 +498,7 @@ mod tests {
         assert!(info.capabilities.tools.is_some());
         assert!(info.capabilities.resources.is_some());
         assert!(info.capabilities.prompts.is_some());
+        assert!(info.capabilities.completions.is_some());
     }
 
     #[test]
@@ -1532,6 +1548,97 @@ mod tests {
 
     #[cfg(all(feature = "streamable-http", feature = "stdio"))]
     #[tokio::test]
+    async fn completion_handler_answers_from_the_listing_snapshot_and_respects_the_profile() {
+        let completion = |reference: rmcp::model::Reference, argument: &str, value: &str, cluster: Option<&str>| {
+            let request = CompleteRequestParams::new(reference, rmcp::model::ArgumentInfo::new(argument, value));
+            match cluster {
+                Some(cluster) => request.with_context(rmcp::model::CompletionContext::with_arguments(
+                    std::collections::HashMap::from([("cluster".to_string(), cluster.to_string())]),
+                )),
+                None => request,
+            }
+        };
+        let cluster_argument = || rmcp::model::Reference::for_prompt("broker_health_check");
+        let topic_template = || rmcp::model::Reference::for_resource("rocketmq://clusters/{cluster}/topics/{topic}");
+
+        let (_owner, server, counters) = test_server("read_only", None);
+        let (running, client) = connected_test_server(server).await;
+        let peer = running.peer().clone();
+        let service = running.service();
+
+        let clusters = service
+            .complete(
+                completion(cluster_argument(), "cluster", "loc", None),
+                local_context(&peer, 1),
+            )
+            .await
+            .unwrap();
+        assert_eq!(clusters.completion.values, ["local-dev"]);
+        assert_eq!(
+            counters.starts.load(Ordering::SeqCst),
+            0,
+            "cluster names come from configuration"
+        );
+
+        // Typing a Topic name reads the inventory once; the listing Tool then reuses that read.
+        for (id, value) in [(2, ""), (3, "o"), (4, "PAY")] {
+            let topics = service
+                .complete(
+                    completion(topic_template(), "topic", value, Some("local-dev")),
+                    local_context(&peer, id),
+                )
+                .await
+                .unwrap();
+            assert!(!topics.completion.values.is_empty(), "value={value}");
+            assert!(topics
+                .completion
+                .values
+                .iter()
+                .all(|name| name == "orders" || name == "payments"));
+        }
+        assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 1);
+        let listed = complete_tool_response(
+            service
+                .call_tool(list_topics_request(None, None), local_context(&peer, 5))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(listed.is_error, Some(false));
+        assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 1);
+
+        // No cluster in the context: no candidates and no session, even with a default cluster.
+        let starts = counters.starts.load(Ordering::SeqCst);
+        let without_cluster = service
+            .complete(completion(topic_template(), "topic", "", None), local_context(&peer, 6))
+            .await
+            .unwrap();
+        assert!(without_cluster.completion.values.is_empty());
+        assert_eq!(counters.starts.load(Ordering::SeqCst), starts);
+        drop(running);
+        drop(client);
+
+        // A profile without a role has no candidates of any class.
+        let (_owner, server, counters) = test_server("unknown-profile", None);
+        let (running, client) = connected_test_server(server).await;
+        let peer = running.peer().clone();
+        for (id, request) in [
+            (1, completion(cluster_argument(), "cluster", "", None)),
+            (2, completion(topic_template(), "topic", "", Some("local-dev"))),
+        ] {
+            let denied = running
+                .service()
+                .complete(request, local_context(&peer, id))
+                .await
+                .unwrap();
+            assert_eq!(denied, CompleteResult::default());
+        }
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 0);
+        drop(running);
+        drop(client);
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    #[tokio::test]
     async fn diagnose_handler_discovers_all_infrastructure_tools() {
         let (_owner, server, _counters) = test_server("diagnose", None);
         let (running, client) = connected_test_server(server).await;
@@ -1841,9 +1948,9 @@ mod tests {
             .collect::<Vec<_>>();
 
         #[cfg(not(feature = "change-planning"))]
-        assert_eq!(tools.len(), 24);
+        assert_eq!(tools.len(), 30);
         #[cfg(feature = "change-planning")]
-        assert_eq!(tools.len(), 29);
+        assert_eq!(tools.len(), 35);
         assert_eq!(resources.len(), 7);
         assert_eq!(resource_templates.as_array().unwrap().len(), 15);
         assert_eq!(prompts.len(), 5);

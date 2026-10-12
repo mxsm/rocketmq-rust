@@ -44,7 +44,7 @@ use crate::dispatch::DeferredParts;
 use crate::dispatch::DeferredRegistrationResult;
 use crate::dispatch::DeferredRegistry;
 use crate::dispatch::DeferredRequest;
-use crate::dispatch::DeferredResponderOutcome;
+use crate::dispatch::DeferredResponderTakeResult;
 use crate::dispatch::DeferredResumeResult;
 use crate::dispatch::DeferredResumeRetainedSize;
 use crate::dispatch::DeferredRetainedSizeParts;
@@ -60,9 +60,9 @@ use crate::runtime::processor::RejectRequestDecision;
 use crate::runtime::RPCHook;
 use crate::session_registry::ServerPushCommand;
 use crate::session_registry::ServerPushKind;
-use crate::session_registry::ServerPushOutcome;
+use crate::session_registry::ServerPushResult;
 use crate::session_registry::ServerRequestCommand;
-use crate::session_registry::ServerRequestOutcome;
+use crate::session_registry::ServerRequestResult;
 use crate::session_registry::SessionCloseReason;
 use crate::session_registry::SessionCloseStatus;
 use crate::session_registry::SessionEvent;
@@ -91,7 +91,7 @@ fn assert_transport_operation(error: &TransportError, expected_operation: &'stat
     );
 }
 
-fn expect_server_request_error(result: Result<ServerRequestOutcome, TransportError>, message: &str) -> TransportError {
+fn expect_server_request_error(result: Result<ServerRequestResult, TransportError>, message: &str) -> TransportError {
     match result {
         Err(error) => error,
         Ok(_) => panic!("{message}"),
@@ -346,11 +346,11 @@ impl RequestProcessor for NetworkDeferredCleanupProcessor {
 
         let opaque = request.original_identity().original_opaque();
         let responder = match request.take_deferred_responder() {
-            DeferredResponderOutcome::Taken(responder) => responder,
-            DeferredResponderOutcome::OneWayRequest
-            | DeferredResponderOutcome::Unavailable
-            | DeferredResponderOutcome::AlreadyTaken
-            | DeferredResponderOutcome::OutcomeCompleted => {
+            DeferredResponderTakeResult::Taken(responder) => responder,
+            DeferredResponderTakeResult::OneWayRequest
+            | DeferredResponderTakeResult::Unavailable
+            | DeferredResponderTakeResult::AlreadyTaken
+            | DeferredResponderTakeResult::OutcomeCompleted => {
                 return Err(crate::error_helpers::argument_invalid());
             }
         };
@@ -564,7 +564,7 @@ async fn registry_capabilities_write_typed_push_and_close_the_same_canonical_ses
         .capabilities(session_id)
         .expect("registered session capabilities");
 
-    let ServerPushOutcome::Sent(receipt) = push
+    let ServerPushResult::Sent(receipt) = push
         .send(
             ServerPushCommand::NotifyConsumerIdsChanged {
                 header: NotifyConsumerIdsChangedRequestHeader {
@@ -590,7 +590,7 @@ async fn registry_capabilities_write_typed_push_and_close_the_same_canonical_ses
     assert_eq!(pushed.opaque(), 9_858);
     assert!(pushed.is_oneway_rpc());
 
-    let ServerPushOutcome::Sent(transaction_receipt) = push
+    let ServerPushResult::Sent(transaction_receipt) = push
         .send(
             ServerPushCommand::CheckTransactionState {
                 header: CheckTransactionStateRequestHeader {
@@ -620,7 +620,7 @@ async fn registry_capabilities_write_typed_push_and_close_the_same_canonical_ses
     assert_eq!(transaction.body(), Some(&Bytes::from_static(b"transaction-message")));
     assert!(transaction.is_oneway_rpc());
 
-    let ServerPushOutcome::Sent(reset_receipt) = push
+    let ServerPushResult::Sent(reset_receipt) = push
         .send(
             ServerPushCommand::ResetConsumerClientOffset {
                 header: ResetOffsetRequestHeader {
@@ -827,13 +827,13 @@ async fn close_transition_rejects_retained_push_and_request_capabilities() {
         )
         .await
         .expect("retained push must not fail operationally"),
-        ServerPushOutcome::SessionClosed
+        ServerPushResult::SessionClosed
     ));
     let request_outcome = request
         .request(consumer_status_request(), Duration::from_secs(1))
         .await
         .expect("retained request must not fail operationally");
-    assert!(matches!(request_outcome, ServerRequestOutcome::SessionClosed));
+    assert!(matches!(request_outcome, ServerRequestResult::SessionClosed));
     assert_eq!(request.pending_usage().count, 0);
     assert!(
         tokio::time::timeout(Duration::from_millis(50), client.receive_command())
@@ -1192,7 +1192,7 @@ async fn server_requests_correlate_by_session_owner_and_fail_on_disconnect_and_d
         )
         .await
         .expect("send correctly owned response");
-    let ServerRequestOutcome::Responded(response) = first_response
+    let ServerRequestResult::Responded(response) = first_response
         .await
         .expect("correct session request must not fail operationally")
     else {
@@ -1214,7 +1214,7 @@ async fn server_requests_correlate_by_session_owner_and_fail_on_disconnect_and_d
     let disconnect_result = tokio::time::timeout(Duration::from_secs(1), &mut disconnected)
         .await
         .expect("disconnect must fail pending response promptly");
-    assert!(matches!(disconnect_result, Ok(ServerRequestOutcome::SessionClosed)));
+    assert!(matches!(disconnect_result, Ok(ServerRequestResult::SessionClosed)));
     assert_eq!(second_sender.pending_usage().count, 0);
     assert_eq!(second_sender.pending_usage().bytes, 0);
 
@@ -1273,7 +1273,7 @@ async fn server_requests_correlate_by_session_owner_and_fail_on_disconnect_and_d
     let interrupted_result = tokio::time::timeout(Duration::from_secs(1), &mut interrupted)
         .await
         .expect("same-session pending request must fail promptly");
-    assert!(matches!(interrupted_result, Ok(ServerRequestOutcome::SessionClosed)));
+    assert!(matches!(interrupted_result, Ok(ServerRequestResult::SessionClosed)));
 
     loop {
         let event = tokio::time::timeout(Duration::from_secs(1), events.recv())
@@ -1290,7 +1290,7 @@ async fn server_requests_correlate_by_session_owner_and_fail_on_disconnect_and_d
         .request(consumer_status_request(), Duration::from_secs(1))
         .await
         .expect("retained sender rejection must not fail operationally");
-    assert!(matches!(retired_outcome, ServerRequestOutcome::SessionClosed));
+    assert!(matches!(retired_outcome, ServerRequestResult::SessionClosed));
 
     let pending = first_sender.pending_usage();
     assert_eq!(pending.count, 0);
@@ -1341,7 +1341,7 @@ async fn typed_close_completes_healthily_with_a_written_pending_server_request()
         .await
         .expect("pending request close completion deadline")
         .expect("pending request task join");
-    assert!(matches!(request_result, Ok(ServerRequestOutcome::SessionClosed)));
+    assert!(matches!(request_result, Ok(ServerRequestResult::SessionClosed)));
     let completion = close.completion_snapshot().await;
     assert!(completion.healthy);
     assert_eq!(completion.remaining_server_outbound_leases, 0);
@@ -1396,7 +1396,7 @@ async fn aborting_a_written_server_request_retires_its_owner_and_rejects_late_re
         .request(consumer_status_request(), Duration::from_secs(1))
         .await
         .expect("cancelled response owner rejection must not fail operationally");
-    assert!(matches!(retired, ServerRequestOutcome::SessionClosed));
+    assert!(matches!(retired, ServerRequestResult::SessionClosed));
 
     let _ = client
         .send_command(
@@ -1448,7 +1448,7 @@ async fn aborting_a_written_server_request_retires_its_owner_and_rejects_late_re
         )
         .await
         .expect("send replacement response");
-    let ServerRequestOutcome::Responded(response) = replacement_request
+    let ServerRequestResult::Responded(response) = replacement_request
         .await
         .expect("replacement owner request must not fail operationally")
     else {
@@ -1554,7 +1554,7 @@ async fn prewrite_deadline_cleanup_keeps_the_server_request_session_usable() {
         .expect("prewrite deadline completion")
         .expect("server request task")
         .expect("prewrite caller deadline is a normal outcome");
-    assert!(matches!(outcome, ServerRequestOutcome::DeadlineExpired));
+    assert!(matches!(outcome, ServerRequestResult::DeadlineExpired));
     assert_eq!(sender.pending_usage().count, 0);
     assert!(registry.contains(session_id));
     assert!(registry.server_request_sender(session_id).is_some());
@@ -1575,7 +1575,7 @@ async fn prewrite_deadline_cleanup_keeps_the_server_request_session_usable() {
         .expect("send healthy retry response");
     assert!(matches!(
         retry.await.expect("healthy retry result"),
-        ServerRequestOutcome::Responded(_)
+        ServerRequestResult::Responded(_)
     ));
 
     running.begin_shutdown();

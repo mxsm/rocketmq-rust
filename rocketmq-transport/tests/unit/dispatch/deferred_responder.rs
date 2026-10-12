@@ -40,11 +40,11 @@ use crate::connection::SessionWriterDiagnostics;
 use crate::dispatch::InlineResponseSlot;
 use crate::dispatch::RequestMeta;
 use crate::dispatch::ResponseBody;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseOperationalFailure;
-use crate::dispatch::ResponseSendOutcome;
-use crate::dispatch::ResponseStateOutcome;
+use crate::dispatch::ResponseSendResult;
 use crate::dispatch::ResponseTerminalState;
+use crate::dispatch::ResponseTransitionResult;
 use crate::error_helpers::connection_failed_for_remote;
 use crate::error_helpers::TransportStage;
 use crate::file_region::FileRegion;
@@ -71,16 +71,16 @@ fn remoting_response(opaque: i32) -> RemotingResponse {
         .expect("remoting response")
 }
 
-fn expect_applied<T>(result: Result<ResponseStateOutcome<T>, TransportContractViolation>) -> T {
+fn expect_applied<T>(result: Result<ResponseTransitionResult<T>, TransportContractViolation>) -> T {
     match result.expect("response state transition remains valid") {
-        ResponseStateOutcome::Applied(value) => value,
-        ResponseStateOutcome::AlreadyCompleted { .. } => panic!("response state unexpectedly terminal"),
+        ResponseTransitionResult::Applied(value) => value,
+        ResponseTransitionResult::AlreadyCompleted { .. } => panic!("response state unexpectedly terminal"),
     }
 }
 
-fn expect_taken(outcome: DeferredResponderOutcome) -> DeferredResponder {
+fn expect_taken(outcome: DeferredResponderTakeResult) -> DeferredResponder {
     match outcome {
-        DeferredResponderOutcome::Taken(responder) => responder,
+        DeferredResponderTakeResult::Taken(responder) => responder,
         _ => panic!("deferred response ownership should be available"),
     }
 }
@@ -170,7 +170,7 @@ async fn take_failures_are_exact_and_only_a_success_allocates_deferred_state() {
     let mut unavailable = InlineResponseSlot::disabled();
     assert!(matches!(
         unavailable.take_deferred_responder(ordinary),
-        DeferredResponderOutcome::Unavailable
+        DeferredResponderTakeResult::Unavailable
     ));
     assert_eq!(deferred_state_allocations(), before);
 
@@ -179,7 +179,7 @@ async fn take_failures_are_exact_and_only_a_success_allocates_deferred_state() {
     let mut slot = InlineResponseSlot::with_deferred_seed(seed);
     assert!(matches!(
         slot.take_deferred_responder(one_way),
-        DeferredResponderOutcome::OneWayRequest
+        DeferredResponderTakeResult::OneWayRequest
     ));
     assert_eq!(deferred_state_allocations(), before);
 
@@ -187,7 +187,7 @@ async fn take_failures_are_exact_and_only_a_success_allocates_deferred_state() {
     assert_eq!(deferred_state_allocations(), before + 1);
     assert!(matches!(
         slot.take_deferred_responder(ordinary),
-        DeferredResponderOutcome::AlreadyTaken
+        DeferredResponderTakeResult::AlreadyTaken
     ));
     assert_eq!(deferred_state_allocations(), before + 1);
     drop(responder);
@@ -201,7 +201,7 @@ async fn take_failures_are_exact_and_only_a_success_allocates_deferred_state() {
         .expect("inline reply completes the slot");
     assert!(matches!(
         completed.take_deferred_responder(ordinary),
-        DeferredResponderOutcome::OutcomeCompleted
+        DeferredResponderTakeResult::OutcomeCompleted
     ));
     assert_eq!(deferred_state_allocations(), before + 1);
     harness.shutdown().await;
@@ -289,7 +289,7 @@ async fn caller_receiver_drop_closes_once_and_reports_the_prior_reason() {
     assert_eq!(state.terminal_reason(), Some(DeferredTerminalReason::ReceiverDropped));
     assert!(matches!(
         state.cancel().expect("prior terminal is a normal outcome"),
-        ResponseStateOutcome::AlreadyCompleted {
+        ResponseTransitionResult::AlreadyCompleted {
             state: ResponseTerminalState::Closed,
             reason: Some(DeferredTerminalReason::ReceiverDropped),
         }
@@ -407,7 +407,7 @@ async fn direct_remoting_response_fails_closed_before_io_and_finishes_not_starte
         .await;
     assert!(matches!(
         outcome,
-        ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed)
+        ResponseSendResult::Rejected(ResponseCompletionResult::SessionClosed)
     ));
     expect_applied(claim.fail(WriteProgress::NotStarted));
     assert_eq!(
@@ -457,7 +457,7 @@ async fn queued_response_without_canonical_plan_context_fails_before_enqueue() {
         .await;
     assert!(matches!(
         outcome,
-        ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed)
+        ResponseSendResult::Rejected(ResponseCompletionResult::SessionClosed)
     ));
     assert_eq!(diagnostics.snapshot().accepted, 0);
     expect_applied(claim.fail(WriteProgress::NotStarted));

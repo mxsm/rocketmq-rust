@@ -26,6 +26,7 @@ use super::AuditResult;
 use super::AuditSchemaVersion;
 use super::AuditTrailState;
 use super::RecoveredInvocation;
+use super::ResultIndex;
 use crate::error::ControlError;
 use crate::error::ControlErrorCode;
 
@@ -85,7 +86,11 @@ pub(super) fn recover_audit_state(records: &[AuditRecord]) -> Result<AuditTrailS
         }
         sequence = record.sequence;
     }
-    Ok(AuditTrailState { sequence, invocations })
+    Ok(AuditTrailState {
+        sequence,
+        invocations,
+        results: ResultIndex::recovered(records),
+    })
 }
 
 pub(super) fn validate_record_shape(record: &AuditRecord) -> Result<(), ControlError> {

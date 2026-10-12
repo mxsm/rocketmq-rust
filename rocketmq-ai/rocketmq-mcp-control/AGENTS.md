@@ -15,14 +15,30 @@ This file applies to `rocketmq-ai/rocketmq-mcp-control/`.
 - `write-tools` may enable only `rocketmq-admin-core/mutation-client-adapter`; it must never enable a read or full adapter.
 - The reviewed production tools are `rocketmq_upsert_topic`,
   `rocketmq_upsert_consumer_group`, `rocketmq_reset_consumer_offset`,
-  `rocketmq_patch_broker_config`, and `rocketmq_set_consumer_request_mode`.
+  `rocketmq_patch_broker_config`, `rocketmq_set_consumer_request_mode`,
+  `rocketmq_begin_proxy_drain`, `rocketmq_cancel_proxy_drain`,
+  `rocketmq_set_broker_log_filter_ttl`, and `rocketmq_restore_broker_log_filter`,
+  plus the read-only `rocketmq_get_mutation_result`.
   Keep delete, skip, resend, and any free-form mutation outside this project
   until separately reviewed.
+- The Proxy drain and Broker log filter tools are operation-bound and have exactly one target. A Proxy is named
+  only by an alias from `[[clusters.proxies]]`: refuse an alias the cluster does not list before the `started`
+  record, and give no tool argument that could carry an address. Read the target before every write. Never
+  replace or end a state that another `operation_id` holds; report it as a conflict and expose a holder only as
+  `none`, `this_operation`, or `other_operation`. Never return, log, or store an `operation_id`; only the
+  requested digest covers it. A log filter override stays within one lower-case `rocketmq_broker::` logger
+  outside the protected modules, the levels `INFO` and `DEBUG`, and 60--900 seconds.
+- `rocketmq_get_mutation_result` reads only what the audit trail remembers about the caller's own invocations on
+  the authorized cluster. It opens no session, sends no RPC, writes no durable audit record, and never returns the
+  operator, the reason, or a request key. It needs the write scope and cluster authorization before its arguments
+  are read, and no operation: it is registered whenever `write-tools` is compiled and stays available when
+  `mutations_enabled` is false. Its annotations are read-only; do not register it through the mutation path.
 - OAuth and closed operation/cluster authorization must complete before mutation argument parsing. A durable
   `started` audit record must then complete before session creation or RPC.
 - Do not add stdio, CLI, shell, subprocess, free-form RPC, arbitrary Admin commands, or stdout protocol output.
 - Durable audit v3 records may contain only: the validated OAuth subject and optional safe bounded request reason
-  as operator evidence; the validated logical names of the mutation target (Topic, Consumer Group, Broker names);
+  as operator evidence; the validated logical names of the mutation target (Topic, Consumer Group, Broker names,
+  a configured Proxy alias);
   SHA-256 digests of the requested state, the request key, the pre-change state, and the selected Broker set; and
   closed outcome values (whether a target changed, per-target result counts). Never store the requested values, a
   request key, or a name that fails argument validation. Responses, errors, tracing, ordinary logs, and all other
@@ -55,8 +71,9 @@ This file applies to `rocketmq-ai/rocketmq-mcp-control/`.
   before target state RPC, keep plans sealed to one Admin session, and preserve exact-target post-read verification.
 - Targeted Topic upserts must treat the complete order-Topic KV as a sealed no-write guard. Never merge, put,
   or delete that global KV from the targeted path; reject any selected entry that is not already exact.
-- Request-key reuse is bounded and process-local; every invocation, including followers and cache hits, keeps
-  its own durable audit pair.
+- Request-key reuse is bounded and process-local; every mutation invocation, including followers and cache
+  hits, keeps its own durable audit pair. A mutation response carries the `invocation_id` of the call that
+  returns it, so a replayed response is never sent under the invocation of the call that produced it.
 - Prefer native async trait methods where object safety is not required; do not add `async_trait`.
 
 ## Development validation

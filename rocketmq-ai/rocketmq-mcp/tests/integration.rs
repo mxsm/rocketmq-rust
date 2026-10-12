@@ -47,6 +47,9 @@ fn mcp_inspector_stdio_surface_integration() {
 {"jsonrpc":"2.0","id":7,"method":"prompts/get","params":{"name":"broker_health_check","arguments":{"cluster":"local-dev"}}}
 {"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"rocketmq_get_cluster_overview","arguments":{"cluster":"missing-cluster"}}}
 {"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"rocketmq_get_cluster_overview","arguments":{}}}
+{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"rocketmq_list_clusters","arguments":{}}}
+{"jsonrpc":"2.0","id":11,"method":"completion/complete","params":{"ref":{"type":"ref/prompt","name":"broker_health_check"},"argument":{"name":"cluster","value":"loc"}}}
+{"jsonrpc":"2.0","id":12,"method":"completion/complete","params":{"ref":{"type":"ref/resource","uri":"rocketmq://clusters/{cluster}/topics/{topic}"},"argument":{"name":"topic","value":""}}}
 "#,
     );
 
@@ -57,6 +60,7 @@ fn mcp_inspector_stdio_surface_integration() {
     assert!(responses[&1]["result"]["capabilities"]["tools"].is_object());
     assert!(responses[&1]["result"]["capabilities"]["resources"].is_object());
     assert!(responses[&1]["result"]["capabilities"]["prompts"].is_object());
+    assert!(responses[&1]["result"]["capabilities"]["completions"].is_object());
     assert_json_array_contains_field_value(
         &responses[&2]["result"]["tools"],
         "name",
@@ -88,6 +92,20 @@ fn mcp_inspector_stdio_surface_integration() {
     assert_eq!(tool_error["request_id"], "9");
     assert_eq!(tool_error["retryable"], false);
     assert!(!tool_error["suggestions"].as_array().unwrap().is_empty());
+
+    // The cluster list and cluster completion are answered from configuration, without a backend.
+    assert_eq!(responses[&10]["result"]["isError"], false, "{}", responses[&10]);
+    let clusters = &responses[&10]["result"]["structuredContent"];
+    assert!(clusters.get("cluster").is_none());
+    assert_eq!(clusters["data"]["clusters"][0]["name"], "local-dev");
+    assert_eq!(clusters["data"]["clusters"][0]["default"], true);
+    assert!(!responses[&10]["result"].to_string().contains("9876"));
+    let completed = &responses[&11]["result"]["completion"];
+    assert_eq!(completed["values"], serde_json::json!(["local-dev"]));
+    assert_eq!(completed["total"], 1);
+    assert_eq!(completed["hasMore"], false);
+    // A Topic is completed inside a chosen cluster only: without one there is nothing to read.
+    assert_eq!(responses[&12]["result"]["completion"]["values"], serde_json::json!([]));
 }
 
 #[test]

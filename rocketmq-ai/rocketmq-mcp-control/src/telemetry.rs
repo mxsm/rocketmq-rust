@@ -300,6 +300,24 @@ impl ControlSignals {
         }
     }
 
+    /// Records one answered result lookup. `state` is the closed state of the answer.
+    #[cfg(feature = "write-tools")]
+    pub(crate) fn result_looked_up(&self, cluster: &crate::model::ClusterName, state: &'static str, elapsed: Duration) {
+        self.metrics.record_operation(
+            McpOperationKind::Tool,
+            crate::tools::GET_MUTATION_RESULT_TOOL,
+            McpOperationStatus::Success,
+            elapsed,
+        );
+        tracing::info!(
+            tool = crate::tools::GET_MUTATION_RESULT_TOOL,
+            cluster = cluster.as_str(),
+            state,
+            elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
+            "mutation result was looked up"
+        );
+    }
+
     /// Records whether admission control let one authorized call through.
     #[cfg(feature = "write-tools")]
     pub(crate) fn rate_limit_decided(&self, accepted: bool) {
@@ -472,6 +490,10 @@ pub(crate) const fn tool_name(operation: crate::model::ControlOperation) -> &'st
         ControlOperation::ConsumerOffsetReset => crate::tools::RESET_CONSUMER_OFFSET_TOOL,
         ControlOperation::BrokerConfigPatch => crate::tools::PATCH_BROKER_CONFIG_TOOL,
         ControlOperation::ConsumerRequestMode => crate::tools::SET_CONSUMER_REQUEST_MODE_TOOL,
+        ControlOperation::ProxyDrainBegin => crate::tools::BEGIN_PROXY_DRAIN_TOOL,
+        ControlOperation::ProxyDrainCancel => crate::tools::CANCEL_PROXY_DRAIN_TOOL,
+        ControlOperation::BrokerLogFilterSet => crate::tools::SET_BROKER_LOG_FILTER_TTL_TOOL,
+        ControlOperation::BrokerLogFilterRestore => crate::tools::RESTORE_BROKER_LOG_FILTER_TOOL,
     }
 }
 
@@ -493,6 +515,14 @@ const fn mutation_metric_operation(operation: crate::model::ControlOperation, dr
         (ControlOperation::BrokerConfigPatch, false) => "rocketmq_patch_broker_config.execute",
         (ControlOperation::ConsumerRequestMode, true) => "rocketmq_set_consumer_request_mode.dry_run",
         (ControlOperation::ConsumerRequestMode, false) => "rocketmq_set_consumer_request_mode.execute",
+        (ControlOperation::ProxyDrainBegin, true) => "rocketmq_begin_proxy_drain.dry_run",
+        (ControlOperation::ProxyDrainBegin, false) => "rocketmq_begin_proxy_drain.execute",
+        (ControlOperation::ProxyDrainCancel, true) => "rocketmq_cancel_proxy_drain.dry_run",
+        (ControlOperation::ProxyDrainCancel, false) => "rocketmq_cancel_proxy_drain.execute",
+        (ControlOperation::BrokerLogFilterSet, true) => "rocketmq_set_broker_log_filter_ttl.dry_run",
+        (ControlOperation::BrokerLogFilterSet, false) => "rocketmq_set_broker_log_filter_ttl.execute",
+        (ControlOperation::BrokerLogFilterRestore, true) => "rocketmq_restore_broker_log_filter.dry_run",
+        (ControlOperation::BrokerLogFilterRestore, false) => "rocketmq_restore_broker_log_filter.execute",
     }
 }
 
@@ -784,6 +814,10 @@ mod tests {
             ControlOperation::ConsumerOffsetReset,
             ControlOperation::BrokerConfigPatch,
             ControlOperation::ConsumerRequestMode,
+            ControlOperation::ProxyDrainBegin,
+            ControlOperation::ProxyDrainCancel,
+            ControlOperation::BrokerLogFilterSet,
+            ControlOperation::BrokerLogFilterRestore,
         ] {
             let tool = tool_name(operation);
             assert_eq!(mutation_metric_operation(operation, true), format!("{tool}.dry_run"));

@@ -137,17 +137,17 @@ struct LaneSender {
     queued_bytes: Arc<AtomicUsize>,
 }
 
-pub(crate) enum WriterEnqueueOutcome {
+pub(crate) enum WriterEnqueueResult {
     Enqueued,
     Full(QueuedWrite),
     Closed(QueuedWrite),
 }
 
 impl LaneSender {
-    fn try_send(&self, write: QueuedWrite) -> WriterEnqueueOutcome {
+    fn try_send(&self, write: QueuedWrite) -> WriterEnqueueResult {
         let bytes = write.encoded_len();
         if !try_reserve_bytes(&self.queued_bytes, self.max_bytes, bytes) {
-            return WriterEnqueueOutcome::Full(write);
+            return WriterEnqueueResult::Full(write);
         }
         self.queued_items.fetch_add(1, Ordering::AcqRel);
         let envelope = LaneEnvelope {
@@ -157,9 +157,9 @@ impl LaneSender {
             queued_bytes: Arc::clone(&self.queued_bytes),
         };
         match self.sender.try_send(envelope) {
-            Ok(()) => WriterEnqueueOutcome::Enqueued,
-            Err(mpsc::error::TrySendError::Full(envelope)) => WriterEnqueueOutcome::Full(envelope.into_write()),
-            Err(mpsc::error::TrySendError::Closed(envelope)) => WriterEnqueueOutcome::Closed(envelope.into_write()),
+            Ok(()) => WriterEnqueueResult::Enqueued,
+            Err(mpsc::error::TrySendError::Full(envelope)) => WriterEnqueueResult::Full(envelope.into_write()),
+            Err(mpsc::error::TrySendError::Closed(envelope)) => WriterEnqueueResult::Closed(envelope.into_write()),
         }
     }
 }
@@ -202,7 +202,7 @@ impl WriterLanes {
         snapshot.data_queued_bytes = self.data.queued_bytes.load(Ordering::Acquire);
     }
 
-    pub(crate) fn try_send(&self, class: AdmissionClass, write: QueuedWrite) -> WriterEnqueueOutcome {
+    pub(crate) fn try_send(&self, class: AdmissionClass, write: QueuedWrite) -> WriterEnqueueResult {
         match class {
             AdmissionClass::Control => self.control.try_send(write),
             AdmissionClass::Data => self.data.try_send(write),
@@ -798,7 +798,7 @@ mod queue_regression_tests {
     use super::CloseRequest;
     use super::LaneEnvelope;
     use super::MicroBatchConfig;
-    use super::WriterEnqueueOutcome;
+    use super::WriterEnqueueResult;
     use super::WriterEvent;
     use super::WriterQueueConfig;
     use crate::admission::AdmissionClass;
@@ -832,21 +832,21 @@ mod queue_regression_tests {
         )
     }
 
-    fn expect_enqueued(outcome: WriterEnqueueOutcome) {
+    fn expect_enqueued(outcome: WriterEnqueueResult) {
         match outcome {
-            WriterEnqueueOutcome::Enqueued => {}
-            WriterEnqueueOutcome::Full(write) | WriterEnqueueOutcome::Closed(write) => {
+            WriterEnqueueResult::Enqueued => {}
+            WriterEnqueueResult::Full(write) | WriterEnqueueResult::Closed(write) => {
                 drop(write);
                 panic!("writer queue accepts the test item")
             }
         }
     }
 
-    fn expect_full(outcome: WriterEnqueueOutcome) {
+    fn expect_full(outcome: WriterEnqueueResult) {
         match outcome {
-            WriterEnqueueOutcome::Full(write) => drop(write),
-            WriterEnqueueOutcome::Enqueued => panic!("full writer queue accepted the test item"),
-            WriterEnqueueOutcome::Closed(write) => {
+            WriterEnqueueResult::Full(write) => drop(write),
+            WriterEnqueueResult::Enqueued => panic!("full writer queue accepted the test item"),
+            WriterEnqueueResult::Closed(write) => {
                 drop(write);
                 panic!("writer queue closed instead of reporting capacity")
             }

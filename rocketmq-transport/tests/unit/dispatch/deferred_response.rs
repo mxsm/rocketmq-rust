@@ -177,7 +177,7 @@ fn every_terminal_reason_has_one_atomic_projection() {
         let state = ResponseState::open();
         assert_eq!(
             state.stop_with_reason(reason, ResponseTransition::Cancel, |_| {}),
-            Ok(ResponseStateOutcome::Applied(())),
+            Ok(ResponseTransitionResult::Applied(())),
             "the first terminal reason wins"
         );
         assert_eq!(state.terminal_state(), Some(expected));
@@ -190,7 +190,7 @@ fn every_terminal_reason_has_one_atomic_projection() {
 
         assert_eq!(
             state.cancel(),
-            Ok(ResponseStateOutcome::AlreadyCompleted {
+            Ok(ResponseTransitionResult::AlreadyCompleted {
                 state: expected,
                 reason: Some(reason),
             })
@@ -214,7 +214,7 @@ fn deferred_terminal_metrics_use_only_fixed_request_code_buckets() {
         let state = ResponseState::observed(telemetry, request_code);
         assert_eq!(
             state.cancel(),
-            Ok(ResponseStateOutcome::Applied(())),
+            Ok(ResponseTransitionResult::Applied(())),
             "the first terminal transition wins"
         );
         assert_eq!(
@@ -303,7 +303,7 @@ fn consuming_completion_disarms_the_claim_drop_path() {
     assert_eq!(state.terminal_state(), Some(ResponseTerminalState::Completed));
     assert_eq!(
         state.close(),
-        Ok(ResponseStateOutcome::AlreadyCompleted {
+        Ok(ResponseTransitionResult::AlreadyCompleted {
             state: ResponseTerminalState::Completed,
             reason: None,
         })
@@ -314,7 +314,7 @@ fn apply_actual(
     state: &Arc<ResponseState>,
     operation: ModelOperation,
 ) -> (
-    Result<ResponseStateOutcome, TransportContractViolation>,
+    Result<ResponseTransitionResult, TransportContractViolation>,
     Option<ResponseSendClaim>,
 ) {
     let claim_for_existing_sending = || ResponseSendClaim {
@@ -327,9 +327,9 @@ fn apply_actual(
         ModelOperation::Register => (state.register(), None),
         ModelOperation::Claim => (state.claim(), None),
         ModelOperation::BeginSending => match state.begin_sending() {
-            Ok(ResponseStateOutcome::Applied(claim)) => (Ok(ResponseStateOutcome::Applied(())), Some(claim)),
-            Ok(ResponseStateOutcome::AlreadyCompleted { state, reason }) => {
-                (Ok(ResponseStateOutcome::AlreadyCompleted { state, reason }), None)
+            Ok(ResponseTransitionResult::Applied(claim)) => (Ok(ResponseTransitionResult::Applied(())), Some(claim)),
+            Ok(ResponseTransitionResult::AlreadyCompleted { state, reason }) => {
+                (Ok(ResponseTransitionResult::AlreadyCompleted { state, reason }), None)
             }
             Err(error) => (Err(error), None),
         },
@@ -345,7 +345,7 @@ fn apply_actual(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ModelTransition {
-    result: Result<ResponseStateOutcome, TransportContractViolation>,
+    result: Result<ResponseTransitionResult, TransportContractViolation>,
     state: ResponseStateSnapshot,
 }
 
@@ -353,7 +353,7 @@ fn model_transition(state_code: u8, operation: ModelOperation) -> ModelTransitio
     let state = snapshot(state_code);
     if let ResponseStateSnapshot::Terminal(state) = state {
         return ModelTransition {
-            result: Ok(ResponseStateOutcome::AlreadyCompleted {
+            result: Ok(ResponseTransitionResult::AlreadyCompleted {
                 state,
                 reason: decode_terminal_reason(state_code),
             }),
@@ -399,15 +399,15 @@ fn model_transition(state_code: u8, operation: ModelOperation) -> ModelTransitio
         }
     };
     ModelTransition {
-        result: Ok(ResponseStateOutcome::Applied(())),
+        result: Ok(ResponseTransitionResult::Applied(())),
         state: next,
     }
 }
 
-fn expect_applied<T>(outcome: ResponseStateOutcome<T>, operation: &str) -> T {
+fn expect_applied<T>(outcome: ResponseTransitionResult<T>, operation: &str) -> T {
     match outcome {
-        ResponseStateOutcome::Applied(value) => value,
-        ResponseStateOutcome::AlreadyCompleted { state, reason } => {
+        ResponseTransitionResult::Applied(value) => value,
+        ResponseTransitionResult::AlreadyCompleted { state, reason } => {
             panic!("{operation} unexpectedly observed terminal state {state:?} with reason {reason:?}");
         }
     }

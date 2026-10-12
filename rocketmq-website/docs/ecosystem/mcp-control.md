@@ -2,7 +2,7 @@
 title: "MCP Control: supervised mutations"
 ---
 
-`rocketmq-mcp-control` is an independent HTTPS MCP server for five typed RocketMQ mutations. It is separate from [read-only MCP](./mcp.md): adding a query-MCP planning feature does not enable these tools. The default Control build contains no Admin Core dependency and no production mutation tools. Actual use requires the build capability, runtime policy, authenticated claims, configured cluster and durable audit path to agree.
+`rocketmq-mcp-control` is an independent HTTPS MCP server for nine typed RocketMQ mutations. It is separate from [read-only MCP](./mcp.md): adding a query-MCP planning feature does not enable these tools. The default Control build contains no Admin Core dependency and no production mutation tools. Actual use requires the build capability, runtime policy, authenticated claims, configured cluster and durable audit path to agree.
 
 ## Supported operations and boundaries
 
@@ -13,8 +13,14 @@ title: "MCP Control: supervised mutations"
 | `rocketmq_reset_consumer_offset` | `consumer_offset_reset` | Topic/group and timezone-qualified RFC3339 timestamp; seals at most 1000 broker/queue targets and uses expected-offset CAS |
 | `rocketmq_patch_broker_config` | `broker_config_patch` | Exactly one logical Broker and a nonempty patch restricted to six known properties |
 | `rocketmq_set_consumer_request_mode` | `consumer_request_mode` | Topic/group, `pull` or `pop`, nonnegative shared-queue count and timeout 1–24000 ms |
+| `rocketmq_begin_proxy_drain` | `proxy_drain_begin` | One Proxy, named by an alias from the server configuration; it stops admitting new work under a caller-chosen `operation_id` |
+| `rocketmq_cancel_proxy_drain` | `proxy_drain_cancel` | Ends the drain that the same `operation_id` began; a drain held by another operation is a conflict |
+| `rocketmq_set_broker_log_filter_ttl` | `broker_log_filter_set` | One `rocketmq_broker::` logger on one logical Broker at `INFO` or `DEBUG` for 60–900 s; never replaces an active override |
+| `rocketmq_restore_broker_log_filter` | `broker_log_filter_restore` | Ends the override that the same `operation_id` set; the Broker also ends it by itself when the time runs out |
 
 Broker patches accept only `autoCreateTopicEnable`, `autoCreateSubscriptionGroup`, `brokerPermission`, `defaultTopicQueueNums`, `messageIndexEnable` and `traceTopicEnable`. `properties` must be a JSON object. Boolean strings must be lowercase; null/empty values and unknown keys are rejected. See the [complete tool schemas and examples](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp-control/docs/tool-reference.md) for required fields and exact limits.
+
+Proxy drains and temporary log levels are operation-bound. The caller chooses an `operation_id` of 8–64 letters, digits, `_` and `-` when it starts the state and passes the same one to end it. Each call reads its one target first, sends at most one write and reads the target again. A target that another identifier holds is reported as `conflict` and is never replaced. A result shows the holder only as `none`, `this_operation` or `other_operation`, and no response, log line or audit record repeats an `operation_id`, so keep it in your own change record. A Proxy is named by an alias listed under `[[clusters.proxies]]` in the server configuration, never by an address. Loggers of modules that handle message content, credentials or storage are rejected.
 
 There is no delete, skip, resend, arbitrary Admin command, shell, subprocess, free-form RPC or stdio transport. The optional `write-tools` feature enables only Admin Core's mutation-client adapter, not a read/full adapter. Necessary preflight/post-read observations belong to that typed mutation session; they do not create a general query surface.
 
@@ -58,7 +64,7 @@ Start from [conf/mcp-control.example.toml](https://github.com/mxsm/rocketmq-rust
 | --- | --- |
 | `server` | Explicit non-wildcard bind; example `127.0.0.1:8090` and `/mcp`. Use a canonical public HTTPS base URL and a real certificate/key pair. |
 | `oauth` | Exact HTTPS issuer, audience and public HTTPS JWKS URL. Only RS256 OAuth JWTs are accepted, including bounded `kid`, signature, expiry, subject and `rocketmq:write` scope. |
-| `clusters` | Map a closed logical alias to its private NameServer endpoint and TLS policy; use environment-variable references for optional access/secret/security-token credentials. Inline secrets are rejected. |
+| `clusters` | Map a closed logical alias to its private NameServer endpoint and TLS policy; use environment-variable references for optional access/secret/security-token credentials. Inline secrets are rejected. For Proxy drains, list each Proxy under `[[clusters.proxies]]` with an alias (`name`) and its remoting `host:port` (`endpoint`). |
 | `mutations` | Initially `mutations_enabled=false`, `dry_run=true` and empty operation/cluster allowlists. Enable only the intended operation and logical cluster when prerequisites are ready. |
 | `audit` | Writable durable JSONL destination; `path` is the active segment. The example keeps 4096 records per segment (`capacity`) and a maximum record size of 4096 bytes, the smallest value accepted. A full segment is sealed beside the active file as `<path>.<six-digit number>` and the server never deletes it, so archive sealed segments yourself. Preserve and recover the existing trail rather than replacing it on restart. |
 | `limits` | Admission control: per OAuth subject `dry_runs_per_minute` (60) and `executes_per_minute` (20), plus `max_concurrent_calls` (8) for the whole server. `audit.capacity` must be at least four times `max_concurrent_calls`. |
@@ -66,6 +72,8 @@ Start from [conf/mcp-control.example.toml](https://github.com/mxsm/rocketmq-rust
 Configuration rejects unknown fields and loads only at startup. TLS/audit path strings are used as configured; the loader does not rebase them to the TOML directory. Use absolute paths or keep a deliberate process working directory. `ROCKETMQ_MCP_CONTROL_CONFIG` selects the file; this binary has no `--config` CLI route.
 
 JWKS retrieval rejects private, loopback, link-local or reserved DNS answers and rechecks addresses at connection time. A local fake issuer is therefore not a substitute for the production authentication path. Keys have a bounded five-minute generation lifetime with refresh/negative-cache controls. A JWKS entry is used when it is an RSA key of 2048 to 8192 bits with exponent 65537 whose `use` is absent or `sig`, whose `alg` is absent or `RS256`, and whose `kid` consists of ASCII letters, digits or `._:-`; other entries, such as encryption keys, and members such as `x5c` are ignored. The server does not start when no entry is usable. Static tokens, HS algorithms and development authentication are unavailable. The HTTPS listener bounds requests to 1 MiB and 30 s; the example mutation operation timeout is 24 s.
+
+A Proxy answers drain requests only for an authenticated principal, and a Broker applies a remote log filter only with authentication and authorization enabled and with `[logging.reload] enabled = true`. Give the cluster entry credentials that those targets accept before allowlisting the four operation-bound operations.
 
 The identity provider must issue matching `rocketmq_operations` and `rocketmq_clusters` claims plus `rocketmq:write`. `conf/permissions.example.toml` describes that vocabulary; it is not a local permission file that bypasses OAuth. The subject must satisfy the safe bounded operator grammar documented in the tool/runbook sources.
 
@@ -117,13 +125,15 @@ Results use `rocketmq-mcp-mutation.v1` with aggregate `before`, `requested` and 
 | `partial` | `partial_apply`; inspect each target rather than treating the operation as atomic |
 | `failed` | May still include an applied target with failed persistence/post-read verification; inspect `error_code` and target evidence |
 
+Every result also carries `invocation_id`, which identifies the call in the audit log and in the service logs. When a response is lost or a call times out, `rocketmq_get_mutation_result` reads how the call ended, selected by that identifier or by the `request_key` that was sent: `finished` with its status, `in_progress`, `interrupted` when the server restarted before the outcome was recorded, or `not_found`. It is read-only, answers only for the caller's own calls on an authorized cluster, needs `rocketmq:write` but no operation claim, writes no audit record, and stays available after mutations are disabled. Send a `request_key` with every execute call you may need to look up, because an error envelope carries no identifier.
+
 Conflict, partial and failed outcomes set MCP `isError=true` while retaining structured data. A failed result does not universally mean no effect. `order_reconciliation_failed` preserves Broker-applied state instead of rewriting the global order KV.
 
 Two rejections happen before anything is written. An `invalid_argument` error can carry `violations`: up to three entries, each a JSON Pointer `path` into the arguments and a `constraint` such as `required`, `maximum` or `additional_property`, never a value that was sent. A call beyond the subject's per-minute budget or the server's concurrency cap gets `rate_limited` before its `started` record, so it writes no audit record and opens no session; retry it later.
 
 Reliable audit failures normalize to `audit_unavailable`. Failed `started` persistence prevents sessions and RPC; terminal audit failure can occur after an effect and after bounded session shutdown. A partial disk tail or poisoned live audit trail needs explicit repair/recovery handling. Do not blindly retry a write after an ambiguous terminal failure.
 
-Only the durable audit trail retains the validated OAuth subject and safe reason as operator evidence. Audit v3 records also name the validated logical targets and hold SHA-256 digests of the requested state, the request key and the pre-change state, whether a target was written, and per-target result counts; they never hold the requested values. Responses, ordinary logs, tracing and errors exclude operator and reason; all surfaces exclude credentials, tokens, endpoints, message bodies and raw backend errors. See the [operations runbook](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp-control/docs/operations-runbook.md) for audit recovery and partial-target investigation.
+Only the durable audit trail retains the validated OAuth subject and safe reason as operator evidence. Audit v3 records also name the validated logical targets, a Proxy alias included, and hold SHA-256 digests of the requested state, the request key and the pre-change state, whether a target was written, and per-target result counts; they never hold the requested values. Responses, ordinary logs, tracing and errors exclude operator and reason; all surfaces exclude credentials, tokens, endpoints, message bodies and raw backend errors. See the [operations runbook](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp-control/docs/operations-runbook.md) for audit recovery and partial-target investigation.
 
 To stop new mutations, disable `mutations_enabled` or remove the operation/cluster allowlist and restart; configuration does not hot reload. Reconcile uncertain target state through separately authorized operational tools. The Control server does not invent compensating writes. These are product runtime controls; omitting documentation approval gates does not remove them.
 

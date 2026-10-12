@@ -22,7 +22,7 @@ use rocketmq_error::SharedError;
 use rocketmq_error::CORE_CONFIGURATION_INVALID;
 use rocketmq_model::common::pop_retry_policy::PopRetryPolicy;
 use rocketmq_model::common::pop_retry_policy::PopRetryTopicVersion;
-use rocketmq_model::PopRetryPolicyOutcome;
+use rocketmq_model::PopRetryPolicyTransitionDecision;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_store_rocksdb::profile_marker::pop_consumer_profile_key;
 use rocketmq_store_rocksdb::profile_marker::PopConsumerProfileMarker;
@@ -317,8 +317,8 @@ fn next_retry_policy(
         .transition_to(requested_state, generation)
         .map_err(|error| codec_source_error("transition existing POP retry policy", "POP retry policy", error))?
     {
-        PopRetryPolicyOutcome::Transitioned(policy) => Ok(policy),
-        PopRetryPolicyOutcome::Rejected => Err(invalid_profile(
+        PopRetryPolicyTransitionDecision::Transitioned(policy) => Ok(policy),
+        PopRetryPolicyTransitionDecision::Rejected => Err(invalid_profile(
             "retryPolicy",
             format!("{requested_state:?}"),
             "the next safe POP retry migration state",

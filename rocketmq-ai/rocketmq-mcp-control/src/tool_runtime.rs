@@ -29,6 +29,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::audit::AuditBrokerSet;
 use crate::audit::AuditContext;
+use crate::audit::AuditInvocationId;
 use crate::audit::AuditOutcome;
 use crate::audit::AuditResult;
 use crate::audit::AuditSubject;
@@ -58,6 +59,10 @@ pub(crate) enum MutationToolRequest {
     ConsumerOffset(tools::ResetConsumerOffsetArgs),
     BrokerConfig(tools::PatchBrokerConfigArgs),
     ConsumerRequestMode(tools::SetConsumerRequestModeArgs),
+    ProxyDrainBegin(tools::ProxyDrainArgs),
+    ProxyDrainCancel(tools::ProxyDrainArgs),
+    BrokerLogFilterSet(tools::SetBrokerLogFilterTtlArgs),
+    BrokerLogFilterRestore(tools::RestoreBrokerLogFilterArgs),
 }
 
 impl MutationToolRequest {
@@ -68,6 +73,10 @@ impl MutationToolRequest {
             Self::ConsumerOffset(_) => ControlOperation::ConsumerOffsetReset,
             Self::BrokerConfig(_) => ControlOperation::BrokerConfigPatch,
             Self::ConsumerRequestMode(_) => ControlOperation::ConsumerRequestMode,
+            Self::ProxyDrainBegin(_) => ControlOperation::ProxyDrainBegin,
+            Self::ProxyDrainCancel(_) => ControlOperation::ProxyDrainCancel,
+            Self::BrokerLogFilterSet(_) => ControlOperation::BrokerLogFilterSet,
+            Self::BrokerLogFilterRestore(_) => ControlOperation::BrokerLogFilterRestore,
         }
     }
 
@@ -78,6 +87,9 @@ impl MutationToolRequest {
             Self::ConsumerOffset(args) => args.dry_run,
             Self::BrokerConfig(args) => args.dry_run,
             Self::ConsumerRequestMode(args) => args.dry_run,
+            Self::ProxyDrainBegin(args) | Self::ProxyDrainCancel(args) => args.dry_run,
+            Self::BrokerLogFilterSet(args) => args.dry_run,
+            Self::BrokerLogFilterRestore(args) => args.dry_run,
         }
     }
 
@@ -88,6 +100,9 @@ impl MutationToolRequest {
             Self::ConsumerOffset(args) => args.request_key.as_deref(),
             Self::BrokerConfig(args) => args.request_key.as_deref(),
             Self::ConsumerRequestMode(args) => args.request_key.as_deref(),
+            Self::ProxyDrainBegin(args) | Self::ProxyDrainCancel(args) => args.request_key.as_deref(),
+            Self::BrokerLogFilterSet(args) => args.request_key.as_deref(),
+            Self::BrokerLogFilterRestore(args) => args.request_key.as_deref(),
         }
     }
 
@@ -98,6 +113,9 @@ impl MutationToolRequest {
             Self::ConsumerOffset(args) => args.reason.as_deref(),
             Self::BrokerConfig(args) => args.reason.as_deref(),
             Self::ConsumerRequestMode(args) => args.reason.as_deref(),
+            Self::ProxyDrainBegin(args) | Self::ProxyDrainCancel(args) => args.reason.as_deref(),
+            Self::BrokerLogFilterSet(args) => args.reason.as_deref(),
+            Self::BrokerLogFilterRestore(args) => args.reason.as_deref(),
         }
     }
 
@@ -108,6 +126,9 @@ impl MutationToolRequest {
             Self::ConsumerOffset(args) => vec![args.topic.clone(), args.consumer_group.clone()],
             Self::BrokerConfig(args) => vec![args.broker_name.clone()],
             Self::ConsumerRequestMode(args) => vec![args.topic.clone(), args.consumer_group.clone()],
+            Self::ProxyDrainBegin(args) | Self::ProxyDrainCancel(args) => vec![args.proxy_name.clone()],
+            Self::BrokerLogFilterSet(args) => vec![args.broker_name.clone()],
+            Self::BrokerLogFilterRestore(args) => vec![args.broker_name.clone()],
         }
     }
 
@@ -116,7 +137,13 @@ impl MutationToolRequest {
         match &mut canonical {
             Self::Topic(args) => args.broker_names.sort(),
             Self::ConsumerGroup(args) => args.broker_names.sort(),
-            Self::ConsumerOffset(_) | Self::BrokerConfig(_) | Self::ConsumerRequestMode(_) => {}
+            Self::ConsumerOffset(_)
+            | Self::BrokerConfig(_)
+            | Self::ConsumerRequestMode(_)
+            | Self::ProxyDrainBegin(_)
+            | Self::ProxyDrainCancel(_)
+            | Self::BrokerLogFilterSet(_)
+            | Self::BrokerLogFilterRestore(_) => {}
         }
         serde_json::to_string(&canonical).map_err(|_| ControlError::invalid_argument())
     }
@@ -151,6 +178,18 @@ impl MutationToolRequest {
                 consumer_group: name(&args.consumer_group),
                 ..AuditTarget::default()
             },
+            Self::ProxyDrainBegin(args) | Self::ProxyDrainCancel(args) => AuditTarget {
+                proxy: name(&args.proxy_name),
+                ..AuditTarget::default()
+            },
+            Self::BrokerLogFilterSet(args) => AuditTarget {
+                broker: name(&args.broker_name),
+                ..AuditTarget::default()
+            },
+            Self::BrokerLogFilterRestore(args) => AuditTarget {
+                broker: name(&args.broker_name),
+                ..AuditTarget::default()
+            },
         };
         AuditSubject::try_new(
             self.operation(),
@@ -161,13 +200,21 @@ impl MutationToolRequest {
     }
 
     /// Digests what this call asks for: its arguments with the Broker names sorted and without
-    /// `reason`, `request_key`, `dry_run` and `confirm`, which say how and why, not what.
+    /// `reason`, `request_key`, `dry_run` and `confirm`, which say how and why, not what. The
+    /// identifier of a drain or of a log filter is part of what is asked, so it is digested and
+    /// never recorded.
     fn requested_digest(&self) -> Result<String, ControlError> {
         let mut canonical = self.clone();
         match &mut canonical {
             Self::Topic(args) => args.broker_names.sort(),
             Self::ConsumerGroup(args) => args.broker_names.sort(),
-            Self::ConsumerOffset(_) | Self::BrokerConfig(_) | Self::ConsumerRequestMode(_) => {}
+            Self::ConsumerOffset(_)
+            | Self::BrokerConfig(_)
+            | Self::ConsumerRequestMode(_)
+            | Self::ProxyDrainBegin(_)
+            | Self::ProxyDrainCancel(_)
+            | Self::BrokerLogFilterSet(_)
+            | Self::BrokerLogFilterRestore(_) => {}
         }
         let mut requested = serde_json::to_value(&canonical).map_err(|_| ControlError::invalid_argument())?;
         if let Some(arguments) = requested.as_object_mut() {
@@ -190,6 +237,9 @@ impl Serialize for MutationToolRequest {
             Self::ConsumerOffset(args) => args.serialize(serializer),
             Self::BrokerConfig(args) => args.serialize(serializer),
             Self::ConsumerRequestMode(args) => args.serialize(serializer),
+            Self::ProxyDrainBegin(args) | Self::ProxyDrainCancel(args) => args.serialize(serializer),
+            Self::BrokerLogFilterSet(args) => args.serialize(serializer),
+            Self::BrokerLogFilterRestore(args) => args.serialize(serializer),
         }
     }
 }
@@ -202,6 +252,8 @@ pub(crate) enum MutationToolResponse {
     ConsumerOffset(tools::OffsetMutationToolResponse),
     BrokerConfig(tools::BrokerConfigMutationToolResponse),
     ConsumerRequestMode(tools::RequestModeMutationToolResponse),
+    ProxyDrain(tools::ProxyDrainToolResponse),
+    BrokerLogFilter(tools::BrokerLogFilterToolResponse),
 }
 
 impl MutationToolResponse {
@@ -212,6 +264,8 @@ impl MutationToolResponse {
             Self::ConsumerOffset(response) => response.is_error(),
             Self::BrokerConfig(response) => response.is_error(),
             Self::ConsumerRequestMode(response) => response.is_error(),
+            Self::ProxyDrain(response) => response.is_error(),
+            Self::BrokerLogFilter(response) => response.is_error(),
         }
     }
 
@@ -222,6 +276,8 @@ impl MutationToolResponse {
             Self::ConsumerOffset(response) => (response.status, response.error_code),
             Self::BrokerConfig(response) => (response.status, response.error_code),
             Self::ConsumerRequestMode(response) => (response.status, response.error_code),
+            Self::ProxyDrain(response) => (response.status, response.error_code),
+            Self::BrokerLogFilter(response) => (response.status, response.error_code),
         };
         match status {
             tools::MutationStatus::Planned => (AuditResult::Planned, error_code),
@@ -231,6 +287,16 @@ impl MutationToolResponse {
             tools::MutationStatus::Failed => (AuditResult::Failed, error_code),
         }
     }
+}
+
+/// The response of one mutation call and the invocation its durable audit pair records.
+///
+/// The invocation belongs to the call, not to the response: a response replayed from the
+/// request-key cache is returned under the invocation of the call that asked for it.
+#[derive(Debug, Clone)]
+pub(crate) struct InvokedMutation {
+    pub(crate) invocation_id: AuditInvocationId,
+    pub(crate) response: MutationToolResponse,
 }
 
 pub(crate) trait MutationToolSession: Send {
@@ -288,6 +354,7 @@ impl ToolRuntime {
         self
     }
 
+    #[cfg(test)]
     pub(crate) async fn execute(
         &self,
         principal: &Principal,
@@ -295,8 +362,26 @@ impl ToolRuntime {
         request: MutationToolRequest,
         cancellation: CancellationToken,
     ) -> Result<MutationToolResponse, ControlError> {
+        self.execute_invoked(principal, authorized, request, cancellation)
+            .await
+            .map(|invoked| invoked.response)
+    }
+
+    /// Runs one authorized mutation call and returns its response with its invocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns the closed error of a call that was refused, could not be audited, or ended
+    /// without a response. Such a call can still be found by its request key.
+    pub(crate) async fn execute_invoked(
+        &self,
+        principal: &Principal,
+        authorized: &AuthorizedMutation,
+        request: MutationToolRequest,
+        cancellation: CancellationToken,
+    ) -> Result<InvokedMutation, ControlError> {
         let started = tokio::time::Instant::now();
-        let receiver = self
+        let (invocation_id, receiver) = self
             .start_supervised(principal, authorized, request, cancellation, started)
             .await
             .inspect_err(|error| {
@@ -306,10 +391,14 @@ impl ToolRuntime {
                     started.elapsed(),
                 );
             })?;
-        receiver.await.map_err(|_| {
+        let response = receiver.await.map_err(|_| {
             self.signals.audit_failed(AuditStage::Supervisor);
             ControlError::audit_unavailable()
-        })?
+        })??;
+        Ok(InvokedMutation {
+            invocation_id,
+            response,
+        })
     }
 
     /// Persists the `started` record and hands the mutation to its supervisor.
@@ -323,7 +412,13 @@ impl ToolRuntime {
         request: MutationToolRequest,
         cancellation: CancellationToken,
         started: tokio::time::Instant,
-    ) -> Result<oneshot::Receiver<Result<MutationToolResponse, ControlError>>, ControlError> {
+    ) -> Result<
+        (
+            AuditInvocationId,
+            oneshot::Receiver<Result<MutationToolResponse, ControlError>>,
+        ),
+        ControlError,
+    > {
         // Admission comes first: a refused call must not cost an audit record or a cache slot.
         let permit = match self.admission.admit(&principal.subject, request.dry_run()) {
             Ok(permit) => permit,
@@ -451,7 +546,7 @@ impl ToolRuntime {
                 .inspect_err(|_| self.signals.audit_failed(AuditStage::Terminal))?;
             return Err(error);
         }
-        Ok(receiver)
+        Ok((invocation.id(), receiver))
     }
 }
 
@@ -525,12 +620,18 @@ mod admission;
 mod execution;
 mod idempotency;
 mod remaining;
+mod result_lookup;
 
 pub(crate) use admin_session::AdminMutationToolFactory;
 use admission::Admission;
 use idempotency::execute_admitted;
 use idempotency::IdempotencyIdentity;
 use idempotency::IdempotencyState;
+#[cfg(test)]
+pub(crate) use remaining::OperationBackend;
+#[cfg(test)]
+pub(crate) use remaining::Planned;
+pub(crate) use result_lookup::ResultLookup;
 
 #[cfg(test)]
 pub(crate) use MutationToolRequest as UpsertRequest;

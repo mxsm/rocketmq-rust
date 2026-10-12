@@ -133,8 +133,8 @@ async fn admitted_reply_uses_body_free_hooks_resolve_bind_writer_and_one_observa
     assert_eq!(observation.body_kind(), ResponseBodyKind::Bytes);
     assert_eq!(observation.path(), ResponseWritePath::Inline);
     assert!(matches!(
-        observation.outcome(),
-        ResponseWriteOutcome::Written(receipt)
+        observation.event(),
+        ResponseDeliveryEvent::DeliveryCompleted(receipt)
             if receipt.request_id() == original.request_id()
                 && receipt.disposition() == ResponseDisposition::TransportWritten
     ));
@@ -225,8 +225,8 @@ async fn file_region_crosses_hooks_and_metric_projection_without_entering_the_ob
     assert_eq!(observation.body_kind(), ResponseBodyKind::FileRegions);
     assert_eq!(observation.path(), ResponseWritePath::Inline);
     assert!(matches!(
-        observation.outcome(),
-        ResponseWriteOutcome::Written(receipt)
+        observation.event(),
+        ResponseDeliveryEvent::DeliveryCompleted(receipt)
             if receipt.request_id() == original.request_id()
                 && receipt.disposition() == ResponseDisposition::TransportWritten
     ));
@@ -395,8 +395,8 @@ async fn possibly_partial_flush_failure_is_observed_once_and_never_retried() {
         let observations = state.observations.lock().expect("observation lock");
         assert_eq!(observations.len(), 1);
         assert_eq!(
-            observations[0].outcome(),
-            ResponseWriteOutcome::Failed {
+            observations[0].event(),
+            ResponseDeliveryEvent::Failed {
                 completion: None,
                 progress: Some(WriteProgress::PossiblyPartial),
             }

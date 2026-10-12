@@ -30,11 +30,8 @@ use crate::storage::StorageStats;
 use rocketmq_error::Error;
 use rocketmq_error::Result;
 
-/// RocksDB storage backend
-///
-/// Provides persistent storage using RocksDB, a high-performance
-/// embedded database based on LevelDB.
-pub struct RocksDBBackend {
+/// Persistent key-value storage backed by RocksDB.
+pub struct RocksDBKeyValueStore {
     /// RocksDB instance
     db: Arc<DB>,
 
@@ -42,8 +39,8 @@ pub struct RocksDBBackend {
     blocking: BlockingExecutor,
 }
 
-impl RocksDBBackend {
-    /// Create a new RocksDB backend
+impl RocksDBKeyValueStore {
+    /// Create a persistent key-value store backed by RocksDB.
     pub async fn new(path: PathBuf, blocking: BlockingExecutor) -> Result<Self> {
         info!("Opening RocksDB at {:?}", path);
 
@@ -112,7 +109,7 @@ fn map_blocking_error(error: rocketmq_runtime::RuntimeError) -> Error {
 }
 
 #[async_trait]
-impl StorageBackend for RocksDBBackend {
+impl StorageBackend for RocksDBKeyValueStore {
     async fn put(&self, key: &str, value: &[u8]) -> Result<()> {
         debug!("RocksDB put: key={}, size={}", key, value.len());
 
@@ -352,7 +349,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("parented_db");
 
-        let backend = RocksDBBackend::new(db_path, service.storage_io().clone())
+        let backend = RocksDBKeyValueStore::new(db_path, service.storage_io().clone())
             .await
             .unwrap();
         assert_eq!(backend.blocking.snapshot().name, service.storage_io().snapshot().name);
@@ -369,7 +366,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test_db");
 
-        let backend = RocksDBBackend::new(db_path, context.service_context("rocksdb").storage_io().clone())
+        let backend = RocksDBKeyValueStore::new(db_path, context.service_context("rocksdb").storage_io().clone())
             .await
             .unwrap();
 

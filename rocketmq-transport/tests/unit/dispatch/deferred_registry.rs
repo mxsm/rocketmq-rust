@@ -53,8 +53,8 @@ use crate::dispatch::DeferredWaitLimits;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestMeta;
 use crate::dispatch::ResponseSink;
-use crate::dispatch::ResponseStateOutcome;
 use crate::dispatch::ResponseTerminalState;
+use crate::dispatch::ResponseTransitionResult;
 use crate::session_view::EmbeddedSessionRecord;
 use crate::telemetry::TransportTelemetry;
 
@@ -1256,7 +1256,7 @@ fn session_cleanup_detaches_multiple_registries_once_and_preserves_other_session
     let cleanup_report = cleanup.close();
     assert_eq!(
         cleanup_report.outcome,
-        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseStatus::Completed
     );
     assert_eq!(cleanup_report.registered_waiters, 3);
     assert_eq!(cleanup_report.removed_waiters, 3);
@@ -1271,7 +1271,7 @@ fn session_cleanup_detaches_multiple_registries_once_and_preserves_other_session
     assert_eq!(other.admission.snapshot().waiting_count(), 1);
     assert_eq!(
         cleanup.close(),
-        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::AlreadyClosed
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseStatus::AlreadyClosed
     );
     drop(first);
     assert_eq!(other.admission.snapshot().waiting_count(), 0);
@@ -1298,7 +1298,7 @@ async fn claimed_session_cleanup_closes_marker_and_fresh_claim_is_not_found() {
     harness.session.close();
     assert_eq!(
         cleanup.close(),
-        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseStatus::Completed
     );
     assert_eq!(registry.inner.session_member_count(harness.session.view().id()), 0);
     assert_eq!(registry.inner.claim_marker_count(), 0);
@@ -1358,7 +1358,7 @@ fn closed_cleanup_owner_rejects_before_id_allocation_and_builder_execution() {
     let cleanup = crate::dispatch::DeferredSessionCleanupOwner::new(harness.session.view().id());
     assert_eq!(
         cleanup.close(),
-        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseStatus::Completed
     );
     let sequence = Arc::new(AtomicU64::new(900));
     let registry = DeferredRegistry::<u64>::with_test_sequence(Arc::clone(&sequence));
@@ -1400,7 +1400,7 @@ fn cleanup_removes_shell_and_prepared_entries_independently() {
     assert_eq!(shell_registry.inner.phase(shell_id), Some(EntryPhaseTag::Shell));
     assert_eq!(
         shell_cleanup.close(),
-        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseStatus::Completed
     );
     assert_eq!(shell_registry.inner.index_counts(), (0, 0, 0));
     assert_eq!(shell_state.terminal_state(), Some(ResponseTerminalState::Closed));
@@ -1419,7 +1419,7 @@ fn cleanup_removes_shell_and_prepared_entries_independently() {
     );
     assert_eq!(
         prepared_cleanup.close(),
-        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseStatus::Completed
     );
     assert_eq!(prepared_registry.inner.index_counts(), (0, 0, 0));
     assert_eq!(prepared_state.terminal_state(), Some(ResponseTerminalState::Closed));
@@ -1480,7 +1480,7 @@ async fn cleanup_detaches_building_entry_and_notifies_ticket_before_builder_retu
 
     assert_eq!(
         cleanup.close(),
-        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseStatus::Completed
     );
     assert!(matches!(
         claim.await.expect("cleanup returns a normal claim outcome"),
@@ -1516,15 +1516,15 @@ async fn session_cleanup_does_not_overwrite_sending_response() {
     );
     let state = claimed.response_state_for_test();
     let send = match state.begin_sending().expect("sending owner contract") {
-        ResponseStateOutcome::Applied(send) => send,
-        ResponseStateOutcome::AlreadyCompleted { state, reason } => {
+        ResponseTransitionResult::Applied(send) => send,
+        ResponseTransitionResult::AlreadyCompleted { state, reason } => {
             panic!("sending owner unexpectedly observed {state:?} with {reason:?}")
         }
     };
     harness.session.close();
     assert_eq!(
         cleanup.close(),
-        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseStatus::Completed
     );
     assert_eq!(state.snapshot(), crate::dispatch::ResponseStateSnapshot::Sending);
     send.fail(crate::dispatch::WriteProgress::NotStarted)
@@ -1653,7 +1653,7 @@ async fn simultaneous_parent_and_session_cleanup_cancel_entry_and_ticket_consist
     harness.session.close();
     assert_eq!(
         cleanup.close(),
-        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseStatus::Completed
     );
     assert!(matches!(
         claim.await.expect("parent cancellation is a normal claim outcome"),
@@ -1767,7 +1767,7 @@ fn session_cleanup_wins_from_activating_and_commit_reports_session_closed() {
     registration.set_commit_checkpoint(move || {
         assert_eq!(
             close.close(),
-            crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+            crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseStatus::Completed
         );
     });
     let error = registration

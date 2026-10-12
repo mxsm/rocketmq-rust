@@ -46,7 +46,7 @@ use crate::dispatch::DeferredClaimResult;
 use crate::dispatch::DeferredExpiryAttachmentStatus;
 use crate::dispatch::DeferredExpiryMargins;
 use crate::dispatch::DeferredRegistrationResult;
-use crate::dispatch::DeferredResponderOutcome;
+use crate::dispatch::DeferredResponderTakeResult;
 use crate::dispatch::DeferredResumeResult;
 use crate::dispatch::DeferredWaitAdmissionResult;
 use crate::telemetry::TransportTelemetry;
@@ -106,11 +106,11 @@ impl RequestProcessor for TcpDeferredExpiryProcessor {
             .saw_owner_deadline
             .store(owner_deadline.is_some(), Ordering::SeqCst);
         let responder = match request.take_deferred_responder() {
-            DeferredResponderOutcome::Taken(responder) => responder,
-            DeferredResponderOutcome::OneWayRequest
-            | DeferredResponderOutcome::Unavailable
-            | DeferredResponderOutcome::AlreadyTaken
-            | DeferredResponderOutcome::OutcomeCompleted => {
+            DeferredResponderTakeResult::Taken(responder) => responder,
+            DeferredResponderTakeResult::OneWayRequest
+            | DeferredResponderTakeResult::Unavailable
+            | DeferredResponderTakeResult::AlreadyTaken
+            | DeferredResponderTakeResult::OutcomeCompleted => {
                 return Err(crate::error_helpers::argument_invalid());
             }
         };

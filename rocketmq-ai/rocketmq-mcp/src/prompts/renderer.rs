@@ -34,7 +34,7 @@ use crate::tools::catalog::ToolId;
 pub fn get_prompt(request: GetPromptRequestParams) -> Result<GetPromptResult, ErrorData> {
     let template = known_template(&request.name)?;
     let arguments = validate_arguments(&template, request.arguments.unwrap_or_default())?;
-    render_prompt(template, arguments)
+    render_prompt(template, arguments, true)
 }
 
 pub fn get_prompt_for(
@@ -79,7 +79,12 @@ pub fn get_prompt_for(
     if !required_tools.into_iter().all(|tool| allows_tool(tool, cluster)) {
         return Err(prompt_unavailable());
     }
-    render_prompt(template, arguments)
+    // A preferred Tool does not decide whether the Prompt is served, only whether it is named.
+    let with_preferred_tools = registry::preferred_tools(&template)
+        .map_err(registry_error)?
+        .into_iter()
+        .all(|tool| allows_tool(tool, cluster));
+    render_prompt(template, arguments, with_preferred_tools)
 }
 
 fn known_template(name: &str) -> Result<PromptTemplate, ErrorData> {
@@ -149,9 +154,14 @@ fn validate_value(argument: &PromptTemplateArgument, value: &str) -> Result<Stri
         .ok_or_else(|| invalid_argument(&argument.name))
 }
 
-fn render_prompt(template: PromptTemplate, arguments: BTreeMap<String, String>) -> Result<GetPromptResult, ErrorData> {
-    let mut rendered = String::with_capacity(template.body.len() + 128);
-    let mut remainder = template.body.as_str();
+fn render_prompt(
+    template: PromptTemplate,
+    arguments: BTreeMap<String, String>,
+    with_preferred_tools: bool,
+) -> Result<GetPromptResult, ErrorData> {
+    let body = template.body_for(with_preferred_tools);
+    let mut rendered = String::with_capacity(body.len() + 128);
+    let mut remainder = body.as_str();
     while let Some(open) = remainder.find("{{") {
         rendered.push_str(&remainder[..open]);
         let after_open = &remainder[open + 2..];
@@ -307,6 +317,45 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(unknown_cluster.message, "prompt is unavailable");
+    }
+
+    #[test]
+    fn a_preferred_tool_is_named_only_to_a_caller_who_may_call_it() {
+        let config = test_config();
+        let connections = || {
+            request(
+                "analyze_consumer_connections",
+                json!({"cluster":"local-dev","consumer_group":"group"}),
+            )
+        };
+
+        // A caller with read-only Tools gets the Prompt, without the diagnosis Tool it may not call.
+        let read_only = get_prompt_for(connections(), &config, |tool, _| {
+            tool.descriptor().risk_level == crate::guard::RiskLevel::ReadOnly
+        })
+        .unwrap();
+        let text = prompt_text(&read_only);
+        assert!(!text.contains("rocketmq_diagnose_consumer_group"));
+        assert!(text.contains("rocketmq_list_consumer_connections"));
+        assert!(!text.contains("preferred-tools"));
+
+        let diagnose = get_prompt_for(connections(), &config, |_, _| true).unwrap();
+        let text = prompt_text(&diagnose);
+        assert!(text.contains("Call `rocketmq_diagnose_consumer_group` first."));
+        assert!(text.contains("rocketmq_list_consumer_connections"));
+        assert!(!text.contains("preferred-tools"));
+
+        // A first step that names two Tools needs both.
+        let one_of_two = get_prompt_for(
+            request("broker_health_check", json!({"cluster":"local-dev"})),
+            &config,
+            |tool, _| tool != ToolId::DiagnoseBrokerHealth,
+        )
+        .unwrap();
+        let text = prompt_text(&one_of_two);
+        assert!(!text.contains("rocketmq_get_cluster_health"));
+        assert!(!text.contains("rocketmq_diagnose_broker_health"));
+        assert!(text.contains("## Required Tools"));
     }
 
     #[test]

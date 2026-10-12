@@ -345,12 +345,12 @@ trait ClusterClientIo: Send + Sync {
 
     async fn broker_name_for_queue(&self, queue: &MessageQueue) -> CheetahString;
 
-    async fn pull_outcome_from_broker(
+    async fn pull_response_from_broker(
         &self,
         broker_addr: &str,
         request: PullMessageRequestHeader,
         timeout_millis: u64,
-    ) -> Result<rocketmq_model::result::PullOutcome<MessageExt>, CanonicalError>;
+    ) -> Result<rocketmq_model::result::PullResponse<MessageExt>, CanonicalError>;
 
     #[allow(clippy::too_many_arguments, reason = "mirrors the RocketMQ send-back wire contract")]
     async fn consumer_send_message_back(
@@ -635,13 +635,13 @@ impl ClusterClientIo for ClientInstanceHandle {
         self.broker_name_for_queue(queue).await
     }
 
-    async fn pull_outcome_from_broker(
+    async fn pull_response_from_broker(
         &self,
         broker_addr: &str,
         request: PullMessageRequestHeader,
         timeout_millis: u64,
-    ) -> Result<rocketmq_model::result::PullOutcome<MessageExt>, CanonicalError> {
-        self.pull_outcome_from_broker(broker_addr, request, timeout_millis)
+    ) -> Result<rocketmq_model::result::PullResponse<MessageExt>, CanonicalError> {
+        self.pull_response_from_broker(broker_addr, request, timeout_millis)
             .await
             .map_err(ClientError::into_error)
     }
@@ -2115,7 +2115,7 @@ async fn pull_message_inner(
     );
     let request_header = build_pull_request_header(&broker_target.broker_name, &request);
     let pull_result = client
-        .pull_outcome_from_broker(broker_target.broker_addr.as_str(), request_header, timeout_ms)
+        .pull_response_from_broker(broker_target.broker_addr.as_str(), request_header, timeout_ms)
         .await?;
     Ok(build_pull_plan(pull_result))
 }
@@ -2829,7 +2829,7 @@ fn build_receive_plan(pop_result: PopResult) -> ReceiveMessagePlan {
     }
 }
 
-fn build_pull_plan(pull_result: rocketmq_model::result::PullOutcome<MessageExt>) -> PullMessagePlan {
+fn build_pull_plan(pull_result: rocketmq_model::result::PullResponse<MessageExt>) -> PullMessagePlan {
     let next_offset = pull_result.next_begin_offset() as i64;
     let min_offset = pull_result.min_offset() as i64;
     let max_offset = pull_result.max_offset() as i64;

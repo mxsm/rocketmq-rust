@@ -27,7 +27,7 @@ use crate::dispatch::DeferredTerminalReason;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestOrigin;
 use crate::dispatch::ResponseBodyKind;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 #[cfg(any(test, feature = "observability"))]
 use crate::dispatch::ResponseDisposition;
 use crate::dispatch::ResponseReceipt;
@@ -342,7 +342,7 @@ impl RequestObservation {
         response_code: i32,
         body_kind: ResponseBodyKind,
         write_elapsed: Duration,
-        result: Result<ResponseReceipt, (Option<ResponseCompletionOutcome>, Option<WriteProgress>)>,
+        result: Result<ResponseReceipt, (Option<ResponseCompletionResult>, Option<WriteProgress>)>,
     ) {
         let outcome = match result {
             Ok(receipt) => ResponseLifecycleEvent::DeliveryCompleted(receipt),
@@ -1083,8 +1083,8 @@ impl TransportTelemetry {
     }
 
     #[inline]
-    pub(crate) fn record_go_away(&self, outcome: TransportGoAwayOutcome) {
-        self.record_lifecycle_event("go_away", outcome.as_str());
+    pub(crate) fn record_go_away_received(&self) {
+        self.record_lifecycle_event("go_away", "received");
     }
 
     #[inline]
@@ -1136,19 +1136,6 @@ pub(crate) enum TransportNameServerFailoverReason {
     Unhealthy,
     CircuitOpen,
     Draining,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum TransportGoAwayOutcome {
-    Received,
-}
-
-impl TransportGoAwayOutcome {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Received => "received",
-        }
-    }
 }
 
 pub(crate) struct TransportRequestMetricsGuard {
@@ -1257,7 +1244,6 @@ mod tests {
     use tracing::Subscriber;
 
     use super::request_span;
-    use super::TransportGoAwayOutcome;
     use super::TransportNameServerFailoverReason;
     use super::TransportRequestCodeClass;
     use super::TransportTelemetry;
@@ -1326,7 +1312,7 @@ mod tests {
         telemetry.record_lifecycle_event("connected", "queued");
         telemetry.record_deferred_terminal("other", "abandoned");
         telemetry.record_nameserver_failover(TransportNameServerFailoverReason::ConnectFailure);
-        telemetry.record_go_away(TransportGoAwayOutcome::Received);
+        telemetry.record_go_away_received();
     }
 
     #[test]

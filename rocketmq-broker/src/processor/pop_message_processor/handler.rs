@@ -30,7 +30,7 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_transport::api::error_response as remoting_error_response;
-use rocketmq_transport::api::DeferredResponderOutcome;
+use rocketmq_transport::api::DeferredResponderTakeResult;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
@@ -432,18 +432,18 @@ where
                 ResponseCode::ServiceNotAvailable,
                 "the deferred POP service is unavailable",
             ),
-            PopDeferredRegisterRejection::Responder(DeferredResponderOutcome::OneWayRequest) => {
+            PopDeferredRegisterRejection::Responder(DeferredResponderTakeResult::OneWayRequest) => {
                 head.set_code_ref(ResponseCode::PollingTimeout);
                 BrokerResponseParts::command(head)?.into_response_action()
             }
-            PopDeferredRegisterRejection::Responder(DeferredResponderOutcome::Unavailable) => self.reply_with_code(
+            PopDeferredRegisterRejection::Responder(DeferredResponderTakeResult::Unavailable) => self.reply_with_code(
                 ResponseCode::ServiceNotAvailable,
                 "a deferred POP responder is unavailable",
             ),
             PopDeferredRegisterRejection::Responder(
-                DeferredResponderOutcome::AlreadyTaken | DeferredResponderOutcome::OutcomeCompleted,
+                DeferredResponderTakeResult::AlreadyTaken | DeferredResponderTakeResult::OutcomeCompleted,
             ) => self.internal_reply(head.opaque()),
-            PopDeferredRegisterRejection::Responder(DeferredResponderOutcome::Taken(responder)) => {
+            PopDeferredRegisterRejection::Responder(DeferredResponderTakeResult::Taken(responder)) => {
                 drop(responder);
                 self.internal_reply(head.opaque())
             }

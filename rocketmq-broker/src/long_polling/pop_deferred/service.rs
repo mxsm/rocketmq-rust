@@ -50,7 +50,7 @@ use rocketmq_transport::api::DeferredRegistrationResult;
 use rocketmq_transport::api::DeferredRegistry;
 use rocketmq_transport::api::DeferredRegistryRecovery;
 use rocketmq_transport::api::DeferredRegistryShutdownStatus;
-use rocketmq_transport::api::DeferredResponderOutcome;
+use rocketmq_transport::api::DeferredResponderTakeResult;
 use rocketmq_transport::api::DeferredResumeResult;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
 use rocketmq_transport::api::DeferredResumeSubmissionStatus;
@@ -559,7 +559,7 @@ impl PopDeferredService {
             )));
         }
         let responder = match request.take_deferred_responder() {
-            DeferredResponderOutcome::Taken(responder) => responder,
+            DeferredResponderTakeResult::Taken(responder) => responder,
             outcome => {
                 return Ok(PopDeferredRegistrationStatus::Rejected(Box::new(
                     PopDeferredRegisterRejection::Responder(outcome),
@@ -1416,7 +1416,7 @@ pub(crate) enum PopDeferredRegisterRejectionKind {
 pub(crate) enum PopDeferredRegisterRejection {
     ProvenanceMismatch,
     ServiceClosed,
-    Responder(DeferredResponderOutcome),
+    Responder(DeferredResponderTakeResult),
     Expiry {
         outcome: DeferredExpiryAttachmentStatus,
         parts: DeferredParts,

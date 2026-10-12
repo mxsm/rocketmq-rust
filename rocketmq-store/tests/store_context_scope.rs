@@ -12,8 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_runtime::ChildServiceContext;
+use rocketmq_store::OpenedStore;
+use rocketmq_store::StoreError;
+use rocketmq_store::StoreFactory;
+use rocketmq_store::StoreFactoryConfig;
+
 #[test]
 fn store_factory_accepts_only_a_child_service_context() {
-    let tests = trybuild::TestCases::new();
-    tests.compile_fail("tests/ui/store_context/*.rs");
+    // The negative case lives on StoreFactory::open as a compile-fail doctest.
+    // Both checks reuse Cargo's normal artifacts instead of rebuilding the store
+    // and its enabled native backends in a nested trybuild workspace.
+    let _: fn(StoreFactoryConfig, ChildServiceContext) -> Result<OpenedStore, StoreError> = StoreFactory::open;
 }

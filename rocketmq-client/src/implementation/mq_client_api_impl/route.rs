@@ -93,7 +93,7 @@ impl MQClientAPIImpl {
             .await
             .map_err(RetryInput::Transport)?;
         match outcome {
-            OutboundRequestOutcome::Response(mut result) => {
+            OutboundRequestResult::Response(mut result) => {
                 let code = result.code();
                 let response_code = ResponseCode::from(code);
                 match response_code {
@@ -127,8 +127,8 @@ impl MQClientAPIImpl {
                     terminal_error: mq_client_err!(code, result.remark().cloned().unwrap_or_default().to_string()),
                 })
             }
-            OutboundRequestOutcome::Rejected(rejection) => Err(RetryInput::Rejected(rejection)),
-            OutboundRequestOutcome::Contract(contract) => Err(RetryInput::Contract(contract)),
+            OutboundRequestResult::Rejected(rejection) => Err(RetryInput::Rejected(rejection)),
+            OutboundRequestResult::Contract(contract) => Err(RetryInput::Contract(contract)),
         }
     }
 

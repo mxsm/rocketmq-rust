@@ -1366,3 +1366,590 @@ async fn audit_records_never_contain_addresses_or_backend_errors() {
         (None, None, None)
     );
 }
+
+fn cluster_a() -> ClusterName {
+    ClusterName::try_new("cluster-a").unwrap()
+}
+
+/// A mutation authorization for a named caller on the test cluster.
+fn authorized_as(operator: &str) -> AuthorizedMutation {
+    AuthorizedMutation::synthetic_as(ControlOperation::TopicUpsert, cluster_a(), operator)
+}
+
+/// The right of a named caller to read its own results on the test cluster.
+fn reader(operator: &str) -> crate::guard::AuthorizedResultLookup {
+    crate::guard::AuthorizedResultLookup::synthetic(cluster_a(), operator)
+}
+
+fn lookup_arguments(invocation_id: Option<u64>, request_key: Option<&str>) -> tools::GetMutationResultArgs {
+    tools::GetMutationResultArgs {
+        schema_version: MUTATION_ARGUMENTS_SCHEMA_VERSION.to_owned(),
+        cluster: "cluster-a".to_owned(),
+        invocation_id,
+        request_key: request_key.map(ToOwned::to_owned),
+    }
+}
+
+/// Reads one result as `operator` from the trail that `runtime` writes.
+async fn look_up(
+    runtime: &ToolRuntime,
+    operator: &str,
+    invocation_id: Option<u64>,
+    request_key: Option<&str>,
+) -> tools::MutationResultToolResponse {
+    ResultLookup::new(runtime.audit.clone(), 60)
+        .find(&reader(operator), &lookup_arguments(invocation_id, request_key))
+        .await
+        .unwrap()
+}
+
+/// Starts one call as `operator` on its own task and waits until `runs` sessions are running.
+async fn start_blocked_call(
+    runtime: &ToolRuntime,
+    counters: &Counters,
+    operator: &'static str,
+    key: Option<&'static str>,
+    runs: usize,
+) -> tokio::task::JoinHandle<Result<InvokedMutation, ControlError>> {
+    let call = tokio::spawn({
+        let runtime = runtime.clone();
+        async move {
+            runtime
+                .execute_invoked(
+                    &principal(operator),
+                    &authorized_as(operator),
+                    request(key),
+                    CancellationToken::new(),
+                )
+                .await
+        }
+    });
+    while counters.runs.load(Ordering::SeqCst) < runs {
+        tokio::task::yield_now().await;
+    }
+    call
+}
+
+async fn wait_for_records(sink: &MemoryAuditSink, count: usize) {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while sink.records().await.unwrap().len() < count {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the supervisor writes the terminal record");
+}
+
+#[tokio::test]
+async fn in_flight_invocation_reports_in_progress() {
+    let (runtime, counters, sink, gate) = runtime(Behavior::Block, Duration::from_secs(1));
+    let call = start_blocked_call(&runtime, &counters, "alice", Some("request-0001"), 1).await;
+
+    let running = look_up(&runtime, "alice", Some(1), None).await;
+    assert_eq!(running.state, tools::MutationResultState::InProgress);
+    assert_eq!(running.invocation_id, Some(1));
+    assert_eq!(running.operation, Some(ControlOperation::TopicUpsert));
+    assert_eq!(running.mode, Some(tools::MutationMode::Execute));
+    let target = running.target.clone().unwrap();
+    assert_eq!(target.topic.as_deref(), Some("orders"));
+    assert_eq!(target.broker_count, Some(2));
+    assert_eq!(
+        target.broker_names,
+        Some(vec!["broker-a".to_owned(), "broker-b".to_owned()])
+    );
+    // Nothing about the outcome is known yet, and nothing is made up.
+    assert_eq!(
+        (
+            running.status,
+            running.error_code,
+            running.duration_millis,
+            running.changed
+        ),
+        (None, None, None, None)
+    );
+    assert_eq!(running.target_results, None);
+    // The request key finds the same invocation.
+    assert_eq!(look_up(&runtime, "alice", None, Some("request-0001")).await, running);
+
+    gate.notify_waiters();
+    let invoked = call.await.unwrap().unwrap();
+    assert_eq!(invoked.invocation_id.get(), 1);
+    assert_eq!(sink.records().await.unwrap().len(), 2);
+    let finished = look_up(&runtime, "alice", Some(1), None).await;
+    assert_eq!(finished.state, tools::MutationResultState::Finished);
+    assert_eq!(finished.status, Some(tools::MutationStatus::Applied));
+}
+
+#[tokio::test]
+async fn result_is_available_after_the_waiter_disconnects() {
+    let (runtime, counters, sink, gate) = runtime(Behavior::Block, Duration::from_secs(1));
+    let call = start_blocked_call(&runtime, &counters, "alice", Some("request-0001"), 1).await;
+
+    // The caller goes away before any response exists; all it has is the key it sent.
+    call.abort();
+    assert!(call.await.unwrap_err().is_cancelled());
+    assert_eq!(
+        look_up(&runtime, "alice", None, Some("request-0001")).await.state,
+        tools::MutationResultState::InProgress
+    );
+
+    gate.notify_waiters();
+    wait_for_records(&sink, 2).await;
+    let found = look_up(&runtime, "alice", None, Some("request-0001")).await;
+    assert_eq!(found.state, tools::MutationResultState::Finished);
+    assert_eq!(found.status, Some(tools::MutationStatus::Applied));
+    assert_eq!(found.error_code, None);
+    assert!(found.duration_millis.is_some());
+    let invocation_id = found.invocation_id.unwrap();
+    assert_eq!(invocation_id, sink.records().await.unwrap()[0].invocation_id.get());
+    assert_eq!(look_up(&runtime, "alice", Some(invocation_id), None).await, found);
+
+    // A mutation that fails after its caller left is found as failed, with its code.
+    let (runtime, counters, sink, gate) = runtime_with(Behavior::FailAfterGate);
+    let call = start_blocked_call(&runtime, &counters, "alice", Some("request-0002"), 1).await;
+    call.abort();
+    gate.notify_waiters();
+    wait_for_records(&sink, 2).await;
+    let failed = look_up(&runtime, "alice", None, Some("request-0002")).await;
+    assert_eq!(failed.state, tools::MutationResultState::Finished);
+    assert_eq!(failed.status, Some(tools::MutationStatus::Failed));
+    assert_eq!(failed.error_code, Some(crate::error::ControlErrorCode::ExecutionFailed));
+    // The attempt reported nothing about its targets, so the answer does not claim it changed none.
+    assert_eq!(failed.changed, None);
+}
+
+fn runtime_with(
+    behavior: Behavior,
+) -> (
+    ToolRuntime,
+    Arc<Counters>,
+    Arc<MemoryAuditSink>,
+    Arc<tokio::sync::Notify>,
+) {
+    runtime(behavior, Duration::from_secs(1))
+}
+
+#[tokio::test]
+async fn result_lookup_is_scoped_to_the_calling_principal() {
+    let (runtime, _, _, _) = runtime_with(Behavior::Success);
+    let mut invocations = Vec::new();
+    for operator in ["alice", "bob"] {
+        let invoked = runtime
+            .execute_invoked(
+                &principal(operator),
+                &authorized_as(operator),
+                request(Some("shared-key-0001")),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        invocations.push(invoked.invocation_id.get());
+    }
+    let (alice_invocation, bob_invocation) = (invocations[0], invocations[1]);
+    assert_ne!(alice_invocation, bob_invocation);
+
+    // Each caller finds its own call, by identifier and by the key both of them used.
+    for (operator, own, foreign) in [
+        ("alice", alice_invocation, bob_invocation),
+        ("bob", bob_invocation, alice_invocation),
+    ] {
+        let by_id = look_up(&runtime, operator, Some(own), None).await;
+        assert_eq!(by_id.state, tools::MutationResultState::Finished, "{operator}");
+        assert_eq!(by_id.invocation_id, Some(own));
+        let by_key = look_up(&runtime, operator, None, Some("shared-key-0001")).await;
+        assert_eq!(by_key.invocation_id, Some(own), "{operator}");
+
+        // The other caller's invocation looks exactly like one that never existed.
+        let hidden = look_up(&runtime, operator, Some(foreign), None).await;
+        let missing = look_up(&runtime, operator, Some(9_999), None).await;
+        assert_eq!(hidden, missing, "{operator}");
+        assert_eq!(hidden.state, tools::MutationResultState::NotFound);
+        assert_eq!(
+            (hidden.invocation_id, hidden.operation, hidden.target),
+            (None, None, None)
+        );
+    }
+    assert_eq!(
+        look_up(&runtime, "carol", None, Some("shared-key-0001")).await.state,
+        tools::MutationResultState::NotFound
+    );
+
+    // The cluster is part of the scope as well.
+    let other_cluster =
+        crate::guard::AuthorizedResultLookup::synthetic(ClusterName::try_new("cluster-b").unwrap(), "alice");
+    let elsewhere = ResultLookup::new(runtime.audit.clone(), 60)
+        .find(&other_cluster, &lookup_arguments(Some(alice_invocation), None))
+        .await
+        .unwrap();
+    assert_eq!(elsewhere.state, tools::MutationResultState::NotFound);
+    assert_eq!(elsewhere.cluster, "cluster-b");
+}
+
+#[tokio::test]
+async fn result_lookup_survives_restart_for_the_active_segment() {
+    let (runtime, counters, sink, gate) = runtime_with(Behavior::Block);
+    let finished = start_blocked_call(&runtime, &counters, "alice", Some("request-0001"), 1).await;
+    gate.notify_waiters();
+    let finished = finished.await.unwrap().unwrap().invocation_id.get();
+    // A second call is still running when the process stops.
+    let running = start_blocked_call(&runtime, &counters, "alice", Some("request-0002"), 2).await;
+    let records = sink.records().await.unwrap();
+    assert_eq!(records.len(), 3);
+    let interrupted = records[2].invocation_id.get();
+
+    // A new process resumes from the records the sink still holds.
+    let resumed = ResultLookup::new(AuditTrail::resume(sink.clone()).await.unwrap(), 60);
+    let find = |invocation_id, request_key| {
+        let resumed = &resumed;
+        async move {
+            resumed
+                .find(&reader("alice"), &lookup_arguments(invocation_id, request_key))
+                .await
+                .unwrap()
+        }
+    };
+    let found = find(Some(finished), None).await;
+    assert_eq!(found.state, tools::MutationResultState::Finished);
+    assert_eq!(found.status, Some(tools::MutationStatus::Applied));
+    assert_eq!(found.target.unwrap().topic.as_deref(), Some("orders"));
+    assert_eq!(find(None, Some("request-0001")).await.invocation_id, Some(finished));
+
+    // Nothing recorded how the second call ended, and no task of the new process will finish it.
+    let lost = find(Some(interrupted), None).await;
+    assert_eq!(lost.state, tools::MutationResultState::Interrupted);
+    assert_eq!((lost.status, lost.changed), (None, None));
+    assert_eq!(find(None, Some("request-0002")).await, lost);
+    // The results stay scoped after the restart.
+    assert_eq!(
+        resumed
+            .find(&reader("bob"), &lookup_arguments(Some(finished), None))
+            .await
+            .unwrap()
+            .state,
+        tools::MutationResultState::NotFound
+    );
+
+    running.abort();
+    gate.notify_waiters();
+}
+
+#[tokio::test]
+async fn result_response_contains_no_operator_or_reason() {
+    const OPERATOR: &str = "alice-operator-7f3a";
+    let (runtime, counters, sink, gate) = runtime_with(Behavior::Block);
+    let call = start_blocked_call(&runtime, &counters, OPERATOR, Some("request-0001"), 1).await;
+    let running = look_up(&runtime, OPERATOR, Some(1), None).await;
+    gate.notify_waiters();
+    call.await.unwrap().unwrap();
+    let finished = look_up(&runtime, OPERATOR, Some(1), None).await;
+    let missing = look_up(&runtime, OPERATOR, Some(99), None).await;
+
+    // The durable records do hold both; the answers hold neither, nor the key that was sent.
+    let records = sink.records().await.unwrap();
+    assert_eq!(records[0].operator.as_deref(), Some(OPERATOR));
+    assert_eq!(records[0].reason.as_deref(), Some("planned operation"));
+    let published = tools::MutationResultToolResponse::json_schema_properties();
+    for answer in [&running, &finished, &missing] {
+        let rendered = serde_json::to_value(answer).unwrap();
+        let text = rendered.to_string();
+        for private in [
+            OPERATOR,
+            "planned operation",
+            "request-0001",
+            "operator",
+            "reason",
+            "request_key",
+        ] {
+            assert!(!text.contains(private), "the answer holds {private}: {text}");
+        }
+        // Every member the answer has is one the output schema declares.
+        for member in rendered.as_object().unwrap().keys() {
+            assert!(published.contains(member), "{member} is not in the output schema");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_replayed_response_is_returned_under_the_invocation_of_its_own_call() {
+    let (runtime, counters, sink, _) = runtime_with(Behavior::Success);
+    let mut invocations = Vec::new();
+    for _ in 0..2 {
+        let invoked = runtime
+            .execute_invoked(
+                &principal("alice"),
+                &authorized_as("alice"),
+                request(Some("request-0001")),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        invocations.push(invoked.invocation_id.get());
+    }
+    // One session ran; the second call was answered from the request-key cache.
+    assert_eq!(counters.runs.load(Ordering::SeqCst), 1);
+    let started = sink
+        .records()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|record| record.event == crate::audit::AuditEvent::Started)
+        .map(|record| record.invocation_id.get())
+        .collect::<Vec<_>>();
+    assert_eq!(invocations, started);
+    assert_ne!(invocations[0], invocations[1]);
+    // The key selects the newest call that carried it; each call is still found by its identifier.
+    assert_eq!(
+        look_up(&runtime, "alice", None, Some("request-0001"))
+            .await
+            .invocation_id,
+        Some(invocations[1])
+    );
+    for invocation in invocations {
+        let found = look_up(&runtime, "alice", Some(invocation), Some("request-0001")).await;
+        assert_eq!(found.state, tools::MutationResultState::Finished);
+        assert_eq!(found.invocation_id, Some(invocation));
+    }
+    // An identifier and a key that do not belong together find nothing.
+    assert_eq!(
+        look_up(&runtime, "alice", Some(1), Some("request-9999")).await.state,
+        tools::MutationResultState::NotFound
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn result_lookups_are_budgeted_per_caller() {
+    let (runtime, _, sink, _) = runtime_with(Behavior::Success);
+    let lookups = ResultLookup::new(runtime.audit.clone(), 2);
+    for _ in 0..2 {
+        lookups.admit(&reader("alice")).unwrap();
+    }
+    assert_eq!(
+        lookups.admit(&reader("alice")).unwrap_err().code(),
+        crate::error::ControlErrorCode::RateLimited
+    );
+    lookups.admit(&reader("bob")).unwrap();
+    tokio::time::advance(Duration::from_secs(30)).await;
+    lookups.admit(&reader("alice")).unwrap();
+    // A lookup is not a mutation: it leaves no durable record.
+    lookups
+        .find(&reader("alice"), &lookup_arguments(Some(1), None))
+        .await
+        .unwrap();
+    assert!(sink.records().await.unwrap().is_empty());
+}
+
+fn drain_args(operation_id: &str) -> tools::ProxyDrainArgs {
+    tools::ProxyDrainArgs {
+        schema_version: MUTATION_ARGUMENTS_SCHEMA_VERSION.to_owned(),
+        cluster: "cluster-a".to_owned(),
+        proxy_name: "proxy-a".to_owned(),
+        operation_id: operation_id.to_owned(),
+        dry_run: false,
+        confirm: true,
+        reason: Some("planned operation".to_owned()),
+        request_key: Some("request-1234".to_owned()),
+    }
+}
+
+fn set_filter_args(ttl_seconds: u32) -> tools::SetBrokerLogFilterTtlArgs {
+    tools::SetBrokerLogFilterTtlArgs {
+        schema_version: MUTATION_ARGUMENTS_SCHEMA_VERSION.to_owned(),
+        cluster: "cluster-a".to_owned(),
+        broker_name: "broker-a".to_owned(),
+        logger: "rocketmq_broker::processor".to_owned(),
+        level: tools::BrokerLogLevel::Debug,
+        ttl_seconds,
+        operation_id: "debug-0001".to_owned(),
+        dry_run: false,
+        confirm: true,
+        reason: Some("planned operation".to_owned()),
+        request_key: Some("request-1234".to_owned()),
+    }
+}
+
+#[test]
+fn operation_bound_requests_are_keyed_by_operation_and_digest_their_identifier() {
+    let principal = principal("alice");
+    let cluster = ClusterName::try_new("cluster-a").unwrap();
+    let identity = |request: &MutationToolRequest| {
+        IdempotencyIdentity::from_request(&principal, &cluster, request)
+            .unwrap()
+            .key
+            .expect("an explicit request key")
+    };
+
+    // One request key and the same arguments are still two operations: a cancel never replays
+    // the recorded outcome of a begin.
+    let begin = MutationToolRequest::ProxyDrainBegin(drain_args("drain-0001"));
+    let cancel = MutationToolRequest::ProxyDrainCancel(drain_args("drain-0001"));
+    assert_eq!(begin.operation(), ControlOperation::ProxyDrainBegin);
+    assert_eq!(cancel.operation(), ControlOperation::ProxyDrainCancel);
+    assert_eq!(identity(&begin).operation, ControlOperation::ProxyDrainBegin);
+    assert_eq!(identity(&cancel).operation, ControlOperation::ProxyDrainCancel);
+    assert_eq!(identity(&begin).targets, ["proxy-a"]);
+    assert!(identity(&begin) != identity(&cancel));
+
+    // Which drain is asked for is part of the request. It reaches the audit record as a digest.
+    let other_drain = MutationToolRequest::ProxyDrainBegin(drain_args("drain-0002"));
+    assert_ne!(
+        begin.requested_digest().unwrap(),
+        other_drain.requested_digest().unwrap()
+    );
+    assert_ne!(
+        IdempotencyIdentity::from_request(&principal, &cluster, &begin)
+            .unwrap()
+            .payload,
+        IdempotencyIdentity::from_request(&principal, &cluster, &other_drain)
+            .unwrap()
+            .payload
+    );
+
+    let set = MutationToolRequest::BrokerLogFilterSet(set_filter_args(300));
+    let restore = MutationToolRequest::BrokerLogFilterRestore(tools::RestoreBrokerLogFilterArgs {
+        schema_version: MUTATION_ARGUMENTS_SCHEMA_VERSION.to_owned(),
+        cluster: "cluster-a".to_owned(),
+        broker_name: "broker-a".to_owned(),
+        operation_id: "debug-0001".to_owned(),
+        dry_run: false,
+        confirm: true,
+        reason: Some("planned operation".to_owned()),
+        request_key: Some("request-1234".to_owned()),
+    });
+    assert_eq!(identity(&set).operation, ControlOperation::BrokerLogFilterSet);
+    assert_eq!(identity(&restore).operation, ControlOperation::BrokerLogFilterRestore);
+    assert_eq!(identity(&set).targets, ["broker-a"]);
+    assert_eq!(identity(&restore).targets, ["broker-a"]);
+    let longer = MutationToolRequest::BrokerLogFilterSet(set_filter_args(301));
+    assert_ne!(set.requested_digest().unwrap(), longer.requested_digest().unwrap());
+
+    // Each request has the audit shape of its own operation, and neither a digest nor the
+    // debug form of an argument repeats what the caller wrote.
+    for request in [&begin, &cancel, &set, &restore] {
+        assert!(request.audit_subject().is_ok());
+        let digest = request.requested_digest().unwrap();
+        assert_eq!(digest.len(), 64);
+        for written in ["drain-0001", "debug-0001", "request-1234", "planned operation"] {
+            assert!(!digest.contains(written));
+        }
+    }
+    let rendered = format!("{:?}{:?}", drain_args("drain-0001"), set_filter_args(300));
+    for hidden in [
+        "drain-0001",
+        "debug-0001",
+        "proxy-a",
+        "broker-a",
+        "request-1234",
+        "planned operation",
+    ] {
+        assert!(!rendered.contains(hidden), "{rendered}");
+    }
+}
+
+#[test]
+fn an_operation_bound_response_is_audited_by_what_its_one_target_says() {
+    let state = |held_by: tools::OperationHolder| tools::ProxyDrainState {
+        phase: if held_by == tools::OperationHolder::None {
+            tools::ProxyDrainPhase::Accepting
+        } else {
+            tools::ProxyDrainPhase::Draining
+        },
+        held_by,
+        admission_open: held_by == tools::OperationHolder::None,
+        routing_open: held_by == tools::OperationHolder::None,
+        readiness_published: held_by == tools::OperationHolder::None,
+        zero_pending: true,
+        pending: tools::ProxyDrainPending {
+            active_connections: 0,
+            sessions: 0,
+            receipt_handles: 0,
+            prepared_transactions: 0,
+            telemetry_links: 0,
+            remoting_channels: 0,
+            telemetry_commands: 0,
+            rpc_in_flight: 0,
+        },
+    };
+    let response = |before: Option<tools::ProxyDrainState>, changed: bool, failure: Option<tools::FailureCode>| {
+        let requested = tools::ProxyDrainRequested {
+            action: tools::ProxyDrainAction::Begin,
+        };
+        let status = match failure {
+            None => tools::MutationStatus::Applied,
+            Some(tools::FailureCode::Conflict) => tools::MutationStatus::Conflict,
+            Some(_) => tools::MutationStatus::Failed,
+        };
+        Ok(MutationToolResponse::ProxyDrain(tools::ProxyDrainToolResponse {
+            schema_version: tools::MutationResultSchemaVersion::V1,
+            operation: tools::ProxyDrainOperation::ProxyDrainBegin,
+            cluster: "cluster-a".to_owned(),
+            mode: tools::MutationMode::Execute,
+            status,
+            error_code: tools::response_error_code(status, [failure]),
+            target: tools::ProxyDrainResource {
+                proxy_name: "proxy-a".to_owned(),
+            },
+            before: before
+                .map(|state| BTreeMap::from([("proxy-a".to_owned(), state)]))
+                .unwrap_or_default(),
+            requested,
+            after: None,
+            targets: vec![tools::ProxyDrainTarget {
+                proxy_name: "proxy-a".to_owned(),
+                before,
+                requested,
+                after: None,
+                applied: failure.is_none(),
+                changed,
+                verification: tools::VerificationState::NotPerformed,
+                failure,
+                retryable: false,
+            }],
+            warnings: Vec::new(),
+        }))
+    };
+    let counts = |applied, unchanged, conflict, failed| {
+        Some(AuditTargetResults {
+            applied,
+            unchanged,
+            conflict,
+            failed,
+        })
+    };
+
+    let begun = audit_outcome(&response(Some(state(tools::OperationHolder::None)), true, None));
+    assert_eq!(begun.changed, Some(true));
+    assert_eq!(begun.target_results, counts(1, 0, 0, 0));
+    assert!(begun.before_digest.is_some());
+    assert_eq!(terminal_audit(&response(None, true, None)).0, AuditResult::Applied);
+
+    let repeated = audit_outcome(&response(
+        Some(state(tools::OperationHolder::ThisOperation)),
+        false,
+        None,
+    ));
+    assert_eq!(repeated.changed, Some(false));
+    assert_eq!(repeated.target_results, counts(0, 1, 0, 0));
+
+    let held = response(
+        Some(state(tools::OperationHolder::OtherOperation)),
+        false,
+        Some(tools::FailureCode::Conflict),
+    );
+    assert_eq!(audit_outcome(&held).target_results, counts(0, 0, 1, 0));
+    assert_eq!(
+        terminal_audit(&held),
+        (
+            AuditResult::Conflict,
+            Some(crate::error::ControlErrorCode::PreconditionConflict)
+        )
+    );
+    // A conflict is settled: the same request key replays it instead of reading the Proxy again.
+    assert!(is_settled(&held));
+
+    // A Proxy that could not be read leaves no state to digest, and the failure is not settled.
+    let unread = response(None, false, Some(tools::FailureCode::Unavailable));
+    let outcome = audit_outcome(&unread);
+    assert_eq!(outcome.before_digest, None);
+    assert_eq!(outcome.target_results, counts(0, 0, 0, 1));
+    assert!(!is_settled(&unread));
+}

@@ -66,8 +66,8 @@ use crate::dispatch::RequestMeta;
 use crate::dispatch::RequestOrigin;
 use crate::dispatch::ResponseSink;
 use crate::dispatch::ResponseState;
-use crate::dispatch::ResponseStateOutcome;
 use crate::dispatch::ResponseTerminalState;
+use crate::dispatch::ResponseTransitionResult;
 use crate::request_ordering::RequestOrdering;
 use crate::session_executor::DeferredResumeExecutor;
 use crate::session_executor::SessionExecutor;
@@ -324,7 +324,7 @@ impl PublishedTerminalWinner {
         };
         assert_eq!(
             outcome,
-            Ok(ResponseStateOutcome::Applied(())),
+            Ok(ResponseTransitionResult::Applied(())),
             "{self:?} must publish the sole response terminal winner"
         );
     }
