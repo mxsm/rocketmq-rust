@@ -85,9 +85,9 @@ fn expect_taken(outcome: DeferredResponderTakeResult) -> DeferredResponder {
     }
 }
 
-fn expect_completed(outcome: DeferredResponseOutcome) -> ResponseReceipt {
+fn expect_completed(outcome: DeferredResponseResult) -> ResponseReceipt {
     match outcome {
-        DeferredResponseOutcome::Completed(receipt) => receipt,
+        DeferredResponseResult::Completed(receipt) => receipt,
         _ => panic!("deferred response should complete"),
     }
 }
@@ -225,7 +225,7 @@ async fn explicit_cancel_and_abandoned_drop_record_only_the_winning_cas() {
     expect_applied(explicit.claim());
     assert_eq!(
         explicit.cancel().expect("open responder cancels"),
-        DeferredResponseOutcome::Cancelled
+        DeferredResponseResult::Cancelled
     );
     assert_eq!(explicit_state.terminal_state(), Some(ResponseTerminalState::Cancelled));
     assert_eq!(explicit_state.terminal_reason(), Some(DeferredTerminalReason::Explicit));
@@ -246,7 +246,7 @@ async fn explicit_cancel_and_abandoned_drop_record_only_the_winning_cas() {
     already_closed.state.close().expect("close wins before explicit cancel");
     assert_eq!(
         already_closed.cancel().expect("prior terminal is a normal outcome"),
-        DeferredResponseOutcome::AlreadyCompleted
+        DeferredResponseResult::AlreadyCompleted
     );
 
     let sending = DeferredResponseSeed::new(sink, telemetry, harness.session_id(), control).into_responder(original);
@@ -282,7 +282,7 @@ async fn caller_receiver_drop_closes_once_and_reports_the_prior_reason() {
         responder
             .cancel_with_reason(DeferredCancellationReason::ReceiverDropped)
             .expect("caller-owned receiver drop closes the response"),
-        DeferredResponseOutcome::Cancelled
+        DeferredResponseResult::Cancelled
     );
 
     assert_eq!(state.terminal_state(), Some(ResponseTerminalState::Closed));
@@ -351,7 +351,7 @@ async fn local_response_binds_original_opaque_and_moves_body_once() {
             .respond(segments_plan)
             .await
             .expect("segments plan handoff");
-    assert!(matches!(segments_outcome, DeferredResponseOutcome::Completed(_)));
+    assert!(matches!(segments_outcome, DeferredResponseResult::Completed(_)));
     let received = receiver.receive().await.expect("receive segments plan");
     let ResponseBody::Segments(segments) = received.test_body() else {
         panic!("deferred segments must retain their representation");
@@ -376,7 +376,7 @@ async fn local_response_binds_original_opaque_and_moves_body_once() {
         .respond(plan)
         .await
         .expect("file plan handoff");
-    assert!(matches!(file_outcome, DeferredResponseOutcome::Completed(_)));
+    assert!(matches!(file_outcome, DeferredResponseResult::Completed(_)));
     assert_eq!(Arc::strong_count(&file), 2);
     let received = receiver.receive().await.expect("receive file plan");
     let ResponseBody::FileRegions(regions) = received.test_body() else {

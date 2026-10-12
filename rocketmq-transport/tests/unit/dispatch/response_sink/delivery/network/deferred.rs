@@ -14,7 +14,7 @@
 
 use super::*;
 use crate::contract::TransportContractViolation;
-use crate::dispatch::DeferredResponseOutcome;
+use crate::dispatch::DeferredResponseResult;
 use crate::dispatch::ResponseSendClaim;
 use crate::dispatch::ResponseState;
 use crate::dispatch::ResponseTransitionResult;
@@ -71,7 +71,7 @@ async fn production_seed_shares_the_canonical_slot_and_rejects_another_session_o
         )
         .await
         .expect("deferred response uses the canonical writer");
-    let DeferredResponseOutcome::Completed(receipt) = outcome else {
+    let DeferredResponseResult::Completed(receipt) = outcome else {
         panic!("canonical deferred response must complete, got {outcome:?}");
     };
     assert_eq!(receipt.request_id(), original.request_id());

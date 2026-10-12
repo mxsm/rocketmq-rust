@@ -57,7 +57,7 @@ pub enum DeferredResponderTakeResult {
 /// Result of consuming a deferred response capability.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[must_use]
-pub enum DeferredResponseOutcome {
+pub enum DeferredResponseResult {
     /// Canonical response delivery completed.
     Completed(ResponseReceipt),
     /// Another terminal operation already completed the response.
@@ -87,14 +87,14 @@ pub(super) enum DeferredResponseAttempt {
 }
 
 impl DeferredResponseAttempt {
-    const fn public_outcome(self) -> DeferredResponseOutcome {
+    const fn public_outcome(self) -> DeferredResponseResult {
         match self {
-            Self::Completed(receipt) => DeferredResponseOutcome::Completed(receipt),
-            Self::AlreadyCompleted { .. } => DeferredResponseOutcome::AlreadyCompleted,
-            Self::DeadlineExceeded => DeferredResponseOutcome::DeadlineExceeded,
-            Self::Cancelled => DeferredResponseOutcome::Cancelled,
-            Self::SessionClosed => DeferredResponseOutcome::SessionClosed,
-            Self::QueueSaturated => DeferredResponseOutcome::QueueSaturated,
+            Self::Completed(receipt) => DeferredResponseResult::Completed(receipt),
+            Self::AlreadyCompleted { .. } => DeferredResponseResult::AlreadyCompleted,
+            Self::DeadlineExceeded => DeferredResponseResult::DeadlineExceeded,
+            Self::Cancelled => DeferredResponseResult::Cancelled,
+            Self::SessionClosed => DeferredResponseResult::SessionClosed,
+            Self::QueueSaturated => DeferredResponseResult::QueueSaturated,
         }
     }
 }
@@ -339,7 +339,7 @@ impl DeferredResponder {
     pub async fn respond(
         self,
         response: RemotingResponse,
-    ) -> Result<DeferredResponseOutcome, crate::error::TransportError> {
+    ) -> Result<DeferredResponseResult, crate::error::TransportError> {
         self.respond_internal(response)
             .await
             .map(DeferredResponseAttempt::public_outcome)
@@ -447,8 +447,8 @@ impl DeferredResponder {
     ///
     /// Returns a transport error only for an invalid nonterminal transition.
     /// A prior terminal winner is the source-free
-    /// [`DeferredResponseOutcome::AlreadyCompleted`] outcome.
-    pub fn cancel(mut self) -> Result<DeferredResponseOutcome, crate::error::TransportError> {
+    /// [`DeferredResponseResult::AlreadyCompleted`] outcome.
+    pub fn cancel(mut self) -> Result<DeferredResponseResult, crate::error::TransportError> {
         let result = self.state.cancel();
         self.active = false;
         if matches!(result, Ok(ResponseTransitionResult::Applied(()))) {
@@ -457,8 +457,8 @@ impl DeferredResponder {
             }
         }
         match result {
-            Ok(ResponseTransitionResult::Applied(())) => Ok(DeferredResponseOutcome::Cancelled),
-            Ok(ResponseTransitionResult::AlreadyCompleted { .. }) => Ok(DeferredResponseOutcome::AlreadyCompleted),
+            Ok(ResponseTransitionResult::Applied(())) => Ok(DeferredResponseResult::Cancelled),
+            Ok(ResponseTransitionResult::AlreadyCompleted { .. }) => Ok(DeferredResponseResult::AlreadyCompleted),
             Err(error) => Err(crate::error::TransportError::response(error)),
         }
     }
@@ -471,11 +471,11 @@ impl DeferredResponder {
     ///
     /// Returns a transport error only for an invalid nonterminal transition.
     /// A prior terminal winner is the source-free
-    /// [`DeferredResponseOutcome::AlreadyCompleted`] outcome.
+    /// [`DeferredResponseResult::AlreadyCompleted`] outcome.
     pub fn cancel_with_reason(
         mut self,
         reason: DeferredCancellationReason,
-    ) -> Result<DeferredResponseOutcome, crate::error::TransportError> {
+    ) -> Result<DeferredResponseResult, crate::error::TransportError> {
         let result = match reason {
             DeferredCancellationReason::ReceiverDropped => self.state.cancel_receiver_dropped(),
         };
@@ -486,8 +486,8 @@ impl DeferredResponder {
             }
         }
         match result {
-            Ok(ResponseTransitionResult::Applied(())) => Ok(DeferredResponseOutcome::Cancelled),
-            Ok(ResponseTransitionResult::AlreadyCompleted { .. }) => Ok(DeferredResponseOutcome::AlreadyCompleted),
+            Ok(ResponseTransitionResult::Applied(())) => Ok(DeferredResponseResult::Cancelled),
+            Ok(ResponseTransitionResult::AlreadyCompleted { .. }) => Ok(DeferredResponseResult::AlreadyCompleted),
             Err(error) => Err(crate::error::TransportError::response(error)),
         }
     }

@@ -20,7 +20,7 @@ use crate::dispatch::DeferredRegistration;
 use crate::dispatch::DeferredRegistrationResult;
 use crate::dispatch::DeferredResponder;
 use crate::dispatch::DeferredResponderTakeResult;
-use crate::dispatch::DeferredResponseOutcome;
+use crate::dispatch::DeferredResponseResult;
 use crate::dispatch::DeferredResumeResult;
 use crate::dispatch::DeferredResumeRetainedSize;
 use crate::dispatch::DeferredWaitAdmissionResult;
@@ -261,12 +261,12 @@ impl RequestProcessor for PublicDeferredProcessor {
             .await
             .map_err(|_| crate::error_helpers::argument_invalid())?
         {
-            DeferredResponseOutcome::Completed(receipt) => receipt,
-            DeferredResponseOutcome::AlreadyCompleted
-            | DeferredResponseOutcome::DeadlineExceeded
-            | DeferredResponseOutcome::Cancelled
-            | DeferredResponseOutcome::SessionClosed
-            | DeferredResponseOutcome::QueueSaturated => {
+            DeferredResponseResult::Completed(receipt) => receipt,
+            DeferredResponseResult::AlreadyCompleted
+            | DeferredResponseResult::DeadlineExceeded
+            | DeferredResponseResult::Cancelled
+            | DeferredResponseResult::SessionClosed
+            | DeferredResponseResult::QueueSaturated => {
                 return Err(crate::error_helpers::argument_invalid());
             }
         };
