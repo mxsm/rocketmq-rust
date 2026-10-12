@@ -14,7 +14,7 @@
 
 use cheetah_string::CheetahString;
 use rocketmq_model::message::MessageQueue;
-use rocketmq_model::result::PullOutcome;
+use rocketmq_model::result::PullResponse;
 use rocketmq_model::result::PullStatus;
 use rocketmq_model::result::QueryResult;
 use rocketmq_model::result::SendResult;
@@ -76,29 +76,29 @@ fn result_contracts_preserve_status_and_owned_message_order() {
     let query = QueryResult::new(42, vec!["first", "second"]);
     assert_eq!(query.message_list(), &["first", "second"]);
 
-    let outcome = PullOutcome::new(PullStatus::Found, 12, 1, 20, vec!["first", "second"]);
-    assert_eq!(outcome.messages(), Some(&["first", "second"][..]));
-    assert_eq!(outcome.next_begin_offset(), 12);
+    let response = PullResponse::new(PullStatus::Found, 12, 1, 20, vec!["first", "second"]);
+    assert_eq!(response.messages(), Some(&["first", "second"][..]));
+    assert_eq!(response.next_begin_offset(), 12);
 }
 
 #[test]
-fn pull_outcome_distinguishes_absent_and_present_empty_messages() {
-    let absent: PullOutcome<String> = serde_json::from_str(
+fn pull_response_distinguishes_absent_and_present_empty_messages() {
+    let absent: PullResponse<String> = serde_json::from_str(
         r#"{"pull_status":"Found","next_begin_offset":1,"min_offset":0,"max_offset":2,"messages":null}"#,
     )
     .expect("an absent message collection should deserialize");
-    let present_empty: PullOutcome<String> = serde_json::from_str(
+    let present_empty: PullResponse<String> = serde_json::from_str(
         r#"{"pull_status":"Found","next_begin_offset":1,"min_offset":0,"max_offset":2,"messages":[]}"#,
     )
     .expect("a present empty message collection should deserialize");
 
     assert_ne!(absent, present_empty);
     assert_eq!(
-        serde_json::to_value(absent).expect("absent outcome should serialize")["messages"],
+        serde_json::to_value(absent).expect("absent response should serialize")["messages"],
         serde_json::Value::Null
     );
     assert_eq!(
-        serde_json::to_value(present_empty).expect("present empty outcome should serialize")["messages"],
+        serde_json::to_value(present_empty).expect("present empty response should serialize")["messages"],
         serde_json::json!([])
     );
 }

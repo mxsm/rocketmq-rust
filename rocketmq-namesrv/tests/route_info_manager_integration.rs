@@ -49,7 +49,7 @@ use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_transport::api::DefaultRequestProcessor;
-use rocketmq_transport::api::OutboundRequestOutcome;
+use rocketmq_transport::api::OutboundRequestResult;
 use rocketmq_transport::api::ServerConfig;
 use rocketmq_transport::api::TransportClient;
 use rocketmq_transport::api::TransportClientConfig;
@@ -158,11 +158,11 @@ impl NamesrvHarness {
                 format!("execute NameServer integration request (code={request_code}, opaque={request_opaque})")
             })?;
         match outcome {
-            OutboundRequestOutcome::Response(response) => Ok(response),
-            OutboundRequestOutcome::Rejected(rejection) => {
+            OutboundRequestResult::Response(response) => Ok(response),
+            OutboundRequestResult::Rejected(rejection) => {
                 bail!("NameServer integration request was rejected: {rejection:?}")
             }
-            OutboundRequestOutcome::Contract(contract) => {
+            OutboundRequestResult::Contract(contract) => {
                 bail!("NameServer integration request contract failed: {contract:?}")
             }
         }
@@ -232,20 +232,20 @@ async fn wait_until_ready(
             .invoke_request(Some(addr), request, READINESS_REQUEST_TIMEOUT_MILLIS)
             .await
         {
-            Ok(OutboundRequestOutcome::Response(response))
+            Ok(OutboundRequestResult::Response(response))
                 if ResponseCode::from(response.code()) == ResponseCode::Success =>
             {
                 return Ok(());
             }
-            Ok(OutboundRequestOutcome::Response(response)) => format!(
+            Ok(OutboundRequestResult::Response(response)) => format!(
                 "unexpected response code {:?}, remark {:?}",
                 ResponseCode::from(response.code()),
                 response.remark()
             ),
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 format!("request rejected before readiness: {rejection:?}")
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 format!("request contract failed before readiness: {contract:?}")
             }
             Err(error) => error.to_string(),

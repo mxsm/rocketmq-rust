@@ -22,11 +22,11 @@ use rocketmq_transport::api::OutboundRequestStage;
 use rocketmq_transport::api::TransportError;
 
 pub(super) fn direct_invoke_result(
-    result: Result<OutboundRequestOutcome, TransportError>,
+    result: Result<OutboundRequestResult, TransportError>,
 ) -> ClientResult<RemotingCommand> {
     match result {
-        Ok(OutboundRequestOutcome::Response(response)) => Ok(response),
-        Ok(OutboundRequestOutcome::Rejected(rejection)) => Err(match rejection.reason() {
+        Ok(OutboundRequestResult::Response(response)) => Ok(response),
+        Ok(OutboundRequestResult::Rejected(rejection)) => Err(match rejection.reason() {
             OutboundRequestRejectionReason::DeadlineExpired => {
                 let mut context = ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, "client_invoke");
                 if let Some(timeout_millis) = rejection.timeout_millis() {
@@ -52,7 +52,7 @@ pub(super) fn direct_invoke_result(
                 direct_connection_error("connect", rejection.remote_addr_present())
             }
         }),
-        Ok(OutboundRequestOutcome::Contract(contract)) => Err(match contract.reason() {
+        Ok(OutboundRequestResult::Contract(contract)) => Err(match contract.reason() {
             OutboundRequestContractReason::NameServerEndpointMissing => {
                 direct_connection_error("connect", contract.remote_addr_present())
             }

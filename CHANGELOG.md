@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(transport):** Renamed `ResponseWriteOutcome` to `ResponseDeliveryEvent`, its `Written` variant to `DeliveryCompleted`, and `ResponseWriteObservation::outcome()` to `event()` (breaking) ([#11425](https://github.com/mxsm/rocketmq-rust/issues/11425)).
+- **refactor(transport):** Renamed `ResponseCompletionOutcome` to `ResponseCompletionResult` (breaking), exported as `rocketmq_transport::api::ResponseCompletionResult`. External callers must update imports and type references; no compatibility alias is provided. Variants `Completed(ResponseReceipt)`, `AlreadyCompleted(ResponseTerminalState)`, `DeadlineExpired`, `Cancelled`, `SessionClosed`, and `QueueSaturated`, trait implementations, and `as_str()` labels are unchanged ([#11421](https://github.com/mxsm/rocketmq-rust/issues/11421)).
 - **refactor(transport):** Renamed `SessionCloseOutcome` to `SessionCloseStatus` (breaking), exported as `rocketmq_transport::api::SessionCloseStatus` and returned by `SessionCloseHandle::close()`. The variants `Closed` and `AlreadyClosed` are unchanged and still both report full close completion; only `Closed` identifies the initiating caller. External callers must update imports and type references; no compatibility alias is provided ([#11427](https://github.com/mxsm/rocketmq-rust/issues/11427)).
 - **refactor(store-local):** Renamed the crate-private `DecodeOutcome` to `LedgerFrameDecodeResult` (renamed from `DecodeOutcome`); variants `EndOfInput`, `TrailingPartial`, and `Frame` are unchanged ([#11306](https://github.com/mxsm/rocketmq-rust/issues/11306)).
 - **refactor(store-local):** Renamed `ManagedLifecycleReadOutcome` to `ManagedLifecycleEvidenceStatus` (breaking), exported as `rocketmq_store_local::mapped_file::ManagedLifecycleEvidenceStatus`. External callers must update imports and type references; no compatibility alias is provided. Variants and `ManagedLifecycleRecoveryReason` payloads are unchanged; `ManagedLifecycleSession` and `LockedManagedLifecycleInspection` expose `evidence_status()` instead of `outcome()` ([#11308](https://github.com/mxsm/rocketmq-rust/issues/11308)).
@@ -149,6 +151,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **transport:** Remove deprecated `TransportClient::is_address_reachable`; use `reconcile_cached_connection` for direct-cache inspection and cleanup.
 - **protocol:** Remove deprecated `FastCodesHeader` and its `SendMessageResponseHeader` adapter; use `CommandCustomHeader::encode_direct_binary` and `FromMap::from` and handle their returned errors.
 - **transport:** Remove deprecated `ClientMetadata::broker_addr_table`; use owned snapshots and controlled address updates instead.
 - **transport:** Remove deprecated `Connection::connection_is_ok`; use `is_healthy()` or `state()` instead.

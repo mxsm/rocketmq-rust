@@ -118,7 +118,7 @@ use rocketmq_transport::api::RequestProcessor;
 use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::ServerConfig;
 use rocketmq_transport::api::ServerPushCommand;
-use rocketmq_transport::api::ServerPushOutcome;
+use rocketmq_transport::api::ServerPushResult;
 use rocketmq_transport::api::SessionId;
 use rocketmq_transport::api::SessionRegistry;
 use rocketmq_transport::api::TransportContractViolation;
@@ -1382,7 +1382,7 @@ where
                 opaque: Some(request.opaque()),
             };
             match capability.send(push, Duration::from_millis(10)).await {
-                Ok(ServerPushOutcome::Sent(_)) => {}
+                Ok(ServerPushResult::Sent(_)) => {}
                 Ok(_) => {
                     return response_with_code(
                         &self.command_factory,
@@ -1451,7 +1451,7 @@ where
             opaque: Some(request.opaque()),
         };
         match capability.send(push, Duration::from_millis(100)).await {
-            Ok(ServerPushOutcome::Sent(_)) => {}
+            Ok(ServerPushResult::Sent(_)) => {}
             Ok(_) => {
                 return response_with_code(
                     &self.command_factory,

@@ -1166,6 +1166,38 @@ fn metric_name_constants_are_declared_only_in_canonical_or_legacy_files() {
     );
 }
 
+#[test]
+fn metric_constant_detector_distinguishes_tool_names_from_metrics() {
+    let tool = r#"const DIAGNOSE_LAG: &str = "rocketmq_diagnose_consumer_lag";"#;
+    assert!(!has_metric_constant_definition(tool));
+
+    for metric in [
+        r#"pub const LAG: &str = "rocketmq_consumer_lag";"#,
+        r#"const TOTAL: &str = "request_total";"#,
+        r#"const TOTAL: &str = "rocketmq_diagnose_consumer_lag_total";"#,
+        "pub const LATENCY: &str =\n    \"rocketmq_consumer_lag_latency\";",
+        r##"const BYTES: &str = r#"rocketmq_store_bytes"#;"##,
+    ] {
+        assert!(has_metric_constant_definition(metric), "missed metric: {metric}");
+        assert!(
+            has_metric_constant_definition(&format!("{tool} {metric}")),
+            "a tool name must not exempt metrics in the same source: {metric}"
+        );
+    }
+
+    for source in [
+        r#"// const LAG: &str = "rocketmq_consumer_lag";"#,
+        r#"const TOOL: &str = "rocketmq_diagnose_consumer_lag"; // "rocketmq_consumer_lag""#,
+        r#"let name = "rocketmq_consumer_lag";"#,
+        r#"const LIMIT: usize = 1; let name = "rocketmq_consumer_lag";"#,
+    ] {
+        assert!(
+            !has_metric_constant_definition(source),
+            "not a metric constant: {source}"
+        );
+    }
+}
+
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -1200,17 +1232,36 @@ fn collect_rs_files(dir: &Path, files: &mut Vec<PathBuf>) {
 }
 
 fn has_metric_constant_definition(source: &str) -> bool {
-    source.lines().any(|line| {
-        let trimmed = line.trim_start();
-        trimmed.contains("const ")
-            && trimmed.contains('"')
-            && (CONTROLLER_METRIC_LITERAL_MARKERS
-                .iter()
-                .any(|marker| trimmed.contains(marker))
-                || (trimmed.contains("\"rocketmq_")
-                    && ROCKETMQ_METRIC_SUFFIX_MARKERS
-                        .iter()
-                        .any(|marker| trimmed.contains(marker))))
+    let tokens = lex_rust_boundary_tokens(source);
+    tokens.iter().enumerate().any(|(index, token)| {
+        if token_identifier(Some(token)) != Some("const") || token_identifier(tokens.get(index + 1)) == Some("fn") {
+            return false;
+        }
+        let declaration = &tokens[index + 1..];
+        let end = declaration
+            .iter()
+            .position(|token| matches!(token, RustBoundaryToken::Semicolon))
+            .unwrap_or(declaration.len());
+        declaration[..end]
+            .iter()
+            .skip_while(|token| !matches!(token, RustBoundaryToken::Equals))
+            .any(|token| {
+                let RustBoundaryToken::StringLiteral(value) = token else {
+                    return false;
+                };
+                // This MCP protocol tool name (tools/catalog.rs) shares the metric prefix and
+                // lag suffix. Exempt only this exact value, never its file or other lag metrics.
+                if value == "rocketmq_diagnose_consumer_lag" {
+                    return false;
+                }
+                CONTROLLER_METRIC_LITERAL_MARKERS
+                    .iter()
+                    .any(|marker| value == marker.trim_matches('"'))
+                    || (value.starts_with("rocketmq_")
+                        && ROCKETMQ_METRIC_SUFFIX_MARKERS
+                            .iter()
+                            .any(|marker| value.ends_with(marker.trim_end_matches('"'))))
+            })
     })
 }
 

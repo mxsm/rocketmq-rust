@@ -79,11 +79,11 @@ use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
 use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::ResponseBodyKind;
-use rocketmq_transport::api::ResponseCompletionOutcome;
+use rocketmq_transport::api::ResponseCompletionResult;
+use rocketmq_transport::api::ResponseDeliveryEvent;
 use rocketmq_transport::api::ResponseDisposition;
 use rocketmq_transport::api::ResponseReceipt;
 use rocketmq_transport::api::ResponseWriteObservation;
-use rocketmq_transport::api::ResponseWriteOutcome;
 use rocketmq_transport::api::ResponseWritePath;
 use rocketmq_transport::api::SessionEvent;
 use rocketmq_transport::api::SessionId;
@@ -401,11 +401,11 @@ fn consume_rejection_exhaustively(decision: RejectRequestDecision) -> Option<Rem
     }
 }
 
-fn inspect_write_outcome(outcome: ResponseWriteOutcome) -> Option<ResponseReceipt> {
-    match outcome {
-        ResponseWriteOutcome::Written(receipt) => Some(receipt),
-        ResponseWriteOutcome::Failed { completion, progress } => {
-            let _: Option<ResponseCompletionOutcome> = completion;
+fn inspect_delivery_event(event: ResponseDeliveryEvent) -> Option<ResponseReceipt> {
+    match event {
+        ResponseDeliveryEvent::DeliveryCompleted(receipt) => Some(receipt),
+        ResponseDeliveryEvent::Failed { completion, progress } => {
+            let _: Option<ResponseCompletionResult> = completion;
             let _: Option<WriteProgress> = progress;
             None
         }
@@ -420,7 +420,7 @@ fn assert_response_write_observation_contract(observation: &ResponseWriteObserva
     let _: ResponseWritePath = observation.path();
     let _: Duration = observation.write_elapsed();
     let _: Duration = observation.end_to_end_elapsed();
-    let _: Option<ResponseReceipt> = inspect_write_outcome(observation.outcome());
+    let _: Option<ResponseReceipt> = inspect_delivery_event(observation.event());
 }
 
 fn order_from_ingress<P: LocalRequestProcessor>(processor: &P, ingress: IngressRequestView<'_>) -> RequestOrdering {
@@ -638,11 +638,11 @@ fn api_processor_side_contracts_are_typed_and_body_free() {
 
     let _ = ResponseWritePath::Inline;
     let _ = ResponseWritePath::Deferred;
-    let failure = ResponseWriteOutcome::Failed {
-        completion: Some(ResponseCompletionOutcome::QueueSaturated),
+    let failure = ResponseDeliveryEvent::Failed {
+        completion: Some(ResponseCompletionResult::QueueSaturated),
         progress: Some(WriteProgress::PossiblyPartial),
     };
-    assert!(inspect_write_outcome(failure).is_none());
+    assert!(inspect_delivery_event(failure).is_none());
     let _ = ResponseDisposition::TransportWritten;
     let _ = ResponseDisposition::InProcessAccepted;
     let _ = RequestOrdering::Concurrent;

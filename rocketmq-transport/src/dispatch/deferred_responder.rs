@@ -26,7 +26,7 @@ use super::OriginalRequestIdentity;
 use super::RemotingResponse;
 use super::RequestControlView;
 use super::RequestId;
-use super::ResponseCompletionOutcome;
+use super::ResponseCompletionResult;
 use super::ResponseReceipt;
 use super::ResponseSink;
 use super::ResponseState;
@@ -41,7 +41,7 @@ use crate::telemetry::TransportTelemetry;
 
 /// Result of transferring a request's affine deferred response right.
 #[must_use]
-pub enum DeferredResponderOutcome {
+pub enum DeferredResponderTakeResult {
     /// The deferred response right was transferred.
     Taken(DeferredResponder),
     /// One-way ingress can never produce a response.
@@ -396,7 +396,7 @@ impl DeferredResponder {
             Ok(response_outcome) => {
                 let progress = response_completion_progress(response_outcome);
                 let claim_result = match response_outcome {
-                    ResponseCompletionOutcome::Completed(_) => claim.complete(),
+                    ResponseCompletionResult::Completed(_) => claim.complete(),
                     _ => claim.fail(progress),
                 };
                 if let Some(outcome) = finish_deferred_claim(claim_result)? {
@@ -404,7 +404,7 @@ impl DeferredResponder {
                 }
                 if let Some(observation) = &self.observation {
                     match response_outcome {
-                        ResponseCompletionOutcome::Completed(receipt) => observation.complete_reply(
+                        ResponseCompletionResult::Completed(receipt) => observation.complete_reply(
                             crate::runtime::processor::ResponseObservationMode::Deferred,
                             response_code,
                             body_kind,
@@ -505,27 +505,27 @@ fn finish_deferred_claim(
     }
 }
 
-const fn response_completion_progress(outcome: ResponseCompletionOutcome) -> WriteProgress {
+const fn response_completion_progress(outcome: ResponseCompletionResult) -> WriteProgress {
     match outcome {
-        ResponseCompletionOutcome::Completed(_)
-        | ResponseCompletionOutcome::AlreadyCompleted(_)
-        | ResponseCompletionOutcome::DeadlineExpired
-        | ResponseCompletionOutcome::Cancelled
-        | ResponseCompletionOutcome::SessionClosed
-        | ResponseCompletionOutcome::QueueSaturated => WriteProgress::NotStarted,
+        ResponseCompletionResult::Completed(_)
+        | ResponseCompletionResult::AlreadyCompleted(_)
+        | ResponseCompletionResult::DeadlineExpired
+        | ResponseCompletionResult::Cancelled
+        | ResponseCompletionResult::SessionClosed
+        | ResponseCompletionResult::QueueSaturated => WriteProgress::NotStarted,
     }
 }
 
-const fn deferred_response_outcome(outcome: ResponseCompletionOutcome) -> DeferredResponseAttempt {
+const fn deferred_response_outcome(outcome: ResponseCompletionResult) -> DeferredResponseAttempt {
     match outcome {
-        ResponseCompletionOutcome::Completed(receipt) => DeferredResponseAttempt::Completed(receipt),
-        ResponseCompletionOutcome::AlreadyCompleted(state) => {
+        ResponseCompletionResult::Completed(receipt) => DeferredResponseAttempt::Completed(receipt),
+        ResponseCompletionResult::AlreadyCompleted(state) => {
             DeferredResponseAttempt::AlreadyCompleted { state, reason: None }
         }
-        ResponseCompletionOutcome::DeadlineExpired => DeferredResponseAttempt::DeadlineExceeded,
-        ResponseCompletionOutcome::Cancelled => DeferredResponseAttempt::Cancelled,
-        ResponseCompletionOutcome::SessionClosed => DeferredResponseAttempt::SessionClosed,
-        ResponseCompletionOutcome::QueueSaturated => DeferredResponseAttempt::QueueSaturated,
+        ResponseCompletionResult::DeadlineExpired => DeferredResponseAttempt::DeadlineExceeded,
+        ResponseCompletionResult::Cancelled => DeferredResponseAttempt::Cancelled,
+        ResponseCompletionResult::SessionClosed => DeferredResponseAttempt::SessionClosed,
+        ResponseCompletionResult::QueueSaturated => DeferredResponseAttempt::QueueSaturated,
     }
 }
 

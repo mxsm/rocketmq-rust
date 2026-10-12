@@ -20,11 +20,19 @@ use crate::tools;
 mod broker;
 #[path = "remaining/offset.rs"]
 mod offset;
+#[path = "remaining/operation.rs"]
+mod operation;
 #[path = "remaining/request_mode.rs"]
 mod request_mode;
 
 pub(super) use broker::run_broker;
 pub(super) use offset::run_offset;
+pub(super) use operation::run_proxy_drain;
+pub(super) use operation::run_restore_log_filter;
+pub(super) use operation::run_set_log_filter;
+pub(crate) use operation::OperationBackend;
+#[cfg(test)]
+pub(crate) use operation::Planned;
 pub(super) use request_mode::run_request_mode;
 
 fn dry_status(success_count: usize, failure_count: usize) -> tools::MutationStatus {

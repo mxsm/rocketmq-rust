@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use schemars::{JsonSchema, Schema, SchemaGenerator};
+use serde::Serialize;
 
 use super::validate_user_name;
 use super::NameKind;
@@ -34,14 +35,35 @@ macro_rules! operation_schema {
 
 #[path = "remaining/broker.rs"]
 mod broker;
+#[path = "remaining/log_filter.rs"]
+mod log_filter;
 #[path = "remaining/offset.rs"]
 mod offset;
+#[path = "remaining/proxy_drain.rs"]
+mod proxy_drain;
 #[path = "remaining/request_mode.rs"]
 mod request_mode;
 
 pub use broker::*;
+pub use log_filter::*;
 pub use offset::*;
+pub use proxy_drain::*;
 pub use request_mode::*;
+
+/// Which operation holds a target, told without its identifier.
+///
+/// The identifier of an operation that another call started is that caller's text, so a response
+/// never repeats it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationHolder {
+    /// No operation holds the target.
+    None,
+    /// The operation that this call names by its `operation_id`.
+    ThisOperation,
+    /// An operation with another identifier.
+    OtherOperation,
+}
 
 fn nullable_schema<T: JsonSchema>(generator: &mut SchemaGenerator) -> Schema {
     schemars::json_schema!({

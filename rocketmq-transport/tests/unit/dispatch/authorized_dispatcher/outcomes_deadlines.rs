@@ -19,7 +19,7 @@ use crate::dispatch::DeferredCommitErrorKind;
 use crate::dispatch::DeferredRegistration;
 use crate::dispatch::DeferredRegistrationResult;
 use crate::dispatch::DeferredResponder;
-use crate::dispatch::DeferredResponderOutcome;
+use crate::dispatch::DeferredResponderTakeResult;
 use crate::dispatch::DeferredResponseOutcome;
 use crate::dispatch::DeferredResumeResult;
 use crate::dispatch::DeferredResumeRetainedSize;
@@ -29,7 +29,7 @@ use crate::dispatch::DeferredWakeReason;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestControlView;
 use crate::dispatch::RequestMeta;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseSink;
 use crate::runtime::processor::ResponseObservation;
 use crate::runtime::processor::ResponseObservationMode;
@@ -89,13 +89,13 @@ where
     }
 }
 
-fn expect_deferred_responder(outcome: DeferredResponderOutcome, context: &str) -> DeferredResponder {
+fn expect_deferred_responder(outcome: DeferredResponderTakeResult, context: &str) -> DeferredResponder {
     match outcome {
-        DeferredResponderOutcome::Taken(responder) => responder,
-        DeferredResponderOutcome::OneWayRequest => panic!("{context}: one-way request"),
-        DeferredResponderOutcome::Unavailable => panic!("{context}: responder unavailable"),
-        DeferredResponderOutcome::AlreadyTaken => panic!("{context}: responder already taken"),
-        DeferredResponderOutcome::OutcomeCompleted => panic!("{context}: outcome already completed"),
+        DeferredResponderTakeResult::Taken(responder) => responder,
+        DeferredResponderTakeResult::OneWayRequest => panic!("{context}: one-way request"),
+        DeferredResponderTakeResult::Unavailable => panic!("{context}: responder unavailable"),
+        DeferredResponderTakeResult::AlreadyTaken => panic!("{context}: responder already taken"),
+        DeferredResponderTakeResult::OutcomeCompleted => panic!("{context}: outcome already completed"),
     }
 }
 
@@ -1040,9 +1040,9 @@ async fn queued_deadline_expiry_attempts_one_plan_write_and_observes_not_started
         let observations = state.observations.lock().expect("observation lock");
         assert_eq!(observations.len(), 2);
         assert!(matches!(
-            observations[1].outcome(),
-            ResponseWriteOutcome::Failed {
-                completion: Some(ResponseCompletionOutcome::DeadlineExpired),
+            observations[1].event(),
+            ResponseDeliveryEvent::Failed {
+                completion: Some(ResponseCompletionResult::DeadlineExpired),
                 progress: Some(WriteProgress::NotStarted),
             }
         ));

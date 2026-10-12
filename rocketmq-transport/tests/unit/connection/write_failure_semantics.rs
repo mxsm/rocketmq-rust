@@ -52,7 +52,7 @@ use crate::admission::ResourceLimit;
 use crate::deadline::RequestDeadline;
 use crate::dispatch::RequestControlView;
 use crate::dispatch::RequestMeta;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseSendResult;
 use crate::dispatch::WriteProgress;
 use crate::file_region::FileRegion;
@@ -123,7 +123,7 @@ fn assert_operational_failure(outcome: ResponseSendResult, expected: WriteProgre
     }
 }
 
-fn assert_normal_rejection(outcome: ResponseSendResult, expected: ResponseCompletionOutcome) {
+fn assert_normal_rejection(outcome: ResponseSendResult, expected: ResponseCompletionResult) {
     match outcome {
         ResponseSendResult::Rejected(actual) => assert_eq!(actual, expected),
         ResponseSendResult::Written => panic!("response unexpectedly completed"),
@@ -393,7 +393,7 @@ async fn typed_response_queue_saturation_is_not_started() {
         connection
             .send_response(RemotingCommand::create_remoting_command(7))
             .await,
-        ResponseCompletionOutcome::QueueSaturated,
+        ResponseCompletionResult::QueueSaturated,
     );
     drop(connection);
     drop(lanes);
@@ -435,7 +435,7 @@ async fn typed_response_admission_saturation_is_not_started_before_lane_enqueue(
         connection
             .send_response(RemotingCommand::create_remoting_command(7))
             .await,
-        ResponseCompletionOutcome::QueueSaturated,
+        ResponseCompletionResult::QueueSaturated,
     );
     drop(connection);
     drop(lanes);
@@ -734,7 +734,7 @@ async fn direct_preflight_deadline_is_not_started_and_keeps_the_writer_healthy()
     resume.notify_one();
     let (mut connection, outcome) = send.await.expect("direct send task");
     let response = outcome.expect_err("preflight deadline must fail").into_response();
-    assert_normal_rejection(response, ResponseCompletionOutcome::DeadlineExpired);
+    assert_normal_rejection(response, ResponseCompletionResult::DeadlineExpired);
     assert_eq!(writes.load(Ordering::Acquire), 0);
     assert_eq!(flushes.load(Ordering::Acquire), 0);
     assert_eq!(connection.state(), ConnectionState::Healthy);
@@ -861,7 +861,7 @@ async fn queued_preflight_deadline_matches_direct_not_started_classification_wit
     let response = outcome
         .expect_err("queued preflight deadline must fail")
         .into_response();
-    assert_normal_rejection(response, ResponseCompletionOutcome::DeadlineExpired);
+    assert_normal_rejection(response, ResponseCompletionResult::DeadlineExpired);
     assert_eq!(writes.load(Ordering::Acquire), 0);
     assert_eq!(flushes.load(Ordering::Acquire), 0);
     assert_eq!(queued_connection.state(), ConnectionState::Healthy);
@@ -942,7 +942,7 @@ async fn micro_batch_preflight_deadline_only_rejects_the_member_that_caused_the_
     tokio::time::advance(std::time::Duration::from_millis(80)).await;
     assert_normal_rejection(
         classify_writer_failure("short-member".to_string(), short_failure, Some(short_deadline)).into_response(),
-        ResponseCompletionOutcome::DeadlineExpired,
+        ResponseCompletionResult::DeadlineExpired,
     );
     assert_not_started_prewrite_operational(
         classify_writer_failure("late-member".to_string(), late_failure, Some(late_deadline)).into_response(),

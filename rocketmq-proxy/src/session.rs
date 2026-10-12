@@ -24,7 +24,7 @@ use std::sync::Weak;
 use std::time::Duration;
 
 use rocketmq_transport::api::ServerPushCommand;
-use rocketmq_transport::api::ServerPushOutcome;
+use rocketmq_transport::api::ServerPushResult;
 use rocketmq_transport::api::ServerPushSender;
 use rocketmq_transport::api::SessionCloseHandle;
 use rocketmq_transport::api::SessionCloseReason;
@@ -82,7 +82,7 @@ impl RemotingSessionCapability {
         &self,
         command: ServerPushCommand,
         timeout: Duration,
-    ) -> Result<ServerPushOutcome, TransportError> {
+    ) -> Result<ServerPushResult, TransportError> {
         self.push.send(command, timeout).await
     }
 

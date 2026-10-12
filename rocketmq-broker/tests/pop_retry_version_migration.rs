@@ -17,7 +17,7 @@ use rocketmq_error::ViewValueRef;
 use rocketmq_error::CORE_CONFIGURATION_INVALID;
 use rocketmq_model::common::pop_retry_policy::PopRetryMigrationState;
 use rocketmq_model::common::pop_retry_policy::PopRetryPolicy;
-use rocketmq_model::PopRetryPolicyOutcome;
+use rocketmq_model::PopRetryPolicyTransitionDecision;
 use tempfile::TempDir;
 
 #[test]
@@ -28,7 +28,7 @@ fn group_policy_survives_upgrade_write_rollback_and_restart() {
     let v1 = store
         .upsert_policy("group-a", &["orders"], PopRetryPolicy::v1_only(0), 10)
         .expect("persist v1-only policy");
-    let PopRetryPolicyOutcome::Transitioned(dual_v1_policy) = v1
+    let PopRetryPolicyTransitionDecision::Transitioned(dual_v1_policy) = v1
         .retry_policy
         .transition_to(PopRetryMigrationState::DualReadV1Write, 2)
         .expect("enter dual-read before switching writes")
@@ -38,7 +38,7 @@ fn group_policy_survives_upgrade_write_rollback_and_restart() {
     let dual_v1 = store
         .upsert_policy("group-a", &["orders"], dual_v1_policy, 11)
         .expect("persist dual-read/v1-write policy");
-    let PopRetryPolicyOutcome::Transitioned(dual_v2_policy) = dual_v1
+    let PopRetryPolicyTransitionDecision::Transitioned(dual_v2_policy) = dual_v1
         .retry_policy
         .transition_to(PopRetryMigrationState::DualReadV2Write, 3)
         .expect("switch writes to v2")
@@ -48,7 +48,7 @@ fn group_policy_survives_upgrade_write_rollback_and_restart() {
     let dual_v2 = store
         .upsert_policy("group-a", &["orders"], dual_v2_policy, 12)
         .expect("persist dual-read/v2-write policy");
-    let PopRetryPolicyOutcome::Transitioned(rolled_back_policy) = dual_v2
+    let PopRetryPolicyTransitionDecision::Transitioned(rolled_back_policy) = dual_v2
         .retry_policy
         .transition_to(PopRetryMigrationState::DualReadV1Write, 4)
         .expect("roll writes back while retaining v2 reads")

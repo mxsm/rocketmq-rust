@@ -27,7 +27,7 @@ use crate::codec::prepare_response;
 use crate::dispatch::BoundResponse;
 use crate::dispatch::RemotingResponse;
 use crate::dispatch::RequestControlView;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseDisposition;
 use crate::dispatch::ResponseOperationalFailure;
 use crate::dispatch::ResponseReceipt;
@@ -93,7 +93,7 @@ impl ResponseDeliveryContext {
 }
 
 pub(super) struct LocalResponseSenderState {
-    sender: parking_lot::Mutex<Option<oneshot::Sender<Result<RemotingResponse, ResponseCompletionOutcome>>>>,
+    sender: parking_lot::Mutex<Option<oneshot::Sender<Result<RemotingResponse, ResponseCompletionResult>>>>,
     sender_taken: Arc<AtomicBool>,
     control: RequestControlView,
     slot: Arc<ResponseCompletionSlot>,
@@ -105,7 +105,7 @@ pub(super) struct LocalResponseSenderState {
 
 impl LocalResponseSenderState {
     fn new(
-        sender: oneshot::Sender<Result<RemotingResponse, ResponseCompletionOutcome>>,
+        sender: oneshot::Sender<Result<RemotingResponse, ResponseCompletionResult>>,
         sender_taken: Arc<AtomicBool>,
         control: RequestControlView,
         slot: Arc<ResponseCompletionSlot>,
@@ -134,7 +134,7 @@ impl LocalResponseSenderState {
         self
     }
 
-    fn take_sender(&self) -> Option<oneshot::Sender<Result<RemotingResponse, ResponseCompletionOutcome>>> {
+    fn take_sender(&self) -> Option<oneshot::Sender<Result<RemotingResponse, ResponseCompletionResult>>> {
         let sender = self.sender.lock().take();
         if sender.is_some() {
             self.sender_taken.store(true, Ordering::Release);
@@ -151,21 +151,21 @@ impl LocalResponseSenderState {
             return;
         };
         if self.slot.close_if_open(ResponseTerminalState::Closed) {
-            let _ = sender.send(Err(ResponseCompletionOutcome::SessionClosed));
+            let _ = sender.send(Err(ResponseCompletionResult::SessionClosed));
         }
     }
 }
 
 /// Single owner of an exact in-process response handoff.
 pub(crate) struct LocalResponseReceiver {
-    receiver: oneshot::Receiver<Result<RemotingResponse, ResponseCompletionOutcome>>,
+    receiver: oneshot::Receiver<Result<RemotingResponse, ResponseCompletionResult>>,
     control: RequestControlView,
     slot: Arc<ResponseCompletionSlot>,
     sender_taken: Arc<AtomicBool>,
 }
 
 impl LocalResponseReceiver {
-    pub(crate) async fn receive(mut self) -> Result<RemotingResponse, ResponseCompletionOutcome> {
+    pub(crate) async fn receive(mut self) -> Result<RemotingResponse, ResponseCompletionResult> {
         if let Some(stop) = current_stop(&self.control) {
             self.slot.finish_external(stop);
             return Err(stop.into_outcome());
@@ -182,7 +182,7 @@ impl LocalResponseReceiver {
         };
         result.map_err(|_| {
             self.slot.finish_external(ResponseStop::SessionClosed);
-            ResponseCompletionOutcome::SessionClosed
+            ResponseCompletionResult::SessionClosed
         })?
     }
 }
@@ -287,7 +287,7 @@ impl ResponseSink {
     pub(crate) async fn send_response(
         self,
         bound: BoundResponse,
-    ) -> Result<ResponseCompletionOutcome, ResponseOperationalFailure> {
+    ) -> Result<ResponseCompletionResult, ResponseOperationalFailure> {
         match self {
             Self::Network(session) => send_network_response(session, bound).await,
             Self::Local(sink) => send_local_response(sink, bound).await,
@@ -298,7 +298,7 @@ impl ResponseSink {
         self,
         bound: BoundResponse,
         deferred_claim: &mut ResponseSendClaim,
-    ) -> Result<ResponseCompletionOutcome, ResponseOperationalFailure> {
+    ) -> Result<ResponseCompletionResult, ResponseOperationalFailure> {
         match self {
             Self::Network(session) => send_deferred_network(session, bound, deferred_claim).await,
             Self::Local(sink) => send_deferred_local(sink, bound).await,
@@ -310,9 +310,9 @@ async fn send_deferred_network(
     session: Arc<SessionHandle>,
     bound: BoundResponse,
     deferred_claim: &mut ResponseSendClaim,
-) -> Result<ResponseCompletionOutcome, ResponseOperationalFailure> {
+) -> Result<ResponseCompletionResult, ResponseOperationalFailure> {
     let Some(context) = session.response_context() else {
-        return Ok(ResponseCompletionOutcome::SessionClosed);
+        return Ok(ResponseCompletionResult::SessionClosed);
     };
     let mut response_claim = match context.slot().claim().await {
         Ok(claim) => claim,
@@ -356,7 +356,7 @@ async fn send_deferred_network(
     match send {
         ResponseSendResult::Written => {
             response_claim.finish(ResponseTerminalState::Completed);
-            Ok(ResponseCompletionOutcome::Completed(ResponseReceipt::new(
+            Ok(ResponseCompletionResult::Completed(ResponseReceipt::new(
                 metadata.request_id(),
                 ResponseDisposition::TransportWritten,
             )))
@@ -375,16 +375,16 @@ async fn send_deferred_network(
 async fn send_deferred_local(
     sink: LocalResponseSink,
     bound: BoundResponse,
-) -> Result<ResponseCompletionOutcome, ResponseOperationalFailure> {
+) -> Result<ResponseCompletionResult, ResponseOperationalFailure> {
     send_local_response(sink, bound).await
 }
 
 async fn send_network_response(
     session: Arc<SessionHandle>,
     bound: BoundResponse,
-) -> Result<ResponseCompletionOutcome, ResponseOperationalFailure> {
+) -> Result<ResponseCompletionResult, ResponseOperationalFailure> {
     let Some(context) = session.response_context() else {
-        return Ok(ResponseCompletionOutcome::SessionClosed);
+        return Ok(ResponseCompletionResult::SessionClosed);
     };
     let mut claim = match context.slot().claim().await {
         Ok(claim) => claim,
@@ -423,7 +423,7 @@ async fn send_network_response(
     match connection.send_prepared_response(prepared, context.control()).await {
         ResponseSendResult::Written => {
             claim.finish(ResponseTerminalState::Completed);
-            Ok(ResponseCompletionOutcome::Completed(ResponseReceipt::new(
+            Ok(ResponseCompletionResult::Completed(ResponseReceipt::new(
                 metadata.request_id(),
                 ResponseDisposition::TransportWritten,
             )))
@@ -442,7 +442,7 @@ async fn send_network_response(
 async fn send_local_response(
     sink: LocalResponseSink,
     bound: BoundResponse,
-) -> Result<ResponseCompletionOutcome, ResponseOperationalFailure> {
+) -> Result<ResponseCompletionResult, ResponseOperationalFailure> {
     let state = Arc::clone(&sink.state);
     let claim = match state.slot.claim().await {
         Ok(claim) => claim,
@@ -460,7 +460,7 @@ async fn send_local_response(
     let (request_id, head, body) = bound.into_parts();
     let response = RemotingResponse::from_bound_parts(head, body);
     match claim.commit_local_handoff(&state, response) {
-        Ok(()) => Ok(ResponseCompletionOutcome::Completed(ResponseReceipt::new(
+        Ok(()) => Ok(ResponseCompletionResult::Completed(ResponseReceipt::new(
             request_id,
             ResponseDisposition::InProcessAccepted,
         ))),
@@ -476,11 +476,11 @@ enum ResponseStop {
 }
 
 impl ResponseStop {
-    fn into_outcome(self) -> ResponseCompletionOutcome {
+    fn into_outcome(self) -> ResponseCompletionResult {
         match self {
-            Self::Cancelled => ResponseCompletionOutcome::Cancelled,
-            Self::SessionClosed => ResponseCompletionOutcome::SessionClosed,
-            Self::DeadlineExceeded => ResponseCompletionOutcome::DeadlineExpired,
+            Self::Cancelled => ResponseCompletionResult::Cancelled,
+            Self::SessionClosed => ResponseCompletionResult::SessionClosed,
+            Self::DeadlineExceeded => ResponseCompletionResult::DeadlineExpired,
         }
     }
 
@@ -510,13 +510,13 @@ fn current_stop(control: &RequestControlView) -> Option<ResponseStop> {
     }
 }
 
-fn terminal_for_outcome(outcome: ResponseCompletionOutcome) -> ResponseTerminalState {
+fn terminal_for_outcome(outcome: ResponseCompletionResult) -> ResponseTerminalState {
     match outcome {
-        ResponseCompletionOutcome::Completed(_) => ResponseTerminalState::Completed,
-        ResponseCompletionOutcome::AlreadyCompleted(state) => state,
-        ResponseCompletionOutcome::Cancelled => ResponseTerminalState::Cancelled,
-        ResponseCompletionOutcome::SessionClosed => ResponseTerminalState::Closed,
-        ResponseCompletionOutcome::DeadlineExpired | ResponseCompletionOutcome::QueueSaturated => {
+        ResponseCompletionResult::Completed(_) => ResponseTerminalState::Completed,
+        ResponseCompletionResult::AlreadyCompleted(state) => state,
+        ResponseCompletionResult::Cancelled => ResponseTerminalState::Cancelled,
+        ResponseCompletionResult::SessionClosed => ResponseTerminalState::Closed,
+        ResponseCompletionResult::DeadlineExpired | ResponseCompletionResult::QueueSaturated => {
             ResponseTerminalState::Failed {
                 progress: WriteProgress::NotStarted,
             }
@@ -588,7 +588,7 @@ impl ResponseCompletionSlot {
         }
     }
 
-    async fn claim(self: &Arc<Self>) -> Result<ResponseClaim, ResponseCompletionOutcome> {
+    async fn claim(self: &Arc<Self>) -> Result<ResponseClaim, ResponseCompletionResult> {
         loop {
             let changed = self.changed.notified();
             tokio::pin!(changed);
@@ -615,9 +615,9 @@ impl ResponseCompletionSlot {
                         if claimant_stop.is_none() {
                             if *primary_session_closed {
                                 *primary_session_closed = false;
-                                return Err(ResponseCompletionOutcome::SessionClosed);
+                                return Err(ResponseCompletionResult::SessionClosed);
                             }
-                            return Err(ResponseCompletionOutcome::AlreadyCompleted(*state));
+                            return Err(ResponseCompletionResult::AlreadyCompleted(*state));
                         }
                     }
                 }
@@ -683,7 +683,7 @@ impl ResponseCompletionSlot {
         }
     }
 
-    fn finish_claim_stop(&self, stop: ResponseStop) -> ResponseCompletionOutcome {
+    fn finish_claim_stop(&self, stop: ResponseStop) -> ResponseCompletionResult {
         let mut state = self.state.lock();
         let (error, changed) = match &mut *state {
             ResponseCompletionState::Claimed => {
@@ -703,9 +703,9 @@ impl ResponseCompletionSlot {
                     (external_stop.into_outcome(), true)
                 } else if *primary_session_closed {
                     *primary_session_closed = false;
-                    (ResponseCompletionOutcome::SessionClosed, true)
+                    (ResponseCompletionResult::SessionClosed, true)
                 } else {
-                    (ResponseCompletionOutcome::AlreadyCompleted(*state), false)
+                    (ResponseCompletionResult::AlreadyCompleted(*state), false)
                 }
             }
             ResponseCompletionState::Open => {
@@ -728,7 +728,7 @@ impl ResponseCompletionSlot {
         &self,
         sender_state: &LocalResponseSenderState,
         response: RemotingResponse,
-    ) -> Result<(), ResponseCompletionOutcome> {
+    ) -> Result<(), ResponseCompletionResult> {
         let mut state = self.state.lock();
         let (result, changed) = match &mut *state {
             ResponseCompletionState::Claimed => {
@@ -748,7 +748,7 @@ impl ResponseCompletionSlot {
                             primary_session_closed: false,
                             claimant_stop: None,
                         };
-                        Err(ResponseCompletionOutcome::SessionClosed)
+                        Err(ResponseCompletionResult::SessionClosed)
                     };
                     (result, true)
                 } else {
@@ -757,7 +757,7 @@ impl ResponseCompletionSlot {
                         primary_session_closed: false,
                         claimant_stop: None,
                     };
-                    (Err(ResponseCompletionOutcome::SessionClosed), true)
+                    (Err(ResponseCompletionResult::SessionClosed), true)
                 }
             }
             ResponseCompletionState::Terminal {
@@ -769,9 +769,9 @@ impl ResponseCompletionSlot {
                     (Err(stop.into_outcome()), true)
                 } else if *primary_session_closed {
                     *primary_session_closed = false;
-                    (Err(ResponseCompletionOutcome::SessionClosed), true)
+                    (Err(ResponseCompletionResult::SessionClosed), true)
                 } else {
-                    (Err(ResponseCompletionOutcome::AlreadyCompleted(*state)), false)
+                    (Err(ResponseCompletionResult::AlreadyCompleted(*state)), false)
                 }
             }
             ResponseCompletionState::Open => {
@@ -780,7 +780,7 @@ impl ResponseCompletionSlot {
                     primary_session_closed: false,
                     claimant_stop: None,
                 };
-                (Err(ResponseCompletionOutcome::SessionClosed), true)
+                (Err(ResponseCompletionResult::SessionClosed), true)
             }
         };
         drop(state);
@@ -831,7 +831,7 @@ impl ResponseClaim {
         }
     }
 
-    fn finish_stop(mut self, stop: ResponseStop) -> ResponseCompletionOutcome {
+    fn finish_stop(mut self, stop: ResponseStop) -> ResponseCompletionResult {
         self.slot
             .take()
             .map_or_else(|| stop.into_outcome(), |slot| slot.finish_claim_stop(stop))
@@ -841,9 +841,9 @@ impl ResponseClaim {
         mut self,
         sender_state: &LocalResponseSenderState,
         response: RemotingResponse,
-    ) -> Result<(), ResponseCompletionOutcome> {
+    ) -> Result<(), ResponseCompletionResult> {
         self.slot.take().map_or_else(
-            || Err(ResponseCompletionOutcome::SessionClosed),
+            || Err(ResponseCompletionResult::SessionClosed),
             |slot| slot.commit_local_handoff(sender_state, response),
         )
     }

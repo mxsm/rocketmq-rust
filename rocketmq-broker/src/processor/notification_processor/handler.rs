@@ -18,7 +18,7 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_transport::api::error_response as remoting_error_response;
-use rocketmq_transport::api::DeferredResponderOutcome;
+use rocketmq_transport::api::DeferredResponderTakeResult;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
@@ -206,7 +206,7 @@ where
                 "the deferred Notification service is unavailable",
             ),
             NotificationDeferredRegisterRejection::ProvenanceMismatch => self.internal_reply(0),
-            NotificationDeferredRegisterRejection::Responder(DeferredResponderOutcome::OneWayRequest) => {
+            NotificationDeferredRegisterRejection::Responder(DeferredResponderTakeResult::OneWayRequest) => {
                 command_outcome(compose_notification_response(
                     &self.context.command_factory,
                     false,
@@ -214,15 +214,15 @@ where
                     0,
                 ))
             }
-            NotificationDeferredRegisterRejection::Responder(DeferredResponderOutcome::Unavailable) => self
+            NotificationDeferredRegisterRejection::Responder(DeferredResponderTakeResult::Unavailable) => self
                 .reply_with_code(
                     ResponseCode::ServiceNotAvailable,
                     "a deferred Notification responder is unavailable",
                 ),
             NotificationDeferredRegisterRejection::Responder(
-                DeferredResponderOutcome::AlreadyTaken | DeferredResponderOutcome::OutcomeCompleted,
+                DeferredResponderTakeResult::AlreadyTaken | DeferredResponderTakeResult::OutcomeCompleted,
             ) => self.internal_reply(0),
-            NotificationDeferredRegisterRejection::Responder(DeferredResponderOutcome::Taken(responder)) => {
+            NotificationDeferredRegisterRejection::Responder(DeferredResponderTakeResult::Taken(responder)) => {
                 drop(responder);
                 self.internal_reply(0)
             }

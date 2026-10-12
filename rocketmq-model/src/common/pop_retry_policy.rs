@@ -63,7 +63,7 @@ pub struct PopRetryPolicy {
 
 /// Result of asking a valid POP retry policy to change migration state.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PopRetryPolicyOutcome {
+pub enum PopRetryPolicyTransitionDecision {
     /// The requested generation or state transition was not accepted.
     Rejected,
     /// The selected policy with the requested migration state and generation.
@@ -147,7 +147,7 @@ impl PopRetryPolicy {
 
     /// Attempts to select a new migration state and generation.
     ///
-    /// Stale generations and unsafe transitions return [`PopRetryPolicyOutcome::Rejected`].
+    /// Stale generations and unsafe transitions return [`PopRetryPolicyTransitionDecision::Rejected`].
     ///
     /// # Errors
     ///
@@ -157,10 +157,10 @@ impl PopRetryPolicy {
         &self,
         next: PopRetryMigrationState,
         generation: u64,
-    ) -> Result<PopRetryPolicyOutcome, ModelContractViolation> {
+    ) -> Result<PopRetryPolicyTransitionDecision, ModelContractViolation> {
         let current = self.state()?;
         if generation <= self.generation {
-            return Ok(PopRetryPolicyOutcome::Rejected);
+            return Ok(PopRetryPolicyTransitionDecision::Rejected);
         }
         let allowed = matches!(
             (current, next),
@@ -176,9 +176,11 @@ impl PopRetryPolicy {
                 )
         );
         if !allowed {
-            return Ok(PopRetryPolicyOutcome::Rejected);
+            return Ok(PopRetryPolicyTransitionDecision::Rejected);
         }
-        Ok(PopRetryPolicyOutcome::Transitioned(Self::for_state(next, generation)))
+        Ok(PopRetryPolicyTransitionDecision::Transitioned(Self::for_state(
+            next, generation,
+        )))
     }
 
     pub fn write_topic(&self, topic: &str, consumer_group: &str) -> String {
@@ -232,19 +234,19 @@ mod tests {
     #[test]
     fn migration_sequence_and_dual_reader_rollback_are_explicit() {
         let v1 = PopRetryPolicy::v1_only(1);
-        let PopRetryPolicyOutcome::Transitioned(dual_v1) = v1
+        let PopRetryPolicyTransitionDecision::Transitioned(dual_v1) = v1
             .transition_to(PopRetryMigrationState::DualReadV1Write, 2)
             .expect("v1 should enter dual-read before switching writes")
         else {
             panic!("v1 should accept the first migration transition");
         };
-        let PopRetryPolicyOutcome::Transitioned(dual_v2) = dual_v1
+        let PopRetryPolicyTransitionDecision::Transitioned(dual_v2) = dual_v1
             .transition_to(PopRetryMigrationState::DualReadV2Write, 3)
             .expect("dual reader should switch writes to v2")
         else {
             panic!("dual reader should accept the write-version transition");
         };
-        let PopRetryPolicyOutcome::Transitioned(rolled_back) = dual_v2
+        let PopRetryPolicyTransitionDecision::Transitioned(rolled_back) = dual_v2
             .transition_to(PopRetryMigrationState::DualReadV1Write, 4)
             .expect("dual reader should roll writes back to v1")
         else {
@@ -261,11 +263,11 @@ mod tests {
         let v1 = PopRetryPolicy::v1_only(4);
         assert_eq!(
             v1.transition_to(PopRetryMigrationState::DualReadV1Write, 4),
-            Ok(PopRetryPolicyOutcome::Rejected)
+            Ok(PopRetryPolicyTransitionDecision::Rejected)
         );
         assert_eq!(
             v1.transition_to(PopRetryMigrationState::DualReadV2Write, 5),
-            Ok(PopRetryPolicyOutcome::Rejected)
+            Ok(PopRetryPolicyTransitionDecision::Rejected)
         );
     }
 

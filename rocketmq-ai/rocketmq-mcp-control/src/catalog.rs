@@ -23,21 +23,32 @@ use rmcp::model::ToolAnnotations;
 use crate::config::MutationPolicyConfig;
 use crate::model::ControlOperation;
 use crate::tools::BrokerConfigMutationToolResponse;
+use crate::tools::BrokerLogFilterOperation;
+use crate::tools::BrokerLogFilterToolResponse;
 use crate::tools::ConsumerGroupMutationToolResponse;
 use crate::tools::GetMutationResultArgs;
 use crate::tools::MutationResultToolResponse;
 use crate::tools::OffsetMutationToolResponse;
 use crate::tools::PatchBrokerConfigArgs;
+use crate::tools::ProxyDrainArgs;
+use crate::tools::ProxyDrainOperation;
+use crate::tools::ProxyDrainToolResponse;
 use crate::tools::RequestModeMutationToolResponse;
 use crate::tools::ResetConsumerOffsetArgs;
+use crate::tools::RestoreBrokerLogFilterArgs;
+use crate::tools::SetBrokerLogFilterTtlArgs;
 use crate::tools::SetConsumerRequestModeArgs;
 use crate::tools::TopicMutationToolResponse;
 use crate::tools::UpsertConsumerGroupArgs;
 use crate::tools::UpsertTopicArgs;
+use crate::tools::BEGIN_PROXY_DRAIN_TOOL;
+use crate::tools::CANCEL_PROXY_DRAIN_TOOL;
 use crate::tools::GET_MUTATION_RESULT_TOOL;
 use crate::tools::INVOCATION_ID_MEMBER;
 use crate::tools::PATCH_BROKER_CONFIG_TOOL;
 use crate::tools::RESET_CONSUMER_OFFSET_TOOL;
+use crate::tools::RESTORE_BROKER_LOG_FILTER_TOOL;
+use crate::tools::SET_BROKER_LOG_FILTER_TTL_TOOL;
 use crate::tools::SET_CONSUMER_REQUEST_MODE_TOOL;
 use crate::tools::UPSERT_CONSUMER_GROUP_TOOL;
 use crate::tools::UPSERT_TOPIC_TOOL;
@@ -88,18 +99,42 @@ impl OperationCatalog {
     }
 }
 
+/// Whether an operation replaces or withdraws something that is in use.
+///
+/// Ending a drain and setting or ending a log filter only add or give back: the filter is bounded
+/// and the Broker ends it by itself. Beginning a drain takes a Proxy out of service, so it is
+/// marked like the operations that replace state.
+const fn is_destructive(operation: ControlOperation) -> bool {
+    match operation {
+        ControlOperation::TopicUpsert
+        | ControlOperation::ConsumerGroupUpsert
+        | ControlOperation::ConsumerOffsetReset
+        | ControlOperation::BrokerConfigPatch
+        | ControlOperation::ConsumerRequestMode
+        | ControlOperation::ProxyDrainBegin => true,
+        ControlOperation::ProxyDrainCancel
+        | ControlOperation::BrokerLogFilterSet
+        | ControlOperation::BrokerLogFilterRestore => false,
+    }
+}
+
 fn tool_definition(operation: ControlOperation) -> Option<Tool> {
-    let annotations = ToolAnnotations::with_title(match operation {
+    let title = match operation {
         ControlOperation::TopicUpsert => "Upsert RocketMQ topic",
         ControlOperation::ConsumerGroupUpsert => "Upsert RocketMQ consumer group",
         ControlOperation::ConsumerOffsetReset => "Reset RocketMQ consumer offset",
         ControlOperation::BrokerConfigPatch => "Patch RocketMQ Broker configuration",
         ControlOperation::ConsumerRequestMode => "Set RocketMQ consumer request mode",
-    })
-    .read_only(false)
-    .destructive(true)
-    .idempotent(true)
-    .open_world(true);
+        ControlOperation::ProxyDrainBegin => "Begin RocketMQ Proxy drain",
+        ControlOperation::ProxyDrainCancel => "Cancel RocketMQ Proxy drain",
+        ControlOperation::BrokerLogFilterSet => "Set temporary RocketMQ Broker log level",
+        ControlOperation::BrokerLogFilterRestore => "Restore RocketMQ Broker log level",
+    };
+    let annotations = ToolAnnotations::with_title(title)
+        .read_only(false)
+        .destructive(is_destructive(operation))
+        .idempotent(true)
+        .open_world(true);
     let tool = match operation {
         ControlOperation::TopicUpsert => Some(
             Tool::new(
@@ -156,16 +191,96 @@ fn tool_definition(operation: ControlOperation) -> Option<Tool> {
             .with_output_schema::<RequestModeMutationToolResponse>()
             .with_annotations(annotations),
         ),
+        ControlOperation::ProxyDrainBegin => Some(
+            Tool::new(
+                BEGIN_PROXY_DRAIN_TOOL,
+                "Dry-run or begin a drain of one configured Proxy: it stops admitting new work so that it can be \
+                 restarted once nothing is pending. The drain lasts until rocketmq_cancel_proxy_drain is called \
+                 with the same operation_id.",
+                std::sync::Arc::new(Default::default()),
+            )
+            .with_title(title)
+            .with_input_schema::<ProxyDrainArgs>()
+            .with_output_schema::<ProxyDrainToolResponse>()
+            .with_annotations(annotations),
+        ),
+        ControlOperation::ProxyDrainCancel => Some(
+            Tool::new(
+                CANCEL_PROXY_DRAIN_TOOL,
+                "Dry-run or cancel the drain of one configured Proxy that rocketmq_begin_proxy_drain began with \
+                 the same operation_id, so that the Proxy admits work again. A drain that another operation \
+                 holds is left alone.",
+                std::sync::Arc::new(Default::default()),
+            )
+            .with_title(title)
+            .with_input_schema::<ProxyDrainArgs>()
+            .with_output_schema::<ProxyDrainToolResponse>()
+            .with_annotations(annotations),
+        ),
+        ControlOperation::BrokerLogFilterSet => Some(
+            Tool::new(
+                SET_BROKER_LOG_FILTER_TTL_TOOL,
+                "Dry-run or set one rocketmq_broker:: logger of one Broker master to INFO or DEBUG for 60 to 900 \
+                 seconds. The Broker returns to its startup log filter by itself when the time is up; \
+                 rocketmq_restore_broker_log_filter ends the override earlier.",
+                std::sync::Arc::new(Default::default()),
+            )
+            .with_title(title)
+            .with_input_schema::<SetBrokerLogFilterTtlArgs>()
+            .with_output_schema::<BrokerLogFilterToolResponse>()
+            .with_annotations(annotations),
+        ),
+        ControlOperation::BrokerLogFilterRestore => Some(
+            Tool::new(
+                RESTORE_BROKER_LOG_FILTER_TOOL,
+                "Dry-run or end the temporary log level that rocketmq_set_broker_log_filter_ttl set on one \
+                 Broker master with the same operation_id, returning the Broker to its startup log filter. An \
+                 override that another operation holds is left alone.",
+                std::sync::Arc::new(Default::default()),
+            )
+            .with_title(title)
+            .with_input_schema::<RestoreBrokerLogFilterArgs>()
+            .with_output_schema::<BrokerLogFilterToolResponse>()
+            .with_annotations(annotations),
+        ),
     };
     tool.map(|mut tool| {
         unwrap_descriptions(Arc::make_mut(&mut tool.input_schema));
         if let Some(output_schema) = &mut tool.output_schema {
             let output_schema = Arc::make_mut(output_schema);
             declare_invocation_id(output_schema);
+            pin_shared_operation(output_schema, operation);
             unwrap_descriptions(output_schema);
         }
         tool
     })
+}
+
+/// Narrows the operation of a response type that two Tools share to the operation of this Tool.
+///
+/// A Tool with a response type of its own fixes its operation in that type. The two drain Tools
+/// share one response type, and so do the two log-filter Tools; the schema that each of them
+/// publishes still allows only its own operation.
+fn pin_shared_operation(output_schema: &mut JsonObject, operation: ControlOperation) {
+    use schemars::JsonSchema;
+
+    let shared = match operation {
+        ControlOperation::ProxyDrainBegin | ControlOperation::ProxyDrainCancel => ProxyDrainOperation::schema_name(),
+        ControlOperation::BrokerLogFilterSet | ControlOperation::BrokerLogFilterRestore => {
+            BrokerLogFilterOperation::schema_name()
+        }
+        ControlOperation::TopicUpsert
+        | ControlOperation::ConsumerGroupUpsert
+        | ControlOperation::ConsumerOffsetReset
+        | ControlOperation::BrokerConfigPatch
+        | ControlOperation::ConsumerRequestMode => return,
+    };
+    if let Some(definition) = output_schema
+        .get_mut("$defs")
+        .and_then(|definitions| definitions.get_mut(shared.as_ref()))
+    {
+        *definition = serde_json::json!({"type": "string", "const": operation.as_str()});
+    }
 }
 
 /// Declares the `invocation_id` that every mutation response carries.
@@ -264,6 +379,18 @@ fn unwrap_lines(text: &str) -> String {
 mod tests {
     use super::*;
 
+    const ALL_OPERATIONS: [ControlOperation; 9] = [
+        ControlOperation::TopicUpsert,
+        ControlOperation::ConsumerGroupUpsert,
+        ControlOperation::ConsumerOffsetReset,
+        ControlOperation::BrokerConfigPatch,
+        ControlOperation::ConsumerRequestMode,
+        ControlOperation::ProxyDrainBegin,
+        ControlOperation::ProxyDrainCancel,
+        ControlOperation::BrokerLogFilterSet,
+        ControlOperation::BrokerLogFilterRestore,
+    ];
+
     fn policy(enabled: bool, operations: Vec<ControlOperation>) -> MutationPolicyConfig {
         MutationPolicyConfig {
             mutations_enabled: enabled,
@@ -313,29 +440,40 @@ mod tests {
                 assert_eq!(annotations.idempotent_hint, Some(true));
                 assert_eq!(annotations.open_world_hint, Some(true));
             }
-            let all = OperationCatalog::from_policy(&policy(
-                true,
-                vec![
-                    ControlOperation::TopicUpsert,
-                    ControlOperation::ConsumerGroupUpsert,
-                    ControlOperation::ConsumerOffsetReset,
-                    ControlOperation::BrokerConfigPatch,
-                    ControlOperation::ConsumerRequestMode,
-                ],
-            ));
-            assert_eq!(all.registered_operations(), 5);
+            let all = OperationCatalog::from_policy(&policy(true, ALL_OPERATIONS.to_vec()));
+            assert_eq!(all.registered_operations(), 9);
+            // Each operation is allowed by itself: a caller may end a drain or a log filter
+            // without being able to begin one.
+            for operation in ALL_OPERATIONS {
+                let only = OperationCatalog::from_policy(&policy(true, vec![operation]));
+                assert_eq!(only.registered_operations(), 1);
+                assert!(only.is_registered(operation));
+                assert_eq!(only.list_tools().tools.len(), 1);
+            }
         }
     }
 
     fn all_operations() -> OperationCatalog {
         OperationCatalog {
-            operations: BTreeSet::from([
-                ControlOperation::TopicUpsert,
-                ControlOperation::ConsumerGroupUpsert,
-                ControlOperation::ConsumerOffsetReset,
-                ControlOperation::BrokerConfigPatch,
-                ControlOperation::ConsumerRequestMode,
-            ]),
+            operations: BTreeSet::from(ALL_OPERATIONS),
+        }
+    }
+
+    #[test]
+    fn only_an_operation_that_takes_something_out_of_service_is_marked_destructive() {
+        for tool in all_operations().list_tools().tools {
+            let annotations = tool.annotations.as_ref().expect("annotations");
+            let restoring = [
+                CANCEL_PROXY_DRAIN_TOOL,
+                SET_BROKER_LOG_FILTER_TTL_TOOL,
+                RESTORE_BROKER_LOG_FILTER_TOOL,
+            ]
+            .contains(&tool.name.as_ref());
+            assert_eq!(annotations.destructive_hint, Some(!restoring), "{}", tool.name);
+            assert_eq!(annotations.read_only_hint, Some(false), "{}", tool.name);
+            assert_eq!(annotations.idempotent_hint, Some(true), "{}", tool.name);
+            assert_eq!(annotations.open_world_hint, Some(true), "{}", tool.name);
+            assert_eq!(annotations.title.as_deref(), tool.title.as_deref(), "{}", tool.name);
         }
     }
 
@@ -359,7 +497,7 @@ mod tests {
     #[test]
     fn every_input_property_has_a_description() {
         let tools = all_operations().list_tools().tools;
-        assert_eq!(tools.len(), 5);
+        assert_eq!(tools.len(), 9);
         let mut described = 0;
         for tool in tools {
             for_each_input_property(&tool.input_schema, "", &mut |pointer, property| {
@@ -372,8 +510,8 @@ mod tests {
                 described += 1;
             });
         }
-        // 61 arguments over the five Tools, plus the six settings of a Broker configuration patch.
-        assert_eq!(described, 67);
+        // 96 arguments over the nine Tools, plus the six settings of a Broker configuration patch.
+        assert_eq!(described, 102);
     }
 
     #[test]
@@ -422,20 +560,29 @@ mod tests {
     #[cfg(feature = "write-tools")]
     #[test]
     fn reviewed_tool_schema_snapshot() {
-        let catalog = OperationCatalog::from_policy(&policy(
-            true,
-            vec![
-                ControlOperation::TopicUpsert,
-                ControlOperation::ConsumerGroupUpsert,
-                ControlOperation::ConsumerOffsetReset,
-                ControlOperation::BrokerConfigPatch,
-                ControlOperation::ConsumerRequestMode,
-            ],
-        ));
+        let catalog = OperationCatalog::from_policy(&policy(true, ALL_OPERATIONS.to_vec()));
         // The mutation Tools in catalog order, then the one read-only Tool.
         let mut tools = catalog.list_tools().tools;
         tools.push(result_tool_definition());
         insta::assert_json_snapshot!("control_reviewed_tool_schemas", tools);
+    }
+
+    #[test]
+    fn every_mutation_output_schema_allows_only_the_operation_of_its_tool() {
+        for operation in ALL_OPERATIONS {
+            let tool = tool_definition(operation).expect("a reviewed Tool");
+            let schema = tool.output_schema.as_deref().expect("an output schema");
+            let definition = schema["properties"]["operation"]["$ref"]
+                .as_str()
+                .and_then(|reference| reference.strip_prefix("#/$defs/"))
+                .expect("a definition of the operation");
+            assert_eq!(
+                schema["$defs"][definition],
+                serde_json::json!({"type": "string", "const": operation.as_str()}),
+                "{}",
+                tool.name
+            );
+        }
     }
 
     #[test]

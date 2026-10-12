@@ -1737,3 +1737,219 @@ async fn result_lookups_are_budgeted_per_caller() {
         .unwrap();
     assert!(sink.records().await.unwrap().is_empty());
 }
+
+fn drain_args(operation_id: &str) -> tools::ProxyDrainArgs {
+    tools::ProxyDrainArgs {
+        schema_version: MUTATION_ARGUMENTS_SCHEMA_VERSION.to_owned(),
+        cluster: "cluster-a".to_owned(),
+        proxy_name: "proxy-a".to_owned(),
+        operation_id: operation_id.to_owned(),
+        dry_run: false,
+        confirm: true,
+        reason: Some("planned operation".to_owned()),
+        request_key: Some("request-1234".to_owned()),
+    }
+}
+
+fn set_filter_args(ttl_seconds: u32) -> tools::SetBrokerLogFilterTtlArgs {
+    tools::SetBrokerLogFilterTtlArgs {
+        schema_version: MUTATION_ARGUMENTS_SCHEMA_VERSION.to_owned(),
+        cluster: "cluster-a".to_owned(),
+        broker_name: "broker-a".to_owned(),
+        logger: "rocketmq_broker::processor".to_owned(),
+        level: tools::BrokerLogLevel::Debug,
+        ttl_seconds,
+        operation_id: "debug-0001".to_owned(),
+        dry_run: false,
+        confirm: true,
+        reason: Some("planned operation".to_owned()),
+        request_key: Some("request-1234".to_owned()),
+    }
+}
+
+#[test]
+fn operation_bound_requests_are_keyed_by_operation_and_digest_their_identifier() {
+    let principal = principal("alice");
+    let cluster = ClusterName::try_new("cluster-a").unwrap();
+    let identity = |request: &MutationToolRequest| {
+        IdempotencyIdentity::from_request(&principal, &cluster, request)
+            .unwrap()
+            .key
+            .expect("an explicit request key")
+    };
+
+    // One request key and the same arguments are still two operations: a cancel never replays
+    // the recorded outcome of a begin.
+    let begin = MutationToolRequest::ProxyDrainBegin(drain_args("drain-0001"));
+    let cancel = MutationToolRequest::ProxyDrainCancel(drain_args("drain-0001"));
+    assert_eq!(begin.operation(), ControlOperation::ProxyDrainBegin);
+    assert_eq!(cancel.operation(), ControlOperation::ProxyDrainCancel);
+    assert_eq!(identity(&begin).operation, ControlOperation::ProxyDrainBegin);
+    assert_eq!(identity(&cancel).operation, ControlOperation::ProxyDrainCancel);
+    assert_eq!(identity(&begin).targets, ["proxy-a"]);
+    assert!(identity(&begin) != identity(&cancel));
+
+    // Which drain is asked for is part of the request. It reaches the audit record as a digest.
+    let other_drain = MutationToolRequest::ProxyDrainBegin(drain_args("drain-0002"));
+    assert_ne!(
+        begin.requested_digest().unwrap(),
+        other_drain.requested_digest().unwrap()
+    );
+    assert_ne!(
+        IdempotencyIdentity::from_request(&principal, &cluster, &begin)
+            .unwrap()
+            .payload,
+        IdempotencyIdentity::from_request(&principal, &cluster, &other_drain)
+            .unwrap()
+            .payload
+    );
+
+    let set = MutationToolRequest::BrokerLogFilterSet(set_filter_args(300));
+    let restore = MutationToolRequest::BrokerLogFilterRestore(tools::RestoreBrokerLogFilterArgs {
+        schema_version: MUTATION_ARGUMENTS_SCHEMA_VERSION.to_owned(),
+        cluster: "cluster-a".to_owned(),
+        broker_name: "broker-a".to_owned(),
+        operation_id: "debug-0001".to_owned(),
+        dry_run: false,
+        confirm: true,
+        reason: Some("planned operation".to_owned()),
+        request_key: Some("request-1234".to_owned()),
+    });
+    assert_eq!(identity(&set).operation, ControlOperation::BrokerLogFilterSet);
+    assert_eq!(identity(&restore).operation, ControlOperation::BrokerLogFilterRestore);
+    assert_eq!(identity(&set).targets, ["broker-a"]);
+    assert_eq!(identity(&restore).targets, ["broker-a"]);
+    let longer = MutationToolRequest::BrokerLogFilterSet(set_filter_args(301));
+    assert_ne!(set.requested_digest().unwrap(), longer.requested_digest().unwrap());
+
+    // Each request has the audit shape of its own operation, and neither a digest nor the
+    // debug form of an argument repeats what the caller wrote.
+    for request in [&begin, &cancel, &set, &restore] {
+        assert!(request.audit_subject().is_ok());
+        let digest = request.requested_digest().unwrap();
+        assert_eq!(digest.len(), 64);
+        for written in ["drain-0001", "debug-0001", "request-1234", "planned operation"] {
+            assert!(!digest.contains(written));
+        }
+    }
+    let rendered = format!("{:?}{:?}", drain_args("drain-0001"), set_filter_args(300));
+    for hidden in [
+        "drain-0001",
+        "debug-0001",
+        "proxy-a",
+        "broker-a",
+        "request-1234",
+        "planned operation",
+    ] {
+        assert!(!rendered.contains(hidden), "{rendered}");
+    }
+}
+
+#[test]
+fn an_operation_bound_response_is_audited_by_what_its_one_target_says() {
+    let state = |held_by: tools::OperationHolder| tools::ProxyDrainState {
+        phase: if held_by == tools::OperationHolder::None {
+            tools::ProxyDrainPhase::Accepting
+        } else {
+            tools::ProxyDrainPhase::Draining
+        },
+        held_by,
+        admission_open: held_by == tools::OperationHolder::None,
+        routing_open: held_by == tools::OperationHolder::None,
+        readiness_published: held_by == tools::OperationHolder::None,
+        zero_pending: true,
+        pending: tools::ProxyDrainPending {
+            active_connections: 0,
+            sessions: 0,
+            receipt_handles: 0,
+            prepared_transactions: 0,
+            telemetry_links: 0,
+            remoting_channels: 0,
+            telemetry_commands: 0,
+            rpc_in_flight: 0,
+        },
+    };
+    let response = |before: Option<tools::ProxyDrainState>, changed: bool, failure: Option<tools::FailureCode>| {
+        let requested = tools::ProxyDrainRequested {
+            action: tools::ProxyDrainAction::Begin,
+        };
+        let status = match failure {
+            None => tools::MutationStatus::Applied,
+            Some(tools::FailureCode::Conflict) => tools::MutationStatus::Conflict,
+            Some(_) => tools::MutationStatus::Failed,
+        };
+        Ok(MutationToolResponse::ProxyDrain(tools::ProxyDrainToolResponse {
+            schema_version: tools::MutationResultSchemaVersion::V1,
+            operation: tools::ProxyDrainOperation::ProxyDrainBegin,
+            cluster: "cluster-a".to_owned(),
+            mode: tools::MutationMode::Execute,
+            status,
+            error_code: tools::response_error_code(status, [failure]),
+            target: tools::ProxyDrainResource {
+                proxy_name: "proxy-a".to_owned(),
+            },
+            before: before
+                .map(|state| BTreeMap::from([("proxy-a".to_owned(), state)]))
+                .unwrap_or_default(),
+            requested,
+            after: None,
+            targets: vec![tools::ProxyDrainTarget {
+                proxy_name: "proxy-a".to_owned(),
+                before,
+                requested,
+                after: None,
+                applied: failure.is_none(),
+                changed,
+                verification: tools::VerificationState::NotPerformed,
+                failure,
+                retryable: false,
+            }],
+            warnings: Vec::new(),
+        }))
+    };
+    let counts = |applied, unchanged, conflict, failed| {
+        Some(AuditTargetResults {
+            applied,
+            unchanged,
+            conflict,
+            failed,
+        })
+    };
+
+    let begun = audit_outcome(&response(Some(state(tools::OperationHolder::None)), true, None));
+    assert_eq!(begun.changed, Some(true));
+    assert_eq!(begun.target_results, counts(1, 0, 0, 0));
+    assert!(begun.before_digest.is_some());
+    assert_eq!(terminal_audit(&response(None, true, None)).0, AuditResult::Applied);
+
+    let repeated = audit_outcome(&response(
+        Some(state(tools::OperationHolder::ThisOperation)),
+        false,
+        None,
+    ));
+    assert_eq!(repeated.changed, Some(false));
+    assert_eq!(repeated.target_results, counts(0, 1, 0, 0));
+
+    let held = response(
+        Some(state(tools::OperationHolder::OtherOperation)),
+        false,
+        Some(tools::FailureCode::Conflict),
+    );
+    assert_eq!(audit_outcome(&held).target_results, counts(0, 0, 1, 0));
+    assert_eq!(
+        terminal_audit(&held),
+        (
+            AuditResult::Conflict,
+            Some(crate::error::ControlErrorCode::PreconditionConflict)
+        )
+    );
+    // A conflict is settled: the same request key replays it instead of reading the Proxy again.
+    assert!(is_settled(&held));
+
+    // A Proxy that could not be read leaves no state to digest, and the failure is not settled.
+    let unread = response(None, false, Some(tools::FailureCode::Unavailable));
+    let outcome = audit_outcome(&unread);
+    assert_eq!(outcome.before_digest, None);
+    assert_eq!(outcome.target_results, counts(0, 0, 0, 1));
+    assert!(!is_settled(&unread));
+}

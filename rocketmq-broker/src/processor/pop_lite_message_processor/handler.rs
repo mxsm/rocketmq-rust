@@ -18,7 +18,7 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader;
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_transport::api::error_response as remoting_error_response;
-use rocketmq_transport::api::DeferredResponderOutcome;
+use rocketmq_transport::api::DeferredResponderTakeResult;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
@@ -179,17 +179,18 @@ where
                 "the deferred POP Lite service is unavailable",
             ),
             PopLiteDeferredRegisterRejection::ProvenanceMismatch => self.internal_reply(0),
-            PopLiteDeferredRegisterRejection::Responder(DeferredResponderOutcome::OneWayRequest) => {
+            PopLiteDeferredRegisterRejection::Responder(DeferredResponderTakeResult::OneWayRequest) => {
                 self.empty_pop_lite_outcome(request_header, PopLiteResponseKind::PollingTimeout)
             }
-            PopLiteDeferredRegisterRejection::Responder(DeferredResponderOutcome::Unavailable) => self.reply_with_code(
-                ResponseCode::ServiceNotAvailable,
-                "a deferred POP Lite responder is unavailable",
-            ),
+            PopLiteDeferredRegisterRejection::Responder(DeferredResponderTakeResult::Unavailable) => self
+                .reply_with_code(
+                    ResponseCode::ServiceNotAvailable,
+                    "a deferred POP Lite responder is unavailable",
+                ),
             PopLiteDeferredRegisterRejection::Responder(
-                DeferredResponderOutcome::AlreadyTaken | DeferredResponderOutcome::OutcomeCompleted,
+                DeferredResponderTakeResult::AlreadyTaken | DeferredResponderTakeResult::OutcomeCompleted,
             ) => self.internal_reply(0),
-            PopLiteDeferredRegisterRejection::Responder(DeferredResponderOutcome::Taken(responder)) => {
+            PopLiteDeferredRegisterRejection::Responder(DeferredResponderTakeResult::Taken(responder)) => {
                 drop(responder);
                 self.internal_reply(0)
             }

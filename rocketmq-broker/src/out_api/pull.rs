@@ -19,7 +19,7 @@ use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::sys_flag::pull_sys_flag::PullSysFlag;
-use rocketmq_model::result::PullOutcome;
+use rocketmq_model::result::PullResponse;
 use rocketmq_model::result::PullStatus;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -102,7 +102,7 @@ pub(super) fn decode_pull_response(
     mut response: BrokerPullResponse,
     broker_name: &CheetahString,
     queue_id: i32,
-) -> PullOutcome<MessageExt> {
+) -> PullResponse<MessageExt> {
     let mut messages = Vec::new();
     if response.status == PullStatus::Found {
         let mut bytes = response.message_binary.take().unwrap_or_default();
@@ -137,7 +137,7 @@ pub(super) fn decode_pull_response(
             }
         }
     }
-    PullOutcome::new(
+    PullResponse::new(
         response.status,
         response.next_begin_offset,
         response.min_offset,
@@ -186,10 +186,10 @@ mod tests {
         command.make_custom_header_to_net();
 
         let response = process_pull_response(command, &"127.0.0.1:10911".into()).expect("pull response should map");
-        let outcome = decode_pull_response(response, &"broker-a".into(), 2);
+        let response = decode_pull_response(response, &"broker-a".into(), 2);
 
-        assert_eq!(PullStatus::NoNewMsg, outcome.pull_status());
-        assert_eq!(8, outcome.next_begin_offset());
-        assert!(outcome.messages().is_some_and(<[MessageExt]>::is_empty));
+        assert_eq!(PullStatus::NoNewMsg, response.pull_status());
+        assert_eq!(8, response.next_begin_offset());
+        assert!(response.messages().is_some_and(<[MessageExt]>::is_empty));
     }
 }

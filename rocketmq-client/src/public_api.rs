@@ -69,6 +69,8 @@ pub use crate::admin::MessageRequestModeCasReport;
 #[cfg(feature = "admin-mutation")]
 pub use crate::admin::MetadataCasReport;
 #[cfg(feature = "admin-mutation")]
+pub use crate::admin::MutationBrokerLogFilterStatus;
+#[cfg(feature = "admin-mutation")]
 pub use crate::admin::MutationConsumerOffsetPreview;
 #[cfg(feature = "admin-mutation")]
 pub use crate::admin::MutationExpectedMessageRequestMode;
