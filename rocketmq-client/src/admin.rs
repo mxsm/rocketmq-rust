@@ -72,6 +72,8 @@ pub use mq_admin_mutation_ext::MessageRequestModeCasReport;
 #[cfg(feature = "admin-mutation")]
 pub use mq_admin_mutation_ext::MetadataCasReport;
 #[cfg(feature = "admin-mutation")]
+pub use mq_admin_mutation_ext::MutationBrokerLogFilterStatus;
+#[cfg(feature = "admin-mutation")]
 pub use mq_admin_mutation_ext::MutationConsumerOffsetPreview;
 #[cfg(feature = "admin-mutation")]
 pub use mq_admin_mutation_ext::MutationExpectedMessageRequestMode;

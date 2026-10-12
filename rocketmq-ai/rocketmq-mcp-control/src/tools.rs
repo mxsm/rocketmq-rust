@@ -414,6 +414,34 @@ pub(super) fn validate_user_name(value: &str, kind: NameKind) -> Result<(), Cont
     Ok(())
 }
 
+/// Validates the alias of a configured target, such as a Proxy.
+///
+/// An alias has the grammar of a cluster name. It therefore cannot be an address or a host name,
+/// and may be kept in a durable audit record.
+pub(super) fn validate_alias(alias: &str) -> Result<(), ControlError> {
+    validate_identifier(alias, 1)
+}
+
+/// Validates the identifier of an operation that one call starts and a later call ends.
+///
+/// The identifier is the caller's text: it is sent to the target and digested for the audit
+/// record, and no response, log or record carries it.
+pub(super) fn validate_operation_id(operation_id: &str) -> Result<(), ControlError> {
+    validate_identifier(operation_id, 8)
+}
+
+fn validate_identifier(value: &str, min_length: usize) -> Result<(), ControlError> {
+    let valid = (min_length..=64).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
+    if valid {
+        Ok(())
+    } else {
+        Err(ControlError::invalid_argument())
+    }
+}
+
 fn contains_encoded_octet(value: &str) -> bool {
     value
         .as_bytes()
