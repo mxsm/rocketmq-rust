@@ -16,7 +16,7 @@ use crate::consumer::pull_status::PullStatus;
 use rocketmq_model::common::message::message_ext::MessageExt;
 
 /// Immutable, runtime-neutral pull response with status, offsets, and optional owned messages.
-pub type PullResponse = rocketmq_model::result::PullOutcome<MessageExt>;
+pub type PullResponse = rocketmq_model::result::PullResponse<MessageExt>;
 
 pub struct PullResult {
     pub(crate) pull_status: PullStatus,

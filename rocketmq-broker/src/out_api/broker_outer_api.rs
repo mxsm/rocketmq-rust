@@ -33,7 +33,7 @@ use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::topic::TopicValidator;
-use rocketmq_model::result::PullOutcome;
+use rocketmq_model::result::PullResponse;
 use rocketmq_model::result::SendResult;
 use rocketmq_model::utils::crc32_utils;
 use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
@@ -1054,7 +1054,7 @@ impl BrokerOuterAPI {
         offset: i64,
         max_nums: i32,
         timeout_millis: u64,
-    ) -> crate::broker_error::BrokerResult<(Option<PullOutcome<MessageExt>>, String, bool)> {
+    ) -> crate::broker_error::BrokerResult<(Option<PullResponse<MessageExt>>, String, bool)> {
         let request_command = build_pull_message_request(
             &self.command_factory,
             broker_name,
@@ -1075,9 +1075,9 @@ impl BrokerOuterAPI {
                     Ok(value) => value,
                     Err(_) => return Ok((None, format!("Response Code:{code}"), true)),
                 };
-                let outcome = decode_pull_response(pull_response, broker_name, queue_id);
-                let name = outcome.pull_status().to_string();
-                Ok((Some(outcome), name, false))
+                let response = decode_pull_response(pull_response, broker_name, queue_id);
+                let name = response.pull_status().to_string();
+                Ok((Some(response), name, false))
             }
             Ok(OutboundRequestResult::Rejected(rejection)) => {
                 Ok((None, format!("request rejected: {:?}", rejection.reason()), true))
