@@ -159,7 +159,7 @@ pub async fn create_storage(config: StorageConfig, storage_io: BlockingExecutor)
 
         #[cfg(feature = "storage-file")]
         StorageConfig::File { path } => {
-            let backend = file_backend::FileBackend::new(path).await?;
+            let backend = file_backend::FileKeyValueStore::new(path).await?;
             Ok(Arc::new(backend))
         }
 
