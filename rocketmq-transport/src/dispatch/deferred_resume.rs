@@ -135,18 +135,18 @@ where
     cell.release_wait_permit();
     let submitted = context.executor.try_execute_resume(Arc::clone(&cell));
     match submitted {
-        DeferredResumeEnqueueOutcome::Submitted(_task_id) => drop(cell),
-        DeferredResumeEnqueueOutcome::AdmissionRejected { error, cell } => {
+        DeferredResumeSubmissionResult::Submitted(_task_id) => drop(cell),
+        DeferredResumeSubmissionResult::AdmissionRejected { error, cell } => {
             if let Some(job) = cell.take() {
                 job.reject(error).await;
             }
         }
-        DeferredResumeEnqueueOutcome::ExecutorClosing { cell } => {
+        DeferredResumeSubmissionResult::ExecutorClosing { cell } => {
             if let Some(job) = cell.take() {
                 job.finish_executor_closed();
             }
         }
-        DeferredResumeEnqueueOutcome::OperationalFailure { source, cell } => {
+        DeferredResumeSubmissionResult::OperationalFailure { source, cell } => {
             if let Some(job) = cell.take() {
                 job.finish_executor_failure(source);
             }
@@ -216,23 +216,23 @@ where
 
     cell.release_wait_permit();
     match context.executor.try_execute_resume(Arc::clone(&cell)) {
-        DeferredResumeEnqueueOutcome::Submitted(_task_id) => {
+        DeferredResumeSubmissionResult::Submitted(_task_id) => {
             drop(cell);
             Ok(DeferredResumeSubmissionStatus::Submitted)
         }
-        DeferredResumeEnqueueOutcome::AdmissionRejected { error, cell } => {
+        DeferredResumeSubmissionResult::AdmissionRejected { error, cell } => {
             if let Some(job) = cell.take() {
                 job.finish_admission_rejected(error);
             }
             submit_outcome(completion.take_finished())
         }
-        DeferredResumeEnqueueOutcome::ExecutorClosing { cell } => {
+        DeferredResumeSubmissionResult::ExecutorClosing { cell } => {
             if let Some(job) = cell.take() {
                 job.finish_executor_closed();
             }
             submit_outcome(completion.take_finished())
         }
-        DeferredResumeEnqueueOutcome::OperationalFailure { source, cell } => {
+        DeferredResumeSubmissionResult::OperationalFailure { source, cell } => {
             if let Some(job) = cell.take() {
                 job.finish_executor_failure(source);
             }
@@ -379,7 +379,7 @@ impl Drop for ResumeJobCell {
     }
 }
 
-pub(crate) enum DeferredResumeEnqueueOutcome {
+pub(crate) enum DeferredResumeSubmissionResult {
     Submitted(rocketmq_runtime::TaskId),
     AdmissionRejected {
         error: AdmissionRejection,
