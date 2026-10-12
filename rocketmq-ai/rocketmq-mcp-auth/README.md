@@ -16,6 +16,7 @@ answer first: which public key of the issuer must verify this token.
 | `parse_jwks` | Reads the usable RS256 keys of a JWKS document. |
 | `JwksPolicy` | The limits and timings a server chooses. The crate has no default. |
 | `OutboundAddressPolicy` | Whether the JWKS endpoint must resolve to public addresses (`PublicOnly`, the default) or may be private. |
+| `SUPPORTED_MCP_PROTOCOL_VERSIONS`, `requested_protocol_version` | The MCP protocol revisions that both servers answer, currently `2025-11-25` alone, and whether the `MCP-Protocol-Version` header of a request names one of them. |
 
 Signature verification, claims, principals, HTTP responses, and telemetry stay in each server.
 

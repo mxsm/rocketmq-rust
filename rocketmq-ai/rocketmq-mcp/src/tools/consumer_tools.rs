@@ -19,6 +19,20 @@ use serde::Serialize;
 use crate::model::contract::Page;
 use crate::model::contract::PageRequest;
 
+mod dlq_summary;
+mod running_info;
+
+pub use dlq_summary::DlqBrokerSummary;
+pub use dlq_summary::GetDlqSummaryArgs;
+pub use dlq_summary::GetDlqSummaryOutput;
+pub(crate) use running_info::is_client_alias;
+pub use running_info::ConsumerClientQueueMode;
+pub use running_info::ConsumerClientQueueRow;
+pub use running_info::ConsumerClientSubscription;
+pub use running_info::ConsumerClientTopicStatus;
+pub use running_info::GetConsumerRunningInfoArgs;
+pub use running_info::GetConsumerRunningInfoOutput;
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ListConsumerGroupsArgs {
@@ -55,6 +69,24 @@ pub struct ListConsumerGroupsOutput {
     #[serde(flatten)]
     #[schemars(flatten)]
     pub page: Page<ConsumerGroupSummary>,
+    pub generated_at: String,
+}
+
+/// One Consumer Group of a list in the `concise` format.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ConsumerGroupName {
+    pub group: String,
+}
+
+/// A page of Consumer Group names: [`ListConsumerGroupsOutput`] in the `concise` format.
+///
+/// Its items are the names alone, so nothing has to be read about each group. It is published
+/// under the output schema of [`ListConsumerGroupsOutput`], which requires only `group` of an item.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ListConsumerGroupNamesOutput {
+    pub cluster: String,
+    #[serde(flatten)]
+    pub page: Page<ConsumerGroupName>,
     pub generated_at: String,
 }
 

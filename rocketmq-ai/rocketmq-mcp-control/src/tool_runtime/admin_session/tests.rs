@@ -431,6 +431,7 @@ async fn production_session_orchestrates_all_stage_c_operations_and_preserves_tr
             confirm,
             reason,
             request_key,
+            expected_plan_digest: None,
         }))
         .await
         .expect("offset through production session");
@@ -469,6 +470,7 @@ async fn production_session_orchestrates_all_stage_c_operations_and_preserves_tr
             confirm,
             reason,
             request_key,
+            expected_plan_digest: None,
         }))
         .await
         .expect("broker through production session");
@@ -500,6 +502,7 @@ async fn production_session_orchestrates_all_stage_c_operations_and_preserves_tr
                 confirm,
                 reason,
                 request_key,
+                expected_plan_digest: None,
             },
         ))
         .await
@@ -544,6 +547,7 @@ async fn production_session_maps_stage_c_postread_errors_as_verification_failure
             confirm,
             reason,
             request_key,
+            expected_plan_digest: None,
         }))
         .await
         .expect("offset through production session");
@@ -577,6 +581,7 @@ async fn production_session_maps_stage_c_postread_errors_as_verification_failure
                 confirm,
                 reason,
                 request_key,
+                expected_plan_digest: None,
             },
         ))
         .await
@@ -619,6 +624,7 @@ async fn production_session_preserves_sorted_mixed_request_mode_postread_truth()
                 confirm,
                 reason,
                 request_key,
+                expected_plan_digest: None,
             },
         ))
         .await
@@ -695,6 +701,7 @@ async fn production_session_dry_runs_all_stage_c_operations_without_execute() {
             confirm,
             reason,
             request_key,
+            expected_plan_digest: None,
         }))
         .await
         .expect("offset dry run through production session");
@@ -719,6 +726,7 @@ async fn production_session_dry_runs_all_stage_c_operations_without_execute() {
             confirm,
             reason,
             request_key,
+            expected_plan_digest: None,
         }))
         .await
         .expect("broker dry run through production session");
@@ -744,6 +752,7 @@ async fn production_session_dry_runs_all_stage_c_operations_without_execute() {
                 confirm,
                 reason,
                 request_key,
+                expected_plan_digest: None,
             },
         ))
         .await
@@ -779,6 +788,7 @@ async fn unknown_proxy_alias_is_rejected_without_any_rpc() {
         confirm: false,
         reason: None,
         request_key: None,
+        expected_plan_digest: None,
     };
 
     // Nothing stands in for an alias the cluster does not configure: not a default Proxy, and
@@ -807,3 +817,6 @@ async fn unknown_proxy_alias_is_rejected_without_any_rpc() {
     );
     assert_eq!(*evidence.proxy_endpoints.lock().unwrap(), ["192.0.2.7:8080"]);
 }
+
+#[path = "plan_tests.rs"]
+mod plan;

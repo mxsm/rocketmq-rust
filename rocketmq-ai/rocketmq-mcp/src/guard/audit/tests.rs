@@ -18,17 +18,89 @@ use std::sync::atomic::AtomicU64;
 use super::*;
 
 #[test]
-fn file_sink_retains_io_causes_without_exposing_paths() {
-    use std::error::Error;
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().to_path_buf();
-    for error in [
-        write_file_record(path.clone(), b"record").unwrap_err(),
-        flush_audit_file(path.clone()).unwrap_err(),
-    ] {
-        assert!(error.source().unwrap().is::<std::io::Error>());
-        assert!(!format!("{error} {error:?}").contains(path.to_str().unwrap()));
-    }
+fn a_record_without_a_target_has_exactly_the_fields_of_schema_version_one() {
+    let record = sanitize_record(sample_record("request-1", None).with_target(AuditTarget::default()));
+    assert_eq!(record.target, None, "a target that names nothing is not kept");
+
+    let written = serde_json::to_value(&record).unwrap();
+    let mut fields = written
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    fields.sort_unstable();
+    assert_eq!(
+        fields,
+        [
+            "arguments_hash",
+            "client",
+            "cluster",
+            "duration_ms",
+            "error",
+            "operator",
+            "request_id",
+            "risk_level",
+            "schema_version",
+            "status",
+            "timestamp_unix_ms",
+            "tool",
+        ]
+    );
+    assert_eq!(written["schema_version"], 2);
+}
+
+#[test]
+fn a_record_says_what_the_call_asked_about_and_writes_a_name_like_its_other_fields() {
+    let record = sanitize_record(sample_record("request-1", None).with_target(target(serde_json::json!({
+        "topic": "orders",
+        "consumer_group": "billing",
+        // A logical name, and one that carries a host name.
+        "broker_names": ["broker-a", "broker-a.internal"],
+    }))));
+
+    let written = serde_json::to_value(&record).unwrap();
+    assert_eq!(
+        written["target"],
+        serde_json::json!({
+            "topic": "orders",
+            "consumer_group": "billing",
+            "broker_names": ["broker-a", sanitize_text("broker-a.internal")],
+        })
+    );
+    assert!(!written.to_string().contains("broker-a.internal"));
+}
+
+#[test]
+fn the_names_of_a_record_are_given_up_before_the_record_is() {
+    let log = AuditLog::default();
+    let mut config = test_config("memory");
+    let named = |request_id: &str| {
+        sample_record(request_id, None).with_target(target(serde_json::json!({
+            "topic": "orders",
+            "consumer_group": "billing",
+        })))
+    };
+
+    // A limit that the record meets without its names: version 1 kept this record.
+    config.max_record_bytes = log
+        .prepare_record(&config, sample_record("request-1", None))
+        .unwrap()
+        .1
+        .len();
+    log.record(&config, named("request-1"));
+    // With room for them, the names are kept.
+    config.max_record_bytes = 16 * 1024;
+    log.record(&config, named("request-2"));
+
+    let records = log.records();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].target, None);
+    assert_eq!(
+        serde_json::to_value(&records[1].target).unwrap(),
+        serde_json::json!({ "topic": "orders", "consumer_group": "billing" })
+    );
+    assert_eq!(log.metrics().oversized, 0);
 }
 
 struct TestSinkState {
@@ -334,6 +406,57 @@ async fn file_sink_flushes_ndjson_through_the_blocking_boundary() {
         .await;
 }
 
+#[tokio::test]
+async fn the_file_sink_seals_a_full_file_and_starts_the_next_one() {
+    let runtime = rocketmq_runtime::RuntimeContext::try_from_current("audit-file-seal-test").unwrap();
+    let service = runtime.service_context("audit-writer");
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("audit.jsonl");
+    let mut config = test_config("file");
+    config.path = path.to_string_lossy().into_owned();
+    config.max_record_bytes = AuditLog::default()
+        .prepare_record(&config, sample_record("request-1", None))
+        .unwrap()
+        .1
+        .len();
+
+    // A file that is sealed has to hold one record at least.
+    config.max_file_bytes = config.max_record_bytes as u64 - 1;
+    assert!(AuditLog::default().start(&config, &service).is_err());
+
+    // Two records fit a file, a third starts the next one.
+    config.max_file_bytes = 2 * config.max_record_bytes as u64;
+    let log = AuditLog::default();
+    log.start(&config, &service).unwrap();
+    for request_id in ["request-1", "request-2", "request-3"] {
+        log.record(&config, sample_record(request_id, None));
+    }
+    let report = log
+        .close_and_drain(rocketmq_runtime::ShutdownDeadline::after(Duration::from_secs(2)))
+        .await;
+    assert_eq!(report.status, AuditDrainStatus::Drained);
+    assert_eq!(report.written, 3);
+    assert_eq!(report.sink_failures, 0);
+
+    let request_ids = |path: &std::path::Path| {
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap()["request_id"].clone())
+            .collect::<Vec<_>>()
+    };
+    let sealed = directory.path().join("audit.jsonl.000001");
+    assert_eq!(request_ids(&sealed), ["request-1", "request-2"]);
+    assert_eq!(request_ids(&path), ["request-3"]);
+    runtime
+        .shutdown_tasks_until(rocketmq_runtime::ShutdownDeadline::after(Duration::from_secs(2)))
+        .await;
+}
+
+fn target(arguments: serde_json::Value) -> AuditTarget {
+    AuditTarget::of_tool_arguments(arguments.as_object().expect("an object of arguments"))
+}
+
 fn test_config(sink: &str) -> AuditConfig {
     AuditConfig {
         enabled: true,
@@ -342,6 +465,7 @@ fn test_config(sink: &str) -> AuditConfig {
         queue_capacity: 16,
         max_record_bytes: 16 * 1024,
         queue_max_bytes: 1024 * 1024,
+        max_file_bytes: 0,
     }
 }
 

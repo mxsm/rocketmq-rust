@@ -26,6 +26,10 @@ allow_tools = [
   "rocketmq_get_consumer_group_config_state",
   "rocketmq_get_topic_stats",
   "rocketmq_get_topic_config",
+  "rocketmq_list_topic_consumers",
+  "rocketmq_get_dlq_summary",
+  "rocketmq_query_message_trace",
+  "rocketmq_get_lite_broker_info",
   "rocketmq_get_consumer_group_details",
   "rocketmq_get_consumer_progress",
   "rocketmq_get_nameserver_config_summary",
@@ -46,6 +50,7 @@ allow_tools = [
   "rocketmq_get_proxy_drain_state",
   "rocketmq_get_ha_status",
   "rocketmq_get_controller_metadata",
+  "rocketmq_get_consumer_running_info",
 ]
 
 [roles.operator]
@@ -57,4 +62,17 @@ allow_tools = [
   "rocketmq_plan_update_topic_permissions",
   "rocketmq_plan_update_broker_config",
   "rocketmq_plan_reset_consumer_offset",
+  # Needs the scope rocketmq:message-search and, like every Tool that looks messages up, the
+  # permission for rocketmq_get_message_metadata.
+  "rocketmq_find_messages_by_key",
 ]
+
+# rocketmq_list_acl_users exists only in a build with the security-admin feature. It needs the
+# scope rocketmq:security-admin and a role that holds it. No other scope includes that scope, and
+# for stdio only the local profile security_admin gets it. No role above holds the Tool. To grant
+# it, give it a role of its own:
+#
+# [roles.security_admin]
+# allowed_clusters = ["*"]
+# allow_tools = ["rocketmq_list_acl_users"]
+# deny_tools = ["*"]

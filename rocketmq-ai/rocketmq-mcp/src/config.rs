@@ -310,6 +310,11 @@ impl McpConfig {
                 "security.rate_limit_per_minute must be greater than zero".to_string(),
             ));
         }
+        if self.security.http_rate_limit_per_minute == Some(0) {
+            return Err(McpError::invalid_config(
+                "security.http_rate_limit_per_minute must be greater than zero".to_string(),
+            ));
+        }
         if self.security.max_concurrent_requests_per_cluster == 0 {
             return Err(McpError::invalid_config(
                 "security.max_concurrent_requests_per_cluster must be greater than zero".to_string(),
@@ -345,6 +350,11 @@ impl McpConfig {
                 "audit.queue_max_bytes must not exceed u32::MAX".to_string(),
             ));
         }
+        if self.audit.max_file_bytes != 0 && self.audit.max_file_bytes < self.audit.max_record_bytes as u64 {
+            return Err(McpError::invalid_config(
+                "audit.max_file_bytes must be zero or at least audit.max_record_bytes".to_string(),
+            ));
+        }
 
         // Fail at startup, not on the first request that needs a pseudonym.
         self.security.resolve_pseudonym_key()?;
@@ -367,6 +377,11 @@ impl McpConfig {
         if !(1..=10_000).contains(&self.cache.cursor_snapshot_max_entries) {
             return Err(McpError::invalid_config(
                 "cache.cursor_snapshot_max_entries must be between 1 and 10000".to_string(),
+            ));
+        }
+        if self.cache.stale_if_error_ms > 5 * 60 * 1_000 {
+            return Err(McpError::invalid_config(
+                "cache.stale_if_error_ms must not exceed 300000".to_string(),
             ));
         }
         self.diagnosis.validate()?;
@@ -959,7 +974,17 @@ pub struct SecurityConfig {
     /// it every process draws its own key, and pseudonyms change when it restarts.
     #[serde(default)]
     pub pseudonym_key_env: Option<String>,
+    /// Requests per minute that one principal may send over HTTP, whatever they ask for.
+    ///
+    /// It is counted apart from `rate_limit_per_minute`, which is the budget of one operation on
+    /// one cluster. Unset, it is ten times that budget: with one budget for both, a caller could
+    /// never use up the budget of a single Tool.
+    #[serde(default)]
+    pub http_rate_limit_per_minute: Option<u32>,
 }
+
+/// How many times the budget of one operation the HTTP budget of a principal is by default.
+const DEFAULT_HTTP_RATE_LIMIT_FACTOR: u32 = 10;
 
 /// A shared pseudonym key read from the environment.
 pub(crate) struct PseudonymKey(String);
@@ -977,6 +1002,14 @@ impl std::fmt::Debug for PseudonymKey {
 }
 
 impl SecurityConfig {
+    /// Returns the requests per minute that one principal may send over HTTP.
+    pub fn http_rate_limit(&self) -> u32 {
+        self.http_rate_limit_per_minute.unwrap_or_else(|| {
+            self.rate_limit_per_minute
+                .saturating_mul(DEFAULT_HTTP_RATE_LIMIT_FACTOR)
+        })
+    }
+
     /// Reads the shared pseudonym key that `pseudonym_key_env` names, if one is configured.
     ///
     /// Whitespace around the value is ignored, so that a key mounted with a trailing newline
@@ -1024,6 +1057,10 @@ pub struct AuditConfig {
     pub max_record_bytes: usize,
     #[serde(default = "default_audit_queue_max_bytes")]
     pub queue_max_bytes: usize,
+    /// The size at which the file sink seals the audit file and starts a new one. Zero keeps
+    /// one file, whatever its size.
+    #[serde(default = "default_audit_max_file_bytes")]
+    pub max_file_bytes: u64,
 }
 
 const fn default_audit_max_record_bytes() -> usize {
@@ -1032,6 +1069,10 @@ const fn default_audit_max_record_bytes() -> usize {
 
 const fn default_audit_queue_max_bytes() -> usize {
     1024 * 1024
+}
+
+const fn default_audit_max_file_bytes() -> u64 {
+    64 * 1024 * 1024
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -1047,6 +1088,38 @@ pub struct CacheConfig {
     pub topic_list_ttl_ms: u64,
     pub broker_metrics_ttl_ms: u64,
     pub consumer_lag_ttl_ms: u64,
+    /// How long a Broker configuration summary is current. `broker_metrics_ttl_ms` when not set.
+    #[serde(default)]
+    pub broker_config_ttl_ms: Option<u64>,
+    /// How long the metadata of a message is current. `broker_metrics_ttl_ms` when not set.
+    #[serde(default)]
+    pub message_metadata_ttl_ms: Option<u64>,
+    /// How long the state read from a Proxy is current. `broker_metrics_ttl_ms` when not set.
+    #[serde(default)]
+    pub proxy_state_ttl_ms: Option<u64>,
+    /// How long a result that is no longer current still answers when its source is unavailable
+    /// or does not answer in time. Such a result carries the warning `stale_cache_value` and
+    /// reports its real age. `0`, the default, never serves one; the maximum is 300000.
+    #[serde(default)]
+    pub stale_if_error_ms: u64,
+}
+
+impl CacheConfig {
+    pub(crate) fn broker_config_ttl(&self) -> Duration {
+        Duration::from_millis(self.broker_config_ttl_ms.unwrap_or(self.broker_metrics_ttl_ms))
+    }
+
+    pub(crate) fn message_metadata_ttl(&self) -> Duration {
+        Duration::from_millis(self.message_metadata_ttl_ms.unwrap_or(self.broker_metrics_ttl_ms))
+    }
+
+    pub(crate) fn proxy_state_ttl(&self) -> Duration {
+        Duration::from_millis(self.proxy_state_ttl_ms.unwrap_or(self.broker_metrics_ttl_ms))
+    }
+
+    pub(crate) fn stale_if_error(&self) -> Duration {
+        Duration::from_millis(self.stale_if_error_ms)
+    }
 }
 
 const fn default_cursor_snapshot_max_entries() -> usize {
@@ -1339,6 +1412,7 @@ mod tests {
         assert_eq!(config.diagnosis.consumer_lag_threshold, 1_000);
         assert_eq!(config.audit.max_record_bytes, 16 * 1024);
         assert_eq!(config.audit.queue_max_bytes, 1024 * 1024);
+        assert_eq!(config.audit.max_file_bytes, 64 * 1024 * 1024);
         assert_eq!(config.logging.filter.as_deref(), Some("info"));
         assert!(config.server.log_level.is_none());
         assert_eq!(config.clusters[0].proxies.len(), 1);
@@ -2069,6 +2143,49 @@ headers = {{ "{HEADER_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}
     }
 
     #[test]
+    fn cache_policy_keys_default_to_the_shared_ttl_and_to_no_stale_results() {
+        let example = McpConfig::load(example_config_path()).unwrap();
+        let shared = Duration::from_millis(example.cache.broker_metrics_ttl_ms);
+        assert_eq!(example.cache.broker_config_ttl(), shared);
+        assert_eq!(example.cache.message_metadata_ttl(), shared);
+        assert_eq!(example.cache.proxy_state_ttl(), shared);
+        assert_eq!(example.cache.stale_if_error(), Duration::ZERO);
+
+        let overrides = [
+            "broker_config_ttl_ms = 30000",
+            "message_metadata_ttl_ms = 0",
+            "proxy_state_ttl_ms = 500",
+            "stale_if_error_ms = 60000",
+        ];
+        let source = std::fs::read_to_string(example_config_path()).unwrap();
+        let source = source
+            .lines()
+            .flat_map(|line| {
+                let added: &[&str] = if line == "[cache]" { &overrides } else { &[] };
+                std::iter::once(line).chain(added.iter().copied())
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parsed = config::Config::builder()
+            .add_source(config::File::from_str(&source, config::FileFormat::Toml))
+            .build()
+            .unwrap()
+            .try_deserialize::<McpConfig>()
+            .unwrap();
+        assert_eq!(parsed.cache.broker_config_ttl(), Duration::from_secs(30));
+        assert_eq!(parsed.cache.message_metadata_ttl(), Duration::ZERO);
+        assert_eq!(parsed.cache.proxy_state_ttl(), Duration::from_millis(500));
+        assert_eq!(parsed.cache.stale_if_error(), Duration::from_secs(60));
+        assert_eq!(parsed.cache.broker_metrics_ttl_ms, example.cache.broker_metrics_ttl_ms);
+
+        let mut config = example;
+        config.cache.stale_if_error_ms = 300_000;
+        config.validate().unwrap();
+        config.cache.stale_if_error_ms = 300_001;
+        assert_configuration_error(&config.validate().unwrap_err());
+    }
+
+    #[test]
     fn shared_pseudonym_key_is_read_from_the_named_variable_and_bounded() {
         const KEY: &str = "0123456789abcdef0123456789abcdef";
         let mut security = McpConfig::load(example_config_path()).unwrap().security;
@@ -2141,6 +2258,27 @@ headers = {{ "{HEADER_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}
         config.audit.queue_max_bytes = u32::MAX as usize + 1;
         let error = config.validate().unwrap_err();
         assert_configuration_error(&error);
+    }
+
+    #[test]
+    fn an_audit_file_is_sealed_at_a_size_that_holds_a_record_or_never() {
+        // A file that is sealed has room for at least the largest record.
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.audit.max_file_bytes = config.audit.max_record_bytes as u64 - 1;
+        assert_configuration_error(&config.validate().unwrap_err());
+
+        config.audit.max_file_bytes = config.audit.max_record_bytes as u64;
+        config.validate().unwrap();
+
+        // Zero keeps one file, as before the file was sealed at all.
+        config.audit.max_file_bytes = 0;
+        config.validate().unwrap();
+        let never = load_example_with(
+            "max_record_bytes = 16384",
+            "max_record_bytes = 16384\nmax_file_bytes = 0",
+        )
+        .unwrap();
+        assert_eq!(never.audit.max_file_bytes, 0);
     }
 
     #[cfg(feature = "streamable-http")]
@@ -2222,6 +2360,26 @@ headers = {{ "{HEADER_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}
         assert_ne!(replaced, contents, "{from} is missing from the example");
         std::fs::write(&config_path, replaced).unwrap();
         McpConfig::load(&config_path)
+    }
+
+    #[test]
+    fn the_http_budget_is_ten_tool_budgets_unless_it_is_set_and_it_is_never_zero() {
+        let example = McpConfig::load(example_config_path()).unwrap();
+        assert_eq!(example.security.http_rate_limit_per_minute, None);
+        assert_eq!(
+            example.security.http_rate_limit(),
+            10 * example.security.rate_limit_per_minute
+        );
+
+        let set = load_example_with("[security]", "[security]\nhttp_rate_limit_per_minute = 90").unwrap();
+        assert_eq!(set.security.http_rate_limit(), 90);
+
+        let zero = load_example_with("[security]", "[security]\nhttp_rate_limit_per_minute = 0")
+            .expect_err("an HTTP budget of zero would refuse every request");
+        assert_configuration_error(&zero);
+        // One request a minute is the smallest budget, below even the budget of one Tool.
+        let one = load_example_with("[security]", "[security]\nhttp_rate_limit_per_minute = 1").unwrap();
+        assert_eq!(one.security.http_rate_limit(), 1);
     }
 
     #[test]

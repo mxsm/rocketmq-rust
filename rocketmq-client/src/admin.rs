@@ -17,15 +17,25 @@ mod capability;
 pub mod default_mq_admin_ext;
 pub mod default_mq_admin_ext_impl;
 #[cfg(feature = "admin-read")]
+mod mq_admin_acl_read_ext;
+#[cfg(feature = "admin-read")]
 mod mq_admin_consumer_observation_read_ext;
 #[cfg(feature = "admin-read")]
+mod mq_admin_consumer_runtime_read_ext;
+#[cfg(feature = "admin-read")]
 mod mq_admin_infrastructure_observation_read_ext;
+#[cfg(feature = "admin-read")]
+mod mq_admin_lite_read_ext;
+#[cfg(feature = "admin-read")]
+mod mq_admin_message_index_read_ext;
 #[cfg(feature = "admin-mutation")]
 mod mq_admin_mutation_ext;
 #[cfg(feature = "admin-read")]
 mod mq_admin_read_ext;
 #[cfg(feature = "admin-read")]
 mod mq_admin_topic_stats_read_ext;
+#[cfg(feature = "admin-read")]
+mod mq_admin_topic_subscriber_read_ext;
 
 #[cfg(feature = "admin-full")]
 pub use capability::AuthAdmin;
@@ -42,6 +52,10 @@ pub use capability::TopicAdmin;
 pub use default_mq_admin_ext::DefaultMQAdminExt;
 pub use default_mq_admin_ext_impl::DefaultMQAdminExtImpl;
 #[cfg(feature = "admin-read")]
+pub use mq_admin_acl_read_ext::AclUserRead;
+#[cfg(feature = "admin-read")]
+pub use mq_admin_acl_read_ext::MQAdminAclReadExt;
+#[cfg(feature = "admin-read")]
 pub use mq_admin_consumer_observation_read_ext::ConsumerConnectionRead;
 #[cfg(feature = "admin-read")]
 pub use mq_admin_consumer_observation_read_ext::ConsumerGroupConfigRead;
@@ -50,11 +64,21 @@ pub use mq_admin_consumer_observation_read_ext::ConsumerProgressRead;
 #[cfg(feature = "admin-read")]
 pub use mq_admin_consumer_observation_read_ext::MQAdminConsumerObservationReadExt;
 #[cfg(feature = "admin-read")]
+pub use mq_admin_consumer_runtime_read_ext::MQAdminConsumerRuntimeReadExt;
+#[cfg(feature = "admin-read")]
 pub use mq_admin_infrastructure_observation_read_ext::InfrastructureObservationReadError;
 #[cfg(feature = "admin-read")]
 pub use mq_admin_infrastructure_observation_read_ext::InfrastructureObservationReadErrorCode;
 #[cfg(feature = "admin-read")]
 pub use mq_admin_infrastructure_observation_read_ext::MQAdminInfrastructureObservationReadExt;
+#[cfg(feature = "admin-read")]
+pub use mq_admin_lite_read_ext::MQAdminLiteReadExt;
+#[cfg(feature = "admin-read")]
+pub use mq_admin_message_index_read_ext::MQAdminMessageIndexReadExt;
+#[cfg(feature = "admin-read")]
+pub use mq_admin_message_index_read_ext::MessageIndexQuery;
+#[cfg(feature = "admin-read")]
+pub use mq_admin_message_index_read_ext::MessageTraceRead;
 #[cfg(feature = "admin-mutation")]
 pub use mq_admin_mutation_ext::BrokerConfigPatchResult;
 #[cfg(feature = "admin-mutation")]
@@ -127,3 +151,5 @@ pub use mq_admin_read_ext::SubscriptionGroupConfigVersioned;
 pub use mq_admin_read_ext::TopicConfigVersioned;
 #[cfg(feature = "admin-read")]
 pub use mq_admin_topic_stats_read_ext::MQAdminTopicStatsReadExt;
+#[cfg(feature = "admin-read")]
+pub use mq_admin_topic_subscriber_read_ext::MQAdminTopicSubscriberReadExt;

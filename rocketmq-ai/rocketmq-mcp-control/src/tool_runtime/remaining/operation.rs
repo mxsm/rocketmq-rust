@@ -25,7 +25,8 @@ use rocketmq_admin_core::mutation_client_adapter::MutationAdminSession;
 
 use super::status_from_failures;
 use crate::error::ControlError;
-use crate::tool_runtime::{map_failure, map_verification, RuntimeFuture};
+use crate::tool_runtime::plan_binding::PlanBinding;
+use crate::tool_runtime::{map_failure, map_verification, MutationToolResponse, RuntimeFuture};
 use crate::tools;
 
 /// What a preflight read and decided, taken out of its sealed plan.
@@ -186,6 +187,7 @@ pub(crate) async fn run_proxy_drain<B: OperationBackend>(
     operation: tools::ProxyDrainOperation,
     args: tools::ProxyDrainArgs,
     proxy_addr: &str,
+    binding: &PlanBinding,
 ) -> Result<tools::ProxyDrainToolResponse, ControlError> {
     let (action, requested) = match operation {
         tools::ProxyDrainOperation::ProxyDrainBegin => (admin::ProxyDrainAction::Begin, tools::ProxyDrainAction::Begin),
@@ -200,19 +202,37 @@ pub(crate) async fn run_proxy_drain<B: OperationBackend>(
         action,
     };
     let plan = backend.preflight_proxy_drain(&request).await?;
-    let outcome = if args.dry_run {
-        Outcome::planned(B::planned_proxy_drain(&plan), drain_state)
-    } else {
-        Outcome::executed(backend.execute_proxy_drain(&plan).await?, drain_state)
-    };
-    let status = outcome.status(args.dry_run);
+    {
+        // What a dry run reports for the state just read. It ends here, before any write.
+        let planned = || {
+            let outcome = Outcome::planned(B::planned_proxy_drain(&plan), drain_state);
+            drain_response(operation, &args, requested, outcome, true)
+        };
+        if args.dry_run {
+            return Ok(planned());
+        }
+        binding.admit(|| MutationToolResponse::ProxyDrain(planned()))?;
+    }
+    let outcome = Outcome::executed(backend.execute_proxy_drain(&plan).await?, drain_state);
+    Ok(drain_response(operation, &args, requested, outcome, false))
+}
+
+/// Shapes what one call planned or did to its Proxy as the response of its Tool.
+fn drain_response(
+    operation: tools::ProxyDrainOperation,
+    args: &tools::ProxyDrainArgs,
+    requested: tools::ProxyDrainAction,
+    outcome: Outcome<tools::ProxyDrainState>,
+    dry_run: bool,
+) -> tools::ProxyDrainToolResponse {
+    let status = outcome.status(dry_run);
     let requested = tools::ProxyDrainRequested { action: requested };
     let by_name = |state: tools::ProxyDrainState| BTreeMap::from([(args.proxy_name.clone(), state)]);
-    Ok(tools::ProxyDrainToolResponse {
+    tools::ProxyDrainToolResponse {
         schema_version: tools::MutationResultSchemaVersion::V1,
         operation,
         cluster: args.cluster.clone(),
-        mode: mode(args.dry_run),
+        mode: mode(dry_run),
         status,
         error_code: tools::response_error_code(status, [outcome.failure]),
         target: tools::ProxyDrainResource {
@@ -233,12 +253,13 @@ pub(crate) async fn run_proxy_drain<B: OperationBackend>(
             retryable: outcome.retryable,
         }],
         warnings: Vec::new(),
-    })
+    }
 }
 
 pub(crate) async fn run_set_log_filter<B: OperationBackend>(
     backend: &mut B,
     args: tools::SetBrokerLogFilterTtlArgs,
+    binding: &PlanBinding,
 ) -> Result<tools::BrokerLogFilterToolResponse, ControlError> {
     let level = match args.level {
         tools::BrokerLogLevel::Info => AdminLogLevel::Info,
@@ -252,19 +273,19 @@ pub(crate) async fn run_set_log_filter<B: OperationBackend>(
         broker_name: &args.broker_name,
         operation_id: &args.operation_id,
         dry_run: args.dry_run,
-        action: admin::BrokerLogFilterAction::Set(filter),
         requested: tools::BrokerLogFilterRequested::Set {
             logger: args.logger.clone(),
             level: args.level,
             ttl_seconds: args.ttl_seconds,
         },
     };
-    run_log_filter(backend, call).await
+    run_log_filter(backend, call, admin::BrokerLogFilterAction::Set(filter), binding).await
 }
 
 pub(crate) async fn run_restore_log_filter<B: OperationBackend>(
     backend: &mut B,
     args: tools::RestoreBrokerLogFilterArgs,
+    binding: &PlanBinding,
 ) -> Result<tools::BrokerLogFilterToolResponse, ControlError> {
     let call = LogFilterCall {
         operation: tools::BrokerLogFilterOperation::BrokerLogFilterRestore,
@@ -272,46 +293,62 @@ pub(crate) async fn run_restore_log_filter<B: OperationBackend>(
         broker_name: &args.broker_name,
         operation_id: &args.operation_id,
         dry_run: args.dry_run,
-        action: admin::BrokerLogFilterAction::Restore,
         requested: tools::BrokerLogFilterRequested::Restore,
     };
-    run_log_filter(backend, call).await
+    run_log_filter(backend, call, admin::BrokerLogFilterAction::Restore, binding).await
 }
 
-/// The parts of a set or a restore call that the shared log-filter flow needs.
+/// The parts of a set or a restore call that the shared log-filter flow reports.
 struct LogFilterCall<'a> {
     operation: tools::BrokerLogFilterOperation,
     cluster: &'a str,
     broker_name: &'a str,
     operation_id: &'a str,
     dry_run: bool,
-    action: admin::BrokerLogFilterAction,
     requested: tools::BrokerLogFilterRequested,
 }
 
 async fn run_log_filter<B: OperationBackend>(
     backend: &mut B,
     call: LogFilterCall<'_>,
+    action: admin::BrokerLogFilterAction,
+    binding: &PlanBinding,
 ) -> Result<tools::BrokerLogFilterToolResponse, ControlError> {
     let request = admin::BrokerLogFilterPreflightRequest {
         cluster: call.cluster.to_owned(),
         broker_name: call.broker_name.to_owned(),
         operation_id: call.operation_id.to_owned(),
-        action: call.action,
+        action,
     };
     let plan = backend.preflight_log_filter(&request).await?;
-    let outcome = if call.dry_run {
-        Outcome::planned(B::planned_log_filter(&plan), filter_state)
-    } else {
-        Outcome::executed(backend.execute_log_filter(&plan).await?, filter_state)
-    };
-    let status = outcome.status(call.dry_run);
+    {
+        // What a dry run reports for the state just read. It ends here, before any write.
+        let planned = || {
+            let outcome = Outcome::planned(B::planned_log_filter(&plan), filter_state);
+            filter_response(&call, outcome, true)
+        };
+        if call.dry_run {
+            return Ok(planned());
+        }
+        binding.admit(|| MutationToolResponse::BrokerLogFilter(planned()))?;
+    }
+    let outcome = Outcome::executed(backend.execute_log_filter(&plan).await?, filter_state);
+    Ok(filter_response(&call, outcome, false))
+}
+
+/// Shapes what one call planned or did to its Broker as the response of its Tool.
+fn filter_response(
+    call: &LogFilterCall<'_>,
+    outcome: Outcome<tools::BrokerLogFilterState>,
+    dry_run: bool,
+) -> tools::BrokerLogFilterToolResponse {
+    let status = outcome.status(dry_run);
     let by_name = |state: tools::BrokerLogFilterState| BTreeMap::from([(call.broker_name.to_owned(), state)]);
-    Ok(tools::BrokerLogFilterToolResponse {
+    tools::BrokerLogFilterToolResponse {
         schema_version: tools::MutationResultSchemaVersion::V1,
         operation: call.operation,
         cluster: call.cluster.to_owned(),
-        mode: mode(call.dry_run),
+        mode: mode(dry_run),
         status,
         error_code: tools::response_error_code(status, [outcome.failure]),
         target: tools::BrokerLogFilterResource {
@@ -323,7 +360,7 @@ async fn run_log_filter<B: OperationBackend>(
         targets: vec![tools::BrokerLogFilterTarget {
             broker_name: call.broker_name.to_owned(),
             before: outcome.before,
-            requested: call.requested,
+            requested: call.requested.clone(),
             after: outcome.after,
             applied: outcome.applied,
             changed: outcome.changed,
@@ -332,7 +369,7 @@ async fn run_log_filter<B: OperationBackend>(
             retryable: outcome.retryable,
         }],
         warnings: Vec::new(),
-    })
+    }
 }
 
 const fn mode(dry_run: bool) -> tools::MutationMode {

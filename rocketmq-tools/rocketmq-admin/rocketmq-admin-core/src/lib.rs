@@ -68,12 +68,28 @@ pub(crate) fn canonical_admin_validation_failed(
 }
 
 #[cfg(feature = "read-client-adapter")]
+#[path = "client_adapter/acl_users.rs"]
+mod acl_users;
+
+#[cfg(feature = "read-client-adapter")]
 #[path = "client_adapter/consumer_observation.rs"]
 mod consumer_observation;
 
 #[cfg(feature = "read-client-adapter")]
+#[path = "client_adapter/consumer_runtime.rs"]
+mod consumer_runtime;
+
+#[cfg(feature = "read-client-adapter")]
 #[path = "client_adapter/exact_broker.rs"]
 mod exact_broker;
+
+#[cfg(feature = "read-client-adapter")]
+#[path = "client_adapter/lite_observation.rs"]
+mod lite_observation;
+
+#[cfg(feature = "read-client-adapter")]
+#[path = "client_adapter/message_index.rs"]
+mod message_index;
 
 #[cfg(feature = "read-client-adapter")]
 #[path = "client_adapter/read_queries.rs"]
@@ -86,6 +102,10 @@ mod infrastructure_observation;
 #[cfg(feature = "read-client-adapter")]
 #[path = "client_adapter/topic_observation.rs"]
 mod topic_observation;
+
+#[cfg(feature = "read-client-adapter")]
+#[path = "client_adapter/topic_subscribers.rs"]
+mod topic_subscribers;
 
 #[cfg(feature = "client-adapter")]
 pub mod client_adapter;

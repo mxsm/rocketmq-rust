@@ -124,16 +124,18 @@ fn list_brokers_output_is_bounded_by_the_shared_row_policy() {
             brokers: rows(count),
             generated_at: "1".to_string(),
         });
-        success_unlinked_result(
+        let composed = success_unlinked_result(
             ToolId::ListBrokers.descriptor(),
             "test-request",
             "local-dev".to_string(),
             "summary".to_string(),
             output,
         )
-        .unwrap()
-        .structured_content
-        .unwrap()
+        .unwrap();
+        crate::guard::sanitizer::process_tool_output(composed, true)
+            .unwrap()
+            .structured_content
+            .unwrap()
     };
 
     let within = render(1_000);

@@ -44,6 +44,7 @@ use crate::config::SecurityConfig;
 use crate::guard::audit::AuditLog;
 use crate::guard::audit::AuditRecord;
 use crate::guard::audit::AuditStatus;
+use crate::guard::audit::AuditTarget;
 use crate::guard::context::RequestContext;
 use crate::guard::policy::PolicyEngine;
 use crate::guard::rate_limit::RateLimiter;
@@ -59,6 +60,12 @@ pub enum RiskLevel {
     Diagnose,
     Plan,
     Destructive,
+    /// Searches messages by a business key. It reads only, and it has a scope of its own because
+    /// it finds messages the caller could not name.
+    MessageSearch,
+    /// Reads who may sign requests to a cluster. It reads only, and it has a scope of its own
+    /// because that list is for the people who administer access, not for every reader.
+    SecurityAdmin,
 }
 
 impl RiskLevel {
@@ -74,6 +81,8 @@ impl std::fmt::Display for RiskLevel {
             Self::Diagnose => f.write_str("Diagnose"),
             Self::Plan => f.write_str("Plan"),
             Self::Destructive => f.write_str("Destructive"),
+            Self::MessageSearch => f.write_str("MessageSearch"),
+            Self::SecurityAdmin => f.write_str("SecurityAdmin"),
         }
     }
 }
@@ -85,7 +94,12 @@ pub enum GuardRejection {
     UnauthorizedScope,
     TenantMismatch,
     ClusterNotAllowed,
-    RateLimited,
+    /// The caller used up a per-minute budget. One request is due after `retry_after_ms`.
+    RateLimited {
+        retry_after_ms: u64,
+    },
+    /// The cluster already serves as many requests as it may at once.
+    ConcurrencyLimited,
     ChangePlanningDisabled,
 }
 
@@ -97,22 +111,25 @@ impl std::fmt::Display for GuardRejection {
             Self::UnauthorizedScope => "required scope is unavailable",
             Self::TenantMismatch => "tenant boundary mismatch",
             Self::ClusterNotAllowed => "cluster is not allowed",
-            Self::RateLimited => "rate limit exceeded",
+            Self::RateLimited { .. } => "rate limit exceeded",
+            Self::ConcurrencyLimited => "cluster concurrency limit reached",
             Self::ChangePlanningDisabled => "change planning disabled by server policy",
         })
     }
 }
 
+/// Every Tool call and Resource read works on copies of the Guard, so its configuration and its
+/// policy are shared between the copies.
 #[derive(Debug, Clone)]
 pub struct Guard {
-    security: SecurityConfig,
-    audit_config: AuditConfig,
+    security: Arc<SecurityConfig>,
+    audit_config: Arc<AuditConfig>,
     allowed_clusters: Arc<[String]>,
     default_cluster: Option<Arc<str>>,
     cluster_tenants: Arc<std::collections::HashMap<String, Option<String>>>,
     audit_log: AuditLog,
     rate_limiter: RateLimiter,
-    policy: PolicyEngine,
+    policy: Arc<PolicyEngine>,
     cluster_concurrency: Arc<std::collections::HashMap<String, Arc<Semaphore>>>,
     next_request_id: Arc<AtomicU64>,
 }
@@ -144,14 +161,14 @@ impl Guard {
             })
             .collect();
         Ok(Self {
-            security,
-            audit_config,
+            security: Arc::new(security),
+            audit_config: Arc::new(audit_config),
             allowed_clusters,
             default_cluster,
             cluster_tenants: Arc::new(cluster_tenants),
             audit_log: AuditLog::default(),
             rate_limiter: RateLimiter::default(),
-            policy,
+            policy: Arc::new(policy),
             cluster_concurrency: Arc::new(cluster_concurrency),
             next_request_id: Arc::new(AtomicU64::new(1)),
         })
@@ -192,6 +209,7 @@ impl Guard {
             client: context.client.clone(),
             cluster: effective_cluster.as_ref().ok().cloned().flatten(),
             arguments_hash: hash_arguments(arguments),
+            target: self.audit_target(|| AuditTarget::of_tool_arguments(arguments)),
             started_at: Instant::now(),
             _cluster_permit: None,
         };
@@ -253,6 +271,15 @@ impl Guard {
     fn allocate_request_id(&self) -> String {
         let id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         format!("mcp-{id}")
+    }
+
+    /// The names a record says the call asked about. They are only read when records are kept.
+    fn audit_target(&self, target: impl FnOnce() -> AuditTarget) -> AuditTarget {
+        if self.audit_config.enabled {
+            target()
+        } else {
+            AuditTarget::default()
+        }
     }
 
     /// Resolves the one logical cluster a Tool call reads, before any other check runs.
@@ -320,7 +347,7 @@ impl Guard {
         semaphore
             .clone()
             .try_acquire_owned()
-            .map_err(|_| GuardRejection::RateLimited)
+            .map_err(|_| GuardRejection::ConcurrencyLimited)
     }
 
     pub fn authorize_resource(
@@ -402,6 +429,7 @@ impl Guard {
             client: context.client.clone(),
             cluster: Some(cluster.to_string()),
             resource_operation: kind.audit_operation(),
+            target: self.audit_target(|| AuditTarget::of_resource(kind)),
             risk_level,
             started_at: Instant::now(),
             _cluster_permit: None,
@@ -441,6 +469,7 @@ impl Guard {
             client: context.client.clone(),
             cluster: None,
             resource_operation: kind.audit_operation(),
+            target: AuditTarget::default(),
             risk_level: RiskLevel::Diagnose,
             started_at: Instant::now(),
             _cluster_permit: None,
@@ -518,13 +547,17 @@ impl Guard {
         self.audit_log.record(&self.audit_config, record);
     }
 
+    /// Charges one HTTP request to the caller, whatever the request asks for.
+    ///
+    /// This budget is `security.http_rate_limit_per_minute` and is counted apart from the budgets
+    /// of the single operations, which a request is charged to afterwards.
     #[cfg(feature = "streamable-http")]
     pub fn check_http_rate_limit(&self, context: &RequestContext) -> Result<(), GuardRejection> {
         self.rate_limiter.check(
             &context.principal.id,
             None,
             "http_request",
-            self.security.rate_limit_per_minute,
+            self.security.http_rate_limit(),
         )
     }
 
@@ -560,6 +593,7 @@ pub struct GuardedToolCall {
     risk_level: RiskLevel,
     cluster: Option<String>,
     arguments_hash: String,
+    target: AuditTarget,
     started_at: Instant,
     _cluster_permit: Option<OwnedSemaphorePermit>,
 }
@@ -570,6 +604,22 @@ impl GuardedToolCall {
     /// The query must read exactly this cluster rather than resolving one from the raw arguments.
     pub fn cluster(&self) -> Option<&str> {
         self.cluster.as_deref()
+    }
+
+    /// Publishes a successful result: applies the output processing of this server to it once
+    /// and records the call as a success.
+    ///
+    /// # Errors
+    ///
+    /// Fails like [`sanitizer::process_tool_output`]. Nothing is recorded then: the caller
+    /// renders the failure and finishes the call with it.
+    pub(crate) fn finish_output(
+        &self,
+        output: sanitizer::ToolOutput,
+    ) -> Result<CallToolResult, crate::tools::executor::ToolFailure> {
+        let result = sanitizer::process_tool_output(output, self.guard.security.sanitize_output)?;
+        self.record_success();
+        Ok(result)
     }
 
     pub fn finish_result(&self, result: CallToolResult) -> CallToolResult {
@@ -613,7 +663,8 @@ impl GuardedToolCall {
             status,
             self.started_at.elapsed().as_millis(),
             error,
-        );
+        )
+        .with_target(self.target.clone());
         self.guard.audit_log.record(&self.guard.audit_config, record);
     }
 }
@@ -760,7 +811,7 @@ mod tests {
             assert!(
                 matches!(
                     guard.begin_tool_call(&authorized, tool, RiskLevel::ReadOnly, &JsonObject::new()),
-                    Err(GuardRejection::RateLimited)
+                    Err(GuardRejection::ConcurrencyLimited)
                 ),
                 "tool={tool}"
             );
@@ -887,7 +938,11 @@ mod tests {
         };
 
         let first = call().unwrap();
-        assert_eq!(call().unwrap_err(), GuardRejection::RateLimited);
+        // The budget is one request a minute, so the next one is due within that minute.
+        match call().unwrap_err() {
+            GuardRejection::RateLimited { retry_after_ms } => assert!((1..=60_000).contains(&retry_after_ms)),
+            other => panic!("expected a rate limit, got {other:?}"),
+        }
         drop(first);
 
         let records = guard.audit_log().records();
@@ -944,7 +999,9 @@ mod tests {
             )
             .unwrap_err();
 
-        assert_eq!(error, GuardRejection::RateLimited);
+        // An exhausted permit is not an exhausted budget: the caller is told which one it is.
+        assert_eq!(error, GuardRejection::ConcurrencyLimited);
+        assert_eq!(error.to_string(), "cluster concurrency limit reached");
         drop(first);
     }
 
@@ -1105,6 +1162,7 @@ mod tests {
                 permissions_file: permission_path(),
                 max_concurrent_requests_per_cluster,
                 pseudonym_key_env: None,
+                http_rate_limit_per_minute: None,
             },
             AuditConfig {
                 enabled: true,
@@ -1113,6 +1171,7 @@ mod tests {
                 queue_capacity: 16,
                 max_record_bytes: 16 * 1024,
                 queue_max_bytes: 1024 * 1024,
+                max_file_bytes: 0,
             },
             &[ClusterConfig {
                 name: "local-dev".to_string(),
@@ -1138,6 +1197,7 @@ mod tests {
                 permissions_file: permission_path(),
                 max_concurrent_requests_per_cluster: 8,
                 pseudonym_key_env: None,
+                http_rate_limit_per_minute: None,
             },
             AuditConfig {
                 enabled: true,
@@ -1146,6 +1206,7 @@ mod tests {
                 queue_capacity: 16,
                 max_record_bytes: 16 * 1024,
                 queue_max_bytes: 1024 * 1024,
+                max_file_bytes: 0,
             },
             &[ClusterConfig {
                 name: "local-dev".to_string(),
@@ -1201,6 +1262,7 @@ mod tests {
                 permissions_file,
                 max_concurrent_requests_per_cluster,
                 pseudonym_key_env: None,
+                http_rate_limit_per_minute: None,
             },
             AuditConfig {
                 enabled: true,
@@ -1209,6 +1271,7 @@ mod tests {
                 queue_capacity: 256,
                 max_record_bytes: 16 * 1024,
                 queue_max_bytes: 1024 * 1024,
+                max_file_bytes: 0,
             },
             clusters,
         )
@@ -1232,33 +1295,48 @@ pub struct GuardedResourceRead {
     client: Option<String>,
     cluster: Option<String>,
     resource_operation: String,
+    target: AuditTarget,
     risk_level: RiskLevel,
     started_at: Instant,
     _cluster_permit: Option<OwnedSemaphorePermit>,
 }
 
 impl GuardedResourceRead {
+    /// Finishes a read whose content is already text: the text is parsed, processed and written
+    /// again. A read that still has its value finishes with [`Self::finish_document`].
     pub fn finish_result(
         &self,
         result: Result<rmcp::model::ReadResourceResult, rmcp::ErrorData>,
     ) -> Result<rmcp::model::ReadResourceResult, rmcp::ErrorData> {
+        self.finish_processed(result.map(|result| {
+            sanitizer::process_read_resource_result(result, &self.request_id, self.guard.security.sanitize_output)
+        }))
+    }
+
+    /// Finishes a read from the value it produced: the shared output processing runs on the
+    /// value, which is then written as text once.
+    pub fn finish_document(
+        &self,
+        result: Result<crate::resources::ResourceDocument, rmcp::ErrorData>,
+    ) -> Result<rmcp::model::ReadResourceResult, rmcp::ErrorData> {
+        self.finish_processed(result.map(|document| {
+            sanitizer::process_resource_document(document, &self.request_id, self.guard.security.sanitize_output)
+        }))
+    }
+
+    /// Audits the outcome of a read: its own failure, or the result of processing its content.
+    fn finish_processed(
+        &self,
+        result: Result<Result<rmcp::model::ReadResourceResult, rmcp::ErrorData>, rmcp::ErrorData>,
+    ) -> Result<rmcp::model::ReadResourceResult, rmcp::ErrorData> {
         match result {
-            Ok(result) => {
-                let result = sanitizer::process_read_resource_result(
-                    result,
-                    &self.request_id,
-                    self.guard.security.sanitize_output,
-                );
-                match result {
-                    Ok(result) => {
-                        self.record(AuditStatus::Success, None);
-                        Ok(result)
-                    }
-                    Err(error) => {
-                        self.record(AuditStatus::Failure, Some(error.to_string()));
-                        Err(error)
-                    }
-                }
+            Ok(Ok(result)) => {
+                self.record(AuditStatus::Success, None);
+                Ok(result)
+            }
+            Ok(Err(error)) => {
+                self.record(AuditStatus::Failure, Some(error.to_string()));
+                Err(error)
             }
             Err(error) => {
                 self.record(AuditStatus::Failure, Some(error.to_string()));
@@ -1286,7 +1364,8 @@ impl GuardedResourceRead {
             status,
             self.started_at.elapsed().as_millis(),
             error,
-        );
+        )
+        .with_target(self.target.clone());
         self.guard.audit_log.record(&self.guard.audit_config, record);
     }
 }

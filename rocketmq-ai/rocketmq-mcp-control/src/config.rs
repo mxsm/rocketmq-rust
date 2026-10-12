@@ -109,6 +109,22 @@ impl ControlConfig {
         )
     }
 
+    /// Returns the keys of the deployment switches this configuration turns on.
+    ///
+    /// Each switch replaces a default that keeps the server on public names and addresses. They
+    /// are all off unless the configuration says otherwise, and a server that starts with one of
+    /// them on says so in its log.
+    pub fn deployment_switches(&self) -> Vec<&'static str> {
+        [
+            (self.oauth.allow_private_network, "oauth.allow_private_network"),
+            (self.server.allow_internal_base_url, "server.allow_internal_base_url"),
+            (self.server.allow_wildcard_bind, "server.allow_wildcard_bind"),
+        ]
+        .into_iter()
+        .filter_map(|(on, key)| on.then_some(key))
+        .collect()
+    }
+
     #[cfg(feature = "write-tools")]
     pub(crate) fn mutation_clusters(&self) -> &[MutationClusterConfig] {
         &self.clusters
@@ -443,6 +459,20 @@ pub struct ServerConfig {
     pub endpoint: String,
     pub public_base_url: HttpsOrigin,
     pub tls: TlsConfig,
+    /// Accepts a bind address on every interface, such as `0.0.0.0:8443`, which a container
+    /// usually needs.
+    ///
+    /// Off by default: the server then listens on interfaces the operator may not have meant to
+    /// expose, and only the network around it decides who can connect.
+    #[serde(default)]
+    pub allow_wildcard_bind: bool,
+    /// Accepts a `public_base_url` with a port, or with a host name that only resolves inside a
+    /// network, such as `control.mq.svc.cluster.local`.
+    ///
+    /// Off by default: no public certificate authority vouches for such a name, so the
+    /// operator's own name service and certificates decide who answers under it.
+    #[serde(default)]
+    pub allow_internal_base_url: bool,
 }
 
 impl ServerConfig {
@@ -450,31 +480,61 @@ impl ServerConfig {
         require(
             self.bind
                 .parse::<SocketAddr>()
-                .is_ok_and(|bind| !bind.ip().is_unspecified()),
+                .is_ok_and(|bind| self.allow_wildcard_bind || !bind.ip().is_unspecified()),
             "server.bind",
         )?;
         require(valid_endpoint(&self.endpoint), "server.endpoint")?;
+        require(
+            self.allow_internal_base_url || !self.public_base_url.is_internal(),
+            "server.public_base_url",
+        )?;
         require(!self.tls.cert_path.trim().is_empty(), "server.tls.cert_path")?;
         require(!self.tls.key_path.trim().is_empty(), "server.tls.key_path")
     }
 }
 
+/// The canonical HTTPS origin under which clients reach the server.
 #[derive(Clone, PartialEq, Eq)]
-pub struct HttpsOrigin(String);
+pub struct HttpsOrigin {
+    origin: String,
+    /// Whether the origin has a port or a host name that is not a public one. A configuration
+    /// accepts such an origin only with `server.allow_internal_base_url`.
+    internal: bool,
+}
 
 impl HttpsOrigin {
+    /// Accepts the canonical origin of a public host: `https://` followed by a lower-case host
+    /// name with a public suffix, and nothing else.
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration error for any other text, including an origin with a port, a
+    /// path, an address literal, or a host name that only resolves inside a network.
     pub fn try_new(value: impl Into<String>) -> Result<Self, ControlError> {
-        let value = value.into();
+        let origin = Self::parse(value.into())?;
+        if origin.internal {
+            return Err(ControlError::invalid_config());
+        }
+        Ok(origin)
+    }
+
+    /// Accepts what [`try_new`](Self::try_new) accepts, and also an origin with a port or with a
+    /// host name that only resolves inside a network. Loopback names and address literals are
+    /// never an origin.
+    fn parse(value: String) -> Result<Self, ControlError> {
         let url = url::Url::parse(&value).map_err(|_| ControlError::invalid_config())?;
         let host = match url.host() {
-            Some(url::Host::Domain(host)) if valid_public_hostname(host) => host,
+            Some(url::Host::Domain(host)) if valid_hostname(host) => host,
             _ => return Err(ControlError::invalid_config()),
         };
-        let canonical = format!("https://{host}");
+        let canonical = match url.port() {
+            Some(port) => format!("https://{host}:{port}"),
+            None => format!("https://{host}"),
+        };
         if url.scheme() != "https"
             || !url.username().is_empty()
             || url.password().is_some()
-            || url.port().is_some()
+            || url.port() == Some(0)
             || url.path() != "/"
             || url.query().is_some()
             || url.fragment().is_some()
@@ -482,15 +542,24 @@ impl HttpsOrigin {
         {
             return Err(ControlError::invalid_config());
         }
-        Ok(Self(canonical))
+        Ok(Self {
+            internal: url.port().is_some() || !valid_public_hostname(host),
+            origin: canonical,
+        })
     }
 
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.origin
     }
 
+    /// Returns the authority of the origin: its host name, followed by `:` and the port when the
+    /// origin has one. It is what a client sends as `Host`.
     pub fn host(&self) -> &str {
-        self.0.strip_prefix("https://").unwrap_or("")
+        self.origin.strip_prefix("https://").unwrap_or("")
+    }
+
+    pub(crate) const fn is_internal(&self) -> bool {
+        self.internal
     }
 }
 
@@ -500,7 +569,7 @@ impl<'de> Deserialize<'de> for HttpsOrigin {
         D: serde::Deserializer<'de>,
     {
         let value = String::deserialize(deserializer)?;
-        Self::try_new(value).map_err(serde::de::Error::custom)
+        Self::parse(value).map_err(serde::de::Error::custom)
     }
 }
 
@@ -519,12 +588,21 @@ pub struct OAuthConfig {
     pub jwks_url: String,
     #[serde(default)]
     pub jwks_ca_path: Option<String>,
+    /// Accepts an issuer and a JWKS URL inside a network: a host name that only resolves there,
+    /// a port, and a JWKS endpoint at a private address.
+    ///
+    /// Off by default: the keys that decide who may change a cluster then come from wherever
+    /// that internal name leads, through the resolver and proxy settings of the process. The
+    /// certificate check of the JWKS connection is what still identifies the issuer.
+    #[serde(default)]
+    pub allow_private_network: bool,
 }
 
 impl OAuthConfig {
     fn check(&self) -> Result<(), ConfigViolation> {
-        require(valid_https_endpoint(&self.issuer), "oauth.issuer")?;
-        require(valid_https_endpoint(&self.jwks_url), "oauth.jwks_url")?;
+        let internal = self.allow_private_network;
+        require(valid_https_endpoint(&self.issuer, internal), "oauth.issuer")?;
+        require(valid_https_endpoint(&self.jwks_url, internal), "oauth.jwks_url")?;
         require(
             !self.audience.is_empty() && self.audience.len() <= 256 && !self.audience.chars().any(char::is_control),
             "oauth.audience",
@@ -549,6 +627,15 @@ pub struct MutationPolicyConfig {
     pub allowed_clusters: Vec<ClusterName>,
     #[serde(default = "default_operation_timeout_seconds")]
     pub operation_timeout_seconds: u64,
+    /// Whether an execution has to name the plan it runs, with the `plan_digest` of a dry run.
+    #[serde(default)]
+    pub require_plan_digest: bool,
+    /// A file whose existence refuses every mutation call, looked up for each call.
+    ///
+    /// It stops mutations without a restart and can only tighten: without the file, the rest of
+    /// this policy decides alone.
+    #[serde(default)]
+    pub emergency_stop_file: Option<String>,
 }
 
 impl Default for MutationPolicyConfig {
@@ -559,6 +646,8 @@ impl Default for MutationPolicyConfig {
             allowed_operations: Vec::new(),
             allowed_clusters: Vec::new(),
             operation_timeout_seconds: default_operation_timeout_seconds(),
+            require_plan_digest: false,
+            emergency_stop_file: None,
         }
     }
 }
@@ -578,6 +667,13 @@ impl MutationPolicyConfig {
         require(
             (1..=24).contains(&self.operation_timeout_seconds),
             "mutations.operation_timeout_seconds",
+        )?;
+        require(
+            !self
+                .emergency_stop_file
+                .as_deref()
+                .is_some_and(|path| path.trim().is_empty() || path.chars().any(char::is_control)),
+            "mutations.emergency_stop_file",
         )
     }
 
@@ -692,23 +788,31 @@ fn valid_endpoint(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'_'))
 }
 
-fn valid_https_endpoint(value: &str) -> bool {
+/// Checks a canonical HTTPS URL without credentials, query, or fragment.
+///
+/// The host has to be a public name and the port the default one, unless `internal` also admits a
+/// port and a host name that only resolves inside a network.
+fn valid_https_endpoint(value: &str, internal: bool) -> bool {
     url::Url::parse(value).is_ok_and(|url| {
         let Some(url::Host::Domain(host)) = url.host() else {
             return false;
         };
+        let authority = match url.port() {
+            Some(port) => format!("{host}:{port}"),
+            None => host.to_string(),
+        };
         let path = url.path();
         let canonical = if path == "/" {
-            format!("https://{host}")
+            format!("https://{authority}")
         } else {
-            format!("https://{host}{path}")
+            format!("https://{authority}{path}")
         };
+        let public = valid_public_hostname(host) && url.port().is_none();
         url.scheme() == "https"
             && !url.cannot_be_a_base()
-            && valid_public_hostname(host)
+            && (public || (internal && valid_hostname(host) && url.port() != Some(0)))
             && url.username().is_empty()
             && url.password().is_none()
-            && url.port().is_none()
             && path.len() <= 512
             && !path.contains("//")
             && !path.split('/').any(|segment| matches!(segment, "." | ".."))
@@ -721,17 +825,20 @@ fn valid_https_endpoint(value: &str) -> bool {
     })
 }
 
+/// A host name that can be expected to resolve on the public internet.
 fn valid_public_hostname(host: &str) -> bool {
+    valid_hostname(host)
+        && host.contains('.')
+        && !host.ends_with(".local")
+        && !host.ends_with(".internal")
+        && !host.ends_with(".home.arpa")
+}
+
+/// A lower-case DNS host name, public or not. It may be a single label, such as the name of a
+/// service in the same namespace. A loopback name is never one.
+fn valid_hostname(host: &str) -> bool {
     let lowercase = host.to_ascii_lowercase();
-    if lowercase != host
-        || !host.contains('.')
-        || host.len() > 253
-        || host == "localhost"
-        || host.ends_with(".localhost")
-        || host.ends_with(".local")
-        || host.ends_with(".internal")
-        || host.ends_with(".home.arpa")
-    {
+    if lowercase != host || host.len() > 253 || host == "localhost" || host.ends_with(".localhost") {
         return false;
     }
     host.split('.').all(|label| {
@@ -759,12 +866,15 @@ mod tests {
                     cert_path: "server.pem".to_string(),
                     key_path: "server-key.pem".to_string(),
                 },
+                allow_wildcard_bind: false,
+                allow_internal_base_url: false,
             },
             oauth: OAuthConfig {
                 issuer: "https://issuer.example.test".to_string(),
                 audience: "rocketmq-mcp-control".to_string(),
                 jwks_url: "https://issuer.example.test/jwks".to_string(),
                 jwks_ca_path: None,
+                allow_private_network: false,
             },
             mutations: MutationPolicyConfig::default(),
             clusters: Vec::new(),
@@ -784,6 +894,26 @@ mod tests {
         assert!(policy.dry_run);
         assert!(policy.allowed_operations.is_empty());
         assert!(policy.allowed_clusters.is_empty());
+        assert_eq!(policy.emergency_stop_file, None);
+    }
+
+    #[test]
+    fn the_emergency_stop_file_is_optional_and_has_to_name_a_file() {
+        let policy: MutationPolicyConfig = toml::from_str(r#"emergency_stop_file = "var/stop-writes""#).unwrap();
+        assert_eq!(policy.emergency_stop_file.as_deref(), Some("var/stop-writes"));
+        assert!(policy.check().is_ok());
+
+        for unusable in ["", "   ", "var/stop\0writes", "var/stop\nwrites"] {
+            let policy = MutationPolicyConfig {
+                emergency_stop_file: Some(unusable.to_string()),
+                ..Default::default()
+            };
+            assert_eq!(
+                policy.check().unwrap_err().field,
+                "mutations.emergency_stop_file",
+                "{unusable:?}"
+            );
+        }
     }
 
     #[test]
@@ -829,6 +959,261 @@ mod tests {
             config.oauth.jwks_url = invalid.to_string();
             assert!(config.validate().is_err(), "accepted {invalid}");
         }
+    }
+
+    /// The example configuration with `lines` put in place of the lines that set the same keys.
+    fn example_with(lines: &[&str]) -> String {
+        let key = |line: &str| line.split('=').next().unwrap_or_default().trim().to_string();
+        let mut text = String::new();
+        let mut section = String::new();
+        for line in EXAMPLE.lines() {
+            if line.starts_with('[') {
+                section = line.to_string();
+            }
+            let replacement = lines.iter().find_map(|replacement| {
+                let (in_section, assignment) = replacement.split_once(' ').expect("`[section] key = value`");
+                (in_section == section && !line.starts_with('#') && key(line) == key(assignment)).then_some(assignment)
+            });
+            text.push_str(replacement.unwrap_or(line));
+            text.push('\n');
+            // A key the example does not set goes right under its section header.
+            for replacement in lines {
+                let (in_section, assignment) = replacement.split_once(' ').expect("`[section] key = value`");
+                let unset = !EXAMPLE
+                    .lines()
+                    .any(|line| !line.starts_with('#') && key(line) == key(assignment));
+                if in_section == line && unset {
+                    text.push_str(assignment);
+                    text.push('\n');
+                }
+            }
+        }
+        text
+    }
+
+    fn rejected_field(text: &str) -> Option<&'static str> {
+        match ControlConfig::from_toml(text) {
+            Ok(_) => None,
+            Err(ConfigLoadError(ConfigRejection::Validate(violation))) => Some(violation.field),
+            Err(other) => panic!("the configuration did not reach validation: {other}"),
+        }
+    }
+
+    #[test]
+    fn an_execution_is_bound_to_a_plan_only_when_the_policy_says_so() {
+        assert!(!MutationPolicyConfig::default().require_plan_digest);
+        assert!(!ControlConfig::from_toml(EXAMPLE).unwrap().mutations.require_plan_digest);
+        let required = ControlConfig::from_toml(&example_with(&["[mutations] require_plan_digest = true"])).unwrap();
+        assert!(required.mutations.require_plan_digest);
+        // The item changes how a call is admitted, not what the server may do.
+        assert_eq!(
+            required.mutations.allowed_operations,
+            ControlConfig::from_toml(EXAMPLE).unwrap().mutations.allowed_operations
+        );
+        assert!(ControlConfig::from_toml(&example_with(&["[mutations] require_plan_digest = \"yes\""])).is_err());
+    }
+
+    #[test]
+    fn defaults_reject_private_issuers_and_wildcard_binds() {
+        let example = ControlConfig::from_toml(EXAMPLE).unwrap();
+        assert!(!example.oauth.allow_private_network);
+        assert!(!example.server.allow_internal_base_url);
+        assert!(!example.server.allow_wildcard_bind);
+        assert!(example.deployment_switches().is_empty());
+
+        for (line, field) in [
+            ("[server] bind = \"0.0.0.0:8443\"", "server.bind"),
+            ("[server] bind = \"[::]:8443\"", "server.bind"),
+            (
+                "[server] public_base_url = \"https://control.example.test:8443\"",
+                "server.public_base_url",
+            ),
+            (
+                "[server] public_base_url = \"https://control.mq.svc.cluster.local\"",
+                "server.public_base_url",
+            ),
+            (
+                "[server] public_base_url = \"https://control.internal\"",
+                "server.public_base_url",
+            ),
+            (
+                "[server] public_base_url = \"https://control\"",
+                "server.public_base_url",
+            ),
+            (
+                "[oauth] issuer = \"https://keycloak.idp.svc.cluster.local\"",
+                "oauth.issuer",
+            ),
+            (
+                "[oauth] issuer = \"https://identity.example.test:8443\"",
+                "oauth.issuer",
+            ),
+            (
+                "[oauth] jwks_url = \"https://keycloak.internal/jwks\"",
+                "oauth.jwks_url",
+            ),
+            (
+                "[oauth] jwks_url = \"https://identity.example.test:8443/jwks\"",
+                "oauth.jwks_url",
+            ),
+            ("[oauth] jwks_url = \"https://keycloak/jwks\"", "oauth.jwks_url"),
+        ] {
+            assert_eq!(rejected_field(&example_with(&[line])), Some(field), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_wildcard_bind_needs_its_switch_and_changes_nothing_else() {
+        for bind in ["0.0.0.0:8443", "[::]:8443"] {
+            let bind_line = format!("[server] bind = \"{bind}\"");
+            let allowed = example_with(&[&bind_line, "[server] allow_wildcard_bind = true"]);
+            let config = ControlConfig::from_toml(&allowed).unwrap();
+            assert_eq!(config.deployment_switches(), ["server.allow_wildcard_bind"]);
+            // The other switches do not admit it.
+            let others = example_with(&[
+                &bind_line,
+                "[server] allow_internal_base_url = true",
+                "[oauth] allow_private_network = true",
+            ]);
+            assert_eq!(rejected_field(&others), Some("server.bind"), "{bind}");
+        }
+        // The switch admits an unspecified address and nothing that is not an address.
+        let invalid = example_with(&[
+            "[server] bind = \"control:8443\"",
+            "[server] allow_wildcard_bind = true",
+        ]);
+        assert_eq!(rejected_field(&invalid), Some("server.bind"));
+        // A specific address needs no switch, and the switch does not have to be used.
+        let unused = example_with(&["[server] allow_wildcard_bind = true"]);
+        assert_eq!(
+            ControlConfig::from_toml(&unused).unwrap().deployment_switches(),
+            ["server.allow_wildcard_bind"]
+        );
+    }
+
+    #[test]
+    fn an_internal_base_url_needs_its_switch_and_stays_a_canonical_https_origin() {
+        for (origin, authority) in [
+            ("https://control.example.test:8443", "control.example.test:8443"),
+            ("https://control.mq.svc.cluster.local", "control.mq.svc.cluster.local"),
+            (
+                "https://control.mq.svc.cluster.local:8443",
+                "control.mq.svc.cluster.local:8443",
+            ),
+            ("https://control.corp.internal", "control.corp.internal"),
+            ("https://control.home.arpa", "control.home.arpa"),
+            ("https://control", "control"),
+        ] {
+            let origin_line = format!("[server] public_base_url = \"{origin}\"");
+            let allowed = example_with(&[&origin_line, "[server] allow_internal_base_url = true"]);
+            let config = ControlConfig::from_toml(&allowed).unwrap();
+            assert_eq!(config.server.public_base_url.as_str(), origin);
+            assert_eq!(config.server.public_base_url.host(), authority);
+            assert_eq!(config.deployment_switches(), ["server.allow_internal_base_url"]);
+            // The strict constructor and the other switches still refuse it.
+            assert!(HttpsOrigin::try_new(origin).is_err(), "{origin}");
+            let others = example_with(&[
+                &origin_line,
+                "[server] allow_wildcard_bind = true",
+                "[oauth] allow_private_network = true",
+            ]);
+            assert_eq!(rejected_field(&others), Some("server.public_base_url"), "{origin}");
+        }
+
+        // Even with the switch, the origin is HTTPS, canonical, and neither an address nor loopback.
+        for invalid in [
+            "http://control.internal:8443",
+            "https://control.internal:8443/path",
+            "https://control.internal:443",
+            "https://control.internal:0",
+            "https://user@control.internal",
+            "https://CONTROL.internal",
+            "https://127.0.0.1:8443",
+            "https://[::1]:8443",
+            "https://10.0.0.5",
+            "https://2130706433",
+            "https://localhost:8443",
+            "https://control.localhost",
+            "https://-control.internal",
+            "https://control..internal",
+        ] {
+            let origin_line = format!("[server] public_base_url = \"{invalid}\"");
+            let text = example_with(&[&origin_line, "[server] allow_internal_base_url = true"]);
+            assert!(ControlConfig::from_toml(&text).is_err(), "accepted {invalid}");
+        }
+    }
+
+    #[test]
+    fn a_private_issuer_needs_its_switch_and_stays_a_canonical_https_url() {
+        let private = [
+            "[oauth] issuer = \"https://keycloak.idp.svc.cluster.local:8443/realms/mq\"",
+            "[oauth] jwks_url = \"https://keycloak.idp.svc.cluster.local:8443/realms/mq/certs\"",
+        ];
+        assert_eq!(rejected_field(&example_with(&private)), Some("oauth.issuer"));
+        let others = example_with(&[
+            private[0],
+            private[1],
+            "[server] allow_wildcard_bind = true",
+            "[server] allow_internal_base_url = true",
+        ]);
+        assert_eq!(rejected_field(&others), Some("oauth.issuer"));
+
+        let allowed = example_with(&[private[0], private[1], "[oauth] allow_private_network = true"]);
+        let config = ControlConfig::from_toml(&allowed).unwrap();
+        assert_eq!(config.deployment_switches(), ["oauth.allow_private_network"]);
+        assert_eq!(
+            config.oauth.issuer,
+            "https://keycloak.idp.svc.cluster.local:8443/realms/mq"
+        );
+
+        for accepted in [
+            "https://keycloak/jwks",
+            "https://keycloak.internal/jwks",
+            "https://idp.example.test:8443/jwks",
+        ] {
+            let line = format!("[oauth] jwks_url = \"{accepted}\"");
+            let text = example_with(&[&line, "[oauth] allow_private_network = true"]);
+            assert_eq!(rejected_field(&text), None, "{accepted}");
+        }
+        // Even with the switch, the URL is HTTPS, canonical, and neither an address nor loopback.
+        for invalid in [
+            "http://keycloak.internal/jwks",
+            "https://127.0.0.1/jwks",
+            "https://10.0.0.5:8443/jwks",
+            "https://[::1]/jwks",
+            "https://localhost/jwks",
+            "https://keycloak.localhost/jwks",
+            "https://keycloak.internal:443/jwks",
+            "https://keycloak.internal:0/jwks",
+            "https://user@keycloak.internal/jwks",
+            "https://keycloak.internal/jwks?kid=a",
+            "https://keycloak.internal/a/../jwks",
+            "https://KEYCLOAK.internal/jwks",
+        ] {
+            let line = format!("[oauth] jwks_url = \"{invalid}\"");
+            let text = example_with(&[&line, "[oauth] allow_private_network = true"]);
+            assert_eq!(rejected_field(&text), Some("oauth.jwks_url"), "accepted {invalid}");
+        }
+    }
+
+    #[test]
+    fn every_switch_that_is_on_is_named_in_a_fixed_order() {
+        let all = example_with(&[
+            "[server] allow_wildcard_bind = true",
+            "[server] allow_internal_base_url = true",
+            "[oauth] allow_private_network = true",
+        ]);
+        assert_eq!(
+            ControlConfig::from_toml(&all).unwrap().deployment_switches(),
+            [
+                "oauth.allow_private_network",
+                "server.allow_internal_base_url",
+                "server.allow_wildcard_bind"
+            ]
+        );
+        // A switch is a boolean and nothing else.
+        let text = example_with(&["[server] allow_wildcard_bind = \"yes\""]);
+        assert_eq!(ControlConfig::from_toml(&text).unwrap_err().stage(), "parse");
     }
 
     #[test]

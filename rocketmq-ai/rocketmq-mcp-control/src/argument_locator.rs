@@ -283,6 +283,7 @@ fn matches_reviewed_pattern(pattern: &str, text: &str) -> Option<bool> {
         "^[%|a-zA-Z0-9_-]+$" => Some(only(b"%|_-")),
         "^[a-zA-Z0-9._:-]+$" => Some(only(b"._:-")),
         crate::tools::LOGGER_PATTERN => Some(crate::tools::is_broker_module_path(text)),
+        crate::tools::PLAN_DIGEST_PATTERN => Some(crate::tools::is_plan_digest(text)),
         _ => None,
     }
 }
@@ -855,7 +856,7 @@ mod tests {
                 assert_ne!(node.get("additionalProperties"), Some(&Value::Bool(true)), "{tool}");
             });
         }
-        assert_eq!(patterns.len(), 5);
+        assert_eq!(patterns.len(), 6);
         for pattern in &patterns {
             assert!(matches_reviewed_pattern(pattern, "").is_some(), "unreviewed {pattern}");
         }
@@ -902,6 +903,12 @@ mod tests {
             "rocketmq_broker::processor\n",
             " rocketmq_broker::processor",
             "rocketmq_store::commit_log",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0",
+            "0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef",
+            "0123456789abcdeg0123456789abcdef0123456789abcdef0123456789abcdef",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n",
         ];
         let mut patterns = BTreeSet::new();
         for (_, schema) in input_schemas() {

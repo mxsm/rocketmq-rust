@@ -90,6 +90,16 @@ impl IdentifierAliaser {
         self.alias("unique-message", &[message_id])
     }
 
+    /// Names the host a trace record says a client ran on.
+    pub(crate) fn host_alias(&self, host: &str) -> Result<String, AliasInputBoundExceeded> {
+        self.alias("host", &[host])
+    }
+
+    /// Names one key of a message. Keys are business identifiers, so they leave only like this.
+    pub(crate) fn key_alias(&self, key: &str) -> Result<String, AliasInputBoundExceeded> {
+        self.alias("key", &[key])
+    }
+
     fn alias(&self, domain: &'static str, parts: &[&str]) -> Result<String, AliasInputBoundExceeded> {
         let input_bytes = parts
             .iter()

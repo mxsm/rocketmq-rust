@@ -68,15 +68,26 @@ const JWKS_POLICY: JwksPolicy = JwksPolicy {
     kid_charset: KidCharset::Token,
 };
 
-/// The HTTPS source of the issuer's JWKS document. It connects only to public addresses.
+/// The HTTPS source of the issuer's JWKS document.
+///
+/// It connects only to public addresses, unless the configuration turns
+/// `oauth.allow_private_network` on for an issuer inside the network.
 fn jwks_source(config: &OAuthConfig) -> Result<HttpJwksSource, AuthError> {
     HttpJwksSource::new(
         Arc::<str>::from(config.jwks_url.clone()),
         config.jwks_ca_path.as_deref().map(Path::new),
         &JWKS_POLICY,
-        OutboundAddressPolicy::PublicOnly,
+        outbound_policy(config),
     )
     .map_err(|_| AuthError::Unavailable)
+}
+
+fn outbound_policy(config: &OAuthConfig) -> OutboundAddressPolicy {
+    if config.allow_private_network {
+        OutboundAddressPolicy::Unrestricted
+    } else {
+        OutboundAddressPolicy::PublicOnly
+    }
 }
 
 pub(crate) struct AuthState<S = HttpJwksSource> {
@@ -362,7 +373,21 @@ mod tests {
             audience: "rocketmq-mcp-control".to_string(),
             jwks_url: "https://issuer.example.test/jwks".to_string(),
             jwks_ca_path: None,
+            allow_private_network: false,
         }
+    }
+
+    #[test]
+    fn the_jwks_endpoint_is_reached_at_a_private_address_only_with_the_switch() {
+        let mut oauth = config();
+        assert_eq!(outbound_policy(&oauth), OutboundAddressPolicy::PublicOnly);
+        // An address literal that is not public is refused when the source is built.
+        oauth.jwks_url = "https://10.0.0.5/jwks".to_string();
+        assert!(matches!(jwks_source(&oauth), Err(AuthError::Unavailable)));
+
+        oauth.allow_private_network = true;
+        assert_eq!(outbound_policy(&oauth), OutboundAddressPolicy::Unrestricted);
+        assert!(jwks_source(&oauth).is_ok());
     }
 
     fn jwks() -> Vec<u8> {

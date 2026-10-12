@@ -46,6 +46,7 @@ use crate::tools::CANCEL_PROXY_DRAIN_TOOL;
 use crate::tools::GET_MUTATION_RESULT_TOOL;
 use crate::tools::INVOCATION_ID_MEMBER;
 use crate::tools::PATCH_BROKER_CONFIG_TOOL;
+use crate::tools::PLAN_DIGEST_MEMBER;
 use crate::tools::RESET_CONSUMER_OFFSET_TOOL;
 use crate::tools::RESTORE_BROKER_LOG_FILTER_TOOL;
 use crate::tools::SET_BROKER_LOG_FILTER_TTL_TOOL;
@@ -117,6 +118,14 @@ const fn is_destructive(operation: ControlOperation) -> bool {
         | ControlOperation::BrokerLogFilterRestore => false,
     }
 }
+
+/// What every mutation Tool says about reading a change back.
+///
+/// The query MCP server answers from short-lived caches and knows nothing of a change made here,
+/// so a model that checks its own change there right away could take the earlier state for a
+/// failure. The note is part of the description and of nothing else: no schema changes with it.
+const READ_DELAY_NOTE: &str = "After an execution, a read through the RocketMQ query MCP server can still return \
+                               the earlier state for a few seconds.";
 
 fn tool_definition(operation: ControlOperation) -> Option<Tool> {
     let title = match operation {
@@ -245,10 +254,13 @@ fn tool_definition(operation: ControlOperation) -> Option<Tool> {
         ),
     };
     tool.map(|mut tool| {
+        tool.description = tool
+            .description
+            .map(|description| format!("{description} {READ_DELAY_NOTE}").into());
         unwrap_descriptions(Arc::make_mut(&mut tool.input_schema));
         if let Some(output_schema) = &mut tool.output_schema {
             let output_schema = Arc::make_mut(output_schema);
-            declare_invocation_id(output_schema);
+            declare_call_members(output_schema);
             pin_shared_operation(output_schema, operation);
             unwrap_descriptions(output_schema);
         }
@@ -283,32 +295,48 @@ fn pin_shared_operation(output_schema: &mut JsonObject, operation: ControlOperat
     }
 }
 
-/// Declares the `invocation_id` that every mutation response carries.
+/// Declares the `invocation_id` and the `plan_digest` that every mutation response carries.
 ///
-/// The server adds the member when it sends a response, so the response types do not hold it and
-/// the published schema declares it here, once for all mutation Tools.
-fn declare_invocation_id(output_schema: &mut JsonObject) {
-    let description = "Identifies this call in the durable audit log. Pass it to rocketmq_get_mutation_result to \
-                       read how the call ended.";
-    if let Some(properties) = output_schema
-        .get_mut("properties")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        properties.insert(
-            INVOCATION_ID_MEMBER.to_owned(),
+/// The server adds both members when it sends a response, so the response types do not hold them
+/// and the published schema declares them here, once for all mutation Tools.
+fn declare_call_members(output_schema: &mut JsonObject) {
+    let invocation = "Identifies this call in the durable audit log. Pass it to rocketmq_get_mutation_result to \
+                      read how the call ended.";
+    let plan = "Digest of the plan that a dry run reports: what was asked of which target, the state that was \
+                read, and what each target would get. Pass it as expected_plan_digest to execute this plan and \
+                no other. Null in the response of an execution.";
+    let members = [
+        (
+            INVOCATION_ID_MEMBER,
             serde_json::json!({
-                "description": description,
+                "description": invocation,
                 "type": "integer",
                 "format": "uint64",
                 "minimum": 1,
             }),
-        );
-    }
-    if let Some(required) = output_schema
-        .get_mut("required")
-        .and_then(serde_json::Value::as_array_mut)
-    {
-        required.push(serde_json::Value::from(INVOCATION_ID_MEMBER));
+        ),
+        (
+            PLAN_DIGEST_MEMBER,
+            serde_json::json!({
+                "description": plan,
+                "type": ["string", "null"],
+                "pattern": crate::tools::PLAN_DIGEST_PATTERN,
+            }),
+        ),
+    ];
+    for (member, schema) in members {
+        if let Some(properties) = output_schema
+            .get_mut("properties")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            properties.insert(member.to_owned(), schema);
+        }
+        if let Some(required) = output_schema
+            .get_mut("required")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            required.push(serde_json::Value::from(member));
+        }
     }
 }
 
@@ -398,6 +426,8 @@ mod tests {
             allowed_operations: operations,
             allowed_clusters: Vec::new(),
             operation_timeout_seconds: 12,
+            require_plan_digest: false,
+            emergency_stop_file: None,
         }
     }
 
@@ -477,6 +507,26 @@ mod tests {
         }
     }
 
+    #[test]
+    fn every_mutation_tool_says_that_a_read_can_lag_behind_its_change() {
+        let tools = all_operations().list_tools().tools;
+        assert_eq!(tools.len(), 9);
+        for tool in tools {
+            let description = tool.description.as_deref().expect("a description");
+            assert!(description.ends_with(READ_DELAY_NOTE), "{}", tool.name);
+            // The note is one sentence after what the Tool does, and the whole fits a Tool listing.
+            assert!(
+                description.len() > READ_DELAY_NOTE.len() + 40 && description.len() <= 400,
+                "{}: {} characters",
+                tool.name,
+                description.len()
+            );
+        }
+        // The lookup changes nothing, so there is nothing to read back.
+        let lookup = result_tool_definition();
+        assert!(!lookup.description.as_deref().unwrap().contains("query MCP"));
+    }
+
     /// Calls `visit` with the pointer and the schema of every input property, nested ones included.
     fn for_each_input_property(schema: &JsonObject, pointer: &str, visit: &mut impl FnMut(&str, &JsonObject)) {
         for keyword in ["properties", "$defs"] {
@@ -510,8 +560,8 @@ mod tests {
                 described += 1;
             });
         }
-        // 96 arguments over the nine Tools, plus the six settings of a Broker configuration patch.
-        assert_eq!(described, 102);
+        // 105 arguments over the nine Tools, plus the six settings of a Broker configuration patch.
+        assert_eq!(described, 111);
     }
 
     #[test]
@@ -600,6 +650,43 @@ mod tests {
                 required
                     .iter()
                     .filter(|member| member.as_str() == Some(INVOCATION_ID_MEMBER))
+                    .count(),
+                1,
+                "{}",
+                tool.name
+            );
+        }
+    }
+
+    #[test]
+    fn every_mutation_tool_takes_and_reports_a_plan_digest_of_one_form() {
+        let digest = regex::Regex::new(crate::tools::PLAN_DIGEST_PATTERN).unwrap();
+        for tool in all_operations().list_tools().tools {
+            // What a dry run reports is what an execution may name.
+            let expected = &tool.input_schema["properties"][crate::tools::EXPECTED_PLAN_DIGEST_ARGUMENT];
+            let reported = &tool.output_schema.as_deref().expect("an output schema")["properties"][PLAN_DIGEST_MEMBER];
+            for declared in [expected, reported] {
+                assert_eq!(declared["type"], serde_json::json!(["string", "null"]), "{}", tool.name);
+                assert_eq!(declared["pattern"], digest.as_str(), "{}", tool.name);
+                assert!(declared["description"]
+                    .as_str()
+                    .is_some_and(|text| !text.contains('\n')));
+            }
+            assert!(digest.is_match(&crate::audit::sha256_hex(b"plan")));
+            // An execution may name a plan; whether it has to is the policy of the server.
+            let required_inputs = tool.input_schema["required"].as_array().expect("required arguments");
+            assert!(
+                !required_inputs.contains(&serde_json::json!(crate::tools::EXPECTED_PLAN_DIGEST_ARGUMENT)),
+                "{}",
+                tool.name
+            );
+            let required_outputs = tool.output_schema.as_deref().expect("an output schema")["required"]
+                .as_array()
+                .expect("required members");
+            assert_eq!(
+                required_outputs
+                    .iter()
+                    .filter(|member| member.as_str() == Some(PLAN_DIGEST_MEMBER))
                     .count(),
                 1,
                 "{}",

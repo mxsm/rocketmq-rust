@@ -63,6 +63,7 @@ fn guard_with_role(role: &str, clusters: &[ClusterConfig], rate_limit_per_minute
             permissions_file: permissions.to_string_lossy().into_owned(),
             max_concurrent_requests_per_cluster: 1,
             pseudonym_key_env: None,
+            http_rate_limit_per_minute: None,
         },
         AuditConfig {
             enabled: true,
@@ -71,6 +72,7 @@ fn guard_with_role(role: &str, clusters: &[ClusterConfig], rate_limit_per_minute
             queue_capacity: 16,
             max_record_bytes: 16 * 1024,
             queue_max_bytes: 1024 * 1024,
+            max_file_bytes: 0,
         },
         clusters,
     )
@@ -259,7 +261,11 @@ async fn list_clusters_is_rate_limited_per_principal_and_takes_no_cluster_permit
         let arguments = serde_json::json!({ "cluster": cluster }).as_object().unwrap().clone();
         let begin = || guard.begin_tool_call(&caller(None, None), overview.name, overview.risk_level, &arguments);
         held.push(begin().unwrap());
-        assert_eq!(begin().unwrap_err(), GuardRejection::RateLimited, "cluster={cluster}");
+        assert_eq!(
+            begin().unwrap_err(),
+            GuardRejection::ConcurrencyLimited,
+            "cluster={cluster}"
+        );
     }
 
     for _ in 0..2 {
@@ -268,13 +274,39 @@ async fn list_clusters_is_rate_limited_per_principal_and_takes_no_cluster_permit
     }
     let limited = call(&guard, caller(None, None), serde_json::json!({})).await;
     assert_eq!(error_code(&limited), "rate_limited");
+    // The refusal says when the next call is due: two a minute is one every thirty seconds.
+    let refusal = serde_json::from_str::<serde_json::Value>(&content_text(&limited)).unwrap();
+    assert_eq!(refusal["retryable"], true);
+    let retry_after_ms = refusal["retry_after_ms"].as_u64().unwrap();
+    assert!((1..=30_000).contains(&retry_after_ms), "{retry_after_ms}");
 
     // The budget belongs to the principal, not to a cluster: another principal still has its own.
-    let mut other = caller(None, None);
-    other.principal.id = "other-caller".to_string();
+    let other = || {
+        let mut other = caller(None, None);
+        other.principal.id = "other-caller".to_string();
+        other
+    };
     assert_eq!(
-        names(&call(&guard, other, serde_json::json!({})).await),
+        names(&call(&guard, other(), serde_json::json!({})).await),
         ["alpha", "beta"]
     );
+
+    // A busy cluster is not a used-up budget: it has a code of its own and names no wait.
+    let adapter = FakeAdapter {
+        fail: false,
+        partial: false,
+    };
+    let busy = ToolExecutor::new(adapter, guard.clone())
+        .with_request_context(other())
+        .call(
+            CallToolRequestParams::new(overview.name)
+                .with_arguments(serde_json::json!({ "cluster": "alpha" }).as_object().unwrap().clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(error_code(&busy), "concurrency_limited");
+    let refusal = serde_json::from_str::<serde_json::Value>(&content_text(&busy)).unwrap();
+    assert_eq!(refusal["retryable"], true);
+    assert_eq!(refusal.get("retry_after_ms"), None);
     drop(held);
 }

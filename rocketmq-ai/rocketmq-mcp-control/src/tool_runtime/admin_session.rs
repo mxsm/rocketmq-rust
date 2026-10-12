@@ -27,6 +27,7 @@ use super::group_dry_run;
 use super::group_executed;
 use super::map_group_to_admin;
 use super::map_topic_to_admin;
+use super::plan_binding::PlanBinding;
 use super::remaining::OperationBackend;
 use super::topic_before;
 use super::topic_dry_run;
@@ -326,13 +327,14 @@ impl<B: OperationBackend> AdminMutationToolSession<B> {
         &mut self,
         operation: tools::ProxyDrainOperation,
         args: tools::ProxyDrainArgs,
+        binding: &PlanBinding,
     ) -> Result<MutationToolResponse, ControlError> {
         // The server refuses an alias that the cluster does not configure before it records the
         // call. Should one get here anyway, nothing is read: there is no endpoint to fall back to.
         let Some(proxy_addr) = self.proxies.get(&args.proxy_name).cloned() else {
             return Err(ControlError::invalid_argument());
         };
-        super::remaining::run_proxy_drain(&mut self.backend, operation, args, &proxy_addr)
+        super::remaining::run_proxy_drain(&mut self.backend, operation, args, &proxy_addr, binding)
             .await
             .map(MutationToolResponse::ProxyDrain)
     }
@@ -347,39 +349,46 @@ where
         request: MutationToolRequest,
     ) -> RuntimeFuture<'a, Result<MutationToolResponse, ControlError>> {
         Box::pin(async move {
+            // Every operation reads its target, lets the binding compare the plan, then writes.
+            let binding = PlanBinding::of(&request)?;
+            let binding = &binding;
             match request {
-                MutationToolRequest::Topic(args) => run_topic(&mut self.backend, args)
+                MutationToolRequest::Topic(args) => run_topic(&mut self.backend, args, binding)
                     .await
                     .map(MutationToolResponse::Topic),
-                MutationToolRequest::ConsumerGroup(args) => run_group(&mut self.backend, args)
+                MutationToolRequest::ConsumerGroup(args) => run_group(&mut self.backend, args, binding)
                     .await
                     .map(MutationToolResponse::ConsumerGroup),
-                MutationToolRequest::ConsumerOffset(args) => super::remaining::run_offset(&mut self.backend, args)
-                    .await
-                    .map(MutationToolResponse::ConsumerOffset),
-                MutationToolRequest::BrokerConfig(args) => super::remaining::run_broker(&mut self.backend, args)
-                    .await
-                    .map(MutationToolResponse::BrokerConfig),
+                MutationToolRequest::ConsumerOffset(args) => {
+                    super::remaining::run_offset(&mut self.backend, args, binding)
+                        .await
+                        .map(MutationToolResponse::ConsumerOffset)
+                }
+                MutationToolRequest::BrokerConfig(args) => {
+                    super::remaining::run_broker(&mut self.backend, args, binding)
+                        .await
+                        .map(MutationToolResponse::BrokerConfig)
+                }
                 MutationToolRequest::ConsumerRequestMode(args) => {
-                    super::remaining::run_request_mode(&mut self.backend, args)
+                    super::remaining::run_request_mode(&mut self.backend, args, binding)
                         .await
                         .map(MutationToolResponse::ConsumerRequestMode)
                 }
                 MutationToolRequest::ProxyDrainBegin(args) => {
-                    self.run_proxy_drain(tools::ProxyDrainOperation::ProxyDrainBegin, args)
+                    self.run_proxy_drain(tools::ProxyDrainOperation::ProxyDrainBegin, args, binding)
                         .await
                 }
                 MutationToolRequest::ProxyDrainCancel(args) => {
-                    self.run_proxy_drain(tools::ProxyDrainOperation::ProxyDrainCancel, args)
+                    self.run_proxy_drain(tools::ProxyDrainOperation::ProxyDrainCancel, args, binding)
                         .await
                 }
                 MutationToolRequest::BrokerLogFilterSet(args) => {
-                    super::remaining::run_set_log_filter(&mut self.backend, args)
+                    super::remaining::run_set_log_filter(&mut self.backend, args, binding)
                         .await
                         .map(MutationToolResponse::BrokerLogFilter)
                 }
                 MutationToolRequest::BrokerLogFilterRestore(args) => {
-                    super::remaining::run_restore_log_filter(&mut self.backend, args)
+                    super::remaining::run_restore_log_filter(&mut self.backend, args, binding)
                         .await
                         .map(MutationToolResponse::BrokerLogFilter)
                 }
@@ -395,6 +404,7 @@ where
 async fn run_topic<B: SupervisedMutationBackend>(
     backend: &mut B,
     args: tools::UpsertTopicArgs,
+    binding: &PlanBinding,
 ) -> Result<tools::TopicMutationToolResponse, ControlError> {
     let request = admin::TopicMutationPreflightRequest {
         cluster: args.cluster.clone(),
@@ -406,6 +416,7 @@ async fn run_topic<B: SupervisedMutationBackend>(
     if args.dry_run {
         return Ok(topic_dry_run(&args, before, B::topic_failures(&plan)));
     }
+    binding.admit(|| MutationToolResponse::Topic(topic_dry_run(&args, before.clone(), B::topic_failures(&plan))))?;
     let outcome = backend.execute_topic(&plan).await?;
     let observed = backend
         .preflight_topic(&request, &args.broker_names)
@@ -418,6 +429,7 @@ async fn run_topic<B: SupervisedMutationBackend>(
 async fn run_group<B: SupervisedMutationBackend>(
     backend: &mut B,
     args: tools::UpsertConsumerGroupArgs,
+    binding: &PlanBinding,
 ) -> Result<tools::ConsumerGroupMutationToolResponse, ControlError> {
     let request = admin::SubscriptionGroupMutationPreflightRequest {
         cluster: args.cluster.clone(),
@@ -429,6 +441,9 @@ async fn run_group<B: SupervisedMutationBackend>(
     if args.dry_run {
         return Ok(group_dry_run(&args, before, B::group_failures(&plan)));
     }
+    binding.admit(|| {
+        MutationToolResponse::ConsumerGroup(group_dry_run(&args, before.clone(), B::group_failures(&plan)))
+    })?;
     let outcome = backend.execute_group(&plan).await?;
     let observed = backend
         .preflight_group(&request, &args.broker_names)

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::borrow::Cow;
 #[cfg(feature = "write-tools")]
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -60,11 +61,18 @@ use crate::tools::UPSERT_TOPIC_TOOL;
 
 pub const CAPABILITY_RESOURCE_URI: &str = "rocketmq-control://capabilities";
 
+/// The MCP protocol revisions this server answers, as the SDK names them.
+///
+/// The set is stated once for both RocketMQ MCP servers, in `rocketmq_mcp_auth`; a test holds this
+/// list to it.
+static SUPPORTED_PROTOCOL_VERSIONS: [ProtocolVersion; 1] = [ProtocolVersion::V_2025_11_25];
+
 #[derive(Clone)]
 pub struct ControlServer {
     catalog: OperationCatalog,
     capabilities: ControlCapabilities,
     guard: MutationGuard,
+    emergency_stop: crate::emergency_stop::EmergencyStop,
     configured_clusters: BTreeSet<ClusterName>,
     signals: ControlSignals,
     #[cfg(feature = "write-tools")]
@@ -93,6 +101,7 @@ impl ControlServer {
             catalog,
             capabilities,
             guard: MutationGuard::new(&policy),
+            emergency_stop: crate::emergency_stop::EmergencyStop::new(&policy),
             configured_clusters: BTreeSet::new(),
             signals: ControlSignals::default(),
             #[cfg(feature = "write-tools")]
@@ -154,6 +163,7 @@ impl ControlServer {
             catalog,
             capabilities,
             guard,
+            emergency_stop: crate::emergency_stop::EmergencyStop::new(&config.mutations),
             configured_clusters,
             signals: ControlSignals::default(),
             tool_runtime,
@@ -188,6 +198,7 @@ impl ControlServer {
             catalog,
             capabilities,
             guard: MutationGuard::new(policy),
+            emergency_stop: crate::emergency_stop::EmergencyStop::new(policy),
             configured_clusters,
             signals: ControlSignals::default(),
             tool_runtime: Some(Arc::new(tool_runtime)),
@@ -207,6 +218,11 @@ impl ControlServer {
 
     pub const fn capabilities(&self) -> &ControlCapabilities {
         &self.capabilities
+    }
+
+    /// Returns whether the emergency stop refuses mutation calls now.
+    pub(crate) async fn emergency_stop_engaged(&self) -> bool {
+        self.emergency_stop.is_engaged().await
     }
 
     pub fn tools_list(&self) -> ListToolsResult {
@@ -310,13 +326,19 @@ impl ControlServer {
 
     /// Rejects one argument that the input schema accepts and the server configuration does not.
     #[cfg(feature = "write-tools")]
-    fn rejected_argument(&self, tool: &'static str, started: std::time::Instant, path: &'static str) -> CallToolResult {
+    fn rejected_argument(
+        &self,
+        tool: &'static str,
+        started: std::time::Instant,
+        path: &'static str,
+        constraint: crate::error::ViolationConstraint,
+    ) -> CallToolResult {
         let error = crate::error::ControlError::invalid_argument();
         self.signals.call_rejected(tool, error.code(), started.elapsed());
         let mut envelope = error.envelope();
         envelope.violations = vec![crate::error::ArgumentViolation {
             path: path.to_owned(),
-            constraint: crate::error::ViolationConstraint::Other,
+            constraint,
         }];
         envelope_result(envelope)
     }
@@ -381,11 +403,20 @@ impl ServerHandler for ControlServer {
         request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, ErrorData> {
-        if request.protocol_version != ProtocolVersion::V_2025_11_25 {
+        if !SUPPORTED_PROTOCOL_VERSIONS.contains(&request.protocol_version) {
             return Err(ErrorData::invalid_params("unsupported MCP protocol version", None));
         }
         context.peer.set_peer_info(request);
         Ok(self.get_info())
+    }
+
+    /// Narrows the revisions that the SDK answers to the ones this server implements.
+    ///
+    /// The SDK defaults to every revision it knows, the ones without an `initialize` handshake
+    /// included. It advertises this list in `server/discover`, and holds to it the revision that
+    /// a request names for itself instead of a handshake.
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Borrowed(&SUPPORTED_PROTOCOL_VERSIONS)
     }
 
     async fn list_tools(
@@ -478,6 +509,12 @@ impl ServerHandler for ControlServer {
             Ok(authorized) => authorized,
             Err(error) => return Ok(self.rejected(tool, started, error).into()),
         };
+        // The stop is looked up for every call: after the caller is authorized, so that nobody
+        // else learns of it, and before an argument is read or anything is recorded.
+        if self.emergency_stop.is_engaged().await {
+            let stopped = crate::error::ControlError::mutation_disabled();
+            return Ok(self.rejected(tool, started, stopped).into());
+        }
         #[cfg(not(feature = "write-tools"))]
         {
             let _ = (authorized, operation, context);
@@ -573,7 +610,8 @@ impl ServerHandler for ControlServer {
                         .get(authorized.cluster())
                         .is_some_and(|aliases| aliases.contains(&args.proxy_name));
                     if !configured {
-                        return Ok(self.rejected_argument(tool, started, "/proxy_name").into());
+                        let unlisted = crate::error::ViolationConstraint::Other;
+                        return Ok(self.rejected_argument(tool, started, "/proxy_name", unlisted).into());
                     }
                     args.dry_run = args.effective_dry_run(default_dry_run, dry_run_omitted);
                     if drain == ControlOperation::ProxyDrainBegin {
@@ -616,6 +654,15 @@ impl ServerHandler for ControlServer {
                         .into())
                 }
             };
+            // A policy that binds executions to reviewed plans makes the digest a required
+            // argument of an execution. One without it ends here like any other invalid call:
+            // before it is admitted or recorded, and before a session exists.
+            if self.guard.requires_plan_digest() && !mutation.dry_run() && mutation.expected_plan_digest().is_none() {
+                let missing = crate::error::ViolationConstraint::Required;
+                return Ok(self
+                    .rejected_argument(tool, started, "/expected_plan_digest", missing)
+                    .into());
+            }
             let Some(runtime) = &self.tool_runtime else {
                 return Ok(self
                     .rejected(tool, started, crate::error::ControlError::operation_unavailable())
@@ -679,7 +726,11 @@ fn principal_from_context(context: &RequestContext<RoleServer>) -> Result<Princi
 
 #[cfg(feature = "write-tools")]
 fn tool_response(invoked: &crate::tool_runtime::InvokedMutation) -> CallToolResult {
-    let rendered = crate::tools::response_with_invocation(&invoked.response, invoked.invocation_id.get());
+    let rendered = crate::tools::response_as_sent(
+        &invoked.response,
+        invoked.invocation_id.get(),
+        invoked.plan_digest.as_deref(),
+    );
     let structured = rendered.unwrap_or_else(|| {
         serde_json::to_value(crate::error::ControlError::execution_failed().envelope()).unwrap_or_default()
     });
@@ -730,6 +781,20 @@ mod tests {
             assert_eq!(server.capabilities.registered_operations(), 0);
             assert!(!server.capabilities.mutation_supported());
         }
+    }
+
+    #[test]
+    fn the_handler_answers_the_protocol_revisions_that_both_servers_share() {
+        let server = ControlServer::new(false);
+        let answered = server.supported_protocol_versions();
+        assert_eq!(
+            answered.iter().map(ProtocolVersion::as_str).collect::<Vec<_>>(),
+            rocketmq_mcp_auth::SUPPORTED_MCP_PROTOCOL_VERSIONS
+        );
+        // The revision of the handshake is one of them, and it is the one both servers implement.
+        let handshake = server.get_info().protocol_version;
+        assert!(answered.contains(&handshake));
+        assert_eq!(handshake.as_str(), rocketmq_mcp_auth::MCP_PROTOCOL_VERSION);
     }
 
     #[test]

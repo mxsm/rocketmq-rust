@@ -38,7 +38,7 @@ The default features are `read-only`, `diagnose` and `stdio`. In that same direc
 cargo build --locked --release --features streamable-http
 ```
 
-`streamable-http` includes the authentication feature; it is not an unauthenticated HTTP mode. `observability` enables in-process signals, while `otlp` selects the implemented OTLP gRPC support. `change-planning` adds five planning tools subject to runtime policy; the feature is deprecated and will be removed, and a change is planned with a dry run of [MCP Control](./mcp-control.md) instead. None of these features turns Query MCP into MCP Control.
+`streamable-http` includes the authentication feature; it is not an unauthenticated HTTP mode. `observability` enables in-process signals, while `otlp` selects the implemented OTLP gRPC support. `change-planning` adds five planning tools subject to runtime policy; the feature is deprecated and will be removed, and a change is planned with a dry run of [MCP Control](./mcp-control.md) instead. `security-admin` adds one read-only tool, `rocketmq_list_acl_users`, which lists the ACL users of a cluster without their passwords; a call also needs the scope `rocketmq:security-admin` and a role that holds the tool. None of these features turns Query MCP into MCP Control.
 
 The binary is `target/release/rocketmq-mcp`, or `rocketmq-mcp.exe` on Windows. Root-workspace `cargo build` does not build this standalone package. Native dependencies come from its selected dependency graph; see [features/platforms](../reference/features-platforms.md).
 
@@ -65,9 +65,11 @@ This is a replacement fragment, not a complete configuration. Remove unused samp
 | `security.permissions_file` | `permissions.example.toml`, loaded relative to the config file |
 | `security.sanitize_output` | `true` |
 | `security.max_concurrent_requests_per_cluster` | 8 |
-| `security.rate_limit_per_minute` | 60 per principal/cluster/operation policy |
+| `security.rate_limit_per_minute` | 60 per principal/cluster/operation; the budget refills evenly, one call every `60 / limit` seconds |
+| `security.http_rate_limit_per_minute` | Unset; HTTP requests per principal, counted apart and ten times `rate_limit_per_minute` by default. A refused request gets HTTP 429 with `Retry-After` |
 | `security.pseudonym_key_env` | Unset; names an environment variable holding a 32–1024 byte key so that restarts and replicas return the same client and message pseudonyms |
-| `audit.enabled` / `sink` | `true` / `file`; choose a writable audit path |
+| `audit.enabled` / `sink` | `true` / `file`; choose a writable audit path. A record names the Topic, Consumer Group and Broker a call asked about, never a message |
+| `audit.max_file_bytes` | 67108864 (64 MiB); the file sink seals the audit file at this size as `<path>.000001`, `<path>.000002`, ... and never deletes a sealed file. `0` keeps one file |
 | `cache.enabled` / `max_entries` | `true` / 256; per-query TTLs govern freshness |
 | `server.request_timeout_ms` | 25000; the time one request may spend on RocketMQ sources over every query it runs, from 1000 to below 30000 |
 | `server.stdio.log_to_stderr` | `true`; stdout is reserved for MCP frames |
@@ -112,16 +114,16 @@ RocketMQ signing credentials must be separate from HTTP identity. A configured Y
 
 ## Discover and call tools
 
-The checked-in protocol version is `2025-11-25`; initialization rejects another version. After initialization, use `tools/list` for the caller-visible catalog. The source default catalog contains 30 tools, but policy can reduce discovery.
+The checked-in protocol version is `2025-11-25`; initialization rejects another version, and over Streamable HTTP a request whose `MCP-Protocol-Version` header names another version gets HTTP 400 `unsupported_protocol_version`. After initialization, use `tools/list` for the caller-visible catalog. The source default catalog contains 36 tools, but policy can reduce discovery.
 
 | Query family | Default tool names |
 | --- | --- |
 | Cluster / inventory | `rocketmq_list_clusters`, `rocketmq_list_brokers`, `rocketmq_get_cluster_overview`, `rocketmq_list_topics`, `rocketmq_list_consumer_groups` |
-| Topic | `rocketmq_describe_topic`, `rocketmq_get_topic_route`, `rocketmq_get_topic_config_state`, `rocketmq_get_topic_stats`, `rocketmq_get_topic_config` |
-| Consumers / connections | `rocketmq_get_consumer_lag`, `rocketmq_list_consumer_connections`, `rocketmq_list_producer_connections`, `rocketmq_get_consumer_group_config_state`, `rocketmq_get_consumer_group_details`, `rocketmq_get_consumer_progress` |
-| Broker | `rocketmq_describe_broker`, `rocketmq_get_broker_diagnostics`, `rocketmq_get_broker_config_summary`, `rocketmq_get_broker_log_filter_state` |
+| Topic | `rocketmq_describe_topic`, `rocketmq_get_topic_route`, `rocketmq_get_topic_config_state`, `rocketmq_get_topic_stats`, `rocketmq_get_topic_config`, `rocketmq_list_topic_consumers` |
+| Consumers / connections | `rocketmq_get_consumer_lag`, `rocketmq_list_consumer_connections`, `rocketmq_list_producer_connections`, `rocketmq_get_consumer_group_config_state`, `rocketmq_get_consumer_group_details`, `rocketmq_get_consumer_progress`, `rocketmq_get_consumer_running_info`, `rocketmq_get_dlq_summary` |
+| Broker | `rocketmq_describe_broker`, `rocketmq_get_broker_diagnostics`, `rocketmq_get_broker_config_summary`, `rocketmq_get_broker_log_filter_state`, `rocketmq_get_lite_broker_info` |
 | Infrastructure | `rocketmq_get_proxy_drain_state`, `rocketmq_get_ha_status`, `rocketmq_get_controller_metadata`, `rocketmq_get_nameserver_config_summary` |
-| Message | `rocketmq_get_message_metadata` |
+| Message | `rocketmq_get_message_metadata`, `rocketmq_query_message_trace`, `rocketmq_find_messages_by_key` |
 | Diagnosis | `rocketmq_diagnose_consumer_lag`, `rocketmq_diagnose_consumer_group`, `rocketmq_diagnose_message_delivery`, `rocketmq_diagnose_broker_health`, `rocketmq_get_cluster_health` |
 
 `rocketmq_diagnose_consumer_lag` reads its evidence in one admin session: the lag of every queue, the connections and configuration of the group, the route and permissions of the topic, the Broker that holds the most lag, and the retry and dead-letter topics of the group. It grades the backlog by its size and by how far behind production the group is, so the same number of waiting messages is `low` on a busy topic and `critical` on a quiet one. Each root cause carries a stable `rule_id`, for example `no_online_consumer`, `consumption_disabled`, `read_permission_missing` or `retry_queue_growing`, and names the evidence it rests on. A read that fails becomes missing evidence in a partial report instead of failing the diagnosis. The thresholds are server-owned settings under `[diagnosis]`, and `[[diagnosis.overrides]]` replaces them for single topics and consumer groups.
@@ -150,7 +152,7 @@ The server also answers `completion/complete` for Prompt arguments and Resource 
 
 ## Interpret observations, partial data and failures
 
-Successful calls carry a `rocketmq-mcp.v2` envelope with request ID, logical cluster, observation time, freshness, cache status, partial flag, warnings and typed data. `hit`, `miss` and `bypass` distinguish query reuse. Failures are not cached. Query state and continuation cursors are separated into `standard` and `sensitive` visibility classes; state does not cross that class boundary.
+Successful calls carry a `rocketmq-mcp.v2` envelope with request ID, logical cluster, observation time, freshness, cache status, partial flag, warnings and typed data. The list Tools accept `response_format`: `detailed` (default) returns every field of each item, `concise` only the fields that name it, which keeps a search for a name small. `hit`, `miss` and `bypass` distinguish query reuse. Requests that waited for the same read share its result or its failure, and a `source_unavailable` failure answers identical requests for at most one second; no other failure is kept. With `cache.stale_if_error_ms` set, a result past its TTL answers while the source is unavailable and carries the warning `stale_cache_value` with its real age. Query state and continuation cursors are separated into `standard` and `sensitive` visibility classes; state does not cross that class boundary.
 
 Output arrays are bounded to 1,000 rows and structured output to 1 MiB. Truncation and source failures can produce partial results. Inspect warnings and `partial` before presenting an observation as complete. Message metadata tools omit bodies, and connection identities are pseudonymous; missing sensitive values are not necessarily a backend failure. A pseudonym is a keyed hash of the identifier: it is stable within one server process, and across restarts and replicas only when `security.pseudonym_key_env` supplies a shared key.
 
@@ -162,7 +164,8 @@ Output arrays are bounded to 1,000 rows and structured output to 1 MiB. Truncati
 | `not_found` | The request was valid but the target named by `entity` does not exist in the selected cluster. Do not retry; confirm the name with the matching list tool. |
 | `source_unavailable` | Check the MCP process's route to configured NameServer/Broker/Proxy/Controller endpoints and outbound read credentials. |
 | `backend_timeout` | The request used up `server.request_timeout_ms`. Retry a narrower query and check which source is slow. |
-| `rate_limited` | Reduce query rate and respect bounded retry; avoid multiplying retries across the AI client and MCP layer. |
+| `rate_limited` | Wait the `retry_after_ms` the error names, then retry; avoid multiplying retries across the AI client and MCP layer. |
+| `concurrency_limited` | The cluster serves as many requests as `security.max_concurrent_requests_per_cluster` allows. Retry shortly, and run fewer queries on that cluster at once. |
 | `cursor_expired` | The kept result is gone. Request the first page again without `cursor`. |
 | `cursor_invalid` | Resend the cursor exactly as received, with the arguments and `limit` of the request that returned it. |
 | `result_too_large` | The result exceeds the 10,000 rows or 4 MiB kept for paging. Narrow the request, for example with `filter`. |

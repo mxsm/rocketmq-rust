@@ -15,8 +15,10 @@
 5. For Proxy drains, list each Proxy of a cluster under `[[clusters.proxies]]` with an alias and its remoting
    `host:port`. Callers name a Proxy only by that alias. See [Proxy drains and temporary log
    levels](#proxy-drains-and-temporary-log-levels) for what the Proxy and the Broker need.
-6. Restart the process. Configuration and emergency-disable changes are startup-time controls and do not hot
-   reload.
+6. Optionally set `mutations.emergency_stop_file` to a path the operators on call can write to. It is the one
+   control that takes effect without a restart; see [Emergency stop-write
+   procedure](#emergency-stop-write-procedure).
+7. Restart the process. Configuration changes are startup-time controls and do not hot reload.
 
 Verify authenticated `tools/list`: a principal can see zero through nine mutation tools according to the
 intersection, and `rocketmq_get_mutation_result` whenever it holds `rocketmq:write` and an allowed, configured
@@ -24,15 +26,50 @@ cluster.
 The capability Resource must report compile/runtime/registered state consistent with that catalog. Resource
 templates and prompts remain empty.
 
+## Deployment inside a private network
+
+By default the server accepts only a specific bind address, a public canonical origin, and an
+identity provider with a public name whose JWKS endpoint answers from a public address. Three
+switches replace one of those defaults each. All are off unless the configuration sets them to
+`true`, and each one only admits what its own row names. A server that starts with any of them on
+logs one warning, `rocketmq-mcp-control starts with deployment switches that relax its network
+defaults`, whose `switches` field lists their configuration keys.
+
+| Switch | What it accepts | What you take on |
+| --- | --- | --- |
+| `server.allow_wildcard_bind` | A `bind` on every interface: `0.0.0.0:<port>` or `[::]:<port>`, as a container usually needs. | The server listens on interfaces you may not have meant to expose. Limit who can connect with a network policy or a firewall. Requests still have to name the configured origin in `Host`. |
+| `server.allow_internal_base_url` | A `public_base_url` with a port, or with a host name that only resolves inside your network: one ending in `.internal`, `.local`, or `.home.arpa`, or a single-label service name. Example: `https://control.mq.svc.cluster.local:8443`. | No public certificate authority vouches for such a name. Your own name service and certificates decide who answers under it, and the same name can mean another server in another network. |
+| `oauth.allow_private_network` | An `issuer` and a `jwks_url` with a port or an internal host name, and a JWKS endpoint that answers from a private address. The JWKS request then follows the resolver and proxy settings of the process. | The keys that decide who may change a cluster come from wherever that name leads. Set `oauth.jwks_ca_path` to the CA of your identity provider, so that the certificate check of the JWKS connection still identifies it. |
+
+What stays fixed with every switch on: the origin and both OAuth URLs are canonical HTTPS URLs
+without credentials, query, or fragment; a host is never an address literal or a loopback name; a
+request must send the configured origin as `Host`, with the port when the origin has one, and as
+`Origin` when it sends that header; tokens are RS256 OAuth JWTs for the exact issuer and audience.
+
+Turn on only the switches a deployment needs, and treat the startup warning as an alert in
+environments that are not meant to run with one.
+
 ## Safe operating sequence
 
 Start with dry-run and inspect the operation-specific top-level `target`, aggregate `before` and `requested`,
 then the broker-sorted per-target evidence. For execution, preserve the same complete replacement and target
 set, set `dry_run=false` and `confirm=true`, and provide a safe operator reason. Inspect aggregate `after` as
-well as each target's persistence/verification evidence. Use a request key when retry or concurrent delivery is
+well as each target's persistence/verification evidence. That response is where to read the result: the query
+MCP server answers from caches of a few seconds, so a read through it right after the execution can still show
+the earlier state. Use a request key when retry or concurrent delivery is
 possible. Do not change the payload for a reused key. A repeated key replays an applied, partial, or conflicting
 outcome; after any failure it runs preflight again, so retrying with the same key is the way to learn the current
 state.
+
+Pass the `plan_digest` of the dry run as `expected_plan_digest` of the execution. The execution then writes
+only if the plan it reads is still that one, and otherwise ends with `precondition_conflict` and writes
+nothing. Run the dry run again, review the plan it reports, and execute it under a new request key. Set
+`mutations.require_plan_digest = true` to refuse every execution that names no plan; the item is read at
+startup like the rest of the policy, and it is off unless set. Before you turn it on, check the callers of
+`rocketmq_reset_consumer_offset`: the offsets of a group that is consuming move between two reads, so its
+plans go stale until the consumers are stopped. A Proxy that serves does not have that problem, because the
+work it holds is not part of a drain plan. The [tool reference](tool-reference.md#executing-a-reviewed-plan)
+lists what a plan covers for each tool.
 
 The server persists `started` before opening an Admin session. One lifecycle-owned supervisor then opens one
 mutation-only session, performs targeted preflight, optionally executes the sealed conditional plan, performs a
@@ -113,10 +150,12 @@ error text.
 | `rocketmq-mcp-control is starting` | info | `version`, `write_tools_compiled` | Logging is installed; the configuration is read next. |
 | `control configuration was rejected` | error | `stage`, then `reason` or `variable` | See the configuration table below. |
 | `control telemetry could not start` | error | `stage="telemetry"`, `operation` | The OTLP variables are invalid or the exporter could not start. |
+| `rocketmq-mcp-control starts with deployment switches that relax its network defaults` | warn | `switches` | One or more [deployment switches](#deployment-inside-a-private-network) are on. `switches` lists their configuration keys, separated by commas. |
 | `control server failed` | error | `stage`, `code` | `stage` is `audit`, `oauth_keys`, `tls`, `listener`, `mutation_tools`, or `serve`. |
 | `rocketmq-mcp-control authenticated HTTPS transport is ready` | info | `version`, `write_tools_compiled`, `mutations_runtime_enabled`, `registered_operations` | The listener accepts requests. The fields repeat the capability Resource. |
 | `request was rejected before authentication` | warn | `site="origin"`, `code`, `suppressed` | The Host or Origin header did not match the public origin. |
 | `request was rejected by authentication` | warn | `site="authentication"`, `code`, `reason`, `suppressed` | `reason` is `invalid_token`, `insufficient_scope`, or `keys_unavailable`. |
+| `request named an unsupported protocol version` | warn | `site="protocol"`, `code`, `suppressed` | An authenticated request sent an `MCP-Protocol-Version` header other than `2025-11-25`. The client speaks another MCP revision or skipped the handshake. |
 | `mutation call was rejected before execution` | warn | `site="call"`, `tool`, `code`, `suppressed` | Authorization, argument, or admission failure. No Admin session was opened. |
 | `mutation finished` | info | `operation`, `cluster`, `mode`, `result`, `invocation_id`, `elapsed_ms` | A supervised dry run was `planned` or an execution was `applied`. |
 | `mutation finished without a clean result` | warn | the same fields plus `code` and `audit_recorded` | The result is `partial`, `conflict`, or `failed`, or the terminal audit record was not persisted. |
@@ -170,7 +209,8 @@ The service records the shared MCP instruments.
 | `invalid_request` | `request_rejected`, `confirmation_required`, `invalid_argument`, `precondition_conflict` |
 | `rate_limited` | `rate_limited` |
 | `source_unavailable` | `operation_unavailable`, `audit_unavailable`, `partial_apply`, `verification_failed`, `timeout`, `shutdown_failed` |
-| `internal` | `execution_failed`, `cancelled`, `invalid_config` |
+| `cancelled` | `cancelled` |
+| `internal` | `execution_failed`, `invalid_config` |
 
 The exact code of each call is in the log line and in the audit record.
 
@@ -224,7 +264,9 @@ Operator and reason appear in no response, error, trace, or ordinary log. Audit 
 tokens, endpoints, request keys, message bodies, or backend error text. Existing version-1, version-2, and
 mixed-version JSONL is recovered in place and is never rewritten; new writes are version 3 only.
 
-To stop new mutations, set `mutations_enabled=false` and restart. Removing an operation or cluster from the
+To stop new mutations at once, create the emergency stop file; to stop them for good, set
+`mutations_enabled=false` and restart. Both are described under [Emergency stop-write
+procedure](#emergency-stop-write-procedure). Removing an operation or cluster from the
 server allowlist also requires restart. Keep the service unavailable until incomplete or partial targets are
 reconciled explicitly; the control server never retries conflicts or invents compensating mutations.
 
@@ -255,8 +297,9 @@ Use a narrow, reversible rollout. The configuration is read only during startup;
 8. Expand to another allowed operation or cluster only by editing the startup configuration and repeating
    the same restart, discovery, dry-run, execute, and audit review sequence.
 
-This is intentionally an operational sequence, not an approval system: it adds no plan hash, fingerprint,
-signature for a change plan, or release gate.
+This is intentionally an operational sequence, not an approval system. A plan digest holds an execution to
+the plan that a dry run reported; it is no signature for a change plan, no approval, and no release gate, and
+the server does not record who reviewed a plan.
 
 ## Rollback and result handling
 
@@ -274,7 +317,7 @@ A Proxy drain and a temporary log level are undone by their own counterpart: `ro
 | --- | --- | --- |
 | `planned` | Dry-run produced a sealed candidate without mutation. | Review it; no rollback is needed. |
 | `applied` | Every target verified, including `changed=false` idempotent success. | Record the terminal audit evidence and continue normal monitoring. |
-| `precondition_conflict` / `conflict` | Sealed state changed before the conditional write. | Re-run dry-run, compare new state, and choose a new explicit action; never automatic-retry. |
+| `precondition_conflict` / `conflict` | Sealed state changed before the conditional write, or the plan read now is not the one the execution named. | Re-run dry-run, compare new state, and choose a new explicit action; never automatic-retry. A plan that was refused needs a new `request_key` for the next one. |
 | `partial_apply` / `partial` | Some targets persisted or verified and others did not. | Treat returned `targets`, `before`, `after`, persistence, and verification fields as source of truth; reconcile each target explicitly before retrying. |
 | `verification_failed` | A write may have persisted but complete post-read verification or order reconciliation failed. | Preserve the result, inspect the affected logical target using an authorized operational path, then restore or complete the intended state with a new typed request. |
 | `audit_unavailable` | Durable audit recovery, append, or timeout failed. | Stop mutation attempts and repair/recover the audit sink before retrying. A failed `started` record means no session/RPC began. |
@@ -294,8 +337,46 @@ in place as an archive, and start the older build with a new `audit.path`. Its c
 
 ## Emergency stop-write procedure
 
-Use this procedure for an immediate policy stop. It stops new mutation Tool registration; it does not erase
-audit records or mutate any RocketMQ state.
+There are two stops. The stop file acts within one call and needs no restart, and it is the first step in an
+incident. The configuration stop takes a restart, removes the mutation Tools from discovery, and is how a
+stop is made to last. Neither erases audit records or changes any RocketMQ state.
+
+### Stop file: no restart
+
+This stop needs `mutations.emergency_stop_file` in the configuration the server was started with. Set it when
+you deploy: it cannot be added during an incident without the restart it is meant to avoid.
+
+1. Create the file that `mutations.emergency_stop_file` names, on the host or in the volume the server reads.
+   An empty file is enough; the server reads no content.
+2. From the next call on, every mutation Tool call is refused with `mutation_disabled`, a dry run included. A
+   refused call writes no audit record and opens no session. The server looks the file up for each call, so
+   there is nothing to reload.
+3. Verify with an authorized dry run: it must return `mutation_disabled`. `tools/list` and
+   `rocketmq-control://capabilities` do not change with the stop file: they report the configuration.
+4. `rocketmq_get_mutation_result` keeps answering, so the outcome of the calls made before the stop can be
+   read.
+5. Remove the file only after the incident is resolved. The next call is then decided by the configuration
+   again.
+
+What the stop file does not do:
+
+- It does not interrupt a call that was admitted before the file appeared. Such a call runs to its end, at
+  most `mutations.operation_timeout_seconds` later. Read its outcome with `rocketmq_get_mutation_result`.
+- It never enables anything. Without the file, `mutations_enabled` and the allowlists decide alone.
+- It is not an authorization. Anyone who can create the file can stop mutations and anyone who can remove it
+  can lift the stop, so give the directory to the operators on call and to nobody else. The server needs
+  only to look the file up, not to write there.
+- If the server cannot look the file up, for example because the directory became unreadable, it refuses
+  mutation calls as if the file existed. A failed lookup is never read as "no stop".
+
+A server that starts while the file exists logs the warning `rocketmq-mcp-control starts with the emergency
+stop engaged: mutation calls are refused`. Keep the path on storage that survives a restart if the stop has to
+survive one, or follow up with the configuration stop below.
+
+### Configuration stop: with a restart
+
+Use this to make a stop last, and whenever no stop file was configured. It stops new mutation Tool
+registration.
 
 1. Edit the active Control configuration and set `mutations_enabled=false`. Keep `dry_run=true`; reducing
    `allowed_operations` and `allowed_clusters` is optional defense in depth, not a substitute for disabling
@@ -322,5 +403,5 @@ after it was set.
 
 To restore writes, reverse the configuration change only after the incident is resolved: set
 `mutations_enabled=true`, restore only the necessary closed operation/cluster allowlists, restart, verify the
-capability fields and intended `tools/list` catalog, then begin again with dry-run. There is no emergency
-override, generic delete Tool, shell, or free-form RPC.
+capability fields and intended `tools/list` catalog, then begin again with dry-run. Remove the stop file as
+well if one was created. There is no emergency override, generic delete Tool, shell, or free-form RPC.

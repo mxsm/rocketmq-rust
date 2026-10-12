@@ -31,6 +31,8 @@ use axum::Router;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::tower::StreamableHttpService;
 use rmcp::transport::StreamableHttpServerConfig;
+use rocketmq_mcp_auth::requested_protocol_version;
+use rocketmq_mcp_auth::RequestedProtocolVersion;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_transport::api::TlsConfig as RocketmqTlsConfig;
 use rocketmq_transport::api::TlsMode;
@@ -84,6 +86,7 @@ where
     F: FutureShutdown,
 {
     config.validate()?;
+    crate::telemetry::deployment_switches_on(&config.deployment_switches());
     let metadata_url = resource_metadata_url(&config);
     let auth = AuthState::<HttpJwksSource>::initialize(&config.oauth, metadata_url)
         .await
@@ -128,6 +131,9 @@ where
         ControlServer::new(config.mutations.mutations_enabled)
     };
     let server = server.with_signals(auth.signals().clone());
+    if server.emergency_stop_engaged().await {
+        crate::telemetry::emergency_stop_engaged();
+    }
     let capabilities = server.capabilities().clone();
     let router = build_router_with_auth(&config, server, cancellation.clone(), auth);
 
@@ -156,8 +162,14 @@ pub(crate) fn build_router_with_auth<S: JwksSource + 'static>(
     let service = streamable_service(config, server, cancellation);
     let metadata_path = "/.well-known/oauth-protected-resource";
     let metadata = protected_resource_metadata(config);
+    // Layers run from the last one added: a request is authenticated before anything else about
+    // it is answered, the revision it names included.
     let mcp_router = Router::new()
         .nest_service(&endpoint, service)
+        .layer(middleware::from_fn_with_state(
+            signals.clone(),
+            validate_protocol_version,
+        ))
         .layer(middleware::from_fn_with_state(auth, oauth_middleware::<S>));
 
     let policy = RequestOriginPolicy {
@@ -206,6 +218,25 @@ async fn validate_host_origin(State(policy): State<RequestOriginPolicy>, request
         .unwrap_or(true);
     if !host_matches || !origin_matches {
         policy.signals.request_rejected();
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(ControlError::request_rejected().envelope()),
+        )
+            .into_response();
+    }
+    next.run(request).await
+}
+
+/// Refuses a request whose `MCP-Protocol-Version` header names a revision this server does not
+/// answer.
+///
+/// The SDK holds that header to every revision it knows, not to the ones a server supports, and
+/// would answer such a request as if nothing were wrong. A request without the header passes
+/// here: it speaks through `initialize` or names its revision in its metadata, and the handler
+/// holds both to the same set.
+async fn validate_protocol_version(State(signals): State<ControlSignals>, request: Request, next: Next) -> Response {
+    if requested_protocol_version(request.headers()) == RequestedProtocolVersion::Unsupported {
+        signals.protocol_version_rejected();
         return (
             StatusCode::BAD_REQUEST,
             axum::Json(ControlError::request_rejected().envelope()),
@@ -393,12 +424,15 @@ mod tests {
                     cert_path: "server.pem".to_string(),
                     key_path: "server-key.pem".to_string(),
                 },
+                allow_wildcard_bind: false,
+                allow_internal_base_url: false,
             },
             oauth: OAuthConfig {
                 issuer: "https://issuer.example.test".to_string(),
                 audience: "rocketmq-mcp-control".to_string(),
                 jwks_url: "https://issuer.example.test/jwks".to_string(),
                 jwks_ca_path: None,
+                allow_private_network: false,
             },
             mutations: MutationPolicyConfig::default(),
             clusters: Vec::new(),
@@ -445,6 +479,9 @@ mod tests {
         preflights: std::sync::atomic::AtomicUsize,
         executes: std::sync::atomic::AtomicUsize,
         shutdowns: std::sync::atomic::AtomicUsize,
+        /// The version of the Topic that another writer left on every Broker; zero while no
+        /// other writer created it. A test moves it to change the state between two calls.
+        topic_version: std::sync::atomic::AtomicU64,
     }
 
     #[cfg(feature = "write-tools")]
@@ -520,18 +557,20 @@ mod tests {
                 self.counters
                     .preflights
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let found = self.counters.topic_version.load(std::sync::atomic::Ordering::SeqCst);
+                let version = found + u64::from(self.topic_executed);
                 Ok(ProtocolTopicPlan {
                     targets: broker_names
                         .iter()
                         .cloned()
                         .map(|broker_name| MetadataPreflightTarget {
                             broker_name,
-                            state: if self.topic_executed {
-                                ExpectedState::Present { version: 1 }
-                            } else {
+                            state: if version == 0 {
                                 ExpectedState::Absent
+                            } else {
+                                ExpectedState::Present { version }
                             },
-                            current: self.topic_executed.then(|| request.replacement.clone()),
+                            current: (version > 0).then(|| request.replacement.clone()),
                         })
                         .collect(),
                     failures: Vec::new(),
@@ -854,12 +893,21 @@ mod tests {
         mutations_enabled: bool,
         trail: crate::audit::AuditTrail,
     ) -> (Router, Arc<ProtocolCounters>) {
+        write_router_with(|policy| policy.mutations_enabled = mutations_enabled, trail).await
+    }
+
+    /// Builds the write router with the test policy as `adjust` leaves it.
+    #[cfg(feature = "write-tools")]
+    async fn write_router_with(
+        adjust: impl FnOnce(&mut MutationPolicyConfig),
+        trail: crate::audit::AuditTrail,
+    ) -> (Router, Arc<ProtocolCounters>) {
         use crate::model::ClusterName;
         use crate::model::ControlOperation;
 
         let mut config = config();
         config.mutations = MutationPolicyConfig {
-            mutations_enabled,
+            mutations_enabled: true,
             dry_run: true,
             allowed_operations: vec![
                 ControlOperation::TopicUpsert,
@@ -870,7 +918,10 @@ mod tests {
             ],
             allowed_clusters: vec![ClusterName::try_new("cluster-a").unwrap()],
             operation_timeout_seconds: 2,
+            require_plan_digest: false,
+            emergency_stop_file: None,
         };
+        adjust(&mut config.mutations);
         let runtime = rocketmq_runtime::RuntimeContext::from_current("control-protocol-write-test");
         let owner = runtime
             .service_context("control-protocol-write-test")
@@ -988,6 +1039,23 @@ mod tests {
         response
     }
 
+    /// Whether `value` has the form of a plan digest.
+    #[cfg(feature = "write-tools")]
+    fn is_plan_digest(value: &serde_json::Value) -> bool {
+        value.as_str().is_some_and(crate::tools::is_plan_digest)
+    }
+
+    /// The expected response of a dry run with the plan digest that `sent` reports.
+    ///
+    /// What a digest binds has tests of its own; here it only has to be one.
+    #[cfg(feature = "write-tools")]
+    fn planned_as(mut response: serde_json::Value, sent: &serde_json::Value) -> serde_json::Value {
+        let digest = &sent["result"]["structuredContent"][crate::tools::PLAN_DIGEST_MEMBER];
+        assert!(is_plan_digest(digest), "a dry run reports no plan digest: {digest}");
+        response[crate::tools::PLAN_DIGEST_MEMBER] = digest.clone();
+        response
+    }
+
     #[cfg(feature = "write-tools")]
     fn expected_upsert_response(
         operation: &str,
@@ -1048,7 +1116,9 @@ mod tests {
             "requested": requested,
             "after": after,
             "targets": targets,
-            "warnings": []
+            "warnings": [],
+            // An execution reports no plan. `planned_as` adds the one of a dry run.
+            "plan_digest": null
         })
     }
 
@@ -1536,7 +1606,10 @@ mod tests {
         assert_eq!(
             topic_dry["result"]["structuredContent"],
             invoked(
-                expected_upsert_response("topic_upsert", "topic", "orders", topic_requested.clone(), false),
+                planned_as(
+                    expected_upsert_response("topic_upsert", "topic", "orders", topic_requested.clone(), false),
+                    &topic_dry
+                ),
                 1
             )
         );
@@ -1599,12 +1672,15 @@ mod tests {
         assert_eq!(
             group_dry["result"]["structuredContent"],
             invoked(
-                expected_upsert_response(
-                    "consumer_group_upsert",
-                    "consumer_group",
-                    "orders_consumers",
-                    group_requested.clone(),
-                    false,
+                planned_as(
+                    expected_upsert_response(
+                        "consumer_group_upsert",
+                        "consumer_group",
+                        "orders_consumers",
+                        group_requested.clone(),
+                        false,
+                    ),
+                    &group_dry
                 ),
                 7
             )
@@ -2189,6 +2265,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_internal_origin_with_a_port_is_the_one_authority_a_request_may_name() {
+        const AUTHORITY: &str = "control.mq.svc.cluster.local:8443";
+        let mut config = config();
+        config.server.bind = "0.0.0.0:8443".to_string();
+        config.server.allow_wildcard_bind = true;
+        config.server.allow_internal_base_url = true;
+        config.server.public_base_url =
+            serde_json::from_value(serde_json::json!(format!("https://{AUTHORITY}"))).unwrap();
+        config.validate().unwrap();
+        let auth = AuthState::from_source(&config.oauth, resource_metadata_url(&config), StaticSource)
+            .await
+            .unwrap();
+        let router = build_router_with_auth(&config, ControlServer::new(false), CancellationToken::new(), auth);
+        let metadata = |host: &str| {
+            Request::builder()
+                .uri("/.well-known/oauth-protected-resource")
+                .header(HOST, host)
+                .body(Body::empty())
+                .unwrap()
+        };
+
+        let published = router.clone().oneshot(metadata(AUTHORITY)).await.unwrap();
+        assert_eq!(published.status(), StatusCode::OK);
+        let body = to_bytes(published.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["resource"], format!("https://{AUTHORITY}/mcp"));
+
+        // The wildcard bind adds no name: the origin is still the only authority that is served.
+        for refused in [
+            "control.mq.svc.cluster.local",
+            "control.mq.svc.cluster.local:9443",
+            "0.0.0.0:8443",
+            "10.0.0.5:8443",
+            "control.example.test",
+        ] {
+            let response = router.clone().oneshot(metadata(refused)).await.unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{refused}");
+        }
+
+        let write_token = token(REQUIRED_WRITE_SCOPE);
+        let initialize = |host: &str, origin: &str| {
+            Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header(HOST, host)
+                .header(ORIGIN, origin)
+                .header("content-type", "application/json")
+                .header("accept", "application/json, text/event-stream")
+                .header("mcp-protocol-version", "2025-11-25")
+                .header(AUTHORIZATION, format!("Bearer {write_token}"))
+                .body(Body::from(
+                    r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"control-test","version":"1.0"}}}"#,
+                ))
+                .unwrap()
+        };
+        let accepted = router
+            .clone()
+            .oneshot(initialize(AUTHORITY, &format!("https://{AUTHORITY}")))
+            .await
+            .unwrap();
+        assert_eq!(accepted.status(), StatusCode::OK);
+        let foreign_origin = router
+            .oneshot(initialize(AUTHORITY, "https://control.mq.svc.cluster.local"))
+            .await
+            .unwrap();
+        assert_eq!(foreign_origin.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn hostile_host_and_origin_are_rejected_before_oauth_without_echo_or_logs() {
         let logs = CapturedLogs::default();
         let subscriber = tracing_subscriber::fmt()
@@ -2381,14 +2526,34 @@ mod tests {
             .unwrap();
     }
 
+    mod protocol_version {
+        use super::*;
+
+        include!("transport/protocol_version.rs");
+    }
+
     #[cfg(feature = "write-tools")]
     include!("transport/acceptance_matrix.rs");
+
+    #[cfg(feature = "write-tools")]
+    mod emergency_stop {
+        use super::*;
+
+        include!("transport/emergency_stop.rs");
+    }
 
     #[cfg(feature = "write-tools")]
     mod mutation_result {
         use super::*;
 
         include!("transport/mutation_result.rs");
+    }
+
+    #[cfg(feature = "write-tools")]
+    mod plan_digest {
+        use super::*;
+
+        include!("transport/plan_digest.rs");
     }
 }
 

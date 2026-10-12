@@ -26,6 +26,7 @@ expression: response
   "invocation_id": 42,
   "mode": "execute",
   "operation": "topic_upsert",
+  "plan_digest": null,
   "requested": {
     "message_type": "NORMAL",
     "order": false,

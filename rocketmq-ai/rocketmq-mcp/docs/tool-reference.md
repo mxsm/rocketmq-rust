@@ -1,9 +1,10 @@
 # RocketMQ MCP Tool Reference
 
-This reference documents the checked-in Query MCP catalog. It is derived from the default and
-`change-planning` Tool contracts in `src/tools/catalog.rs` and their checked-in schema snapshots. The
-default catalog has 30 Tools; enabling `change-planning` adds five non-mutating planning Tools for a
-total of 35. Use `tools/list` as the live authority for the caller-visible subset.
+This reference documents the checked-in Query MCP catalog. It is derived from the default,
+`change-planning`, and `security-admin` Tool contracts in `src/tools/catalog.rs` and their checked-in
+schema snapshots. The default catalog has 36 Tools; enabling `change-planning` adds five non-mutating
+planning Tools, and enabling `security-admin` adds one read-only Tool, for a total of 42 with both.
+Use `tools/list` as the live authority for the caller-visible subset.
 
 All default Tools have `readOnlyHint=true`, `destructiveHint=false`, and do not create a RocketMQ
 Admin mutation session. See the authorization matrix for discovery and call-time checks. Logical
@@ -14,14 +15,27 @@ tables are not network addresses.
 
 Each Tool has a risk level and requires the corresponding principal scope. For HTTP, scopes come
 from verified OAuth claims. For stdio, `Principal::local(profile)` synthesizes them: every profile
-gets `rocketmq:read`; `diagnose`, `diagnostic`, and `operator` also get `rocketmq:diagnose`; and
-`plan` and `operator` also get `rocketmq:plan`.
+gets `rocketmq:read`; `diagnose`, `diagnostic`, and `operator` also get `rocketmq:diagnose`; `plan`
+and `operator` also get `rocketmq:plan`; and `operator` also gets `rocketmq:message-search`. Only
+the profile `security_admin` gets `rocketmq:security-admin`.
 
 | Risk level | Required scope |
 | --- | --- |
 | ReadOnly | `rocketmq:read` |
 | Diagnose | `rocketmq:diagnose` |
 | Plan | `rocketmq:plan` |
+| MessageSearch | `rocketmq:message-search` |
+| SecurityAdmin | `rocketmq:security-admin` |
+
+`MessageSearch` is the level of `rocketmq_find_messages_by_key`. It reads only. It has a scope of its
+own because a search by a business key finds messages the caller could not name, so the permission
+to read does not include it. A Tool that looks messages up, by an identifier or by a key, also needs
+the role permission for `rocketmq_get_message_metadata` on the cluster.
+
+`SecurityAdmin` is the level of `rocketmq_list_acl_users`, which exists only in a build with the
+`security-admin` feature. It reads only. It has a scope of its own because the list of who may sign
+requests to a cluster is for the people who administer access to it: no other scope includes it, and
+it includes no other scope.
 
 `tools/list` discovery checks only the principal scope and the role's Tool allow/deny rules. It does
 not check configured clusters, the principal cluster claim, tenant binding, or runtime
@@ -90,6 +104,12 @@ and add `source_failures_present` to `warnings`. If the cap is exceeded, `warnin
 `output_rows_truncated`. The controlled Query/Admin projections omit addresses, credentials,
 tokens, message bodies, and other configured sensitive values.
 
+`warnings` includes `stale_cache_value` when the source was unavailable or did not answer in time
+and the server answered with the result it had kept: `cache_status` is `hit`, and `observed_at`
+and `freshness_ms` tell how old the result is. This happens only on a server whose operator set
+`cache.stale_if_error_ms`; by default such a request fails with `source_unavailable` or
+`backend_timeout`.
+
 `rocketmq_list_clusters` is not bound to a cluster and answers in the same envelope without
 `cluster` and `source_failures`.
 
@@ -99,6 +119,33 @@ contains `items`, `count`, `total_count`, `has_more`, and `next_cursor`. More th
 rows are truncated, with `partial=true` and `output_rows_truncated`. A serialized response over
 1 MiB instead fails with `OutputTooLarge` (`output_too_large`); it is not returned as a truncated
 partial response.
+
+### List formats
+
+The list Tools `rocketmq_list_topics`, `rocketmq_list_consumer_groups`, `rocketmq_list_brokers`,
+`rocketmq_list_consumer_connections`, and `rocketmq_list_producer_connections` take the optional
+argument `response_format`:
+
+- `detailed`, the default, returns every field of each item.
+- `concise` returns only the fields that name an item. Use it to find a name, then ask for the one
+  item with the Tool that describes it.
+
+| Tool | A `concise` item has |
+| --- | --- |
+| `rocketmq_list_topics` | `topic` |
+| `rocketmq_list_consumer_groups` | `group` |
+| `rocketmq_list_brokers` | `broker_name`, `broker_id`, `broker_active` |
+| `rocketmq_list_consumer_connections`, `rocketmq_list_producer_connections` | `broker_name`, `client_alias` |
+
+Everything outside the items is the same in both formats, including the page metadata, `partial`,
+and `source_failures`. The output schema of a list Tool therefore requires only the naming fields
+of an item, and a client that validates results accepts both formats. A cursor is not bound to the
+format: a page read as `concise` can be continued as `detailed`, and the other way round.
+
+For `rocketmq_list_consumer_groups`, `concise` also skips the Broker reads that fill in the
+details of each group, so it is faster and cannot be partial because of them. For the other list
+Tools the format changes only what is returned. Any other value is an invalid argument, and a Tool
+that is not a list Tool does not accept the argument.
 
 A cursor continues one result that the server keeps for `cache.cursor_snapshot_ttl_ms` (60 seconds
 by default, at most 5 minutes), so that every page comes from the same observation. Send it back
@@ -147,10 +194,11 @@ A failed call returns `isError=true` and one text block holding a JSON object wi
 | `code` | Retryable | Meaning |
 | --- | --- | --- |
 | `invalid_arguments` | no | The arguments violate the input schema or a validation rule. The additional `violations` field locates them when the server can tell which argument is wrong. |
-| `not_found` | no | The request was valid, but the selected entity does not exist. The additional `entity` field names its kind: `topic`, `consumer_group`, `broker`, `message`, `proxy`, `controller`, or `cluster`. |
-| `source_unavailable` | yes | A RocketMQ source could not be reached or answered with a failure. |
+| `not_found` | no | The request was valid, but the selected entity does not exist. The additional `entity` field names its kind: `topic`, `consumer_group`, `broker`, `message`, `proxy`, `controller`, `client`, or `cluster`. |
+| `source_unavailable` | yes | A RocketMQ source could not be reached or answered with a failure. Identical requests get the same answer for up to one second without asking the source again. |
 | `backend_timeout` | yes | The request used up `server.request_timeout_ms` (25 seconds by default), the time it may spend on RocketMQ sources over every query the Tool runs. |
-| `rate_limited` | yes | The rate limit or the per-cluster concurrency limit was reached. |
+| `rate_limited` | yes | The principal used up its per-minute budget for this Tool on this cluster. The additional `retry_after_ms` field is the wait after which one call is due. |
+| `concurrency_limited` | yes | The cluster already serves as many requests as `security.max_concurrent_requests_per_cluster` allows at once. Retry shortly; no wait is named, because a permit is free as soon as a request in flight ends. |
 | `cancelled` | no | The client cancelled the request. |
 | `unauthorized_scope` | no | The principal lacks the scope the Tool's risk level requires. |
 | `permission_denied` | no | No role of the principal grants the Tool, or an argument needs the permission for another Tool; `violations` then names that argument. |
@@ -163,6 +211,24 @@ A failed call returns `isError=true` and one text block holding a JSON object wi
 | `result_too_large` | no | The result exceeds the size the server keeps for paging. Narrow the request, for example with `filter`. |
 | `identifier_input_bound_exceeded` | no | An identifier is longer than the 1,024 bytes a pseudonym may cover. |
 | `internal_error` | no | The server failed internally; report the `request_id`. |
+
+The mutation control server (`rocketmq-mcp-control`) has its own error codes and spells the argument
+error `invalid_argument`. A client of both servers accepts both spellings. One spelling for both is
+left to a later contract version, because renaming a code breaks every client that matches on it.
+
+A budget holds one minute of calls (`security.rate_limit_per_minute`, 60 by default) and refills
+evenly, so a caller that used it up gets one call back every `60 / rate_limit_per_minute` seconds
+instead of all of them a minute later. `retry_after_ms` is that wait, rounded up to a whole
+millisecond:
+
+```json
+{"code":"rate_limited","retryable":true,"retry_after_ms":830}
+```
+
+Budgets are kept per principal, cluster, and operation. Over HTTP a principal also has one budget for
+all its requests, `security.http_rate_limit_per_minute`, which defaults to ten times the budget of a
+single operation. A request beyond it is refused before it reaches a Tool, with HTTP 429 and a
+`Retry-After` header in whole seconds.
 
 `violations` holds at most three entries, each with a `path` and a `constraint`:
 
@@ -229,7 +295,7 @@ a cluster-bound completion holds one of the cluster's concurrency permits while 
 {"completion":{"values":["orders","orders-retry"],"total":2,"hasMore":false}}
 ```
 
-## Default read-only catalog (30 Tools)
+## Default read-only catalog (36 Tools)
 
 ### `rocketmq_get_cluster_overview`
 
@@ -261,9 +327,10 @@ cluster. It is read-only.
 | `filter` | string or null | no | Optional Topic inventory filter; trim, ASCII-lowercase, at most 1,024 bytes. |
 | `limit` | integer or null | no | Page limit, 1--200; defaults to 50. |
 | `cursor` | string or null | no | Opaque continuation from the preceding response, at most 256 bytes. |
+| `response_format` | string | no | `detailed` (default) or `concise`; see [List formats](#list-formats). |
 
 **Output.** Paged `data.items` contains Topic entries with their visible cluster and optional
-consumer-group context.
+consumer-group context. With `response_format = "concise"` an entry is its `topic` alone.
 
 ```json
 {"cluster":"production-a","filter":"orders","limit":25}
@@ -328,9 +395,11 @@ summaries. It is read-only.
 | `filter` | string or null | no | Optional Consumer Group inventory filter; trim, ASCII-lowercase, at most 1,024 bytes. |
 | `limit` | integer or null | no | Page limit, 1--200; defaults to 50. |
 | `cursor` | string or null | no | Opaque continuation, at most 256 bytes. |
+| `response_format` | string | no | `detailed` (default) or `concise`; see [List formats](#list-formats). |
 
 **Output.** Paged `data.items` contains the visible Consumer Group records and the standard page
-metadata.
+metadata. With `response_format = "concise"` a record is its `group` alone, and the server reads
+nothing about the groups beyond their names.
 
 ```json
 {"cluster":"production-a","filter":"orders","limit":25}
@@ -818,9 +887,11 @@ Consumer Group. It is read-only.
 | `consumer_group` | string | yes | Exact Consumer Group name. |
 | `limit` | integer or null | no | Page limit, 1--200; defaults to 50. |
 | `cursor` | string or null | no | Opaque continuation. |
+| `response_format` | string | no | `detailed` (default) or `concise`; see [List formats](#list-formats). |
 
 **Output.** Paged `data.items` has logical Broker names, pseudonymous `client_alias`, language,
-version, and optional update time; client addresses are not exposed.
+version, and optional update time; client addresses are not exposed. With
+`response_format = "concise"` an item is its `broker_name` and `client_alias`.
 
 ```json
 {"cluster":"production-a","consumer_group":"orders-consumer","limit":25}
@@ -842,8 +913,10 @@ Topic and Producer Group. It is read-only.
 | `producer_group` | string | yes | Exact Producer Group name. |
 | `limit` | integer or null | no | Page limit, 1--200; defaults to 50. |
 | `cursor` | string or null | no | Opaque continuation. |
+| `response_format` | string | no | `detailed` (default) or `concise`; see [List formats](#list-formats). |
 
-**Output.** Paged `data.items` has pseudonymous connection observations and page metadata.
+**Output.** Paged `data.items` has pseudonymous connection observations and page metadata. With
+`response_format = "concise"` an item is its `broker_name` and `client_alias`.
 
 ```json
 {"cluster":"production-a","topic":"orders","producer_group":"orders-producer","limit":25}
@@ -1106,11 +1179,13 @@ Consumer Group inventories.
 | Argument | Type | Required | Rules |
 | --- | --- | --- | --- |
 | `cluster` | string | yes | Configured logical cluster alias. |
+| `response_format` | string | no | `detailed` (default) or `concise`; see [List formats](#list-formats). |
 
 **Output.** `data` contains the logical cluster, `brokers`, and `generated_at`. `brokers` has one
 row for each Broker instance, masters and slaves alike, with the same fields as the overview's
-`brokers`: `broker_name`, `broker_id`, `version`, TPS, and `broker_active`. A Broker that did not
-answer makes the response partial through `source_failures`. The
+`brokers`: `broker_name`, `broker_id`, `version`, TPS, and `broker_active`. With
+`response_format = "concise"` a row is its `broker_name`, `broker_id`, and `broker_active`. A Broker
+that did not answer makes the response partial through `source_failures`. The
 `rocketmq://clusters/{cluster}/brokers` Resource publishes the same rows from the same read; it
 stays authorized as `rocketmq_get_cluster_overview`, so the Tool result carries no link to it.
 
@@ -1120,6 +1195,277 @@ stays authorized as `rocketmq_get_cluster_overview`, so the Tool result carries 
 
 ```json
 {"cluster":"production-a","data":{"cluster":"production-a","brokers":[{"broker_name":"broker-a","broker_id":0,"broker_active":true}]}}
+```
+
+### `rocketmq_list_topic_consumers`
+
+**Purpose and access.** Lists the Consumer Groups that consume one Topic. It is read-only. A Broker
+answers with the groups subscribed to the Topic now and the groups that hold a consume offset on it,
+and it knows only the groups it has seen. The Tool therefore asks every master Broker that hosts the
+Topic in the selected cluster and joins the answers.
+
+| Argument | Type | Required | Rules |
+| --- | --- | --- | --- |
+| `cluster` | string | yes | Configured logical cluster alias. |
+| `topic` | string | yes | Exact Topic name. |
+| `limit` | integer or null | no | Page limit, 1--200; defaults to 50. |
+| `cursor` | string or null | no | Opaque continuation. |
+
+**Output.** `data` contains the logical cluster, the `topic`, `truncated`, a page of `items` with the
+normal page metadata, and `generated_at`. An item is `{"group": "<name>"}`; the items are in ascending
+order and without duplicates. Pass a name as `consumer_group` to `rocketmq_get_consumer_lag` or
+`rocketmq_get_consumer_group_details`. Every page of one cursor chain comes from one read. A Broker
+that did not answer makes the response partial through `source_failures` with the source
+`subscription_groups`, and the groups that only this Broker knows are then missing. A Topic with more
+than 10,000 Consumer Groups sets `truncated` and adds the warning `topic_subscribers_truncated`. A
+Topic that nobody consumes returns an empty page, and a Topic without a route in the cluster is
+`not_found`. The Tool takes no `response_format`, because its items are names already, and it has no
+Resource.
+
+```json
+{"cluster":"production-a","topic":"orders","limit":50}
+```
+
+```json
+{"cluster":"production-a","data":{"cluster":"production-a","topic":"orders","truncated":false,"items":[{"group":"billing"}],"count":1,"total_count":1,"has_more":false,"next_cursor":null}}
+```
+
+### `rocketmq_get_consumer_running_info`
+
+**Purpose and access.** Asks one connected client of a Consumer Group what it reports about itself.
+It is read-only and requires the `rocketmq:diagnose` scope. The Broker that the client is connected to
+relays the request, so the client answers for itself and the answer is as current as the call. The
+thread dump of the client is never requested.
+
+| Argument | Type | Required | Rules |
+| --- | --- | --- | --- |
+| `cluster` | string | yes | Configured logical cluster alias. |
+| `consumer_group` | string | yes | Exact Consumer Group name. |
+| `client_alias` | string | yes | Pseudonym of the client: the `client_alias` of an item of `rocketmq_list_consumer_connections`. It matches `^client-[0-9a-f]{32}$`. |
+| `limit` | integer or null | no | Queue page limit, 1--200; defaults to 50. |
+| `cursor` | string or null | no | Opaque continuation. |
+
+The client is named by its pseudonym only. The server matches the pseudonym against the connections
+of the group in the session that then asks the client, so a client identifier or address is neither
+accepted nor returned. A pseudonym that no connection has is `not_found` with `entity = "client"`
+when every Broker answered for the group; when a Broker did not answer, or the group has more
+connections than one read keeps, the call fails with `source_unavailable` instead, because the client
+may still be connected. Without `security.pseudonym_key_env` a pseudonym is valid only in the server
+process that issued it and until that process restarts.
+
+**Output.** `data` contains the logical cluster, `consumer_group`, `client_alias`, the `broker_name`
+that relayed the request, and what the client reported:
+
+- `consume_type`, `consume_orderly`, `thread_pool_core_size`, `client_version`, and `started_at`. These
+  are read from fixed members of the client's property table. No other property is returned, so the
+  NameServer address the client holds and anything an application added stay out. A member the client
+  did not report is null.
+- `subscriptions`: the Topic, the `expression_type` (`TAG` or `SQL92`), the filter `expression` and
+  the `sub_version` of each subscription the client itself holds, at most 256. An expression longer
+  than 1,024 bytes is null. The clients of one group must hold the same subscriptions, so comparing
+  two clients shows an inconsistent group.
+- `topic_status`: pull and consume response times in milliseconds, rates, and the number of messages
+  the listener failed, for each Topic, at most 256.
+- `queue_count`, `truncated`, and a page of `items` with the normal page metadata. An item is one
+  queue the client holds, in ascending order of Topic, Broker, queue and mode. Its `mode` is `pull`
+  or `pop`. A `pull` item has `commit_offset`, `cached_message_count`, `cached_message_size_mib`,
+  `locked`, `try_unlock_times`, `last_lock_at`, and `last_consume_at`; a `pop` item has
+  `wait_ack_count`. Both have `dropped` and `last_pull_at`. A member the mode does not have is null,
+  and so is a time the client never recorded.
+
+Every page of one cursor chain comes from one answer of the client. `truncated` is true when the
+client reported more than 256 subscriptions or Topics or more than 10,000 queues. A name in the
+answer that no Broker would accept fails the call instead of being passed on. The Tool has no
+Resource.
+
+```json
+{"cluster":"production-a","consumer_group":"order-service","client_alias":"client-0123456789abcdef0123456789abcdef","limit":50}
+```
+
+```json
+{"cluster":"production-a","data":{"consumer_group":"order-service","client_alias":"client-0123456789abcdef0123456789abcdef","broker_name":"broker-a","consume_type":"CONSUME_PASSIVELY","subscriptions":[{"topic":"orders","expression_type":"TAG","expression":"*","sub_version":1700000000000}],"topic_status":[],"queue_count":1,"truncated":false,"items":[{"topic":"orders","broker_name":"broker-a","queue_id":0,"mode":"pull","dropped":false,"commit_offset":40,"cached_message_count":5,"locked":false}],"count":1,"total_count":1,"has_more":false,"next_cursor":null}}
+```
+
+### `rocketmq_get_dlq_summary`
+
+**Purpose and access.** Returns how many dead letters one Consumer Group holds and when the newest
+one was stored. It is read-only. A Broker moves a message to the dead-letter Topic of a group,
+`%DLQ%` followed by the group name, when the group gave up retrying it. The Tool reads the statistics
+of that Topic. It reads no message, so it returns counts and times only: no message identifier, key,
+tag, property, or body.
+
+| Argument | Type | Required | Rules |
+| --- | --- | --- | --- |
+| `cluster` | string | yes | Configured logical cluster alias. |
+| `consumer_group` | string | yes | Exact Consumer Group name. |
+
+**Output.** `data` contains the logical cluster, `consumer_group`, `dlq_topic`, `exists`,
+`queue_count`, `message_count`, `last_message_at`, `last_message_age_ms`, `brokers`, `truncated`, and
+`generated_at`.
+
+- `exists` is false when the dead-letter Topic does not exist, which means that no message of the
+  group was dead-lettered in this cluster. The counts are then zero and `brokers` is empty. This is a
+  complete answer, not a failure.
+- `message_count` is the number of dead letters the Topic holds now. A Broker deletes them when their
+  retention time ends, so it is not the number that was ever dead-lettered.
+- `last_message_at` is the store time of the newest dead letter and `last_message_age_ms` its age at
+  the time of the observation. Both are null when the Topic holds none.
+- `brokers` has `broker_name`, `queue_count`, `message_count`, and `last_message_at` for each Broker
+  that holds a part of the Topic, in ascending order of Broker name.
+- `truncated` is true when the Topic has more than 10,000 queues. The per-Broker rows then cover the
+  queues that were read; the totals cover every queue.
+
+A dead-letter Topic that is absent and a name that is no Consumer Group look the same to a Broker.
+The Tool therefore looks the group up when the Topic is absent: an unknown group is `not_found` with
+`entity = "consumer_group"` instead of a zero count. When that lookup itself fails, the response is
+partial with a `consumer_group_config` source failure, and the zero count then holds only if the
+name is a group. A Broker that did not answer for the statistics makes the response partial through
+`source_failures` with the source `topic_stats`. The Tool has no Resource. To find out where one
+message stands, use `rocketmq_diagnose_message_delivery`.
+
+```json
+{"cluster":"production-a","consumer_group":"order-service"}
+```
+
+```json
+{"cluster":"production-a","data":{"consumer_group":"order-service","dlq_topic":"%DLQ%order-service","exists":true,"queue_count":1,"message_count":12,"last_message_at":"2026-10-01T00:00:05.000Z","last_message_age_ms":60000,"brokers":[{"broker_name":"broker-a","queue_count":1,"message_count":12,"last_message_at":"2026-10-01T00:00:05.000Z"}],"truncated":false}}
+```
+
+### `rocketmq_query_message_trace`
+
+**Purpose and access.** Returns the trace records clients wrote about one message: when it was
+published, and when each Consumer Group received it and finished it. It is read-only. Because it
+looks a message up, the caller also needs the role permission for `rocketmq_get_message_metadata`;
+without it the call fails with `permission_denied` and a violation at `/message_id`. The identifier
+is replaced before the arguments are hashed for the audit record.
+
+Trace records exist only where clients are configured to write them. Clients write them to a trace
+Topic, and Brokers index them by the identifier the producing client gave the message. A record is
+therefore a claim of a client and not a fact a Broker verified.
+
+| Argument | Type | Required | Rules |
+| --- | --- | --- | --- |
+| `cluster` | string | yes | Configured logical cluster alias. |
+| `message_id` | string | yes | Identifier the producing client gave the message, 1--255 bytes without whitespace. The offset message identifier does not find a trace. |
+| `trace_topic` | string or null | no | Name of the trace Topic; defaults to `RMQ_SYS_TRACE_TOPIC`. |
+
+**Output.** `data` contains the logical cluster, `unique_message_alias`, `message_alias`,
+`trace_topic`, `trace_topic_found`, `redacted`, `records`, `truncated`, `queried_broker_count`,
+`unanswered_brokers`, and `generated_at`.
+
+- `unique_message_alias` is the pseudonym of the queried identifier and `message_alias` the
+  pseudonym of the offset message identifier the records name. They are the pseudonyms
+  `rocketmq_get_message_metadata` reports under the same names. The identifiers themselves are never
+  returned.
+- `trace_topic_found` is false when the trace Topic has no route in the cluster: no client traces
+  messages there, or the clients use another trace Topic. `records` is then empty. This is a
+  complete answer, not a failure.
+- `records` holds at most 128 records in ascending order of time. A record has `step` (`publish`,
+  `consume_start`, `consume_end`, `end_transaction`, or `recall`), `at`, `group`, `cost_time_ms`,
+  `success`, `topic`, `retry_times`, `body_length`, `from_transaction_check`, and
+  `store_broker_name`. `body_length` is a size; the body is never read. `store_broker_name` is the
+  logical name of the Broker the record names as the store and is null when that is no Broker of
+  the cluster.
+- `client_host_alias`, `tags`, and `key_aliases` describe a business message and its sender, so they
+  are returned by level. With the `rocketmq:diagnose` scope a record carries the pseudonym of the
+  client host, the tags, and the pseudonyms of at most 4 keys. Without it they are null, null, and
+  empty, and `redacted` is true. A host or a key is never returned as it was written. The two
+  answers are cached apart.
+- A text a client wrote into a record that is empty, longer than 255 bytes, or holds a control
+  character is null.
+
+A Broker that hosts the trace Topic and did not answer is named in `unanswered_brokers`; the response
+is then partial with the warning `message_index_brokers_unanswered`, and the call fails with
+`source_unavailable` only when no Broker answered. More than 128 records set `truncated` and the
+warning `message_trace_records_truncated`. The Tool has no Resource.
+
+```json
+{"cluster":"production-a","message_id":"7F0000010000B4AAC21828A0B9B50000"}
+```
+
+```json
+{"cluster":"production-a","data":{"unique_message_alias":"unique-message-0123456789abcdef0123456789abcdef","message_alias":"message-fedcba9876543210fedcba9876543210","trace_topic":"RMQ_SYS_TRACE_TOPIC","trace_topic_found":true,"redacted":true,"records":[{"step":"publish","at":"2026-10-01T00:00:05.000Z","group":"order-producers","cost_time_ms":12,"success":true,"topic":"orders","retry_times":0,"body_length":128,"from_transaction_check":false,"store_broker_name":"broker-a","client_host_alias":null,"tags":null,"key_aliases":[]}],"truncated":false,"queried_broker_count":2,"unanswered_brokers":[]}}
+```
+
+### `rocketmq_find_messages_by_key`
+
+**Purpose and access.** Finds the messages of one Topic that carry an exact message key. It reads
+only, and it requires the scope `rocketmq:message-search` instead of `rocketmq:read`. The caller also
+needs the role permission for `rocketmq_get_message_metadata`; without it the call fails with
+`permission_denied` and a violation at `/key`. A key is a business identifier, such as an order
+number. It is replaced before the arguments are hashed for the audit record, and it is repeated
+neither in the result nor in an error.
+
+| Argument | Type | Required | Rules |
+| --- | --- | --- | --- |
+| `cluster` | string | yes | Configured logical cluster alias. |
+| `topic` | string | yes | Exact Topic name. |
+| `key` | string | yes | One whole key, 1--255 bytes without whitespace, matched exactly and case-sensitively. It is neither a prefix nor a pattern. |
+| `end_at` | string or null | no | End of the searched store-time window as an RFC 3339 timestamp; defaults to now. |
+| `window_minutes` | integer or null | no | Length of the window, 1--1440; defaults to 60. |
+
+The search is bounded on purpose. The window ends at `end_at` and is at most 24 hours long, and a
+call returns at most 32 messages. There is no paging: to reach more matches, search a shorter or an
+earlier window. Every call reads the Brokers; nothing is answered from a cache.
+
+**Output.** `data` contains the logical cluster, `topic`, `window_begin_at`, `window_end_at`,
+`messages`, `truncated`, `queried_broker_count`, `unanswered_brokers`, and `generated_at`. `messages`
+is ordered newest first. A message has the same fixed metadata `rocketmq_get_message_metadata`
+returns, by pseudonyms only: `message_alias`, `unique_message_alias`, `born_at`, `stored_at`,
+`queue_id`, `queue_offset`, `store_size`, `reconsume_times`, `sys_flag`, `flag`, and
+`prepared_transaction_offset`, plus the `broker_name` that stores it. No body, key, tag, property, or
+address is returned.
+
+A Broker finds a key by its hash, so the server keeps only the messages of the Topic that really
+carry the key and were stored inside the window. More than 32 matches set `truncated` and the warning
+`message_key_matches_truncated`. A Broker that hosts the Topic and did not answer is named in
+`unanswered_brokers`; the response is then partial with the warning
+`message_index_brokers_unanswered`, and the call fails with `source_unavailable` only when no Broker
+answered. A Topic without a route in the cluster is `not_found`. The Tool has no Resource.
+
+```json
+{"cluster":"production-a","topic":"orders","key":"order-42","end_at":"2026-10-01T08:30:00Z","window_minutes":120}
+```
+
+```json
+{"cluster":"production-a","data":{"topic":"orders","window_begin_at":"2026-10-01T06:30:00.000Z","window_end_at":"2026-10-01T08:30:00.000Z","messages":[{"message_alias":"message-fedcba9876543210fedcba9876543210","unique_message_alias":"unique-message-0123456789abcdef0123456789abcdef","broker_name":"broker-a","stored_at":"2026-10-01T07:12:44.120Z","queue_id":3,"queue_offset":42,"store_size":128,"reconsume_times":0}],"truncated":false,"queried_broker_count":2,"unanswered_brokers":[]}}
+```
+
+### `rocketmq_get_lite_broker_info`
+
+**Purpose and access.** Returns what one Broker holds for Lite Topics. It is read-only. A Lite Topic
+is a lightweight child queue of a Topic whose message type is `LITE`. The Tool asks the master of
+the logical Broker, because the master serves Lite Topics.
+
+| Argument | Type | Required | Rules |
+| --- | --- | --- | --- |
+| `cluster` | string | yes | Configured logical cluster alias. |
+| `broker_name` | string | yes | Logical Broker name. It is a name, not a network address. |
+
+**Output.** `data` contains the logical cluster, `broker_name`, and what the master reported:
+
+- `store_type`, the kind of store that keeps Lite Topic queues; `max_lmq_count`, the most queues the
+  Broker accepts; and `current_lmq_count`, the queues it holds now. A Broker close to its limit
+  refuses new Lite Topics.
+- `lite_subscription_count`, `order_info_count`, `consume_queue_count`, `offset_count`, and
+  `event_count`, the sizes of the tables the Broker keeps for Lite Topics.
+- `lite_topic_count` and `lite_topics`: the Topics of message type `LITE`, in ascending order of
+  name and at most 100. A row has `topic`, `expiration_minutes` (how long an idle Lite Topic is kept;
+  `-1` when no expiration is configured), `bound_group_count`, and `bound_groups`, the Consumer
+  Groups bound to the Topic in ascending order and at most 8.
+- `truncated` is true when the Broker knows more than 100 Lite Topics or a Topic has more than 8
+  bound groups. The counts still cover what was left out.
+
+A Broker name that the cluster does not have is `not_found` with `entity = "broker"`. A Broker
+without a master that can be asked, and a master that does not answer, fail the call with
+`source_unavailable`. The Tool has no Resource.
+
+```json
+{"cluster":"production-a","broker_name":"broker-a"}
+```
+
+```json
+{"cluster":"production-a","data":{"broker_name":"broker-a","store_type":"RocksDB","max_lmq_count":100000,"current_lmq_count":42,"lite_subscription_count":7,"lite_topic_count":1,"lite_topics":[{"topic":"lite-orders","expiration_minutes":30,"bound_group_count":1,"bound_groups":["order-service"]}],"truncated":false}}
 ```
 
 ## Optional `change-planning` catalog (5 Tools)
@@ -1249,4 +1595,63 @@ mutual-exclusion rule for them.
 
 ```json
 {"schema_version":"rocketmq-mcp.v2","request_id":"request-opaque","cluster":"production-a","observed_at":"2026-09-04T12:00:00Z","freshness_ms":0,"cache_status":"bypass","partial":false,"warnings":[],"data":{"mutates_cluster":false,"plan_type":"reset_consumer_offset"}}
+```
+
+## Optional `security-admin` catalog (1 Tool)
+
+`security-admin` is compiled separately and is not a default feature: a default build has no code
+path that lists ACL users. With the feature, three checks still stand between a caller and the list:
+
+1. the scope `rocketmq:security-admin`. No other scope includes it. Over HTTP the identity provider
+   must issue it; for stdio only the local profile `security_admin` gets it.
+2. a role that holds `rocketmq_list_acl_users`. No role of the example permissions file does; the
+   file shows a role to add. A role with `allow_tools = ["*"]` and no `deny_tools = ["*"]` holds
+   every Tool, this one included, so the scope is then the only check left. Name the Tool in
+   `deny_tools` of such a role when its holders must not list users.
+3. the cluster, tenant, rate-limit, and concurrency checks of every Tool.
+
+A caller without the scope gets `unauthorized_scope`, a caller without the role `permission_denied`,
+and neither sees the Tool in `tools/list` or in the capability Resource. Every call is audited with
+the risk level `security_admin`.
+
+### `rocketmq_list_acl_users`
+
+**Purpose and access.** Lists the ACL users of one cluster. It is read-only and requires the scope
+`rocketmq:security-admin` instead of `rocketmq:read`. Each Broker keeps its own users, so the Tool
+asks the master of every Broker of the cluster and names, for each user, the Broker that holds it.
+Use it to check who may sign requests to a cluster and whether every Broker holds the same users in
+the same state.
+
+| Argument | Type | Required | Rules |
+| --- | --- | --- | --- |
+| `cluster` | string | yes | Configured logical cluster alias. |
+
+There is no argument that names a user or a Broker: the Tool answers for the whole cluster, and it
+cannot be used to confirm guessed user names one by one.
+
+**Output.** `data` contains the logical cluster, `user_count`, `users`, `truncated`,
+`queried_broker_count`, `unanswered_brokers`, and `generated_at`.
+
+- `users` has one row for each user on each Broker, in ascending order of user name and Broker and
+  at most 500. A row has `username`, the logical `broker_name`, `user_type` (`Super` or `Normal`),
+  and `user_status` (`enable` or `disable`). A type or status that is not a short label is null.
+- `user_count` is the number of distinct user names over every Broker that answered. It also covers
+  the rows that `truncated` reports as left out, with the warning `acl_users_truncated`.
+- A Broker without a master that can be asked, and a master that did not answer, are named in
+  `unanswered_brokers`; the response is then partial with the warning
+  `acl_user_brokers_unanswered`, and the users of those Brokers are missing. The call fails with
+  `source_unavailable` only when no Broker answered.
+
+The result never contains a password, an access key, an access rule, or an address. A Broker sends
+the password of every user it lists; the RocketMQ client drops it before the read is handed on, so
+it reaches neither this server's code, nor its cache, nor its logs. Every call reads the Brokers:
+nothing is answered from a cache, and the Tool has no Resource. A cluster with more than 64 Brokers
+is not read in part: the call fails with `invalid_arguments`.
+
+```json
+{"cluster":"production-a"}
+```
+
+```json
+{"cluster":"production-a","data":{"user_count":2,"users":[{"username":"ops","broker_name":"broker-a","user_type":"Super","user_status":"enable"},{"username":"ops","broker_name":"broker-b","user_type":"Super","user_status":"disable"},{"username":"reader","broker_name":"broker-a","user_type":"Normal","user_status":"enable"}],"truncated":false,"queried_broker_count":2,"unanswered_brokers":[]}}
 ```

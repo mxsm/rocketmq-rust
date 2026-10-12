@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::OnceLock;
@@ -36,6 +37,8 @@ use crate::tools::diagnosis_tools;
 use crate::tools::infrastructure_tools;
 use crate::tools::message_tools;
 use crate::tools::proxy_tools;
+#[cfg(feature = "security-admin")]
+use crate::tools::security_tools;
 use crate::tools::topic_tools;
 
 /// How a Tool binds a request to one configured logical cluster.
@@ -82,6 +85,12 @@ pub enum ToolId {
     DiagnoseBrokerHealth,
     GetClusterHealth,
     DiagnoseMessageDelivery,
+    ListTopicConsumers,
+    GetConsumerRunningInfo,
+    GetDlqSummary,
+    QueryMessageTrace,
+    FindMessagesByKey,
+    GetLiteBrokerInfo,
     #[cfg(feature = "change-planning")]
     PlanCreateTopic,
     #[cfg(feature = "change-planning")]
@@ -92,6 +101,8 @@ pub enum ToolId {
     PlanUpdateBrokerConfig,
     #[cfg(feature = "change-planning")]
     PlanResetConsumerOffset,
+    #[cfg(feature = "security-admin")]
+    ListAclUsers,
 }
 
 impl ToolId {
@@ -126,6 +137,12 @@ impl ToolId {
         Self::DiagnoseBrokerHealth,
         Self::GetClusterHealth,
         Self::DiagnoseMessageDelivery,
+        Self::ListTopicConsumers,
+        Self::GetConsumerRunningInfo,
+        Self::GetDlqSummary,
+        Self::QueryMessageTrace,
+        Self::FindMessagesByKey,
+        Self::GetLiteBrokerInfo,
         #[cfg(feature = "change-planning")]
         Self::PlanCreateTopic,
         #[cfg(feature = "change-planning")]
@@ -136,6 +153,8 @@ impl ToolId {
         Self::PlanUpdateBrokerConfig,
         #[cfg(feature = "change-planning")]
         Self::PlanResetConsumerOffset,
+        #[cfg(feature = "security-admin")]
+        Self::ListAclUsers,
     ];
 
     pub fn resolve(name: &str) -> Option<Self> {
@@ -180,13 +199,21 @@ impl ToolId {
             | Self::DiagnoseConsumerGroup
             | Self::DiagnoseBrokerHealth
             | Self::GetClusterHealth
-            | Self::DiagnoseMessageDelivery => ClusterArg::Required,
+            | Self::DiagnoseMessageDelivery
+            | Self::ListTopicConsumers
+            | Self::GetConsumerRunningInfo
+            | Self::GetDlqSummary
+            | Self::QueryMessageTrace
+            | Self::FindMessagesByKey
+            | Self::GetLiteBrokerInfo => ClusterArg::Required,
             #[cfg(feature = "change-planning")]
             Self::PlanCreateTopic
             | Self::PlanUpdateTopicConfig
             | Self::PlanUpdateTopicPermissions
             | Self::PlanUpdateBrokerConfig
             | Self::PlanResetConsumerOffset => ClusterArg::Required,
+            #[cfg(feature = "security-admin")]
+            Self::ListAclUsers => ClusterArg::Required,
         }
     }
 
@@ -473,6 +500,66 @@ impl ToolId {
                  it or dead-lettered it. Use it first when a message does not arrive. Never returns a body.",
                 RiskLevel::Diagnose,
             ),
+            Self::ListTopicConsumers => ToolDescriptor::read_only(
+                self,
+                "rocketmq_list_topic_consumers",
+                "RocketMQ Topic consumers",
+                "Lists the Consumer Groups that consume one Topic, a page at a time: the groups subscribed to it \
+                 now and the groups that hold a consume offset on it, joined over every Broker that hosts the \
+                 Topic. Use it when you know the Topic and need to learn who reads it, for example before changing \
+                 or removing the Topic. Next, pass a group and the Topic to rocketmq_get_consumer_lag.",
+                RiskLevel::ReadOnly,
+            ),
+            Self::GetConsumerRunningInfo => ToolDescriptor::read_only(
+                self,
+                "rocketmq_get_consumer_running_info",
+                "RocketMQ consumer client running info",
+                "Asks one connected client of a Consumer Group what it reports about itself: its subscriptions, \
+                 its pull and consume rates per Topic, and a page of the queues it holds with offsets, cached \
+                 messages and lock state. Use it to find a stuck client or to compare the subscriptions of two \
+                 clients of one group. Name the client by a client_alias from rocketmq_list_consumer_connections.",
+                RiskLevel::Diagnose,
+            ),
+            Self::GetDlqSummary => ToolDescriptor::read_only(
+                self,
+                "rocketmq_get_dlq_summary",
+                "RocketMQ dead-letter summary",
+                "Returns how many dead letters one Consumer Group holds and when the newest one was stored, in \
+                 total and for each Broker. A message is dead-lettered when the group gave up retrying it. Use it \
+                 to check whether a group loses messages to its dead-letter Topic. It returns counts and times \
+                 only, never a message. To locate one message use rocketmq_diagnose_message_delivery.",
+                RiskLevel::ReadOnly,
+            ),
+            Self::QueryMessageTrace => ToolDescriptor::read_only(
+                self,
+                "rocketmq_query_message_trace",
+                "RocketMQ message trace",
+                "Returns the trace of one message: when it was published and when each Consumer Group received \
+                 and finished it, with groups, durations and results. Use it to see what happened to a message you \
+                 can name by the identifier its producer got. It needs clients that write traces. It never returns \
+                 a body; client hosts, tags and keys are returned only with the diagnose scope.",
+                RiskLevel::ReadOnly,
+            ),
+            Self::FindMessagesByKey => ToolDescriptor::read_only(
+                self,
+                "rocketmq_find_messages_by_key",
+                "RocketMQ message search by key",
+                "Finds the messages of one Topic that carry an exact message key and were stored in a window of at \
+                 most 24 hours, newest first and at most 32. Use it when you know a business key, such as an order \
+                 number, and not the message. It returns where and when each message was stored and names it by \
+                 pseudonyms; it never returns a body, a key or a tag. It needs the rocketmq:message-search scope.",
+                RiskLevel::MessageSearch,
+            ),
+            Self::GetLiteBrokerInfo => ToolDescriptor::read_only(
+                self,
+                "rocketmq_get_lite_broker_info",
+                "RocketMQ Lite Topic state of a Broker",
+                "Returns what one Broker holds for Lite Topics: the queues it has and the most it accepts, its \
+                 subscription, offset and event counters, and the Lite Topics it knows with their expiration and \
+                 bound Consumer Groups. Use it to check whether a Broker is close to its Lite Topic limit, or \
+                 which groups are bound to a Lite Topic. It asks the master of the Broker.",
+                RiskLevel::ReadOnly,
+            ),
             #[cfg(feature = "change-planning")]
             Self::PlanCreateTopic => ToolDescriptor::read_only(
                 self,
@@ -527,6 +614,17 @@ impl ToolId {
                  impact and rollback suggestions, and expires after five minutes.",
                 RiskLevel::Plan,
             ),
+            #[cfg(feature = "security-admin")]
+            Self::ListAclUsers => ToolDescriptor::read_only(
+                self,
+                "rocketmq_list_acl_users",
+                "RocketMQ ACL users",
+                "Lists the ACL users of one cluster: for each Broker, the user names it holds with their type \
+                 and status, at most 500 rows. Use it to check who may sign requests to a cluster and whether \
+                 every Broker holds the same users. It never returns a password or an access rule. It needs \
+                 the rocketmq:security-admin scope.",
+                RiskLevel::SecurityAdmin,
+            ),
         }
     }
 
@@ -547,22 +645,43 @@ impl ToolId {
         }
     }
 
+    /// Returns the validators of this Tool's two schemas.
+    ///
+    /// They are compiled on first use and then kept, so that a call only validates. A Tool
+    /// outside [`ToolId::ALL`] has none, and its calls are refused.
+    pub fn validators(self) -> &'static ToolValidators {
+        static VALIDATORS: LazyLock<Vec<OnceLock<ToolValidators>>> =
+            LazyLock::new(|| ToolId::ALL.iter().map(|_| OnceLock::new()).collect());
+        static UNLISTED: ToolValidators = ToolValidators {
+            input: None,
+            output: None,
+            declared_input_properties: BTreeSet::new(),
+        };
+        let cached = Self::ALL
+            .iter()
+            .position(|tool_id| *tool_id == self)
+            .and_then(|index| VALIDATORS.get(index));
+        match cached {
+            Some(validators) => validators.get_or_init(|| ToolValidators::compile(&self.definition())),
+            None => &UNLISTED,
+        }
+    }
+
     fn build_definition(self) -> Tool {
         let descriptor = self.descriptor();
         match self {
             Self::GetClusterOverview => {
                 descriptor.build::<cluster_tools::ClusterOverviewArgs, cluster_tools::ClusterOverviewOutput>()
             }
-            Self::ListTopics => descriptor.build::<topic_tools::ListTopicsArgs, topic_tools::ListTopicsOutput>(),
+            Self::ListTopics => descriptor.build_list::<topic_tools::ListTopicsArgs, topic_tools::ListTopicsOutput>(),
             Self::DescribeTopic => {
                 descriptor.build::<topic_tools::DescribeTopicArgs, topic_tools::DescribeTopicOutput>()
             }
             Self::GetTopicRoute => {
                 descriptor.build::<topic_tools::QueryTopicRouteArgs, topic_tools::QueryTopicRouteOutput>()
             }
-            Self::ListConsumerGroups => {
-                descriptor.build::<consumer_tools::ListConsumerGroupsArgs, consumer_tools::ListConsumerGroupsOutput>()
-            }
+            Self::ListConsumerGroups => descriptor
+                .build_list::<consumer_tools::ListConsumerGroupsArgs, consumer_tools::ListConsumerGroupsOutput>(),
             Self::GetConsumerLag => {
                 descriptor.build::<consumer_tools::QueryConsumerLagArgs, consumer_tools::QueryConsumerLagOutput>()
             }
@@ -584,11 +703,11 @@ impl ToolId {
             Self::DiagnoseConsumerLag => {
                 descriptor.build::<diagnosis_tools::DiagnoseConsumerLagArgs, crate::model::diagnosis::DiagnosisReport>()
             }
-            Self::ListConsumerConnections => descriptor.build::<
+            Self::ListConsumerConnections => descriptor.build_list::<
                 connection_tools::ListConsumerConnectionsArgs,
                 connection_tools::ListConsumerConnectionsOutput,
             >(),
-            Self::ListProducerConnections => descriptor.build::<
+            Self::ListProducerConnections => descriptor.build_list::<
                 connection_tools::ListProducerConnectionsArgs,
                 connection_tools::ListProducerConnectionsOutput,
             >(),
@@ -631,7 +750,9 @@ impl ToolId {
             Self::ListClusters => {
                 descriptor.build_server_scoped::<cluster_tools::ListClustersArgs, cluster_tools::ListClustersOutput>()
             }
-            Self::ListBrokers => descriptor.build::<broker_tools::ListBrokersArgs, broker_tools::ListBrokersOutput>(),
+            Self::ListBrokers => {
+                descriptor.build_list::<broker_tools::ListBrokersArgs, broker_tools::ListBrokersOutput>()
+            }
             Self::DiagnoseConsumerGroup => {
                 descriptor.build::<diagnosis_tools::DiagnoseConsumerGroupArgs, crate::model::diagnosis::DiagnosisReport>()
             }
@@ -643,6 +764,25 @@ impl ToolId {
             }
             Self::DiagnoseMessageDelivery => {
                 descriptor.build::<diagnosis_tools::DiagnoseMessageDeliveryArgs, crate::model::diagnosis::DiagnosisReport>()
+            }
+            Self::ListTopicConsumers => {
+                descriptor.build::<topic_tools::ListTopicConsumersArgs, topic_tools::ListTopicConsumersOutput>()
+            }
+            Self::GetConsumerRunningInfo => descriptor.build::<
+                consumer_tools::GetConsumerRunningInfoArgs,
+                consumer_tools::GetConsumerRunningInfoOutput,
+            >(),
+            Self::GetDlqSummary => {
+                descriptor.build::<consumer_tools::GetDlqSummaryArgs, consumer_tools::GetDlqSummaryOutput>()
+            }
+            Self::QueryMessageTrace => {
+                descriptor.build::<message_tools::QueryMessageTraceArgs, message_tools::QueryMessageTraceOutput>()
+            }
+            Self::FindMessagesByKey => {
+                descriptor.build::<message_tools::FindMessagesByKeyArgs, message_tools::FindMessagesByKeyOutput>()
+            }
+            Self::GetLiteBrokerInfo => {
+                descriptor.build::<broker_tools::GetLiteBrokerInfoArgs, broker_tools::GetLiteBrokerInfoOutput>()
             }
             #[cfg(feature = "change-planning")]
             Self::PlanCreateTopic => descriptor.build::<change_tools::CreateTopicArgs, change_tools::ChangePlan>(),
@@ -662,7 +802,71 @@ impl ToolId {
             Self::PlanResetConsumerOffset => {
                 descriptor.build::<change_tools::ResetConsumerOffsetArgs, change_tools::ChangePlan>()
             }
+            #[cfg(feature = "security-admin")]
+            Self::ListAclUsers => {
+                descriptor.build::<security_tools::ListAclUsersArgs, security_tools::ListAclUsersOutput>()
+            }
         }
+    }
+}
+
+/// The validators compiled from the input and the output schema of one Tool.
+///
+/// A schema that does not compile leaves its validator out. Nothing validates against a missing
+/// validator, so the Tool refuses its calls instead of running unchecked.
+#[derive(Debug)]
+pub struct ToolValidators {
+    input: Option<jsonschema::Validator>,
+    output: Option<jsonschema::Validator>,
+    declared_input_properties: BTreeSet<String>,
+}
+
+impl ToolValidators {
+    fn compile(definition: &Tool) -> Self {
+        let input_schema = serde_json::Value::Object(definition.input_schema.as_ref().clone());
+        let mut declared_input_properties = BTreeSet::new();
+        collect_declared_properties(&input_schema, &mut declared_input_properties);
+        let output = definition
+            .output_schema
+            .as_ref()
+            .and_then(|schema| jsonschema::validator_for(&serde_json::Value::Object(schema.as_ref().clone())).ok());
+        Self {
+            input: jsonschema::validator_for(&input_schema).ok(),
+            output,
+            declared_input_properties,
+        }
+    }
+
+    /// The validator of the arguments a caller sends.
+    pub fn input(&self) -> Option<&jsonschema::Validator> {
+        self.input.as_ref()
+    }
+
+    /// The validator of the structured content the Tool returns.
+    pub fn output(&self) -> Option<&jsonschema::Validator> {
+        self.output.as_ref()
+    }
+
+    /// Every property name the input schema declares, at any depth.
+    pub fn declared_input_properties(&self) -> &BTreeSet<String> {
+        &self.declared_input_properties
+    }
+}
+
+fn collect_declared_properties(schema: &serde_json::Value, declared: &mut BTreeSet<String>) {
+    match schema {
+        serde_json::Value::Object(keywords) => {
+            for (keyword, value) in keywords {
+                if let ("properties", serde_json::Value::Object(properties)) = (keyword.as_str(), value) {
+                    declared.extend(properties.keys().cloned());
+                }
+                collect_declared_properties(value, declared);
+            }
+        }
+        serde_json::Value::Array(values) => values
+            .iter()
+            .for_each(|value| collect_declared_properties(value, declared)),
+        _ => {}
     }
 }
 
@@ -712,6 +916,20 @@ impl ToolDescriptor {
         O: JsonSchema + 'static,
     {
         self.build_with_envelope::<I, ToolResponse<O>>()
+    }
+
+    /// Builds the definition of a list Tool: it also takes `response_format`, and its output
+    /// schema accepts an item in either format.
+    fn build_list<I, O>(self) -> Tool
+    where
+        I: JsonSchema + 'static,
+        O: JsonSchema + 'static,
+    {
+        let mut tool = self.build::<crate::tools::response_format::ListArguments<I>, O>();
+        if let (Some(items), Some(output_schema)) = (self.id.list_items(), &mut tool.output_schema) {
+            items.require_only_names(Arc::make_mut(output_schema));
+        }
+        tool
     }
 
     /// Builds the definition of a Tool that is not bound to a cluster and answers in
@@ -809,6 +1027,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_tool_schema_compiles() {
+        for tool_id in ToolId::ALL {
+            let name = tool_id.descriptor().name;
+            let validators = tool_id.validators();
+            assert!(
+                validators.input().is_some(),
+                "{name}: the input schema does not compile"
+            );
+            assert!(
+                validators.output().is_some(),
+                "{name}: the output schema does not compile"
+            );
+            // Compiled once: a later call gets the validators of the first one.
+            assert!(std::ptr::eq(validators, tool_id.validators()), "{name}");
+            let definition = tool_id.definition();
+            let declared = validators.declared_input_properties();
+            let properties = definition
+                .input_schema
+                .get("properties")
+                .and_then(serde_json::Value::as_object);
+            for property in properties.into_iter().flat_map(|properties| properties.keys()) {
+                assert!(declared.contains(property), "{name}: {property} is not declared");
+            }
+        }
+    }
+
+    #[test]
     fn catalog_is_the_single_source_for_discovery_and_risk() {
         let definitions = list_tools().tools;
         assert_eq!(definitions.len(), ToolId::ALL.len());
@@ -824,7 +1069,11 @@ mod tests {
             );
             assert!(matches!(
                 descriptor.risk_level,
-                RiskLevel::ReadOnly | RiskLevel::Diagnose | RiskLevel::Plan
+                RiskLevel::ReadOnly
+                    | RiskLevel::Diagnose
+                    | RiskLevel::Plan
+                    | RiskLevel::MessageSearch
+                    | RiskLevel::SecurityAdmin
             ));
         }
     }
@@ -953,10 +1202,17 @@ mod tests {
                 "rocketmq_diagnose_consumer_lag",
             ]
         );
+        // The Tool of the `security-admin` feature is counted on its own, so that the two counts
+        // below hold with and without that feature.
+        let security_admin = ToolId::ALL
+            .iter()
+            .filter(|tool_id| tool_id.descriptor().risk_level == RiskLevel::SecurityAdmin)
+            .count();
+        assert_eq!(security_admin, usize::from(cfg!(feature = "security-admin")));
         #[cfg(not(feature = "change-planning"))]
-        assert_eq!(names.len(), 30);
+        assert_eq!(names.len() - security_admin, 36);
         #[cfg(feature = "change-planning")]
-        assert_eq!(names.len(), 35);
+        assert_eq!(names.len() - security_admin, 41);
     }
 
     #[test]
@@ -1153,8 +1409,11 @@ mod tests {
 
     #[test]
     fn complete_tool_contract_snapshot() {
+        // The Tool of the `security-admin` feature has a snapshot of its own, so that the two
+        // below are the same with and without that feature.
         let contracts = ToolId::ALL
             .iter()
+            .filter(|tool_id| tool_id.descriptor().risk_level != RiskLevel::SecurityAdmin)
             .map(|tool_id| serde_json::to_value(tool_id.definition()).expect("tool contract serializes"))
             .collect::<Vec<_>>();
 
@@ -1190,5 +1449,55 @@ mod tests {
                 && descriptor.annotations.idempotent
                 && !descriptor.name.starts_with("mq_")
         }));
+    }
+
+    #[cfg(not(feature = "security-admin"))]
+    #[test]
+    fn a_build_without_the_security_admin_feature_has_no_acl_user_list() {
+        assert!(ToolId::resolve("rocketmq_list_acl_users").is_none());
+        assert!(get_tool("rocketmq_list_acl_users").is_none());
+        assert!(ToolId::ALL
+            .iter()
+            .all(|tool_id| tool_id.descriptor().risk_level != RiskLevel::SecurityAdmin));
+    }
+
+    #[cfg(feature = "security-admin")]
+    #[test]
+    fn the_acl_user_list_is_read_only_closed_and_publishes_no_secret() {
+        let security_admin = ToolId::ALL
+            .iter()
+            .copied()
+            .filter(|tool_id| tool_id.descriptor().risk_level == RiskLevel::SecurityAdmin)
+            .collect::<Vec<_>>();
+        assert_eq!(security_admin, [ToolId::ListAclUsers]);
+
+        let descriptor = ToolId::ListAclUsers.descriptor();
+        assert_eq!(descriptor.name, "rocketmq_list_acl_users");
+        assert!(descriptor.annotations.read_only && !descriptor.annotations.destructive);
+        assert!(descriptor.annotations.idempotent);
+        // A model that reads the listing learns which scope the call takes.
+        assert!(descriptor.description.contains("rocketmq:security-admin"));
+
+        let definition = ToolId::ListAclUsers.definition();
+        assert_eq!(
+            definition.input_schema.get("additionalProperties"),
+            Some(&serde_json::Value::Bool(false))
+        );
+        let arguments = definition.input_schema["properties"].as_object().unwrap();
+        assert_eq!(arguments.keys().collect::<Vec<_>>(), ["cluster"]);
+        let output = serde_json::to_value(definition.output_schema.as_deref().unwrap()).unwrap();
+        let mut properties = Vec::new();
+        property_names(&output, &mut properties);
+        assert!(properties.contains(&"username".to_string()));
+        for forbidden in ["password", "secret", "token", "addr", "endpoint", "whitelist", "rule"] {
+            assert!(
+                properties
+                    .iter()
+                    .all(|name| !name.to_ascii_lowercase().contains(forbidden)),
+                "the output has a {forbidden} property"
+            );
+        }
+        let contract = serde_json::to_value(definition).expect("tool contract serializes");
+        insta::assert_json_snapshot!("tool_contract_schema_metadata_security_admin", contract);
     }
 }

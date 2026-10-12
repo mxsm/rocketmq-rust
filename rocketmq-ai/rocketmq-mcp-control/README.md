@@ -21,6 +21,12 @@ cleanup.
 - JWKS generations have a bounded five-minute lifetime. Rotation and revocation replace the whole generation;
   unknown keys use a bounded negative cache and refresh cooldown. DNS answers are rechecked at connection time,
   and any private, loopback, link-local, or reserved answer rejects the connection.
+- The network defaults are strict: a specific bind address, a public canonical origin, and an identity provider
+  with a public name and a public JWKS address. A deployment inside a private network replaces them one by one
+  with `server.allow_wildcard_bind`, `server.allow_internal_base_url`, and `oauth.allow_private_network`. Each is
+  off unless set to `true`, and the server warns at startup about every one that is on. The
+  [operations runbook](docs/operations-runbook.md#deployment-inside-a-private-network) states what each one
+  accepts and what the operator takes on.
 - A JWKS entry is used when it is an RSA key of 2048 to 8192 bits with exponent 65537, its `use` is absent or
   `sig`, its `key_ops` is absent or lists `verify`, its `alg` is absent or `RS256`, and its `kid` is 1 to 128
   ASCII letters, digits, or `._:-`. Other entries, such as encryption keys, and members such as `x5c` and `x5t`
@@ -32,6 +38,9 @@ cleanup.
   compile/catalog availability are evaluated in that order before common argument schema parsing or
   adapter/session creation.
 - The project exposes no CLI, shell, subprocess, free-form RPC, arbitrary Admin command, or stdout protocol path.
+- The server answers MCP protocol version `2025-11-25` and no other, the same set as `rocketmq-mcp`. `initialize`
+  declines another version, `server/discover` advertises this one alone, and an authenticated request whose
+  `MCP-Protocol-Version` header names another version gets `request_rejected`.
 
 The fixed capability Resource is `rocketmq-control://capabilities`. Its independent compile-time,
 runtime-enabled, and registered-operation fields make availability explicit. `mutation_supported` becomes true
@@ -61,8 +70,10 @@ Set `ROCKETMQ_MCP_CONTROL_CONFIG` to a TOML file based on
 [`conf/mcp-control.example.toml`](conf/mcp-control.example.toml). All configuration structs reject unknown
 fields. `mutations_enabled` defaults to `false` and `dry_run` defaults to `true`. Issuer, JWKS, and public server
 URLs must use canonical public HTTPS hostnames. The listener rejects wildcard binds. Configuration is loaded at
-startup; changing `mutations_enabled` or either allowlist, including an emergency disable, requires a process
-restart. A rejected configuration is logged with its stage, position, and key or field name, never with a value.
+startup; changing `mutations_enabled` or either allowlist requires a process restart. The one control that
+takes effect without a restart is the emergency stop: while the file that `mutations.emergency_stop_file` names
+exists, every mutation call is refused with `mutation_disabled`. It can only tighten the configured policy. A
+rejected configuration is logged with its stage, position, and key or field name, never with a value.
 
 The private cluster registry maps a logical alias to a NameServer endpoint, TLS policy, and optional environment
 variable names for credentials. Inline credentials are rejected. Registry values and resolved credentials have
@@ -117,6 +128,13 @@ failed outcomes set MCP `isError=true` while retaining the structured result. Th
 `execution_failed`. An unchanged success is `applied` with `changed=false`; there is no separate no-op status.
 Responses never include addresses, credential
 references, OAuth subjects, reasons, request keys, or raw backend errors.
+
+A dry run also reports `plan_digest`, a SHA-256 of what was asked, the state that was read, and what each
+target would get. An execution that passes it back as `expected_plan_digest` writes only if the plan it reads
+is still that one; otherwise it writes nothing and ends with `precondition_conflict`. The argument is optional
+unless the server sets `mutations.require_plan_digest = true`, which refuses an execution without it as an
+invalid argument. The [tool reference](docs/tool-reference.md#executing-a-reviewed-plan) states what a plan
+covers for each tool.
 
 Every result also carries `invocation_id`, the sequence number of the call's `started` audit record. It belongs
 to the call, not to the result: a result replayed for a repeated request key is returned under the invocation of

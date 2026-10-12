@@ -204,6 +204,7 @@ fn guard_with_role(role: &str, rate_limit_per_minute: u32) -> (Guard, tempfile::
             permissions_file: permissions.to_string_lossy().into_owned(),
             max_concurrent_requests_per_cluster: 1,
             pseudonym_key_env: None,
+            http_rate_limit_per_minute: None,
         },
         AuditConfig {
             enabled: true,
@@ -212,6 +213,7 @@ fn guard_with_role(role: &str, rate_limit_per_minute: u32) -> (Guard, tempfile::
             queue_capacity: 64,
             max_record_bytes: 16 * 1024,
             queue_max_bytes: 1024 * 1024,
+            max_file_bytes: 0,
         },
         &clusters,
     )
@@ -642,14 +644,15 @@ async fn completion_names_of_an_oversized_inventory_need_a_prefix() {
         .unwrap();
     assert!(unfiltered.is_empty());
 
-    // A prefix narrows the read to names that contain it, which fits.
+    // A prefix narrows the selection to names that contain it, which fits. The names themselves
+    // were read once: narrowing them reads nothing again.
     let narrowed = facade
         .completion_names("local-dev", CompletionClass::Topic, "orders-0999")
         .await
         .unwrap();
     assert_eq!(narrowed.len(), 10);
     assert!(narrowed.iter().all(|name| name.starts_with("Orders-0999")));
-    assert!(counters.topic_inventory.load(Ordering::SeqCst) >= 2);
+    assert_eq!(counters.topic_inventory.load(Ordering::SeqCst), 1);
 
     // Through the handler, the narrowed read is what a caller typing a prefix gets.
     let (guard, _permissions) = guard_with_role(EVERY_LISTING_TOOL, 60);

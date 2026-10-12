@@ -54,6 +54,9 @@ streamable-http = [
     "auth",
 ]
 change-planning = []
+# Registers the Tool that lists ACL users. It is off by default: who may sign requests to a
+# cluster is for the people who administer access to it.
+security-admin  = []
 
 [dependencies]
 rocketmq-admin-core   = { version = "1.0.0", path = "../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", default-features = false, features = ["read-client-adapter"] }
