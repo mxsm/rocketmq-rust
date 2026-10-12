@@ -19,8 +19,8 @@ use crate::dispatch::DeferredCommitErrorKind;
 use crate::dispatch::DeferredRegistration;
 use crate::dispatch::DeferredRegistrationResult;
 use crate::dispatch::DeferredResponder;
-use crate::dispatch::DeferredResponderOutcome;
-use crate::dispatch::DeferredResponseOutcome;
+use crate::dispatch::DeferredResponderTakeResult;
+use crate::dispatch::DeferredResponseResult;
 use crate::dispatch::DeferredResumeResult;
 use crate::dispatch::DeferredResumeRetainedSize;
 use crate::dispatch::DeferredWaitAdmissionResult;
@@ -29,11 +29,11 @@ use crate::dispatch::DeferredWakeReason;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestControlView;
 use crate::dispatch::RequestMeta;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseSink;
+use crate::runtime::processor::ResponseLifecycleEvent;
 use crate::runtime::processor::ResponseObservation;
 use crate::runtime::processor::ResponseObservationMode;
-use crate::runtime::processor::ResponseObservationOutcome;
 use crate::session_view::EmbeddedSessionRecord;
 use crate::telemetry::TransportTelemetry;
 
@@ -89,13 +89,13 @@ where
     }
 }
 
-fn expect_deferred_responder(outcome: DeferredResponderOutcome, context: &str) -> DeferredResponder {
+fn expect_deferred_responder(outcome: DeferredResponderTakeResult, context: &str) -> DeferredResponder {
     match outcome {
-        DeferredResponderOutcome::Taken(responder) => responder,
-        DeferredResponderOutcome::OneWayRequest => panic!("{context}: one-way request"),
-        DeferredResponderOutcome::Unavailable => panic!("{context}: responder unavailable"),
-        DeferredResponderOutcome::AlreadyTaken => panic!("{context}: responder already taken"),
-        DeferredResponderOutcome::OutcomeCompleted => panic!("{context}: outcome already completed"),
+        DeferredResponderTakeResult::Taken(responder) => responder,
+        DeferredResponderTakeResult::OneWayRequest => panic!("{context}: one-way request"),
+        DeferredResponderTakeResult::Unavailable => panic!("{context}: responder unavailable"),
+        DeferredResponderTakeResult::AlreadyTaken => panic!("{context}: responder already taken"),
+        DeferredResponderTakeResult::OutcomeCompleted => panic!("{context}: outcome already completed"),
     }
 }
 
@@ -261,12 +261,12 @@ impl RequestProcessor for PublicDeferredProcessor {
             .await
             .map_err(|_| crate::error_helpers::argument_invalid())?
         {
-            DeferredResponseOutcome::Completed(receipt) => receipt,
-            DeferredResponseOutcome::AlreadyCompleted
-            | DeferredResponseOutcome::DeadlineExceeded
-            | DeferredResponseOutcome::Cancelled
-            | DeferredResponseOutcome::SessionClosed
-            | DeferredResponseOutcome::QueueSaturated => {
+            DeferredResponseResult::Completed(receipt) => receipt,
+            DeferredResponseResult::AlreadyCompleted
+            | DeferredResponseResult::DeadlineExceeded
+            | DeferredResponseResult::Cancelled
+            | DeferredResponseResult::SessionClosed
+            | DeferredResponseResult::QueueSaturated => {
                 return Err(crate::error_helpers::argument_invalid());
             }
         };
@@ -397,8 +397,8 @@ async fn dispatcher_commits_a_real_registry_registration_before_returning_deferr
         assert_eq!(observed.len(), 1, "deferred completion is observed exactly once");
         assert_eq!(observed[0].metadata().mode(), ResponseObservationMode::Deferred);
         assert!(matches!(
-            observed[0].metadata().outcome(),
-            ResponseObservationOutcome::Written(observed_receipt) if observed_receipt == receipt
+            observed[0].metadata().event(),
+            ResponseLifecycleEvent::DeliveryCompleted(observed_receipt) if observed_receipt == receipt
         ));
     }
     assert_eq!(registry.test_index_counts(), (0, 0, 0));
@@ -472,8 +472,8 @@ async fn deferred_commit_session_close_is_a_normal_terminal_race_without_recordi
         let observed = observations.lock().expect("deferred observation lock");
         assert_eq!(observed.len(), 1, "commit failure publishes one terminal observation");
         assert!(matches!(
-            observed[0].metadata().outcome(),
-            ResponseObservationOutcome::Cancelled(crate::dispatch::DeferredTerminalReason::SessionClosed)
+            observed[0].metadata().event(),
+            ResponseLifecycleEvent::Cancelled(crate::dispatch::DeferredTerminalReason::SessionClosed)
         ));
     }
     assert_eq!(registry.test_index_counts(), (0, 0, 0));
@@ -858,8 +858,8 @@ async fn cancellation_during_processor_wait_binds_one_terminal_observer_without_
         let observations = state.terminal_observations.lock().expect("terminal observation lock");
         assert_eq!(observations.len(), 1);
         assert!(matches!(
-            observations[0].metadata().outcome(),
-            ResponseObservationOutcome::Failed {
+            observations[0].metadata().event(),
+            ResponseLifecycleEvent::Failed {
                 completion: None,
                 progress: Some(WriteProgress::NotStarted),
             }
@@ -1040,9 +1040,9 @@ async fn queued_deadline_expiry_attempts_one_plan_write_and_observes_not_started
         let observations = state.observations.lock().expect("observation lock");
         assert_eq!(observations.len(), 2);
         assert!(matches!(
-            observations[1].outcome(),
-            ResponseWriteOutcome::Failed {
-                completion: Some(ResponseCompletionOutcome::DeadlineExpired),
+            observations[1].event(),
+            ResponseDeliveryEvent::Failed {
+                completion: Some(ResponseCompletionResult::DeadlineExpired),
                 progress: Some(WriteProgress::NotStarted),
             }
         ));

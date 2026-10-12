@@ -21,7 +21,7 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 use super::request_control::LazyExtensions;
 use super::AuthenticationState;
-use super::DeferredResponderOutcome;
+use super::DeferredResponderTakeResult;
 use super::InlineResponseSlot;
 use super::OriginalRequestIdentity;
 use super::ProtocolNoResponse;
@@ -182,7 +182,7 @@ impl RemotingRequest {
     ///
     /// Returns a source-free outcome for one-way, unsupported transport,
     /// duplicate-take, or completed-outcome state.
-    pub fn take_deferred_responder(&mut self) -> DeferredResponderOutcome {
+    pub fn take_deferred_responder(&mut self) -> DeferredResponderTakeResult {
         self.inline_response.take_deferred_responder(self.original)
     }
 

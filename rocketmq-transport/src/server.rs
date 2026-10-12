@@ -2431,7 +2431,7 @@ mod retirement_tests {
                             RemotingCommand::create_response_command_with_code(0).set_opaque(command.opaque())
                         )
                         .await,
-                    crate::dispatch::ResponseSendOutcome::Written
+                    crate::dispatch::ResponseSendResult::Written
                 ));
             })
         }

@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 
+use crate::admin::mq_admin_mutation_ext::MutationBrokerLogFilterStatus;
 use crate::ClientError;
 use cheetah_string::CheetahString;
 
@@ -74,6 +75,19 @@ pub(super) fn restore_properties(
         ("logFilterTtlSeconds", MIN_TTL_SECONDS.to_string()),
         ("logFilterRequestId", operation_id.to_string()),
     ]))
+}
+
+/// Projects the Broker runtime table onto the log-filter control status and
+/// nothing else, so a mutation precheck never carries the rest of the table.
+pub(super) fn status_from_runtime(runtime: &HashMap<CheetahString, CheetahString>) -> MutationBrokerLogFilterStatus {
+    let value = |key: &str| runtime.get(key).map(CheetahString::as_str);
+    MutationBrokerLogFilterStatus {
+        supported: value("sreLogFilterControlSupported") == Some("true"),
+        effective_filter: value("sreLogFilterEffective").map(str::to_owned),
+        active_operation_id: value("sreLogFilterActiveOperationId").map(str::to_owned),
+        last_completed_operation_id: value("sreLogFilterLastCompletedOperationId").map(str::to_owned),
+        expires_at_millis: value("sreLogFilterExpiresAtMillis").and_then(|millis| millis.parse().ok()),
+    }
 }
 
 fn validate_broker_addr(value: &CheetahString) -> Result<(), ClientError> {
@@ -155,6 +169,40 @@ mod tests {
         assert!(!properties
             .keys()
             .any(|key| key.contains("message") || key.contains("body")));
+    }
+
+    #[test]
+    fn status_projection_reads_only_the_log_filter_control_keys() {
+        let runtime = properties([
+            ("sreLogFilterControlSupported", "true".to_owned()),
+            (
+                "sreLogFilterEffective",
+                "info,rocketmq_broker::processor=debug".to_owned(),
+            ),
+            ("sreLogFilterActiveOperationId", "operation-1".to_owned()),
+            ("sreLogFilterLastCompletedOperationId", "operation-0".to_owned()),
+            ("sreLogFilterExpiresAtMillis", "123456".to_owned()),
+            ("brokerConfigGeneration", "7".to_owned()),
+        ]);
+        assert_eq!(
+            status_from_runtime(&runtime),
+            MutationBrokerLogFilterStatus {
+                supported: true,
+                effective_filter: Some("info,rocketmq_broker::processor=debug".to_owned()),
+                active_operation_id: Some("operation-1".to_owned()),
+                last_completed_operation_id: Some("operation-0".to_owned()),
+                expires_at_millis: Some(123_456),
+            }
+        );
+
+        // A Broker without the control, or one that reports anything but `true`, is unsupported.
+        for runtime in [
+            properties([("brokerConfigGeneration", "7".to_owned())]),
+            properties([("sreLogFilterControlSupported", "false".to_owned())]),
+            properties([("sreLogFilterControlSupported", "TRUE".to_owned())]),
+        ] {
+            assert_eq!(status_from_runtime(&runtime), MutationBrokerLogFilterStatus::default());
+        }
     }
 
     #[test]

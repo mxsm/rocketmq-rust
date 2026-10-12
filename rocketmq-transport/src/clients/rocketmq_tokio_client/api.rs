@@ -30,7 +30,7 @@ use crate::clients::nameserver_endpoint::NameServerEndpoint;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::deadline::RequestDeadline;
 use crate::error::TransportError;
-use crate::request_outcome::OutboundRequestOutcome;
+use crate::request_outcome::OutboundRequestResult;
 use crate::request_processor::default_request_processor::DefaultRequestProcessor;
 use crate::runtime::config::client_config::TransportClientConfig;
 use crate::runtime::processor::RequestProcessor;
@@ -393,7 +393,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         target: RequestTarget,
         request: RemotingCommand,
         deadline: RequestDeadline,
-    ) -> Result<OutboundRequestOutcome, TransportError> {
+    ) -> Result<OutboundRequestResult, TransportError> {
         self.request_inner(target, request, deadline).await
     }
 
@@ -439,7 +439,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// # use rocketmq_transport::api::OutboundRequestOutcome;
+    /// # use rocketmq_transport::api::OutboundRequestResult;
     /// # use rocketmq_transport::clients::TransportClient;
     /// # use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     /// # async fn example(client: &TransportClient) -> Result<(), rocketmq_transport::api::TransportError> {
@@ -450,13 +450,13 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
     ///     3000 // 3 second timeout
     /// ).await?;
     /// match outcome {
-    ///     OutboundRequestOutcome::Response(response) => {
+    ///     OutboundRequestResult::Response(response) => {
     ///         let _ = response.code();
     ///     }
-    ///     OutboundRequestOutcome::Rejected(rejection) => {
+    ///     OutboundRequestResult::Rejected(rejection) => {
     ///         let _ = (rejection.reason(), rejection.stage());
     ///     }
-    ///     OutboundRequestOutcome::Contract(contract) => {
+    ///     OutboundRequestResult::Contract(contract) => {
     ///         let _ = (contract.reason(), contract.stage());
     ///     }
     /// }
@@ -468,7 +468,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         addr: Option<&CheetahString>,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> Result<OutboundRequestOutcome, TransportError> {
+    ) -> Result<OutboundRequestResult, TransportError> {
         self.invoke_request_with_deadline(addr, request, RequestDeadline::from_timeout_millis(timeout_millis))
             .await
     }
@@ -535,19 +535,6 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
     /// It is not a DNS, socket, or network reachability probe.
     pub fn reconcile_cached_connection(&self, addr: &CheetahString) -> CachedConnectionState {
         self.reconcile_cached_connection_inner(addr)
-    }
-
-    /// Retained compatibility facade for direct cached-session cleanup.
-    ///
-    /// This method is not a DNS, socket, or network reachability probe. Use
-    /// [`Self::reconcile_cached_connection`] when the caller needs the typed
-    /// cache state.
-    #[deprecated(
-        since = "1.0.0",
-        note = "use TransportClient::reconcile_cached_connection; is_address_reachable is not a network probe"
-    )]
-    pub fn is_address_reachable(&self, addr: &CheetahString) {
-        self.is_address_reachable_inner(addr);
     }
 
     pub fn close_clients(&self, addrs: Vec<String>) {

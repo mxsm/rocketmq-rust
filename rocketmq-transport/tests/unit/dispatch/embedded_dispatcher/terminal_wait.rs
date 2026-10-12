@@ -21,7 +21,7 @@ use crate::dispatch::DeferredRegistrationResult;
 use crate::dispatch::DeferredRegistry;
 use crate::dispatch::DeferredRequest;
 use crate::dispatch::DeferredResponder;
-use crate::dispatch::DeferredResponderOutcome;
+use crate::dispatch::DeferredResponderTakeResult;
 use crate::dispatch::DeferredResumeResult;
 use crate::dispatch::DeferredResumeRetainedSize;
 use crate::dispatch::DeferredRetainedSizeParts;
@@ -30,13 +30,13 @@ use crate::dispatch::DeferredWaitLimits;
 use crate::dispatch::DeferredWakeReason;
 use crate::telemetry::TransportTelemetry;
 
-fn terminal_responder(outcome: DeferredResponderOutcome) -> DeferredResponder {
+fn terminal_responder(outcome: DeferredResponderTakeResult) -> DeferredResponder {
     match outcome {
-        DeferredResponderOutcome::Taken(responder) => responder,
-        DeferredResponderOutcome::OneWayRequest
-        | DeferredResponderOutcome::Unavailable
-        | DeferredResponderOutcome::AlreadyTaken
-        | DeferredResponderOutcome::OutcomeCompleted => panic!("terminal wait owns the deferred responder"),
+        DeferredResponderTakeResult::Taken(responder) => responder,
+        DeferredResponderTakeResult::OneWayRequest
+        | DeferredResponderTakeResult::Unavailable
+        | DeferredResponderTakeResult::AlreadyTaken
+        | DeferredResponderTakeResult::OutcomeCompleted => panic!("terminal wait owns the deferred responder"),
     }
 }
 

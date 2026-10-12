@@ -9,12 +9,16 @@
 3. Add a private cluster-registry entry for each logical cluster. Reference credentials only through protected
    environment-variable names; inline credentials are rejected.
 4. Configure `mutations_enabled=true` and allowlist only the required subset of `topic_upsert`,
-   `consumer_group_upsert`, `consumer_offset_reset`, `broker_config_patch`, and `consumer_request_mode`, plus
+   `consumer_group_upsert`, `consumer_offset_reset`, `broker_config_patch`, `consumer_request_mode`,
+   `proxy_drain_begin`, `proxy_drain_cancel`, `broker_log_filter_set`, and `broker_log_filter_restore`, plus
    their logical clusters. The identity provider must issue matching closed claims and `rocketmq:write`.
-5. Restart the process. Configuration and emergency-disable changes are startup-time controls and do not hot
+5. For Proxy drains, list each Proxy of a cluster under `[[clusters.proxies]]` with an alias and its remoting
+   `host:port`. Callers name a Proxy only by that alias. See [Proxy drains and temporary log
+   levels](#proxy-drains-and-temporary-log-levels) for what the Proxy and the Broker need.
+6. Restart the process. Configuration and emergency-disable changes are startup-time controls and do not hot
    reload.
 
-Verify authenticated `tools/list`: a principal can see zero through five mutation tools according to the
+Verify authenticated `tools/list`: a principal can see zero through nine mutation tools according to the
 intersection, and `rocketmq_get_mutation_result` whenever it holds `rocketmq:write` and an allowed, configured
 cluster.
 The capability Resource must report compile/runtime/registered state consistent with that catalog. Resource
@@ -46,6 +50,54 @@ Interpret results conservatively:
   targeted path never tries to repair that global value and preserves the broker-applied truth.
 
 Never infer success from HTTP delivery alone; consume the closed structured result and `isError` value.
+
+## Proxy drains and temporary log levels
+
+`rocketmq_begin_proxy_drain`, `rocketmq_cancel_proxy_drain`, `rocketmq_set_broker_log_filter_ttl`, and
+`rocketmq_restore_broker_log_filter` each start or end a state on one target instead of replacing metadata.
+The state belongs to the `operation_id` that started it, and only a call with the same identifier ends it. The
+tool reference lists the arguments and every outcome.
+
+Prepare the targets before you allowlist an operation:
+
+- A Proxy answers drain requests, reads included, only for an authenticated principal. Run the Proxy with
+  authentication, and give the cluster entry credentials that the Proxy accepts.
+- A Broker applies a remote log filter only with authentication and authorization enabled and with
+  `[logging.reload] enabled = true`, and only for a request that carries an AccessKey. Give the cluster entry
+  credentials that the Broker authorizes to update its configuration.
+- Grant `proxy_drain_cancel` to every principal that holds `proxy_drain_begin`, and `broker_log_filter_restore`
+  to every principal that holds `broker_log_filter_set`. A principal that can start a state should be able to
+  end it.
+
+Drain a Proxy before a restart:
+
+1. Call `rocketmq_begin_proxy_drain` as a dry run and check that `before` shows `phase=accepting` and
+   `held_by=none`. A `conflict` means another operation already drains the Proxy.
+2. Execute it with a new `operation_id`, and write that identifier into the change record. The Control
+   server stores it nowhere and never returns it, so your own record is what tells you which identifier
+   cancels the drain.
+3. Repeat the dry run with the same `operation_id` until `phase=drained` and `zero_pending=true`. The `pending`
+   counters show what the Proxy still holds.
+4. Restart the Proxy. The new process admits work again, so no cancel is needed.
+5. To abandon the drain instead, execute `rocketmq_cancel_proxy_drain` with the same `operation_id`.
+
+A drain whose identifier is lost cannot be cancelled through the Control server. Restart that Proxy, or cancel
+the drain through a separately authorized operational path.
+
+Raise a log level for an investigation:
+
+1. Call `rocketmq_set_broker_log_filter_ttl` as a dry run. `held_by=other_operation` means an override is
+   already active, and the server will not replace it.
+2. Execute it with the shortest `ttl_seconds` that covers the investigation, 60 through 900.
+3. Call `rocketmq_restore_broker_log_filter` with the same `operation_id` when you are done. Without it the
+   Broker ends the override by itself at `expires_at_millis`.
+
+An override covers one `rocketmq_broker::` logger at `INFO` or `DEBUG`. Loggers of modules that handle message
+content, credentials, or storage are refused. `DEBUG` output still grows the Broker log volume, so prefer one
+narrow logger and a short time to live.
+
+Send a new `request_key` with every one of these calls. A key replays the outcome of its call for 10 minutes
+without reading the target again.
 
 ## Logs and metrics
 
@@ -215,6 +267,9 @@ absent Consumer request mode cannot be restored through a set operation. For tho
 evidence and use a separately authorized operational path; do not invent a generic compensating command,
 CLI, RPC, or delete operation. Do not reuse a request key with different content.
 
+A Proxy drain and a temporary log level are undone by their own counterpart: `rocketmq_cancel_proxy_drain` and
+`rocketmq_restore_broker_log_filter` with the `operation_id` that started the state.
+
 | Result or code | Meaning | Required operator action |
 | --- | --- | --- |
 | `planned` | Dry-run produced a sealed candidate without mutation. | Review it; no rollback is needed. |
@@ -231,6 +286,12 @@ For rollback of server policy rather than a RocketMQ resource, restore the prior
 the Control process. After restart, repeat authenticated `tools/list` and capability-resource verification;
 configuration edits do not take effect in a running process.
 
+Rolling back the Control binary needs one more step once a Proxy drain or a log filter call has been recorded.
+A build from before those four operations rejects their operation values and the `proxy` target member, so it
+refuses to start on an active audit segment that holds such a record. Stop the service, leave the whole trail
+in place as an archive, and start the older build with a new `audit.path`. Its configuration must not contain
+`[[clusters.proxies]]` or one of the four operation values either: that build rejects them as unknown.
+
 ## Emergency stop-write procedure
 
 Use this procedure for an immediate policy stop. It stops new mutation Tool registration; it does not erase
@@ -242,7 +303,9 @@ audit records or mutate any RocketMQ state.
 2. Restart the Control process. There is no hot reload for this setting.
 3. With an authenticated request, call `tools/list`. Verify that no reviewed write Tool is present:
    `rocketmq_upsert_topic`, `rocketmq_upsert_consumer_group`, `rocketmq_reset_consumer_offset`,
-   `rocketmq_patch_broker_config`, and `rocketmq_set_consumer_request_mode` must all be absent. The read-only
+   `rocketmq_patch_broker_config`, `rocketmq_set_consumer_request_mode`, `rocketmq_begin_proxy_drain`,
+   `rocketmq_cancel_proxy_drain`, `rocketmq_set_broker_log_filter_ttl`, and
+   `rocketmq_restore_broker_log_filter` must all be absent. The read-only
    `rocketmq_get_mutation_result` stays listed on purpose: it is how the outcome of the calls made before the
    stop is read, for every invocation whose records are still in the active audit segment.
 4. Read `rocketmq-control://capabilities`. Verify
@@ -251,6 +314,11 @@ audit records or mutate any RocketMQ state.
    distinct from runtime enablement and registration.
 5. Preserve and inspect existing durable audit records. Reconcile any already-started, partial, failed, or
    verification-incomplete operations through the returned target evidence before permitting new writes.
+
+The stop also removes `rocketmq_cancel_proxy_drain` and `rocketmq_restore_broker_log_filter`. A drain that is
+active at that moment stays active: cancel it before the stop, restart the Proxy, or cancel it once mutations
+are enabled again. A log filter override ends by itself when its time to live runs out, at most 15 minutes
+after it was set.
 
 To restore writes, reverse the configuration change only after the incident is resolved: set
 `mutations_enabled=true`, restore only the necessary closed operation/cluster allowlists, restart, verify the

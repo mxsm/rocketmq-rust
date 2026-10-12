@@ -59,6 +59,10 @@ pub(crate) enum MutationToolRequest {
     ConsumerOffset(tools::ResetConsumerOffsetArgs),
     BrokerConfig(tools::PatchBrokerConfigArgs),
     ConsumerRequestMode(tools::SetConsumerRequestModeArgs),
+    ProxyDrainBegin(tools::ProxyDrainArgs),
+    ProxyDrainCancel(tools::ProxyDrainArgs),
+    BrokerLogFilterSet(tools::SetBrokerLogFilterTtlArgs),
+    BrokerLogFilterRestore(tools::RestoreBrokerLogFilterArgs),
 }
 
 impl MutationToolRequest {
@@ -69,6 +73,10 @@ impl MutationToolRequest {
             Self::ConsumerOffset(_) => ControlOperation::ConsumerOffsetReset,
             Self::BrokerConfig(_) => ControlOperation::BrokerConfigPatch,
             Self::ConsumerRequestMode(_) => ControlOperation::ConsumerRequestMode,
+            Self::ProxyDrainBegin(_) => ControlOperation::ProxyDrainBegin,
+            Self::ProxyDrainCancel(_) => ControlOperation::ProxyDrainCancel,
+            Self::BrokerLogFilterSet(_) => ControlOperation::BrokerLogFilterSet,
+            Self::BrokerLogFilterRestore(_) => ControlOperation::BrokerLogFilterRestore,
         }
     }
 
@@ -79,6 +87,9 @@ impl MutationToolRequest {
             Self::ConsumerOffset(args) => args.dry_run,
             Self::BrokerConfig(args) => args.dry_run,
             Self::ConsumerRequestMode(args) => args.dry_run,
+            Self::ProxyDrainBegin(args) | Self::ProxyDrainCancel(args) => args.dry_run,
+            Self::BrokerLogFilterSet(args) => args.dry_run,
+            Self::BrokerLogFilterRestore(args) => args.dry_run,
         }
     }
 
@@ -89,6 +100,9 @@ impl MutationToolRequest {
             Self::ConsumerOffset(args) => args.request_key.as_deref(),
             Self::BrokerConfig(args) => args.request_key.as_deref(),
             Self::ConsumerRequestMode(args) => args.request_key.as_deref(),
+            Self::ProxyDrainBegin(args) | Self::ProxyDrainCancel(args) => args.request_key.as_deref(),
+            Self::BrokerLogFilterSet(args) => args.request_key.as_deref(),
+            Self::BrokerLogFilterRestore(args) => args.request_key.as_deref(),
         }
     }
 
@@ -99,6 +113,9 @@ impl MutationToolRequest {
             Self::ConsumerOffset(args) => args.reason.as_deref(),
             Self::BrokerConfig(args) => args.reason.as_deref(),
             Self::ConsumerRequestMode(args) => args.reason.as_deref(),
+            Self::ProxyDrainBegin(args) | Self::ProxyDrainCancel(args) => args.reason.as_deref(),
+            Self::BrokerLogFilterSet(args) => args.reason.as_deref(),
+            Self::BrokerLogFilterRestore(args) => args.reason.as_deref(),
         }
     }
 
@@ -109,6 +126,9 @@ impl MutationToolRequest {
             Self::ConsumerOffset(args) => vec![args.topic.clone(), args.consumer_group.clone()],
             Self::BrokerConfig(args) => vec![args.broker_name.clone()],
             Self::ConsumerRequestMode(args) => vec![args.topic.clone(), args.consumer_group.clone()],
+            Self::ProxyDrainBegin(args) | Self::ProxyDrainCancel(args) => vec![args.proxy_name.clone()],
+            Self::BrokerLogFilterSet(args) => vec![args.broker_name.clone()],
+            Self::BrokerLogFilterRestore(args) => vec![args.broker_name.clone()],
         }
     }
 
@@ -117,7 +137,13 @@ impl MutationToolRequest {
         match &mut canonical {
             Self::Topic(args) => args.broker_names.sort(),
             Self::ConsumerGroup(args) => args.broker_names.sort(),
-            Self::ConsumerOffset(_) | Self::BrokerConfig(_) | Self::ConsumerRequestMode(_) => {}
+            Self::ConsumerOffset(_)
+            | Self::BrokerConfig(_)
+            | Self::ConsumerRequestMode(_)
+            | Self::ProxyDrainBegin(_)
+            | Self::ProxyDrainCancel(_)
+            | Self::BrokerLogFilterSet(_)
+            | Self::BrokerLogFilterRestore(_) => {}
         }
         serde_json::to_string(&canonical).map_err(|_| ControlError::invalid_argument())
     }
@@ -152,6 +178,18 @@ impl MutationToolRequest {
                 consumer_group: name(&args.consumer_group),
                 ..AuditTarget::default()
             },
+            Self::ProxyDrainBegin(args) | Self::ProxyDrainCancel(args) => AuditTarget {
+                proxy: name(&args.proxy_name),
+                ..AuditTarget::default()
+            },
+            Self::BrokerLogFilterSet(args) => AuditTarget {
+                broker: name(&args.broker_name),
+                ..AuditTarget::default()
+            },
+            Self::BrokerLogFilterRestore(args) => AuditTarget {
+                broker: name(&args.broker_name),
+                ..AuditTarget::default()
+            },
         };
         AuditSubject::try_new(
             self.operation(),
@@ -162,13 +200,21 @@ impl MutationToolRequest {
     }
 
     /// Digests what this call asks for: its arguments with the Broker names sorted and without
-    /// `reason`, `request_key`, `dry_run` and `confirm`, which say how and why, not what.
+    /// `reason`, `request_key`, `dry_run` and `confirm`, which say how and why, not what. The
+    /// identifier of a drain or of a log filter is part of what is asked, so it is digested and
+    /// never recorded.
     fn requested_digest(&self) -> Result<String, ControlError> {
         let mut canonical = self.clone();
         match &mut canonical {
             Self::Topic(args) => args.broker_names.sort(),
             Self::ConsumerGroup(args) => args.broker_names.sort(),
-            Self::ConsumerOffset(_) | Self::BrokerConfig(_) | Self::ConsumerRequestMode(_) => {}
+            Self::ConsumerOffset(_)
+            | Self::BrokerConfig(_)
+            | Self::ConsumerRequestMode(_)
+            | Self::ProxyDrainBegin(_)
+            | Self::ProxyDrainCancel(_)
+            | Self::BrokerLogFilterSet(_)
+            | Self::BrokerLogFilterRestore(_) => {}
         }
         let mut requested = serde_json::to_value(&canonical).map_err(|_| ControlError::invalid_argument())?;
         if let Some(arguments) = requested.as_object_mut() {
@@ -191,6 +237,9 @@ impl Serialize for MutationToolRequest {
             Self::ConsumerOffset(args) => args.serialize(serializer),
             Self::BrokerConfig(args) => args.serialize(serializer),
             Self::ConsumerRequestMode(args) => args.serialize(serializer),
+            Self::ProxyDrainBegin(args) | Self::ProxyDrainCancel(args) => args.serialize(serializer),
+            Self::BrokerLogFilterSet(args) => args.serialize(serializer),
+            Self::BrokerLogFilterRestore(args) => args.serialize(serializer),
         }
     }
 }
@@ -203,6 +252,8 @@ pub(crate) enum MutationToolResponse {
     ConsumerOffset(tools::OffsetMutationToolResponse),
     BrokerConfig(tools::BrokerConfigMutationToolResponse),
     ConsumerRequestMode(tools::RequestModeMutationToolResponse),
+    ProxyDrain(tools::ProxyDrainToolResponse),
+    BrokerLogFilter(tools::BrokerLogFilterToolResponse),
 }
 
 impl MutationToolResponse {
@@ -213,6 +264,8 @@ impl MutationToolResponse {
             Self::ConsumerOffset(response) => response.is_error(),
             Self::BrokerConfig(response) => response.is_error(),
             Self::ConsumerRequestMode(response) => response.is_error(),
+            Self::ProxyDrain(response) => response.is_error(),
+            Self::BrokerLogFilter(response) => response.is_error(),
         }
     }
 
@@ -223,6 +276,8 @@ impl MutationToolResponse {
             Self::ConsumerOffset(response) => (response.status, response.error_code),
             Self::BrokerConfig(response) => (response.status, response.error_code),
             Self::ConsumerRequestMode(response) => (response.status, response.error_code),
+            Self::ProxyDrain(response) => (response.status, response.error_code),
+            Self::BrokerLogFilter(response) => (response.status, response.error_code),
         };
         match status {
             tools::MutationStatus::Planned => (AuditResult::Planned, error_code),
@@ -572,6 +627,10 @@ use admission::Admission;
 use idempotency::execute_admitted;
 use idempotency::IdempotencyIdentity;
 use idempotency::IdempotencyState;
+#[cfg(test)]
+pub(crate) use remaining::OperationBackend;
+#[cfg(test)]
+pub(crate) use remaining::Planned;
 pub(crate) use result_lookup::ResultLookup;
 
 #[cfg(test)]

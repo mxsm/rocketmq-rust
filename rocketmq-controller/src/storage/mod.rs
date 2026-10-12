@@ -153,13 +153,13 @@ pub async fn create_storage(config: StorageConfig, storage_io: BlockingExecutor)
     match config {
         #[cfg(feature = "storage-rocksdb")]
         StorageConfig::RocksDB { path } => {
-            let backend = rocksdb_backend::RocksDBBackend::new(path, storage_io).await?;
+            let backend = rocksdb_backend::RocksDBKeyValueStore::new(path, storage_io).await?;
             Ok(Arc::new(backend))
         }
 
         #[cfg(feature = "storage-file")]
         StorageConfig::File { path } => {
-            let backend = file_backend::FileBackend::new(path).await?;
+            let backend = file_backend::FileKeyValueStore::new(path).await?;
             Ok(Arc::new(backend))
         }
 

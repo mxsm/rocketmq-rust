@@ -212,7 +212,7 @@ pub(crate) mod network {
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_transport::api::DefaultRequestProcessor;
-    use rocketmq_transport::api::OutboundRequestOutcome;
+    use rocketmq_transport::api::OutboundRequestResult;
     use rocketmq_transport::api::ServerConfig;
     use rocketmq_transport::api::TransportClient;
     use rocketmq_transport::api::TransportClientConfig;
@@ -510,11 +510,11 @@ pub(crate) mod network {
                 .await
                 .context("execute route benchmark request")?;
             match outcome {
-                OutboundRequestOutcome::Response(response) => Ok(response),
-                OutboundRequestOutcome::Rejected(rejection) => {
+                OutboundRequestResult::Response(response) => Ok(response),
+                OutboundRequestResult::Rejected(rejection) => {
                     bail!("route benchmark request was rejected: {rejection:?}")
                 }
-                OutboundRequestOutcome::Contract(contract) => {
+                OutboundRequestResult::Contract(contract) => {
                     bail!("route benchmark request contract failed: {contract:?}")
                 }
             }

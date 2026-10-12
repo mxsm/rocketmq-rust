@@ -55,14 +55,14 @@ impl MQClientAPIImpl {
             .invoke_request(Some(addr), request, timeout_millis)
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "get_consume_stats_for_mutation",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "get_consume_stats_for_mutation",
                     RetryInput::Contract(contract),
@@ -89,14 +89,14 @@ impl MQClientAPIImpl {
             .invoke_request(Some(addr), request, timeout_millis)
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "get_consume_stats_for_supervised_mutation",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "get_consume_stats_for_supervised_mutation",
                     RetryInput::Contract(contract),
@@ -127,14 +127,14 @@ impl MQClientAPIImpl {
             .invoke_request(Some(&broker_addr), request, timeout_millis)
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "get_topic_config_state_for_mutation",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "get_topic_config_state_for_mutation",
                     RetryInput::Contract(contract),
@@ -204,14 +204,14 @@ impl MQClientAPIImpl {
             .invoke_request(Some(&broker_addr), request, timeout_millis)
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "replace_topic_config_if_state",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "replace_topic_config_if_state",
                     RetryInput::Contract(contract),
@@ -242,14 +242,14 @@ impl MQClientAPIImpl {
             .invoke_request(Some(&broker_addr), request, timeout_millis)
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "get_subscription_group_config_state_for_mutation",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "get_subscription_group_config_state_for_mutation",
                     RetryInput::Contract(contract),
@@ -339,14 +339,14 @@ impl MQClientAPIImpl {
             .invoke_request(Some(&broker_addr), request, timeout_millis)
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "replace_subscription_group_config_if_state",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "replace_subscription_group_config_if_state",
                     RetryInput::Contract(contract),
@@ -370,14 +370,14 @@ impl MQClientAPIImpl {
             .invoke_request(Some(&broker_addr), request, timeout_millis)
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "get_broker_mutation_config_state",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "get_broker_mutation_config_state",
                     RetryInput::Contract(contract),
@@ -442,14 +442,14 @@ impl MQClientAPIImpl {
             .invoke_request(Some(&broker_addr), request, timeout_millis)
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "reset_consumer_offset_if_current",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "reset_consumer_offset_if_current",
                     RetryInput::Contract(contract),
@@ -483,14 +483,14 @@ impl MQClientAPIImpl {
             .invoke_request(Some(&broker_addr), request, timeout_millis)
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "get_message_request_mode_for_mutation",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "get_message_request_mode_for_mutation",
                     RetryInput::Contract(contract),
@@ -557,14 +557,14 @@ impl MQClientAPIImpl {
             .invoke_request(Some(&broker_addr), request, timeout_millis)
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "replace_message_request_mode_if_current",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "replace_message_request_mode_if_current",
                     RetryInput::Contract(contract),

@@ -778,6 +778,61 @@ mod tests {
         }
     }
 
+    /// The protocol tests call no operation-bound Tool, so this part of the session stays shut.
+    #[cfg(feature = "write-tools")]
+    impl crate::tool_runtime::OperationBackend for ProtocolBackend {
+        type ProxyDrainPlan = ();
+        type LogFilterPlan = ();
+
+        fn preflight_proxy_drain<'a>(
+            &'a mut self,
+            _request: &'a rocketmq_admin_core::core::supervised_operation::ProxyDrainPreflightRequest,
+        ) -> crate::tool_runtime::RuntimeFuture<'a, Result<Self::ProxyDrainPlan, ControlError>> {
+            Box::pin(async { Err(ControlError::operation_unavailable()) })
+        }
+
+        fn planned_proxy_drain(
+            _plan: &Self::ProxyDrainPlan,
+        ) -> crate::tool_runtime::Planned<rocketmq_admin_core::core::supervised_operation::ProxyDrainObservation>
+        {
+            unreachable!("no drain plan is ever made")
+        }
+
+        fn execute_proxy_drain<'a>(
+            &'a mut self,
+            _plan: &'a Self::ProxyDrainPlan,
+        ) -> crate::tool_runtime::RuntimeFuture<
+            'a,
+            Result<rocketmq_admin_core::core::supervised_operation::ProxyDrainReport, ControlError>,
+        > {
+            Box::pin(async { Err(ControlError::operation_unavailable()) })
+        }
+
+        fn preflight_log_filter<'a>(
+            &'a mut self,
+            _request: &'a rocketmq_admin_core::core::supervised_operation::BrokerLogFilterPreflightRequest,
+        ) -> crate::tool_runtime::RuntimeFuture<'a, Result<Self::LogFilterPlan, ControlError>> {
+            Box::pin(async { Err(ControlError::operation_unavailable()) })
+        }
+
+        fn planned_log_filter(
+            _plan: &Self::LogFilterPlan,
+        ) -> crate::tool_runtime::Planned<rocketmq_admin_core::core::supervised_operation::BrokerLogFilterObservation>
+        {
+            unreachable!("no log-filter plan is ever made")
+        }
+
+        fn execute_log_filter<'a>(
+            &'a mut self,
+            _plan: &'a Self::LogFilterPlan,
+        ) -> crate::tool_runtime::RuntimeFuture<
+            'a,
+            Result<rocketmq_admin_core::core::supervised_operation::BrokerLogFilterReport, ControlError>,
+        > {
+            Box::pin(async { Err(ControlError::operation_unavailable()) })
+        }
+    }
+
     #[cfg(feature = "write-tools")]
     async fn write_router() -> (Router, Arc<ProtocolCounters>, Arc<MemoryAuditSink>) {
         write_router_with_mutations_enabled(true).await

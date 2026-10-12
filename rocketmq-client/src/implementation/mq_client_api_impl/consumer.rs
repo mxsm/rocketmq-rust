@@ -207,14 +207,14 @@ impl MQClientAPIImpl {
             .invoke_request(Some(broker_addr), request, timeout_millis)
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(consumer_request_error(
                     "notification_with_polling_stats",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(consumer_request_error(
                     "notification_with_polling_stats",
                     RetryInput::Contract(contract),
@@ -253,14 +253,14 @@ impl MQClientAPIImpl {
             )
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(consumer_request_error(
                     "get_consumer_id_list_by_group",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(consumer_request_error(
                     "get_consumer_id_list_by_group",
                     RetryInput::Contract(contract),
@@ -315,14 +315,14 @@ impl MQClientAPIImpl {
             )
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(consumer_request_error(
                     "get_consumer_connection_list",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(consumer_request_error(
                     "get_consumer_connection_list",
                     RetryInput::Contract(contract),
@@ -371,14 +371,14 @@ impl MQClientAPIImpl {
             )
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(consumer_request_error(
                     "get_producer_connection_list",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(consumer_request_error(
                     "get_producer_connection_list",
                     RetryInput::Contract(contract),
@@ -435,14 +435,14 @@ impl MQClientAPIImpl {
             )
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(consumer_request_error(
                     "invoke_broker_to_get_consumer_status",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(consumer_request_error(
                     "invoke_broker_to_get_consumer_status",
                     RetryInput::Contract(contract),
@@ -484,14 +484,14 @@ impl MQClientAPIImpl {
             )
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(consumer_request_error(
                     "get_all_producer_info",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(consumer_request_error(
                     "get_all_producer_info",
                     RetryInput::Contract(contract),
@@ -559,14 +559,14 @@ impl MQClientAPIImpl {
             .invoke_request(Some(addr), request, timeout_millis)
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(consumer_request_error(
                     "update_consumer_offset",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(consumer_request_error(
                     "update_consumer_offset",
                     RetryInput::Contract(contract),
@@ -610,14 +610,14 @@ impl MQClientAPIImpl {
             )
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(consumer_request_error(
                     "query_consumer_offset",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(consumer_request_error(
                     "query_consumer_offset",
                     RetryInput::Contract(contract),
@@ -678,11 +678,11 @@ impl MQClientAPIImpl {
             .invoke_request(Some(addr), request, timeout_millis)
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(consumer_request_error("query_message", RetryInput::Rejected(rejection)));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(consumer_request_error("query_message", RetryInput::Contract(contract)));
             }
             Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
@@ -757,14 +757,14 @@ impl MQClientAPIImpl {
             .invoke_request(Some(addr), request, timeout_millis)
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(consumer_request_error(
                     "pull_message_sync",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(consumer_request_error(
                     "pull_message_sync",
                     RetryInput::Contract(contract),
@@ -790,7 +790,7 @@ impl MQClientAPIImpl {
             .invoke_request(Some(addr), request, timeout_millis)
             .await
         {
-            Ok(OutboundRequestOutcome::Response(response)) => {
+            Ok(OutboundRequestResult::Response(response)) => {
                 let result = self.process_pull_response(response, addr).await;
                 let _ = self
                     .callback_executor
@@ -802,14 +802,14 @@ impl MQClientAPIImpl {
                     })
                     .await;
             }
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 let error = consumer_request_error("pull_message_async", RetryInput::Rejected(rejection));
                 let _ = self
                     .callback_executor
                     .execute(async { pull_callback.on_exception(error) })
                     .await;
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 let error = consumer_request_error("pull_message_async", RetryInput::Contract(contract));
                 let _ = self
                     .callback_executor
@@ -896,14 +896,14 @@ impl MQClientAPIImpl {
             )
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(consumer_request_error(
                     "consumer_send_message_back",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(consumer_request_error(
                     "consumer_send_message_back",
                     RetryInput::Contract(contract),
@@ -958,12 +958,12 @@ impl MQClientAPIImpl {
             .invoke_request(Some(addr), request, timeout_millis)
             .await;
         match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => Ok(response),
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => Err(consumer_request_error(
+            Ok(OutboundRequestResult::Response(response)) => Ok(response),
+            Ok(OutboundRequestResult::Rejected(rejection)) => Err(consumer_request_error(
                 "send_message_back_async",
                 RetryInput::Rejected(rejection),
             )),
-            Ok(OutboundRequestOutcome::Contract(contract)) => Err(consumer_request_error(
+            Ok(OutboundRequestResult::Contract(contract)) => Err(consumer_request_error(
                 "send_message_back_async",
                 RetryInput::Contract(contract),
             )),
@@ -991,14 +991,14 @@ impl MQClientAPIImpl {
             .invoke_request(Some(addr), request, timeout_millis)
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(consumer_request_error(
                     "unregister_client",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(consumer_request_error(
                     "unregister_client",
                     RetryInput::Contract(contract),
@@ -1045,14 +1045,14 @@ impl MQClientAPIImpl {
                 )
                 .await;
             let response = match outcome {
-                Ok(OutboundRequestOutcome::Response(response)) => response,
-                Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                Ok(OutboundRequestResult::Response(response)) => response,
+                Ok(OutboundRequestResult::Rejected(rejection)) => {
                     return Err(consumer_request_error(
                         "unlock_batch_mq",
                         RetryInput::Rejected(rejection),
                     ));
                 }
-                Ok(OutboundRequestOutcome::Contract(contract)) => {
+                Ok(OutboundRequestResult::Contract(contract)) => {
                     return Err(consumer_request_error(
                         "unlock_batch_mq",
                         RetryInput::Contract(contract),
@@ -1101,11 +1101,11 @@ impl MQClientAPIImpl {
             )
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(consumer_request_error("lock_batch_mq", RetryInput::Rejected(rejection)));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(consumer_request_error("lock_batch_mq", RetryInput::Contract(contract)));
             }
             Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),

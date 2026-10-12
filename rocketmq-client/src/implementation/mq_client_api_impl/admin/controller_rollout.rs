@@ -17,7 +17,7 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::controller_rollout::RolloutQuorumStatus;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::api::OutboundRequestOutcome;
+use rocketmq_transport::api::OutboundRequestResult;
 
 use super::admin_request_error;
 use crate::common::retry_policy::RetryInput;
@@ -49,14 +49,14 @@ impl MQClientAPIImpl {
             .invoke_request(Some(&controller_address), request, timeout_millis)
             .await
         {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "check_controller_rollout",
                     RetryInput::Rejected(rejection),
                 ))
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "check_controller_rollout",
                     RetryInput::Contract(contract),

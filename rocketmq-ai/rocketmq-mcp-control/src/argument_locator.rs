@@ -282,6 +282,7 @@ fn matches_reviewed_pattern(pattern: &str, text: &str) -> Option<bool> {
         "^[a-zA-Z0-9_-]+$" => Some(only(b"_-")),
         "^[%|a-zA-Z0-9_-]+$" => Some(only(b"%|_-")),
         "^[a-zA-Z0-9._:-]+$" => Some(only(b"._:-")),
+        crate::tools::LOGGER_PATTERN => Some(crate::tools::is_broker_module_path(text)),
         _ => None,
     }
 }
@@ -296,7 +297,10 @@ mod tests {
 
     use super::*;
     use crate::tools::PatchBrokerConfigArgs;
+    use crate::tools::ProxyDrainArgs;
     use crate::tools::ResetConsumerOffsetArgs;
+    use crate::tools::RestoreBrokerLogFilterArgs;
+    use crate::tools::SetBrokerLogFilterTtlArgs;
     use crate::tools::SetConsumerRequestModeArgs;
     use crate::tools::UpsertConsumerGroupArgs;
     use crate::tools::UpsertTopicArgs;
@@ -400,6 +404,36 @@ mod tests {
         })
     }
 
+    fn proxy_drain() -> Value {
+        json!({
+            "schema_version": MUTATION_ARGUMENTS_SCHEMA_VERSION,
+            "cluster": "cluster-a",
+            "proxy_name": "proxy-a",
+            "operation_id": "drain-0001"
+        })
+    }
+
+    fn set_log_filter() -> Value {
+        json!({
+            "schema_version": MUTATION_ARGUMENTS_SCHEMA_VERSION,
+            "cluster": "cluster-a",
+            "broker_name": "broker-a",
+            "logger": "rocketmq_broker::processor",
+            "level": "DEBUG",
+            "ttl_seconds": 300,
+            "operation_id": "debug-0001"
+        })
+    }
+
+    fn restore_log_filter() -> Value {
+        json!({
+            "schema_version": MUTATION_ARGUMENTS_SCHEMA_VERSION,
+            "cluster": "cluster-a",
+            "broker_name": "broker-a",
+            "operation_id": "debug-0001"
+        })
+    }
+
     fn with(mut arguments: Value, name: &str, value: Value) -> Value {
         arguments[name] = value;
         arguments
@@ -410,7 +444,7 @@ mod tests {
         arguments
     }
 
-    fn input_schemas() -> [(&'static str, std::sync::Arc<JsonObject>); 5] {
+    fn input_schemas() -> [(&'static str, std::sync::Arc<JsonObject>); 8] {
         use rmcp::handler::server::tool::schema_for_input;
         [
             ("topic", schema_for_input::<UpsertTopicArgs>().unwrap()),
@@ -420,6 +454,15 @@ mod tests {
             (
                 "request mode",
                 schema_for_input::<SetConsumerRequestModeArgs>().unwrap(),
+            ),
+            ("proxy drain", schema_for_input::<ProxyDrainArgs>().unwrap()),
+            (
+                "set log filter",
+                schema_for_input::<SetBrokerLogFilterTtlArgs>().unwrap(),
+            ),
+            (
+                "restore log filter",
+                schema_for_input::<RestoreBrokerLogFilterArgs>().unwrap(),
             ),
         ]
     }
@@ -455,6 +498,12 @@ mod tests {
         assert_eq!(locate::<PatchBrokerConfigArgs>(&broker_config()), []);
         assert!(decodes::<SetConsumerRequestModeArgs>(&request_mode()));
         assert_eq!(locate::<SetConsumerRequestModeArgs>(&request_mode()), []);
+        assert!(decodes::<ProxyDrainArgs>(&proxy_drain()));
+        assert_eq!(locate::<ProxyDrainArgs>(&proxy_drain()), []);
+        assert!(decodes::<SetBrokerLogFilterTtlArgs>(&set_log_filter()));
+        assert_eq!(locate::<SetBrokerLogFilterTtlArgs>(&set_log_filter()), []);
+        assert!(decodes::<RestoreBrokerLogFilterArgs>(&restore_log_filter()));
+        assert_eq!(locate::<RestoreBrokerLogFilterArgs>(&restore_log_filter()), []);
 
         // Every bound is inclusive.
         let widest = with(
@@ -695,6 +744,90 @@ mod tests {
     }
 
     #[test]
+    fn operation_bound_tools_locate_what_their_schemas_declare() {
+        use ViolationConstraint::{Enum, MaxLength, Maximum, MinLength, Minimum, Pattern, Required, Type};
+
+        let drain_cases = [
+            (
+                with(proxy_drain(), "proxy_name", json!("10.0.0.7:8080")),
+                located("/proxy_name", Pattern),
+            ),
+            (
+                with(proxy_drain(), "proxy_name", json!("proxy-a.example.test")),
+                located("/proxy_name", Pattern),
+            ),
+            (
+                with(proxy_drain(), "proxy_name", json!("p".repeat(65))),
+                located("/proxy_name", MaxLength),
+            ),
+            (
+                with(proxy_drain(), "operation_id", json!("short")),
+                located("/operation_id", MinLength),
+            ),
+            (
+                with(proxy_drain(), "operation_id", json!("drain.0001")),
+                located("/operation_id", Pattern),
+            ),
+            (
+                with(proxy_drain(), "operation_id", json!(42)),
+                located("/operation_id", Type),
+            ),
+            (
+                without(proxy_drain(), "operation_id"),
+                located("/operation_id", Required),
+            ),
+            (without(proxy_drain(), "proxy_name"), located("/proxy_name", Required)),
+        ];
+        // A bound that serde does not enforce is refused by `validate`; the locator then says
+        // which member broke which rule of the published schema.
+        for (arguments, expected) in drain_cases {
+            assert_eq!(locate::<ProxyDrainArgs>(&arguments), [expected]);
+        }
+
+        let set_cases = [
+            (
+                with(set_log_filter(), "ttl_seconds", json!(59)),
+                located("/ttl_seconds", Minimum),
+            ),
+            (
+                with(set_log_filter(), "ttl_seconds", json!(901)),
+                located("/ttl_seconds", Maximum),
+            ),
+            (with(set_log_filter(), "level", json!("TRACE")), located("/level", Enum)),
+            (
+                with(set_log_filter(), "logger", json!("rocketmq_store::commit_log")),
+                located("/logger", Pattern),
+            ),
+            (
+                with(set_log_filter(), "logger", json!("rocketmq_broker::processor=trace")),
+                located("/logger", Pattern),
+            ),
+            (
+                with(set_log_filter(), "logger", json!("rocketmq_broker")),
+                located("/logger", MinLength),
+            ),
+            (
+                with(set_log_filter(), "broker_name", json!("broker-a.example.test:10911")),
+                located("/broker_name", Pattern),
+            ),
+            (without(set_log_filter(), "logger"), located("/logger", Required)),
+        ];
+        for (arguments, expected) in set_cases {
+            assert_eq!(locate::<SetBrokerLogFilterTtlArgs>(&arguments), [expected]);
+        }
+
+        // A restore names no logger, level or time to live.
+        for member in ["logger", "level", "ttl_seconds"] {
+            let extra = with(restore_log_filter(), member, json!("x"));
+            assert!(!decodes::<RestoreBrokerLogFilterArgs>(&extra));
+            assert_eq!(
+                locate::<RestoreBrokerLogFilterArgs>(&extra),
+                [located("/*", ViolationConstraint::AdditionalProperty)]
+            );
+        }
+    }
+
+    #[test]
     fn locator_understands_every_keyword_of_the_reviewed_schemas() {
         let mut patterns = BTreeSet::new();
         for (tool, schema) in input_schemas() {
@@ -722,7 +855,7 @@ mod tests {
                 assert_ne!(node.get("additionalProperties"), Some(&Value::Bool(true)), "{tool}");
             });
         }
-        assert_eq!(patterns.len(), 4);
+        assert_eq!(patterns.len(), 5);
         for pattern in &patterns {
             assert!(matches_reviewed_pattern(pattern, "").is_some(), "unreviewed {pattern}");
         }
@@ -755,6 +888,20 @@ mod tests {
             "a^b",
             "a]b",
             "a\\b",
+            "rocketmq_broker",
+            "rocketmq_broker::",
+            "rocketmq_broker::processor",
+            "rocketmq_broker::processor::send_2",
+            "rocketmq_broker::_internal",
+            "rocketmq_broker::Processor",
+            "rocketmq_broker::2fast",
+            "rocketmq_broker::processor::",
+            "rocketmq_broker::::processor",
+            "rocketmq_broker::processor:send",
+            "rocketmq_broker::processor=trace",
+            "rocketmq_broker::processor\n",
+            " rocketmq_broker::processor",
+            "rocketmq_store::commit_log",
         ];
         let mut patterns = BTreeSet::new();
         for (_, schema) in input_schemas() {

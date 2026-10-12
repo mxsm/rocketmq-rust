@@ -23,7 +23,7 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
-use rocketmq_transport::api::OutboundRequestOutcome;
+use rocketmq_transport::api::OutboundRequestResult;
 use rocketmq_transport::api::TransportClient;
 use tokio::sync::mpsc;
 use tracing::info;
@@ -419,13 +419,13 @@ impl BrokerRoleNotifier {
             .await;
         let success = matches!(
             &result,
-            Ok(OutboundRequestOutcome::Response(response))
+            Ok(OutboundRequestResult::Response(response))
                 if response.code() == ResponseCode::Success as i32
         );
         let should_retry = self.mailbox.lock().finish(&task, success, started_at.elapsed());
 
         match result {
-            Ok(OutboundRequestOutcome::Response(_response)) if success => {
+            Ok(OutboundRequestResult::Response(_response)) if success => {
                 info!(
                     target = %task.broker_addr,
                     broker_id = task.key.broker_id,
@@ -433,7 +433,7 @@ impl BrokerRoleNotifier {
                     "Notified broker role change"
                 );
             }
-            Ok(OutboundRequestOutcome::Response(response)) => {
+            Ok(OutboundRequestResult::Response(response)) => {
                 warn!(
                     target = %task.broker_addr,
                     broker_id = task.key.broker_id,
@@ -443,7 +443,7 @@ impl BrokerRoleNotifier {
                     "Broker role notify did not succeed"
                 );
             }
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 warn!(
                     target = %task.broker_addr,
                     broker_id = task.key.broker_id,
@@ -453,7 +453,7 @@ impl BrokerRoleNotifier {
                     "Broker role notify was rejected"
                 );
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 warn!(
                     target = %task.broker_addr,
                     broker_id = task.key.broker_id,

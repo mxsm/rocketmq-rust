@@ -34,11 +34,11 @@ impl MqClientAdminInner for MQClientAPIImpl {
 
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let mut response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error("query_message", RetryInput::Rejected(rejection)));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error("query_message", RetryInput::Contract(contract)));
             }
             Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
@@ -70,14 +70,14 @@ impl MqClientAdminInner for MQClientAPIImpl {
         let request = self.create_request_command(RequestCode::GetTopicStatsInfo, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "get_topic_stats_info",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "get_topic_stats_info",
                     RetryInput::Contract(contract),
@@ -105,14 +105,14 @@ impl MqClientAdminInner for MQClientAPIImpl {
         let request = self.create_request_command(RequestCode::QueryConsumeTimeSpan, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "query_consume_time_span",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "query_consume_time_span",
                     RetryInput::Contract(contract),
@@ -142,14 +142,14 @@ impl MqClientAdminInner for MQClientAPIImpl {
         let request = self.create_request_command(RequestCode::UpdateAndCreateTopic, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "update_or_create_topic",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "update_or_create_topic",
                     RetryInput::Contract(contract),
@@ -178,14 +178,14 @@ impl MqClientAdminInner for MQClientAPIImpl {
             .set_body(config.encode()?);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "update_or_create_subscription_group",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "update_or_create_subscription_group",
                     RetryInput::Contract(contract),
@@ -212,14 +212,14 @@ impl MqClientAdminInner for MQClientAPIImpl {
         let request = self.create_request_command(RequestCode::DeleteTopicInBroker, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "delete_topic_in_broker",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "delete_topic_in_broker",
                     RetryInput::Contract(contract),
@@ -246,14 +246,14 @@ impl MqClientAdminInner for MQClientAPIImpl {
         let request = delete_topic_list_request(&self.command_factory, topic_list)?;
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "delete_topic_in_broker_list",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "delete_topic_in_broker_list",
                     RetryInput::Contract(contract),
@@ -280,14 +280,14 @@ impl MqClientAdminInner for MQClientAPIImpl {
         let request = self.create_request_command(RequestCode::DeleteTopicInNamesrv, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "delete_topic_in_nameserver",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "delete_topic_in_nameserver",
                     RetryInput::Contract(contract),
@@ -314,11 +314,11 @@ impl MqClientAdminInner for MQClientAPIImpl {
         let request = self.create_request_command(RequestCode::DeleteKvConfig, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error("delete_kv_config", RetryInput::Rejected(rejection)));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error("delete_kv_config", RetryInput::Contract(contract)));
             }
             Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
@@ -342,14 +342,14 @@ impl MqClientAdminInner for MQClientAPIImpl {
         let request = self.create_request_command(RequestCode::DeleteSubscriptionGroup, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "delete_subscription_group",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "delete_subscription_group",
                     RetryInput::Contract(contract),
@@ -377,14 +377,14 @@ impl MqClientAdminInner for MQClientAPIImpl {
         let request = delete_subscription_group_list_request(&self.command_factory, group_name_list, clean_offset)?;
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "delete_subscription_group_list",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "delete_subscription_group_list",
                     RetryInput::Contract(contract),
@@ -411,14 +411,14 @@ impl MqClientAdminInner for MQClientAPIImpl {
         let request = self.create_request_command(RequestCode::InvokeBrokerToResetOffset, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "invoke_broker_to_reset_offset",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "invoke_broker_to_reset_offset",
                     RetryInput::Contract(contract),
@@ -438,11 +438,11 @@ impl MqClientAdminInner for MQClientAPIImpl {
         let request = self.create_request_command(RequestCode::ViewMessageById, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error("view_message", RetryInput::Rejected(rejection)));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error("view_message", RetryInput::Contract(contract)));
             }
             Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
@@ -468,14 +468,14 @@ impl MqClientAdminInner for MQClientAPIImpl {
         let request = self.create_request_command(RequestCode::GetBrokerClusterInfo, EmptyHeader {});
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "get_broker_cluster_info",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "get_broker_cluster_info",
                     RetryInput::Contract(contract),
@@ -503,14 +503,14 @@ impl MqClientAdminInner for MQClientAPIImpl {
         let request = self.create_request_command(RequestCode::GetConsumerConnectionList, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "get_consumer_connection_list",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "get_consumer_connection_list",
                     RetryInput::Contract(contract),
@@ -538,14 +538,14 @@ impl MqClientAdminInner for MQClientAPIImpl {
         let request = self.create_request_command(RequestCode::QueryTopicsByConsumer, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "query_topics_by_consumer",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "query_topics_by_consumer",
                     RetryInput::Contract(contract),
@@ -573,14 +573,14 @@ impl MqClientAdminInner for MQClientAPIImpl {
         let request = self.create_request_command(RequestCode::QuerySubscriptionByConsumer, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "query_subscription_by_consumer",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "query_subscription_by_consumer",
                     RetryInput::Contract(contract),
@@ -612,14 +612,14 @@ impl MqClientAdminInner for MQClientAPIImpl {
         let request = self.create_request_command(RequestCode::GetConsumeStats, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "get_consume_stats",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error("get_consume_stats", RetryInput::Contract(contract)));
             }
             Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
@@ -644,14 +644,14 @@ impl MqClientAdminInner for MQClientAPIImpl {
         let request = self.create_request_command(RequestCode::QueryTopicConsumeByWho, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "query_topic_consume_by_who",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "query_topic_consume_by_who",
                     RetryInput::Contract(contract),
@@ -679,14 +679,14 @@ impl MqClientAdminInner for MQClientAPIImpl {
         let request = self.create_request_command(RequestCode::GetConsumerRunningInfo, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let mut response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "get_consumer_running_info",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "get_consumer_running_info",
                     RetryInput::Contract(contract),
@@ -718,14 +718,14 @@ impl MqClientAdminInner for MQClientAPIImpl {
         let request = self.create_request_command(RequestCode::ConsumeMessageDirectly, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let mut response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     "consume_message_directly",
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     "consume_message_directly",
                     RetryInput::Contract(contract),

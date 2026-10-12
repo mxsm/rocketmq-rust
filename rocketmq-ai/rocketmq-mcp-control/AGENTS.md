@@ -15,10 +15,19 @@ This file applies to `rocketmq-ai/rocketmq-mcp-control/`.
 - `write-tools` may enable only `rocketmq-admin-core/mutation-client-adapter`; it must never enable a read or full adapter.
 - The reviewed production tools are `rocketmq_upsert_topic`,
   `rocketmq_upsert_consumer_group`, `rocketmq_reset_consumer_offset`,
-  `rocketmq_patch_broker_config`, and `rocketmq_set_consumer_request_mode`,
+  `rocketmq_patch_broker_config`, `rocketmq_set_consumer_request_mode`,
+  `rocketmq_begin_proxy_drain`, `rocketmq_cancel_proxy_drain`,
+  `rocketmq_set_broker_log_filter_ttl`, and `rocketmq_restore_broker_log_filter`,
   plus the read-only `rocketmq_get_mutation_result`.
   Keep delete, skip, resend, and any free-form mutation outside this project
   until separately reviewed.
+- The Proxy drain and Broker log filter tools are operation-bound and have exactly one target. A Proxy is named
+  only by an alias from `[[clusters.proxies]]`: refuse an alias the cluster does not list before the `started`
+  record, and give no tool argument that could carry an address. Read the target before every write. Never
+  replace or end a state that another `operation_id` holds; report it as a conflict and expose a holder only as
+  `none`, `this_operation`, or `other_operation`. Never return, log, or store an `operation_id`; only the
+  requested digest covers it. A log filter override stays within one lower-case `rocketmq_broker::` logger
+  outside the protected modules, the levels `INFO` and `DEBUG`, and 60--900 seconds.
 - `rocketmq_get_mutation_result` reads only what the audit trail remembers about the caller's own invocations on
   the authorized cluster. It opens no session, sends no RPC, writes no durable audit record, and never returns the
   operator, the reason, or a request key. It needs the write scope and cluster authorization before its arguments
@@ -28,7 +37,8 @@ This file applies to `rocketmq-ai/rocketmq-mcp-control/`.
   `started` audit record must then complete before session creation or RPC.
 - Do not add stdio, CLI, shell, subprocess, free-form RPC, arbitrary Admin commands, or stdout protocol output.
 - Durable audit v3 records may contain only: the validated OAuth subject and optional safe bounded request reason
-  as operator evidence; the validated logical names of the mutation target (Topic, Consumer Group, Broker names);
+  as operator evidence; the validated logical names of the mutation target (Topic, Consumer Group, Broker names,
+  a configured Proxy alias);
   SHA-256 digests of the requested state, the request key, the pre-change state, and the selected Broker set; and
   closed outcome values (whether a target changed, per-target result counts). Never store the requested values, a
   request key, or a name that fails argument validation. Responses, errors, tracing, ordinary logs, and all other

@@ -142,9 +142,12 @@ pub struct MutationResultTarget {
     pub topic: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub consumer_group: Option<String>,
-    /// The one Broker of a Broker configuration patch.
+    /// The one Broker of a Broker configuration patch or of a temporary log filter.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub broker: Option<String>,
+    /// The Proxy of a drain, by its configured alias.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<String>,
     /// How many Brokers a Topic or Consumer Group upsert selected.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub broker_count: Option<u32>,
@@ -163,6 +166,7 @@ impl From<AuditTarget> for MutationResultTarget {
             topic: target.topic,
             consumer_group: target.consumer_group,
             broker: target.broker,
+            proxy: target.proxy,
             broker_count,
             broker_names,
         }

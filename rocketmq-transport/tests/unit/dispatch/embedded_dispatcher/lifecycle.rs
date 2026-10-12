@@ -96,9 +96,9 @@ async fn admitted_non_oneway_deadline_response_is_observed_without_terminal_fail
         let observations = state.observations.lock().expect("observation lock");
         assert_eq!(observations.len(), 1);
         assert!(matches!(
-            observations[0].outcome(),
-            ResponseWriteOutcome::Failed {
-                completion: Some(crate::dispatch::ResponseCompletionOutcome::DeadlineExpired),
+            observations[0].event(),
+            ResponseDeliveryEvent::Failed {
+                completion: Some(crate::dispatch::ResponseCompletionResult::DeadlineExpired),
                 progress: Some(crate::dispatch::WriteProgress::NotStarted),
             }
         ));
@@ -166,9 +166,9 @@ async fn dropping_public_future_closes_terminal_and_session_while_accepted_work_
         let observations = state.observations.lock().expect("observation lock");
         assert_eq!(observations.len(), 1);
         assert!(matches!(
-            observations[0].outcome(),
-            ResponseWriteOutcome::Failed {
-                completion: Some(crate::dispatch::ResponseCompletionOutcome::SessionClosed),
+            observations[0].event(),
+            ResponseDeliveryEvent::Failed {
+                completion: Some(crate::dispatch::ResponseCompletionResult::SessionClosed),
                 progress: Some(crate::dispatch::WriteProgress::NotStarted),
             }
         ));

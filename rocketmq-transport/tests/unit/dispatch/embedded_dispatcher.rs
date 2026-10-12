@@ -40,19 +40,19 @@ use crate::admission::AdmissionScope;
 use crate::admission::ResourceLimit;
 use crate::contract::TransportContractViolation;
 use crate::dispatch::AuthenticationState;
-use crate::dispatch::DeferredResponderOutcome;
+use crate::dispatch::DeferredResponderTakeResult;
 use crate::dispatch::ProtocolNoResponseReason;
 use crate::dispatch::RemotingRequest;
 use crate::dispatch::RequestMeta;
 use crate::dispatch::RequestOrigin;
 use crate::dispatch::ResponseAction;
 use crate::dispatch::ResponseBody;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseDisposition;
 use crate::error::TransportError;
 use crate::runtime::processor::RejectRequestDecision;
+use crate::runtime::processor::ResponseDeliveryEvent;
 use crate::runtime::processor::ResponseWriteObservation;
-use crate::runtime::processor::ResponseWriteOutcome;
 use crate::security::TransportSecurity;
 
 fn assert_dispatch_error(error: TransportError) {
@@ -187,7 +187,7 @@ impl RequestProcessor for TestProcessor {
             Behavior::Deferred => {
                 assert!(matches!(
                     request.take_deferred_responder(),
-                    DeferredResponderOutcome::Unavailable
+                    DeferredResponderTakeResult::Unavailable
                 ));
                 Ok(ResponseAction::Reply(
                     RemotingResponse::bytes(
@@ -353,7 +353,7 @@ async fn public_reply_is_channel_free_zero_copy_bound_and_observed_once_after_on
     {
         let observations = state.observations.lock().expect("observation lock");
         assert_eq!(observations.len(), 1);
-        let ResponseWriteOutcome::Written(receipt) = observations[0].outcome() else {
+        let ResponseDeliveryEvent::DeliveryCompleted(receipt) = observations[0].event() else {
             panic!("local remoting response must be accepted")
         };
         assert_eq!(receipt.disposition(), ResponseDisposition::InProcessAccepted);
@@ -415,7 +415,10 @@ async fn non_oneway_processor_error_is_observed_without_terminal_failure_reporti
     {
         let observations = state.observations.lock().expect("observation lock");
         assert_eq!(observations.len(), 1);
-        assert!(matches!(observations[0].outcome(), ResponseWriteOutcome::Written(_)));
+        assert!(matches!(
+            observations[0].event(),
+            ResponseDeliveryEvent::DeliveryCompleted(_)
+        ));
     }
     fixture.shutdown().await;
 }
@@ -523,9 +526,9 @@ async fn expired_reply_maps_once_to_deadline_with_one_failed_observation() {
         let observations = state.observations.lock().expect("observation lock");
         assert_eq!(observations.len(), 1);
         assert!(matches!(
-            observations[0].outcome(),
-            ResponseWriteOutcome::Failed {
-                completion: Some(ResponseCompletionOutcome::DeadlineExpired),
+            observations[0].event(),
+            ResponseDeliveryEvent::Failed {
+                completion: Some(ResponseCompletionResult::DeadlineExpired),
                 progress: Some(crate::dispatch::WriteProgress::NotStarted),
             }
         ));

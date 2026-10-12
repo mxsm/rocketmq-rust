@@ -266,7 +266,7 @@ use rocketmq_transport::api::ConnectionNetEvent;
 use rocketmq_transport::api::DefaultTopAddressing;
 use rocketmq_transport::api::HeartbeatV2Result;
 use rocketmq_transport::api::NameServerUpdateCallback;
-use rocketmq_transport::api::OutboundRequestOutcome;
+use rocketmq_transport::api::OutboundRequestResult;
 use rocketmq_transport::api::RemotingClient;
 use rocketmq_transport::api::RequestDeadline;
 use rocketmq_transport::api::TopAddressing;

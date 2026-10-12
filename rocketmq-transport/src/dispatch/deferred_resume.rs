@@ -135,18 +135,18 @@ where
     cell.release_wait_permit();
     let submitted = context.executor.try_execute_resume(Arc::clone(&cell));
     match submitted {
-        DeferredResumeEnqueueOutcome::Submitted(_task_id) => drop(cell),
-        DeferredResumeEnqueueOutcome::AdmissionRejected { error, cell } => {
+        DeferredResumeSubmissionResult::Submitted(_task_id) => drop(cell),
+        DeferredResumeSubmissionResult::AdmissionRejected { error, cell } => {
             if let Some(job) = cell.take() {
                 job.reject(error).await;
             }
         }
-        DeferredResumeEnqueueOutcome::ExecutorClosing { cell } => {
+        DeferredResumeSubmissionResult::ExecutorClosing { cell } => {
             if let Some(job) = cell.take() {
                 job.finish_executor_closed();
             }
         }
-        DeferredResumeEnqueueOutcome::OperationalFailure { source, cell } => {
+        DeferredResumeSubmissionResult::OperationalFailure { source, cell } => {
             if let Some(job) = cell.take() {
                 job.finish_executor_failure(source);
             }
@@ -216,23 +216,23 @@ where
 
     cell.release_wait_permit();
     match context.executor.try_execute_resume(Arc::clone(&cell)) {
-        DeferredResumeEnqueueOutcome::Submitted(_task_id) => {
+        DeferredResumeSubmissionResult::Submitted(_task_id) => {
             drop(cell);
             Ok(DeferredResumeSubmissionStatus::Submitted)
         }
-        DeferredResumeEnqueueOutcome::AdmissionRejected { error, cell } => {
+        DeferredResumeSubmissionResult::AdmissionRejected { error, cell } => {
             if let Some(job) = cell.take() {
                 job.finish_admission_rejected(error);
             }
             submit_outcome(completion.take_finished())
         }
-        DeferredResumeEnqueueOutcome::ExecutorClosing { cell } => {
+        DeferredResumeSubmissionResult::ExecutorClosing { cell } => {
             if let Some(job) = cell.take() {
                 job.finish_executor_closed();
             }
             submit_outcome(completion.take_finished())
         }
-        DeferredResumeEnqueueOutcome::OperationalFailure { source, cell } => {
+        DeferredResumeSubmissionResult::OperationalFailure { source, cell } => {
             if let Some(job) = cell.take() {
                 job.finish_executor_failure(source);
             }
@@ -379,7 +379,7 @@ impl Drop for ResumeJobCell {
     }
 }
 
-pub(crate) enum DeferredResumeEnqueueOutcome {
+pub(crate) enum DeferredResumeSubmissionResult {
     Submitted(rocketmq_runtime::TaskId),
     AdmissionRejected {
         error: AdmissionRejection,
@@ -657,7 +657,7 @@ where
         drop(resume);
         return result;
     }
-    enum HandlerOutcome<T> {
+    enum ResumeHandlerCompletion<T> {
         Completed(Result<T, rocketmq_error::SharedError>),
         Stopped(ResumeResult),
     }
@@ -668,7 +668,7 @@ where
     tokio::pin!(handler_future);
     let outcome = tokio::select! {
         biased;
-        stop = stop_view.wait_before_write() => HandlerOutcome::Stopped(finish_lifecycle(
+        stop = stop_view.wait_before_write() => ResumeHandlerCompletion::Stopped(finish_lifecycle(
             id,
             request_id,
             responder.take().expect("stopped handler responder"),
@@ -678,7 +678,7 @@ where
         )),
         result = &mut handler_future => {
             match stop_view.current_before_write() {
-                Some(stop) => HandlerOutcome::Stopped(finish_lifecycle(
+                Some(stop) => ResumeHandlerCompletion::Stopped(finish_lifecycle(
                     id,
                     request_id,
                     responder.take().expect("post-handler responder"),
@@ -686,13 +686,13 @@ where
                     stop,
                     None,
                 )),
-                None => HandlerOutcome::Completed(result),
+                None => ResumeHandlerCompletion::Completed(result),
             }
         },
     };
     let result = match outcome {
-        HandlerOutcome::Stopped(result) => result,
-        HandlerOutcome::Completed(Ok(response)) => {
+        ResumeHandlerCompletion::Stopped(result) => result,
+        ResumeHandlerCompletion::Completed(Ok(response)) => {
             if let Some(stop) = stop_view.current_before_write() {
                 return finish_lifecycle(
                     id,
@@ -715,7 +715,7 @@ where
             drop(marker.take());
             result
         }
-        HandlerOutcome::Completed(Err(error)) => {
+        ResumeHandlerCompletion::Completed(Err(error)) => {
             let context = error.context();
             let view = rocketmq_error::PublicErrorView::try_new(error.descriptor(), context)
                 .unwrap_or_else(|_| rocketmq_error::PublicErrorView::descriptor_only(error.descriptor()));

@@ -1786,6 +1786,15 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use crate::admin::MutationBrokerLogFilterStatus",
+          "identity": "rocketmq-client/src/public_api.rs:pub use crate::admin::MutationBrokerLogFilterStatus",
+          "owner": "client",
+          "path": "rocketmq-client/src/public_api.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use crate::admin::MutationConsumerOffsetPreview",
           "identity": "rocketmq-client/src/public_api.rs:pub use crate::admin::MutationConsumerOffsetPreview",
           "owner": "client",
@@ -2280,7 +2289,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 253
+      "maximum_exports": 254
     },
     "rocketmq-model": {
       "entries": [
@@ -2412,8 +2421,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use common::pop_retry_policy::PopRetryPolicyOutcome",
-          "identity": "rocketmq-model/src/lib.rs:pub use common::pop_retry_policy::PopRetryPolicyOutcome",
+          "declaration": "pub use common::pop_retry_policy::PopRetryPolicyTransitionDecision",
+          "identity": "rocketmq-model/src/lib.rs:pub use common::pop_retry_policy::PopRetryPolicyTransitionDecision",
           "owner": "model",
           "path": "rocketmq-model/src/lib.rs",
           "rationale": "deliberate root entry point",
@@ -7257,8 +7266,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::dispatch::DeferredResponderOutcome",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredResponderOutcome",
+          "declaration": "pub use crate::dispatch::DeferredResponderTakeResult",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredResponderTakeResult",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -7266,8 +7275,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::dispatch::DeferredResponseOutcome",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredResponseOutcome",
+          "declaration": "pub use crate::dispatch::DeferredResponseResult",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredResponseResult",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -7500,8 +7509,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::dispatch::ResponseCompletionOutcome",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::ResponseCompletionOutcome",
+          "declaration": "pub use crate::dispatch::ResponseCompletionResult",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::ResponseCompletionResult",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -7680,8 +7689,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::request_outcome::OutboundRequestOutcome",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::request_outcome::OutboundRequestOutcome",
+          "declaration": "pub use crate::request_outcome::OutboundRequestResult",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::request_outcome::OutboundRequestResult",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "exhaustive response, normal rejection, and deterministic contract result for outbound requests",
@@ -7914,8 +7923,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::runtime::processor::ResponseObservationOutcome",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::runtime::processor::ResponseObservationOutcome",
+          "declaration": "pub use crate::runtime::processor::ResponseLifecycleEvent",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::runtime::processor::ResponseLifecycleEvent",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -7932,8 +7941,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::runtime::processor::ResponseWriteOutcome",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::runtime::processor::ResponseWriteOutcome",
+          "declaration": "pub use crate::runtime::processor::ResponseDeliveryEvent",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::runtime::processor::ResponseDeliveryEvent",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -7977,8 +7986,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::session_registry::ServerPushOutcome",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::session_registry::ServerPushOutcome",
+          "declaration": "pub use crate::session_registry::ServerPushResult",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::session_registry::ServerPushResult",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",

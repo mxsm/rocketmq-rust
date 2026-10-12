@@ -39,12 +39,11 @@ use crate::dispatch::EmbeddedResponseAction;
 use crate::dispatch::ExplicitProcessor;
 use crate::dispatch::InternalFailureOrigin;
 use crate::dispatch::InternalProcessorCandidate;
-use crate::dispatch::InternalProcessorOutcome;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RemotingResponse;
 use crate::dispatch::RequestContext;
 use crate::dispatch::RequestControlView;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseSink;
 use crate::error::TransportError;
 use crate::runtime::processor::RequestProcessor;
@@ -509,7 +508,7 @@ where
             original,
             request_started,
             InternalProcessorCandidate::failure(
-                InternalProcessorOutcome::Handled(crate::dispatch::ResponseAction::Reply(response)),
+                crate::dispatch::ResponseAction::Reply(response),
                 InternalFailureOrigin::Deadline,
             ),
         )
@@ -527,9 +526,9 @@ where
         .process_embedded(&mut request)
         .await
         .map_err(map_processor_error)?;
-    let InternalProcessorCandidate { outcome, failure } = candidate;
+    let InternalProcessorCandidate { action, failure } = candidate;
     let outcome = processor
-        .resolve_embedded_response_action(&mut request, outcome)
+        .resolve_embedded_response_action(&mut request, action)
         .map_err(map_resolve_error)?;
     if matches!(&outcome, EmbeddedResponseAction::OneWay) {
         if let Some(failure) = failure {
@@ -574,7 +573,7 @@ where
     let control = builder.control().clone();
     let mut request = builder.build().map_err(EmbeddedDispatchError::request_construction)?;
     let outcome = processor
-        .resolve_embedded_response_action(&mut request, candidate.outcome)
+        .resolve_embedded_response_action(&mut request, candidate.action)
         .map_err(map_resolve_error)?;
     finish_resolved(processor, control, original, request_started, outcome, false).await
 }
@@ -589,7 +588,7 @@ async fn finish_rejected_candidate<P>(
 where
     P: RequestProcessor + Clone + Sync + 'static,
 {
-    let InternalProcessorOutcome::Handled(crate::dispatch::ResponseAction::Reply(response)) = candidate.outcome else {
+    let crate::dispatch::ResponseAction::Reply(response) = candidate.action else {
         return Err(EmbeddedDispatchError::one_way_contract(
             crate::contract::TransportContractViolation::OneWayInvalidRejection,
         ));
@@ -656,7 +655,7 @@ where
                 &send_result,
             );
             match send_result {
-                Ok(ResponseCompletionOutcome::Completed(_)) => {}
+                Ok(ResponseCompletionResult::Completed(_)) => {}
                 Ok(outcome) => return Ok(embedded_response_outcome(outcome)),
                 Err(error) => return Err(EmbeddedDispatchError::response(error)),
             }
@@ -668,22 +667,20 @@ where
     }
 }
 
-const fn embedded_response_outcome(outcome: ResponseCompletionOutcome) -> EmbeddedDispatchResult {
+const fn embedded_response_outcome(outcome: ResponseCompletionResult) -> EmbeddedDispatchResult {
     match outcome {
-        ResponseCompletionOutcome::Completed(_) | ResponseCompletionOutcome::AlreadyCompleted(_) => {
+        ResponseCompletionResult::Completed(_) | ResponseCompletionResult::AlreadyCompleted(_) => {
             EmbeddedDispatchResult::CompletionClosed
         }
-        ResponseCompletionOutcome::DeadlineExpired => EmbeddedDispatchResult::DeadlineExceeded,
-        ResponseCompletionOutcome::Cancelled => EmbeddedDispatchResult::Cancelled,
-        ResponseCompletionOutcome::SessionClosed => EmbeddedDispatchResult::SessionClosed,
-        ResponseCompletionOutcome::QueueSaturated => EmbeddedDispatchResult::AdmissionRejected,
+        ResponseCompletionResult::DeadlineExpired => EmbeddedDispatchResult::DeadlineExceeded,
+        ResponseCompletionResult::Cancelled => EmbeddedDispatchResult::Cancelled,
+        ResponseCompletionResult::SessionClosed => EmbeddedDispatchResult::SessionClosed,
+        ResponseCompletionResult::QueueSaturated => EmbeddedDispatchResult::AdmissionRejected,
     }
 }
 
 fn reply_candidate(response: RemotingResponse) -> InternalProcessorCandidate {
-    InternalProcessorCandidate::success(InternalProcessorOutcome::Handled(
-        crate::dispatch::ResponseAction::Reply(response),
-    ))
+    InternalProcessorCandidate::success(crate::dispatch::ResponseAction::Reply(response))
 }
 
 fn map_processor_error(error: crate::dispatch::DispatchProcessorError) -> EmbeddedDispatchError {

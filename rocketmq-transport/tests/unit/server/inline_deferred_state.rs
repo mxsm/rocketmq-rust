@@ -41,7 +41,7 @@ use super::RequestProcessor;
 use super::ResponseAction;
 use super::TransportServer;
 use crate::dispatch::DeferredRegistrationResult;
-use crate::dispatch::DeferredResponderOutcome;
+use crate::dispatch::DeferredResponderTakeResult;
 use crate::dispatch::DeferredWaitAdmissionResult;
 use crate::telemetry::TransportTelemetry;
 
@@ -69,11 +69,11 @@ impl RequestProcessor for ConstructionProbeProcessor {
             )),
             DEFERRED_CODE => {
                 let responder = match request.take_deferred_responder() {
-                    DeferredResponderOutcome::Taken(responder) => responder,
-                    DeferredResponderOutcome::OneWayRequest
-                    | DeferredResponderOutcome::Unavailable
-                    | DeferredResponderOutcome::AlreadyTaken
-                    | DeferredResponderOutcome::OutcomeCompleted => {
+                    DeferredResponderTakeResult::Taken(responder) => responder,
+                    DeferredResponderTakeResult::OneWayRequest
+                    | DeferredResponderTakeResult::Unavailable
+                    | DeferredResponderTakeResult::AlreadyTaken
+                    | DeferredResponderTakeResult::OutcomeCompleted => {
                         return Err(crate::error_helpers::argument_invalid());
                     }
                 };
