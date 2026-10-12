@@ -150,6 +150,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **transport:** Remove deprecated `TransportClient::is_address_reachable`; use `reconcile_cached_connection` for direct-cache inspection and cleanup.
 - **protocol:** Remove deprecated `FastCodesHeader` and its `SendMessageResponseHeader` adapter; use `CommandCustomHeader::encode_direct_binary` and `FromMap::from` and handle their returned errors.
 - **transport:** Remove deprecated `ClientMetadata::broker_addr_table`; use owned snapshots and controlled address updates instead.
 - **transport:** Remove deprecated `Connection::connection_is_ok`; use `is_healthy()` or `state()` instead.

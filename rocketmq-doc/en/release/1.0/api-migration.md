@@ -134,13 +134,12 @@ let runtime = ClientRuntime::try_new(service_context, config, telemetry_handle)?
 
 ### Tokio client cached-session reconciliation
 
-`TransportClient::is_address_reachable` is retained as a deprecated
-compatibility facade, but it has never performed a DNS, socket, or network
-reachability probe. It only inspected the direct cached session and removed an
-unhealthy entry.
-
-Use `reconcile_cached_connection` when application logic needs the typed cache
-result:
+`TransportClient::is_address_reachable`, deprecated in 1.0.0, has been removed.
+Use `reconcile_cached_connection` for the same direct-cache inspection and
+unhealthy-entry cleanup, or `let _ = client.reconcile_cached_connection(&address);`
+when the result is not needed. Neither API performs a network reachability probe.
+The returned state lets callers reproduce the old facade's logging or decide
+whether to reconnect:
 
 ```rust,ignore
 use rocketmq_transport::api::CachedConnectionState;
