@@ -32,7 +32,7 @@ use crate::dispatch::ResponseDisposition;
 use crate::dispatch::ResponseOperationalFailure;
 use crate::dispatch::ResponseReceipt;
 use crate::dispatch::ResponseSendClaim;
-use crate::dispatch::ResponseSendOutcome;
+use crate::dispatch::ResponseSendResult;
 use crate::dispatch::ResponseTerminalState;
 use crate::dispatch::WriteProgress;
 use crate::server::SessionHandle;
@@ -354,18 +354,18 @@ async fn send_deferred_network(
         .send_prepared_deferred_response(prepared, context.control(), deferred_drop)
         .await;
     match send {
-        ResponseSendOutcome::Written => {
+        ResponseSendResult::Written => {
             response_claim.finish(ResponseTerminalState::Completed);
             Ok(ResponseCompletionResult::Completed(ResponseReceipt::new(
                 metadata.request_id(),
                 ResponseDisposition::TransportWritten,
             )))
         }
-        ResponseSendOutcome::Rejected(outcome) => {
+        ResponseSendResult::Rejected(outcome) => {
             response_claim.finish(terminal_for_outcome(outcome));
             Ok(outcome)
         }
-        ResponseSendOutcome::OperationalFailure(error) => {
+        ResponseSendResult::OperationalFailure(error) => {
             response_claim.finish(terminal_for_operational_failure(&error));
             Err(error)
         }
@@ -421,18 +421,18 @@ async fn send_network_response(
     }
 
     match connection.send_prepared_response(prepared, context.control()).await {
-        ResponseSendOutcome::Written => {
+        ResponseSendResult::Written => {
             claim.finish(ResponseTerminalState::Completed);
             Ok(ResponseCompletionResult::Completed(ResponseReceipt::new(
                 metadata.request_id(),
                 ResponseDisposition::TransportWritten,
             )))
         }
-        ResponseSendOutcome::Rejected(outcome) => {
+        ResponseSendResult::Rejected(outcome) => {
             claim.finish(terminal_for_outcome(outcome));
             Ok(outcome)
         }
-        ResponseSendOutcome::OperationalFailure(error) => {
+        ResponseSendResult::OperationalFailure(error) => {
             claim.finish(terminal_for_operational_failure(&error));
             Err(error)
         }

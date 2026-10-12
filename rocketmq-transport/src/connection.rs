@@ -46,7 +46,7 @@ use crate::dispatch::DeferredTransportDropHandle;
 use crate::dispatch::RequestControlView;
 use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseOperationalFailure;
-use crate::dispatch::ResponseSendOutcome;
+use crate::dispatch::ResponseSendResult;
 use crate::dispatch::ResponseTransportDropHandle;
 use crate::dispatch::WriteProgress;
 use crate::error_helpers::admission_queue_saturated;
@@ -202,14 +202,14 @@ impl SendFailure {
         }
     }
 
-    fn into_response(self) -> ResponseSendOutcome {
+    fn into_response(self) -> ResponseSendResult {
         match self {
-            Self::DeadlineExceeded { .. } => ResponseSendOutcome::Rejected(ResponseCompletionResult::DeadlineExpired),
-            Self::SessionClosed => ResponseSendOutcome::Rejected(ResponseCompletionResult::SessionClosed),
-            Self::Cancelled => ResponseSendOutcome::Rejected(ResponseCompletionResult::Cancelled),
-            Self::QueueSaturated { .. } => ResponseSendOutcome::Rejected(ResponseCompletionResult::QueueSaturated),
+            Self::DeadlineExceeded { .. } => ResponseSendResult::Rejected(ResponseCompletionResult::DeadlineExpired),
+            Self::SessionClosed => ResponseSendResult::Rejected(ResponseCompletionResult::SessionClosed),
+            Self::Cancelled => ResponseSendResult::Rejected(ResponseCompletionResult::Cancelled),
+            Self::QueueSaturated { .. } => ResponseSendResult::Rejected(ResponseCompletionResult::QueueSaturated),
             Self::Writer { progress, error } => {
-                ResponseSendOutcome::OperationalFailure(ResponseOperationalFailure::transport(progress, error))
+                ResponseSendResult::OperationalFailure(ResponseOperationalFailure::transport(progress, error))
             }
         }
     }
@@ -1233,12 +1233,12 @@ impl Connection {
         &mut self,
         prepared: PreparedResponse,
         control: &RequestControlView,
-    ) -> ResponseSendOutcome {
+    ) -> ResponseSendResult {
         if self.queued_writer().is_none() {
-            return ResponseSendOutcome::Rejected(ResponseCompletionResult::SessionClosed);
+            return ResponseSendResult::Rejected(ResponseCompletionResult::SessionClosed);
         }
         let Some(class) = self.response_class() else {
-            return ResponseSendOutcome::Rejected(ResponseCompletionResult::SessionClosed);
+            return ResponseSendResult::Rejected(ResponseCompletionResult::SessionClosed);
         };
         let (_, payload) = prepared.into_parts();
         self.send_payload_inner_with_response_observation(
@@ -1253,7 +1253,7 @@ impl Connection {
             "transport-session-writer".to_string(),
         )
         .await
-        .map_or_else(SendFailure::into_response, |_| ResponseSendOutcome::Written)
+        .map_or_else(SendFailure::into_response, |_| ResponseSendResult::Written)
     }
 
     pub(crate) async fn send_prepared_deferred_response(
@@ -1261,15 +1261,15 @@ impl Connection {
         prepared: PreparedResponse,
         control: &RequestControlView,
         deferred_drop: DeferredTransportDropHandle,
-    ) -> ResponseSendOutcome {
+    ) -> ResponseSendResult {
         if self.queued_writer().is_none() {
-            return ResponseSendOutcome::Rejected(ResponseCompletionResult::SessionClosed);
+            return ResponseSendResult::Rejected(ResponseCompletionResult::SessionClosed);
         }
         if self.response_drop.is_none() {
-            return ResponseSendOutcome::Rejected(ResponseCompletionResult::SessionClosed);
+            return ResponseSendResult::Rejected(ResponseCompletionResult::SessionClosed);
         }
         let Some(class) = self.response_class() else {
-            return ResponseSendOutcome::Rejected(ResponseCompletionResult::SessionClosed);
+            return ResponseSendResult::Rejected(ResponseCompletionResult::SessionClosed);
         };
         let (_, payload) = prepared.into_parts();
         self.send_payload_inner_with_response_observation(
@@ -1284,19 +1284,19 @@ impl Connection {
             "transport-session-writer".to_string(),
         )
         .await
-        .map_or_else(SendFailure::into_response, |_| ResponseSendOutcome::Written)
+        .map_or_else(SendFailure::into_response, |_| ResponseSendResult::Written)
     }
 
     /// Sends a server response through the canonical writer with a stage-aware
     /// completion error. This is intentionally crate-private while the public
     /// response receipt/context API is introduced separately.
-    pub(crate) async fn send_response(&mut self, command: RemotingCommand) -> ResponseSendOutcome {
+    pub(crate) async fn send_response(&mut self, command: RemotingCommand) -> ResponseSendResult {
         let class = self
             .response_class()
             .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
         let frame = match self.limits.encode_command(command) {
             Ok(frame) => frame,
-            Err(source) => return ResponseSendOutcome::OperationalFailure(ResponseOperationalFailure::encode(source)),
+            Err(source) => return ResponseSendResult::OperationalFailure(ResponseOperationalFailure::encode(source)),
         };
         self.send_payload_inner_with_response_observation(
             OutboundPayload::Frame(frame),
@@ -1310,7 +1310,7 @@ impl Connection {
             "transport-session-writer".to_string(),
         )
         .await
-        .map_or_else(SendFailure::into_response, |_| ResponseSendOutcome::Written)
+        .map_or_else(SendFailure::into_response, |_| ResponseSendResult::Written)
     }
 
     /// Sends a `RemotingCommand` to the peer (consumes command).
