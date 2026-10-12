@@ -71,7 +71,7 @@ async fn supplied_principal_and_peerless_origin_are_authoritative_over_command_h
             .dispatch_embedded(&fixture.task_group, Principal::new("trusted-broker"), None, command)
             .await
             .expect("authenticated embedded dispatch"),
-        EmbeddedDispatchOutcome::Reply(_)
+        EmbeddedDispatchResult::Reply(_)
     ));
     assert_eq!(
         policy.seen.lock().expect("policy lock").as_slice(),
@@ -118,7 +118,7 @@ async fn embedded_security_denial_is_peerless_exactly_once_and_development_exemp
         )
         .await
         .expect("security denial becomes an embedded reply");
-    let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+    let EmbeddedDispatchResult::Reply(plan) = outcome else {
         panic!("security denial must return a reply")
     };
     assert_safe_authorization_denial(&plan);
@@ -145,7 +145,7 @@ async fn embedded_security_denial_is_peerless_exactly_once_and_development_exemp
         )
         .await
         .expect("missing embedded policy fails closed with a denial reply");
-    let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+    let EmbeddedDispatchResult::Reply(plan) = outcome else {
         panic!("fail-closed security must return a reply")
     };
     assert_safe_authorization_denial(&plan);
@@ -202,7 +202,7 @@ async fn embedded_never_invokes_legacy_address_hooks() {
             )
             .await
             .expect("embedded dispatch"),
-        EmbeddedDispatchOutcome::Reply(_)
+        EmbeddedDispatchResult::Reply(_)
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert_eq!(state.processes.load(Ordering::SeqCst), 1);

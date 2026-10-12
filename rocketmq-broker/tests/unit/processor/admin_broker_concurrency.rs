@@ -43,7 +43,7 @@ use rocketmq_store::StorePorts;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
-use rocketmq_transport::api::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::EmbeddedDispatchResult;
 use rocketmq_transport::api::IngressRequestView;
 use rocketmq_transport::api::RejectRequestDecision;
 use rocketmq_transport::api::RemotingRequest;
@@ -259,8 +259,8 @@ fn create_user_request(username: &'static str, opaque: i32) -> RemotingCommand {
     request
 }
 
-fn expect_success_reply(outcome: EmbeddedDispatchOutcome, expected_body: bool) {
-    let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+fn expect_success_reply(outcome: EmbeddedDispatchResult, expected_body: bool) {
+    let EmbeddedDispatchResult::Reply(plan) = outcome else {
         panic!("Admin operation must produce one immediate response")
     };
     assert_eq!(ResponseCode::from(plan.response_code()), ResponseCode::Success);

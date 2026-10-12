@@ -18,7 +18,7 @@ use rocketmq_security_api::AuthorizationDecision;
 use rocketmq_security_api::Principal;
 use rocketmq_security_api::RequestPolicy;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
-use rocketmq_transport::api::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::EmbeddedDispatchResult;
 use rocketmq_transport::api::TransportSecurity;
 use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
@@ -181,7 +181,7 @@ async fn embedded_origin_is_rejected_before_any_pop_reservation() {
         .dispatch(None, request_command("TopicA", "GroupA", 0, None, 43))
         .await
         .expect("embedded POP rejection is an inline response");
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::Reply(_)));
+    assert!(matches!(outcome, EmbeddedDispatchResult::Reply(_)));
     assert_eq!(*observed.lock(), Some(PopDeferredPrepareErrorKind::EmbeddedOrigin));
     assert_released(&service);
 

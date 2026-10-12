@@ -132,7 +132,7 @@ use rocketmq_runtime::TaskId;
 use rocketmq_runtime::{
     BudgetCapacity, BudgetClass, BudgetLimit, FullPolicy, ResourceBudget, ResourceBudgetTree, ResourcePermit,
 };
-use rocketmq_transport::api::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::EmbeddedDispatchResult;
 use rocketmq_transport::api::EmbeddedResponse;
 use rocketmq_transport::api::EmbeddedResponseBody;
 use rocketmq_transport::api::RemotingDeserializable;
@@ -223,7 +223,7 @@ pub(crate) enum LocalBrokerCommand {
     ProcessRemoting {
         request: RemotingCommand,
         timeout: Duration,
-        reply: oneshot::Sender<ProxyResult<EmbeddedDispatchOutcome>>,
+        reply: oneshot::Sender<ProxyResult<EmbeddedDispatchResult>>,
     },
 }
 
@@ -613,7 +613,7 @@ impl LocalBrokerFacadeClient {
     ///
     /// Returns an error when the local Broker worker is unavailable, rejects
     /// the command, or does not complete within the default timeout.
-    pub async fn process_remoting(&self, request: RemotingCommand) -> ProxyResult<EmbeddedDispatchOutcome> {
+    pub async fn process_remoting(&self, request: RemotingCommand) -> ProxyResult<EmbeddedDispatchResult> {
         self.process_remoting_with_timeout(request, LOCAL_REMOTING_RESPONSE_TIMEOUT)
             .await
     }
@@ -629,7 +629,7 @@ impl LocalBrokerFacadeClient {
         &self,
         mut request: RemotingCommand,
         timeout: Duration,
-    ) -> ProxyResult<EmbeddedDispatchOutcome> {
+    ) -> ProxyResult<EmbeddedDispatchResult> {
         request.make_custom_header_to_net();
         self.execute(|reply| LocalBrokerCommand::ProcessRemoting {
             request,
@@ -772,9 +772,9 @@ impl LocalRemotingBackend {
 }
 
 impl ProxyRemotingBackend for LocalRemotingBackend {
-    type Response = EmbeddedDispatchOutcome;
+    type Response = EmbeddedDispatchResult;
 
-    fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchOutcome> {
+    fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchResult> {
         Box::pin(async move { self.client.process_remoting(request).await })
     }
 
@@ -1364,16 +1364,16 @@ async fn shutdown_local_broker(facade: &mut ProxyBrokerFacade, deadline: Shutdow
     }
 }
 
-fn embedded_response(outcome: EmbeddedDispatchOutcome) -> ProxyResult<EmbeddedResponse> {
+fn embedded_response(outcome: EmbeddedDispatchResult) -> ProxyResult<EmbeddedResponse> {
     match outcome {
-        EmbeddedDispatchOutcome::Reply(response) => Ok(response.into_embedded_response()),
-        EmbeddedDispatchOutcome::OneWay { .. } => Err(ProxyError::Transport {
+        EmbeddedDispatchResult::Reply(response) => Ok(response.into_embedded_response()),
+        EmbeddedDispatchResult::OneWay { .. } => Err(ProxyError::Transport {
             message: "local Broker returned one-way completion where a response was required".to_owned(),
         }),
-        EmbeddedDispatchOutcome::Deferred { .. } => Err(ProxyError::Transport {
+        EmbeddedDispatchResult::Deferred { .. } => Err(ProxyError::Transport {
             message: "local Broker returned an unresolved deferred completion".to_owned(),
         }),
-        EmbeddedDispatchOutcome::NoReply { .. } => Err(ProxyError::Transport {
+        EmbeddedDispatchResult::NoReply { .. } => Err(ProxyError::Transport {
             message: "local Broker suppressed a required response".to_owned(),
         }),
         _ => Err(ProxyError::Transport {
@@ -2856,7 +2856,7 @@ mod tests {
     use rocketmq_proxy_core::SendMessageEntry;
     use rocketmq_proxy_core::TransactionResolution;
     use rocketmq_runtime::ShutdownDeadline;
-    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::EmbeddedResponse;
     use rocketmq_transport::api::RemotingResponse;
 
@@ -3414,7 +3414,7 @@ mod tests {
                         .set_opaque(request.opaque())
                         .mark_response_type(),
                 )
-                .map(EmbeddedDispatchOutcome::Reply)
+                .map(EmbeddedDispatchResult::Reply)
                 .expect("valid embedded response");
                 assert!(
                     reply.send(Ok(response)).is_ok(),
@@ -3425,7 +3425,7 @@ mod tests {
         }
 
         let response = call.await.expect("backend task joins").expect("backend succeeds");
-        let EmbeddedDispatchOutcome::Reply(response) = response else {
+        let EmbeddedDispatchResult::Reply(response) = response else {
             panic!("backend must return a reply plan")
         };
         assert_eq!(ResponseCode::from(response.response_code()), ResponseCode::Success);
@@ -3465,7 +3465,7 @@ mod tests {
                         .set_opaque(request.opaque())
                         .mark_response_type(),
                 )
-                .map(EmbeddedDispatchOutcome::Reply)
+                .map(EmbeddedDispatchResult::Reply)
                 .expect("valid embedded response");
                 assert!(
                     reply.send(Ok(response)).is_ok(),
@@ -3476,7 +3476,7 @@ mod tests {
         }
 
         let response = call.await.expect("client task joins").expect("client call succeeds");
-        let EmbeddedDispatchOutcome::Reply(response) = response else {
+        let EmbeddedDispatchResult::Reply(response) = response else {
             panic!("client must return a reply plan")
         };
         assert_eq!(ResponseCode::from(response.response_code()), ResponseCode::Success);
@@ -3661,7 +3661,7 @@ mod tests {
                             ResponseCode::Success,
                         ))
                         .unwrap();
-                        let _ = reply.send(Ok(EmbeddedDispatchOutcome::Reply(response)));
+                        let _ = reply.send(Ok(EmbeddedDispatchResult::Reply(response)));
                     }
                     LocalBrokerCommand::SendMessage { reply, .. } => {
                         self.release_data.cancelled().await;
@@ -3766,7 +3766,7 @@ mod tests {
                         .process_remoting(RemotingCommand::create_remoting_command(RequestCode::AckMessage))
                         .await
                         .unwrap(),
-                    EmbeddedDispatchOutcome::Reply(_)
+                    EmbeddedDispatchResult::Reply(_)
                 ));
                 assert_eq!(
                     budget.snapshot().current_count,

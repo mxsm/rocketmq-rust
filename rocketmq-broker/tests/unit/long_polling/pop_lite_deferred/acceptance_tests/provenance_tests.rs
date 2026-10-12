@@ -21,7 +21,7 @@ use rocketmq_transport::api::AuthorizedCommandDispatcher;
 use rocketmq_transport::api::DeferredAdmission;
 use rocketmq_transport::api::DeferredExpiryMargins;
 use rocketmq_transport::api::DeferredWaitLimits;
-use rocketmq_transport::api::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::EmbeddedDispatchResult;
 use rocketmq_transport::api::TransportSecurity;
 use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
@@ -169,7 +169,7 @@ async fn pop_lite_deferred_embedded_origin_is_rejected_before_capacity_take() {
         .dispatch(None, request_command_for("embedded-client", 103, 60_000))
         .await
         .expect("embedded PopLite inline response");
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::Reply(_)));
+    assert!(matches!(outcome, EmbeddedDispatchResult::Reply(_)));
     assert_eq!(
         *observed.lock(),
         Some(PopLiteDeferredPrepareRejectionKind::EmbeddedOrigin)

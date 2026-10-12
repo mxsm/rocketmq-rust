@@ -662,7 +662,7 @@ mod tests {
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
     use rocketmq_transport::api::EmbeddedCaller;
-    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::ResponseBodyKind;
     use rocketmq_transport::api::TransportSecurity;
     use rocketmq_transport::test_support::EmbeddedRequestHarness;
@@ -830,7 +830,7 @@ mod tests {
             .dispatch(None, RemotingCommand::create_remoting_command(-98_454).set_opaque(321))
             .await
             .expect("embedded RecallMessage rejection must produce a typed remoting response");
-        let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+        let EmbeddedDispatchResult::Reply(plan) = outcome else {
             panic!("embedded RecallMessage request must fail closed with a reply plan");
         };
         assert_eq!(plan.response_code(), ResponseCode::InvalidParameter as i32);

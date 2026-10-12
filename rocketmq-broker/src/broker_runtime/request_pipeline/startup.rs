@@ -312,7 +312,7 @@ mod tests {
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
-    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::RemotingRequest;
     use rocketmq_transport::api::RemotingResponse;
     use rocketmq_transport::api::RequestProcessor;
@@ -371,7 +371,7 @@ mod tests {
         )
         .await
         .expect("coarse ingress should continue to Broker ACL");
-        let EmbeddedDispatchOutcome::Reply(plan) = allowed else {
+        let EmbeddedDispatchResult::Reply(plan) = allowed else {
             panic!("explicitly disabled Broker ACL should reach the leaf")
         };
         assert_eq!(plan.response_code(), ResponseCode::Success as i32);
@@ -399,7 +399,7 @@ mod tests {
         )
         .await
         .expect("Broker ACL denial should be a remoting response");
-        let EmbeddedDispatchOutcome::Reply(plan) = denied else {
+        let EmbeddedDispatchResult::Reply(plan) = denied else {
             panic!("unconfigured Broker ACL should fail closed with one reply")
         };
         assert_eq!(plan.response_code(), ResponseCode::NoPermission as i32);

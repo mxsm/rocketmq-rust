@@ -48,7 +48,7 @@ use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
-use rocketmq_transport::api::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::EmbeddedDispatchResult;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestProcessor;
@@ -339,7 +339,7 @@ impl RequestPolicy for AllowEmbeddedPolicy {
     }
 }
 
-async fn dispatch(behavior: StoreBehavior, state: Arc<State>, name: &'static str) -> EmbeddedDispatchOutcome {
+async fn dispatch(behavior: StoreBehavior, state: Arc<State>, name: &'static str) -> EmbeddedDispatchResult {
     let owner = RuntimeOwner::plan(RuntimeConfig::server_default(name))
         .expect("test runtime configuration is valid")
         .build()
@@ -379,7 +379,7 @@ async fn dispatch(behavior: StoreBehavior, state: Arc<State>, name: &'static str
 #[tokio::test]
 async fn structured_reply_store_leaf_preserves_push_hook_metadata_and_error_visibility() {
     let success = State::new();
-    let EmbeddedDispatchOutcome::Reply(success_plan) =
+    let EmbeddedDispatchResult::Reply(success_plan) =
         dispatch(StoreBehavior::Success, Arc::clone(&success), "structured-reply-success").await
     else {
         panic!("successful Reply store must return one reply")
@@ -411,7 +411,7 @@ async fn structured_reply_store_leaf_preserves_push_hook_metadata_and_error_visi
     drop(success_plan);
 
     let failed = State::new();
-    let EmbeddedDispatchOutcome::Reply(error_plan) =
+    let EmbeddedDispatchResult::Reply(error_plan) =
         dispatch(StoreBehavior::Error, Arc::clone(&failed), "structured-reply-error").await
     else {
         panic!("failed Reply store must return one visible reply")

@@ -1954,7 +1954,7 @@ mod tests {
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
     use rocketmq_transport::api::ConnectionState;
-    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::RPCHook;
     use rocketmq_transport::api::ServerConfig;
     use rocketmq_transport::api::SessionEvent;
@@ -2114,7 +2114,7 @@ mod tests {
             .await
             .expect("layered dispatch should return a response");
         match outcome {
-            EmbeddedDispatchOutcome::Reply(plan) => plan,
+            EmbeddedDispatchResult::Reply(plan) => plan,
             _ => panic!("layered NameServer request must reply"),
         }
     }

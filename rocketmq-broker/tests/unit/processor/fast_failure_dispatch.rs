@@ -31,7 +31,7 @@ use rocketmq_security_api::RequestPolicy;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
-use rocketmq_transport::api::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::EmbeddedDispatchResult;
 use rocketmq_transport::api::RejectRequestDecision;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RemotingResponse;
@@ -242,7 +242,7 @@ impl ControlFixture {
     }
 
     async fn capture(&mut self, deadline: Option<RequestDeadline>, opaque: i32) -> RequestControlView {
-        let EmbeddedDispatchOutcome::Reply(plan) = self
+        let EmbeddedDispatchResult::Reply(plan) = self
             .harness
             .dispatch(deadline, request(opaque))
             .await
@@ -380,7 +380,7 @@ async fn canonical_deadline_drops_post_mark_run_owner_and_releases_resources() {
             .await
             .expect("canonical deadline is a source-free dispatch outcome")
     };
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::DeadlineExceeded));
+    assert!(matches!(outcome, EmbeddedDispatchResult::DeadlineExceeded));
     assert_queue_resources_released(&service);
 
     drop(harness);

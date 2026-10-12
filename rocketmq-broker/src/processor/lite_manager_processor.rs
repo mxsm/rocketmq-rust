@@ -970,7 +970,7 @@ mod tests {
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
-    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::RemotingRequest;
     use rocketmq_transport::api::RequestProcessor;
     use rocketmq_transport::api::ResponseAction;
@@ -1064,7 +1064,7 @@ mod tests {
     async fn dispatch_request(
         processor: LiteManagerProcessor<BrokerMessageStore>,
         command: RemotingCommand,
-    ) -> EmbeddedDispatchOutcome {
+    ) -> EmbeddedDispatchResult {
         let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             SharedLiteManagerProcessor {
                 inner: Arc::new(tokio::sync::Mutex::new(processor)),
@@ -1114,7 +1114,7 @@ mod tests {
         let request =
             RemotingCommand::create_request_command(RequestCode::GetBrokerLiteInfo, EmptyHeader {}).set_opaque(8_808);
 
-        let EmbeddedDispatchOutcome::Reply(plan) = dispatch_request(processor, request).await else {
+        let EmbeddedDispatchResult::Reply(plan) = dispatch_request(processor, request).await else {
             panic!("Lite manager must return an inline remoting response");
         };
 

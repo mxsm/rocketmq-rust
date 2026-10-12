@@ -27,7 +27,7 @@ use rocketmq_proxy_core::error::canonical;
 use rocketmq_proxy_core::ProxyError;
 use rocketmq_proxy_core::ProxyRemotingBackend;
 use rocketmq_proxy_core::ProxyServiceFuture;
-use rocketmq_transport::api::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::EmbeddedDispatchResult;
 use rocketmq_transport::api::RemotingResponse;
 
 use crate::cluster::RocketmqClusterClient;
@@ -44,9 +44,9 @@ impl ClusterRemotingBackend {
 }
 
 impl ProxyRemotingBackend for ClusterRemotingBackend {
-    type Response = EmbeddedDispatchOutcome;
+    type Response = EmbeddedDispatchResult;
 
-    fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchOutcome> {
+    fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchResult> {
         Box::pin(async move {
             let opaque = request.opaque();
             let body = request
@@ -88,7 +88,7 @@ impl ProxyRemotingBackend for ClusterRemotingBackend {
             }?;
             let response = RemotingResponse::from_command(response)
                 .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
-            Ok(EmbeddedDispatchOutcome::Reply(response))
+            Ok(EmbeddedDispatchResult::Reply(response))
         })
     }
 }

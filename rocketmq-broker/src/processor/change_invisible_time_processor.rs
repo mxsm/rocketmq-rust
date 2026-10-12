@@ -764,7 +764,7 @@ mod tests {
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
-    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::ResponseBodyKind;
     use rocketmq_transport::api::TransportError;
     use rocketmq_transport::api::TransportSecurity;
@@ -812,7 +812,7 @@ mod tests {
     async fn dispatch_embedded<P>(
         processor: P,
         command: RemotingCommand,
-    ) -> std::result::Result<EmbeddedDispatchOutcome, TransportError>
+    ) -> std::result::Result<EmbeddedDispatchResult, TransportError>
     where
         P: RequestProcessor + Send + 'static,
     {
@@ -938,7 +938,7 @@ mod tests {
         )
         .await
         .expect("embedded ChangeInvisibleTime response");
-        let EmbeddedDispatchOutcome::Reply(response) = outcome else {
+        let EmbeddedDispatchResult::Reply(response) = outcome else {
             panic!("ChangeInvisibleTime unknown request must return a reply response");
         };
 

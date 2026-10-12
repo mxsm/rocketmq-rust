@@ -500,7 +500,7 @@ mod tests {
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
-    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::RemotingRequest;
     use rocketmq_transport::api::ResponseAction;
     use rocketmq_transport::api::TransportSecurity;
@@ -593,7 +593,7 @@ mod tests {
     async fn dispatch_request(
         processor: LiteSubscriptionCtlProcessor<BrokerMessageStore>,
         command: RemotingCommand,
-    ) -> EmbeddedDispatchOutcome {
+    ) -> EmbeddedDispatchResult {
         let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             SharedLiteSubscriptionProcessor {
                 inner: Arc::new(tokio::sync::Mutex::new(processor)),
@@ -646,7 +646,7 @@ mod tests {
         let request =
             RemotingCommand::create_request_command(RequestCode::LiteSubscriptionCtl, EmptyHeader {}).set_opaque(7_707);
 
-        let EmbeddedDispatchOutcome::Reply(plan) = dispatch_request(processor, request).await else {
+        let EmbeddedDispatchResult::Reply(plan) = dispatch_request(processor, request).await else {
             panic!("Lite subscription must return an inline remoting response");
         };
 

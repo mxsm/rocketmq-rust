@@ -7374,8 +7374,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::dispatch::EmbeddedDispatchOutcome",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::EmbeddedDispatchOutcome",
+          "declaration": "pub use crate::dispatch::EmbeddedDispatchResult",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::EmbeddedDispatchResult",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",

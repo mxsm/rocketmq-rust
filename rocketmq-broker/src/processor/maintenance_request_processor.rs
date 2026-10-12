@@ -545,7 +545,7 @@ mod tests {
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
-    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::RPCHook;
     use rocketmq_transport::api::ServerConfig;
     use rocketmq_transport::api::TransportSecurity;
@@ -700,7 +700,7 @@ mod tests {
         processor: MaintenanceRequestProcessor,
         principal: &'static str,
         command: RemotingCommand,
-    ) -> std::result::Result<EmbeddedDispatchOutcome, rocketmq_transport::api::TransportError> {
+    ) -> std::result::Result<EmbeddedDispatchResult, rocketmq_transport::api::TransportError> {
         dispatch_request_with_hooks(processor, principal, command, Vec::new()).await
     }
 
@@ -709,7 +709,7 @@ mod tests {
         principal: &'static str,
         command: RemotingCommand,
         hooks: Vec<Arc<dyn RPCHook>>,
-    ) -> std::result::Result<EmbeddedDispatchOutcome, rocketmq_transport::api::TransportError> {
+    ) -> std::result::Result<EmbeddedDispatchResult, rocketmq_transport::api::TransportError> {
         let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             processor,
             hooks,
@@ -817,7 +817,7 @@ mod tests {
     async fn maintenance_uses_authenticated_principal_for_authorization() {
         let processor = maintenance_processor_for_test().await;
 
-        let EmbeddedDispatchOutcome::Reply(plan) =
+        let EmbeddedDispatchResult::Reply(plan) =
             dispatch_request(processor.clone(), "release-operator", verify_request(5_505))
                 .await
                 .expect("bound maintenance principal should be authorized")
@@ -827,7 +827,7 @@ mod tests {
         assert_eq!(ResponseCode::from(plan.response_code()), ResponseCode::Success);
         assert!(plan.body_len() > 0);
 
-        let EmbeddedDispatchOutcome::Reply(denied) =
+        let EmbeddedDispatchResult::Reply(denied) =
             dispatch_request(processor, "ordinary-admin", verify_request(5_506))
                 .await
                 .expect("authorization failures should become typed remoting responses")
@@ -933,7 +933,7 @@ mod tests {
     async fn maintenance_before_hook_cannot_replace_the_original_operation() {
         let (processor, _store, _root) = maintenance_processor_with_store_for_test().await;
 
-        let EmbeddedDispatchOutcome::Reply(plan) = dispatch_request_with_hooks(
+        let EmbeddedDispatchResult::Reply(plan) = dispatch_request_with_hooks(
             processor,
             "release-operator",
             capabilities_request(5_507),

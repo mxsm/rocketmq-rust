@@ -328,7 +328,7 @@ async fn public_reply_is_channel_free_zero_copy_bound_and_observed_once_after_on
         .dispatch_embedded(&fixture.task_group, Principal::new("broker-proxy"), None, command)
         .await
         .expect("embedded reply");
-    let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+    let EmbeddedDispatchResult::Reply(plan) = outcome else {
         panic!("expected embedded reply")
     };
     let ResponseBody::Bytes(body) = plan.test_body() else {
@@ -380,7 +380,7 @@ async fn one_way_discards_processor_rejection_and_error_plans_before_binding_wit
             .dispatch_embedded(&fixture.task_group, Principal::new("broker-proxy"), None, command)
             .await
             .expect("one-way terminal outcome");
-        assert!(matches!(outcome, EmbeddedDispatchOutcome::OneWay { .. }));
+        assert!(matches!(outcome, EmbeddedDispatchResult::OneWay { .. }));
         assert!(state.observations.lock().expect("observation lock").is_empty());
         let failures = dispatcher.core.reported_failure_categories();
         if matches!(behavior, Behavior::Error) {
@@ -410,7 +410,7 @@ async fn non_oneway_processor_error_is_observed_without_terminal_failure_reporti
         )
         .await
         .expect("processor error response must use the local plan handoff");
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::Reply(_)));
+    assert!(matches!(outcome, EmbeddedDispatchResult::Reply(_)));
     assert!(dispatcher.core.reported_failure_categories().is_empty());
     {
         let observations = state.observations.lock().expect("observation lock");
@@ -441,7 +441,7 @@ async fn one_way_discards_pre_admission_deadline_security_and_admission_plans_wi
         )
         .await
         .expect("one-way pre-admission deadline");
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::OneWay { .. }));
+    assert!(matches!(outcome, EmbeddedDispatchResult::OneWay { .. }));
     assert_eq!(deadline_state.clones.load(Ordering::SeqCst), 0);
     assert!(deadline_state.observations.lock().expect("observation lock").is_empty());
 
@@ -465,7 +465,7 @@ async fn one_way_discards_pre_admission_deadline_security_and_admission_plans_wi
         )
         .await
         .expect("one-way security denial");
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::OneWay { .. }));
+    assert!(matches!(outcome, EmbeddedDispatchResult::OneWay { .. }));
     assert_eq!(security_state.clones.load(Ordering::SeqCst), 0);
     assert!(security_state.observations.lock().expect("observation lock").is_empty());
 
@@ -493,7 +493,7 @@ async fn one_way_discards_pre_admission_deadline_security_and_admission_plans_wi
         )
         .await
         .expect("one-way admission rejection");
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::OneWay { .. }));
+    assert!(matches!(outcome, EmbeddedDispatchResult::OneWay { .. }));
     assert_eq!(admission_state.clones.load(Ordering::SeqCst), 0);
     assert!(admission_state
         .observations
@@ -521,7 +521,7 @@ async fn expired_reply_maps_once_to_deadline_with_one_failed_observation() {
         )
         .await
         .expect("expired reply handoff is a normal deadline outcome");
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::DeadlineExceeded));
+    assert!(matches!(outcome, EmbeddedDispatchResult::DeadlineExceeded));
     {
         let observations = state.observations.lock().expect("observation lock");
         assert_eq!(observations.len(), 1);
@@ -551,10 +551,10 @@ async fn embedded_deferred_take_is_unavailable_while_protocol_no_reply_stays_obs
             .await
             .expect("affine embedded outcome");
         match behavior {
-            Behavior::Deferred => assert!(matches!(outcome, EmbeddedDispatchOutcome::Reply(_))),
+            Behavior::Deferred => assert!(matches!(outcome, EmbeddedDispatchResult::Reply(_))),
             Behavior::NoReply => assert!(matches!(
                 outcome,
-                EmbeddedDispatchOutcome::NoReply {
+                EmbeddedDispatchResult::NoReply {
                     reason: ProtocolNoResponseReason::CallbackHandled,
                     ..
                 }
@@ -701,7 +701,7 @@ async fn embedded_admission_rejection_uses_typed_caller_scope_without_processor_
         )
         .await
         .expect("reject policy returns a reply plan");
-    let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+    let EmbeddedDispatchResult::Reply(plan) = outcome else {
         panic!("admission rejection must return an embedded reply")
     };
     assert_eq!(
@@ -744,7 +744,7 @@ async fn embedded_caller_admission_isolated_from_the_loopback_network_scope() {
             )
             .await
             .expect("typed embedded capacity remains isolated"),
-        EmbeddedDispatchOutcome::Reply(_)
+        EmbeddedDispatchResult::Reply(_)
     ));
     assert_eq!(state.clones.load(Ordering::SeqCst), 1);
     drop(held_network);

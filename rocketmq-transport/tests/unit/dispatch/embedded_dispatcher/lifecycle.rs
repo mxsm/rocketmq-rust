@@ -40,7 +40,7 @@ async fn public_oneway_waiter_lets_the_admitted_deadline_candidate_complete_and_
             .await
             .expect("the processor deadline plan must complete through one-way policy")
     };
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::OneWay { .. }));
+    assert!(matches!(outcome, EmbeddedDispatchResult::OneWay { .. }));
     assert_eq!(state.clones.load(Ordering::SeqCst), 1);
     assert_eq!(state.rejects.load(Ordering::SeqCst), 1);
     assert_eq!(state.processes.load(Ordering::SeqCst), 1);
@@ -87,7 +87,7 @@ async fn admitted_non_oneway_deadline_response_is_observed_without_terminal_fail
     )
     .await
     .expect("expired local handoff is a source-free deadline outcome");
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::DeadlineExceeded));
+    assert!(matches!(outcome, EmbeddedDispatchResult::DeadlineExceeded));
     assert_eq!(state.clones.load(Ordering::SeqCst), 1);
     assert_eq!(state.rejects.load(Ordering::SeqCst), 0);
     assert_eq!(state.processes.load(Ordering::SeqCst), 0);
@@ -130,7 +130,7 @@ async fn parent_cancellation_wins_an_inflight_processor_and_drains_under_the_exi
         .await
         .expect("dispatch join")
         .expect("cancellation is a normal embedded dispatch outcome");
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::Cancelled));
+    assert!(matches!(outcome, EmbeddedDispatchResult::Cancelled));
     assert!(state.observations.lock().expect("observation lock").is_empty());
     fixture.shutdown().await;
 }
@@ -193,7 +193,7 @@ async fn terminal_stop_priority_is_cancel_then_session_close_then_deadline() {
         .receive()
         .await
         .expect("deadline is a source-free terminal outcome");
-    assert!(matches!(deadline_outcome, EmbeddedDispatchOutcome::DeadlineExceeded));
+    assert!(matches!(deadline_outcome, EmbeddedDispatchResult::DeadlineExceeded));
 
     let closed_record = EmbeddedSessionRecord::new(92);
     let closed_meta = RequestMeta::new(Instant::now(), Some(RequestDeadline::after(Duration::ZERO)));
@@ -206,7 +206,7 @@ async fn terminal_stop_priority_is_cancel_then_session_close_then_deadline() {
         .receive()
         .await
         .expect("session close is a source-free terminal outcome");
-    assert!(matches!(closed_outcome, EmbeddedDispatchOutcome::SessionClosed));
+    assert!(matches!(closed_outcome, EmbeddedDispatchResult::SessionClosed));
 
     let cancelled_record = EmbeddedSessionRecord::new(93);
     let cancelled_meta = RequestMeta::new(Instant::now(), Some(RequestDeadline::after(Duration::ZERO)));
@@ -224,7 +224,7 @@ async fn terminal_stop_priority_is_cancel_then_session_close_then_deadline() {
         .receive()
         .await
         .expect("parent cancellation is a source-free terminal outcome");
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::Cancelled));
+    assert!(matches!(outcome, EmbeddedDispatchResult::Cancelled));
     fixture.shutdown().await;
 }
 
@@ -242,16 +242,16 @@ async fn terminal_distinguishes_an_external_stop_claim_from_receiver_drop() {
         .receive()
         .await
         .expect("parent cancellation must claim the terminal");
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::Cancelled));
+    assert!(matches!(outcome, EmbeddedDispatchResult::Cancelled));
     assert_eq!(
-        sender.complete(Ok(EmbeddedDispatchOutcome::CompletionClosed)),
+        sender.complete(Ok(EmbeddedDispatchResult::CompletionClosed)),
         terminal::TerminalPublishStatus::AlreadyCompleted
     );
 
     let (sender, receiver) = terminal();
     drop(receiver);
     assert_eq!(
-        sender.complete(Ok(EmbeddedDispatchOutcome::Cancelled)),
+        sender.complete(Ok(EmbeddedDispatchResult::Cancelled)),
         terminal::TerminalPublishStatus::ReceiverDropped
     );
     fixture.shutdown().await;

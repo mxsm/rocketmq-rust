@@ -18,7 +18,7 @@ use rocketmq_security_api::AuthorizationDecision;
 use rocketmq_security_api::Principal;
 use rocketmq_security_api::RequestPolicy;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
-use rocketmq_transport::api::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::EmbeddedDispatchResult;
 use rocketmq_transport::api::TransportSecurity;
 use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
@@ -317,7 +317,7 @@ async fn notification_deferred_embedded_origin_is_rejected_before_capacity_take(
         .dispatch(None, request_command_for("embedded-group", 10_103, 60_000))
         .await
         .expect("embedded Notification inline response");
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::Reply(_)));
+    assert!(matches!(outcome, EmbeddedDispatchResult::Reply(_)));
     assert_eq!(
         *observed.lock(),
         Some(NotificationDeferredPrepareRejectionKind::EmbeddedOrigin)

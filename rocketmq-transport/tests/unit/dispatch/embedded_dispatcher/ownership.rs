@@ -65,7 +65,7 @@ async fn dispatch_plan(plan: RemotingResponse, name: &'static str) -> RemotingRe
         .await
         .expect("plan dispatch");
     fixture.shutdown().await;
-    let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+    let EmbeddedDispatchResult::Reply(plan) = outcome else {
         panic!("expected reply plan")
     };
     plan

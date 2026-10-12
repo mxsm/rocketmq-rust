@@ -109,7 +109,7 @@ use rocketmq_proxy_core::ProxyPayloadStatus;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_transport::api::error_response;
-use rocketmq_transport::api::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::EmbeddedDispatchResult;
 use rocketmq_transport::api::RejectRequestDecision;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
@@ -183,7 +183,7 @@ where
         sessions: ClientSessionRegistry,
         auth_runtime: Option<ProxyAuthRuntime>,
         remoting_backend: Option<
-            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
+            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>,
         >,
     ) -> Self {
         Self::new_with_remoting_command_factory(
@@ -202,7 +202,7 @@ where
         sessions: ClientSessionRegistry,
         auth_runtime: Option<ProxyAuthRuntime>,
         remoting_backend: Option<
-            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
+            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>,
         >,
         command_factory: RemotingCommandFactory,
     ) -> Self {
@@ -223,7 +223,7 @@ where
         sessions: ClientSessionRegistry,
         auth_runtime: Option<ProxyAuthRuntime>,
         remoting_backend: Option<
-            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
+            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>,
         >,
         drain: ProxyDrainController,
     ) -> Self {
@@ -244,7 +244,7 @@ where
         sessions: ClientSessionRegistry,
         auth_runtime: Option<ProxyAuthRuntime>,
         remoting_backend: Option<
-            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
+            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>,
         >,
         drain: ProxyDrainController,
         command_factory: RemotingCommandFactory,
@@ -272,7 +272,7 @@ where
         sessions: ClientSessionRegistry,
         auth_runtime: Option<ProxyAuthRuntime>,
         remoting_backend: Option<
-            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
+            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>,
         >,
         drain: ProxyDrainController,
         command_factory: RemotingCommandFactory,
@@ -495,9 +495,7 @@ pub async fn serve_with_service_context<P, F>(
     processor: Arc<P>,
     sessions: ClientSessionRegistry,
     auth_runtime: Option<ProxyAuthRuntime>,
-    remoting_backend: Option<
-        Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
-    >,
+    remoting_backend: Option<Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>>,
     shutdown: F,
 ) -> ProxyResult<Option<ShutdownReport>>
 where
@@ -530,9 +528,7 @@ pub async fn serve_with_service_context_and_remoting_command_factory<P, F>(
     processor: Arc<P>,
     sessions: ClientSessionRegistry,
     auth_runtime: Option<ProxyAuthRuntime>,
-    remoting_backend: Option<
-        Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
-    >,
+    remoting_backend: Option<Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>>,
     command_factory: RemotingCommandFactory,
     shutdown: F,
 ) -> ProxyResult<Option<ShutdownReport>>
@@ -564,9 +560,7 @@ pub async fn serve_with_service_context_and_ready<P, F, R>(
     processor: Arc<P>,
     sessions: ClientSessionRegistry,
     auth_runtime: Option<ProxyAuthRuntime>,
-    remoting_backend: Option<
-        Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
-    >,
+    remoting_backend: Option<Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>>,
     shutdown: F,
     ready: R,
 ) -> ProxyResult<Option<ShutdownReport>>
@@ -602,9 +596,7 @@ pub async fn serve_with_service_context_and_ready_and_remoting_command_factory<P
     processor: Arc<P>,
     sessions: ClientSessionRegistry,
     auth_runtime: Option<ProxyAuthRuntime>,
-    remoting_backend: Option<
-        Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
-    >,
+    remoting_backend: Option<Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>>,
     command_factory: RemotingCommandFactory,
     shutdown: F,
     ready: R,
@@ -643,9 +635,7 @@ pub async fn serve_with_service_context_and_ready_and_drain<P, F, R>(
     processor: Arc<P>,
     sessions: ClientSessionRegistry,
     auth_runtime: Option<ProxyAuthRuntime>,
-    remoting_backend: Option<
-        Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
-    >,
+    remoting_backend: Option<Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>>,
     drain: ProxyDrainController,
     shutdown: F,
     ready: R,
@@ -683,9 +673,7 @@ pub async fn serve_with_service_context_and_ready_and_drain_and_remoting_command
     processor: Arc<P>,
     sessions: ClientSessionRegistry,
     auth_runtime: Option<ProxyAuthRuntime>,
-    remoting_backend: Option<
-        Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
-    >,
+    remoting_backend: Option<Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>>,
     drain: ProxyDrainController,
     command_factory: RemotingCommandFactory,
     shutdown: F,
@@ -719,9 +707,7 @@ async fn serve_with_context<P, F>(
     processor: Arc<P>,
     sessions: ClientSessionRegistry,
     auth_runtime: Option<ProxyAuthRuntime>,
-    remoting_backend: Option<
-        Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
-    >,
+    remoting_backend: Option<Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>>,
     drain: ProxyDrainController,
     command_factory: RemotingCommandFactory,
     shutdown: F,
@@ -833,8 +819,7 @@ pub struct ProxyRemotingDispatcher<P> {
     processor: Arc<P>,
     validate_message_type: bool,
     sessions: ClientSessionRegistry,
-    remoting_backend:
-        Option<Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>>,
+    remoting_backend: Option<Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>>,
     drain: ProxyDrainController,
     command_factory: RemotingCommandFactory,
     session_binder: Option<ProxySessionBinder>,
@@ -849,7 +834,7 @@ where
         processor: Arc<P>,
         sessions: ClientSessionRegistry,
         remoting_backend: Option<
-            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
+            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>,
         >,
     ) -> Self {
         Self::new_with_remoting_command_factory(
@@ -866,7 +851,7 @@ where
         processor: Arc<P>,
         sessions: ClientSessionRegistry,
         remoting_backend: Option<
-            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
+            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>,
         >,
         command_factory: RemotingCommandFactory,
     ) -> Self {
@@ -885,7 +870,7 @@ where
         processor: Arc<P>,
         sessions: ClientSessionRegistry,
         remoting_backend: Option<
-            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
+            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>,
         >,
         drain: ProxyDrainController,
     ) -> Self {
@@ -904,7 +889,7 @@ where
         processor: Arc<P>,
         sessions: ClientSessionRegistry,
         remoting_backend: Option<
-            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
+            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchResult>>,
         >,
         drain: ProxyDrainController,
         command_factory: RemotingCommandFactory,
@@ -1011,15 +996,15 @@ where
             backend_command.set_code_ref(request.original_identity().original_code());
             backend_command.set_opaque_mut(request.original_identity().original_opaque());
             return match backend.process(backend_command).await {
-                Ok(EmbeddedDispatchOutcome::Reply(plan)) => Ok(ResponseAction::Reply(plan)),
-                Ok(EmbeddedDispatchOutcome::OneWay { .. }) => Ok(ResponseAction::Reply(
+                Ok(EmbeddedDispatchResult::Reply(plan)) => Ok(ResponseAction::Reply(plan)),
+                Ok(EmbeddedDispatchResult::OneWay { .. }) => Ok(ResponseAction::Reply(
                     RemotingResponse::empty_response(ResponseCode::Success as i32),
                 )),
-                Ok(EmbeddedDispatchOutcome::NoReply { reason, .. }) => request
+                Ok(EmbeddedDispatchResult::NoReply { reason, .. }) => request
                     .protocol_no_response(reason)
                     .map(ResponseAction::NoReply)
                     .map_err(|error| Arc::new(protocol_no_response_contract_error(error))),
-                Ok(EmbeddedDispatchOutcome::Deferred { .. }) => Err(Arc::new(canonical::internal(
+                Ok(EmbeddedDispatchResult::Deferred { .. }) => Err(Arc::new(canonical::internal(
                     "dispatch_remoting_backend",
                     "terminal Proxy backend route returned an unresolved deferred outcome",
                 ))),
@@ -2734,7 +2719,7 @@ mod tests {
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
-    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::RejectRequestDecision;
     use rocketmq_transport::api::RemotingRequest;
     use rocketmq_transport::api::RemotingResponse;
@@ -3363,17 +3348,17 @@ mod tests {
     }
 
     impl ProxyRemotingBackend for TestRemotingBackend {
-        type Response = rocketmq_transport::api::EmbeddedDispatchOutcome;
+        type Response = rocketmq_transport::api::EmbeddedDispatchResult;
         fn process(
             &self,
             request: RemotingCommand,
-        ) -> rocketmq_proxy_core::ProxyServiceFuture<'_, EmbeddedDispatchOutcome> {
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'_, EmbeddedDispatchResult> {
             Box::pin(async move {
                 self.seen_requests.lock().expect("backend mutex poisoned").push(request);
                 RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                     ResponseCode::Success,
                 ))
-                .map(EmbeddedDispatchOutcome::Reply)
+                .map(EmbeddedDispatchResult::Reply)
                 .map_err(|error| ProxyError::Transport {
                     message: format!("test remoting response: {error}"),
                 })
@@ -3458,7 +3443,7 @@ mod tests {
             )
             .await
             .expect("embedded Proxy reply");
-        let EmbeddedDispatchOutcome::Reply(plan) = response else {
+        let EmbeddedDispatchResult::Reply(plan) = response else {
             panic!("forward backend must produce a reply")
         };
         assert_eq!(plan.response_code(), ResponseCode::Success.to_i32());
@@ -3479,7 +3464,7 @@ mod tests {
             )
             .await
             .expect("embedded non-backend reply");
-        let EmbeddedDispatchOutcome::Reply(plan) = local_response else {
+        let EmbeddedDispatchResult::Reply(plan) = local_response else {
             panic!("original CheckClientConfig route must produce a reply")
         };
         assert_eq!(plan.response_code(), ResponseCode::Success.to_i32());
@@ -3491,7 +3476,7 @@ mod tests {
             .dispatch(None, one_way)
             .await
             .expect("embedded one-way compatibility mapping");
-        assert!(matches!(one_way_outcome, EmbeddedDispatchOutcome::OneWay { .. }));
+        assert!(matches!(one_way_outcome, EmbeddedDispatchResult::OneWay { .. }));
 
         {
             let seen = backend.seen_requests.lock().expect("backend mutex poisoned");
@@ -3689,7 +3674,7 @@ mod tests {
             )
             .await
             .expect("request should be rejected with a remoting response");
-        let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+        let EmbeddedDispatchResult::Reply(plan) = outcome else {
             panic!("drain authentication rejection must be a reply")
         };
         assert_eq!(plan.response_code(), ResponseCode::NoPermission.to_i32());

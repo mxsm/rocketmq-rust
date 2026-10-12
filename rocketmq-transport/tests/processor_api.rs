@@ -53,7 +53,7 @@ use rocketmq_transport::api::DeferredTerminalReason;
 use rocketmq_transport::api::DeferredWaitPermit;
 use rocketmq_transport::api::DeferredWakeReason;
 use rocketmq_transport::api::EmbeddedCaller;
-use rocketmq_transport::api::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::EmbeddedDispatchResult;
 use rocketmq_transport::api::EmbeddedResponse;
 use rocketmq_transport::api::EmbeddedResponseBody;
 use rocketmq_transport::api::FileRegion;
@@ -163,14 +163,14 @@ fn assert_error_contract<T: std::error::Error>() {}
 
 fn assert_debug_contract<T: std::fmt::Debug>() {}
 
-fn assert_embedded_dispatch_contract(outcome: Option<EmbeddedDispatchOutcome>, error: Option<TransportError>) {
+fn assert_embedded_dispatch_contract(outcome: Option<EmbeddedDispatchResult>, error: Option<TransportError>) {
     if let Some(outcome) = outcome {
         match outcome {
-            EmbeddedDispatchOutcome::Reply(plan) => assert_remoting_response_contract(Some(plan)),
-            EmbeddedDispatchOutcome::OneWay { request_id } | EmbeddedDispatchOutcome::Deferred { request_id } => {
+            EmbeddedDispatchResult::Reply(plan) => assert_remoting_response_contract(Some(plan)),
+            EmbeddedDispatchResult::OneWay { request_id } | EmbeddedDispatchResult::Deferred { request_id } => {
                 let _: RequestId = request_id;
             }
-            EmbeddedDispatchOutcome::NoReply { request_id, reason } => {
+            EmbeddedDispatchResult::NoReply { request_id, reason } => {
                 let _: RequestId = request_id;
                 let _: ProtocolNoResponseReason = reason;
             }
@@ -529,7 +529,7 @@ fn api_exposes_only_remoting_response_metadata_and_file_region_construction_dtos
 
 #[test]
 fn api_exposes_the_affine_embedded_outcome_and_redacted_error_facades() {
-    assert_debug_contract::<EmbeddedDispatchOutcome>();
+    assert_debug_contract::<EmbeddedDispatchResult>();
     assert_error_contract::<TransportError>();
     assert_embedded_dispatch_contract(None, None);
 }

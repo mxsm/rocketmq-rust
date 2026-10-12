@@ -27,7 +27,7 @@ use rocketmq_security_api::Principal;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
-use rocketmq_transport::api::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::EmbeddedDispatchResult;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestProcessor;
@@ -116,7 +116,7 @@ fn benchmark_processor_dispatch(criterion: &mut Criterion) {
                                 .await
                                 .expect("canonical embedded dispatch");
                             match outcome {
-                                EmbeddedDispatchOutcome::Reply(plan) => {
+                                EmbeddedDispatchResult::Reply(plan) => {
                                     black_box((plan.response_code(), plan.body_len()));
                                 }
                                 other => panic!("inline benchmark returned an unexpected outcome: {other:?}"),

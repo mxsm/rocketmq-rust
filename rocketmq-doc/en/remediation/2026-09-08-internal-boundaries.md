@@ -21,7 +21,7 @@ Local and Cluster adapters select their remoting response type through
 | Core context constructors taking a Tonic or Transport request | Import `rocketmq_proxy::ProxyContextExt`; neutral callers use `ProxyContextWithPrincipal::from_metadata` |
 | `ProxyStatusMapper::to_tonic_status` | Import `rocketmq_proxy::ProxyStatusMapperExt` alongside the mapper |
 | Core-generated gRPC client/server modules enabled implicitly | Enable `rocketmq-proxy-core/grpc-bindings`, or use the existing Proxy facade exports |
-| Core reexports of `EmbeddedDispatchOutcome` / `RemotingResponse` | `rocketmq_transport::api` |
+| Core reexports of `EmbeddedDispatchResult` / `RemotingResponse` | `rocketmq_transport::api` |
 
 Network metadata does not create an authenticated principal. The facade attaches
 the existing verified principal after authentication. Deadlines, request identity,
