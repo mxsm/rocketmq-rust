@@ -498,6 +498,8 @@ async fn matrix_router(
         allowed_operations: ToolKind::ALL.into_iter().map(ToolKind::operation).collect(),
         allowed_clusters: vec![ClusterName::try_new("cluster-a").unwrap()],
         operation_timeout_seconds: 2,
+        require_plan_digest: false,
+        emergency_stop_file: None,
     };
     transport_config.mutations = policy.clone();
     let runtime = rocketmq_runtime::RuntimeContext::from_current("control-acceptance-matrix");
@@ -1861,6 +1863,8 @@ fn enabled_tool_contract_marks_state_replacing_tools_destructive_and_restoring_o
         allowed_operations: ToolKind::ALL.into_iter().map(ToolKind::operation).collect(),
         allowed_clusters: vec![ClusterName::try_new("cluster-a").unwrap()],
         operation_timeout_seconds: 2,
+        require_plan_digest: false,
+        emergency_stop_file: None,
     };
     let tools = crate::catalog::OperationCatalog::from_policy(&enabled).list_tools().tools;
     assert_eq!(tools.len(), 9);

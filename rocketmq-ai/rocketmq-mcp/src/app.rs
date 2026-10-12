@@ -92,9 +92,11 @@ impl McpShutdownReport {
     }
 }
 
+/// The Streamable HTTP transport builds a server from a copy of the app for every request, so a
+/// copy shares the configuration instead of repeating it.
 #[derive(Clone)]
 pub struct McpApp {
-    config: McpConfig,
+    config: Arc<McpConfig>,
     guard: Guard,
     metrics: rocketmq_observability::metrics::mcp::McpMetricsRecorder,
     query: Arc<QueryFacade<AdminCoreSessionFactory>>,
@@ -131,6 +133,7 @@ impl McpApp {
         service_context: rocketmq_runtime::ChildServiceContext,
         telemetry_handle: rocketmq_observability::TelemetryHandle,
     ) -> crate::error::McpResult<Self> {
+        let config = Arc::new(config);
         let metrics = rocketmq_observability::metrics::mcp::McpMetricsRecorder::from_handle(&telemetry_handle);
         let guard =
             Guard::new(config.security.clone(), config.audit.clone(), &config.clusters)?.with_metrics(metrics.clone());
@@ -146,7 +149,7 @@ impl McpApp {
         };
         let query = Arc::new(
             QueryFacade::new(
-                config.clone(),
+                Arc::clone(&config),
                 client_runtime.clone(),
                 service_context.storage_io().clone(),
             )
@@ -175,7 +178,7 @@ impl McpApp {
             AdminCoreSessionFactory::new(self.client_runtime.clone(), self.service_context.storage_io().clone())
                 .with_test_session_factory(factory);
         self.query =
-            Arc::new(QueryFacade::with_factory(self.config.clone(), factory).with_metrics(self.metrics.clone()));
+            Arc::new(QueryFacade::with_factory(Arc::clone(&self.config), factory).with_metrics(self.metrics.clone()));
         self
     }
 

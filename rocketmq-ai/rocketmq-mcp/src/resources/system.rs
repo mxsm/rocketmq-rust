@@ -13,33 +13,49 @@
 // limitations under the License.
 
 use rmcp::model::ReadResourceResult;
-use rmcp::model::ResourceContents;
 use rmcp::ErrorData;
 use serde::Serialize;
 
-use crate::resources::uri::JSON_MIME_TYPE;
+use crate::resources::ResourceDocument;
 
+/// Writes a system Resource as indented JSON, without the shared output processing.
+///
+/// # Errors
+///
+/// Fails when `value` cannot be represented as JSON.
 pub fn read_result(uri: &str, kind: &str, value: impl Serialize) -> Result<ReadResourceResult, ErrorData> {
-    let payload = serde_json::json!({
-        "schema_version": "rocketmq-mcp.system-resource.v1",
-        "resource": uri,
-        "source": "mcp_process",
-        "partial": false,
-        "warnings": [],
-        "kind": kind,
-        "data": value,
-    });
-    let text = serde_json::to_string_pretty(&payload).map_err(|error| {
-        ErrorData::internal_error(
-            "failed to encode system resource",
-            Some(serde_json::json!({
-                "code": "system_resource_encoding_failed",
-                "retryable": false,
-                "reason": crate::McpError::from_source(error).to_string(),
-            })),
-        )
-    })?;
-    Ok(ReadResourceResult::new(vec![
-        ResourceContents::text(text, uri).with_mime_type(JSON_MIME_TYPE)
-    ]))
+    document(uri, kind, value)?.into_read_result().map_err(encoding_failed)
+}
+
+/// Returns a system Resource as the value the Guard processes and then publishes.
+///
+/// # Errors
+///
+/// Fails when `value` cannot be represented as JSON.
+pub fn document(uri: &str, kind: &str, value: impl Serialize) -> Result<ResourceDocument, ErrorData> {
+    let data = serde_json::to_value(value)
+        .map_err(|source| encoding_failed(crate::McpError::from_source(source).into_error_data()))?;
+    Ok(ResourceDocument {
+        uri: uri.to_string(),
+        value: serde_json::json!({
+            "schema_version": "rocketmq-mcp.system-resource.v1",
+            "resource": uri,
+            "source": "mcp_process",
+            "partial": false,
+            "warnings": [],
+            "kind": kind,
+            "data": data,
+        }),
+    })
+}
+
+fn encoding_failed(source: ErrorData) -> ErrorData {
+    ErrorData::internal_error(
+        "failed to encode system resource",
+        Some(serde_json::json!({
+            "code": "system_resource_encoding_failed",
+            "retryable": false,
+            "reason": source.message,
+        })),
+    )
 }

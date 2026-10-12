@@ -144,9 +144,12 @@ Correctable Tool failures set `isError: true`, omit success
 ```
 
 Stable codes include `invalid_arguments`, `not_found`, `source_unavailable`,
-`permission_denied`, `rate_limited`, `change_planning_disabled`,
-`internal_error`, `output_too_large`, `backend_timeout`, `cancelled`,
-`cursor_expired`, `cursor_invalid`, and `result_too_large`.
+`permission_denied`, `rate_limited`, `concurrency_limited`,
+`change_planning_disabled`, `internal_error`, `output_too_large`,
+`backend_timeout`, `cancelled`, `cursor_expired`, `cursor_invalid`, and
+`result_too_large`. A `rate_limited` error also carries `retry_after_ms`, the
+wait after which one call is due; `concurrency_limited` is a cluster that
+already serves as many requests as it may at once and names no wait.
 A `not_found` error also carries `entity`, the kind of target that does not
 exist. An `invalid_arguments` error carries `violations` when the server can
 locate the arguments: up to three `path` and `constraint` pairs that name the

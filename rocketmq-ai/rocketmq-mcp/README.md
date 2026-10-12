@@ -35,6 +35,7 @@ Optional features:
 - `observability`: enables in-process metrics and traces without selecting a remote exporter.
 - `otlp`: enables metrics, traces, and logs through the implemented OTLP gRPC exporter.
 - `change-planning`: deprecated. Registers non-mutating change planning Tools and still requires runtime policy.
+- `security-admin`: registers `rocketmq_list_acl_users`, which lists the ACL users of a cluster without their passwords. A call still needs the scope `rocketmq:security-admin` and a role that holds the Tool.
 - `auth`: feature marker enabled by `streamable-http`; it is not a switch to bypass HTTP authentication.
 
 ## Safety Boundary
@@ -51,9 +52,11 @@ For HTTP deployments, keep `server.http.bind` on loopback unless there is a revi
 
 When `change-planning` is compiled, planning Tools are still controlled by runtime policy. They return a plan, impact analysis, and rollback suggestions. Their schemas contain no Apply mode, operator identity, or confirmation token, and no mutation API is called.
 
-The server targets MCP protocol version `2025-11-25`. Clients requesting another protocol version are rejected during initialization.
+When `security-admin` is compiled, `rocketmq_list_acl_users` is still refused to a caller without the scope `rocketmq:security-admin`, which no other scope and no local profile other than `security_admin` implies, and to a caller whose roles do not hold the Tool. No example role holds it. The Tool returns user names, types, and statuses. The password a Broker sends with each user is dropped inside the RocketMQ client, before the read reaches this server's code.
 
-Successful Tool calls return a `rocketmq-mcp.v2` envelope with `request_id`, cluster, RFC 3339 observation time, freshness, cache status, partial status, warnings, and typed data. Correctable input and backend failures return Tool execution errors with a stable code, retryability, suggestions, and the request identifier.
+The server targets MCP protocol version `2025-11-25` and answers no other. A client that requests another version is rejected during initialization. Over Streamable HTTP, a request whose `MCP-Protocol-Version` header names another version gets HTTP 400 with the body `unsupported_protocol_version`, with or without an earlier `initialize`, and a request that names a version for itself in its metadata is held to the same one. `server/discover` advertises `2025-11-25` alone. A request without the header is still answered.
+
+Successful Tool calls return a `rocketmq-mcp.v2` envelope with `request_id`, cluster, RFC 3339 observation time, freshness, cache status, partial status, warnings, and typed data. The envelope is sanitized and held to the row and byte bounds once, and the text block that mirrors it is written from that processed value, so the two always agree. The list Tools take `response_format`: `detailed` (default) returns every field of each item, `concise` only the fields that name it. Correctable input and backend failures return Tool execution errors with a stable code, retryability, suggestions, and the request identifier.
 
 Resource-backed Tool calls return a ResourceLink only when the selected target has one canonical, safely representable Resource URI. A target accepted by the existing Tool contract but not representable as a Resource keeps the Tool's normal success/error and data semantics; only the ResourceLink is omitted, while genuinely sensitive target values remain sanitized. Tool and Resource requests share the application-level `QueryFacade`, bounded TTL cache, and singleflight coordination, so an identical query can be replayed without starting a second admin session while its entry is fresh. Each verified request selects one of two closed query visibility classes: read-only HTTP principals and local read-only stdio profiles use `standard`, while principals or local profiles with diagnosis or planning access use `sensitive`. Requests share query state within a class, but ordinary cache entries, snapshots, singleflight work, and continuation cursors never cross classes.
 Both surfaces pass through the same authorization, audit, redaction, row-bound, byte-bound, and stable-error pipeline. Arrays are bounded to 1,000 rows, structured output to 1 MiB, and truncation is reported with `partial = true` and the stable `output_rows_truncated` warning.
@@ -128,7 +131,13 @@ Important fields:
   variable references used instead of a file. Inline credential values and mixed file/environment sources are rejected.
 - `security.permissions_file`: executable role, tool, and cluster policy. Claims roles and `rocketmq_clusters` are intersected with this policy.
 - `security.max_concurrent_requests_per_cluster`: bounded concurrent Tool and Resource work per configured cluster.
-- `security.rate_limit_per_minute`: per-principal, per-cluster, per-operation limit.
+  A call that finds no free permit fails with `concurrency_limited`.
+- `security.rate_limit_per_minute`: per-principal, per-cluster, per-operation budget. It holds one minute of
+  calls and refills evenly, so a caller that used it up gets one call back every `60 / rate_limit_per_minute`
+  seconds. A refused Tool call fails with `rate_limited` and names the wait in `retry_after_ms`.
+- `security.http_rate_limit_per_minute`: optional per-principal budget of HTTP requests, whatever they ask for.
+  It is counted apart from the budget of a single operation and defaults to ten times
+  `rate_limit_per_minute`. A refused request gets HTTP `429` with a `Retry-After` header in whole seconds.
 - `security.pseudonym_key_env`: optional name of an environment variable that holds the key for client and message
   pseudonyms, 32 to 1024 bytes after surrounding whitespace is removed (for example the output of
   `openssl rand -hex 32`). Replicas that share the key return the same pseudonym for the same identifier. Without it
@@ -139,9 +148,22 @@ Important fields:
 - `audit.max_record_bytes`: maximum serialized NDJSON record size after redaction and deterministic field bounds.
 - `audit.queue_max_bytes`: maximum bytes retained by the writer queue. Record-count and byte admission are enforced
   independently with non-blocking `try` semantics.
+- `audit.max_file_bytes`: size at which the `file` sink seals the audit file, 64 MiB by default. The sink keeps the
+  file open. A record that would make the file larger moves it to `<path>.000001`, `<path>.000002`, and so on, and
+  starts a new file under `audit.path`. A record is never split, and the server never replaces or deletes a sealed
+  file, so removing old files is for the operator. `0` keeps one file, whatever its size. When something else moves
+  the file away or empties it, such as a log shipper, the next record starts a new file under `audit.path`.
 - `cache.enabled`: enables or bypasses the shared query cache.
 - `cache.max_entries`: maximum number of in-memory entries; it must be greater than zero when caching is enabled.
 - `cache.*_ttl_ms`: per-query-family freshness windows for overview, topic, broker, and consumer-lag data.
+  `cache.broker_config_ttl_ms`, `cache.message_metadata_ttl_ms`, and `cache.proxy_state_ttl_ms` are optional and
+  give the Broker configuration summary, message metadata, and Proxy drain state a window of their own; each
+  defaults to `cache.broker_metrics_ttl_ms`.
+- `cache.stale_if_error_ms`: how long a result that is no longer current still answers when its source is
+  unavailable or does not answer in time. Such a result carries the warning `stale_cache_value`, reports
+  `cache_status = hit`, and states its real age in `freshness_ms`. `0`, the default, never serves one; the maximum
+  is 300000. A paged result is served this way only for the same request and only while the server still keeps it
+  for its cursors (`cache.cursor_snapshot_ttl_ms`).
 - `diagnosis.consumer_lag_policy_profile`: server-owned policy identifier reported with each diagnosis.
 - `diagnosis.consumer_lag_threshold`: backlog, in messages, up to which a Consumer Group is healthy. Default 1000.
 - `diagnosis.consume_delay_threshold_ms`: how far behind production a group may be. A larger backlog is graded by its size and by this delay; below it, the backlog is only `low`. Default 300000.
@@ -169,10 +191,18 @@ headers or tokens in a broadly readable ConfigMap; use an access-restricted,
 secret-mounted configuration file when headers are required. Raw headers,
 resource attributes, and collector endpoints are not written to startup logs.
 
-Cache keys include the schema version, the stable `standard` or `sensitive` visibility name, query kind, resolved cluster, and normalized query parameters. The shared query state never retains a principal identifier, tenant, role, scope, client identifier, or bearer token. Failures are not cached. Concurrent misses for the same class and key are coalesced, and `cache_status` reports `miss`, `hit`, or `bypass`. Embedders can call `McpApp::invalidate_cache()` to clear all entries explicitly. Cumulative hit, miss, bypass, eviction, invalidation, and coalesced-waiter counters are emitted at trace level after Tool and Resource requests.
+Cache keys include the schema version, the stable `standard` or `sensitive` visibility name, query kind, resolved cluster, and normalized query parameters. The shared query state never retains a principal identifier, tenant, role, scope, client identifier, or bearer token. Concurrent misses for the same class and key are coalesced: one request reads the source, and the others get its result or its failure. A `source_unavailable` failure also answers identical requests for up to one second, so a cluster that is down is not asked again by every call; no other failure is kept. The Topic and Consumer Group names of a cluster are read once per visibility class while they are current, and every filter and page size is selected from them in memory. `cache_status` reports `miss`, `hit`, or `bypass`. Embedders can call `McpApp::invalidate_cache()` to clear all entries explicitly. Cumulative hit, miss, bypass, eviction, invalidation, and coalesced-waiter counters are emitted at trace level after Tool and Resource requests.
 
-Audit records use `schema_version = 1`, redact sensitive assignments and control characters before admission, and
-bound every variable-length field. Shutdown closes admission, drains accepted records in FIFO order, flushes the sink,
+Audit records use `schema_version = 2`, redact sensitive assignments and control characters before admission, and
+bound every variable-length field. Version 2 adds one optional field to version 1, `target`: the Topic, Consumer
+Group, producer group, Broker, Proxy, and Controller names that a Tool call or a Resource read asked about, for
+example `{"topic":"orders","consumer_group":"billing","broker_names":["broker-a"]}`. Only a value that is a valid
+name of its kind is written, with at most eight Broker and eight Controller names (`"truncated":true` marks a longer
+list), and never a message identifier, a key, a filter, or a completion prefix. A call that named nothing leaves a
+record without `target`, which has exactly the fields of version 1. One file may hold records of both versions, and
+a reader of version 1 reads version 2 by ignoring `target`. A record that would exceed `audit.max_record_bytes`
+with its target is written without it. The `tracing` sink logs the same object as the text of one field,
+`audit_target`. Shutdown closes admission, drains accepted records in FIFO order, flushes the sink,
 and then shuts down runtime tasks against the same absolute deadline. Embedders that need machine-readable lifecycle
 evidence can call `McpApp::shutdown_with_deadline()` and inspect `McpShutdownReport`; `McpApp::shutdown()` retains the
 ten-second compatibility wrapper and logs unhealthy reports.
@@ -313,7 +343,7 @@ For HTTP-capable clients, use the Streamable HTTPS URL `https://127.0.0.1:8089/m
 
 ## Tools
 
-The default feature set exposes 30 Tools:
+The default feature set exposes 36 Tools:
 
 - `rocketmq_list_clusters`: list the logical clusters the caller may query, with their Proxy and Controller aliases. It is the one Tool that takes no `cluster`.
 - `rocketmq_list_brokers`: list the Broker instances of one cluster without counting its Topics and Consumer Groups.
@@ -345,16 +375,28 @@ The default feature set exposes 30 Tools:
 - `rocketmq_get_ha_status`: get bounded HA and optional Controller synchronization observations.
 - `rocketmq_get_controller_metadata`: get bounded metadata for configured logical Controllers.
 - `rocketmq_get_nameserver_config_summary`: get fixed allowlisted NameServer configuration summaries.
+- `rocketmq_list_topic_consumers`: list a cursor-paginated page of the Consumer Groups that consume one Topic, joined over every Broker that hosts it.
+- `rocketmq_get_consumer_running_info`: ask one connected consumer client, named by its pseudonym, for its subscriptions, rates, and the queues it holds; never requests a thread dump.
+- `rocketmq_get_dlq_summary`: count the dead letters of one Consumer Group and report when the newest one was stored, in total and for each Broker; never returns a message.
+- `rocketmq_query_message_trace`: read the trace records clients wrote about one message; never returns a body, and returns client hosts, tags, and keys only with the diagnose scope, the hosts and keys as pseudonyms.
+- `rocketmq_get_lite_broker_info`: get the Lite Topic limits, counters, and bounded Lite Topic and bound-group lists of one Broker.
+- `rocketmq_find_messages_by_key`: find the messages of one Topic that carry an exact key in a window of at most 24 hours, at most 32 and by pseudonyms only; needs the scope `rocketmq:message-search`.
 
 The five diagnosis Tools return one report shape with versioned Evidence Snapshots and stable rule identifiers. Each reads its evidence in one admin session, and a read that fails makes the report partial instead of failing the diagnosis. Thresholds belong to the server: historical `time_range` and caller-controlled thresholds are intentionally unavailable until a historical metrics source exists. Naming a message in `rocketmq_diagnose_message_delivery` also needs the permission for `rocketmq_get_message_metadata`.
 
-The all-features surface has 35 Tools. Its five additional `change-planning` Tools never mutate the cluster. They are deprecated and will be removed together with the feature: plan a change with a dry run of the control MCP server (`rocketmq-mcp-control`), which reads the state the change would be applied to and uses the arguments the execution takes. Each description names its replacement, and a server that has the feature compiled and `security.allow_change_planning = true` logs a deprecation warning at startup.
+The all-features surface has 42 Tools: the 36 above, five `change-planning` Tools, and one `security-admin` Tool.
+
+The five `change-planning` Tools never mutate the cluster. They are deprecated and will be removed together with the feature: plan a change with a dry run of the control MCP server (`rocketmq-mcp-control`), which reads the state the change would be applied to and uses the arguments the execution takes. Each description names its replacement, and a server that has the feature compiled and `security.allow_change_planning = true` logs a deprecation warning at startup.
 
 - `rocketmq_plan_create_topic`
 - `rocketmq_plan_update_topic_config`
 - `rocketmq_plan_update_topic_permissions`
 - `rocketmq_plan_update_broker_config`
 - `rocketmq_plan_reset_consumer_offset`
+
+The `security-admin` feature adds one read-only Tool:
+
+- `rocketmq_list_acl_users`: list the ACL users that each Broker of a cluster holds, with their type and status, at most 500 rows; never returns a password or an access rule; needs the scope `rocketmq:security-admin`.
 
 ## Resources
 
@@ -423,9 +465,14 @@ Broker. Other arguments, such as `message_id`, `check_level`, `filter`, `limit`,
 - HTTP authentication configuration error: set the referenced token environment variable for `development-token`. For `oauth-jwt`, configure the HTTPS issuer/JWKS endpoint, audience and scopes; `jwt_key_env` is compatibility-only and does not provide an OAuth key fallback.
 - HTTP `401`: check the access-token signature, expiry, issuer, audience, and `Authorization: Bearer <token>` header.
 - HTTP `403`: check token scopes, role claims, `rocketmq_clusters`, `permissions.example.toml`, and browser origin policy.
-- HTTP `429`: raise `security.rate_limit_per_minute` only after reviewing client retry behavior.
+- HTTP `429`: the principal used up `security.http_rate_limit_per_minute`; `Retry-After` says when the next
+  request is due. Raise the budget only after reviewing client retry behavior. A Tool error `rate_limited` is
+  the budget of that one Tool instead (`security.rate_limit_per_minute`), and `concurrency_limited` is
+  `security.max_concurrent_requests_per_cluster`.
 - Empty or invalid stdio responses: ensure no wrapper script writes logs or banners to stdout.
 - No cluster data: verify `clusters[].namesrv_addr`, local network access, and RocketMQ namesrv availability.
 - Audit file errors: create the audit directory or use `audit.sink = "memory"` for local tests. Check accepted/written,
   count-capacity drops, byte-capacity drops, oversized records, sink/flush failures, and pending records/bytes before
-  changing either queue limit.
+  changing either queue limit. The warning `audit file could not be sealed` means that the full file could not be
+  moved to its sealed name: records are still written, and the file grows past `audit.max_file_bytes` until the
+  directory accepts the move.

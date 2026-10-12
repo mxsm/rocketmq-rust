@@ -80,7 +80,7 @@ impl MutationToolRequest {
         }
     }
 
-    fn dry_run(&self) -> bool {
+    pub(crate) fn dry_run(&self) -> bool {
         match self {
             Self::Topic(args) => args.dry_run,
             Self::ConsumerGroup(args) => args.dry_run,
@@ -116,6 +116,20 @@ impl MutationToolRequest {
             Self::ProxyDrainBegin(args) | Self::ProxyDrainCancel(args) => args.reason.as_deref(),
             Self::BrokerLogFilterSet(args) => args.reason.as_deref(),
             Self::BrokerLogFilterRestore(args) => args.reason.as_deref(),
+        }
+    }
+
+    /// The plan that an execution expects to find, when the caller named one.
+    pub(crate) fn expected_plan_digest(&self) -> Option<&str> {
+        match self {
+            Self::Topic(args) => args.expected_plan_digest.as_deref(),
+            Self::ConsumerGroup(args) => args.expected_plan_digest.as_deref(),
+            Self::ConsumerOffset(args) => args.expected_plan_digest.as_deref(),
+            Self::BrokerConfig(args) => args.expected_plan_digest.as_deref(),
+            Self::ConsumerRequestMode(args) => args.expected_plan_digest.as_deref(),
+            Self::ProxyDrainBegin(args) | Self::ProxyDrainCancel(args) => args.expected_plan_digest.as_deref(),
+            Self::BrokerLogFilterSet(args) => args.expected_plan_digest.as_deref(),
+            Self::BrokerLogFilterRestore(args) => args.expected_plan_digest.as_deref(),
         }
     }
 
@@ -200,9 +214,10 @@ impl MutationToolRequest {
     }
 
     /// Digests what this call asks for: its arguments with the Broker names sorted and without
-    /// `reason`, `request_key`, `dry_run` and `confirm`, which say how and why, not what. The
-    /// identifier of a drain or of a log filter is part of what is asked, so it is digested and
-    /// never recorded.
+    /// `reason`, `request_key`, `dry_run`, `confirm` and `expected_plan_digest`, which say how and
+    /// why, not what. The identifier of a drain or of a log filter is part of what is asked, so it
+    /// is digested and never recorded. A dry run and the execution of its plan therefore ask for
+    /// the same thing.
     fn requested_digest(&self) -> Result<String, ControlError> {
         let mut canonical = self.clone();
         match &mut canonical {
@@ -218,7 +233,13 @@ impl MutationToolRequest {
         }
         let mut requested = serde_json::to_value(&canonical).map_err(|_| ControlError::invalid_argument())?;
         if let Some(arguments) = requested.as_object_mut() {
-            for excluded in ["reason", "request_key", "dry_run", "confirm"] {
+            for excluded in [
+                "reason",
+                "request_key",
+                "dry_run",
+                "confirm",
+                tools::EXPECTED_PLAN_DIGEST_ARGUMENT,
+            ] {
                 arguments.remove(excluded);
             }
         }
@@ -297,6 +318,8 @@ impl MutationToolResponse {
 pub(crate) struct InvokedMutation {
     pub(crate) invocation_id: AuditInvocationId,
     pub(crate) response: MutationToolResponse,
+    /// The digest of the plan that `response` reports, when the call was a dry run.
+    pub(crate) plan_digest: Option<String>,
 }
 
 pub(crate) trait MutationToolSession: Send {
@@ -381,23 +404,34 @@ impl ToolRuntime {
         cancellation: CancellationToken,
     ) -> Result<InvokedMutation, ControlError> {
         let started = tokio::time::Instant::now();
+        let rejected = |error: &ControlError| {
+            self.signals.call_rejected(
+                crate::telemetry::tool_name(authorized.operation()),
+                error.code(),
+                started.elapsed(),
+            );
+        };
+        // A dry run answers with the digest of its plan, which covers what the request asks for.
+        let planned_request = request
+            .dry_run()
+            .then(|| request.requested_digest())
+            .transpose()
+            .inspect_err(&rejected)?;
         let (invocation_id, receiver) = self
             .start_supervised(principal, authorized, request, cancellation, started)
             .await
-            .inspect_err(|error| {
-                self.signals.call_rejected(
-                    crate::telemetry::tool_name(authorized.operation()),
-                    error.code(),
-                    started.elapsed(),
-                );
-            })?;
+            .inspect_err(&rejected)?;
         let response = receiver.await.map_err(|_| {
             self.signals.audit_failed(AuditStage::Supervisor);
             ControlError::audit_unavailable()
         })??;
+        let plan_digest = planned_request
+            .map(|requested_digest| plan_binding::plan_digest(&requested_digest, &response))
+            .transpose()?;
         Ok(InvokedMutation {
             invocation_id,
             response,
+            plan_digest,
         })
     }
 
@@ -619,6 +653,7 @@ pub(crate) mod admin_session;
 mod admission;
 mod execution;
 mod idempotency;
+mod plan_binding;
 mod remaining;
 mod result_lookup;
 

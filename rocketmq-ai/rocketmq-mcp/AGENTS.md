@@ -14,11 +14,20 @@ This file applies to `rocketmq-ai/rocketmq-mcp/`.
 - OAuth JWKS retrieval, caching, and key selection come from `../rocketmq-mcp-auth/`, an optional dependency of
   `streamable-http`. This server states its own limits in `src/guard/jwks.rs`; a private JWKS issuer stays
   supported, so do not restrict its outbound addresses without a separate decision.
+- The server answers one MCP protocol revision, `MCP_PROTOCOL_VERSION`, which the HTTP build takes from
+  `../rocketmq-mcp-auth/`. Keep `initialize`, `supported_protocol_versions()`, and the `MCP-Protocol-Version`
+  header check of the HTTP transport on that set, and the header check after authentication. Answering another
+  revision, or negotiating one in `initialize`, is a decision to take together with the control server and the
+  SRE Connector.
 - Tool and Resource output must use the shared authorization, audit, correlation, sanitization, row, and byte policy.
   Argument completion is an output surface too: it needs the permission of the listing Tool that returns the same
   names, and it is rate limited, audited, and sanitized.
 - A Tool that looks up a message by its identifier also needs the permission for `rocketmq_get_message_metadata`.
   The identifier is redacted before audit hashing, and results name a message by its pseudonyms only.
+- An audit record says what a call asked about only through `AuditTarget`, which holds Topic, Consumer Group,
+  producer group, Broker, Proxy, and Controller names that passed the check of their kind. Never record a message
+  identifier, a key, a filter, or a completion prefix. The file sink seals a full audit file as
+  `<path>.<six-digit number>` and never replaces or deletes a sealed file.
 - Prefer native async fn methods in traits. #[allow(async_fn_in_trait)] is permitted when required by the lint for an intentional public async trait API; do not add #[async_trait].
 
 ## Development validation

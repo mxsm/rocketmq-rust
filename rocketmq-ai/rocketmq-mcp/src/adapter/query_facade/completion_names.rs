@@ -30,10 +30,10 @@ where
     /// Returns the names of `class` in one cluster that can match `prefix`, sorted and distinct.
     ///
     /// The names come from the inventory snapshot of the matching listing Tool, or from the Broker
-    /// list, so completing while typing does not read a source again. An inventory too large to
-    /// keep whole is read with `prefix` as its filter instead; without a prefix it has no
-    /// candidates. The result may hold names that merely contain `prefix`: the caller keeps the
-    /// ones that start with it.
+    /// list, so completing while typing does not read a source again. An inventory too large for
+    /// one snapshot is narrowed with `prefix` as its filter instead; without a prefix it has no
+    /// candidates. Inventory names are the ones that start with `prefix`, ignoring ASCII case.
+    /// Broker names are all returned, and the caller keeps the ones that start with it.
     ///
     /// # Errors
     ///
@@ -78,18 +78,26 @@ where
     }
 }
 
-/// Reads an inventory whole, or narrowed by `prefix` when the whole of it is too large to keep.
+/// Takes an inventory whole, or narrowed by `prefix` when the whole is too large for a snapshot.
 async fn inventory_names<'a, Load, LoadFuture>(prefix: &'a str, load: Load) -> Result<Vec<String>, ToolFailure>
 where
     Load: Fn(Option<&'a str>) -> LoadFuture,
     LoadFuture: std::future::Future<Output = Result<SnapshotView<Vec<String>>, ToolFailure>>,
 {
-    match load(None).await {
-        Ok(snapshot) => Ok(snapshot.payload.data),
+    let snapshot = match load(None).await {
+        Ok(snapshot) => snapshot,
         Err(ToolFailure::Rejected(ToolRejection::ResultTooLarge)) if !prefix.trim().is_empty() => {
-            Ok(load(Some(prefix)).await?.payload.data)
+            load(Some(prefix)).await?
         }
-        Err(ToolFailure::Rejected(ToolRejection::ResultTooLarge)) => Ok(Vec::new()),
-        Err(error) => Err(error),
-    }
+        Err(ToolFailure::Rejected(ToolRejection::ResultTooLarge)) => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    // The snapshot is shared with the listing Tool, so only the candidates are copied out of it.
+    Ok(snapshot
+        .payload
+        .data
+        .iter()
+        .filter(|name| crate::completion::starts_with_ignore_ascii_case(name, prefix))
+        .cloned()
+        .collect())
 }

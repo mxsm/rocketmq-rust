@@ -98,7 +98,15 @@ impl GetMutationResultArgs {
     /// Returns `invalid_argument` otherwise.
     pub fn validate(&self) -> Result<(), ControlError> {
         // A lookup plans nothing and writes nothing, so it is validated like a dry run.
-        validate_common(&self.schema_version, true, false, None, self.request_key.as_deref())?;
+        // A lookup changes nothing, so it has no plan to name.
+        validate_common(
+            &self.schema_version,
+            true,
+            false,
+            None,
+            self.request_key.as_deref(),
+            None,
+        )?;
         if self.invocation_id == Some(0) || (self.invocation_id.is_none() && self.request_key.is_none()) {
             return Err(ControlError::invalid_argument());
         }

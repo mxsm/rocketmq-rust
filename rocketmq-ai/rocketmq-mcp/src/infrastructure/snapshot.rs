@@ -105,6 +105,15 @@ impl<T: RetainedSize> RetainedSize for Vec<T> {
     }
 }
 
+impl<T: RetainedSize> RetainedSize for Arc<T> {
+    /// Charges the shared value in full to this holder, which can only overstate what is kept.
+    fn retained_heap_size(&self) -> usize {
+        ARC_ALLOCATION_OVERHEAD
+            .saturating_add(size_of::<T>())
+            .saturating_add((**self).retained_heap_size())
+    }
+}
+
 impl<T: RetainedSize> RetainedSize for Option<T> {
     fn retained_heap_size(&self) -> usize {
         self.as_ref().map_or(0, RetainedSize::retained_heap_size)
@@ -489,8 +498,10 @@ pub(crate) enum SnapshotKind {
     ConsumerGroupInventory,
     TopicRoute,
     TopicStats,
+    TopicConsumers,
     ConsumerLag,
     ConsumerProgress,
+    ConsumerRunningInfo,
     ConsumerConnections,
     ProducerConnections,
 }
@@ -502,8 +513,10 @@ impl SnapshotKind {
             Self::ConsumerGroupInventory => "consumer_group_inventory",
             Self::TopicRoute => "topic_route",
             Self::TopicStats => "topic_stats",
+            Self::TopicConsumers => "topic_consumers",
             Self::ConsumerLag => "consumer_lag",
             Self::ConsumerProgress => "consumer_progress",
+            Self::ConsumerRunningInfo => "consumer_running_info",
             Self::ConsumerConnections => "consumer_connections",
             Self::ProducerConnections => "producer_connections",
         }
@@ -682,6 +695,9 @@ struct SnapshotStoreInner {
     capacity: usize,
     per_scope_capacity: usize,
     limits: SnapshotLimits,
+    /// How long after a snapshot stopped being current it still answers a first page whose load
+    /// fails. Zero is never.
+    stale_if_error: Duration,
     generation: AtomicU64,
     sequence: AtomicU64,
     flight_sequence: AtomicU64,
@@ -706,6 +722,14 @@ struct StoreState {
 #[derive(Default)]
 struct SnapshotState {
     entries: HashMap<Arc<str>, SnapshotEntry>,
+    /// The entry that answers a key while it is reusable, by the hash of the key.
+    ///
+    /// A reusable entry is created only by a flight, and a flight starts only when its key has
+    /// no reusable entry. A key therefore has at most one, the last one loaded for it.
+    reusable: HashMap<u64, Arc<str>>,
+    /// No entry expires before this instant. `None` when that is not known and the next purge
+    /// has to look at every entry.
+    purge_not_before: Option<Instant>,
     insertion_order: VecDeque<Arc<str>>,
     tombstones: HashMap<Arc<str>, TombstoneReason>,
     tombstone_order: VecDeque<Arc<str>>,
@@ -767,6 +791,7 @@ enum BeginFlight<T> {
 
 struct SnapshotEntry {
     key: SnapshotKey,
+    key_hash: u64,
     value: Arc<dyn Any + Send + Sync>,
     observed_at: String,
     inserted_at: Instant,
@@ -783,13 +808,17 @@ enum TombstoneReason {
     Invalidated,
 }
 
+/// One reader's view of a retained snapshot.
+///
+/// The payload is shared with the store and with every other view of the snapshot. Taking a view
+/// copies none of it, however large the snapshot is.
 #[derive(Debug, Clone)]
 pub(crate) struct SnapshotView<T> {
     id: Arc<str>,
     request: SnapshotRequest,
     generation: u64,
     position: usize,
-    pub(crate) payload: QueryPayload<T>,
+    pub(crate) payload: Arc<QueryPayload<T>>,
     pub(crate) observed_at: String,
     pub(crate) freshness_ms: u64,
     pub(crate) cache_status: CacheStatus,
@@ -801,18 +830,51 @@ impl<T> SnapshotView<T> {
     }
 }
 
+/// A first page that has to be loaded: what `begin_load` resolved for `finish_load`.
+struct PendingLoad {
+    key: SnapshotKey,
+    /// The flight this caller leads. `None` when no snapshot is kept current for its request.
+    ticket: Option<FlightTicket>,
+    cursor_ttl: Duration,
+    response_cache_ttl: Option<Duration>,
+}
+
+enum BegunLoad<T> {
+    Ready(SnapshotView<T>),
+    Pending(PendingLoad),
+}
+
 impl SnapshotStore {
     pub(crate) fn new(capacity: usize) -> Self {
         Self::with_limits(capacity, SnapshotLimits::default())
     }
 
+    /// Returns an empty store with the same limits that answers a first page whose load fails
+    /// with the snapshot of the same request, for `window` after that stopped being current and
+    /// while the store still retains it. A zero `window` turns that off.
+    ///
+    /// Apply this before the store is used: snapshots and counters do not carry over.
+    pub(crate) fn with_stale_if_error(self, window: Duration) -> Self {
+        Self::build(self.inner.capacity, self.inner.limits, window)
+    }
+
+    /// The largest number of entries one inventory snapshot may hold.
+    pub(crate) fn max_snapshot_entries(&self) -> usize {
+        self.inner.limits.max_entries
+    }
+
     fn with_limits(capacity: usize, limits: SnapshotLimits) -> Self {
+        Self::build(capacity, limits, Duration::ZERO)
+    }
+
+    fn build(capacity: usize, limits: SnapshotLimits, stale_if_error: Duration) -> Self {
         let capacity = capacity.max(1);
         Self {
             inner: Arc::new(SnapshotStoreInner {
                 capacity,
                 per_scope_capacity: (capacity / 4).max(1),
                 limits,
+                stale_if_error,
                 generation: AtomicU64::new(0),
                 sequence: AtomicU64::new(0),
                 flight_sequence: AtomicU64::new(0),
@@ -839,8 +901,34 @@ impl SnapshotStore {
         Load: FnOnce() -> LoadFuture,
         LoadFuture: Future<Output = Result<QueryPayload<T>, ToolFailure>>,
     {
+        let pending = match self
+            .begin_load(request, cursor, cursor_ttl, response_cache_ttl, cancellation)
+            .await?
+        {
+            BegunLoad::Ready(view) => return Ok(view),
+            BegunLoad::Pending(pending) => pending,
+        };
+        match load().await {
+            Ok(payload) => self.finish_load(pending, payload, None, weight),
+            Err(failure) => self.fail_load(pending, failure),
+        }
+    }
+
+    /// Resolves a request that needs no load of its own: a cursor, a snapshot that is current,
+    /// or the outcome of a load another caller leads. Otherwise the caller has to load.
+    async fn begin_load<T>(
+        &self,
+        request: SnapshotRequest,
+        cursor: Option<&str>,
+        cursor_ttl: Duration,
+        response_cache_ttl: Option<Duration>,
+        cancellation: &CancellationToken,
+    ) -> Result<BegunLoad<T>, ToolFailure>
+    where
+        T: Clone + Send + Sync + 'static,
+    {
         if let Some(cursor) = cursor {
-            return self.resolve_cursor(&request, cursor).map_err(Into::into);
+            return Ok(BegunLoad::Ready(self.resolve_cursor(&request, cursor)?));
         }
 
         let cursor_ttl = cursor_ttl.min(self.inner.limits.max_lifetime);
@@ -851,17 +939,17 @@ impl SnapshotStore {
             .filter(|ttl| !ttl.is_zero())
             .map(|ttl| ttl.min(cursor_ttl));
         let generation = self.inner.generation.load(Ordering::Acquire);
-        let key = SnapshotKey {
-            request: request.clone(),
-            generation,
-        };
+        let key = SnapshotKey { request, generation };
         let ticket = if response_cache_ttl.is_some() {
             match self.begin_flight::<T>(&key)? {
-                BeginFlight::Cached(view) => return Ok(view),
+                BeginFlight::Cached(view) => return Ok(BegunLoad::Ready(view)),
                 BeginFlight::Leader(ticket) => Some(ticket),
                 BeginFlight::Waiter(ticket) => {
                     self.inner.metrics.coalesced_waiters.fetch_add(1, Ordering::Relaxed);
-                    return ticket.wait::<T>(&key, cancellation).await;
+                    return match ticket.wait::<T>(&key, cancellation).await {
+                        Ok(view) => Ok(BegunLoad::Ready(view)),
+                        Err(failure) => self.stale_or(&key, failure).map(BegunLoad::Ready),
+                    };
                 }
             }
         } else {
@@ -871,16 +959,46 @@ impl SnapshotStore {
         if cancellation.is_cancelled() {
             return Err(ToolFailure::Rejected(ToolRejection::Cancelled));
         }
+        Ok(BegunLoad::Pending(PendingLoad {
+            key,
+            ticket,
+            cursor_ttl,
+            response_cache_ttl,
+        }))
+    }
 
-        let payload = match load().await {
-            Ok(payload) => payload,
-            Err(error) => {
-                if let Some(ticket) = ticket.as_ref() {
-                    self.finish_failure(ticket, error.clone());
-                }
-                return Err(error);
-            }
-        };
+    /// Ends a load that failed. Its waiters get the failure, and so does the caller, unless the
+    /// snapshot that was current before may answer in its place.
+    fn fail_load<T>(&self, pending: PendingLoad, failure: ToolFailure) -> Result<SnapshotView<T>, ToolFailure>
+    where
+        T: Clone + Send + Sync + 'static,
+    {
+        if let Some(ticket) = pending.ticket.as_ref() {
+            self.finish_failure(ticket, failure.clone());
+        }
+        self.stale_or(&pending.key, failure)
+    }
+
+    /// Ends a load that produced `payload`: holds it to the budgets, retains it, and hands it to
+    /// the waiters of the load.
+    ///
+    /// `origin` is set for a payload derived from a value that was observed earlier.
+    fn finish_load<T>(
+        &self,
+        pending: PendingLoad,
+        payload: QueryPayload<T>,
+        origin: Option<SnapshotOrigin>,
+        weight: impl FnOnce(&T) -> SnapshotWeight,
+    ) -> Result<SnapshotView<T>, ToolFailure>
+    where
+        T: Clone + RetainedSize + Send + Sync + 'static,
+    {
+        let PendingLoad {
+            key,
+            ticket,
+            cursor_ttl,
+            response_cache_ttl,
+        } = pending;
         let snapshot_weight = weight(&payload.data);
         let budget_error = if snapshot_weight.entries > self.inner.limits.max_entries {
             Some(SnapshotRejection::EntryBudgetExceeded)
@@ -896,7 +1014,10 @@ impl SnapshotStore {
             }
             return Err(tool_error);
         }
-        let observed_at = observed_at();
+        let (observed_at, age, derived_status) = match origin {
+            Some(origin) => (origin.observed_at, origin.age, Some(origin.cache_status)),
+            None => (observed_at(), Duration::ZERO, None),
+        };
         let id = self.snapshot_id(&key);
         let bytes = retained_entry_bytes(&payload, &key, &id, &observed_at);
         if bytes > self.inner.limits.max_snapshot_bytes
@@ -909,12 +1030,17 @@ impl SnapshotStore {
             }
             return Err(error);
         }
-        let inserted_at = Instant::now();
+        // A derived payload is as old as what it comes from, so the snapshot stops being current
+        // when one read then would. Its cursors still get their whole lifetime from now.
+        let now = Instant::now();
+        let inserted_at = now.checked_sub(age).unwrap_or(now);
+        let cursor_ttl = cursor_ttl.saturating_add(age);
+        let payload = Arc::new(payload);
         if let Some(ticket) = ticket.as_ref() {
             if let Err(error) = self.finish_success(
                 ticket,
                 id.clone(),
-                Arc::new(payload.clone()),
+                payload.clone(),
                 observed_at.clone(),
                 inserted_at,
                 cursor_ttl,
@@ -923,34 +1049,38 @@ impl SnapshotStore {
             ) {
                 return Err(error.into());
             }
-            self.inner.metrics.misses.fetch_add(1, Ordering::Relaxed);
+            if derived_status.is_none() {
+                self.inner.metrics.misses.fetch_add(1, Ordering::Relaxed);
+            }
         } else {
             self.insert(
                 id.clone(),
                 key.clone(),
-                Arc::new(payload.clone()),
+                payload.clone(),
                 observed_at.clone(),
                 inserted_at,
                 cursor_ttl,
                 response_cache_ttl,
                 bytes,
-                generation,
+                key.generation,
             )?;
-            self.inner.metrics.bypasses.fetch_add(1, Ordering::Relaxed);
+            if derived_status.is_none() {
+                self.inner.metrics.bypasses.fetch_add(1, Ordering::Relaxed);
+            }
         }
-        let cache_status = if response_cache_ttl.is_some() {
+        let cache_status = derived_status.unwrap_or(if response_cache_ttl.is_some() {
             CacheStatus::Miss
         } else {
             CacheStatus::Bypass
-        };
+        });
         Ok(SnapshotView {
             id,
-            request,
-            generation,
+            request: key.request,
+            generation: key.generation,
             position: 0,
             payload,
             observed_at,
-            freshness_ms: 0,
+            freshness_ms: age.as_millis().try_into().unwrap_or(u64::MAX),
             cache_status,
         })
     }
@@ -1041,15 +1171,14 @@ impl SnapshotStore {
     {
         purge_expired(state, self.tombstone_capacity());
         let now = Instant::now();
-        let id = state.insertion_order.iter().rev().find_map(|id| {
-            state
-                .entries
-                .get(id)
-                .filter(|entry| entry.key == *key && entry.reusable_until.is_some_and(|until| until > now))
-                .map(|_| id.clone())
-        })?;
-        let entry = state.entries.get(&id)?;
-        let payload = entry.value.downcast_ref::<QueryPayload<T>>()?.clone();
+        let id = state.reusable.get(&self.key_hash(key))?.clone();
+        // Two keys with one hash share an index slot. The entry in it answers only its own key,
+        // so the other key is loaded again instead of being answered with foreign data.
+        let entry = state
+            .entries
+            .get(&id)
+            .filter(|entry| entry.key == *key && entry.reusable_until.is_some_and(|until| until > now))?;
+        let payload = Arc::downcast::<QueryPayload<T>>(Arc::clone(&entry.value)).ok()?;
         let freshness_ms = Instant::now()
             .saturating_duration_since(entry.inserted_at)
             .as_millis()
@@ -1100,11 +1229,8 @@ impl SnapshotStore {
             return Err(SnapshotRejection::InvalidCursor);
         }
         validate_request(request, &entry.key.request)?;
-        let payload = entry
-            .value
-            .downcast_ref::<QueryPayload<T>>()
-            .ok_or(SnapshotRejection::ContextMismatch)?
-            .clone();
+        let payload = Arc::downcast::<QueryPayload<T>>(Arc::clone(&entry.value))
+            .map_err(|_| SnapshotRejection::ContextMismatch)?;
         let freshness_ms = Instant::now()
             .saturating_duration_since(entry.inserted_at)
             .as_millis()
@@ -1216,12 +1342,13 @@ impl SnapshotStore {
         {
             return Err(SnapshotRejection::ByteBudgetExceeded);
         }
-        snapshots.insertion_order.push_back(id.clone());
-        snapshots.total_bytes = snapshots.total_bytes.saturating_add(bytes);
-        snapshots.entries.insert(
+        let key_hash = self.key_hash(&key);
+        admit_entry(
+            snapshots,
             id,
             SnapshotEntry {
                 key,
+                key_hash,
                 value,
                 observed_at,
                 inserted_at,
@@ -1232,6 +1359,10 @@ impl SnapshotStore {
             },
         );
         Ok(())
+    }
+
+    fn key_hash(&self, key: &SnapshotKey) -> u64 {
+        self.inner.primary_key.hash_one(key)
     }
 
     fn begin_flight<T>(&self, key: &SnapshotKey) -> Result<BeginFlight<T>, SnapshotRejection>
@@ -1519,12 +1650,13 @@ impl SnapshotStore {
         } else {
             remove_flight_record(flights, ticket.id);
         }
-        snapshots.insertion_order.push_back(id.clone());
-        snapshots.total_bytes = snapshots.total_bytes.saturating_add(entry_bytes);
-        snapshots.entries.insert(
+        let key_hash = self.key_hash(&key);
+        admit_entry(
+            snapshots,
             id,
             SnapshotEntry {
                 key,
+                key_hash,
                 value,
                 observed_at,
                 inserted_at,
@@ -1667,13 +1799,9 @@ impl FlightTicket {
                         let entry = store.snapshots.entries.get(id).ok_or_else(|| {
                             ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Internal(None))
                         })?;
-                        let payload = entry
-                            .value
-                            .downcast_ref::<QueryPayload<T>>()
-                            .ok_or_else(|| {
-                                ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Internal(None))
-                            })?
-                            .clone();
+                        let payload = Arc::downcast::<QueryPayload<T>>(Arc::clone(&entry.value)).map_err(|_| {
+                            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Internal(None))
+                        })?;
                         let freshness_ms = Instant::now()
                             .saturating_duration_since(entry.inserted_at)
                             .as_millis()
@@ -1840,6 +1968,8 @@ fn release_flight_record(inner: &SnapshotStoreInner, store: &mut StoreState, id:
         if let Some(entry) = store.snapshots.entries.get_mut(&id) {
             entry.pinned_by_flight = false;
         }
+        // A pinned entry is kept past its expiry, so the entry released here may be due now.
+        store.snapshots.purge_not_before = None;
         purge_expired(&mut store.snapshots, inner.capacity.saturating_mul(4).clamp(32, 4_096));
     }
 }
@@ -1872,8 +2002,25 @@ fn oldest_evictable(state: &SnapshotState) -> Option<Arc<str>> {
     })
 }
 
+/// Adds an entry that passed every budget check to the state and its indexes.
+fn admit_entry(state: &mut SnapshotState, id: Arc<str>, entry: SnapshotEntry) {
+    state.insertion_order.push_back(id.clone());
+    state.total_bytes = state.total_bytes.saturating_add(entry.bytes);
+    // An unknown bound stays unknown: the next purge looks at every entry and sets it.
+    state.purge_not_before = state
+        .purge_not_before
+        .map(|not_before| not_before.min(entry.expires_at));
+    if entry.reusable_until.is_some() {
+        state.reusable.insert(entry.key_hash, id.clone());
+    }
+    state.entries.insert(id, entry);
+}
+
 fn purge_expired(state: &mut SnapshotState, tombstone_capacity: usize) {
     let now = Instant::now();
+    if state.purge_not_before.is_some_and(|not_before| now < not_before) {
+        return;
+    }
     let expired = state
         .entries
         .iter()
@@ -1887,12 +2034,22 @@ fn purge_expired(state: &mut SnapshotState, tombstone_capacity: usize) {
     if removed_any {
         compact_state_containers(state);
     }
+    // An expired entry that a flight still pins keeps the bound in the past, so every purge
+    // looks again until the flight releases it.
+    state.purge_not_before = state.entries.values().map(|entry| entry.expires_at).min();
 }
 
 fn remove_entry(state: &mut SnapshotState, id: &str, tombstone: Option<TombstoneReason>, tombstone_capacity: usize) {
     if let Some(entry) = state.entries.remove(id) {
         state.insertion_order.retain(|candidate| candidate.as_ref() != id);
         state.total_bytes = state.total_bytes.saturating_sub(entry.bytes);
+        if state
+            .reusable
+            .get(&entry.key_hash)
+            .is_some_and(|indexed| indexed.as_ref() == id)
+        {
+            state.reusable.remove(&entry.key_hash);
+        }
     }
     if let Some(reason) = tombstone {
         let id: Arc<str> = Arc::from(id);
@@ -1937,6 +2094,7 @@ fn trim_tombstones_for_bytes(state: &mut SnapshotState, incoming: usize, max_tot
 
 fn compact_state_containers(state: &mut SnapshotState) {
     state.entries.shrink_to_fit();
+    state.reusable.shrink_to_fit();
     state.insertion_order.shrink_to_fit();
     state.tombstones.shrink_to_fit();
     state.tombstone_order.shrink_to_fit();
@@ -2027,6 +2185,12 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
         .fold(0u8, |difference, (left, right)| difference | (left ^ right))
         == 0
 }
+
+mod derived;
+mod stale;
+
+pub(crate) use derived::DerivedPayload;
+pub(crate) use derived::SnapshotOrigin;
 
 #[cfg(test)]
 mod tests {
@@ -2253,13 +2417,11 @@ mod tests {
             .await
             .unwrap();
         let cursor = store.page(&view, &view.payload.data).unwrap().next_cursor.unwrap();
-        store
-            .lock_state()
-            .snapshots
-            .entries
-            .get_mut(view.id.as_ref())
-            .unwrap()
-            .expires_at = Instant::now();
+        {
+            let mut state = store.lock_state();
+            state.snapshots.entries.get_mut(view.id.as_ref()).unwrap().expires_at = Instant::now();
+            state.snapshots.purge_not_before = None;
+        }
         let error = store
             .get_or_load(
                 request(SnapshotKind::TopicRoute, "a", 1),
@@ -2301,6 +2463,180 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code(), "cursor_expired");
+    }
+
+    async fn load_bytes(
+        store: &SnapshotStore,
+        cluster: &str,
+        cursor: Option<&str>,
+        cursor_ttl: Duration,
+        reuse_ttl: Duration,
+        loaded: Option<Vec<u8>>,
+    ) -> Result<SnapshotView<Vec<u8>>, ToolFailure> {
+        store
+            .get_or_load(
+                request(SnapshotKind::TopicInventory, cluster, 1),
+                cursor,
+                cursor_ttl,
+                Some(reuse_ttl),
+                |items: &Vec<u8>| SnapshotWeight::inventory(items.len()),
+                &CancellationToken::new(),
+                || async move { Ok(QueryPayload::complete(loaded.expect("this read must not load"))) },
+            )
+            .await
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn every_view_of_a_snapshot_shares_one_payload() {
+        let store = SnapshotStore::new(8);
+        let long = Duration::from_secs(60);
+        let loaded = load_bytes(&store, "a", None, long, long, Some(vec![1, 2, 3]))
+            .await
+            .unwrap();
+        let cursor = store.page(&loaded, &loaded.payload.data).unwrap().next_cursor.unwrap();
+
+        // A later first page and a resumed page read the allocation the load produced.
+        let reused = load_bytes(&store, "a", None, long, long, None).await.unwrap();
+        let resumed = load_bytes(&store, "a", Some(&cursor), long, long, None).await.unwrap();
+        assert_eq!(reused.cache_status, CacheStatus::Hit);
+        assert!(Arc::ptr_eq(&loaded.payload, &reused.payload));
+        assert!(Arc::ptr_eq(&loaded.payload, &resumed.payload));
+        assert_eq!(store.page(&resumed, &resumed.payload.data).unwrap().items, [2]);
+
+        // A view outlives the entry it was taken from.
+        assert_eq!(store.clear().await, 1);
+        assert_eq!(loaded.payload.data, [1, 2, 3]);
+        assert!(store.lock_state().snapshots.reusable.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_key_is_answered_by_its_newest_snapshot_while_that_is_reusable() {
+        let store = SnapshotStore::new(8);
+        let cursor_ttl = Duration::from_secs(60);
+        let reuse_ttl = Duration::from_secs(2);
+        let first = load_bytes(&store, "a", None, cursor_ttl, reuse_ttl, Some(vec![1, 2]))
+            .await
+            .unwrap();
+        let other = load_bytes(&store, "b", None, cursor_ttl, reuse_ttl, Some(vec![9, 9]))
+            .await
+            .unwrap();
+        let first_cursor = store.page(&first, &first.payload.data).unwrap().next_cursor.unwrap();
+        assert_eq!(
+            load_bytes(&store, "a", None, cursor_ttl, reuse_ttl, None)
+                .await
+                .unwrap()
+                .identity(),
+            first.identity()
+        );
+        assert_eq!(
+            load_bytes(&store, "b", None, cursor_ttl, reuse_ttl, None)
+                .await
+                .unwrap()
+                .identity(),
+            other.identity()
+        );
+
+        // Past its reuse window the first snapshot only serves its cursors; the key loads again
+        // and is answered by the new snapshot from then on.
+        tokio::time::advance(Duration::from_secs(3)).await;
+        let second = load_bytes(&store, "a", None, cursor_ttl, reuse_ttl, Some(vec![3, 4]))
+            .await
+            .unwrap();
+        assert_eq!(second.cache_status, CacheStatus::Miss);
+        assert_ne!(second.identity(), first.identity());
+        let reused = load_bytes(&store, "a", None, cursor_ttl, reuse_ttl, None)
+            .await
+            .unwrap();
+        assert_eq!(reused.identity(), second.identity());
+        assert_eq!(reused.payload.data, [3, 4]);
+        let resumed = load_bytes(&store, "a", Some(&first_cursor), cursor_ttl, reuse_ttl, None)
+            .await
+            .unwrap();
+        assert_eq!(resumed.payload.data, [1, 2]);
+
+        // Removing the old snapshot leaves the newer one of the same key in place.
+        {
+            let mut state = store.lock_state();
+            remove_entry(
+                &mut state.snapshots,
+                first.identity(),
+                Some(TombstoneReason::Evicted),
+                8,
+            );
+        }
+        assert_eq!(
+            load_bytes(&store, "a", None, cursor_ttl, reuse_ttl, None)
+                .await
+                .unwrap()
+                .identity(),
+            second.identity()
+        );
+        // Removing the newest one leaves the key without an answer.
+        {
+            let mut state = store.lock_state();
+            remove_entry(
+                &mut state.snapshots,
+                second.identity(),
+                Some(TombstoneReason::Evicted),
+                8,
+            );
+        }
+        let third = load_bytes(&store, "a", None, cursor_ttl, reuse_ttl, Some(vec![5]))
+            .await
+            .unwrap();
+        assert_eq!(third.cache_status, CacheStatus::Miss);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn each_snapshot_is_purged_at_its_own_expiry() {
+        let store = SnapshotStore::new(8);
+        let reuse_ttl = Duration::from_secs(1);
+        let short = load_bytes(
+            &store,
+            "short",
+            None,
+            Duration::from_secs(10),
+            reuse_ttl,
+            Some(vec![1, 2]),
+        )
+        .await
+        .unwrap();
+        let long = load_bytes(
+            &store,
+            "long",
+            None,
+            Duration::from_secs(30),
+            reuse_ttl,
+            Some(vec![3, 4]),
+        )
+        .await
+        .unwrap();
+        let short_cursor = store.page(&short, &short.payload.data).unwrap().next_cursor.unwrap();
+        let long_cursor = store.page(&long, &long.payload.data).unwrap().next_cursor.unwrap();
+        let resume = |cluster: &'static str, cursor: String| {
+            let store = store.clone();
+            async move {
+                load_bytes(&store, cluster, Some(&cursor), Duration::from_secs(30), reuse_ttl, None)
+                    .await
+                    .map(|view| view.payload.data.clone())
+                    .map_err(|error| error.code())
+            }
+        };
+
+        // Nothing is due before the earliest expiry, and a read does not have to look.
+        tokio::time::advance(Duration::from_secs(9)).await;
+        assert_eq!(resume("short", short_cursor.clone()).await, Ok(vec![1, 2]));
+        assert_eq!(store.lock_state().snapshots.entries.len(), 2);
+
+        tokio::time::advance(Duration::from_secs(2)).await;
+        assert_eq!(resume("short", short_cursor.clone()).await, Err("cursor_expired"));
+        assert_eq!(resume("long", long_cursor.clone()).await, Ok(vec![3, 4]));
+        assert_eq!(store.lock_state().snapshots.entries.len(), 1);
+
+        // The later expiry is found although the earlier one was the known bound.
+        tokio::time::advance(Duration::from_secs(20)).await;
+        assert_eq!(resume("long", long_cursor).await, Err("cursor_expired"));
+        assert!(store.lock_state().snapshots.entries.is_empty());
     }
 
     #[tokio::test]
@@ -3114,7 +3450,7 @@ mod tests {
 
         let upstream_calls = AtomicUsize::new(0);
         upstream_calls.fetch_add(1, Ordering::SeqCst);
-        let payload = QueryPayload::complete(vec![1u8, 2]);
+        let payload = Arc::new(QueryPayload::complete(vec![1u8, 2]));
         let observed_at = observed_at();
         let id = store.snapshot_id(&key);
         let bytes = retained_entry_bytes(&payload, &key, &id, &observed_at);
@@ -3123,7 +3459,7 @@ mod tests {
             .finish_success(
                 &leader,
                 id.clone(),
-                Arc::new(payload.clone()),
+                payload.clone(),
                 observed_at.clone(),
                 inserted_at,
                 Duration::from_nanos(1),
@@ -3393,7 +3729,7 @@ mod tests {
         };
         let (leader, _) = store.flight_lock(&key).await.unwrap();
         let (waiter, _) = store.flight_lock(&key).await.unwrap();
-        let payload = QueryPayload::complete(vec![1u8, 2]);
+        let payload = Arc::new(QueryPayload::complete(vec![1u8, 2]));
         let observed_at = observed_at();
         let id = store.snapshot_id(&key);
         let bytes = retained_entry_bytes(&payload, &key, &id, &observed_at);
@@ -3401,7 +3737,7 @@ mod tests {
             .finish_success(
                 &leader,
                 id.clone(),
-                Arc::new(payload.clone()),
+                payload.clone(),
                 observed_at.clone(),
                 Instant::now(),
                 Duration::from_secs(1),

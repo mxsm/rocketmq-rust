@@ -28,6 +28,7 @@ use crate::model::Principal;
 pub struct MutationGuard {
     runtime_enabled: bool,
     default_dry_run: bool,
+    require_plan_digest: bool,
     allowed_operations: BTreeSet<ControlOperation>,
     allowed_clusters: BTreeSet<ClusterName>,
 }
@@ -37,6 +38,7 @@ impl MutationGuard {
         Self {
             runtime_enabled: policy.mutations_enabled,
             default_dry_run: policy.dry_run,
+            require_plan_digest: policy.require_plan_digest,
             allowed_operations: policy.operation_allowlist(),
             allowed_clusters: policy.cluster_allowlist(),
         }
@@ -134,6 +136,11 @@ impl MutationGuard {
 
     pub const fn default_dry_run(&self) -> bool {
         self.default_dry_run
+    }
+
+    /// Whether an execution has to name the plan it runs.
+    pub const fn requires_plan_digest(&self) -> bool {
+        self.require_plan_digest
     }
 
     pub fn allows_discovery(
@@ -248,6 +255,8 @@ mod tests {
             allowed_operations: vec![ControlOperation::TopicUpsert],
             allowed_clusters: vec![ClusterName::try_new("cluster-a").unwrap()],
             operation_timeout_seconds: 24,
+            require_plan_digest: false,
+            emergency_stop_file: None,
         }
     }
 

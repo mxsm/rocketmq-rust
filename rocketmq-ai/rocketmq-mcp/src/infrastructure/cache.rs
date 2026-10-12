@@ -27,8 +27,6 @@ use tokio::sync::Mutex;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use serde::Serialize;
-
 use rocketmq_observability::metrics::mcp::McpCacheEvent;
 use rocketmq_observability::metrics::mcp::McpMetricsRecorder;
 
@@ -39,10 +37,19 @@ use crate::model::contract::CacheStatus;
 use crate::model::contract::QueryPayload;
 use crate::model::contract::QueryResult;
 
+mod failure;
+
+pub(crate) use failure::CachedFailure;
+use failure::Flight;
+
 const MAX_CACHE_ENTRY_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CACHE_TOTAL_BYTES: usize = 64 * 1024 * 1024;
 const RETAINED_CACHE_ENTRY_OVERHEAD: usize = 2 * 1024;
 const ARC_ALLOCATION_OVERHEAD: usize = 2 * size_of::<usize>();
+/// How long a kept failure answers the calls for its key, and never longer than a value would.
+const FAILURE_KEPT_FOR: Duration = Duration::from_secs(1);
+/// The warning on a result that is the expired value of a source that failed.
+pub(crate) const STALE_CACHE_VALUE_WARNING: &str = "stale_cache_value";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct CacheMetricsSnapshot {
@@ -87,9 +94,11 @@ struct QueryCacheInner {
     capacity: usize,
     max_entry_bytes: usize,
     max_total_bytes: usize,
+    /// How long past its expiry a value still answers for a source that fails. Zero is never.
+    stale_if_error: Duration,
     generation: AtomicU64,
     state: Mutex<CacheState>,
-    flights: Mutex<HashMap<String, Weak<Mutex<()>>>>,
+    flights: Mutex<HashMap<String, Weak<Flight>>>,
     metrics: CacheMetrics,
     telemetry: ComponentMetrics,
 }
@@ -99,6 +108,9 @@ struct CacheState {
     entries: HashMap<String, CacheEntry>,
     insertion_order: VecDeque<String>,
     retained_bytes: usize,
+    /// The failures that answer their key for a moment. There are at most as many as the cache
+    /// has entries, and they hold no payload, so the byte limits do not count them.
+    kept_failures: HashMap<String, KeptFailure>,
 }
 
 struct CacheEntry {
@@ -106,7 +118,40 @@ struct CacheEntry {
     observed_at: String,
     inserted_at: Instant,
     expires_at: Instant,
+    /// Until when the value answers for a source that fails; `expires_at` when it never does.
+    stale_until: Instant,
     retained_bytes: usize,
+}
+
+impl CacheEntry {
+    fn age_ms(&self, now: Instant) -> u64 {
+        now.saturating_duration_since(self.inserted_at)
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX)
+    }
+}
+
+struct KeptFailure {
+    failure: Arc<dyn Any + Send + Sync>,
+    expires_at: Instant,
+}
+
+/// What a key holds for a caller.
+enum Held {
+    Value {
+        value: Arc<dyn Any + Send + Sync>,
+        observed_at: String,
+        freshness_ms: u64,
+    },
+    Failure(Arc<dyn Any + Send + Sync>),
+    Nothing,
+}
+
+enum Lookup<T, E> {
+    Fresh(QueryResult<T>),
+    Failed(E),
+    Absent,
 }
 
 impl QueryCache {
@@ -123,7 +168,23 @@ impl QueryCache {
             self.inner.capacity,
             self.inner.max_entry_bytes,
             self.inner.max_total_bytes,
+            self.inner.stale_if_error,
             ComponentMetrics::new(metrics),
+        )
+    }
+
+    /// Returns an empty cache with the same limits whose values answer for `window` past their
+    /// expiry when their source fails. A zero `window` turns that off.
+    ///
+    /// Apply this before the cache is used: entries and counters do not carry over.
+    pub(crate) fn with_stale_if_error(self, window: Duration) -> Self {
+        Self::build(
+            self.inner.enabled,
+            self.inner.capacity,
+            self.inner.max_entry_bytes,
+            self.inner.max_total_bytes,
+            window,
+            self.inner.telemetry.clone(),
         )
     }
 
@@ -133,6 +194,7 @@ impl QueryCache {
             capacity,
             max_entry_bytes,
             max_total_bytes,
+            Duration::ZERO,
             ComponentMetrics::default(),
         )
     }
@@ -142,6 +204,7 @@ impl QueryCache {
         capacity: usize,
         max_entry_bytes: usize,
         max_total_bytes: usize,
+        stale_if_error: Duration,
         telemetry: ComponentMetrics,
     ) -> Self {
         Self {
@@ -150,6 +213,7 @@ impl QueryCache {
                 capacity,
                 max_entry_bytes,
                 max_total_bytes,
+                stale_if_error,
                 generation: AtomicU64::new(0),
                 state: Mutex::new(CacheState::default()),
                 flights: Mutex::new(HashMap::new()),
@@ -167,7 +231,8 @@ impl QueryCache {
         load: Load,
     ) -> Result<QueryResult<T>, E>
     where
-        T: Clone + RetainedSize + Serialize + Send + Sync + 'static,
+        T: Clone + RetainedSize + Send + Sync + 'static,
+        E: CachedFailure,
         Load: FnOnce() -> LoadFuture,
         LoadFuture: Future<Output = Result<T, E>>,
     {
@@ -182,6 +247,16 @@ impl QueryCache {
         .await
     }
 
+    /// Returns the value of `key`, loading it when the cache holds none that is current.
+    ///
+    /// The callers of one key load one at a time. Those that waited for a load read the value it
+    /// left, or get its failure when that [is shared](CachedFailure::is_shared). A failure that
+    /// [is kept](CachedFailure::is_kept) also answers the calls of the next second, so a source
+    /// that is down is asked once in that time.
+    ///
+    /// A cache built [`with_stale_if_error`](Self::with_stale_if_error) answers a failure that
+    /// [allows it](CachedFailure::allows_stale) with the value that expired within that window,
+    /// marked with [`STALE_CACHE_VALUE_WARNING`] and reported at its real age.
     pub(crate) async fn get_or_try_init_cancellable<T, E, Load, LoadFuture, Cancelled>(
         &self,
         key: String,
@@ -191,7 +266,8 @@ impl QueryCache {
         load: Load,
     ) -> Result<QueryResult<T>, E>
     where
-        T: Clone + RetainedSize + Serialize + Send + Sync + 'static,
+        T: Clone + RetainedSize + Send + Sync + 'static,
+        E: CachedFailure,
         Load: FnOnce() -> LoadFuture,
         LoadFuture: Future<Output = Result<QueryPayload<T>, E>>,
         Cancelled: FnOnce() -> E,
@@ -204,26 +280,45 @@ impl QueryCache {
                 .map(|payload| QueryResult::from_payload(payload, observed_at(), 0, CacheStatus::Bypass));
         }
 
-        if let Some(result) = self.get(&key).await {
-            return Ok(result);
+        match self.lookup(&key).await {
+            Lookup::Fresh(result) => return Ok(result),
+            Lookup::Failed(failure) => return self.answer_failure(&key, failure).await,
+            Lookup::Absent => {}
         }
 
-        let (flight, coalesced) = self.flight_lock(&key).await;
+        let (flight, coalesced) = self.flight(&key).await;
         if coalesced {
             self.inner.metrics.coalesced_waiters.fetch_add(1, Ordering::Relaxed);
             self.inner.telemetry.record_cache_event(McpCacheEvent::CoalescedWaiter);
         }
-        let _flight_guard = tokio::select! {
+        let failed_loads = flight.failed_loads();
+        let _turn = tokio::select! {
             biased;
             _ = cancellation.cancelled() => return Err(cancelled()),
-            guard = flight.lock() => guard,
+            turn = flight.turn.lock() => turn,
         };
-        if let Some(result) = self.get(&key).await {
-            return Ok(result);
+        match self.lookup(&key).await {
+            Lookup::Fresh(result) => return Ok(result),
+            Lookup::Failed(failure) => return self.answer_failure(&key, failure).await,
+            Lookup::Absent => {}
+        }
+        if let Some(failure) = flight.failure_since(failed_loads) {
+            return self.answer_failure(&key, failure).await;
         }
 
         let generation = self.inner.generation.load(Ordering::Acquire);
-        let payload = load().await?;
+        let payload = match load().await {
+            Ok(payload) => payload,
+            Err(failure) => {
+                if failure.is_shared() {
+                    flight.fail(&failure);
+                }
+                if failure.is_kept() {
+                    self.keep_failure(&key, &failure, ttl, generation).await;
+                }
+                return self.answer_failure(&key, failure).await;
+            }
+        };
         let source_retained_bytes = payload.retained_size();
         let observed_at = observed_at();
         self.insert_if_current(
@@ -260,33 +355,94 @@ impl QueryCache {
         state.entries.shrink_to_fit();
         state.insertion_order.shrink_to_fit();
         state.retained_bytes = 0;
+        state.kept_failures = HashMap::new();
         self.inner.metrics.invalidations.fetch_add(1, Ordering::Relaxed);
         self.inner.telemetry.record_cache_event(McpCacheEvent::Invalidation);
         removed
     }
 
-    async fn get<T>(&self, key: &str) -> Option<QueryResult<T>>
+    /// Reads what `key` holds: a current value, a failure kept for it, or neither.
+    async fn lookup<T, E>(&self, key: &str) -> Lookup<T, E>
     where
         T: Clone + Send + Sync + 'static,
+        E: CachedFailure,
     {
-        let mut state = self.inner.state.lock().await;
-        let now = Instant::now();
-        let expired = state.entries.get(key).is_some_and(|entry| entry.expires_at <= now);
-        if expired {
-            remove_entry(&mut state, key);
-            return None;
+        let held = {
+            let mut state = self.inner.state.lock().await;
+            held(&mut state, key, Instant::now())
+        };
+        // The lock is released: this caller's copy of the entry is made without holding it.
+        match held {
+            Held::Value {
+                value,
+                observed_at,
+                freshness_ms,
+            } => match value.downcast_ref::<QueryPayload<T>>() {
+                Some(payload) => Lookup::Fresh(self.hit(payload.clone(), observed_at, freshness_ms)),
+                None => Lookup::Absent,
+            },
+            Held::Failure(failure) => failure
+                .downcast_ref::<E>()
+                .cloned()
+                .map_or(Lookup::Absent, Lookup::Failed),
+            Held::Nothing => Lookup::Absent,
         }
-        let entry = state.entries.get(key)?;
-        let payload = entry.value.downcast_ref::<QueryPayload<T>>()?.clone();
-        let freshness_ms = now
-            .saturating_duration_since(entry.inserted_at)
-            .as_millis()
-            .try_into()
-            .unwrap_or(u64::MAX);
-        let result = QueryResult::from_payload(payload, entry.observed_at.clone(), freshness_ms, CacheStatus::Hit);
+    }
+
+    fn hit<T>(&self, payload: QueryPayload<T>, observed_at: String, freshness_ms: u64) -> QueryResult<T> {
         self.inner.metrics.hits.fetch_add(1, Ordering::Relaxed);
         self.inner.telemetry.record_cache_event(McpCacheEvent::Hit);
-        Some(result)
+        QueryResult::from_payload(payload, observed_at, freshness_ms, CacheStatus::Hit)
+    }
+
+    /// Answers a failed load of `key`: with the value that expired a short while ago when the
+    /// failure allows that and there is one, otherwise with the failure.
+    async fn answer_failure<T, E>(&self, key: &str, failure: E) -> Result<QueryResult<T>, E>
+    where
+        T: Clone + Send + Sync + 'static,
+        E: CachedFailure,
+    {
+        if self.inner.stale_if_error.is_zero() || !failure.allows_stale() {
+            return Err(failure);
+        }
+        let stale = {
+            let state = self.inner.state.lock().await;
+            let now = Instant::now();
+            state
+                .entries
+                .get(key)
+                .filter(|entry| entry.stale_until > now)
+                .map(|entry| (Arc::clone(&entry.value), entry.observed_at.clone(), entry.age_ms(now)))
+        };
+        let Some((value, observed_at, freshness_ms)) = stale else {
+            return Err(failure);
+        };
+        let Some(payload) = value.downcast_ref::<QueryPayload<T>>() else {
+            return Err(failure);
+        };
+        let mut payload = payload.clone();
+        mark_stale(&mut payload.warnings);
+        Ok(self.hit(payload, observed_at, freshness_ms))
+    }
+
+    /// Keeps `failure` as the answer for `key` for a moment, unless the cache was invalidated
+    /// while the load ran.
+    async fn keep_failure<E: CachedFailure>(&self, key: &str, failure: &E, ttl: Duration, generation: u64) {
+        let mut state = self.inner.state.lock().await;
+        if self.inner.generation.load(Ordering::Acquire) != generation {
+            return;
+        }
+        let now = Instant::now();
+        state.kept_failures.retain(|_, kept| kept.expires_at > now);
+        if state.kept_failures.len() < self.inner.capacity {
+            state.kept_failures.insert(
+                key.to_string(),
+                KeptFailure {
+                    failure: Arc::new(failure.clone()),
+                    expires_at: now + ttl.min(FAILURE_KEPT_FOR),
+                },
+            );
+        }
     }
 
     async fn insert_if_current<T>(
@@ -298,19 +454,11 @@ impl QueryCache {
         ttl: Duration,
         generation: u64,
     ) where
-        T: RetainedSize + Serialize + Send + Sync + 'static,
+        T: RetainedSize + Send + Sync + 'static,
     {
-        let Ok(mut serialized) = serde_json::to_vec(&value) else {
-            return;
-        };
-        serialized.shrink_to_fit();
-        let retained_bytes = retained_cache_entry_bytes(
-            &key,
-            &observed_at,
-            source_retained_bytes
-                .max(value.retained_size())
-                .max(serialized.capacity()),
-        );
+        // The larger of what the loaded value and the stored copy retain is charged.
+        let retained_bytes =
+            retained_cache_entry_bytes(&key, &observed_at, source_retained_bytes.max(value.retained_size()));
         if retained_bytes > self.inner.max_entry_bytes || retained_bytes > self.inner.max_total_bytes {
             return;
         }
@@ -332,6 +480,7 @@ impl QueryCache {
             }
         }
         let inserted_at = Instant::now();
+        state.kept_failures.retain(|_, kept| kept.expires_at > inserted_at);
         state.retained_bytes = state.retained_bytes.saturating_add(retained_bytes);
         state.insertion_order.push_back(key.clone());
         state.entries.insert(
@@ -341,18 +490,20 @@ impl QueryCache {
                 observed_at,
                 inserted_at,
                 expires_at: inserted_at + ttl,
+                stale_until: inserted_at + ttl + self.inner.stale_if_error,
                 retained_bytes,
             },
         );
     }
 
-    async fn flight_lock(&self, key: &str) -> (Arc<Mutex<()>>, bool) {
+    /// Joins the loads of `key`; `true` when a caller is already there.
+    async fn flight(&self, key: &str) -> (Arc<Flight>, bool) {
         let mut flights = self.inner.flights.lock().await;
         flights.retain(|_, flight| flight.strong_count() > 0);
         if let Some(flight) = flights.get(key).and_then(Weak::upgrade) {
             return (flight, true);
         }
-        let flight = Arc::new(Mutex::new(()));
+        let flight = Arc::new(Flight::default());
         flights.insert(key.to_string(), Arc::downgrade(&flight));
         (flight, false)
     }
@@ -365,6 +516,39 @@ impl QueryCache {
     #[cfg(test)]
     async fn retained_bytes(&self) -> usize {
         self.inner.state.lock().await.retained_bytes
+    }
+}
+
+/// Adds [`STALE_CACHE_VALUE_WARNING`] to the warnings of a result, which stay sorted.
+pub(crate) fn mark_stale(warnings: &mut Vec<String>) {
+    if !warnings.iter().any(|warning| warning == STALE_CACHE_VALUE_WARNING) {
+        warnings.push(STALE_CACHE_VALUE_WARNING.to_string());
+        warnings.sort();
+    }
+}
+
+/// Reads `key`, dropping what it holds past any use: a value past its stale window, a failure
+/// past its moment.
+fn held(state: &mut CacheState, key: &str, now: Instant) -> Held {
+    if let Some(entry) = state.entries.get(key) {
+        if entry.expires_at > now {
+            return Held::Value {
+                value: Arc::clone(&entry.value),
+                observed_at: entry.observed_at.clone(),
+                freshness_ms: entry.age_ms(now),
+            };
+        }
+        if entry.stale_until <= now {
+            remove_entry(state, key);
+        }
+    }
+    match state.kept_failures.get(key) {
+        Some(kept) if kept.expires_at > now => Held::Failure(Arc::clone(&kept.failure)),
+        Some(_) => {
+            state.kept_failures.remove(key);
+            Held::Nothing
+        }
+        None => Held::Nothing,
     }
 }
 
@@ -389,12 +573,16 @@ fn retained_cache_entry_bytes(key: &String, observed_at: &String, payload_bytes:
 }
 
 #[cfg(test)]
+mod policy_tests;
+
+#[cfg(test)]
 mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::time::Duration;
 
+    use serde::Serialize;
     use tokio::sync::Notify;
 
     use crate::model::contract::CacheStatus;
@@ -416,6 +604,35 @@ mod tests {
             self.visible
                 .retained_heap_size()
                 .saturating_add(self.hidden.retained_heap_size())
+        }
+    }
+
+    /// The plain failures of these tests: the waiters of a load get them, and nothing else.
+    impl CachedFailure for () {
+        fn is_shared(&self) -> bool {
+            true
+        }
+
+        fn is_kept(&self) -> bool {
+            false
+        }
+
+        fn allows_stale(&self) -> bool {
+            false
+        }
+    }
+
+    impl CachedFailure for &'static str {
+        fn is_shared(&self) -> bool {
+            true
+        }
+
+        fn is_kept(&self) -> bool {
+            false
+        }
+
+        fn allows_stale(&self) -> bool {
+            false
         }
     }
 
@@ -533,10 +750,7 @@ mod tests {
         let key = "entry-a".to_string();
         let observed = "2026-01-01T00:00:00Z".to_string();
         let payload = QueryPayload::complete("x".repeat(128));
-        let mut serialized = serde_json::to_vec(&payload).unwrap();
-        serialized.shrink_to_fit();
-        let entry_bytes =
-            retained_cache_entry_bytes(&key, &observed, payload.retained_size().max(serialized.capacity()));
+        let entry_bytes = retained_cache_entry_bytes(&key, &observed, payload.retained_size());
         let ttl = Duration::from_secs(60);
 
         let exact = QueryCache::with_byte_limits(true, 8, entry_bytes, entry_bytes * 2);
@@ -587,11 +801,8 @@ mod tests {
         let mut plus_one_observed = String::with_capacity(observed.capacity() + 1);
         plus_one_observed.push_str(&observed);
         plus_one_observed.push('x');
-        let plus_one_bytes = retained_cache_entry_bytes(
-            &"entry-c".to_string(),
-            &plus_one_observed,
-            payload.retained_size().max(serialized.capacity()),
-        );
+        let plus_one_bytes =
+            retained_cache_entry_bytes(&"entry-c".to_string(), &plus_one_observed, payload.retained_size());
         assert_eq!(plus_one_bytes, entry_bytes + 1);
         global
             .insert_if_current(

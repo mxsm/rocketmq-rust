@@ -89,7 +89,13 @@ profile = "diagnose"
 # Deprecated with the `change-planning` feature: plan changes with a dry run of rocketmq-mcp-control.
 allow_change_planning = false
 sanitize_output = true
+# Calls per minute of one principal to one Tool on one cluster. The budget refills evenly: a
+# caller that used it up gets one call back every 60 / rate_limit_per_minute seconds.
 rate_limit_per_minute = 60
+# HTTP requests per minute of one principal, whatever they ask for. It is counted apart from the
+# budget above and defaults to ten times that budget. A refused request gets HTTP 429 with a
+# Retry-After header.
+# http_rate_limit_per_minute = 600
 permissions_file = "permissions.example.toml"
 max_concurrent_requests_per_cluster = 8
 # Name of an environment variable holding the key for client and message pseudonyms (32 to 1024
@@ -104,6 +110,11 @@ path = "../logs/rocketmq-mcp-audit.log"
 queue_capacity = 1024
 max_record_bytes = 16384
 queue_max_bytes = 1048576
+# The file sink keeps the audit file open. A record that would make the file larger than this many
+# bytes moves it to <path>.000001, <path>.000002, and so on, and starts a new file. The server
+# never deletes or replaces a sealed file: removing old ones is for the operator. The default is
+# 64 MiB, and 0 keeps one file, whatever its size.
+# max_file_bytes = 67108864
 
 [cache]
 enabled = true
@@ -114,6 +125,15 @@ cluster_overview_ttl_ms = 3000
 topic_list_ttl_ms = 5000
 broker_metrics_ttl_ms = 2000
 consumer_lag_ttl_ms = 1000
+# The Broker configuration summary, message metadata, and Proxy drain state are current for
+# broker_metrics_ttl_ms unless they get a lifetime of their own.
+# broker_config_ttl_ms = 30000
+# message_metadata_ttl_ms = 10000
+# proxy_state_ttl_ms = 1000
+# How long a result that is no longer current still answers when its source is unavailable or does
+# not answer in time. Such a result carries the warning "stale_cache_value" and its real age in
+# freshness_ms. 0, the default, never serves one; the maximum is 300000.
+# stale_if_error_ms = 60000
 
 [diagnosis]
 consumer_lag_policy_profile = "production-default"

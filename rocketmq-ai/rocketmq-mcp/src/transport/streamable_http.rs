@@ -16,15 +16,20 @@ use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use axum::extract::Request;
 use axum::http::StatusCode;
 use axum::middleware;
+use axum::middleware::Next;
 use axum::response::IntoResponse;
+use axum::response::Response;
 use axum::routing::get;
 use axum::serve::Listener;
 use axum::Router;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::tower::StreamableHttpService;
 use rmcp::transport::StreamableHttpServerConfig;
+use rocketmq_mcp_auth::requested_protocol_version;
+use rocketmq_mcp_auth::RequestedProtocolVersion;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -146,8 +151,11 @@ fn build_router_with_auth(app: McpApp, cancellation_token: CancellationToken, au
     let service = streamable_service(app.clone(), cancellation_token);
     let metadata_path = app.config().server.http.auth.protected_resource_metadata_path.clone();
     let metadata = protected_resource_metadata(&app.config().server.http);
+    // Layers run from the last one added: a request is authenticated before anything else about
+    // it is answered, the revision it names included.
     let mcp_router = Router::new()
         .nest_service(&endpoint, service)
+        .layer(middleware::from_fn(validate_protocol_version))
         .layer(middleware::from_fn_with_state(auth_state, http_auth_middleware));
 
     Router::new()
@@ -165,6 +173,23 @@ fn build_router_with_auth(app: McpApp, cancellation_token: CancellationToken, au
             crate::config::HTTP_REQUEST_TIMEOUT,
         ))
         .layer(RequestBodyLimitLayer::new(MAX_HTTP_BODY_BYTES))
+}
+
+/// The body of the answer to a request that names a protocol revision this server does not answer.
+const UNSUPPORTED_PROTOCOL_VERSION: &str = "unsupported_protocol_version";
+
+/// Refuses a request whose `MCP-Protocol-Version` header names a revision this server does not
+/// answer.
+///
+/// The SDK holds that header to every revision it knows, not to the ones a server supports, and
+/// would answer such a request as if nothing were wrong. A request without the header passes
+/// here: it speaks through `initialize` or names its revision in its metadata, and the handler
+/// holds both to the same set. The answer repeats nothing that was sent.
+async fn validate_protocol_version(request: Request, next: Next) -> Response {
+    if requested_protocol_version(request.headers()) == RequestedProtocolVersion::Unsupported {
+        return (StatusCode::BAD_REQUEST, UNSUPPORTED_PROTOCOL_VERSION).into_response();
+    }
+    next.run(request).await
 }
 
 fn protected_resource_metadata(http_config: &HttpConfig) -> serde_json::Value {
@@ -555,9 +580,22 @@ mod tests {
         LOCK.get_or_init(tokio::sync::Mutex::default)
     }
 
+    /// Runs `test` while the development token is `token`, one such test at a time.
+    ///
+    /// The test files of this module set the token through here: the environment is written in
+    /// this module only.
+    async fn with_development_token(token: &str, test: impl std::future::Future<Output = ()>) {
+        let _environment = development_token_environment_lock().lock().await;
+        std::env::set_var("ROCKETMQ_MCP_HTTP_TOKEN", token);
+        test.await;
+        std::env::remove_var("ROCKETMQ_MCP_HTTP_TOKEN");
+    }
+
     fn example_config_path() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("conf")
             .join("mcp.example.toml")
     }
+
+    mod protocol;
 }

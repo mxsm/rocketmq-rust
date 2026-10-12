@@ -72,6 +72,9 @@ impl McpOperationStatus {
 }
 
 /// Bounded failure labels suitable for aggregate metrics.
+///
+/// This enum is closed: it cannot gain a member without breaking the code that matches on it.
+/// A caller that tells more causes apart records an [`McpFailureClass`] instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum McpFailureLabel {
     InvalidRequest,
@@ -82,16 +85,54 @@ pub enum McpFailureLabel {
     Internal,
 }
 
-impl McpFailureLabel {
+/// Bounded failure classes of [`MCP_ERRORS_TOTAL`].
+///
+/// It holds every [`McpFailureLabel`] under the same label value, and the causes that the closed
+/// label set can only fold into a class they do not belong to. Members may be added, so match it
+/// with a wildcard arm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum McpFailureClass {
+    InvalidRequest,
+    /// The request was valid and named a target that does not exist.
+    NotFound,
+    PermissionDenied,
+    RateLimited,
+    /// The caller withdrew the request. Neither the server nor a source failed.
+    Cancelled,
+    SourceUnavailable,
+    /// A value is beyond a bound the server sets for it, so the request could not be answered.
+    BoundExceeded,
+    OutputTooLarge,
+    Internal,
+}
+
+impl McpFailureClass {
     #[cfg(any(feature = "otel-metrics", test))]
     const fn as_str(self) -> &'static str {
         match self {
             Self::InvalidRequest => "invalid_request",
+            Self::NotFound => "not_found",
             Self::PermissionDenied => "permission_denied",
             Self::RateLimited => "rate_limited",
+            Self::Cancelled => "cancelled",
             Self::SourceUnavailable => "source_unavailable",
+            Self::BoundExceeded => "bound_exceeded",
             Self::OutputTooLarge => "output_too_large",
             Self::Internal => "internal",
+        }
+    }
+}
+
+impl From<McpFailureLabel> for McpFailureClass {
+    fn from(label: McpFailureLabel) -> Self {
+        match label {
+            McpFailureLabel::InvalidRequest => Self::InvalidRequest,
+            McpFailureLabel::PermissionDenied => Self::PermissionDenied,
+            McpFailureLabel::RateLimited => Self::RateLimited,
+            McpFailureLabel::SourceUnavailable => Self::SourceUnavailable,
+            McpFailureLabel::OutputTooLarge => Self::OutputTooLarge,
+            McpFailureLabel::Internal => Self::Internal,
         }
     }
 }
@@ -253,11 +294,21 @@ impl McpMetricsRecorder {
     }
 
     /// Records a bounded error class without including an error message.
+    ///
+    /// The same as [`record_failure`](Self::record_failure) with the class of `failure`.
     pub fn record_error(&self, kind: McpOperationKind, operation: &'static str, failure: McpFailureLabel) {
+        self.record_failure(kind, operation, failure.into());
+    }
+
+    /// Records a bounded failure class without including an error message.
+    ///
+    /// It counts into [`MCP_ERRORS_TOTAL`], like [`record_error`](Self::record_error), under the
+    /// label value of the class.
+    pub fn record_failure(&self, kind: McpOperationKind, operation: &'static str, failure: McpFailureClass) {
         #[cfg(feature = "otel-metrics")]
         if self.telemetry.is_active() {
             if let Some(metrics) = &self.metrics {
-                metrics.record_error(kind, operation, failure);
+                metrics.record_failure(kind, operation, failure);
             }
         }
 
@@ -495,7 +546,7 @@ impl McpMetrics {
         self.request_latency.record(latency_ms, &base_attributes);
     }
 
-    fn record_error(&self, kind: McpOperationKind, operation: &'static str, failure: McpFailureLabel) {
+    fn record_failure(&self, kind: McpOperationKind, operation: &'static str, failure: McpFailureClass) {
         self.errors_total.add(
             1,
             &[
@@ -548,7 +599,20 @@ mod tests {
     fn bounded_labels_are_stable() {
         assert_eq!(McpOperationKind::Tool.as_str(), "tool");
         assert_eq!(McpOperationStatus::Denied.as_str(), "denied");
-        assert_eq!(McpFailureLabel::OutputTooLarge.as_str(), "output_too_large");
+        // A closed label keeps the value it always had, now through its class.
+        for (label, value) in [
+            (McpFailureLabel::InvalidRequest, "invalid_request"),
+            (McpFailureLabel::PermissionDenied, "permission_denied"),
+            (McpFailureLabel::RateLimited, "rate_limited"),
+            (McpFailureLabel::SourceUnavailable, "source_unavailable"),
+            (McpFailureLabel::OutputTooLarge, "output_too_large"),
+            (McpFailureLabel::Internal, "internal"),
+        ] {
+            assert_eq!(McpFailureClass::from(label).as_str(), value);
+        }
+        assert_eq!(McpFailureClass::NotFound.as_str(), "not_found");
+        assert_eq!(McpFailureClass::Cancelled.as_str(), "cancelled");
+        assert_eq!(McpFailureClass::BoundExceeded.as_str(), "bound_exceeded");
         assert_eq!(McpCacheEvent::CoalescedWaiter.as_str(), "coalesced_waiter");
         assert_eq!(McpRateLimitDecision::Rejected.as_str(), "rejected");
         assert_eq!(McpAuditDropReason::ByteCapacity.as_str(), "byte_capacity");
@@ -577,6 +641,7 @@ mod tests {
         record_audit_backlog(3);
         record_audit_drop(McpAuditDropReason::Closed);
         record_audit_failure(McpAuditFailureKind::Sink);
+        McpMetricsRecorder::noop().record_failure(McpOperationKind::Tool, "get_topic_route", McpFailureClass::NotFound);
     }
 
     #[test]
@@ -604,11 +669,12 @@ mod tests {
             McpOperationStatus::Success,
             4,
         );
-        metrics.record_error(
+        metrics.record_failure(
             McpOperationKind::Resource,
             "read_resource",
-            McpFailureLabel::PermissionDenied,
+            McpFailureLabel::PermissionDenied.into(),
         );
+        metrics.record_failure(McpOperationKind::Tool, "get_topic_route", McpFailureClass::Cancelled);
         metrics.record_cache_event(McpCacheEvent::Miss);
         metrics.record_rate_limit(McpRateLimitDecision::Rejected);
         metrics.record_audit_drop(McpAuditDropReason::ByteCapacity);

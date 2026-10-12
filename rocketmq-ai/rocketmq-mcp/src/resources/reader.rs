@@ -15,8 +15,8 @@
 use crate::tools::executor::NotFoundEntity;
 use crate::tools::executor::ToolExecutionError;
 use crate::tools::executor::ToolRejection;
+#[cfg(test)]
 use rmcp::model::ReadResourceResult;
-use rmcp::model::ResourceContents;
 use rmcp::ErrorData;
 use serde_json::json;
 use serde_json::Value;
@@ -25,7 +25,7 @@ use crate::adapter::query_facade::ReadOnlyQuery;
 use crate::model::contract::SCHEMA_VERSION;
 use crate::resources::uri::ResourceKind;
 use crate::resources::uri::RocketmqResourceUri;
-use crate::resources::uri::JSON_MIME_TYPE;
+use crate::resources::ResourceDocument;
 use crate::tools::broker_tools::BrokerDiagnosticsArgs;
 use crate::tools::broker_tools::DescribeBrokerArgs;
 use crate::tools::broker_tools::ListBrokersArgs;
@@ -41,22 +41,30 @@ use crate::tools::topic_tools::GetTopicStatsArgs;
 use crate::tools::topic_tools::ListTopicsArgs;
 use crate::tools::topic_tools::QueryTopicRouteArgs;
 
+/// Reads a cluster Resource as text, without the shared output processing.
+#[cfg(test)]
 pub(crate) async fn read_resource<Q>(query: &Q, uri: &str) -> Result<ReadResourceResult, ErrorData>
+where
+    Q: ReadOnlyQuery,
+{
+    read_resource_document(query, uri)
+        .await?
+        .into_read_result()
+        .map_err(|_| ErrorData::internal_error("failed to serialize resource", None))
+}
+
+/// Reads a cluster Resource as the value the Guard processes and then publishes.
+pub(crate) async fn read_resource_document<Q>(query: &Q, uri: &str) -> Result<ResourceDocument, ErrorData>
 where
     Q: ReadOnlyQuery,
 {
     let resource_uri = RocketmqResourceUri::parse(uri)
         .ok_or_else(|| ErrorData::resource_not_found("resource is unavailable", None))?;
-    let canonical_uri = resource_uri.as_string();
-    let payload = resource_payload(query, &resource_uri).await.map_err(resource_error)?;
-    let text = serde_json::to_string_pretty(&payload)
-        .map_err(|_| ErrorData::internal_error("failed to serialize resource", None))?;
-
-    Ok(ReadResourceResult::new(vec![ResourceContents::text(
-        text,
-        canonical_uri,
-    )
-    .with_mime_type(JSON_MIME_TYPE)]))
+    let value = resource_payload(query, &resource_uri).await.map_err(resource_error)?;
+    Ok(ResourceDocument {
+        uri: resource_uri.as_string(),
+        value,
+    })
 }
 
 async fn resource_payload<Q>(query: &Q, uri: &RocketmqResourceUri) -> Result<Value, ToolFailure>
@@ -273,10 +281,12 @@ fn resource_error(error: ToolFailure) -> ErrorData {
             "RocketMQ resource is unavailable",
             Some(json!({ "code": "cluster_not_allowed", "retryable": false })),
         ),
-        ToolFailure::Rejected(ToolRejection::RateLimited) => ErrorData::internal_error(
-            "rate limit exceeded for RocketMQ resource",
-            Some(json!({ "code": "resource_rate_limited", "retryable": true })),
-        ),
+        ToolFailure::Rejected(ToolRejection::RateLimited { .. } | ToolRejection::ConcurrencyLimited) => {
+            ErrorData::internal_error(
+                "rate limit exceeded for RocketMQ resource",
+                Some(json!({ "code": "resource_rate_limited", "retryable": true })),
+            )
+        }
         ToolFailure::Operational(ToolExecutionError::Backend(_)) => ErrorData::internal_error(
             "live RocketMQ resource query failed",
             Some(json!({ "code": "source_unavailable", "retryable": true })),
@@ -301,6 +311,7 @@ mod tests {
     use crate::model::contract::SourceFailure;
     use crate::model::contract::SourceFailureCode;
     use crate::model::diagnosis::DiagnosisReport;
+    use crate::resources::uri::JSON_MIME_TYPE;
     use crate::tools::broker_tools::DescribeBrokerArgs;
     use crate::tools::broker_tools::DescribeBrokerOutput;
     use crate::tools::cluster_tools::BrokerSummary;
@@ -314,6 +325,7 @@ mod tests {
     use crate::tools::topic_tools::ListTopicsOutput;
     use crate::tools::topic_tools::QueryTopicRouteArgs;
     use crate::tools::topic_tools::QueryTopicRouteOutput;
+    use rmcp::model::ResourceContents;
 
     #[derive(Clone)]
     struct FakeQuery;

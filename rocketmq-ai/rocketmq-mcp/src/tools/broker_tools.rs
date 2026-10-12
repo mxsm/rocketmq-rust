@@ -18,6 +18,12 @@ use serde::Serialize;
 
 use crate::tools::cluster_tools::BrokerSummary;
 
+mod lite;
+
+pub use lite::GetLiteBrokerInfoArgs;
+pub use lite::GetLiteBrokerInfoOutput;
+pub use lite::LiteTopicSummary;
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct DescribeBrokerArgs {

@@ -45,6 +45,8 @@ struct Targets {
     endpoints: Vec<String>,
     unreadable: bool,
     lose_verification: bool,
+    /// The connections that the Proxy serves at the moment it is read.
+    busy: usize,
 }
 
 struct DrainPlan {
@@ -70,8 +72,9 @@ impl Targets {
             admission_open: accepting,
             routing_open: accepting,
             readiness_published: accepting,
-            zero_pending: accepting,
+            zero_pending: accepting && self.busy == 0,
             pending: ProxyDrainPending {
+                active_connections: self.busy,
                 sessions: if accepting { 0 } else { 3 },
                 ..ProxyDrainPending::default()
             },
@@ -322,21 +325,22 @@ async fn drain(
     dry_run: bool,
     operation_id: &str,
 ) -> serde_json::Value {
-    let response = run_proxy_drain(targets, operation, drain_args(dry_run, operation_id), PROXY_ENDPOINT)
+    let args = drain_args(dry_run, operation_id);
+    let response = run_proxy_drain(targets, operation, args, PROXY_ENDPOINT, &PlanBinding::unbound())
         .await
         .unwrap();
     serde_json::to_value(response).unwrap()
 }
 
 async fn set(targets: &mut Targets, dry_run: bool, operation_id: &str) -> serde_json::Value {
-    let response = run_set_log_filter(targets, set_args(dry_run, operation_id))
+    let response = run_set_log_filter(targets, set_args(dry_run, operation_id), &PlanBinding::unbound())
         .await
         .unwrap();
     serde_json::to_value(response).unwrap()
 }
 
 async fn restore(targets: &mut Targets, dry_run: bool, operation_id: &str) -> serde_json::Value {
-    let response = run_restore_log_filter(targets, restore_args(dry_run, operation_id))
+    let response = run_restore_log_filter(targets, restore_args(dry_run, operation_id), &PlanBinding::unbound())
         .await
         .unwrap();
     serde_json::to_value(response).unwrap()
@@ -665,8 +669,13 @@ async fn a_logger_the_adapter_keeps_closed_is_refused_before_anything_is_read() 
     args.logger = "rocketmq_broker::message".to_owned();
 
     assert_eq!(
-        run_set_log_filter(&mut targets, args).await.unwrap_err(),
+        run_set_log_filter(&mut targets, args, &PlanBinding::unbound())
+            .await
+            .unwrap_err(),
         ControlError::invalid_argument()
     );
     assert_eq!((targets.reads, targets.writes), (0, 0));
 }
+
+#[path = "plan_tests.rs"]
+mod plan;

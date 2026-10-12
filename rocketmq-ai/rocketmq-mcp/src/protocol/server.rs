@@ -38,6 +38,7 @@ use rmcp::ErrorData;
 use rmcp::RoleServer;
 use rmcp::ServerHandler;
 use serde_json::json;
+use std::borrow::Cow;
 use std::time::Instant;
 use tracing::Instrument;
 
@@ -50,7 +51,7 @@ use crate::prompts;
 use crate::resources;
 use crate::tools;
 use crate::tools::executor::ToolExecutor;
-use rocketmq_observability::metrics::mcp::McpFailureLabel;
+use rocketmq_observability::metrics::mcp::McpFailureClass;
 use rocketmq_observability::metrics::mcp::McpMetricsRecorder;
 use rocketmq_observability::metrics::mcp::McpOperationKind;
 use rocketmq_observability::metrics::mcp::McpOperationStatus;
@@ -120,6 +121,12 @@ impl RocketmqMcpServer {
     }
 }
 
+/// The MCP protocol revisions this server answers, as the SDK names them.
+///
+/// The revision itself is [`MCP_PROTOCOL_VERSION`](resources::capability::MCP_PROTOCOL_VERSION),
+/// which the HTTP build shares with the control server; a test holds this list to it.
+static SUPPORTED_PROTOCOL_VERSIONS: [ProtocolVersion; 1] = [ProtocolVersion::V_2025_11_25];
+
 impl ServerHandler for RocketmqMcpServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(
@@ -143,16 +150,28 @@ impl ServerHandler for RocketmqMcpServer {
         request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, ErrorData> {
-        if request.protocol_version != ProtocolVersion::V_2025_11_25 {
+        if !SUPPORTED_PROTOCOL_VERSIONS.contains(&request.protocol_version) {
             return Err(ErrorData::invalid_params(
-                "unsupported MCP protocol version; rocketmq-mcp requires 2025-11-25",
+                format!(
+                    "unsupported MCP protocol version; rocketmq-mcp requires {}",
+                    resources::capability::MCP_PROTOCOL_VERSION
+                ),
                 Some(json!({
-                    "supported": ["2025-11-25"],
+                    "supported": SUPPORTED_PROTOCOL_VERSIONS,
                 })),
             ));
         }
         context.peer.set_peer_info(request);
         Ok(self.get_info())
+    }
+
+    /// Narrows the revisions that the SDK answers to the ones this server implements.
+    ///
+    /// The SDK defaults to every revision it knows, the ones without an `initialize` handshake
+    /// included. It advertises this list in `server/discover`, and holds to it the revision that
+    /// a request names for itself instead of a handshake.
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Borrowed(&SUPPORTED_PROTOCOL_VERSIONS)
     }
 
     async fn list_resources(
@@ -202,10 +221,10 @@ impl ServerHandler for RocketmqMcpServer {
                 Ok(access) => access,
                 Err(error) => {
                     span_recorder.denied();
-                    metrics.record_error(
+                    metrics.record_failure(
                         McpOperationKind::Resource,
                         "resource_access_context",
-                        McpFailureLabel::PermissionDenied,
+                        McpFailureClass::PermissionDenied,
                     );
                     return Err(error);
                 }
@@ -216,10 +235,10 @@ impl ServerHandler for RocketmqMcpServer {
                     self.app
                         .guard()
                         .record_resource_rejection(&access, "resource:unavailable", "invalid_resource_uri");
-                    metrics.record_error(
+                    metrics.record_failure(
                         McpOperationKind::Resource,
                         "invalid_resource_uri",
-                        McpFailureLabel::InvalidRequest,
+                        McpFailureClass::InvalidRequest,
                     );
                     return Err(resource_unavailable(&request_id_string(&context.id)));
                 }
@@ -234,7 +253,7 @@ impl ServerHandler for RocketmqMcpServer {
                 Ok(guarded_resource) => guarded_resource,
                 Err(error) => {
                     span_recorder.denied();
-                    metrics.record_error(McpOperationKind::Resource, operation, guard_failure_label(&error));
+                    metrics.record_failure(McpOperationKind::Resource, operation, guard_failure_label(&error));
                     return Err(resource_guard_error(error, &request_id_string(&context.id)));
                 }
             };
@@ -247,7 +266,7 @@ impl ServerHandler for RocketmqMcpServer {
                         .iter()
                         .map(|tool| tool.descriptor())
                         .filter(|descriptor| self.app.guard().allows_tool_on_cluster(&access, descriptor.id, cluster));
-                    resources::capability::read_result(
+                    resources::capability::document(
                         &canonical_uri,
                         resources::capability::manifest_for(
                             cluster,
@@ -257,20 +276,18 @@ impl ServerHandler for RocketmqMcpServer {
                     )
                 }
                 crate::resources::uri::ResourceKind::SystemRuntimeV1 => {
-                    resources::system::read_result(&canonical_uri, "runtime", self.app.runtime_diagnostics_view())
+                    resources::system::document(&canonical_uri, "runtime", self.app.runtime_diagnostics_view())
                 }
-                crate::resources::uri::ResourceKind::SystemObservabilityV1 => resources::system::read_result(
-                    &canonical_uri,
-                    "observability",
-                    self.app.observability_status_view(),
-                ),
+                crate::resources::uri::ResourceKind::SystemObservabilityV1 => {
+                    resources::system::document(&canonical_uri, "observability", self.app.observability_status_view())
+                }
                 _ => {
                     let query = self.request_query(&access, context.ct);
-                    resources::reader::read_resource(&query, &canonical_uri).await
+                    resources::reader::read_resource_document(&query, &canonical_uri).await
                 }
             };
             self.app.trace_cache_metrics();
-            let result = guarded_resource.finish_result(result).map_err(|error| {
+            let result = guarded_resource.finish_document(result).map_err(|error| {
                 if error.code == rmcp::model::ErrorCode::RESOURCE_NOT_FOUND {
                     resource_unavailable(&request_id_string(&context.id))
                 } else {
@@ -278,7 +295,7 @@ impl ServerHandler for RocketmqMcpServer {
                 }
             });
             if let Err(error) = &result {
-                metrics.record_error(McpOperationKind::Resource, operation, resource_failure_label(error));
+                metrics.record_failure(McpOperationKind::Resource, operation, resource_failure_label(error));
             }
             result
         }
@@ -412,19 +429,19 @@ fn resource_unavailable(correlation_id: &str) -> ErrorData {
     )
 }
 
-fn guard_failure_label(error: &GuardRejection) -> McpFailureLabel {
+fn guard_failure_label(error: &GuardRejection) -> McpFailureClass {
     match error {
-        GuardRejection::InvalidArgument => McpFailureLabel::InvalidRequest,
-        GuardRejection::RateLimited => McpFailureLabel::RateLimited,
+        GuardRejection::InvalidArgument => McpFailureClass::InvalidRequest,
+        GuardRejection::RateLimited { .. } | GuardRejection::ConcurrencyLimited => McpFailureClass::RateLimited,
         GuardRejection::PermissionDenied
         | GuardRejection::UnauthorizedScope
         | GuardRejection::TenantMismatch
         | GuardRejection::ClusterNotAllowed
-        | GuardRejection::ChangePlanningDisabled => McpFailureLabel::PermissionDenied,
+        | GuardRejection::ChangePlanningDisabled => McpFailureClass::PermissionDenied,
     }
 }
 
-fn resource_failure_label(error: &ErrorData) -> McpFailureLabel {
+fn resource_failure_label(error: &ErrorData) -> McpFailureClass {
     let code = error
         .data
         .as_ref()
@@ -432,15 +449,16 @@ fn resource_failure_label(error: &ErrorData) -> McpFailureLabel {
         .and_then(serde_json::Value::as_str);
     match code {
         Some("permission_denied" | "unauthorized_scope" | "tenant_mismatch" | "cluster_not_allowed") => {
-            McpFailureLabel::PermissionDenied
+            McpFailureClass::PermissionDenied
         }
-        Some("resource_rate_limited") => McpFailureLabel::RateLimited,
-        Some("source_unavailable" | "resource_query_timeout" | "resource_query_cancelled") => {
-            McpFailureLabel::SourceUnavailable
-        }
-        Some("output_too_large") => McpFailureLabel::OutputTooLarge,
-        Some("invalid_arguments" | "resource_not_found" | "resource_unavailable") => McpFailureLabel::InvalidRequest,
-        _ => McpFailureLabel::Internal,
+        Some("resource_rate_limited") => McpFailureClass::RateLimited,
+        Some("source_unavailable" | "resource_query_timeout") => McpFailureClass::SourceUnavailable,
+        // The caller withdrew the read; no source failed.
+        Some("resource_query_cancelled") => McpFailureClass::Cancelled,
+        Some("identifier_input_bound_exceeded") => McpFailureClass::BoundExceeded,
+        Some("output_too_large") => McpFailureClass::OutputTooLarge,
+        Some("invalid_arguments" | "resource_not_found" | "resource_unavailable") => McpFailureClass::InvalidRequest,
+        _ => McpFailureClass::Internal,
     }
 }
 
@@ -495,6 +513,19 @@ mod tests {
         assert_eq!(info.server_info.name, "rocketmq-mcp");
         assert_eq!(info.server_info.version, "1.0.0");
         assert_eq!(info.protocol_version, ProtocolVersion::V_2025_11_25);
+        // The handshake revision is the one revision the handler answers, in every build.
+        let answered = server.supported_protocol_versions();
+        assert_eq!(
+            answered.iter().map(ProtocolVersion::as_str).collect::<Vec<_>>(),
+            [resources::capability::MCP_PROTOCOL_VERSION]
+        );
+        assert!(answered.contains(&info.protocol_version));
+        // The HTTP build reads requests against the set it shares with the control server.
+        #[cfg(feature = "streamable-http")]
+        assert_eq!(
+            answered.iter().map(ProtocolVersion::as_str).collect::<Vec<_>>(),
+            rocketmq_mcp_auth::SUPPORTED_MCP_PROTOCOL_VERSIONS
+        );
         assert!(info.capabilities.tools.is_some());
         assert!(info.capabilities.resources.is_some());
         assert!(info.capabilities.prompts.is_some());
@@ -1919,11 +1950,15 @@ mod tests {
 
     #[test]
     fn mcp_protocol_surface_snapshot() {
-        let tools = tools::catalog::list_tools()
-            .tools
-            .into_iter()
-            .map(|tool| serde_json::to_value(tool).expect("tool descriptor serializes"))
-            .collect::<Vec<_>>();
+        // The Tool of the `security-admin` feature has a contract snapshot of its own, so that this
+        // surface is the same with and without that feature.
+        let tools = tools::catalog::list_tools_for(|descriptor| {
+            descriptor.risk_level != crate::guard::RiskLevel::SecurityAdmin
+        })
+        .tools
+        .into_iter()
+        .map(|tool| serde_json::to_value(tool).expect("tool descriptor serializes"))
+        .collect::<Vec<_>>();
         let config = McpConfig::load(example_config_path()).unwrap();
         let registry = resources::registry::ResourceRegistry::new().unwrap();
         let resources = registry
@@ -1948,9 +1983,9 @@ mod tests {
             .collect::<Vec<_>>();
 
         #[cfg(not(feature = "change-planning"))]
-        assert_eq!(tools.len(), 30);
+        assert_eq!(tools.len(), 36);
         #[cfg(feature = "change-planning")]
-        assert_eq!(tools.len(), 35);
+        assert_eq!(tools.len(), 41);
         assert_eq!(resources.len(), 7);
         assert_eq!(resource_templates.as_array().unwrap().len(), 15);
         assert_eq!(prompts.len(), 5);

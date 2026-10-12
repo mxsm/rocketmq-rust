@@ -41,7 +41,19 @@ pub(crate) fn apply(value: Value) -> Result<Value, ToolFailure> {
     apply_with_policy(value, OutputPolicy::default())
 }
 
-pub(crate) fn apply_with_policy(mut value: Value, policy: OutputPolicy) -> Result<Value, ToolFailure> {
+/// Applies the output policy and returns the value together with its JSON text.
+///
+/// The text is the one the byte bound was checked on, so a caller that publishes the value as
+/// text does not write it a second time.
+pub(crate) fn apply_rendered(value: Value) -> Result<(Value, String), ToolFailure> {
+    render_with_policy(value, OutputPolicy::default())
+}
+
+pub(crate) fn apply_with_policy(value: Value, policy: OutputPolicy) -> Result<Value, ToolFailure> {
+    render_with_policy(value, policy).map(|(value, _)| value)
+}
+
+fn render_with_policy(mut value: Value, policy: OutputPolicy) -> Result<(Value, String), ToolFailure> {
     let source_failures_overflow = value
         .get("source_failures")
         .and_then(Value::as_array)
@@ -58,14 +70,14 @@ pub(crate) fn apply_with_policy(mut value: Value, policy: OutputPolicy) -> Resul
     if truncated {
         mark_partial(&mut value);
     }
-    let size = serde_json::to_vec(&value).map_err(ToolFailure::internal)?.len();
-    if size > policy.max_bytes {
+    let text = serde_json::to_string(&value).map_err(ToolFailure::internal)?;
+    if text.len() > policy.max_bytes {
         return Err(ToolFailure::Rejected(ToolRejection::OutputTooLarge {
-            actual_bytes: size,
+            actual_bytes: text.len(),
             max_bytes: policy.max_bytes,
         }));
     }
-    Ok(value)
+    Ok((value, text))
 }
 
 fn bound_rows(value: &mut Value, max_rows: usize) -> bool {

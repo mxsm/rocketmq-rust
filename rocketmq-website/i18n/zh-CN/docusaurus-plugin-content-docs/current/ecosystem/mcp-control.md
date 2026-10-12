@@ -71,7 +71,9 @@ cargo build --locked --release --features write-tools
 
 配置拒绝未知字段，仅在启动时加载。TLS/审计路径按配置原值使用，加载器不会将其改为相对 TOML 目录解析。使用绝对路径，或明确控制进程工作目录。`ROCKETMQ_MCP_CONTROL_CONFIG` 选择文件；该二进制没有 `--config` CLI 路径。
 
-JWKS 获取拒绝私有、环回、链路本地或保留 DNS 地址，并在连接时复查。因此，本地伪造 issuer 不能替代生产认证路径。密钥代际生命周期上限为五分钟，并具有刷新/负缓存控制。JWKS 中的一个条目满足以下条件时才会被使用：它是 2048 到 8192 位、指数为 65537 的 RSA 密钥，`use` 缺省或为 `sig`，`alg` 缺省或为 `RS256`，且 `kid` 由 ASCII 字母、数字或 `._:-` 组成；其他条目（例如加密密钥）以及 `x5c` 等成员会被忽略。没有任何可用条目时服务拒绝启动。不提供静态令牌、HS 算法或开发认证。HTTPS 监听器限制请求为 1 MiB 和 30 s；示例变更操作超时为 24 s。
+`server` 与 `oauth` 两行描述的是默认要求。部署在内网时，可以用三个开关逐项放宽，全部默认关闭，设为 `true` 才生效：`server.allow_wildcard_bind` 允许监听所有网卡，例如 `0.0.0.0:8443`；`server.allow_internal_base_url` 允许 `public_base_url` 带端口，或使用只在内网解析的主机名，例如 `https://control.mq.svc.cluster.local:8443`；`oauth.allow_private_network` 允许 issuer 和 JWKS URL 带端口或使用内网主机名，并允许 JWKS 端点位于私网地址。任何一个开关打开时，服务启动日志会给出一条警告并列出已打开的开关。即使三个开关全部打开，origin 和两个 OAuth URL 仍必须是规范的 HTTPS URL，主机不能是地址字面量或环回名称，请求的 `Host` 仍必须与配置的 origin 一致。每个开关带来的风险见[运维手册](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp-control/docs/operations-runbook.md#deployment-inside-a-private-network)。
+
+未打开 `oauth.allow_private_network` 时，JWKS 获取拒绝私有、环回、链路本地或保留 DNS 地址，并在连接时复查。因此，本地伪造 issuer 不能替代生产认证路径。密钥代际生命周期上限为五分钟，并具有刷新/负缓存控制。JWKS 中的一个条目满足以下条件时才会被使用：它是 2048 到 8192 位、指数为 65537 的 RSA 密钥，`use` 缺省或为 `sig`，`alg` 缺省或为 `RS256`，且 `kid` 由 ASCII 字母、数字或 `._:-` 组成；其他条目（例如加密密钥）以及 `x5c` 等成员会被忽略。没有任何可用条目时服务拒绝启动。不提供静态令牌、HS 算法或开发认证。HTTPS 监听器限制请求为 1 MiB 和 30 s；示例变更操作超时为 24 s。
 
 Proxy 只对已认证主体响应排空请求；Broker 只有在启用认证与授权并设置 `[logging.reload] enabled = true` 时才应用远程日志过滤。将这四个操作加入允许列表之前，先为集群条目配置这些目标接受的凭据。
 
@@ -113,9 +115,11 @@ cargo run --locked --release --features write-tools
 
 执行调用上的可选 `request_key` 提供进程内 10 分钟 singleflight/结果复用，上限 4096 项，按主体、操作、集群、排序后的目标和规范载荷限定范围。只保留已有定论的结果：`applied`、`partial` 或 `conflict`。失败、超时或取消之后，同一个键会重新执行预检，而不是重复返回上次的错误；dry-run 从不按键复用。同一键配不同载荷会被拒绝。缓存命中/跟随调用不打开新 Admin 会话，但每次调用仍持久化自己的审计记录对。这不是跨重启精确一次执行，调用方超时也不保证回滚。
 
+dry-run 会返回 `plan_digest`：对请求内容、读取到的状态以及每个目标将得到的结果计算的 SHA-256。执行时把它作为 `expected_plan_digest` 传回，服务端只有在当前读取到的计划仍是这一份时才写入，否则不做任何写入，并以 `precondition_conflict` 结束调用。此时请重新 dry-run，审阅新的计划，再用新的 `request_key` 执行。该参数默认可选；服务端配置 `mutations.require_plan_digest = true` 后，不带该参数的执行会被作为 `invalid_argument` 拒绝。正在消费的消费组，其位点在两次读取之间会变化，因此带摘要执行位点重置前应先停止消费者。摘要只是比对，不是审批：服务端不保存摘要，也不记录审阅人。
+
 ## 解释结果与恢复
 
-结果使用 `rocketmq-mcp-mutation.v1`，包含聚合 `before`、`requested`、`after` 及逐目标持久化和验证证据。
+结果使用 `rocketmq-mcp-mutation.v1`，包含聚合 `before`、`requested`、`after` 及逐目标持久化和验证证据。变更的结果应从这个响应中读取：[Query MCP](./mcp.md) 的回答来自保留数秒的缓存，执行后立即通过它读取，仍可能得到变更前的状态。每个变更工具的描述中都有这条说明。
 
 | 状态 | 含义 |
 | --- | --- |
@@ -135,7 +139,7 @@ cargo run --locked --release --features write-tools
 
 只有持久审计轨迹可以保留已校验 OAuth subject 与安全原因作为操作者证据。审计 v3 记录还包含已校验的逻辑目标名称（包括 Proxy 别名），请求状态、request key 和变更前状态的 SHA-256 摘要，目标是否被写入，以及按目标统计的结果数量；记录中不保存请求的具体取值。响应、普通日志、tracing 和错误排除操作者与原因；所有输出均排除凭据、令牌、端点、消息正文和原始后端错误。审计恢复与部分目标调查参见[运维手册](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp-control/docs/operations-runbook.md)。
 
-停止新变更时，禁用 `mutations_enabled` 或移除操作/集群允许列表并重启，配置不热加载。通过单独授权的运维工具核对不确定目标状态，Control 不自行生成补偿写入。这些是产品运行时控制；取消文档审批门禁不会移除它们。
+需要立即停止新变更时，创建 `mutations.emergency_stop_file` 指向的文件：文件存在期间，所有变更调用都以 `mutation_disabled` 被拒绝，无需重启，删除文件即解除。需要长期停止时，禁用 `mutations_enabled` 或移除操作/集群允许列表并重启；其余配置不热加载。通过单独授权的运维工具核对不确定目标状态，Control 不自行生成补偿写入。这些是产品运行时控制；取消文档审批门禁不会移除它们。
 
 本文核对源码定义的配置、目录与模式。文档编写期间未执行 OAuth 部署、真实 Control 会话或集群变更。
 

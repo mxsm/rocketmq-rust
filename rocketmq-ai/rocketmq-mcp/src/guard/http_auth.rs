@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use axum::extract::Request;
 use axum::extract::State;
+use axum::http::header::RETRY_AFTER;
 use axum::http::header::WWW_AUTHENTICATE;
 use axum::http::HeaderMap;
 use axum::http::HeaderValue;
@@ -42,6 +43,7 @@ use crate::guard::jwks::HttpJwksSource;
 use crate::guard::jwks::JwksSource;
 use crate::guard::jwks::JwksVerifier;
 use crate::guard::Guard;
+use crate::guard::GuardRejection;
 use crate::{McpError, McpResult};
 
 pub struct HttpAuthState<S = HttpJwksSource> {
@@ -235,8 +237,12 @@ where
                 }
             }
         };
-        if self.guard.check_http_rate_limit(&context).is_err() {
-            return Ok(Err(HttpAuthRejection::rate_limited()));
+        if let Err(refused) = self.guard.check_http_rate_limit(&context) {
+            let retry_after_ms = match refused {
+                GuardRejection::RateLimited { retry_after_ms } => retry_after_ms,
+                _ => 0,
+            };
+            return Ok(Err(HttpAuthRejection::rate_limited(retry_after_ms)));
         }
         Ok(Ok(context))
     }
@@ -287,6 +293,8 @@ fn jwt_validation(config: &HttpAuthConfig) -> Validation {
 pub struct HttpAuthRejection {
     kind: AuthRejectionKind,
     _source: Option<jsonwebtoken::errors::Error>,
+    /// Whole seconds after which a rate-limited caller may send the next request.
+    retry_after_seconds: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -317,6 +325,7 @@ impl HttpAuthRejection {
         Self {
             kind: AuthRejectionKind::InvalidToken,
             _source: None,
+            retry_after_seconds: None,
         }
     }
 
@@ -324,6 +333,7 @@ impl HttpAuthRejection {
         Self {
             kind: AuthRejectionKind::InvalidToken,
             _source: Some(source),
+            retry_after_seconds: None,
         }
     }
 
@@ -331,13 +341,17 @@ impl HttpAuthRejection {
         Self {
             kind: AuthRejectionKind::InsufficientScope,
             _source: None,
+            retry_after_seconds: None,
         }
     }
 
-    fn rate_limited() -> Self {
+    /// A caller that used up its HTTP budget. `Retry-After` counts whole seconds, so the wait is
+    /// rounded up: a caller that waits that long finds a request due.
+    fn rate_limited(retry_after_ms: u64) -> Self {
         Self {
             kind: AuthRejectionKind::RateLimited,
             _source: None,
+            retry_after_seconds: Some(retry_after_ms.div_ceil(1_000).max(1)),
         }
     }
 
@@ -372,6 +386,9 @@ impl IntoResponse for HttpAuthRejection {
             response
                 .headers_mut()
                 .insert(WWW_AUTHENTICATE, HeaderValue::from_static(challenge));
+        }
+        if let Some(seconds) = self.retry_after_seconds {
+            response.headers_mut().insert(RETRY_AFTER, HeaderValue::from(seconds));
         }
         response
     }
@@ -442,12 +459,13 @@ mod tests {
 
     #[tokio::test]
     async fn http_rejections_have_fixed_status_body_and_challenge() {
-        for (rejection, status, body, challenge) in [
+        for (rejection, status, body, challenge, retry_after) in [
             (
                 HttpAuthRejection::unauthorized(),
                 StatusCode::UNAUTHORIZED,
                 "invalid_token",
                 Some("Bearer error=\"invalid_token\""),
+                None,
             ),
             (
                 HttpAuthRejection::invalid_token(jsonwebtoken::errors::Error::from(
@@ -456,18 +474,29 @@ mod tests {
                 StatusCode::UNAUTHORIZED,
                 "invalid_token",
                 Some("Bearer error=\"invalid_token\""),
+                None,
             ),
             (
                 HttpAuthRejection::insufficient_scope(),
                 StatusCode::FORBIDDEN,
                 "insufficient_scope",
                 Some("Bearer error=\"insufficient_scope\""),
+                None,
             ),
+            // `Retry-After` counts whole seconds: the wait is rounded up and is never zero.
             (
-                HttpAuthRejection::rate_limited(),
+                HttpAuthRejection::rate_limited(1_001),
                 StatusCode::TOO_MANY_REQUESTS,
                 "rate_limited",
                 None,
+                Some("2"),
+            ),
+            (
+                HttpAuthRejection::rate_limited(0),
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limited",
+                None,
+                Some("1"),
             ),
         ] {
             let response = rejection.into_response();
@@ -478,6 +507,10 @@ mod tests {
                     .get(WWW_AUTHENTICATE)
                     .map(|value| value.to_str().unwrap()),
                 challenge
+            );
+            assert_eq!(
+                response.headers().get(RETRY_AFTER).map(|value| value.to_str().unwrap()),
+                retry_after
             );
             let bytes = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
             assert_eq!(bytes.as_ref(), body.as_bytes());
@@ -571,6 +604,41 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(context.visibility_class(), VisibilityClass::Sensitive);
+    }
+
+    #[tokio::test]
+    async fn the_http_budget_is_counted_apart_from_the_budget_of_a_tool() {
+        let state_with = |guard| -> HttpAuthState<StaticSource> {
+            HttpAuthState {
+                authenticator: HttpAuthenticator::DevelopmentToken {
+                    token: Arc::from("local-test-token"),
+                    tenant: None,
+                },
+                guard,
+                resource_metadata: None,
+            }
+        };
+        let headers = bearer_headers("local-test-token");
+
+        // One call a minute for each Tool, and three requests a minute over HTTP.
+        let state = state_with(test_guard_with_budgets(1, Some(3)));
+        for _ in 0..3 {
+            assert!(state.authenticate(&headers).await.unwrap().is_ok());
+        }
+        let refused = state.authenticate(&headers).await.unwrap().unwrap_err();
+        assert_eq!(refused.to_string(), "rate_limited");
+        let response = refused.into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        // Three a minute is one every twenty seconds, and the response says so in whole seconds.
+        let retry_after = response.headers().get(RETRY_AFTER).unwrap().to_str().unwrap();
+        assert!((1..=20).contains(&retry_after.parse::<u64>().unwrap()), "{retry_after}");
+
+        // Unset, the HTTP budget is ten times the budget of one Tool.
+        let state = state_with(test_guard_with_budgets(1, None));
+        for _ in 0..10 {
+            assert!(state.authenticate(&headers).await.unwrap().is_ok());
+        }
+        assert!(state.authenticate(&headers).await.unwrap().is_err());
     }
 
     #[tokio::test]
@@ -704,6 +772,7 @@ mod tests {
             Err(HttpAuthRejection {
                 kind: AuthRejectionKind::InvalidToken,
                 _source: None,
+                retry_after_seconds: None,
             })
         ));
     }
@@ -738,15 +807,21 @@ mod tests {
     }
 
     fn test_guard() -> Guard {
+        test_guard_with_budgets(60, None)
+    }
+
+    /// A Guard with the given budget for one Tool and, when set, for all HTTP requests.
+    fn test_guard_with_budgets(rate_limit_per_minute: u32, http_rate_limit_per_minute: Option<u32>) -> Guard {
         Guard::new(
             SecurityConfig {
                 profile: "diagnose".to_string(),
                 allow_change_planning: false,
                 sanitize_output: true,
-                rate_limit_per_minute: 60,
+                rate_limit_per_minute,
                 permissions_file: permission_path(),
                 max_concurrent_requests_per_cluster: 8,
                 pseudonym_key_env: None,
+                http_rate_limit_per_minute,
             },
             AuditConfig {
                 enabled: true,
@@ -755,6 +830,7 @@ mod tests {
                 queue_capacity: 16,
                 max_record_bytes: 16 * 1024,
                 queue_max_bytes: 1024 * 1024,
+                max_file_bytes: 0,
             },
             &[ClusterConfig {
                 name: "local-dev".to_string(),

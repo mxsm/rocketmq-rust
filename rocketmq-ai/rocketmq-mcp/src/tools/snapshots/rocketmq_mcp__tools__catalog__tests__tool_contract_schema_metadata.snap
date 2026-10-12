@@ -288,6 +288,15 @@ expression: contracts
             "integer",
             "null"
           ]
+        },
+        "response_format": {
+          "default": "detailed",
+          "description": "How much of each item to return. `detailed`, the default, returns every field. `concise` returns only the fields that name an item, which is smaller and can be faster: use it to find a name, then ask for one item.",
+          "enum": [
+            "concise",
+            "detailed"
+          ],
+          "type": "string"
         }
       },
       "type": "object"
@@ -1142,6 +1151,15 @@ expression: contracts
             "integer",
             "null"
           ]
+        },
+        "response_format": {
+          "default": "detailed",
+          "description": "How much of each item to return. `detailed`, the default, returns every field. `concise` returns only the fields that name an item, which is smaller and can be faster: use it to find a name, then ask for one item.",
+          "enum": [
+            "concise",
+            "detailed"
+          ],
+          "type": "string"
         }
       },
       "type": "object"
@@ -1186,13 +1204,7 @@ expression: contracts
             }
           },
           "required": [
-            "group",
-            "version",
-            "client_count",
-            "consume_type",
-            "message_model",
-            "consume_tps",
-            "diff_total"
+            "group"
           ],
           "type": "object"
         },
@@ -4192,6 +4204,15 @@ expression: contracts
             "integer",
             "null"
           ]
+        },
+        "response_format": {
+          "default": "detailed",
+          "description": "How much of each item to return. `detailed`, the default, returns every field. `concise` returns only the fields that name an item, which is smaller and can be faster: use it to find a name, then ask for one item.",
+          "enum": [
+            "concise",
+            "detailed"
+          ],
+          "type": "string"
         }
       },
       "required": [
@@ -4235,9 +4256,7 @@ expression: contracts
           },
           "required": [
             "broker_name",
-            "client_alias",
-            "language",
-            "version"
+            "client_alias"
           ],
           "type": "object"
         },
@@ -4451,6 +4470,15 @@ expression: contracts
           "description": "Exact Producer Group name.",
           "type": "string"
         },
+        "response_format": {
+          "default": "detailed",
+          "description": "How much of each item to return. `detailed`, the default, returns every field. `concise` returns only the fields that name an item, which is smaller and can be faster: use it to find a name, then ask for one item.",
+          "enum": [
+            "concise",
+            "detailed"
+          ],
+          "type": "string"
+        },
         "topic": {
           "description": "Exact Topic name. `rocketmq_list_topics` lists the names.",
           "type": "string"
@@ -4498,9 +4526,7 @@ expression: contracts
           },
           "required": [
             "broker_name",
-            "client_alias",
-            "language",
-            "version"
+            "client_alias"
           ],
           "type": "object"
         },
@@ -7591,6 +7617,15 @@ expression: contracts
           "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
           "minLength": 1,
           "type": "string"
+        },
+        "response_format": {
+          "default": "detailed",
+          "description": "How much of each item to return. `detailed`, the default, returns every field. `concise` returns only the fields that name an item, which is smaller and can be faster: use it to find a name, then ask for one item.",
+          "enum": [
+            "concise",
+            "detailed"
+          ],
+          "type": "string"
         }
       },
       "required": [
@@ -7640,16 +7675,8 @@ expression: contracts
             }
           },
           "required": [
-            "cluster",
             "broker_name",
             "broker_id",
-            "version",
-            "in_tps",
-            "out_tps",
-            "timer_progress",
-            "page_cache_lock_time_millis",
-            "hour",
-            "space",
             "broker_active"
           ],
           "type": "object"
@@ -10479,5 +10506,1904 @@ expression: contracts
       "type": "object"
     },
     "title": "RocketMQ message delivery diagnosis"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "RocketMQ Topic consumers"
+    },
+    "description": "Lists the Consumer Groups that consume one Topic, a page at a time: the groups subscribed to it now and the groups that hold a consume offset on it, joined over every Broker that hosts the Topic. Use it when you know the Topic and need to learn who reads it, for example before changing or removing the Topic. Next, pass a group and the Topic to rocketmq_get_consumer_lag.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "cursor": {
+          "default": null,
+          "description": "Continuation token. To read the next page, pass the `next_cursor` of the previous response unchanged, together with the same arguments and `limit`. Omit it for the first page.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "default": null,
+          "description": "Maximum number of items in the returned page, from 1 to 200. Defaults to 50.",
+          "format": "uint32",
+          "maximum": 200,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "topic": {
+          "description": "Exact Topic name. `rocketmq_list_topics` lists the names.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "cluster",
+        "topic"
+      ],
+      "type": "object"
+    },
+    "name": "rocketmq_list_topic_consumers",
+    "outputSchema": {
+      "$defs": {
+        "CacheStatus": {
+          "enum": [
+            "bypass",
+            "hit",
+            "miss"
+          ],
+          "type": "string"
+        },
+        "ListTopicConsumersOutput": {
+          "properties": {
+            "cluster": {
+              "type": "string"
+            },
+            "count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "generated_at": {
+              "type": "string"
+            },
+            "has_more": {
+              "type": "boolean"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/$defs/TopicConsumerGroup"
+              },
+              "type": "array"
+            },
+            "next_cursor": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "topic": {
+              "type": "string"
+            },
+            "total_count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "truncated": {
+              "description": "Whether the Topic has more Consumer Groups than the server keeps for one answer. The names beyond that bound are missing from every page.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "cluster",
+            "topic",
+            "truncated",
+            "items",
+            "count",
+            "total_count",
+            "has_more",
+            "generated_at"
+          ],
+          "type": "object"
+        },
+        "QuerySource": {
+          "enum": [
+            "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
+            "consumer_statistics",
+            "consumer_connection",
+            "producer_connection",
+            "topic_config",
+            "topic_stats",
+            "consumer_group_config",
+            "subscription_groups",
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
+          ],
+          "type": "string"
+        },
+        "SourceFailure": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/SourceFailureCode"
+            },
+            "logical_target": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "source": {
+              "$ref": "#/$defs/QuerySource"
+            }
+          },
+          "required": [
+            "source",
+            "code",
+            "retryable",
+            "logical_target"
+          ],
+          "type": "object"
+        },
+        "SourceFailureCode": {
+          "enum": [
+            "source_unavailable",
+            "timeout",
+            "permission_denied",
+            "not_found",
+            "rate_limited",
+            "invalid_response"
+          ],
+          "type": "string"
+        },
+        "TopicConsumerGroup": {
+          "description": "One Consumer Group that consumes a Topic.",
+          "properties": {
+            "group": {
+              "description": "Exact Consumer Group name, as the Tools that take `consumer_group` expect it.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "group"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "cache_status": {
+          "$ref": "#/$defs/CacheStatus"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/ListTopicConsumersOutput"
+        },
+        "freshness_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observed_at": {
+          "type": "string"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "source_failures": {
+          "items": {
+            "$ref": "#/$defs/SourceFailure"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "request_id",
+        "cluster",
+        "observed_at",
+        "freshness_ms",
+        "cache_status",
+        "partial",
+        "warnings",
+        "data"
+      ],
+      "type": "object"
+    },
+    "title": "RocketMQ Topic consumers"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "RocketMQ consumer client running info"
+    },
+    "description": "Asks one connected client of a Consumer Group what it reports about itself: its subscriptions, its pull and consume rates per Topic, and a page of the queues it holds with offsets, cached messages and lock state. Use it to find a stuck client or to compare the subscriptions of two clients of one group. Name the client by a client_alias from rocketmq_list_consumer_connections.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "client_alias": {
+          "description": "Pseudonym of one connected client of the group: the `client_alias` of an item that `rocketmq_list_consumer_connections` returned. It is neither a client identifier nor an address.",
+          "pattern": "^client-[0-9a-f]{32}$",
+          "type": "string"
+        },
+        "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "consumer_group": {
+          "description": "Exact Consumer Group name. `rocketmq_list_consumer_groups` lists the names.",
+          "type": "string"
+        },
+        "cursor": {
+          "default": null,
+          "description": "Continuation token. To read the next page, pass the `next_cursor` of the previous response unchanged, together with the same arguments and `limit`. Omit it for the first page.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "default": null,
+          "description": "Maximum number of items in the returned page, from 1 to 200. Defaults to 50.",
+          "format": "uint32",
+          "maximum": 200,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cluster",
+        "consumer_group",
+        "client_alias"
+      ],
+      "type": "object"
+    },
+    "name": "rocketmq_get_consumer_running_info",
+    "outputSchema": {
+      "$defs": {
+        "CacheStatus": {
+          "enum": [
+            "bypass",
+            "hit",
+            "miss"
+          ],
+          "type": "string"
+        },
+        "ConsumerClientQueueMode": {
+          "description": "How a client takes messages from a queue.",
+          "enum": [
+            "pull",
+            "pop"
+          ],
+          "type": "string"
+        },
+        "ConsumerClientQueueRow": {
+          "description": "What a client holds for one queue. A member its `mode` does not have is null, and so is a time the client never recorded.",
+          "properties": {
+            "broker_name": {
+              "type": "string"
+            },
+            "cached_message_count": {
+              "description": "Messages the client holds that its listener has not finished. `pull` only.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "cached_message_size_mib": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "commit_offset": {
+              "description": "The offset the client has committed. `pull` only.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "dropped": {
+              "description": "Whether the client gave the queue up, as it does after a rebalance.",
+              "type": "boolean"
+            },
+            "last_consume_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "last_lock_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "last_pull_at": {
+              "description": "When the client last pulled or popped from the queue.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "locked": {
+              "description": "Whether the client holds the queue lock that ordered consumption needs. `pull` only.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "mode": {
+              "$ref": "#/$defs/ConsumerClientQueueMode"
+            },
+            "queue_id": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "topic": {
+              "type": "string"
+            },
+            "try_unlock_times": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "wait_ack_count": {
+              "description": "Messages popped and not yet acknowledged. `pop` only.",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "topic",
+            "broker_name",
+            "queue_id",
+            "mode",
+            "dropped"
+          ],
+          "type": "object"
+        },
+        "ConsumerClientSubscription": {
+          "properties": {
+            "expression": {
+              "description": "The filter expression, `*` for every message. Null when it is longer than 1,024 bytes.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "expression_type": {
+              "description": "The kind of filter, `TAG` or `SQL92`.",
+              "type": "string"
+            },
+            "sub_version": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "topic": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "topic",
+            "expression_type",
+            "sub_version"
+          ],
+          "type": "object"
+        },
+        "ConsumerClientTopicStatus": {
+          "properties": {
+            "consume_failed_messages": {
+              "description": "Messages the listener failed in the last hour.",
+              "format": "int64",
+              "type": "integer"
+            },
+            "consume_failed_tps": {
+              "format": "double",
+              "type": "number"
+            },
+            "consume_ok_tps": {
+              "format": "double",
+              "type": "number"
+            },
+            "consume_rt_ms": {
+              "description": "Average time the listener takes for one message, in milliseconds.",
+              "format": "double",
+              "type": "number"
+            },
+            "pull_rt_ms": {
+              "description": "Average time of one pull, in milliseconds.",
+              "format": "double",
+              "type": "number"
+            },
+            "pull_tps": {
+              "format": "double",
+              "type": "number"
+            },
+            "topic": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "topic",
+            "pull_rt_ms",
+            "pull_tps",
+            "consume_rt_ms",
+            "consume_ok_tps",
+            "consume_failed_tps",
+            "consume_failed_messages"
+          ],
+          "type": "object"
+        },
+        "GetConsumerRunningInfoOutput": {
+          "properties": {
+            "broker_name": {
+              "description": "The Broker that relayed the request to the client.",
+              "type": "string"
+            },
+            "client_alias": {
+              "type": "string"
+            },
+            "client_version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "cluster": {
+              "type": "string"
+            },
+            "consume_orderly": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "consume_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "consumer_group": {
+              "type": "string"
+            },
+            "count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "generated_at": {
+              "type": "string"
+            },
+            "has_more": {
+              "type": "boolean"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/$defs/ConsumerClientQueueRow"
+              },
+              "type": "array"
+            },
+            "next_cursor": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "queue_count": {
+              "description": "How many queues the client reported.",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "started_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "subscriptions": {
+              "description": "The subscriptions the client itself holds, at most 256. Clients of one group must hold the same ones.",
+              "items": {
+                "$ref": "#/$defs/ConsumerClientSubscription"
+              },
+              "type": "array"
+            },
+            "thread_pool_core_size": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "topic_status": {
+              "description": "Pull and consume rates of the client for each Topic, at most 256.",
+              "items": {
+                "$ref": "#/$defs/ConsumerClientTopicStatus"
+              },
+              "type": "array"
+            },
+            "total_count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "truncated": {
+              "description": "Whether the client reported more subscriptions, Topics or queues than the server keeps.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "cluster",
+            "consumer_group",
+            "client_alias",
+            "broker_name",
+            "subscriptions",
+            "topic_status",
+            "queue_count",
+            "truncated",
+            "items",
+            "count",
+            "total_count",
+            "has_more",
+            "generated_at"
+          ],
+          "type": "object"
+        },
+        "QuerySource": {
+          "enum": [
+            "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
+            "consumer_statistics",
+            "consumer_connection",
+            "producer_connection",
+            "topic_config",
+            "topic_stats",
+            "consumer_group_config",
+            "subscription_groups",
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
+          ],
+          "type": "string"
+        },
+        "SourceFailure": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/SourceFailureCode"
+            },
+            "logical_target": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "source": {
+              "$ref": "#/$defs/QuerySource"
+            }
+          },
+          "required": [
+            "source",
+            "code",
+            "retryable",
+            "logical_target"
+          ],
+          "type": "object"
+        },
+        "SourceFailureCode": {
+          "enum": [
+            "source_unavailable",
+            "timeout",
+            "permission_denied",
+            "not_found",
+            "rate_limited",
+            "invalid_response"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "cache_status": {
+          "$ref": "#/$defs/CacheStatus"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/GetConsumerRunningInfoOutput"
+        },
+        "freshness_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observed_at": {
+          "type": "string"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "source_failures": {
+          "items": {
+            "$ref": "#/$defs/SourceFailure"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "request_id",
+        "cluster",
+        "observed_at",
+        "freshness_ms",
+        "cache_status",
+        "partial",
+        "warnings",
+        "data"
+      ],
+      "type": "object"
+    },
+    "title": "RocketMQ consumer client running info"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "RocketMQ dead-letter summary"
+    },
+    "description": "Returns how many dead letters one Consumer Group holds and when the newest one was stored, in total and for each Broker. A message is dead-lettered when the group gave up retrying it. Use it to check whether a group loses messages to its dead-letter Topic. It returns counts and times only, never a message. To locate one message use rocketmq_diagnose_message_delivery.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "consumer_group": {
+          "description": "Exact Consumer Group name. `rocketmq_list_consumer_groups` lists the names.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "cluster",
+        "consumer_group"
+      ],
+      "type": "object"
+    },
+    "name": "rocketmq_get_dlq_summary",
+    "outputSchema": {
+      "$defs": {
+        "CacheStatus": {
+          "enum": [
+            "bypass",
+            "hit",
+            "miss"
+          ],
+          "type": "string"
+        },
+        "DlqBrokerSummary": {
+          "description": "The part of a dead-letter Topic that one Broker holds.",
+          "properties": {
+            "broker_name": {
+              "type": "string"
+            },
+            "last_message_at": {
+              "description": "Store time of the newest dead letter on this Broker.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "message_count": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "queue_count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "broker_name",
+            "queue_count",
+            "message_count"
+          ],
+          "type": "object"
+        },
+        "GetDlqSummaryOutput": {
+          "properties": {
+            "brokers": {
+              "description": "The same counts for each Broker that holds a part of the Topic, in ascending order of Broker name.",
+              "items": {
+                "$ref": "#/$defs/DlqBrokerSummary"
+              },
+              "type": "array"
+            },
+            "cluster": {
+              "type": "string"
+            },
+            "consumer_group": {
+              "type": "string"
+            },
+            "dlq_topic": {
+              "description": "Name of the dead-letter Topic of the group: `%DLQ%` followed by the group name.",
+              "type": "string"
+            },
+            "exists": {
+              "description": "False when the dead-letter Topic does not exist: no message of the group was dead-lettered in this cluster.",
+              "type": "boolean"
+            },
+            "generated_at": {
+              "type": "string"
+            },
+            "last_message_age_ms": {
+              "description": "How long before this observation the newest dead letter was stored, in milliseconds.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "last_message_at": {
+              "description": "Store time of the newest dead letter.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "message_count": {
+              "description": "Dead letters the Topic holds now. A Broker deletes them when their retention time ends, so this is not the number that was ever dead-lettered.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "queue_count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "truncated": {
+              "description": "Whether the Topic has more queues than the server reads. The per-Broker rows then cover only the queues that were read; the totals still cover every queue.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "cluster",
+            "consumer_group",
+            "dlq_topic",
+            "exists",
+            "queue_count",
+            "message_count",
+            "brokers",
+            "truncated",
+            "generated_at"
+          ],
+          "type": "object"
+        },
+        "QuerySource": {
+          "enum": [
+            "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
+            "consumer_statistics",
+            "consumer_connection",
+            "producer_connection",
+            "topic_config",
+            "topic_stats",
+            "consumer_group_config",
+            "subscription_groups",
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
+          ],
+          "type": "string"
+        },
+        "SourceFailure": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/SourceFailureCode"
+            },
+            "logical_target": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "source": {
+              "$ref": "#/$defs/QuerySource"
+            }
+          },
+          "required": [
+            "source",
+            "code",
+            "retryable",
+            "logical_target"
+          ],
+          "type": "object"
+        },
+        "SourceFailureCode": {
+          "enum": [
+            "source_unavailable",
+            "timeout",
+            "permission_denied",
+            "not_found",
+            "rate_limited",
+            "invalid_response"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "cache_status": {
+          "$ref": "#/$defs/CacheStatus"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/GetDlqSummaryOutput"
+        },
+        "freshness_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observed_at": {
+          "type": "string"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "source_failures": {
+          "items": {
+            "$ref": "#/$defs/SourceFailure"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "request_id",
+        "cluster",
+        "observed_at",
+        "freshness_ms",
+        "cache_status",
+        "partial",
+        "warnings",
+        "data"
+      ],
+      "type": "object"
+    },
+    "title": "RocketMQ dead-letter summary"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "RocketMQ message trace"
+    },
+    "description": "Returns the trace of one message: when it was published and when each Consumer Group received and finished it, with groups, durations and results. Use it to see what happened to a message you can name by the identifier its producer got. It needs clients that write traces. It never returns a body; client hosts, tags and keys are returned only with the diagnose scope.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "message_id": {
+          "description": "Identifier the producing client gave the message: the message identifier of its send result, exactly as RocketMQ reported it. Trace records are indexed by this identifier, not by the offset message identifier.",
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "trace_topic": {
+          "default": null,
+          "description": "Name of the trace Topic. Omit it unless the clients are configured with a custom one; the default is `RMQ_SYS_TRACE_TOPIC`.",
+          "maxLength": 255,
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cluster",
+        "message_id"
+      ],
+      "type": "object"
+    },
+    "name": "rocketmq_query_message_trace",
+    "outputSchema": {
+      "$defs": {
+        "CacheStatus": {
+          "enum": [
+            "bypass",
+            "hit",
+            "miss"
+          ],
+          "type": "string"
+        },
+        "MessageTraceRecord": {
+          "description": "One trace record. Clients write trace records, so a record is a claim of a client and not a fact a Broker verified.",
+          "properties": {
+            "at": {
+              "description": "When the step happened.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "body_length": {
+              "description": "Size of the message body in bytes. The body itself is never returned.",
+              "format": "int32",
+              "type": "integer"
+            },
+            "client_host_alias": {
+              "description": "Pseudonym of the host of the client that wrote the record. Null without the `rocketmq:diagnose` scope.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "cost_time_ms": {
+              "description": "How long the step took, in milliseconds.",
+              "format": "int32",
+              "type": "integer"
+            },
+            "from_transaction_check": {
+              "type": "boolean"
+            },
+            "group": {
+              "description": "The producer or consumer group of the client that wrote the record.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "key_aliases": {
+              "description": "Pseudonyms of the keys of the message, at most 4. Empty without the `rocketmq:diagnose` scope.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "retry_times": {
+              "description": "How often the message had been redelivered when a consumer received it.",
+              "format": "int32",
+              "type": "integer"
+            },
+            "step": {
+              "$ref": "#/$defs/MessageTraceStep"
+            },
+            "store_broker_name": {
+              "description": "The Broker the record names as the store, when it is a Broker of this cluster.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "success": {
+              "type": "boolean"
+            },
+            "tags": {
+              "description": "The tags of the message. Null without the `rocketmq:diagnose` scope.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "topic": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "step",
+            "cost_time_ms",
+            "success",
+            "retry_times",
+            "body_length",
+            "from_transaction_check",
+            "key_aliases"
+          ],
+          "type": "object"
+        },
+        "MessageTraceStep": {
+          "description": "The step in the life of a message that a trace record is about.",
+          "oneOf": [
+            {
+              "const": "publish",
+              "description": "A producer sent the message.",
+              "type": "string"
+            },
+            {
+              "const": "consume_start",
+              "description": "A consumer received the message and is about to run its listener.",
+              "type": "string"
+            },
+            {
+              "const": "consume_end",
+              "description": "The listener of a consumer returned.",
+              "type": "string"
+            },
+            {
+              "const": "end_transaction",
+              "description": "A producer committed or rolled back a transactional message.",
+              "type": "string"
+            },
+            {
+              "const": "recall",
+              "description": "A producer recalled a scheduled message.",
+              "type": "string"
+            }
+          ]
+        },
+        "QueryMessageTraceOutput": {
+          "properties": {
+            "cluster": {
+              "type": "string"
+            },
+            "generated_at": {
+              "type": "string"
+            },
+            "message_alias": {
+              "description": "Pseudonym of the offset message identifier the records name, the same one `rocketmq_get_message_metadata` reports as `message_alias`. Null when no record names one.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "queried_broker_count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "records": {
+              "description": "The records in ascending order of time, at most 128.",
+              "items": {
+                "$ref": "#/$defs/MessageTraceRecord"
+              },
+              "type": "array"
+            },
+            "redacted": {
+              "description": "Whether client hosts, tags and keys were left out because the caller lacks the `rocketmq:diagnose` scope.",
+              "type": "boolean"
+            },
+            "trace_topic": {
+              "type": "string"
+            },
+            "trace_topic_found": {
+              "description": "False when the trace Topic has no route in this cluster: no client traces messages there, or the clients use another trace Topic.",
+              "type": "boolean"
+            },
+            "truncated": {
+              "description": "Whether the message has more trace records than were returned.",
+              "type": "boolean"
+            },
+            "unanswered_brokers": {
+              "description": "The Brokers that host the trace Topic and did not answer. Their records are missing.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "unique_message_alias": {
+              "description": "Pseudonym of the queried identifier, the same one `rocketmq_get_message_metadata` reports as `unique_message_alias`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cluster",
+            "unique_message_alias",
+            "trace_topic",
+            "trace_topic_found",
+            "redacted",
+            "records",
+            "truncated",
+            "queried_broker_count",
+            "unanswered_brokers",
+            "generated_at"
+          ],
+          "type": "object"
+        },
+        "QuerySource": {
+          "enum": [
+            "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
+            "consumer_statistics",
+            "consumer_connection",
+            "producer_connection",
+            "topic_config",
+            "topic_stats",
+            "consumer_group_config",
+            "subscription_groups",
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
+          ],
+          "type": "string"
+        },
+        "SourceFailure": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/SourceFailureCode"
+            },
+            "logical_target": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "source": {
+              "$ref": "#/$defs/QuerySource"
+            }
+          },
+          "required": [
+            "source",
+            "code",
+            "retryable",
+            "logical_target"
+          ],
+          "type": "object"
+        },
+        "SourceFailureCode": {
+          "enum": [
+            "source_unavailable",
+            "timeout",
+            "permission_denied",
+            "not_found",
+            "rate_limited",
+            "invalid_response"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "cache_status": {
+          "$ref": "#/$defs/CacheStatus"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/QueryMessageTraceOutput"
+        },
+        "freshness_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observed_at": {
+          "type": "string"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "source_failures": {
+          "items": {
+            "$ref": "#/$defs/SourceFailure"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "request_id",
+        "cluster",
+        "observed_at",
+        "freshness_ms",
+        "cache_status",
+        "partial",
+        "warnings",
+        "data"
+      ],
+      "type": "object"
+    },
+    "title": "RocketMQ message trace"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "RocketMQ message search by key"
+    },
+    "description": "Finds the messages of one Topic that carry an exact message key and were stored in a window of at most 24 hours, newest first and at most 32. Use it when you know a business key, such as an order number, and not the message. It returns where and when each message was stored and names it by pseudonyms; it never returns a body, a key or a tag. It needs the rocketmq:message-search scope.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "end_at": {
+          "default": null,
+          "description": "End of the searched store-time window as an RFC 3339 timestamp, for example `2026-10-01T08:30:00Z`. Omit it to search up to now.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "description": "One whole message key, exactly as the producer set it. It is matched exactly and case-sensitively: it is neither a prefix nor a pattern, and it holds no whitespace.",
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "topic": {
+          "description": "Exact Topic name. `rocketmq_list_topics` lists the names.",
+          "type": "string"
+        },
+        "window_minutes": {
+          "default": null,
+          "description": "Length of the searched window in minutes, from 1 to 1440. The window ends at `end_at`. Defaults to 60.",
+          "format": "uint32",
+          "maximum": 1440,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cluster",
+        "topic",
+        "key"
+      ],
+      "type": "object"
+    },
+    "name": "rocketmq_find_messages_by_key",
+    "outputSchema": {
+      "$defs": {
+        "CacheStatus": {
+          "enum": [
+            "bypass",
+            "hit",
+            "miss"
+          ],
+          "type": "string"
+        },
+        "FindMessagesByKeyOutput": {
+          "properties": {
+            "cluster": {
+              "type": "string"
+            },
+            "generated_at": {
+              "type": "string"
+            },
+            "messages": {
+              "description": "The matches, newest first, at most 32.",
+              "items": {
+                "$ref": "#/$defs/MessageKeyMatch"
+              },
+              "type": "array"
+            },
+            "queried_broker_count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "topic": {
+              "type": "string"
+            },
+            "truncated": {
+              "description": "Whether more messages match than were returned. Search a shorter window to reach them.",
+              "type": "boolean"
+            },
+            "unanswered_brokers": {
+              "description": "The Brokers that host the Topic and did not answer. Their matches are missing.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "window_begin_at": {
+              "description": "The store-time window that was searched.",
+              "type": "string"
+            },
+            "window_end_at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cluster",
+            "topic",
+            "window_begin_at",
+            "window_end_at",
+            "messages",
+            "truncated",
+            "queried_broker_count",
+            "unanswered_brokers",
+            "generated_at"
+          ],
+          "type": "object"
+        },
+        "MessageKeyMatch": {
+          "description": "The fixed metadata of one message a search found. It names the message by pseudonyms only.",
+          "properties": {
+            "born_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "broker_name": {
+              "description": "The Broker that stores the message.",
+              "type": "string"
+            },
+            "flag": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "message_alias": {
+              "type": "string"
+            },
+            "prepared_transaction_offset": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "queue_id": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "queue_offset": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "reconsume_times": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "store_size": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "stored_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sys_flag": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "unique_message_alias": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "message_alias",
+            "broker_name",
+            "queue_id",
+            "queue_offset",
+            "store_size",
+            "reconsume_times",
+            "sys_flag",
+            "flag",
+            "prepared_transaction_offset"
+          ],
+          "type": "object"
+        },
+        "QuerySource": {
+          "enum": [
+            "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
+            "consumer_statistics",
+            "consumer_connection",
+            "producer_connection",
+            "topic_config",
+            "topic_stats",
+            "consumer_group_config",
+            "subscription_groups",
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
+          ],
+          "type": "string"
+        },
+        "SourceFailure": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/SourceFailureCode"
+            },
+            "logical_target": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "source": {
+              "$ref": "#/$defs/QuerySource"
+            }
+          },
+          "required": [
+            "source",
+            "code",
+            "retryable",
+            "logical_target"
+          ],
+          "type": "object"
+        },
+        "SourceFailureCode": {
+          "enum": [
+            "source_unavailable",
+            "timeout",
+            "permission_denied",
+            "not_found",
+            "rate_limited",
+            "invalid_response"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "cache_status": {
+          "$ref": "#/$defs/CacheStatus"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/FindMessagesByKeyOutput"
+        },
+        "freshness_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observed_at": {
+          "type": "string"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "source_failures": {
+          "items": {
+            "$ref": "#/$defs/SourceFailure"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "request_id",
+        "cluster",
+        "observed_at",
+        "freshness_ms",
+        "cache_status",
+        "partial",
+        "warnings",
+        "data"
+      ],
+      "type": "object"
+    },
+    "title": "RocketMQ message search by key"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "RocketMQ Lite Topic state of a Broker"
+    },
+    "description": "Returns what one Broker holds for Lite Topics: the queues it has and the most it accepts, its subscription, offset and event counters, and the Lite Topics it knows with their expiration and bound Consumer Groups. Use it to check whether a Broker is close to its Lite Topic limit, or which groups are bound to a Lite Topic. It asks the master of the Broker.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "broker_name": {
+          "description": "Logical Broker name as reported by `rocketmq_list_brokers`, for example `broker-a`. It is a name, not a network address.",
+          "type": "string"
+        },
+        "cluster": {
+          "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "cluster",
+        "broker_name"
+      ],
+      "type": "object"
+    },
+    "name": "rocketmq_get_lite_broker_info",
+    "outputSchema": {
+      "$defs": {
+        "CacheStatus": {
+          "enum": [
+            "bypass",
+            "hit",
+            "miss"
+          ],
+          "type": "string"
+        },
+        "GetLiteBrokerInfoOutput": {
+          "properties": {
+            "broker_name": {
+              "type": "string"
+            },
+            "cluster": {
+              "type": "string"
+            },
+            "consume_queue_count": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "current_lmq_count": {
+              "description": "The Lite Topic queues the Broker holds now.",
+              "format": "int32",
+              "type": "integer"
+            },
+            "event_count": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "generated_at": {
+              "type": "string"
+            },
+            "lite_subscription_count": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "lite_topic_count": {
+              "description": "How many Lite Topics the Broker knows.",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "lite_topics": {
+              "description": "The Lite Topics in ascending order of name, at most 100.",
+              "items": {
+                "$ref": "#/$defs/LiteTopicSummary"
+              },
+              "type": "array"
+            },
+            "max_lmq_count": {
+              "description": "The most Lite Topic queues the Broker accepts.",
+              "format": "int32",
+              "type": "integer"
+            },
+            "offset_count": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "order_info_count": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "store_type": {
+              "description": "The kind of store the Broker keeps Lite Topic queues in.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "truncated": {
+              "description": "Whether Lite Topics or bound groups beyond those bounds were left out. The counts still cover them.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "cluster",
+            "broker_name",
+            "max_lmq_count",
+            "current_lmq_count",
+            "lite_subscription_count",
+            "order_info_count",
+            "consume_queue_count",
+            "offset_count",
+            "event_count",
+            "lite_topic_count",
+            "lite_topics",
+            "truncated",
+            "generated_at"
+          ],
+          "type": "object"
+        },
+        "LiteTopicSummary": {
+          "properties": {
+            "bound_group_count": {
+              "description": "How many Consumer Groups are bound to the Topic.",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "bound_groups": {
+              "description": "The bound Consumer Groups in ascending order, at most 8.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "expiration_minutes": {
+              "description": "How long an idle Lite Topic is kept, in minutes. `-1` when no expiration is configured.",
+              "format": "int32",
+              "type": "integer"
+            },
+            "topic": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "topic",
+            "expiration_minutes",
+            "bound_group_count",
+            "bound_groups"
+          ],
+          "type": "object"
+        },
+        "QuerySource": {
+          "enum": [
+            "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
+            "consumer_statistics",
+            "consumer_connection",
+            "producer_connection",
+            "topic_config",
+            "topic_stats",
+            "consumer_group_config",
+            "subscription_groups",
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
+          ],
+          "type": "string"
+        },
+        "SourceFailure": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/SourceFailureCode"
+            },
+            "logical_target": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "source": {
+              "$ref": "#/$defs/QuerySource"
+            }
+          },
+          "required": [
+            "source",
+            "code",
+            "retryable",
+            "logical_target"
+          ],
+          "type": "object"
+        },
+        "SourceFailureCode": {
+          "enum": [
+            "source_unavailable",
+            "timeout",
+            "permission_denied",
+            "not_found",
+            "rate_limited",
+            "invalid_response"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "cache_status": {
+          "$ref": "#/$defs/CacheStatus"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/GetLiteBrokerInfoOutput"
+        },
+        "freshness_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observed_at": {
+          "type": "string"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "source_failures": {
+          "items": {
+            "$ref": "#/$defs/SourceFailure"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "request_id",
+        "cluster",
+        "observed_at",
+        "freshness_ms",
+        "cache_status",
+        "partial",
+        "warnings",
+        "data"
+      ],
+      "type": "object"
+    },
+    "title": "RocketMQ Lite Topic state of a Broker"
   }
 ]

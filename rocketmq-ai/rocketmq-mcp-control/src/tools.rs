@@ -189,6 +189,12 @@ pub struct UpsertTopicArgs {
     #[serde(default)]
     #[schemars(length(min = 8, max = 64), regex(pattern = "^[a-zA-Z0-9._:-]+$"))]
     pub request_key: Option<String>,
+    /// Digest of the plan to execute: the `plan_digest` that a dry run with the same arguments returned. With
+    /// it, the server writes only if the plan it reads now is that one, and otherwise ends the call with
+    /// `precondition_conflict`. A dry run ignores it; the server policy can require it to execute.
+    #[serde(default)]
+    #[schemars(length(min = 64, max = 64), regex(pattern = "^[0-9a-f]{64}$"))]
+    pub expected_plan_digest: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
@@ -233,6 +239,12 @@ pub struct UpsertConsumerGroupArgs {
     #[serde(default)]
     #[schemars(length(min = 8, max = 64), regex(pattern = "^[a-zA-Z0-9._:-]+$"))]
     pub request_key: Option<String>,
+    /// Digest of the plan to execute: the `plan_digest` that a dry run with the same arguments returned. With
+    /// it, the server writes only if the plan it reads now is that one, and otherwise ends the call with
+    /// `precondition_conflict`. A dry run ignores it; the server policy can require it to execute.
+    #[serde(default)]
+    #[schemars(length(min = 64, max = 64), regex(pattern = "^[0-9a-f]{64}$"))]
+    pub expected_plan_digest: Option<String>,
 }
 
 impl std::fmt::Debug for UpsertTopicArgs {
@@ -271,6 +283,7 @@ impl UpsertTopicArgs {
             self.confirm,
             self.reason.as_deref(),
             self.request_key.as_deref(),
+            self.expected_plan_digest.as_deref(),
         )?;
         validate_target_set(&self.broker_names)?;
         validate_user_name(&self.topic, NameKind::Topic)?;
@@ -305,6 +318,7 @@ impl UpsertConsumerGroupArgs {
             self.confirm,
             self.reason.as_deref(),
             self.request_key.as_deref(),
+            self.expected_plan_digest.as_deref(),
         )?;
         validate_target_set(&self.broker_names)?;
         validate_user_name(&self.consumer_group, NameKind::ConsumerGroup)?;
@@ -339,6 +353,7 @@ pub(super) fn validate_common(
     confirm: bool,
     reason: Option<&str>,
     request_key: Option<&str>,
+    expected_plan_digest: Option<&str>,
 ) -> Result<(), ControlError> {
     MutationArguments {
         schema_version: schema_version.to_owned(),
@@ -347,7 +362,22 @@ pub(super) fn validate_common(
         reason: reason.map(ToOwned::to_owned),
         request_key: request_key.map(ToOwned::to_owned),
     }
-    .validate()
+    .validate()?;
+    if expected_plan_digest.is_some_and(|digest| !is_plan_digest(digest)) {
+        return Err(ControlError::invalid_argument());
+    }
+    Ok(())
+}
+
+/// The pattern that the schemas declare for a plan digest.
+pub(crate) const PLAN_DIGEST_PATTERN: &str = "^[0-9a-f]{64}$";
+
+/// Returns whether `value` matches [`PLAN_DIGEST_PATTERN`]: a SHA-256 in lower-case hexadecimal.
+pub(crate) fn is_plan_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn validate_target_set(broker_names: &[String]) -> Result<(), ControlError> {
@@ -500,17 +530,27 @@ pub enum FailureCode {
 
 /// Name of the member that carries the invocation of a mutation response.
 pub const INVOCATION_ID_MEMBER: &str = "invocation_id";
+/// Name of the member that carries the digest of the plan that a dry run reports.
+pub const PLAN_DIGEST_MEMBER: &str = "plan_digest";
+/// Name of the argument that names the plan an execution expects to find.
+pub const EXPECTED_PLAN_DIGEST_ARGUMENT: &str = "expected_plan_digest";
 
-/// Renders a mutation response as it is sent: with the invocation of the call that returns it.
+/// Renders a mutation response as it is sent: with the invocation of the call that returns it
+/// and, for a dry run, the digest of its plan.
 ///
-/// The response types do not hold the invocation. A response replayed from the request-key cache
-/// was built for another call, and every call is recorded under an invocation of its own.
+/// The response types hold neither. A response replayed from the request-key cache was built for
+/// another call, and every call is recorded under an invocation of its own. A plan digest also
+/// covers what the request asks for, which a response does not repeat.
 #[cfg(any(feature = "write-tools", test))]
-pub(crate) fn response_with_invocation(response: &impl Serialize, invocation_id: u64) -> Option<serde_json::Value> {
+pub(crate) fn response_as_sent(
+    response: &impl Serialize,
+    invocation_id: u64,
+    plan_digest: Option<&str>,
+) -> Option<serde_json::Value> {
     let mut rendered = serde_json::to_value(response).ok()?;
-    rendered
-        .as_object_mut()?
-        .insert(INVOCATION_ID_MEMBER.to_owned(), serde_json::Value::from(invocation_id));
+    let members = rendered.as_object_mut()?;
+    members.insert(INVOCATION_ID_MEMBER.to_owned(), serde_json::Value::from(invocation_id));
+    members.insert(PLAN_DIGEST_MEMBER.to_owned(), serde_json::Value::from(plan_digest));
     Some(rendered)
 }
 
@@ -951,9 +991,11 @@ mod tests {
             }],
             warnings: vec!["topic order configuration was not reconciled".to_owned()],
         };
-        // The snapshot is the response as it is sent: with the invocation of the call.
-        let sent = response_with_invocation(&response, 42).unwrap();
+        // The snapshot is the response as it is sent: with the invocation of the call, and
+        // without a plan digest, which only a dry run reports.
+        let sent = response_as_sent(&response, 42, None).unwrap();
         assert_eq!(sent[INVOCATION_ID_MEMBER], 42);
+        assert_eq!(sent[PLAN_DIGEST_MEMBER], serde_json::Value::Null);
         insta::assert_json_snapshot!("control_mutation_response", sent);
     }
 }

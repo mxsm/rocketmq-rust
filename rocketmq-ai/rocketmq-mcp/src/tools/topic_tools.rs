@@ -25,6 +25,9 @@ mod observation;
 
 pub use observation::GetTopicStatsArgs;
 pub use observation::GetTopicStatsOutput;
+pub use observation::ListTopicConsumersArgs;
+pub use observation::ListTopicConsumersOutput;
+pub use observation::TopicConsumerGroup;
 pub use observation::TopicStatsQueueRow;
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]

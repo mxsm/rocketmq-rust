@@ -157,6 +157,7 @@ fn request(key: Option<&str>) -> UpsertRequest {
         confirm: true,
         reason: Some("planned operation".to_owned()),
         request_key: key.map(ToOwned::to_owned),
+        expected_plan_digest: None,
     })
 }
 
@@ -194,6 +195,7 @@ fn stage_c_idempotency_identity_covers_operation_resource_and_full_payload() {
         confirm: true,
         reason,
         request_key,
+        expected_plan_digest: None,
     });
     let offset_identity = IdempotencyIdentity::from_request(&principal, &cluster, &offset).unwrap();
     let offset_key = offset_identity.key.as_ref().expect("explicit offset key");
@@ -213,6 +215,7 @@ fn stage_c_idempotency_identity_covers_operation_resource_and_full_payload() {
         confirm: true,
         reason,
         request_key,
+        expected_plan_digest: None,
     });
     let broker_identity = IdempotencyIdentity::from_request(&principal, &cluster, &broker).unwrap();
     let broker_key = broker_identity.key.as_ref().expect("explicit broker key");
@@ -232,6 +235,7 @@ fn stage_c_idempotency_identity_covers_operation_resource_and_full_payload() {
         confirm: true,
         reason,
         request_key,
+        expected_plan_digest: None,
     });
     let request_mode_identity = IdempotencyIdentity::from_request(&principal, &cluster, &request_mode).unwrap();
     let request_mode_key = request_mode_identity.key.as_ref().expect("explicit request-mode key");
@@ -915,6 +919,7 @@ fn topic_and_group_dry_runs_report_all_mixed_and_zero_success() {
         confirm: false,
         reason: None,
         request_key: None,
+        expected_plan_digest: None,
     };
     let topic_before = BTreeMap::from([
         ("broker-a".to_owned(), tools::VisibleState::Absent),
@@ -1748,6 +1753,7 @@ fn drain_args(operation_id: &str) -> tools::ProxyDrainArgs {
         confirm: true,
         reason: Some("planned operation".to_owned()),
         request_key: Some("request-1234".to_owned()),
+        expected_plan_digest: None,
     }
 }
 
@@ -1764,6 +1770,7 @@ fn set_filter_args(ttl_seconds: u32) -> tools::SetBrokerLogFilterTtlArgs {
         confirm: true,
         reason: Some("planned operation".to_owned()),
         request_key: Some("request-1234".to_owned()),
+        expected_plan_digest: None,
     }
 }
 
@@ -1814,6 +1821,7 @@ fn operation_bound_requests_are_keyed_by_operation_and_digest_their_identifier()
         confirm: true,
         reason: Some("planned operation".to_owned()),
         request_key: Some("request-1234".to_owned()),
+        expected_plan_digest: None,
     });
     assert_eq!(identity(&set).operation, ControlOperation::BrokerLogFilterSet);
     assert_eq!(identity(&restore).operation, ControlOperation::BrokerLogFilterRestore);

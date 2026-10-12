@@ -167,7 +167,7 @@ fn audit_arguments(request: &CompleteRequestParams, cluster: Option<&str>) -> Js
     ])
 }
 
-fn starts_with_ignore_ascii_case(name: &str, prefix: &str) -> bool {
+pub(crate) fn starts_with_ignore_ascii_case(name: &str, prefix: &str) -> bool {
     name.len() >= prefix.len() && name.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
 }
 

@@ -76,9 +76,24 @@ use crate::tools::topic_tools::TopicRouteBroker;
 use crate::tools::topic_tools::TopicRouteQueue;
 use crate::tools::topic_tools::TopicStatsQueueRow;
 
+#[cfg(feature = "security-admin")]
+mod acl_users;
 mod consumer_observation;
+mod consumer_runtime;
 mod infrastructure_observation;
+mod lite_broker;
+mod message_index;
+mod topic_consumers;
 mod topic_observation;
+
+pub(crate) use consumer_runtime::SessionConsumerClientRuntime;
+#[cfg(test)]
+pub(crate) use message_index::SessionMessageKeyMatch;
+pub(crate) use message_index::SessionMessageKeyMatches;
+pub(crate) use message_index::SessionMessageTrace;
+#[cfg(test)]
+pub(crate) use message_index::SessionMessageTraceRecord;
+pub(crate) use topic_consumers::SessionTopicConsumers;
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedCluster {
@@ -194,6 +209,14 @@ pub(crate) trait AdminSession: Send {
         async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
+    /// Returns the Consumer Groups that consume `topic`, joined over the Brokers that host it.
+    fn topic_consumers(
+        &mut self,
+        _topic: &str,
+    ) -> impl Future<Output = Result<QueryPayload<SessionTopicConsumers>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+    }
+
     fn consumer_groups(
         &mut self,
     ) -> impl Future<Output = Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolFailure>> + Send;
@@ -291,6 +314,17 @@ pub(crate) trait AdminSession: Send {
         async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
+    /// Asks one connected client of a Consumer Group for its running state, through the Broker
+    /// it is connected to. The identifier comes from a connection this session read.
+    fn consumer_client_runtime(
+        &mut self,
+        _consumer_group: &str,
+        _broker_name: &str,
+        _client_id: &str,
+    ) -> impl Future<Output = Result<SessionConsumerClientRuntime, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+    }
+
     fn producer_connections(
         &mut self,
         _topic: &str,
@@ -303,6 +337,44 @@ pub(crate) trait AdminSession: Send {
         &mut self,
         _message_id: &str,
     ) -> impl Future<Output = Result<SessionMessageMetadata, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+    }
+
+    /// Returns the ACL users the masters of the cluster hold, without a password.
+    #[cfg(feature = "security-admin")]
+    fn acl_users(
+        &mut self,
+    ) -> impl Future<Output = Result<crate::tools::security_tools::ListAclUsersOutput, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+    }
+
+    /// Returns what the master of one Broker holds for Lite Topics.
+    fn lite_broker_info(
+        &mut self,
+        _broker_name: &str,
+    ) -> impl Future<Output = Result<crate::tools::broker_tools::GetLiteBrokerInfoOutput, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+    }
+
+    /// Returns the trace records clients wrote about one message, read from `trace_topic` or
+    /// from the default trace Topic.
+    fn message_trace(
+        &mut self,
+        _message_id: &str,
+        _trace_topic: Option<&str>,
+    ) -> impl Future<Output = Result<SessionMessageTrace, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+    }
+
+    /// Returns the messages of `topic` that carry `key` and were stored between the two times,
+    /// given in Unix milliseconds and both inclusive.
+    fn find_messages_by_key(
+        &mut self,
+        _topic: &str,
+        _key: &str,
+        _begin_millis: i64,
+        _end_millis: i64,
+    ) -> impl Future<Output = Result<SessionMessageKeyMatches, ToolFailure>> + Send {
         async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
@@ -555,6 +627,30 @@ impl AdminSession for AdminCoreSession {
             return session.topic_config(topic).await;
         }
         self.query_topic_config_observation(topic).await
+    }
+
+    async fn topic_consumers(&mut self, topic: &str) -> Result<QueryPayload<SessionTopicConsumers>, ToolFailure> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.topic_consumers(topic).await;
+        }
+        self.query_topic_consumers_observation(topic).await
+    }
+
+    async fn consumer_client_runtime(
+        &mut self,
+        consumer_group: &str,
+        broker_name: &str,
+        client_id: &str,
+    ) -> Result<SessionConsumerClientRuntime, ToolFailure> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session
+                .consumer_client_runtime(consumer_group, broker_name, client_id)
+                .await;
+        }
+        self.query_consumer_client_runtime(consumer_group, broker_name, client_id)
+            .await
     }
 
     async fn consumer_group_details(
@@ -968,6 +1064,52 @@ impl AdminSession for AdminCoreSession {
             queried_broker_count: result.queried_broker_count,
             truncated: result.truncated,
         }))
+    }
+
+    #[cfg(feature = "security-admin")]
+    async fn acl_users(&mut self) -> Result<crate::tools::security_tools::ListAclUsersOutput, ToolFailure> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.acl_users().await;
+        }
+        self.query_acl_user_observation().await
+    }
+
+    async fn lite_broker_info(
+        &mut self,
+        broker_name: &str,
+    ) -> Result<crate::tools::broker_tools::GetLiteBrokerInfoOutput, ToolFailure> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.lite_broker_info(broker_name).await;
+        }
+        self.query_lite_broker_observation(broker_name).await
+    }
+
+    async fn message_trace(
+        &mut self,
+        message_id: &str,
+        trace_topic: Option<&str>,
+    ) -> Result<SessionMessageTrace, ToolFailure> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.message_trace(message_id, trace_topic).await;
+        }
+        self.query_message_trace(message_id, trace_topic).await
+    }
+
+    async fn find_messages_by_key(
+        &mut self,
+        topic: &str,
+        key: &str,
+        begin_millis: i64,
+        end_millis: i64,
+    ) -> Result<SessionMessageKeyMatches, ToolFailure> {
+        #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
+        if let Some(session) = &mut self.test_session {
+            return session.find_messages_by_key(topic, key, begin_millis, end_millis).await;
+        }
+        self.query_messages_by_key(topic, key, begin_millis, end_millis).await
     }
 
     async fn message_metadata(&mut self, message_id: &str) -> Result<SessionMessageMetadata, ToolFailure> {

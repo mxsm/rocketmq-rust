@@ -34,7 +34,7 @@ pub struct PromptFrontMatter {
     pub conditional_tools: Vec<PromptConditionalTool>,
     /// Tools the Prompt starts with for a caller who may call every one of them. They do not
     /// decide whether the Prompt is available: the body names them only between the
-    /// [`PREFERRED_TOOLS_OPEN`] and [`PREFERRED_TOOLS_CLOSE`] lines, and that part is left out for
+    /// `PREFERRED_TOOLS_OPEN` and `PREFERRED_TOOLS_CLOSE` lines, and that part is left out for
     /// every other caller.
     #[serde(default)]
     pub preferred_tools: Vec<String>,

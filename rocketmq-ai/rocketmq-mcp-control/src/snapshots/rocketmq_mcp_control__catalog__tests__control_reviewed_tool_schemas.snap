@@ -6,7 +6,7 @@ expression: catalog.list_tools().tools
   {
     "name": "rocketmq_upsert_topic",
     "title": "Upsert RocketMQ topic",
-    "description": "Dry-run or conditionally replace a complete Topic configuration on selected cluster masters.",
+    "description": "Dry-run or conditionally replace a complete Topic configuration on selected cluster masters. After an execution, a read through the RocketMQ query MCP server can still return the earlier state for a few seconds.",
     "inputSchema": {
       "$defs": {
         "TopicMessageType": {
@@ -51,6 +51,17 @@ expression: catalog.list_tools().tools
           "default": true,
           "description": "Plan only: read the current state and report what would change, without writing. When omitted, the server's configured default applies, which is a dry run unless the operator changed it.",
           "type": "boolean"
+        },
+        "expected_plan_digest": {
+          "default": null,
+          "description": "Digest of the plan to execute: the `plan_digest` that a dry run with the same arguments returned. With it, the server writes only if the plan it reads now is that one, and otherwise ends the call with `precondition_conflict`. A dry run ignores it; the server policy can require it to execute.",
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "message_type": {
           "$ref": "#/$defs/TopicMessageType",
@@ -441,6 +452,14 @@ expression: catalog.list_tools().tools
         "operation": {
           "$ref": "#/$defs/TopicUpsertOperation"
         },
+        "plan_digest": {
+          "description": "Digest of the plan that a dry run reports: what was asked of which target, the state that was read, and what each target would get. Pass it as expected_plan_digest to execute this plan and no other. Null in the response of an execution.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "requested": {
           "$ref": "#/$defs/TopicReplacement"
         },
@@ -479,7 +498,8 @@ expression: catalog.list_tools().tools
         "after",
         "targets",
         "warnings",
-        "invocation_id"
+        "invocation_id",
+        "plan_digest"
       ],
       "type": "object"
     },
@@ -494,7 +514,7 @@ expression: catalog.list_tools().tools
   {
     "name": "rocketmq_upsert_consumer_group",
     "title": "Upsert RocketMQ consumer group",
-    "description": "Dry-run or conditionally replace a complete Consumer Group configuration on selected cluster masters.",
+    "description": "Dry-run or conditionally replace a complete Consumer Group configuration on selected cluster masters. After an execution, a read through the RocketMQ query MCP server can still return the earlier state for a few seconds.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
@@ -563,6 +583,17 @@ expression: catalog.list_tools().tools
           "default": true,
           "description": "Plan only: read the current state and report what would change, without writing. When omitted, the server's configured default applies, which is a dry run unless the operator changed it.",
           "type": "boolean"
+        },
+        "expected_plan_digest": {
+          "default": null,
+          "description": "Digest of the plan to execute: the `plan_digest` that a dry run with the same arguments returned. With it, the server writes only if the plan it reads now is that one, and otherwise ends the call with `precondition_conflict`. A dry run ignores it; the server policy can require it to execute.",
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "group_sys_flag": {
           "description": "System flag bits of the group; 0 for an ordinary group.",
@@ -977,6 +1008,14 @@ expression: catalog.list_tools().tools
         "operation": {
           "$ref": "#/$defs/ConsumerGroupUpsertOperation"
         },
+        "plan_digest": {
+          "description": "Digest of the plan that a dry run reports: what was asked of which target, the state that was read, and what each target would get. Pass it as expected_plan_digest to execute this plan and no other. Null in the response of an execution.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "requested": {
           "$ref": "#/$defs/ConsumerGroupReplacement"
         },
@@ -1015,7 +1054,8 @@ expression: catalog.list_tools().tools
         "after",
         "targets",
         "warnings",
-        "invocation_id"
+        "invocation_id",
+        "plan_digest"
       ],
       "type": "object"
     },
@@ -1030,7 +1070,7 @@ expression: catalog.list_tools().tools
   {
     "name": "rocketmq_reset_consumer_offset",
     "title": "Reset RocketMQ consumer offset",
-    "description": "Dry-run or conditionally reset exact consumer queue offsets from a sealed RFC3339 preview.",
+    "description": "Dry-run or conditionally reset exact consumer queue offsets from a sealed RFC3339 preview. After an execution, a read through the RocketMQ query MCP server can still return the earlier state for a few seconds.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
@@ -1058,6 +1098,17 @@ expression: catalog.list_tools().tools
           "default": true,
           "description": "Plan only: read the current state and report what would change, without writing. When omitted, the server's configured default applies, which is a dry run unless the operator changed it.",
           "type": "boolean"
+        },
+        "expected_plan_digest": {
+          "default": null,
+          "description": "Digest of the plan to execute: the `plan_digest` that a dry run with the same arguments returned. With it, the server writes only if the plan it reads now is that one, and otherwise ends the call with `precondition_conflict`. A dry run ignores it; the server policy can require it to execute.",
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "force": {
           "default": false,
@@ -1384,6 +1435,14 @@ expression: catalog.list_tools().tools
         "operation": {
           "$ref": "#/$defs/ConsumerOffsetResetOperation"
         },
+        "plan_digest": {
+          "description": "Digest of the plan that a dry run reports: what was asked of which target, the state that was read, and what each target would get. Pass it as expected_plan_digest to execute this plan and no other. Null in the response of an execution.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "requested": {
           "$ref": "#/$defs/OffsetRequested"
         },
@@ -1422,7 +1481,8 @@ expression: catalog.list_tools().tools
         "after",
         "targets",
         "warnings",
-        "invocation_id"
+        "invocation_id",
+        "plan_digest"
       ],
       "type": "object"
     },
@@ -1437,7 +1497,7 @@ expression: catalog.list_tools().tools
   {
     "name": "rocketmq_patch_broker_config",
     "title": "Patch RocketMQ Broker configuration",
-    "description": "Dry-run or generation-conditionally patch six allowlisted settings on one logical Broker.",
+    "description": "Dry-run or generation-conditionally patch six allowlisted settings on one logical Broker. After an execution, a read through the RocketMQ query MCP server can still return the earlier state for a few seconds.",
     "inputSchema": {
       "$defs": {
         "BrokerConfigProperties": {
@@ -1503,6 +1563,17 @@ expression: catalog.list_tools().tools
           "default": true,
           "description": "Plan only: read the current state and report what would change, without writing. When omitted, the server's configured default applies, which is a dry run unless the operator changed it.",
           "type": "boolean"
+        },
+        "expected_plan_digest": {
+          "default": null,
+          "description": "Digest of the plan to execute: the `plan_digest` that a dry run with the same arguments returned. With it, the server writes only if the plan it reads now is that one, and otherwise ends the call with `precondition_conflict`. A dry run ignores it; the server policy can require it to execute.",
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "properties": {
           "$ref": "#/$defs/BrokerConfigProperties",
@@ -1839,6 +1910,14 @@ expression: catalog.list_tools().tools
         "operation": {
           "$ref": "#/$defs/BrokerConfigPatchOperation"
         },
+        "plan_digest": {
+          "description": "Digest of the plan that a dry run reports: what was asked of which target, the state that was read, and what each target would get. Pass it as expected_plan_digest to execute this plan and no other. Null in the response of an execution.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "requested": {
           "$ref": "#/$defs/BrokerConfigPatch"
         },
@@ -1877,7 +1956,8 @@ expression: catalog.list_tools().tools
         "after",
         "targets",
         "warnings",
-        "invocation_id"
+        "invocation_id",
+        "plan_digest"
       ],
       "type": "object"
     },
@@ -1892,7 +1972,7 @@ expression: catalog.list_tools().tools
   {
     "name": "rocketmq_set_consumer_request_mode",
     "title": "Set RocketMQ consumer request mode",
-    "description": "Dry-run or conditionally set pull/pop request mode on validated cluster masters.",
+    "description": "Dry-run or conditionally set pull/pop request mode on validated cluster masters. After an execution, a read through the RocketMQ query MCP server can still return the earlier state for a few seconds.",
     "inputSchema": {
       "$defs": {
         "ConsumerRequestMode": {
@@ -1929,6 +2009,17 @@ expression: catalog.list_tools().tools
           "default": true,
           "description": "Plan only: read the current state and report what would change, without writing. When omitted, the server's configured default applies, which is a dry run unless the operator changed it.",
           "type": "boolean"
+        },
+        "expected_plan_digest": {
+          "default": null,
+          "description": "Digest of the plan to execute: the `plan_digest` that a dry run with the same arguments returned. With it, the server writes only if the plan it reads now is that one, and otherwise ends the call with `precondition_conflict`. A dry run ignores it; the server policy can require it to execute.",
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "mode": {
           "$ref": "#/$defs/ConsumerRequestMode",
@@ -2273,6 +2364,14 @@ expression: catalog.list_tools().tools
         "operation": {
           "$ref": "#/$defs/ConsumerRequestModeOperation"
         },
+        "plan_digest": {
+          "description": "Digest of the plan that a dry run reports: what was asked of which target, the state that was read, and what each target would get. Pass it as expected_plan_digest to execute this plan and no other. Null in the response of an execution.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "requested": {
           "$ref": "#/$defs/RequestModeRequested"
         },
@@ -2311,7 +2410,8 @@ expression: catalog.list_tools().tools
         "after",
         "targets",
         "warnings",
-        "invocation_id"
+        "invocation_id",
+        "plan_digest"
       ],
       "type": "object"
     },
@@ -2326,7 +2426,7 @@ expression: catalog.list_tools().tools
   {
     "name": "rocketmq_begin_proxy_drain",
     "title": "Begin RocketMQ Proxy drain",
-    "description": "Dry-run or begin a drain of one configured Proxy: it stops admitting new work so that it can be restarted once nothing is pending. The drain lasts until rocketmq_cancel_proxy_drain is called with the same operation_id.",
+    "description": "Dry-run or begin a drain of one configured Proxy: it stops admitting new work so that it can be restarted once nothing is pending. The drain lasts until rocketmq_cancel_proxy_drain is called with the same operation_id. After an execution, a read through the RocketMQ query MCP server can still return the earlier state for a few seconds.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
@@ -2347,6 +2447,17 @@ expression: catalog.list_tools().tools
           "default": true,
           "description": "Plan only: read the current state and report what would change, without writing. When omitted, the server's configured default applies, which is a dry run unless the operator changed it.",
           "type": "boolean"
+        },
+        "expected_plan_digest": {
+          "default": null,
+          "description": "Digest of the plan to execute: the `plan_digest` that a dry run with the same arguments returned. With it, the server writes only if the plan it reads now is that one, and otherwise ends the call with `precondition_conflict`. A dry run ignores it; the server policy can require it to execute.",
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "operation_id": {
           "description": "Identifier of the drain: 8 to 64 letters, digits, `_` and `-`. The call that begins a drain chooses it and the Proxy keeps it while it drains; a call that cancels the drain must pass the same one.",
@@ -2749,6 +2860,14 @@ expression: catalog.list_tools().tools
         "operation": {
           "$ref": "#/$defs/ProxyDrainOperation"
         },
+        "plan_digest": {
+          "description": "Digest of the plan that a dry run reports: what was asked of which target, the state that was read, and what each target would get. Pass it as expected_plan_digest to execute this plan and no other. Null in the response of an execution.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "requested": {
           "$ref": "#/$defs/ProxyDrainRequested"
         },
@@ -2787,7 +2906,8 @@ expression: catalog.list_tools().tools
         "after",
         "targets",
         "warnings",
-        "invocation_id"
+        "invocation_id",
+        "plan_digest"
       ],
       "type": "object"
     },
@@ -2802,7 +2922,7 @@ expression: catalog.list_tools().tools
   {
     "name": "rocketmq_cancel_proxy_drain",
     "title": "Cancel RocketMQ Proxy drain",
-    "description": "Dry-run or cancel the drain of one configured Proxy that rocketmq_begin_proxy_drain began with the same operation_id, so that the Proxy admits work again. A drain that another operation holds is left alone.",
+    "description": "Dry-run or cancel the drain of one configured Proxy that rocketmq_begin_proxy_drain began with the same operation_id, so that the Proxy admits work again. A drain that another operation holds is left alone. After an execution, a read through the RocketMQ query MCP server can still return the earlier state for a few seconds.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
@@ -2823,6 +2943,17 @@ expression: catalog.list_tools().tools
           "default": true,
           "description": "Plan only: read the current state and report what would change, without writing. When omitted, the server's configured default applies, which is a dry run unless the operator changed it.",
           "type": "boolean"
+        },
+        "expected_plan_digest": {
+          "default": null,
+          "description": "Digest of the plan to execute: the `plan_digest` that a dry run with the same arguments returned. With it, the server writes only if the plan it reads now is that one, and otherwise ends the call with `precondition_conflict`. A dry run ignores it; the server policy can require it to execute.",
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "operation_id": {
           "description": "Identifier of the drain: 8 to 64 letters, digits, `_` and `-`. The call that begins a drain chooses it and the Proxy keeps it while it drains; a call that cancels the drain must pass the same one.",
@@ -3225,6 +3356,14 @@ expression: catalog.list_tools().tools
         "operation": {
           "$ref": "#/$defs/ProxyDrainOperation"
         },
+        "plan_digest": {
+          "description": "Digest of the plan that a dry run reports: what was asked of which target, the state that was read, and what each target would get. Pass it as expected_plan_digest to execute this plan and no other. Null in the response of an execution.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "requested": {
           "$ref": "#/$defs/ProxyDrainRequested"
         },
@@ -3263,7 +3402,8 @@ expression: catalog.list_tools().tools
         "after",
         "targets",
         "warnings",
-        "invocation_id"
+        "invocation_id",
+        "plan_digest"
       ],
       "type": "object"
     },
@@ -3278,7 +3418,7 @@ expression: catalog.list_tools().tools
   {
     "name": "rocketmq_set_broker_log_filter_ttl",
     "title": "Set temporary RocketMQ Broker log level",
-    "description": "Dry-run or set one rocketmq_broker:: logger of one Broker master to INFO or DEBUG for 60 to 900 seconds. The Broker returns to its startup log filter by itself when the time is up; rocketmq_restore_broker_log_filter ends the override earlier.",
+    "description": "Dry-run or set one rocketmq_broker:: logger of one Broker master to INFO or DEBUG for 60 to 900 seconds. The Broker returns to its startup log filter by itself when the time is up; rocketmq_restore_broker_log_filter ends the override earlier. After an execution, a read through the RocketMQ query MCP server can still return the earlier state for a few seconds.",
     "inputSchema": {
       "$defs": {
         "BrokerLogLevel": {
@@ -3316,6 +3456,17 @@ expression: catalog.list_tools().tools
           "default": true,
           "description": "Plan only: read the current state and report what would change, without writing. When omitted, the server's configured default applies, which is a dry run unless the operator changed it.",
           "type": "boolean"
+        },
+        "expected_plan_digest": {
+          "default": null,
+          "description": "Digest of the plan to execute: the `plan_digest` that a dry run with the same arguments returned. With it, the server writes only if the plan it reads now is that one, and otherwise ends the call with `precondition_conflict`. A dry run ignores it; the server policy can require it to execute.",
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "level": {
           "$ref": "#/$defs/BrokerLogLevel",
@@ -3689,6 +3840,14 @@ expression: catalog.list_tools().tools
         "operation": {
           "$ref": "#/$defs/BrokerLogFilterOperation"
         },
+        "plan_digest": {
+          "description": "Digest of the plan that a dry run reports: what was asked of which target, the state that was read, and what each target would get. Pass it as expected_plan_digest to execute this plan and no other. Null in the response of an execution.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "requested": {
           "$ref": "#/$defs/BrokerLogFilterRequested"
         },
@@ -3727,7 +3886,8 @@ expression: catalog.list_tools().tools
         "after",
         "targets",
         "warnings",
-        "invocation_id"
+        "invocation_id",
+        "plan_digest"
       ],
       "type": "object"
     },
@@ -3742,7 +3902,7 @@ expression: catalog.list_tools().tools
   {
     "name": "rocketmq_restore_broker_log_filter",
     "title": "Restore RocketMQ Broker log level",
-    "description": "Dry-run or end the temporary log level that rocketmq_set_broker_log_filter_ttl set on one Broker master with the same operation_id, returning the Broker to its startup log filter. An override that another operation holds is left alone.",
+    "description": "Dry-run or end the temporary log level that rocketmq_set_broker_log_filter_ttl set on one Broker master with the same operation_id, returning the Broker to its startup log filter. An override that another operation holds is left alone. After an execution, a read through the RocketMQ query MCP server can still return the earlier state for a few seconds.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
@@ -3770,6 +3930,17 @@ expression: catalog.list_tools().tools
           "default": true,
           "description": "Plan only: read the current state and report what would change, without writing. When omitted, the server's configured default applies, which is a dry run unless the operator changed it.",
           "type": "boolean"
+        },
+        "expected_plan_digest": {
+          "default": null,
+          "description": "Digest of the plan to execute: the `plan_digest` that a dry run with the same arguments returned. With it, the server writes only if the plan it reads now is that one, and otherwise ends the call with `precondition_conflict`. A dry run ignores it; the server policy can require it to execute.",
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "operation_id": {
           "description": "Identifier the override was set with: 8 to 64 letters, digits, `_` and `-`. An override that another identifier holds is left alone.",
@@ -4122,6 +4293,14 @@ expression: catalog.list_tools().tools
         "operation": {
           "$ref": "#/$defs/BrokerLogFilterOperation"
         },
+        "plan_digest": {
+          "description": "Digest of the plan that a dry run reports: what was asked of which target, the state that was read, and what each target would get. Pass it as expected_plan_digest to execute this plan and no other. Null in the response of an execution.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "requested": {
           "$ref": "#/$defs/BrokerLogFilterRequested"
         },
@@ -4160,7 +4339,8 @@ expression: catalog.list_tools().tools
         "after",
         "targets",
         "warnings",
-        "invocation_id"
+        "invocation_id",
+        "plan_digest"
       ],
       "type": "object"
     },

@@ -16,6 +16,19 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
+mod key_search;
+mod trace;
+
+pub use key_search::FindMessagesByKeyArgs;
+pub use key_search::FindMessagesByKeyOutput;
+pub use key_search::MessageKeyMatch;
+pub(crate) use key_search::DEFAULT_KEY_SEARCH_WINDOW_MINUTES;
+pub(crate) use key_search::MAX_KEY_SEARCH_WINDOW_MINUTES;
+pub use trace::MessageTraceRecord;
+pub use trace::MessageTraceStep;
+pub use trace::QueryMessageTraceArgs;
+pub use trace::QueryMessageTraceOutput;
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct MessageMetadataArgs {

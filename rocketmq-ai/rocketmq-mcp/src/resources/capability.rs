@@ -12,18 +12,32 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 use rmcp::model::ReadResourceResult;
-use rmcp::model::ResourceContents;
 use serde::Serialize;
 use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
 
 use crate::model::contract::SCHEMA_VERSION;
-use crate::resources::uri::JSON_MIME_TYPE;
+use crate::resources::ResourceDocument;
 use crate::tools::catalog::ToolDescriptor;
+use crate::tools::catalog::ToolId;
 
+/// The MCP protocol revision this server implements.
+///
+/// A build with the HTTP transport takes it from `rocketmq-mcp-auth`, the crate it shares with the
+/// control server, so that both servers answer the same revision. A build without that transport
+/// does not depend on that crate and states the revision itself. The capability snapshot holds
+/// both to the same value.
+#[cfg(feature = "streamable-http")]
+pub const MCP_PROTOCOL_VERSION: &str = rocketmq_mcp_auth::MCP_PROTOCOL_VERSION;
+/// The MCP protocol revision this server implements.
+///
+/// A build with the HTTP transport takes it from the crate it shares with the control server.
+/// The capability snapshot holds both to the same value.
+#[cfg(not(feature = "streamable-http"))]
 pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,21 +70,14 @@ pub fn manifest_for(
 ) -> CapabilityManifest {
     let mut tools = descriptors
         .into_iter()
-        .map(|descriptor| {
-            let definition = descriptor.id.definition();
-            let schema = serde_json::json!({
-                "input": definition.input_schema,
-                "output": definition.output_schema,
-            });
-            CapabilityTool {
-                name: descriptor.name.to_string(),
-                risk_level: descriptor.risk_level.to_string(),
-                schema_digest: digest_value(schema),
-                read_only: descriptor.annotations.read_only,
-                destructive: descriptor.annotations.destructive,
-                task_support: "forbidden",
-                mutates_cluster: false,
-            }
+        .map(|descriptor| CapabilityTool {
+            name: descriptor.name.to_string(),
+            risk_level: descriptor.risk_level.to_string(),
+            schema_digest: schema_digest(descriptor.id),
+            read_only: descriptor.annotations.read_only,
+            destructive: descriptor.annotations.destructive,
+            task_support: "forbidden",
+            mutates_cluster: false,
         })
         .collect::<Vec<_>>();
     tools.sort_by(|left, right| left.name.cmp(&right.name));
@@ -100,12 +107,51 @@ pub fn manifest_for(
     }
 }
 
+/// Returns the digest of the input and the output schema of a Tool.
+///
+/// The schemas of a Tool never change while the server runs, so every digest is computed once.
+fn schema_digest(tool: ToolId) -> String {
+    static DIGESTS: LazyLock<BTreeMap<&'static str, String>> = LazyLock::new(|| {
+        ToolId::ALL
+            .iter()
+            .map(|tool| (tool.descriptor().name, compute_schema_digest(*tool)))
+            .collect()
+    });
+    match DIGESTS.get(tool.descriptor().name) {
+        Some(digest) => digest.clone(),
+        None => compute_schema_digest(tool),
+    }
+}
+
+fn compute_schema_digest(tool: ToolId) -> String {
+    let definition = tool.definition();
+    digest_value(serde_json::json!({
+        "input": definition.input_schema,
+        "output": definition.output_schema,
+    }))
+}
+
+/// Writes a manifest as indented JSON, without the shared output processing.
+///
+/// # Errors
+///
+/// Fails when the manifest cannot be written as JSON.
 pub fn read_result(uri: &str, manifest: CapabilityManifest) -> Result<ReadResourceResult, rmcp::ErrorData> {
-    let text = serde_json::to_string_pretty(&manifest)
-        .map_err(|source| crate::McpError::from_source(source).into_error_data())?;
-    Ok(ReadResourceResult::new(vec![
-        ResourceContents::text(text, uri).with_mime_type(JSON_MIME_TYPE)
-    ]))
+    document(uri, manifest)?.into_read_result()
+}
+
+/// Returns a manifest as the value the Guard processes and then publishes.
+///
+/// # Errors
+///
+/// Fails when the manifest cannot be represented as JSON.
+pub fn document(uri: &str, manifest: CapabilityManifest) -> Result<ResourceDocument, rmcp::ErrorData> {
+    let value =
+        serde_json::to_value(&manifest).map_err(|source| crate::McpError::from_source(source).into_error_data())?;
+    Ok(ResourceDocument {
+        uri: uri.to_string(),
+        value,
+    })
 }
 
 fn digest_value(value: Value) -> String {
@@ -136,7 +182,6 @@ fn canonical_value(value: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::catalog::ToolId;
 
     #[test]
     fn manifest_is_read_only_and_digest_is_stable() {
@@ -148,5 +193,22 @@ mod tests {
             .tools
             .iter()
             .all(|tool| tool.read_only && !tool.destructive && !tool.mutates_cluster));
+    }
+
+    #[test]
+    fn a_kept_schema_digest_is_the_digest_of_the_published_schemas() {
+        for tool in ToolId::ALL {
+            assert_eq!(
+                schema_digest(*tool),
+                compute_schema_digest(*tool),
+                "{}",
+                tool.descriptor().name
+            );
+        }
+        let manifest = manifest_for("local-dev", ToolId::ALL.iter().map(|tool| tool.descriptor()), false);
+        for entry in &manifest.tools {
+            let tool = ToolId::resolve(&entry.name).expect("a catalog Tool");
+            assert_eq!(entry.schema_digest, compute_schema_digest(tool), "{}", entry.name);
+        }
     }
 }

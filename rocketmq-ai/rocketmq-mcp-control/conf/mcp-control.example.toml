@@ -5,6 +5,19 @@
 bind = "127.0.0.1:8090"
 endpoint = "/mcp"
 public_base_url = "https://control.example.test"
+# Deployment switches for a server inside a private network. Both are off unless set to true, and
+# the server logs a warning at startup for each one that is on. See "Deployment inside a private
+# network" in docs/operations-runbook.md before turning one on.
+#
+# Accept a bind address on every interface, such as "0.0.0.0:8443", which a container usually
+# needs. The server then listens on interfaces you may not have meant to expose: limit who can
+# connect with a network policy or a firewall.
+# allow_wildcard_bind = true
+#
+# Accept a public_base_url with a port or with a host name that only resolves inside your network,
+# such as "https://control.mq.svc.cluster.local:8443". No public certificate authority vouches for
+# such a name: your own name service and certificates decide who answers under it.
+# allow_internal_base_url = true
 
 [server.tls]
 cert_path = "secrets/control-cert.pem"
@@ -14,6 +27,12 @@ key_path = "secrets/control-key.pem"
 issuer = "https://identity.example.test"
 audience = "rocketmq-mcp-control"
 jwks_url = "https://identity.example.test/.well-known/jwks.json"
+# Deployment switch for an identity provider inside a private network, off unless set to true.
+# It accepts an issuer and a jwks_url with a port or an internal host name, and lets the server
+# fetch the signing keys from a private address, through the resolver and proxy settings of the
+# process. The keys that decide who may change a cluster then come from wherever that name leads:
+# set jwks_ca_path to the CA of the identity provider so that only it can answer.
+# allow_private_network = true
 
 [mutations]
 mutations_enabled = false
@@ -24,6 +43,15 @@ dry_run = true
 allowed_operations = []
 allowed_clusters = []
 operation_timeout_seconds = 24
+# Refuse an execution that does not name the plan it runs. A dry run reports `plan_digest`; with this
+# item on, every execution has to pass it back as `expected_plan_digest`, and the server writes only if
+# the plan it reads is still that one. Off unless set to true.
+# require_plan_digest = true
+# Emergency stop without a restart. While this file exists, every mutation call is refused with
+# `mutation_disabled`, a dry run included; remove the file to lift the stop. The server looks the
+# file up for each call and never creates or removes it. Use an absolute path that the operators
+# on call can write to and that survives a restart of the server. Unset by default.
+# emergency_stop_file = "/var/run/rocketmq-mcp-control/stop-writes"
 
 # A private logical cluster registry is required before any reviewed operation can be allowlisted.
 # Credential values are read from these environment variables only when a session is opened.

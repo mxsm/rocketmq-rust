@@ -7,9 +7,9 @@ It describes implemented behavior; it does not certify a live RocketMQ deploymen
 
 | Item | Value |
 | --- | --- |
-| Base revision | `3b7cad90d53b2bf134dbf7289056fd19c978b372` |
-| Base revision subject | `[ISSUE #9951]🚀Add typed HA, Controller, and NameServer observation tools to RocketMQ MCP(#9954)` |
-| Baseline captured | 2026-09-01, Windows Issue #9955 worktree |
+| Base revision | `9b87f95c3921fcede8eddbedc4e13d6f384129e6` |
+| Base revision subject | `[ISSUE #11469]🐛Avoid nested builds in retirement capability tests (#11470)` |
+| Baseline captured | 2026-10-12, Windows local checkout of that revision with the changes this document describes |
 | MCP workspace | `rocketmq-ai/rocketmq-mcp` (standalone Cargo workspace) |
 | Protocol source | [`src/protocol/server.rs`](../src/protocol/server.rs) |
 | Tool catalog | [`src/tools/catalog.rs`](../src/tools/catalog.rs) |
@@ -34,15 +34,19 @@ ordering remain the source of truth for details not reproduced in this summary.
   correlation/request identifier. Internal addresses, credentials, bearer tokens, and sensitive assignments are
   not part of the public output.
 - Initialization rejects a protocol version other than `2025-11-25`.
+- The handler declares `2025-11-25` as the only supported protocol version, so `server/discover` advertises it
+  alone and a request that names another version in its own metadata is refused. Over Streamable HTTP, an
+  `MCP-Protocol-Version` header with another value is answered with HTTP 400 `unsupported_protocol_version`
+  after authentication. The SDK alone would hold that header only to the versions it knows.
 - Declared capabilities: `tools`, `resources`, `prompts`, and `completions`. `completion/complete` names
   clusters, Topics, Consumer Groups, and Brokers for Prompt arguments and Resource template variables,
   under the permission of the matching listing Tool.
 
 ## Tool surface
 
-### Default features: 30 tools
+### Default features: 36 tools
 
-These 30 tools are present in the default catalog (`read-only`, `diagnose`, and `stdio`). The `diagnose` feature
+These 36 tools are present in the default catalog (`read-only`, `diagnose`, and `stdio`). The `diagnose` feature
 is a capability marker that includes `read-only`; diagnosis execution is controlled by the configured profile and
 required authorization scope, not by a separate feature-gated tool implementation:
 
@@ -78,6 +82,12 @@ required authorization scope, not by a separate feature-gated tool implementatio
 | `rocketmq_get_nameserver_config_summary` | ReadOnly | `cluster` | Returns fixed allowlisted NameServer configuration summaries. |
 | `rocketmq_list_clusters` | ReadOnly | none | Lists the configured logical clusters the caller may query, with their Proxy and Controller aliases; reads configuration only. |
 | `rocketmq_list_brokers` | ReadOnly | `cluster` | Lists the Broker instances of one cluster from the Broker rows alone. |
+| `rocketmq_list_topic_consumers` | ReadOnly | `cluster`, `topic`, optional page `limit`/`cursor` | Lists the Consumer Groups that consume one Topic, joined over every master Broker of the Topic route in the selected cluster. |
+| `rocketmq_get_dlq_summary` | ReadOnly | `cluster`, `consumer_group` | Counts the dead letters of one Consumer Group from the statistics of its dead-letter Topic, in total and for each Broker. Reads no message; a name that is no Consumer Group is `not_found` instead of a zero count. |
+| `rocketmq_get_lite_broker_info` | ReadOnly | `cluster`, `broker_name` | Returns the Lite Topic limits and counters of the master of one Broker, with at most 100 Lite Topics and at most 8 bound Consumer Groups for each. |
+| `rocketmq_query_message_trace` | ReadOnly | `cluster`, `message_id`, optional `trace_topic` | Reads at most 128 trace records of one message from the trace Topic. Never returns a body; client hosts, tags, and keys only with `rocketmq:diagnose`. Also needs the permission for `rocketmq_get_message_metadata`. |
+| `rocketmq_find_messages_by_key` | MessageSearch | `cluster`, `topic`, `key`, optional `end_at`, optional `window_minutes` | Returns the fixed metadata of at most 32 messages that carry an exact key, stored in a window of at most 24 hours. Needs `rocketmq:message-search` and the permission for `rocketmq_get_message_metadata`. |
+| `rocketmq_get_consumer_running_info` | Diagnose | `cluster`, `consumer_group`, `client_alias`, optional page `limit`/`cursor` | Asks one connected consumer client, named by its pseudonym, for its subscriptions, per-Topic rates, and bounded per-queue state. The client identifier is resolved inside the session and never published. |
 
 Page `limit` is bounded to 1–200 and defaults to 50. The outer output policy additionally caps arrays at 1,000
 rows and structured output at 1 MiB.
@@ -97,8 +107,9 @@ identifier: a message is named by its pseudonyms.
 The feature and its Tools are deprecated and will be removed. Changes are planned with a dry run of the control
 MCP server; see the Tool reference for the replacement of each Tool.
 
-When compiled with `change-planning`, the all-features catalog has exactly 35 tools: the 30 defaults above
-plus these five planning tools:
+When compiled with `change-planning`, the catalog has these five planning tools next to the 36 defaults above.
+The all-features catalog has exactly 42 tools: the 36 defaults, these five, and the one `security-admin` tool
+below.
 
 | Tool | Plan type | Required request | Result boundary |
 | --- | --- | --- | --- |
@@ -112,6 +123,16 @@ Every planning result has `mutates_cluster = false`, an expiry of 300 seconds, a
 identity, or confirmation token in its schema. Planning requires the feature, `security.allow_change_planning = true`,
 the configured policy, and the `rocketmq:plan` scope. The default runtime setting is false. There is no Apply path
 and no destructive tool in this baseline.
+
+### Optional `security-admin`: one tool
+
+| Tool | Risk | Input shape | Implemented behavior |
+| --- | --- | --- | --- |
+| `rocketmq_list_acl_users` | SecurityAdmin | `cluster` | Lists the ACL users that the master of every Broker of the cluster holds, with type and status, at most 500 rows from at most 64 Brokers. Returns no password, access rule, or address, and is never answered from a cache. |
+
+The Tool is absent from a default build. With the feature, a call needs the scope `rocketmq:security-admin`, which
+no other scope includes and which only the local profile `security_admin` gets for stdio, and a role that holds the
+Tool; no example role does. The feature adds no Resource, Prompt, or configuration key.
 
 ## Resource surface
 
@@ -222,14 +243,17 @@ The `Cargo.toml` feature graph at this revision is:
 | `otlp` | No | Includes `observability` and OTLP metrics, traces, and logs through the OTLP gRPC exporter. |
 | `auth` | No | Internal authentication feature; selected by `streamable-http`. |
 | `change-planning` | No | Deprecated. Registers the five non-mutating planning tools. |
+| `security-admin` | No | Registers `rocketmq_list_acl_users`. The scope `rocketmq:security-admin` and the role rules still apply. |
 
 Default feature set: `read-only`, `diagnose`, `stdio`. The default binary is intended for local stdio. HTTPS is
 available only with `streamable-http`; production OAuth requires that transport feature and its TLS/JWKS setup.
 
 ## Authorization and read-only adapter boundary
 
-Authorization is applied to discovery and execution. The policy engine combines role includes, tool allow/deny
-patterns, configured cluster allow-lists, principal `rocketmq_clusters`, exact tenant binding, and required scopes.
+Authorization is applied to discovery and execution. The policy engine combines role includes, the Tool allow and
+deny rules of every role (a Tool by its name or `*`; a rule that names the Tool wins over `*`, and a denial wins
+between two rules of the same kind), configured cluster allow-lists, principal `rocketmq_clusters`, exact tenant
+binding, and required scopes.
 The default example profile is `diagnose`: it can use read-only and diagnosis tools, while planning remains disabled
 unless explicitly enabled. HTTP principals are derived from the verified request; they cannot substitute the local
 stdio identity. System resources require diagnostic scope and a valid diagnostic role.
@@ -245,9 +269,18 @@ for each new read session and are never serialized into public output.
 - Output arrays are capped at 1,000 rows; structured JSON is capped at 1 MiB. Truncation sets `partial = true` and
   adds `output_rows_truncated`; an oversized result returns `output_too_large`.
 - Cache entries use schema version, visibility class, query kind, resolved cluster, and normalized parameters. The
-  configured TTLs cover overview, topic, broker, and consumer-lag families. Failures are not cached, concurrent
-  identical misses are coalesced, and `cache_status` is `miss`, `hit`, or `bypass`. An explicit invalidation clears
-  all entries.
+  configured TTLs cover overview, topic, broker, and consumer-lag families; the Broker configuration summary,
+  message metadata, and Proxy drain state can each get a TTL of their own. Concurrent identical misses are
+  coalesced, and the requests that waited get the result of the one read or its failure. A `source_unavailable`
+  failure answers identical requests for at most one second; no other failure is kept. `cache_status` is `miss`,
+  `hit`, or `bypass`. An explicit invalidation clears all entries, kept failures included.
+- The Topic and Consumer Group names of a cluster are read once per visibility class while they are current.
+  Every filter, selection mode, and page size has its own snapshot, because a cursor is bound to all three, and each
+  snapshot is selected from those names in memory. It reports the observation time and age of the names.
+- `cache.stale_if_error_ms` is `0` by default. When it is set, a result that is no longer current answers a
+  request whose source is unavailable or times out, for that long after it stopped being current. The result
+  carries the warning `stale_cache_value`, `cache_status = hit`, and its real age. A paged result is served this way
+  only for the same request and while its snapshot is still kept for cursors.
 - Tool and Resource calls share the query facade, cache, singleflight coordination, authorization, audit, redaction,
   row, byte, and stable-error policies. A Resource-backed Tool result includes a ResourceLink only when its target is
   canonical and safely representable by the closed Resource URI contract. A Tool-compatible but unrepresentable
@@ -255,17 +288,21 @@ for each new read session and are never serialized into public output.
   are still sanitized. Topic-statistics and consumer-progress continuation cursors can cross the Tool/Resource surface without
   another upstream call; disabling the response cache still reloads new first pages while preserving existing
   bounded continuation snapshots.
-- Audit records use schema version 1, redact control characters and sensitive assignments, bound variable-length
-  fields, and use a bounded non-blocking queue. Shutdown closes admission, drains accepted records FIFO, flushes the
+- Audit records use schema version 2, redact control characters and sensitive assignments, bound variable-length
+  fields, and use a bounded non-blocking queue. Version 2 adds the optional `target` to version 1: the validated
+  Topic, Consumer Group, producer group, Broker, Proxy, and Controller names of a Tool call or a Resource read, and
+  never what names a message. A record without `target` has the fields of version 1. The `file` sink keeps its file
+  open and seals it at `audit.max_file_bytes` (64 MiB by default, `0` never) as `<path>.<six-digit number>`; it
+  never replaces or deletes a sealed file. Shutdown closes admission, drains accepted records FIFO, flushes the
   sink, and reports drops, sink/flush failures, or pending records/bytes.
 - The default example sets cache enabled with 256 entries and TTLs of 3,000 ms (overview), 5,000 ms (topic),
-  2,000 ms (broker), and 1,000 ms (consumer lag); security rate limit is 60 per minute and cluster concurrency is 8.
+  2,000 ms (broker), and 1,000 ms (consumer lag); security rate limit is 60 per minute for one operation and ten times that for all HTTP requests of a principal, and cluster concurrency is 8.
   These are example defaults, not a production capacity recommendation.
 
 ## Validation evidence
 
-Evidence below applies to the uncommitted Issue #9955 worktree based on
-`3b7cad90d53b2bf134dbf7289056fd19c978b372` and was captured on 2026-09-01 from a Windows local checkout.
+Evidence below was captured on 2026-10-12 from a Windows local checkout that holds every change this document
+describes. It is refreshed before a release, so between releases a count in this table can trail the code.
 Commands marked with a relative working directory are run from the repository root unless the directory is shown
 as the command's current directory. The local environment had no reachable RocketMQ test cluster and did not
 provide the four `ROCKETMQ_MCP_E2E_*` variables.
@@ -273,12 +310,12 @@ provide the four `ROCKETMQ_MCP_E2E_*` variables.
 | Command | Working directory | Feature set | Result | Environment | Limitation |
 | --- | --- | --- | --- | --- | --- |
 | `cargo fmt --all -- --check` | `rocketmq-ai/rocketmq-mcp` | Cargo defaults | **failed (exit 1)** | Windows local checkout | Cargo/rustfmt reported `文件名或扩展名太长。 (os error 206)` and printed usage before formatting; no source files were changed by this command. |
-| `cargo fmt -p rocketmq-mcp -- --check` | `rocketmq-ai/rocketmq-mcp` | Package `rocketmq-mcp` only | **passed (exit 0)** | Issue #9955 worktree on Windows | This narrower package-scoped check does not replace the failed mandatory all-package check; it validates every Rust file in the standalone MCP package. |
+| `cargo fmt -p rocketmq-mcp -- --check` | `rocketmq-ai/rocketmq-mcp` | Package `rocketmq-mcp` only | **passed (exit 0)** | Windows local checkout | This narrower package-scoped check does not replace the failed mandatory all-package check; it validates every Rust file in the standalone MCP package. |
 | `cargo check --locked` | `rocketmq-ai/rocketmq-mcp` | Default: `read-only`, `diagnose`, `stdio` | **passed (exit 0)** | Windows local checkout | No live RocketMQ connection was attempted. |
-| `cargo check --locked --all-features` | `rocketmq-ai/rocketmq-mcp` | All declared features | **passed (exit 0)** | Windows local checkout | Validates the 29-Tool feature combination without a live cluster. |
+| `cargo check --locked --all-features` | `rocketmq-ai/rocketmq-mcp` | All declared features | **passed (exit 0)** | Windows local checkout | Validates the 42-Tool feature combination without a live cluster. |
 | `python scripts/check_read_only_boundary.py` | `rocketmq-ai/rocketmq-mcp` | Metadata/dependency closure | **passed (exit 0)** | Windows local checkout | Printed `MCP read-only dependency boundary passed`; this checks the dependency/source boundary, not a live cluster. |
-| `cargo test --locked` | `rocketmq-ai/rocketmq-mcp` | Default: `read-only`, `diagnose`, `stdio` | **passed (exit 0): 268 passed, 0 failed, 1 ignored; doc-tests 0** | Windows local checkout; `RUST_MIN_STACK` and `INSTA_UPDATE` unset | 259 library + 5 binary + 1 compatibility integration + 3 non-E2E integration tests passed. The external-cluster test remained ignored because it requires `ROCKETMQ_MCP_E2E_NAMESRV_ADDR`, `ROCKETMQ_MCP_E2E_TOPIC`, `ROCKETMQ_MCP_E2E_CONSUMER_GROUP`, and `ROCKETMQ_MCP_E2E_BROKER`. |
-| `cargo test --locked --all-features` | `rocketmq-ai/rocketmq-mcp` | All declared features, including `streamable-http`, `otlp`, and `change-planning` | **passed (exit 0): 313 passed, 0 failed, 1 ignored; doc-tests 0** | Windows local checkout; `RUST_MIN_STACK` and `INSTA_UPDATE` unset | 304 library + 5 binary + 1 compatibility integration + 3 non-E2E integration tests passed. The same external-cluster test was ignored; this is not live-cluster evidence. |
+| `cargo test --locked` | `rocketmq-ai/rocketmq-mcp` | Default: `read-only`, `diagnose`, `stdio` | **passed (exit 0): 607 passed, 0 failed, 1 ignored; doc-tests 0** | Windows local checkout; `RUST_MIN_STACK` unset, `INSTA_UPDATE=no` | 597 library + 5 binary + 2 compatibility integration + 3 non-E2E integration tests passed. The external-cluster test remained ignored because it requires `ROCKETMQ_MCP_E2E_NAMESRV_ADDR`, `ROCKETMQ_MCP_E2E_TOPIC`, `ROCKETMQ_MCP_E2E_CONSUMER_GROUP`, and `ROCKETMQ_MCP_E2E_BROKER`. |
+| `cargo test --locked --all-features` | `rocketmq-ai/rocketmq-mcp` | All declared features, including `streamable-http`, `otlp`, `change-planning`, and `security-admin` | **passed (exit 0): 669 passed, 0 failed, 1 ignored; doc-tests 0** | Windows local checkout; `RUST_MIN_STACK` unset, `INSTA_UPDATE=no` | 659 library + 5 binary + 2 compatibility integration + 3 non-E2E integration tests passed. The same external-cluster test was ignored; this is not live-cluster evidence. |
 | `cargo clippy --locked --all-targets --features streamable-http -- -D warnings` | `rocketmq-ai/rocketmq-mcp` | `streamable-http` plus default features | **passed (exit 0)** | Windows local checkout | No warning was accepted. |
 | `cargo clippy --locked --all-targets --all-features -- -D warnings` | `rocketmq-ai/rocketmq-mcp` | All declared features | **passed (exit 0)** | Windows local checkout | No warning was accepted. |
 | `cargo doc --locked --no-deps` | `rocketmq-ai/rocketmq-mcp` | Default: `read-only`, `diagnose`, `stdio` | **passed (exit 0)** | Windows local checkout | Documentation generated successfully; generated docs do not exercise a cluster. |
@@ -288,5 +325,5 @@ provide the four `ROCKETMQ_MCP_E2E_*` variables.
 The failed formatter check is retained as evidence rather than hidden. The package-scoped
 `cargo fmt -p rocketmq-mcp -- --check` passed (exit 0), but it does not replace the failed mandatory all-package
 command. The passed checks establish only local build, boundary, test, lint, documentation, and whitespace
-properties for this uncommitted Issue #9955 worktree. Production qualification remains environment-dependent and
+properties of that checkout. Production qualification remains environment-dependent and
 must be rerun with the external dependencies and test principal listed above.

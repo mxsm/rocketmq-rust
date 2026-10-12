@@ -27,7 +27,7 @@ use std::sync::PoisonError;
 use std::time::Duration;
 use std::time::Instant;
 
-use rocketmq_observability::metrics::mcp::McpFailureLabel;
+use rocketmq_observability::metrics::mcp::McpFailureClass;
 use rocketmq_observability::metrics::mcp::McpMetricsRecorder;
 use rocketmq_observability::metrics::mcp::McpOperationKind;
 use rocketmq_observability::metrics::mcp::McpOperationStatus;
@@ -197,10 +197,10 @@ impl ControlSignals {
 
     /// Records a request refused by the Host and Origin policy before authentication.
     pub(crate) fn request_rejected(&self) {
-        self.metrics.record_error(
+        self.metrics.record_failure(
             McpOperationKind::Tool,
             HTTP_REQUEST_OPERATION,
-            McpFailureLabel::InvalidRequest,
+            McpFailureClass::InvalidRequest,
         );
         let code = ControlErrorCode::RequestRejected.as_str();
         if let Some(suppressed) = self.rejections.admit("origin", code) {
@@ -213,11 +213,30 @@ impl ControlSignals {
         }
     }
 
+    /// Records an authenticated request refused for the protocol revision that its
+    /// `MCP-Protocol-Version` header names.
+    pub(crate) fn protocol_version_rejected(&self) {
+        self.metrics.record_failure(
+            McpOperationKind::Tool,
+            HTTP_REQUEST_OPERATION,
+            McpFailureClass::InvalidRequest,
+        );
+        let code = ControlErrorCode::RequestRejected.as_str();
+        if let Some(suppressed) = self.rejections.admit("protocol", code) {
+            tracing::warn!(
+                site = "protocol",
+                code,
+                suppressed,
+                "request named an unsupported protocol version"
+            );
+        }
+    }
+
     /// Records a request refused by OAuth authentication. `code` is the code of the returned
     /// error envelope.
     pub(crate) fn authentication_rejected(&self, rejection: AuthenticationRejection, code: ControlErrorCode) {
         self.metrics
-            .record_error(McpOperationKind::Tool, AUTHENTICATION_OPERATION, rejection.failure());
+            .record_failure(McpOperationKind::Tool, AUTHENTICATION_OPERATION, rejection.failure());
         if let Some(suppressed) = self.rejections.admit("authentication", rejection.as_str()) {
             tracing::warn!(
                 site = "authentication",
@@ -235,7 +254,7 @@ impl ControlSignals {
         self.metrics
             .record_operation(McpOperationKind::Tool, tool, operation_status(code), elapsed);
         self.metrics
-            .record_error(McpOperationKind::Tool, tool, failure_label(code));
+            .record_failure(McpOperationKind::Tool, tool, failure_label(code));
         if let Some(suppressed) = self.rejections.admit("call", code.as_str()) {
             tracing::warn!(
                 site = "call",
@@ -265,7 +284,7 @@ impl ControlSignals {
             .record_operation(McpOperationKind::Tool, operation, status, record.elapsed);
         if let Some(code) = reported {
             self.metrics
-                .record_error(McpOperationKind::Tool, operation, failure_label(code));
+                .record_failure(McpOperationKind::Tool, operation, failure_label(code));
         }
 
         let mode = if record.dry_run { "dry_run" } else { "execute" };
@@ -384,10 +403,10 @@ impl AuthenticationRejection {
         }
     }
 
-    const fn failure(self) -> McpFailureLabel {
+    const fn failure(self) -> McpFailureClass {
         match self {
-            Self::InvalidToken | Self::InsufficientScope => McpFailureLabel::PermissionDenied,
-            Self::KeysUnavailable => McpFailureLabel::SourceUnavailable,
+            Self::InvalidToken | Self::InsufficientScope => McpFailureClass::PermissionDenied,
+            Self::KeysUnavailable => McpFailureClass::SourceUnavailable,
         }
     }
 }
@@ -429,6 +448,30 @@ pub(crate) fn server_failed(stage: ServerStage, error: ControlError) -> ControlE
         "control server failed"
     );
     error
+}
+
+/// Warns that the server starts with deployment switches on, naming their configuration keys.
+///
+/// Each of them replaces a default that keeps the server on public names and addresses, so an
+/// operator who did not mean to turn one on has to see it. No configured value is logged.
+pub(crate) fn deployment_switches_on(switches: &[&'static str]) {
+    if !switches.is_empty() {
+        tracing::warn!(
+            switches = %switches.join(","),
+            "rocketmq-mcp-control starts with deployment switches that relax its network defaults"
+        );
+    }
+}
+
+/// Warns that the server starts with its emergency stop engaged, naming the configuration key.
+///
+/// Mutation calls are refused until the file is removed, which an operator who restarts the
+/// server during an incident has to see. The configured path is not logged.
+pub(crate) fn emergency_stop_engaged() {
+    tracing::warn!(
+        setting = "mutations.emergency_stop_file",
+        "rocketmq-mcp-control starts with the emergency stop engaged: mutation calls are refused"
+    );
 }
 
 /// Logs that the server accepts requests. The fields repeat the capability resource.
@@ -565,27 +608,27 @@ const fn operation_status(code: ControlErrorCode) -> McpOperationStatus {
 }
 
 /// Folds the control error vocabulary into the bounded failure classes of the shared MCP metrics.
-const fn failure_label(code: ControlErrorCode) -> McpFailureLabel {
+const fn failure_label(code: ControlErrorCode) -> McpFailureClass {
     match code {
         ControlErrorCode::Unauthorized
         | ControlErrorCode::PermissionDenied
         | ControlErrorCode::ClusterNotAllowed
         | ControlErrorCode::OperationNotAllowed
-        | ControlErrorCode::MutationDisabled => McpFailureLabel::PermissionDenied,
-        ControlErrorCode::RateLimited => McpFailureLabel::RateLimited,
+        | ControlErrorCode::MutationDisabled => McpFailureClass::PermissionDenied,
+        ControlErrorCode::RateLimited => McpFailureClass::RateLimited,
         ControlErrorCode::RequestRejected
         | ControlErrorCode::ConfirmationRequired
         | ControlErrorCode::InvalidArgument
-        | ControlErrorCode::PreconditionConflict => McpFailureLabel::InvalidRequest,
+        | ControlErrorCode::PreconditionConflict => McpFailureClass::InvalidRequest,
         ControlErrorCode::OperationUnavailable
         | ControlErrorCode::AuditUnavailable
         | ControlErrorCode::PartialApply
         | ControlErrorCode::VerificationFailed
         | ControlErrorCode::Timeout
-        | ControlErrorCode::ShutdownFailed => McpFailureLabel::SourceUnavailable,
-        ControlErrorCode::InvalidConfig | ControlErrorCode::Cancelled | ControlErrorCode::ExecutionFailed => {
-            McpFailureLabel::Internal
-        }
+        | ControlErrorCode::ShutdownFailed => McpFailureClass::SourceUnavailable,
+        // The caller withdrew the request: the server did not fail.
+        ControlErrorCode::Cancelled => McpFailureClass::Cancelled,
+        ControlErrorCode::InvalidConfig | ControlErrorCode::ExecutionFailed => McpFailureClass::Internal,
     }
 }
 
@@ -781,13 +824,30 @@ mod tests {
             ControlErrorCode::PermissionDenied,
         );
         signals.call_rejected("unknown", ControlErrorCode::ClusterNotAllowed, Duration::from_millis(3));
+        signals.protocol_version_rejected();
+        signals.protocol_version_rejected();
         let text = logs.text();
+        assert_eq!(text.matches("request named an unsupported protocol version").count(), 1);
+        assert!(text.contains(r#"site="protocol" code="request_rejected" suppressed=0"#));
         assert_eq!(text.matches("request was rejected before authentication").count(), 1);
         assert!(text.contains(r#"site="origin" code="request_rejected" suppressed=0"#));
         assert!(text.contains(r#"site="authentication" code="unauthorized" reason="invalid_token" suppressed=0"#));
         assert!(text.contains(r#"code="permission_denied" reason="insufficient_scope""#));
         assert!(text.contains(r#"site="call" tool="unknown" code="cluster_not_allowed" suppressed=0"#));
-        assert_eq!(text.matches("WARN").count(), 4);
+        assert_eq!(text.matches("WARN").count(), 5);
+    }
+
+    #[test]
+    fn deployment_switches_are_named_in_one_warning_and_only_when_one_is_on() {
+        let logs = LogCapture::start();
+        deployment_switches_on(&[]);
+        assert_eq!(logs.text(), "");
+
+        deployment_switches_on(&["oauth.allow_private_network", "server.allow_wildcard_bind"]);
+        let text = logs.text();
+        assert_eq!(text.lines().count(), 1);
+        assert!(text.contains("WARN"));
+        assert!(text.contains("switches=oauth.allow_private_network,server.allow_wildcard_bind"));
     }
 
     #[test]

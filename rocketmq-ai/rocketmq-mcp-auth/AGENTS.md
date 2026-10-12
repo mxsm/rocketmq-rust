@@ -10,6 +10,9 @@ This file applies to `rocketmq-ai/rocketmq-mcp-auth/`.
   used by `rocketmq-ai/rocketmq-mcp-control/` and, under `streamable-http`, by `rocketmq-ai/rocketmq-mcp/`.
 - It owns JWKS retrieval, caching, and parsing, RS256 key selection by `kid`, and Bearer token extraction.
   Signature and claims validation, principal mapping, HTTP responses, and telemetry stay in each server.
+- It also states the MCP protocol revisions that both servers answer (`src/protocol.rs`) and reads the
+  `MCP-Protocol-Version` header against them. Change that set only together with both servers: each holds
+  `initialize`, the header, and self-describing request metadata to it.
 - Do not depend on any `rocketmq-*` crate or on a web framework such as axum.
 - Verification keys are RS256 only and are always selected by `kid`. Do not add symmetric algorithms, static
   keys, or a way to accept a token without a `kid`.

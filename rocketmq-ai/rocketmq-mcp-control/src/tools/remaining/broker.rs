@@ -144,6 +144,12 @@ pub struct PatchBrokerConfigArgs {
     #[serde(default)]
     #[schemars(length(min = 8, max = 64), regex(pattern = "^[a-zA-Z0-9._:-]+$"))]
     pub request_key: Option<String>,
+    /// Digest of the plan to execute: the `plan_digest` that a dry run with the same arguments returned. With
+    /// it, the server writes only if the plan it reads now is that one, and otherwise ends the call with
+    /// `precondition_conflict`. A dry run ignores it; the server policy can require it to execute.
+    #[serde(default)]
+    #[schemars(length(min = 64, max = 64), regex(pattern = "^[0-9a-f]{64}$"))]
+    pub expected_plan_digest: Option<String>,
 }
 
 impl std::fmt::Debug for PatchBrokerConfigArgs {
@@ -204,6 +210,7 @@ impl PatchBrokerConfigArgs {
             self.confirm,
             self.reason.as_deref(),
             self.request_key.as_deref(),
+            self.expected_plan_digest.as_deref(),
         )?;
         validate_user_name(&self.broker_name, NameKind::Broker)?;
         self.properties.typed()

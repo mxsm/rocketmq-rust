@@ -28,4 +28,7 @@ pub mod infrastructure_tools;
 pub mod message_tools;
 pub mod output_policy;
 pub mod proxy_tools;
+pub mod response_format;
+#[cfg(feature = "security-admin")]
+pub mod security_tools;
 pub mod topic_tools;

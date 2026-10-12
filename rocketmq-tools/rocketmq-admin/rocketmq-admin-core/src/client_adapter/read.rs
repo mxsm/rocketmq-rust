@@ -120,7 +120,10 @@ use crate::core::topic_observation::QueryTopicConfigRequest;
 use crate::core::topic_observation::QueryTopicConfigResult;
 use crate::core::topic_observation::QueryTopicStatsRequest;
 use crate::core::topic_observation::QueryTopicStatsResult;
+use crate::core::topic_observation::QueryTopicSubscribersRequest;
+use crate::core::topic_observation::QueryTopicSubscribersResult;
 use crate::core::topic_observation::TopicObservationQueryAdmin;
+use crate::core::topic_observation::TopicSubscriberQueryAdmin;
 use crate::core::AdminError;
 use crate::core::AdminFuture;
 use crate::core::AdminResult;
@@ -1265,6 +1268,76 @@ impl TopicObservationQueryAdmin for ReadAdminSession {
         Box::pin(async move {
             self.ensure_open()?;
             crate::topic_observation::query_topic_config(&self.inner, request).await
+        })
+    }
+}
+
+impl crate::core::consumer_runtime::ConsumerRuntimeQueryAdmin for ReadAdminSession {
+    fn query_consumer_client_runtime<'a>(
+        &'a mut self,
+        request: &'a crate::core::consumer_runtime::QueryConsumerClientRuntimeRequest,
+    ) -> AdminFuture<'a, crate::core::consumer_runtime::ConsumerClientRuntime> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            crate::consumer_runtime::query_consumer_client_runtime(&self.inner, request).await
+        })
+    }
+}
+
+impl crate::core::security::AclUserQueryAdmin for ReadAdminSession {
+    fn query_acl_users<'a>(
+        &'a mut self,
+        request: &'a crate::core::security::AclUserQueryRequest,
+    ) -> AdminFuture<'a, crate::core::security::AclUserQueryResult> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            crate::acl_users::query_acl_users(&self.inner, request).await
+        })
+    }
+}
+
+impl crate::core::lite::LiteBrokerQueryAdmin for ReadAdminSession {
+    fn query_lite_broker_info<'a>(
+        &'a mut self,
+        request: &'a crate::core::lite::LiteBrokerQueryRequest,
+    ) -> AdminFuture<'a, crate::core::lite::LiteBrokerObservation> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            crate::lite_observation::query_lite_broker_info(&self.inner, request).await
+        })
+    }
+}
+
+impl crate::core::message_index::MessageIndexQueryAdmin for ReadAdminSession {
+    fn find_messages_by_key<'a>(
+        &'a mut self,
+        request: &'a crate::core::message_index::FindMessagesByKeyRequest,
+    ) -> AdminFuture<'a, crate::core::message_index::FindMessagesByKeyResult> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            crate::message_index::find_messages_by_key(&self.inner, request).await
+        })
+    }
+
+    fn query_message_trace<'a>(
+        &'a mut self,
+        request: &'a crate::core::message_index::QueryMessageTraceRequest,
+    ) -> AdminFuture<'a, crate::core::message_index::MessageTraceResult> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            crate::message_index::query_message_trace(&self.inner, request).await
+        })
+    }
+}
+
+impl TopicSubscriberQueryAdmin for ReadAdminSession {
+    fn query_topic_subscribers<'a>(
+        &'a mut self,
+        request: &'a QueryTopicSubscribersRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<QueryTopicSubscribersResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            crate::topic_subscribers::query_topic_subscribers(&self.inner, request).await
         })
     }
 }

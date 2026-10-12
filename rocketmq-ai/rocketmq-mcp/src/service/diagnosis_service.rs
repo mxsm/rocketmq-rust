@@ -14,7 +14,7 @@
 
 //! Writes diagnosis reports from an evidence snapshot and what the rules concluded.
 //!
-//! [`finish`] completes any report. [`build_lag_report`] writes the report of a backlog, which the
+//! `finish` completes any report. `build_lag_report` writes the report of a backlog, which the
 //! diagnosis of one Topic and the diagnosis of a whole Consumer Group share.
 
 use serde_json::json;

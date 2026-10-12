@@ -18,6 +18,7 @@ use crate::tools::executor::ToolRejection;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_admin_core::core::broker::BrokerRuntimeTargetStatus;
@@ -75,6 +76,7 @@ use crate::tools::connection_tools::ListConsumerConnectionsArgs;
 use crate::tools::connection_tools::ListConsumerConnectionsOutput;
 use crate::tools::connection_tools::ListProducerConnectionsArgs;
 use crate::tools::connection_tools::ListProducerConnectionsOutput;
+use crate::tools::consumer_tools::ListConsumerGroupNamesOutput;
 use crate::tools::consumer_tools::ListConsumerGroupsArgs;
 use crate::tools::consumer_tools::ListConsumerGroupsOutput;
 use crate::tools::consumer_tools::QueryConsumerLagArgs;
@@ -92,6 +94,8 @@ use crate::tools::topic_tools::ListTopicsOutput;
 use crate::tools::topic_tools::QueryTopicRouteArgs;
 use crate::tools::topic_tools::QueryTopicRouteOutput;
 
+#[cfg(feature = "security-admin")]
+mod acl_users;
 mod broker_health_diagnosis;
 mod broker_listing;
 mod cluster_directory;
@@ -100,9 +104,17 @@ mod completion_names;
 mod consumer_group_diagnosis;
 mod consumer_lag_diagnosis;
 mod consumer_observation;
+mod consumer_running_info;
 mod diagnosis_support;
+mod dlq_summary;
 mod infrastructure_observation;
+mod inventory_snapshots;
+mod lite_broker;
 mod message_delivery_diagnosis;
+mod message_index;
+#[cfg(test)]
+mod observation_fixture;
+mod topic_consumers;
 mod topic_observation;
 
 /// Lets a test adapter build the same cluster entries as the facade.
@@ -224,10 +236,48 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
+    /// Returns what one connected consumer client reports about itself, named by its pseudonym.
+    fn consumer_running_info(
+        &self,
+        _args: crate::tools::consumer_tools::GetConsumerRunningInfoArgs,
+    ) -> impl Future<Output = Result<QueryResult<crate::tools::consumer_tools::GetConsumerRunningInfoOutput>, ToolFailure>>
+           + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+    }
+
+    /// Returns how many messages of a Consumer Group were dead-lettered and when the last one was.
+    fn dlq_summary(
+        &self,
+        _args: crate::tools::consumer_tools::GetDlqSummaryArgs,
+    ) -> impl Future<Output = Result<QueryResult<crate::tools::consumer_tools::GetDlqSummaryOutput>, ToolFailure>> + Send
+    {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+    }
+
+    /// Returns one page of the Consumer Groups that consume a Topic.
+    fn topic_consumers(
+        &self,
+        _args: crate::tools::topic_tools::ListTopicConsumersArgs,
+    ) -> impl Future<Output = Result<QueryResult<crate::tools::topic_tools::ListTopicConsumersOutput>, ToolFailure>> + Send
+    {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+    }
+
     fn list_consumer_groups(
         &self,
         args: ListConsumerGroupsArgs,
     ) -> impl Future<Output = Result<QueryResult<ListConsumerGroupsOutput>, ToolFailure>> + Send;
+
+    /// Returns one page of Consumer Group names, without reading anything about each group.
+    ///
+    /// It pages the same result as [`list_consumer_groups`](Self::list_consumer_groups): a
+    /// cursor of either continues with the other.
+    fn list_consumer_group_names(
+        &self,
+        _args: ListConsumerGroupsArgs,
+    ) -> impl Future<Output = Result<QueryResult<ListConsumerGroupNamesOutput>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+    }
 
     fn describe_consumer_group(
         &self,
@@ -348,6 +398,43 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
+    /// Returns the ACL users of one cluster, without a password.
+    #[cfg(feature = "security-admin")]
+    fn list_acl_users(
+        &self,
+        _args: crate::tools::security_tools::ListAclUsersArgs,
+    ) -> impl Future<Output = Result<QueryResult<crate::tools::security_tools::ListAclUsersOutput>, ToolFailure>> + Send
+    {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+    }
+
+    /// Returns what the master of one Broker holds for Lite Topics.
+    fn lite_broker_info(
+        &self,
+        _args: crate::tools::broker_tools::GetLiteBrokerInfoArgs,
+    ) -> impl Future<Output = Result<QueryResult<crate::tools::broker_tools::GetLiteBrokerInfoOutput>, ToolFailure>> + Send
+    {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+    }
+
+    /// Returns the trace records clients wrote about one message, reduced to what the caller may see.
+    fn message_trace(
+        &self,
+        _args: crate::tools::message_tools::QueryMessageTraceArgs,
+    ) -> impl Future<Output = Result<QueryResult<crate::tools::message_tools::QueryMessageTraceOutput>, ToolFailure>> + Send
+    {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+    }
+
+    /// Returns the fixed metadata of the messages of a Topic that carry a key.
+    fn find_messages_by_key(
+        &self,
+        _args: crate::tools::message_tools::FindMessagesByKeyArgs,
+    ) -> impl Future<Output = Result<QueryResult<crate::tools::message_tools::FindMessagesByKeyOutput>, ToolFailure>> + Send
+    {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+    }
+
     fn topic_config_state(
         &self,
         _args: TopicConfigStateArgs,
@@ -426,9 +513,10 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
     }
 }
 
+/// Every request works on a copy of the facade, so everything in it is shared or small.
 #[derive(Clone)]
 pub(crate) struct QueryFacade<F> {
-    config: McpConfig,
+    config: Arc<McpConfig>,
     factory: F,
     control: WorkflowControl,
     cache: QueryCache,
@@ -456,15 +544,22 @@ impl<F> QueryFacade<F>
 where
     F: AdminSessionFactory,
 {
-    pub(crate) fn with_factory(config: McpConfig, factory: F) -> Self {
+    pub(crate) fn with_factory(config: impl Into<Arc<McpConfig>>, factory: F) -> Self {
+        let config = config.into();
         let control = WorkflowControl::new(config.server.request_timeout(), CancellationToken::new());
         Self::with_factory_and_control(config, factory, control)
     }
 
-    pub(crate) fn with_factory_and_control(config: McpConfig, factory: F, control: WorkflowControl) -> Self {
+    pub(crate) fn with_factory_and_control(
+        config: impl Into<Arc<McpConfig>>,
+        factory: F,
+        control: WorkflowControl,
+    ) -> Self {
+        let config = config.into();
+        let stale_if_error = config.cache.stale_if_error();
         Self {
-            cache: QueryCache::new(config.cache.enabled, config.cache.max_entries),
-            snapshots: SnapshotStore::new(config.cache.cursor_snapshot_max_entries),
+            cache: QueryCache::new(config.cache.enabled, config.cache.max_entries).with_stale_if_error(stale_if_error),
+            snapshots: SnapshotStore::new(config.cache.cursor_snapshot_max_entries).with_stale_if_error(stale_if_error),
             aliases: IdentifierAliaser::default(),
             config,
             factory,
@@ -534,19 +629,10 @@ where
                 &self.control.cancellation,
                 || ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled),
                 || async {
-                    let page = PageRequest::default();
-                    // Boxed because every Tool and Resource dispatch holds the overview future by
-                    // value: keeping the inventory futures inline would deepen every request's stack.
-                    let topics = Box::pin(inventory_size(
-                        || self.topic_inventory_snapshot(cluster.clone(), None, &page),
-                        || self.read_topic_inventory(cluster.clone(), String::new()),
-                    ))
-                    .await?;
-                    let consumer_groups = Box::pin(inventory_size(
-                        || self.consumer_group_inventory_snapshot(cluster.clone(), None, false, &page),
-                        || self.read_consumer_group_inventory(cluster.clone(), String::new(), false),
-                    ))
-                    .await?;
+                    // The counts come from the names the listing Tools select their pages from, so
+                    // the overview and a listing share one read of each inventory.
+                    let topics = self.topic_count(cluster.clone()).await?;
+                    let consumer_groups = self.consumer_group_count(cluster.clone()).await?;
                     self.run_workflow(cluster, move |session, cluster| {
                         Box::pin(async move {
                             let brokers = session.broker_rows().await?;
@@ -574,18 +660,23 @@ where
         let snapshot = self
             .topic_inventory_snapshot(cluster.clone(), args.filter.as_deref(), &args.page)
             .await?;
-        let entries = snapshot
-            .payload
-            .data
-            .iter()
-            .cloned()
-            .map(|topic| crate::tools::topic_tools::TopicListEntry {
-                topic,
-                cluster: Some(cluster.rocketmq_cluster_name.clone()),
-                consumer_group: None,
-            })
-            .collect::<Vec<_>>();
-        let page = self.snapshots.page(&snapshot, &entries)?;
+        // Only the names of the requested page leave the snapshot and become entries.
+        let names = self.snapshots.page(&snapshot, &snapshot.payload.data)?;
+        let page = Page {
+            count: names.count,
+            total_count: names.total_count,
+            has_more: names.has_more,
+            next_cursor: names.next_cursor,
+            items: names
+                .items
+                .into_iter()
+                .map(|topic| crate::tools::topic_tools::TopicListEntry {
+                    topic,
+                    cluster: Some(cluster.rocketmq_cluster_name.clone()),
+                    consumer_group: None,
+                })
+                .collect(),
+        };
         Ok(query_result_from_snapshot(
             &snapshot,
             snapshot.payload.completeness().wrap(ListTopicsOutput {
@@ -666,7 +757,7 @@ where
             ),
         );
         let ttl = Duration::from_millis(self.config.cache.consumer_lag_ttl_ms);
-        let enrichment_snapshot = snapshot.clone();
+        let inventory_completeness = snapshot.payload.completeness();
         let enriched = self
             .cache
             .get_or_try_init_cancellable(
@@ -678,7 +769,7 @@ where
                     self.run_workflow(cluster.clone(), move |session, cluster| {
                         Box::pin(async move {
                             let groups = session.consumer_groups_exact(&selected_names).await?;
-                            let mut completeness = enrichment_snapshot.payload.completeness();
+                            let mut completeness = inventory_completeness;
                             completeness.merge(groups.completeness());
                             let mut groups = groups.data;
                             groups.sort_by(|left, right| left.group.cmp(&right.group));
@@ -870,7 +961,7 @@ where
             &cluster.name,
             &format!("broker={}", args.broker_name),
         );
-        let ttl = Duration::from_millis(self.config.cache.broker_metrics_ttl_ms);
+        let ttl = self.config.cache.broker_config_ttl();
         self.cache
             .get_or_try_init_cancellable(
                 key,
@@ -932,7 +1023,7 @@ where
             &cluster.name,
             &format!("proxy={}", args.proxy_name),
         );
-        let ttl = Duration::from_millis(self.config.cache.broker_metrics_ttl_ms);
+        let ttl = self.config.cache.proxy_state_ttl();
         self.cache
             .get_or_try_init_cancellable(
                 key,
@@ -1026,7 +1117,7 @@ where
         let cluster = self.resolve_cluster(&args.cluster)?;
         let lookup_alias = self.aliases.message_alias(&args.message_id).map_err(alias_error)?;
         let key = self.cache_key("message_metadata", &cluster.name, &format!("message={lookup_alias}"));
-        let ttl = Duration::from_millis(self.config.cache.broker_metrics_ttl_ms);
+        let ttl = self.config.cache.message_metadata_ttl();
         let aliases = self.aliases.clone();
         self.cache
             .get_or_try_init_cancellable(
@@ -1109,117 +1200,6 @@ where
                 },
             )
             .await
-    }
-
-    async fn topic_inventory_snapshot(
-        &self,
-        cluster: ResolvedCluster,
-        filter: Option<&str>,
-        page: &PageRequest,
-    ) -> Result<SnapshotView<Vec<String>>, ToolFailure> {
-        let filter = normalized_filter(filter).unwrap_or_default();
-        let request = SnapshotRequest::try_new(
-            SnapshotKind::TopicInventory,
-            cluster.name.clone(),
-            filter.clone(),
-            page,
-            self.visibility_class.as_str(),
-        )?;
-        self.snapshots
-            .get_or_load(
-                request,
-                page.cursor.as_deref(),
-                self.cursor_snapshot_ttl(),
-                self.snapshot_response_ttl(self.config.cache.topic_list_ttl_ms),
-                |topics: &Vec<String>| SnapshotWeight::inventory(topics.len()),
-                &self.control.cancellation,
-                || self.read_topic_inventory(cluster, filter),
-            )
-            .await
-    }
-
-    /// Reads the sorted Topic inventory, keeping the names that contain the normalized `filter`.
-    async fn read_topic_inventory(
-        &self,
-        cluster: ResolvedCluster,
-        filter: String,
-    ) -> Result<QueryPayload<Vec<String>>, ToolFailure> {
-        self.run_workflow(cluster, move |session, _| {
-            Box::pin(async move {
-                let mut topics = sorted_unique_topic_names(session.topic_inventory().await?);
-                if !filter.is_empty() {
-                    topics.retain(|topic| topic.to_ascii_lowercase().contains(&filter));
-                }
-                Ok(QueryPayload::complete(topics))
-            })
-        })
-        .await
-    }
-
-    async fn consumer_group_inventory_snapshot(
-        &self,
-        cluster: ResolvedCluster,
-        filter: Option<&str>,
-        exact: bool,
-        page: &PageRequest,
-    ) -> Result<SnapshotView<Vec<String>>, ToolFailure> {
-        let filter = if exact {
-            filter.map(str::trim).unwrap_or_default().to_string()
-        } else {
-            normalized_filter(filter).unwrap_or_default()
-        };
-        let selection_mode = if exact {
-            SnapshotSelectionMode::ExactIdentifier
-        } else {
-            SnapshotSelectionMode::LiteralFilter
-        };
-        let request = SnapshotRequest::try_new_with_selection(
-            SnapshotKind::ConsumerGroupInventory,
-            cluster.name.clone(),
-            filter.clone(),
-            selection_mode,
-            page,
-            self.visibility_class.as_str(),
-        )?;
-        self.snapshots
-            .get_or_load(
-                request,
-                page.cursor.as_deref(),
-                self.cursor_snapshot_ttl(),
-                self.snapshot_response_ttl(self.config.cache.consumer_lag_ttl_ms),
-                |groups: &Vec<String>| SnapshotWeight::inventory(groups.len()),
-                &self.control.cancellation,
-                || self.read_consumer_group_inventory(cluster, filter, exact),
-            )
-            .await
-    }
-
-    /// Reads the sorted Consumer Group inventory, keeping the names selected by `filter`: the one
-    /// equal name when `exact`, otherwise every name that contains the normalized filter.
-    async fn read_consumer_group_inventory(
-        &self,
-        cluster: ResolvedCluster,
-        filter: String,
-        exact: bool,
-    ) -> Result<QueryPayload<Vec<String>>, ToolFailure> {
-        self.run_workflow(cluster, move |session, _| {
-            Box::pin(async move {
-                let groups = session.consumer_group_inventory().await?;
-                Ok(groups.map(|mut groups| {
-                    groups.sort();
-                    groups.dedup();
-                    if !filter.is_empty() {
-                        if exact {
-                            groups.retain(|group| group == &filter);
-                        } else {
-                            groups.retain(|group| group.to_ascii_lowercase().contains(&filter));
-                        }
-                    }
-                    groups
-                }))
-            })
-        })
-        .await
     }
 
     async fn topic_route_snapshot(
@@ -1427,8 +1407,8 @@ where
 impl QueryFacade<AdminCoreSessionFactory> {
     /// `blocking` is the owning service's short-I/O lane; sessions read credential files on it.
     pub(crate) fn new(
-        config: McpConfig,
-        client_runtime: std::sync::Arc<rocketmq_admin_core::read_client_adapter::ClientRuntime>,
+        config: impl Into<Arc<McpConfig>>,
+        client_runtime: Arc<rocketmq_admin_core::read_client_adapter::ClientRuntime>,
         blocking: rocketmq_runtime::BlockingExecutor,
     ) -> Self {
         Self::with_factory(config, AdminCoreSessionFactory::new(client_runtime, blocking))
@@ -1484,11 +1464,39 @@ where
         QueryFacade::topic_config(self, args).await
     }
 
+    async fn topic_consumers(
+        &self,
+        args: crate::tools::topic_tools::ListTopicConsumersArgs,
+    ) -> Result<QueryResult<crate::tools::topic_tools::ListTopicConsumersOutput>, ToolFailure> {
+        QueryFacade::topic_consumers(self, args).await
+    }
+
+    async fn consumer_running_info(
+        &self,
+        args: crate::tools::consumer_tools::GetConsumerRunningInfoArgs,
+    ) -> Result<QueryResult<crate::tools::consumer_tools::GetConsumerRunningInfoOutput>, ToolFailure> {
+        QueryFacade::consumer_running_info(self, args).await
+    }
+
+    async fn dlq_summary(
+        &self,
+        args: crate::tools::consumer_tools::GetDlqSummaryArgs,
+    ) -> Result<QueryResult<crate::tools::consumer_tools::GetDlqSummaryOutput>, ToolFailure> {
+        QueryFacade::dlq_summary(self, args).await
+    }
+
     async fn list_consumer_groups(
         &self,
         args: ListConsumerGroupsArgs,
     ) -> Result<QueryResult<ListConsumerGroupsOutput>, ToolFailure> {
         QueryFacade::list_consumer_groups(self, args).await
+    }
+
+    async fn list_consumer_group_names(
+        &self,
+        args: ListConsumerGroupsArgs,
+    ) -> Result<QueryResult<ListConsumerGroupNamesOutput>, ToolFailure> {
+        QueryFacade::list_consumer_group_names(self, args).await
     }
 
     async fn describe_consumer_group(
@@ -1581,6 +1589,35 @@ where
         args: MessageMetadataArgs,
     ) -> Result<QueryResult<MessageMetadataOutput>, ToolFailure> {
         QueryFacade::message_metadata(self, args).await
+    }
+
+    #[cfg(feature = "security-admin")]
+    async fn list_acl_users(
+        &self,
+        args: crate::tools::security_tools::ListAclUsersArgs,
+    ) -> Result<QueryResult<crate::tools::security_tools::ListAclUsersOutput>, ToolFailure> {
+        QueryFacade::list_acl_users(self, args).await
+    }
+
+    async fn lite_broker_info(
+        &self,
+        args: crate::tools::broker_tools::GetLiteBrokerInfoArgs,
+    ) -> Result<QueryResult<crate::tools::broker_tools::GetLiteBrokerInfoOutput>, ToolFailure> {
+        QueryFacade::lite_broker_info(self, args).await
+    }
+
+    async fn message_trace(
+        &self,
+        args: crate::tools::message_tools::QueryMessageTraceArgs,
+    ) -> Result<QueryResult<crate::tools::message_tools::QueryMessageTraceOutput>, ToolFailure> {
+        QueryFacade::message_trace(self, args).await
+    }
+
+    async fn find_messages_by_key(
+        &self,
+        args: crate::tools::message_tools::FindMessagesByKeyArgs,
+    ) -> Result<QueryResult<crate::tools::message_tools::FindMessagesByKeyOutput>, ToolFailure> {
+        QueryFacade::find_messages_by_key(self, args).await
     }
 
     async fn topic_config_state(
@@ -1769,36 +1806,15 @@ where
     }))
 }
 
-/// Sizes an inventory for the cluster overview, which reports counts and never pages.
-///
-/// The size normally comes from the snapshot that the listing Tools page through, so the overview
-/// and a listing share one upstream read. An inventory too large to keep as a snapshot is read a
-/// second time and counted without being kept: the overview stays available on clusters whose
-/// listings need a filter, at the cost of that second read.
-async fn inventory_size<Snapshot, Unretained>(
-    snapshot: impl FnOnce() -> Snapshot,
-    read_unretained: impl FnOnce() -> Unretained,
-) -> Result<QueryPayload<usize>, ToolFailure>
-where
-    Snapshot: Future<Output = Result<SnapshotView<Vec<String>>, ToolFailure>>,
-    Unretained: Future<Output = Result<QueryPayload<Vec<String>>, ToolFailure>>,
-{
-    let inventory = match snapshot().await {
-        Ok(snapshot) => snapshot.payload,
-        Err(ToolFailure::Rejected(ToolRejection::ResultTooLarge)) => read_unretained().await?,
-        Err(error) => return Err(error),
-    };
-    Ok(inventory.map(|names| names.len()))
-}
-
 fn completeness_for_error(source: QuerySource, logical_target: &str, error: &ToolFailure) -> QueryCompleteness {
     let (code, retryable) = match error {
         ToolFailure::Rejected(crate::tools::executor::ToolRejection::TimedOut { .. }) => {
             (SourceFailureCode::Timeout, true)
         }
-        ToolFailure::Rejected(crate::tools::executor::ToolRejection::RateLimited) => {
-            (SourceFailureCode::RateLimited, true)
-        }
+        ToolFailure::Rejected(
+            crate::tools::executor::ToolRejection::RateLimited { .. }
+            | crate::tools::executor::ToolRejection::ConcurrencyLimited,
+        ) => (SourceFailureCode::RateLimited, true),
         ToolFailure::Rejected(crate::tools::executor::ToolRejection::PermissionDenied)
         | ToolFailure::Rejected(crate::tools::executor::ToolRejection::UnauthorizedScope)
         | ToolFailure::Rejected(crate::tools::executor::ToolRejection::TenantMismatch)
@@ -1826,19 +1842,6 @@ fn completeness_for_error(source: QuerySource, logical_target: &str, error: &Too
         warnings: vec!["source_failures_present".to_string()],
         source_failures: vec![SourceFailure::new(source, code, retryable, logical_target)],
     }
-}
-
-fn normalized_filter(filter: Option<&str>) -> Option<String> {
-    filter
-        .map(str::trim)
-        .filter(|filter| !filter.is_empty())
-        .map(str::to_ascii_lowercase)
-}
-
-fn sorted_unique_topic_names(mut topics: Vec<String>) -> Vec<String> {
-    topics.sort();
-    topics.dedup();
-    topics
 }
 
 fn normalized_identifier(_field: &str, value: &str) -> Result<String, ToolFailure> {
@@ -1998,10 +2001,12 @@ fn valid_rust_module_path(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     mod broker_health_diagnosis;
+    mod cache_policy;
     mod cluster_health;
     mod consumer_group_diagnosis;
     mod consumer_lag_diagnosis;
     mod message_delivery_diagnosis;
+    mod response_format;
 
     #[test]
     fn alias_input_bound_is_a_closed_tool_rejection() {
@@ -2037,6 +2042,8 @@ mod tests {
     #[derive(Debug, Default)]
     struct LifecycleCounters {
         starts: AtomicUsize,
+        /// Sessions that could not be opened because the source was down.
+        refused_starts: AtomicUsize,
         shutdowns: AtomicUsize,
         broker_queries: AtomicUsize,
         broker_diagnostics_queries: AtomicUsize,
@@ -2146,6 +2153,8 @@ mod tests {
     #[derive(Clone, Default)]
     struct FakeSessionFactory {
         counters: Arc<LifecycleCounters>,
+        /// While set, no session can be opened: the cluster cannot be reached.
+        source_down: Arc<AtomicBool>,
         selected_broker_missing: bool,
         failed_selected_broker: bool,
         overflow_failed_selected_broker: bool,
@@ -2195,6 +2204,10 @@ mod tests {
         type Session = FakeSession;
 
         async fn start(&self, cluster: ResolvedCluster) -> Result<Self::Session, ToolFailure> {
+            if self.source_down.load(Ordering::SeqCst) {
+                self.counters.refused_starts.fetch_add(1, Ordering::SeqCst);
+                return Err(ToolFailure::Operational(ToolExecutionError::Backend(None)));
+            }
             self.counters.starts.fetch_add(1, Ordering::SeqCst);
             Ok(FakeSession {
                 cluster,
@@ -3930,9 +3943,9 @@ mod tests {
         assert_eq!(overview.topic_count, 10_001);
         assert_eq!(overview.consumer_group_count, 10_001);
         assert!(!overview.partial);
-        // An inventory that cannot enter a snapshot is read once more to be counted.
-        assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 2);
-        assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 2);
+        // An inventory that cannot enter a snapshot is counted from the same one read.
+        assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 1);
         assert_eq!(counters.broker_queries.load(Ordering::SeqCst), 1);
         assert_eq!(
             counters.starts.load(Ordering::SeqCst),
@@ -5156,6 +5169,7 @@ mod tests {
                 permissions_file: config.security.permissions_file.clone(),
                 max_concurrent_requests_per_cluster: 8,
                 pseudonym_key_env: None,
+                http_rate_limit_per_minute: None,
             },
             crate::config::AuditConfig {
                 enabled: true,
@@ -5164,6 +5178,7 @@ mod tests {
                 queue_capacity: 256,
                 max_record_bytes: 16 * 1024,
                 queue_max_bytes: 1024 * 1024,
+                max_file_bytes: 0,
             },
             &config.clusters,
         )
@@ -5387,7 +5402,8 @@ mod tests {
             _ => panic!("resource should contain JSON text"),
         };
         assert_eq!(payload["consumer_group"]["group"], "group-4");
-        assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 3);
+        // The three selections are distinct snapshots, all made from one read of the names.
+        assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 1);
         assert_eq!(counters.consumer_group_enrichment_queries.load(Ordering::SeqCst), 2);
     }
 
@@ -5428,7 +5444,8 @@ mod tests {
             .unwrap();
 
         assert!(listed.page.items.is_empty());
-        assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 3);
+        // The three selections are distinct snapshots, all made from one read of the names.
+        assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 1);
         assert_eq!(counters.consumer_group_enrichment_queries.load(Ordering::SeqCst), 2);
     }
 
@@ -5476,7 +5493,8 @@ mod tests {
                 .unwrap_err();
         assert!(error.to_string().contains("not found"));
         assert!(!error.to_string().contains("unavailable"));
-        assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 4);
+        // The four selections are distinct snapshots, all made from one read of the names.
+        assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 1);
         assert_eq!(counters.consumer_group_enrichment_queries.load(Ordering::SeqCst), 3);
         assert_eq!(counters.consumer_group_enriched_targets.load(Ordering::SeqCst), 4);
     }
@@ -5525,7 +5543,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["OrderGroup", "ordergroup"]
         );
-        assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 4);
+        // The four selections are distinct snapshots, all made from one read of the names.
+        assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 1);
         assert_eq!(counters.consumer_group_enrichment_queries.load(Ordering::SeqCst), 3);
         assert_eq!(counters.consumer_group_enriched_targets.load(Ordering::SeqCst), 4);
     }

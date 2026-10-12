@@ -39,6 +39,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "broker_config_patch",
+    "plan_digest": null,
     "requested": {
       "autoCreateSubscriptionGroup": null,
       "autoCreateTopicEnable": null,
@@ -101,6 +102,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "dry_run",
     "operation": "broker_config_patch",
+    "plan_digest": "7f9c26ac5e3a04845bfa63991c699412059da255871b51b97c1b9183e705094c",
     "requested": {
       "autoCreateSubscriptionGroup": null,
       "autoCreateTopicEnable": null,
@@ -173,6 +175,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "broker_config_patch",
+    "plan_digest": null,
     "requested": {
       "autoCreateSubscriptionGroup": null,
       "autoCreateTopicEnable": null,
@@ -273,6 +276,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "broker_config_patch",
+    "plan_digest": null,
     "requested": {
       "autoCreateSubscriptionGroup": null,
       "autoCreateTopicEnable": null,
@@ -341,6 +345,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "broker_config_patch",
+    "plan_digest": null,
     "requested": {
       "autoCreateSubscriptionGroup": null,
       "autoCreateTopicEnable": null,
@@ -436,6 +441,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "proxy_drain_begin",
+    "plan_digest": null,
     "requested": {
       "action": "begin"
     },
@@ -505,6 +511,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "dry_run",
     "operation": "proxy_drain_begin",
+    "plan_digest": "ab9891fea45eb9217b2c43437c0ace65082721af9c5360a952b3329379b3634e",
     "requested": {
       "action": "begin"
     },
@@ -593,6 +600,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "proxy_drain_begin",
+    "plan_digest": null,
     "requested": {
       "action": "begin"
     },
@@ -709,6 +717,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "proxy_drain_begin",
+    "plan_digest": null,
     "requested": {
       "action": "begin"
     },
@@ -784,6 +793,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "proxy_drain_begin",
+    "plan_digest": null,
     "requested": {
       "action": "begin"
     },
@@ -877,6 +887,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "proxy_drain_cancel",
+    "plan_digest": null,
     "requested": {
       "action": "cancel"
     },
@@ -946,6 +957,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "dry_run",
     "operation": "proxy_drain_cancel",
+    "plan_digest": "de36fb65609fa0b9d80bf8c3f4f11b6d5572c940bcab83a1a683a647699dbc3d",
     "requested": {
       "action": "cancel"
     },
@@ -1034,6 +1046,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "proxy_drain_cancel",
+    "plan_digest": null,
     "requested": {
       "action": "cancel"
     },
@@ -1150,6 +1163,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "proxy_drain_cancel",
+    "plan_digest": null,
     "requested": {
       "action": "cancel"
     },
@@ -1225,6 +1239,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "proxy_drain_cancel",
+    "plan_digest": null,
     "requested": {
       "action": "cancel"
     },
@@ -1303,6 +1318,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_group_upsert",
+    "plan_digest": null,
     "requested": {
       "broker_id": 0,
       "consume_broadcast_enable": false,
@@ -1368,6 +1384,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "dry_run",
     "operation": "consumer_group_upsert",
+    "plan_digest": "fb3c34f7004c28d954d8324936d0abdeabce9cbcc5cc6aa8ac170f90d28e5300",
     "requested": {
       "broker_id": 0,
       "consume_broadcast_enable": false,
@@ -1451,6 +1468,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_group_upsert",
+    "plan_digest": null,
     "requested": {
       "broker_id": 0,
       "consume_broadcast_enable": false,
@@ -1577,6 +1595,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_group_upsert",
+    "plan_digest": null,
     "requested": {
       "broker_id": 0,
       "consume_broadcast_enable": false,
@@ -1687,6 +1706,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_group_upsert",
+    "plan_digest": null,
     "requested": {
       "broker_id": 0,
       "consume_broadcast_enable": false,
@@ -1758,6 +1778,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_group_upsert",
+    "plan_digest": null,
     "requested": {
       "broker_id": 0,
       "consume_broadcast_enable": false,
@@ -1849,6 +1870,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "broker_log_filter_restore",
+    "plan_digest": null,
     "requested": {
       "action": "restore"
     },
@@ -1892,6 +1914,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "dry_run",
     "operation": "broker_log_filter_restore",
+    "plan_digest": "db018a8db447f403bf2cef15fcfce77d2c77501f675aca6327469dfe62e403fd",
     "requested": {
       "action": "restore"
     },
@@ -1941,6 +1964,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "broker_log_filter_restore",
+    "plan_digest": null,
     "requested": {
       "action": "restore"
     },
@@ -2018,6 +2042,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "broker_log_filter_restore",
+    "plan_digest": null,
     "requested": {
       "action": "restore"
     },
@@ -2067,6 +2092,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "broker_log_filter_restore",
+    "plan_digest": null,
     "requested": {
       "action": "restore"
     },
@@ -2134,6 +2160,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "broker_log_filter_set",
+    "plan_digest": null,
     "requested": {
       "action": "set",
       "level": "DEBUG",
@@ -2183,6 +2210,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "dry_run",
     "operation": "broker_log_filter_set",
+    "plan_digest": "fb80cdf0735b1ca694d5c80ac1bc16e501cb9ba8974878ea2ba8bb11bafda676",
     "requested": {
       "action": "set",
       "level": "DEBUG",
@@ -2238,6 +2266,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "broker_log_filter_set",
+    "plan_digest": null,
     "requested": {
       "action": "set",
       "level": "DEBUG",
@@ -2321,6 +2350,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "broker_log_filter_set",
+    "plan_digest": null,
     "requested": {
       "action": "set",
       "level": "DEBUG",
@@ -2376,6 +2406,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "broker_log_filter_set",
+    "plan_digest": null,
     "requested": {
       "action": "set",
       "level": "DEBUG",
@@ -2448,6 +2479,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_request_mode",
+    "plan_digest": null,
     "requested": {
       "mode": "pop",
       "pop_share_queue_num": 4,
@@ -2497,6 +2529,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "dry_run",
     "operation": "consumer_request_mode",
+    "plan_digest": "34367ec9275d5652ae3eaa3e7fd773f31983586f1d7c047a1249c114fb991178",
     "requested": {
       "mode": "pop",
       "pop_share_queue_num": 4,
@@ -2551,6 +2584,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_request_mode",
+    "plan_digest": null,
     "requested": {
       "mode": "pop",
       "pop_share_queue_num": 4,
@@ -2637,6 +2671,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_request_mode",
+    "plan_digest": null,
     "requested": {
       "mode": "pop",
       "pop_share_queue_num": 4,
@@ -2708,6 +2743,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_request_mode",
+    "plan_digest": null,
     "requested": {
       "mode": "pop",
       "pop_share_queue_num": 4,
@@ -2763,6 +2799,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_request_mode",
+    "plan_digest": null,
     "requested": {
       "mode": "pop",
       "pop_share_queue_num": 4,
@@ -2831,6 +2868,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_offset_reset",
+    "plan_digest": null,
     "requested": {
       "force": false,
       "timestamp": "2026-08-30T00:00:00Z",
@@ -2875,6 +2913,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "dry_run",
     "operation": "consumer_offset_reset",
+    "plan_digest": "80c8c91b1fddabc6992ea80558589f136152240a3a00e46ded1a8eb96cbd8508",
     "requested": {
       "force": false,
       "timestamp": "2026-08-30T00:00:00Z",
@@ -2925,6 +2964,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_offset_reset",
+    "plan_digest": null,
     "requested": {
       "force": false,
       "timestamp": "2026-08-30T00:00:00Z",
@@ -3004,6 +3044,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_offset_reset",
+    "plan_digest": null,
     "requested": {
       "force": false,
       "timestamp": "2026-08-30T00:00:00Z",
@@ -3061,6 +3102,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_offset_reset",
+    "plan_digest": null,
     "requested": {
       "force": false,
       "timestamp": "2026-08-30T00:00:00Z",
@@ -3111,6 +3153,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "consumer_offset_reset",
+    "plan_digest": null,
     "requested": {
       "force": false,
       "timestamp": "2026-08-30T00:00:00Z",
@@ -3177,6 +3220,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "topic_upsert",
+    "plan_digest": null,
     "requested": {
       "message_type": "NORMAL",
       "order": false,
@@ -3230,6 +3274,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "dry_run",
     "operation": "topic_upsert",
+    "plan_digest": "6228d5ab5ff65727fb068ea9a58c575bc3bed3a7ea181a403fb76f83861c00b2",
     "requested": {
       "message_type": "NORMAL",
       "order": false,
@@ -3295,6 +3340,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "topic_upsert",
+    "plan_digest": null,
     "requested": {
       "message_type": "NORMAL",
       "order": false,
@@ -3397,6 +3443,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "topic_upsert",
+    "plan_digest": null,
     "requested": {
       "message_type": "NORMAL",
       "order": false,
@@ -3483,6 +3530,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "topic_upsert",
+    "plan_digest": null,
     "requested": {
       "message_type": "NORMAL",
       "order": false,
@@ -3542,6 +3590,7 @@ expression: exact_contract
     "invocation_id": 1,
     "mode": "execute",
     "operation": "topic_upsert",
+    "plan_digest": null,
     "requested": {
       "message_type": "NORMAL",
       "order": false,

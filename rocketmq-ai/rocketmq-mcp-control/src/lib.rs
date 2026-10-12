@@ -28,6 +28,7 @@ pub mod audit;
 mod auth;
 pub mod catalog;
 pub mod config;
+mod emergency_stop;
 pub mod error;
 pub mod guard;
 pub mod model;

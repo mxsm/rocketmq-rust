@@ -14,6 +14,8 @@
 
 //! Deliberate stable Client entry points.
 
+#[cfg(feature = "admin-read")]
+pub use crate::admin::AclUserRead;
 #[cfg(feature = "admin-full")]
 pub use crate::admin::AuthAdmin;
 #[cfg(feature = "admin-full")]
@@ -49,9 +51,17 @@ pub use crate::admin::InfrastructureObservationReadError;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::InfrastructureObservationReadErrorCode;
 #[cfg(feature = "admin-read")]
+pub use crate::admin::MQAdminAclReadExt;
+#[cfg(feature = "admin-read")]
 pub use crate::admin::MQAdminConsumerObservationReadExt;
 #[cfg(feature = "admin-read")]
+pub use crate::admin::MQAdminConsumerRuntimeReadExt;
+#[cfg(feature = "admin-read")]
 pub use crate::admin::MQAdminInfrastructureObservationReadExt;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::MQAdminLiteReadExt;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::MQAdminMessageIndexReadExt;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::MQAdminMessageReadExt;
 #[cfg(feature = "admin-mutation")]
@@ -63,9 +73,15 @@ pub use crate::admin::MQAdminTopicInventoryReadExt;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::MQAdminTopicStatsReadExt;
 #[cfg(feature = "admin-read")]
+pub use crate::admin::MQAdminTopicSubscriberReadExt;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::MessageIndexQuery;
+#[cfg(feature = "admin-read")]
 pub use crate::admin::MessageMetadataRead;
 #[cfg(feature = "admin-mutation")]
 pub use crate::admin::MessageRequestModeCasReport;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::MessageTraceRead;
 #[cfg(feature = "admin-mutation")]
 pub use crate::admin::MetadataCasReport;
 #[cfg(feature = "admin-mutation")]

@@ -153,6 +153,8 @@ impl PolicyEngine {
             RiskLevel::Diagnose => "rocketmq:diagnose",
             RiskLevel::Plan => "rocketmq:plan",
             RiskLevel::Destructive => "rocketmq:write",
+            RiskLevel::MessageSearch => "rocketmq:message-search",
+            RiskLevel::SecurityAdmin => "rocketmq:security-admin",
         };
         if principal.scopes.contains(required_scope) {
             return Ok(());

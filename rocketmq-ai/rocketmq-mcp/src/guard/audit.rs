@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod file_sink;
+mod target;
+
 use std::collections::VecDeque;
-use std::fs::OpenOptions;
 use std::future::Future;
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
@@ -43,7 +44,14 @@ use crate::guard::RiskLevel;
 use crate::infrastructure::metrics::ComponentMetrics;
 use crate::McpError;
 
-pub const AUDIT_SCHEMA_VERSION: u16 = 1;
+use self::file_sink::FileAuditSink;
+pub use self::target::AuditTarget;
+
+/// The version every record carries in `schema_version`.
+///
+/// Version 2 adds the optional `target`. Nothing else changed: a version 1 record is a version 2
+/// record without a target, and one file may hold records of both versions.
+pub const AUDIT_SCHEMA_VERSION: u16 = 2;
 
 const MAX_AUDIT_RECORDS: usize = 1024;
 const MAX_REQUEST_ID_BYTES: usize = 128;
@@ -72,6 +80,10 @@ pub struct AuditRecord {
     pub status: AuditStatus,
     pub duration_ms: u128,
     pub error: Option<String>,
+    /// The logical names the call asked about. It is written only when there is one, so a
+    /// record without it has exactly the fields of schema version 1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<AuditTarget>,
 }
 
 impl AuditRecord {
@@ -104,7 +116,15 @@ impl AuditRecord {
             status,
             duration_ms,
             error,
+            target: None,
         }
+    }
+
+    /// Adds the logical names the call asked about. A target that names nothing is not kept.
+    #[must_use]
+    pub fn with_target(mut self, target: AuditTarget) -> Self {
+        self.target = (!target.is_empty()).then_some(target);
+        self
     }
 }
 
@@ -274,10 +294,11 @@ impl AuditLog {
         service_context: &rocketmq_runtime::ChildServiceContext,
     ) -> crate::McpResult<()> {
         let sink = match config.sink.as_str() {
-            "file" => ConfiguredAuditSink::File(FileAuditSink {
-                path: PathBuf::from(&config.path),
-                blocking: service_context.storage_io().clone(),
-            }),
+            "file" => ConfiguredAuditSink::File(Box::new(FileAuditSink::new(
+                PathBuf::from(&config.path),
+                config.max_file_bytes,
+                service_context.storage_io().clone(),
+            ))),
             "tracing" => ConfiguredAuditSink::Tracing(TracingAuditSink),
             "memory" => ConfiguredAuditSink::Memory(MemoryAuditSink),
             _ => {
@@ -491,18 +512,13 @@ impl AuditLog {
     }
 
     fn prepare_record(&self, config: &AuditConfig, record: AuditRecord) -> Option<(AuditRecord, Vec<u8>)> {
-        let record = sanitize_record(record);
-        let mut encoded = match serde_json::to_vec(&record) {
-            Ok(encoded) => encoded,
-            Err(_) => {
-                self.counters.dropped.fetch_add(1, Ordering::Relaxed);
-                self.counters.sink_failures.fetch_add(1, Ordering::Relaxed);
-                self.counters.telemetry.record_audit_failure(McpAuditFailureKind::Sink);
-                tracing::warn!("rocketmq-mcp audit record serialization failed");
-                return None;
-            }
-        };
-        encoded.push(b'\n');
+        let mut record = sanitize_record(record);
+        let mut encoded = self.encode_record(&record)?;
+        // The names are given up before the record is: a limit that every version 1 record met
+        // must not start to drop records because they now say what they were about.
+        if encoded.len() > config.max_record_bytes && record.target.take().is_some() {
+            encoded = self.encode_record(&record)?;
+        }
         if encoded.len() > config.max_record_bytes {
             self.counters.dropped.fetch_add(1, Ordering::Relaxed);
             self.counters.oversized.fetch_add(1, Ordering::Relaxed);
@@ -515,6 +531,23 @@ impl AuditLog {
             return None;
         }
         Some((record, encoded))
+    }
+
+    /// Encodes a record as one line, or counts it as lost when it cannot be encoded.
+    fn encode_record(&self, record: &AuditRecord) -> Option<Vec<u8>> {
+        match serde_json::to_vec(record) {
+            Ok(mut encoded) => {
+                encoded.push(b'\n');
+                Some(encoded)
+            }
+            Err(_) => {
+                self.counters.dropped.fetch_add(1, Ordering::Relaxed);
+                self.counters.sink_failures.fetch_add(1, Ordering::Relaxed);
+                self.counters.telemetry.record_audit_failure(McpAuditFailureKind::Sink);
+                tracing::warn!("rocketmq-mcp audit record serialization failed");
+                None
+            }
+        }
     }
 
     fn accept_memory(&self, record: AuditRecord) {
@@ -578,7 +611,8 @@ trait AuditSink: Send + 'static {
 }
 
 enum ConfiguredAuditSink {
-    File(FileAuditSink),
+    /// Boxed: it holds its writer, and the other sinks hold nothing.
+    File(Box<FileAuditSink>),
     Tracing(TracingAuditSink),
     Memory(MemoryAuditSink),
 }
@@ -601,36 +635,15 @@ impl AuditSink for ConfiguredAuditSink {
     }
 }
 
-struct FileAuditSink {
-    path: PathBuf,
-    blocking: rocketmq_runtime::BlockingExecutor,
-}
-
-impl AuditSink for FileAuditSink {
-    async fn write(&mut self, _record: &AuditRecord, encoded: &[u8]) -> crate::McpResult<()> {
-        let path = self.path.clone();
-        let encoded = encoded.to_vec();
-        self.blocking
-            .spawn_io("rocketmq-mcp-audit-file-write", move || {
-                write_file_record(path, &encoded)
-            })
-            .await
-            .map_err(McpError::from_source)?
-    }
-
-    async fn flush(&mut self) -> crate::McpResult<()> {
-        let path = self.path.clone();
-        self.blocking
-            .spawn_io("rocketmq-mcp-audit-file-flush", move || flush_audit_file(path))
-            .await
-            .map_err(McpError::from_source)?
-    }
-}
-
 struct TracingAuditSink;
 
 impl AuditSink for TracingAuditSink {
     async fn write(&mut self, record: &AuditRecord, _encoded: &[u8]) -> crate::McpResult<()> {
+        // The names are one field, written the way the file sink writes them.
+        let audit_target = record
+            .target
+            .as_ref()
+            .and_then(|target| serde_json::to_string(target).ok());
         tracing::info!(
             schema_version = record.schema_version,
             request_id = %record.request_id,
@@ -641,6 +654,7 @@ impl AuditSink for TracingAuditSink {
             risk_level = ?record.risk_level,
             status = ?record.status,
             duration_ms = record.duration_ms,
+            audit_target = audit_target.as_deref(),
             "rocketmq-mcp audit record"
         );
         Ok(())
@@ -703,27 +717,6 @@ fn push_record(records: &Mutex<VecDeque<AuditRecord>>, record: AuditRecord) {
     records.push_back(record);
 }
 
-fn write_file_record(path: PathBuf, encoded: &[u8]) -> crate::McpResult<()> {
-    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent).map_err(McpError::from_source)?;
-    }
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(McpError::from_source)?;
-    file.write_all(encoded).map_err(McpError::from_source)
-}
-
-fn flush_audit_file(path: PathBuf) -> crate::McpResult<()> {
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(McpError::from_source)?;
-    file.sync_all().map_err(McpError::from_source)
-}
-
 fn sanitize_record(mut record: AuditRecord) -> AuditRecord {
     record.schema_version = AUDIT_SCHEMA_VERSION;
     record.request_id = sanitize_field(&record.request_id, MAX_REQUEST_ID_BYTES);
@@ -739,6 +732,10 @@ fn sanitize_record(mut record: AuditRecord) -> AuditRecord {
     record.tool = sanitize_field(&record.tool, MAX_TOOL_BYTES);
     record.arguments_hash = sanitize_field(&record.arguments_hash, MAX_ARGUMENTS_HASH_BYTES);
     record.error = record.error.map(|_| "MCP request failed".to_string());
+    // A name that carries an address is written the way the other fields write one.
+    record.target = record
+        .target
+        .map(|target| target.sanitized(|name| sanitize_field(name, MAX_IDENTITY_BYTES)));
     record
 }
 
@@ -769,6 +766,9 @@ fn validate_queue_config(config: &AuditConfig) -> crate::McpResult<()> {
         return Err(McpError::invalid_config("invalid audit configuration".to_string()));
     }
     if config.queue_max_bytes > u32::MAX as usize {
+        return Err(McpError::invalid_config("invalid audit configuration".to_string()));
+    }
+    if config.max_file_bytes != 0 && config.max_file_bytes < config.max_record_bytes as u64 {
         return Err(McpError::invalid_config("invalid audit configuration".to_string()));
     }
     Ok(())

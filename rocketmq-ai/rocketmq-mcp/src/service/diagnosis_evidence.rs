@@ -15,7 +15,7 @@
 //! Evidence that explains a backlog: who consumes, who may read, and what failed.
 //!
 //! Each type summarizes its complete source result. A report lists Broker names only up to
-//! [`LISTED_BROKER_LIMIT`] and states the full count next to the list, so a diagnosis of a large
+//! `LISTED_BROKER_LIMIT` and states the full count next to the list, so a diagnosis of a large
 //! cluster stays inside the row limit of a Tool result. The rules still see every Broker.
 
 use std::collections::BTreeSet;

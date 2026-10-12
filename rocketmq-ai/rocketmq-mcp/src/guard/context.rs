@@ -59,6 +59,13 @@ impl Principal {
         if profile.eq_ignore_ascii_case("plan") || profile.eq_ignore_ascii_case("operator") {
             scopes.insert("rocketmq:plan".to_string());
         }
+        if profile.eq_ignore_ascii_case("operator") {
+            scopes.insert("rocketmq:message-search".to_string());
+        }
+        // No other profile implies this scope: administering access is not operating a cluster.
+        if profile.eq_ignore_ascii_case("security_admin") {
+            scopes.insert("rocketmq:security-admin".to_string());
+        }
         Self {
             id: "local-stdio".to_string(),
             tenant: None,
@@ -185,10 +192,24 @@ mod tests {
             ("diagnose", VisibilityClass::Sensitive),
             ("diagnostic", VisibilityClass::Sensitive),
             ("operator", VisibilityClass::Sensitive),
+            ("security_admin", VisibilityClass::Standard),
         ] {
             let context = RequestContext::local(profile);
             assert_eq!(context.visibility_class(), expected, "profile={profile}");
         }
+    }
+
+    #[test]
+    fn only_the_security_admin_profile_holds_the_security_admin_scope() {
+        for profile in ["read_only", "diagnose", "diagnostic", "plan", "operator"] {
+            let scopes = Principal::local(profile).scopes;
+            assert!(!scopes.contains("rocketmq:security-admin"), "profile={profile}");
+        }
+        // It reads and lists users, and it neither diagnoses, plans nor searches messages.
+        assert_eq!(
+            Principal::local("security_admin").scopes,
+            BTreeSet::from(["rocketmq:read".to_string(), "rocketmq:security-admin".to_string()])
+        );
     }
 
     #[test]
