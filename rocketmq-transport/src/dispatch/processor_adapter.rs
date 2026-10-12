@@ -37,7 +37,7 @@ use crate::remoting::inner::run_before_rpc_hooks;
 use crate::request_ordering::RequestOrdering;
 use crate::runtime::processor::RejectRequestDecision;
 use crate::runtime::processor::RequestProcessor;
-use crate::runtime::processor::ResponseObservationOutcome;
+use crate::runtime::processor::ResponseLifecycleEvent;
 use crate::server::SessionHandle;
 use crate::telemetry::TransportTelemetry;
 
@@ -176,12 +176,12 @@ impl DispatchMetricsGuard {
 
     pub(crate) fn complete_oneway(&mut self) {
         let Self::Explicit { observation } = self;
-        observation.complete_no_response(ResponseObservationOutcome::Oneway);
+        observation.complete_no_response(ResponseLifecycleEvent::Oneway);
     }
 
     pub(crate) fn complete_protocol_no_response(&mut self) {
         let Self::Explicit { observation } = self;
-        observation.complete_no_response(ResponseObservationOutcome::ProtocolNoResponse);
+        observation.complete_no_response(ResponseLifecycleEvent::ProtocolNoResponse);
     }
 
     pub(crate) fn arm_deferred_metrics(&mut self, retained_bytes: usize) {

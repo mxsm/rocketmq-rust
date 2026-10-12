@@ -77,9 +77,9 @@ pub enum ResponseObservationMode {
 
 /// One typed response lifecycle event.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum ResponseObservationOutcome {
+pub enum ResponseLifecycleEvent {
     /// The canonical response owner reached its transport disposition.
-    Written(ResponseReceipt),
+    DeliveryCompleted(ResponseReceipt),
     /// The immutable ingress request was one-way.
     Oneway,
     /// Protocol policy explicitly permits no response.
@@ -103,7 +103,7 @@ pub struct ResponseMetadata {
     response_code: Option<i32>,
     body_kind: Option<ResponseBodyKind>,
     mode: ResponseObservationMode,
-    outcome: ResponseObservationOutcome,
+    event: ResponseLifecycleEvent,
 }
 
 impl ResponseMetadata {
@@ -113,7 +113,7 @@ impl ResponseMetadata {
         response_code: Option<i32>,
         body_kind: Option<ResponseBodyKind>,
         mode: ResponseObservationMode,
-        outcome: ResponseObservationOutcome,
+        event: ResponseLifecycleEvent,
     ) -> Self {
         Self {
             request_id,
@@ -121,7 +121,7 @@ impl ResponseMetadata {
             response_code,
             body_kind,
             mode,
-            outcome,
+            event,
         }
     }
 
@@ -155,10 +155,10 @@ impl ResponseMetadata {
         self.mode
     }
 
-    /// Returns the typed response lifecycle outcome.
+    /// Returns the typed response lifecycle event.
     #[must_use]
-    pub const fn outcome(self) -> ResponseObservationOutcome {
-        self.outcome
+    pub const fn event(self) -> ResponseLifecycleEvent {
+        self.event
     }
 }
 
@@ -211,14 +211,14 @@ impl ResponseObservation {
             ResponseObservationMode::Deferred => ResponseWritePath::Deferred,
             ResponseObservationMode::NoResponse => return None,
         };
-        let event = match self.metadata.outcome {
-            ResponseObservationOutcome::Written(receipt) => ResponseDeliveryEvent::DeliveryCompleted(receipt),
-            ResponseObservationOutcome::Failed { completion, progress } => {
+        let event = match self.metadata.event {
+            ResponseLifecycleEvent::DeliveryCompleted(receipt) => ResponseDeliveryEvent::DeliveryCompleted(receipt),
+            ResponseLifecycleEvent::Failed { completion, progress } => {
                 ResponseDeliveryEvent::Failed { completion, progress }
             }
-            ResponseObservationOutcome::Oneway
-            | ResponseObservationOutcome::ProtocolNoResponse
-            | ResponseObservationOutcome::Cancelled(_) => return None,
+            ResponseLifecycleEvent::Oneway
+            | ResponseLifecycleEvent::ProtocolNoResponse
+            | ResponseLifecycleEvent::Cancelled(_) => return None,
         };
         Some(ResponseWriteObservation {
             request_id: self.metadata.request_id,
@@ -246,13 +246,13 @@ impl ResponseObservation {
             ResponseWritePath::Inline => ResponseObservationMode::Inline,
             ResponseWritePath::Deferred => ResponseObservationMode::Deferred,
         };
-        let outcome = match result {
-            Ok(ResponseCompletionResult::Completed(receipt)) => ResponseObservationOutcome::Written(*receipt),
-            Ok(outcome) => ResponseObservationOutcome::Failed {
+        let event = match result {
+            Ok(ResponseCompletionResult::Completed(receipt)) => ResponseLifecycleEvent::DeliveryCompleted(*receipt),
+            Ok(outcome) => ResponseLifecycleEvent::Failed {
                 completion: Some(*outcome),
                 progress: response_completion_progress(*outcome),
             },
-            Err(error) => ResponseObservationOutcome::Failed {
+            Err(error) => ResponseLifecycleEvent::Failed {
                 completion: None,
                 progress: Some(error.write_progress()),
             },
@@ -264,7 +264,7 @@ impl ResponseObservation {
                 Some(response_code),
                 Some(body_kind),
                 mode,
-                outcome,
+                event,
             ),
             Some(write_elapsed),
             end_to_end_elapsed,

@@ -31,9 +31,9 @@ use crate::dispatch::RequestControlView;
 use crate::dispatch::RequestMeta;
 use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseSink;
+use crate::runtime::processor::ResponseLifecycleEvent;
 use crate::runtime::processor::ResponseObservation;
 use crate::runtime::processor::ResponseObservationMode;
-use crate::runtime::processor::ResponseObservationOutcome;
 use crate::session_view::EmbeddedSessionRecord;
 use crate::telemetry::TransportTelemetry;
 
@@ -397,8 +397,8 @@ async fn dispatcher_commits_a_real_registry_registration_before_returning_deferr
         assert_eq!(observed.len(), 1, "deferred completion is observed exactly once");
         assert_eq!(observed[0].metadata().mode(), ResponseObservationMode::Deferred);
         assert!(matches!(
-            observed[0].metadata().outcome(),
-            ResponseObservationOutcome::Written(observed_receipt) if observed_receipt == receipt
+            observed[0].metadata().event(),
+            ResponseLifecycleEvent::DeliveryCompleted(observed_receipt) if observed_receipt == receipt
         ));
     }
     assert_eq!(registry.test_index_counts(), (0, 0, 0));
@@ -472,8 +472,8 @@ async fn deferred_commit_session_close_is_a_normal_terminal_race_without_recordi
         let observed = observations.lock().expect("deferred observation lock");
         assert_eq!(observed.len(), 1, "commit failure publishes one terminal observation");
         assert!(matches!(
-            observed[0].metadata().outcome(),
-            ResponseObservationOutcome::Cancelled(crate::dispatch::DeferredTerminalReason::SessionClosed)
+            observed[0].metadata().event(),
+            ResponseLifecycleEvent::Cancelled(crate::dispatch::DeferredTerminalReason::SessionClosed)
         ));
     }
     assert_eq!(registry.test_index_counts(), (0, 0, 0));
@@ -858,8 +858,8 @@ async fn cancellation_during_processor_wait_binds_one_terminal_observer_without_
         let observations = state.terminal_observations.lock().expect("terminal observation lock");
         assert_eq!(observations.len(), 1);
         assert!(matches!(
-            observations[0].metadata().outcome(),
-            ResponseObservationOutcome::Failed {
+            observations[0].metadata().event(),
+            ResponseLifecycleEvent::Failed {
                 completion: None,
                 progress: Some(WriteProgress::NotStarted),
             }
