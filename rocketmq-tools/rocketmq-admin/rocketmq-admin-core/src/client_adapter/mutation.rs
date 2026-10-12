@@ -13,6 +13,8 @@
 
 //! Mutation-only public adapter over the explicit client mutation capability.
 
+#[path = "mutation/operation.rs"]
+mod operation;
 #[path = "mutation/supervised.rs"]
 mod supervised;
 

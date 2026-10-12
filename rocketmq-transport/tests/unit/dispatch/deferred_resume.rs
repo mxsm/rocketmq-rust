@@ -33,8 +33,8 @@ use super::deferred_resume_fixed_bytes;
 use super::execution_retained_bytes;
 use super::ClaimExecutionParts;
 use super::DeferredResponseAttempt;
-use super::DeferredResumeEnqueueOutcome;
 use super::DeferredResumeJob;
+use super::DeferredResumeSubmissionResult;
 use super::DeferredResumeWork;
 use super::ResumeAttempt;
 use super::ResumeCompletion;
@@ -243,8 +243,8 @@ fn executor_with_limits(
     (runtime, controller, executor)
 }
 
-fn is_submitted(outcome: &DeferredResumeEnqueueOutcome) -> bool {
-    matches!(outcome, DeferredResumeEnqueueOutcome::Submitted(_))
+fn is_submitted(outcome: &DeferredResumeSubmissionResult) -> bool {
+    matches!(outcome, DeferredResumeSubmissionResult::Submitted(_))
 }
 
 #[test]
@@ -345,12 +345,12 @@ async fn real_queued_admission_rejects_the_checked_high_alignment_charge_and_ret
         .deferred_resume_executor()
         .try_execute_resume(Arc::clone(&cell))
     {
-        DeferredResumeEnqueueOutcome::AdmissionRejected { cell, .. } => cell,
-        DeferredResumeEnqueueOutcome::ExecutorClosing { .. } => panic!("executor unexpectedly closed"),
-        DeferredResumeEnqueueOutcome::OperationalFailure { .. } => {
+        DeferredResumeSubmissionResult::AdmissionRejected { cell, .. } => cell,
+        DeferredResumeSubmissionResult::ExecutorClosing { .. } => panic!("executor unexpectedly closed"),
+        DeferredResumeSubmissionResult::OperationalFailure { .. } => {
             panic!("executor unexpectedly returned an operational failure")
         }
-        DeferredResumeEnqueueOutcome::Submitted(_) => {
+        DeferredResumeSubmissionResult::Submitted(_) => {
             panic!("under-capacity queued budget accepted the resume job")
         }
     };
@@ -422,12 +422,12 @@ async fn detached_submit_admission_failure_terminalizes_and_observes_exactly_onc
         .deferred_resume_executor()
         .try_execute_resume(Arc::clone(&cell))
     {
-        DeferredResumeEnqueueOutcome::AdmissionRejected { error, cell } => (error, cell),
-        DeferredResumeEnqueueOutcome::ExecutorClosing { .. } => panic!("executor unexpectedly closed"),
-        DeferredResumeEnqueueOutcome::OperationalFailure { .. } => {
+        DeferredResumeSubmissionResult::AdmissionRejected { error, cell } => (error, cell),
+        DeferredResumeSubmissionResult::ExecutorClosing { .. } => panic!("executor unexpectedly closed"),
+        DeferredResumeSubmissionResult::OperationalFailure { .. } => {
             panic!("executor unexpectedly returned an operational failure")
         }
-        DeferredResumeEnqueueOutcome::Submitted(_) => {
+        DeferredResumeSubmissionResult::Submitted(_) => {
             panic!("under-capacity queued budget accepted the resume job")
         }
     };
@@ -472,12 +472,12 @@ async fn inflight_admission_rejection_returns_the_exact_job_and_releases_queued_
         .deferred_resume_executor()
         .try_execute_resume(Arc::clone(&cell))
     {
-        DeferredResumeEnqueueOutcome::AdmissionRejected { cell, .. } => cell,
-        DeferredResumeEnqueueOutcome::ExecutorClosing { .. } => panic!("executor unexpectedly closed"),
-        DeferredResumeEnqueueOutcome::OperationalFailure { .. } => {
+        DeferredResumeSubmissionResult::AdmissionRejected { cell, .. } => cell,
+        DeferredResumeSubmissionResult::ExecutorClosing { .. } => panic!("executor unexpectedly closed"),
+        DeferredResumeSubmissionResult::OperationalFailure { .. } => {
             panic!("executor unexpectedly returned an operational failure")
         }
-        DeferredResumeEnqueueOutcome::Submitted(_) => {
+        DeferredResumeSubmissionResult::Submitted(_) => {
             panic!("under-capacity inflight budget accepted the resume job")
         }
     };
@@ -561,12 +561,12 @@ async fn operation_close_at_spawn_returns_the_exact_cell_and_source_free_cancell
         .deferred_resume_executor()
         .try_execute_resume(Arc::clone(&cell))
     {
-        DeferredResumeEnqueueOutcome::ExecutorClosing { cell } => cell,
-        DeferredResumeEnqueueOutcome::AdmissionRejected { .. } => panic!("capacity unexpectedly rejected"),
-        DeferredResumeEnqueueOutcome::OperationalFailure { .. } => {
+        DeferredResumeSubmissionResult::ExecutorClosing { cell } => cell,
+        DeferredResumeSubmissionResult::AdmissionRejected { .. } => panic!("capacity unexpectedly rejected"),
+        DeferredResumeSubmissionResult::OperationalFailure { .. } => {
             panic!("closed operation must remain a source-free control outcome")
         }
-        DeferredResumeEnqueueOutcome::Submitted(_) => panic!("closed operation accepted a resume task"),
+        DeferredResumeSubmissionResult::Submitted(_) => panic!("closed operation accepted a resume task"),
     };
     assert!(Arc::ptr_eq(&cell, &returned));
     returned
@@ -597,10 +597,10 @@ async fn retired_resume_executor_returns_the_exact_cell_and_source_free_cancelle
 
     let executor = DeferredResumeExecutor::retired();
     let returned = match executor.try_execute_resume(Arc::clone(&cell)) {
-        DeferredResumeEnqueueOutcome::ExecutorClosing { cell } => cell,
-        DeferredResumeEnqueueOutcome::AdmissionRejected { .. }
-        | DeferredResumeEnqueueOutcome::OperationalFailure { .. }
-        | DeferredResumeEnqueueOutcome::Submitted(_) => {
+        DeferredResumeSubmissionResult::ExecutorClosing { cell } => cell,
+        DeferredResumeSubmissionResult::AdmissionRejected { .. }
+        | DeferredResumeSubmissionResult::OperationalFailure { .. }
+        | DeferredResumeSubmissionResult::Submitted(_) => {
             panic!("retired executor must return a source-free closing outcome")
         }
     };
@@ -637,10 +637,10 @@ async fn preclosed_resume_executor_returns_the_exact_cell_and_source_free_cancel
         .deferred_resume_executor()
         .try_execute_resume(Arc::clone(&cell))
     {
-        DeferredResumeEnqueueOutcome::ExecutorClosing { cell } => cell,
-        DeferredResumeEnqueueOutcome::AdmissionRejected { .. }
-        | DeferredResumeEnqueueOutcome::OperationalFailure { .. }
-        | DeferredResumeEnqueueOutcome::Submitted(_) => {
+        DeferredResumeSubmissionResult::ExecutorClosing { cell } => cell,
+        DeferredResumeSubmissionResult::AdmissionRejected { .. }
+        | DeferredResumeSubmissionResult::OperationalFailure { .. }
+        | DeferredResumeSubmissionResult::Submitted(_) => {
             panic!("preclosed executor must return a source-free closing outcome")
         }
     };
@@ -731,10 +731,10 @@ async fn terminal_winner_does_not_mask_an_operation_owner_failure_or_leak_admiss
             .deferred_resume_executor()
             .try_execute_resume(Arc::clone(&cell))
         {
-            DeferredResumeEnqueueOutcome::OperationalFailure { source, cell } => (source, cell),
-            DeferredResumeEnqueueOutcome::AdmissionRejected { .. }
-            | DeferredResumeEnqueueOutcome::ExecutorClosing { .. }
-            | DeferredResumeEnqueueOutcome::Submitted(_) => {
+            DeferredResumeSubmissionResult::OperationalFailure { source, cell } => (source, cell),
+            DeferredResumeSubmissionResult::AdmissionRejected { .. }
+            | DeferredResumeSubmissionResult::ExecutorClosing { .. }
+            | DeferredResumeSubmissionResult::Submitted(_) => {
                 panic!("an operation-owner invariant must remain operational")
             }
         };

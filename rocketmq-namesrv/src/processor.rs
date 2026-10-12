@@ -45,8 +45,8 @@ use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestProcessor;
 use rocketmq_transport::api::ResponseAction;
+use rocketmq_transport::api::ResponseDeliveryEvent;
 use rocketmq_transport::api::ResponseObservation;
-use rocketmq_transport::api::ResponseWriteOutcome;
 
 pub use self::client_request_processor::ClientRequestProcessor;
 pub use self::cluster_test_request_processor::ClusterTestRequestProcessor;
@@ -416,7 +416,7 @@ impl RequestProcessor for NameServerRequestProcessor {
             self.metrics.record_route_response_write(
                 observation.write_elapsed(),
                 observation.end_to_end_elapsed(),
-                matches!(observation.outcome(), ResponseWriteOutcome::Written(_)),
+                matches!(observation.event(), ResponseDeliveryEvent::DeliveryCompleted(_)),
             );
         }
     }

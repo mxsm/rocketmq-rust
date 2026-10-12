@@ -35,7 +35,7 @@ use crate::admission::AdmissionRejection;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScopeHandle;
 use crate::admission::PartialFramePermit;
-use crate::dispatch::deferred_resume::DeferredResumeEnqueueOutcome;
+use crate::dispatch::deferred_resume::DeferredResumeSubmissionResult;
 use crate::dispatch::deferred_resume::ResumeJobCell;
 use crate::request_ordering::RequestOrdering;
 use crate::request_ordering::RequestSequencer;
@@ -315,12 +315,12 @@ impl DeferredResumeExecutor {
         Self { inner: Weak::new() }
     }
 
-    pub(crate) fn try_execute_resume(&self, cell: Arc<ResumeJobCell>) -> DeferredResumeEnqueueOutcome {
+    pub(crate) fn try_execute_resume(&self, cell: Arc<ResumeJobCell>) -> DeferredResumeSubmissionResult {
         let Some(inner) = self.inner.upgrade() else {
-            return DeferredResumeEnqueueOutcome::ExecutorClosing { cell };
+            return DeferredResumeSubmissionResult::ExecutorClosing { cell };
         };
         if !inner.accepting.load(Ordering::Acquire) {
-            return DeferredResumeEnqueueOutcome::ExecutorClosing { cell };
+            return DeferredResumeSubmissionResult::ExecutorClosing { cell };
         }
         let retained_bytes = cell.retained_bytes();
         let class = cell.class();
@@ -330,14 +330,14 @@ impl DeferredResumeExecutor {
             .try_acquire(AdmissionResource::Queued, retained_bytes, class)
         {
             Ok(permit) => permit,
-            Err(error) => return DeferredResumeEnqueueOutcome::AdmissionRejected { error, cell },
+            Err(error) => return DeferredResumeSubmissionResult::AdmissionRejected { error, cell },
         };
         let inflight = match inner
             .admission
             .try_acquire(AdmissionResource::Inflight, retained_bytes, class)
         {
             Ok(permit) => permit,
-            Err(error) => return DeferredResumeEnqueueOutcome::AdmissionRejected { error, cell },
+            Err(error) => return DeferredResumeSubmissionResult::AdmissionRejected { error, cell },
         };
         let admission = inner.admission.clone();
         let sequencer = inner.sequencer.clone();
@@ -411,9 +411,11 @@ impl DeferredResumeExecutor {
                 job.execute(operation_for_task).await;
             },
         ) {
-            Ok(task_id) => DeferredResumeEnqueueOutcome::Submitted(task_id),
-            Err(source) if session_stopped_admission(&source) => DeferredResumeEnqueueOutcome::ExecutorClosing { cell },
-            Err(source) => DeferredResumeEnqueueOutcome::OperationalFailure { source, cell },
+            Ok(task_id) => DeferredResumeSubmissionResult::Submitted(task_id),
+            Err(source) if session_stopped_admission(&source) => {
+                DeferredResumeSubmissionResult::ExecutorClosing { cell }
+            }
+            Err(source) => DeferredResumeSubmissionResult::OperationalFailure { source, cell },
         }
     }
 }

@@ -27,6 +27,7 @@ use super::group_dry_run;
 use super::group_executed;
 use super::map_group_to_admin;
 use super::map_topic_to_admin;
+use super::remaining::OperationBackend;
 use super::topic_before;
 use super::topic_dry_run;
 use super::topic_executed;
@@ -301,17 +302,45 @@ impl SupervisedMutationBackend for MutationAdminSession {
 
 pub(crate) struct AdminMutationToolSession<B> {
     backend: B,
+    /// The endpoint of each Proxy that a drain on this cluster may name, by alias.
+    proxies: BTreeMap<String, String>,
 }
 
 impl<B> AdminMutationToolSession<B> {
     pub(crate) const fn new(backend: B) -> Self {
-        Self { backend }
+        Self {
+            backend,
+            proxies: BTreeMap::new(),
+        }
+    }
+
+    /// Binds the Proxy aliases of the cluster this session was opened for.
+    pub(crate) fn with_proxies(mut self, proxies: BTreeMap<String, String>) -> Self {
+        self.proxies = proxies;
+        self
+    }
+}
+
+impl<B: OperationBackend> AdminMutationToolSession<B> {
+    async fn run_proxy_drain(
+        &mut self,
+        operation: tools::ProxyDrainOperation,
+        args: tools::ProxyDrainArgs,
+    ) -> Result<MutationToolResponse, ControlError> {
+        // The server refuses an alias that the cluster does not configure before it records the
+        // call. Should one get here anyway, nothing is read: there is no endpoint to fall back to.
+        let Some(proxy_addr) = self.proxies.get(&args.proxy_name).cloned() else {
+            return Err(ControlError::invalid_argument());
+        };
+        super::remaining::run_proxy_drain(&mut self.backend, operation, args, &proxy_addr)
+            .await
+            .map(MutationToolResponse::ProxyDrain)
     }
 }
 
 impl<B> MutationToolSession for AdminMutationToolSession<B>
 where
-    B: SupervisedMutationBackend,
+    B: SupervisedMutationBackend + OperationBackend,
 {
     fn run<'a>(
         &'a mut self,
@@ -335,6 +364,24 @@ where
                     super::remaining::run_request_mode(&mut self.backend, args)
                         .await
                         .map(MutationToolResponse::ConsumerRequestMode)
+                }
+                MutationToolRequest::ProxyDrainBegin(args) => {
+                    self.run_proxy_drain(tools::ProxyDrainOperation::ProxyDrainBegin, args)
+                        .await
+                }
+                MutationToolRequest::ProxyDrainCancel(args) => {
+                    self.run_proxy_drain(tools::ProxyDrainOperation::ProxyDrainCancel, args)
+                        .await
+                }
+                MutationToolRequest::BrokerLogFilterSet(args) => {
+                    super::remaining::run_set_log_filter(&mut self.backend, args)
+                        .await
+                        .map(MutationToolResponse::BrokerLogFilter)
+                }
+                MutationToolRequest::BrokerLogFilterRestore(args) => {
+                    super::remaining::run_restore_log_filter(&mut self.backend, args)
+                        .await
+                        .map(MutationToolResponse::BrokerLogFilter)
                 }
             }
         })
@@ -451,7 +498,11 @@ impl MutationToolSessionFactory for AdminMutationToolFactory {
                 .build_and_start()
                 .await
                 .map_err(|_| ControlError::execution_failed())?;
-            Ok(Box::new(AdminMutationToolSession::new(admin)) as Box<dyn MutationToolSession>)
+            let proxies = config
+                .proxies()
+                .map(|(name, endpoint)| (name.to_owned(), endpoint.to_owned()))
+                .collect();
+            Ok(Box::new(AdminMutationToolSession::new(admin).with_proxies(proxies)) as Box<dyn MutationToolSession>)
         })
     }
 }

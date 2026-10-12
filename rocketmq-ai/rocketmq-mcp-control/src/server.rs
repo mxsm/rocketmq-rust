@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(feature = "write-tools")]
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 #[cfg(feature = "write-tools")]
 use std::sync::Arc;
@@ -46,8 +48,12 @@ use crate::model::ControlCapabilities;
 use crate::model::ControlOperation;
 use crate::model::Principal;
 use crate::telemetry::ControlSignals;
+use crate::tools::BEGIN_PROXY_DRAIN_TOOL;
+use crate::tools::CANCEL_PROXY_DRAIN_TOOL;
 use crate::tools::PATCH_BROKER_CONFIG_TOOL;
 use crate::tools::RESET_CONSUMER_OFFSET_TOOL;
+use crate::tools::RESTORE_BROKER_LOG_FILTER_TOOL;
+use crate::tools::SET_BROKER_LOG_FILTER_TTL_TOOL;
 use crate::tools::SET_CONSUMER_REQUEST_MODE_TOOL;
 use crate::tools::UPSERT_CONSUMER_GROUP_TOOL;
 use crate::tools::UPSERT_TOPIC_TOOL;
@@ -67,6 +73,10 @@ pub struct ControlServer {
     /// whether or not a mutation is registered.
     #[cfg(feature = "write-tools")]
     result_lookup: Option<Arc<crate::tool_runtime::ResultLookup>>,
+    /// The Proxy aliases that each cluster configures. A drain names one of them; the endpoints
+    /// stay with the session factory.
+    #[cfg(feature = "write-tools")]
+    proxy_aliases: BTreeMap<ClusterName, BTreeSet<String>>,
     #[cfg(test)]
     response_delay: Option<std::time::Duration>,
 }
@@ -89,6 +99,8 @@ impl ControlServer {
             tool_runtime: None,
             #[cfg(feature = "write-tools")]
             result_lookup: None,
+            #[cfg(feature = "write-tools")]
+            proxy_aliases: BTreeMap::new(),
             #[cfg(test)]
             response_delay: None,
         }
@@ -107,6 +119,14 @@ impl ControlServer {
             .mutation_clusters()
             .iter()
             .map(|cluster| cluster.name().clone())
+            .collect();
+        let proxy_aliases = config
+            .mutation_clusters()
+            .iter()
+            .map(|cluster| {
+                let aliases = cluster.proxies().map(|(alias, _)| alias.to_owned()).collect();
+                (cluster.name().clone(), aliases)
+            })
             .collect();
         // A lookup is budgeted like planning: it reads, and a caller polls it.
         let result_lookup = Arc::new(crate::tool_runtime::ResultLookup::new(
@@ -138,6 +158,7 @@ impl ControlServer {
             signals: ControlSignals::default(),
             tool_runtime,
             result_lookup: Some(result_lookup),
+            proxy_aliases,
             #[cfg(test)]
             response_delay: None,
         })
@@ -171,8 +192,17 @@ impl ControlServer {
             signals: ControlSignals::default(),
             tool_runtime: Some(Arc::new(tool_runtime)),
             result_lookup: Some(result_lookup),
+            proxy_aliases: BTreeMap::new(),
             response_delay: None,
         }
+    }
+
+    /// Names the Proxies that a drain on `cluster` may address.
+    #[cfg(all(test, feature = "write-tools"))]
+    pub(crate) fn with_proxy_aliases(mut self, cluster: ClusterName, aliases: &[&str]) -> Self {
+        self.proxy_aliases
+            .insert(cluster, aliases.iter().map(|alias| (*alias).to_owned()).collect());
+        self
     }
 
     pub const fn capabilities(&self) -> &ControlCapabilities {
@@ -278,6 +308,19 @@ impl ControlServer {
         tool_error(error)
     }
 
+    /// Rejects one argument that the input schema accepts and the server configuration does not.
+    #[cfg(feature = "write-tools")]
+    fn rejected_argument(&self, tool: &'static str, started: std::time::Instant, path: &'static str) -> CallToolResult {
+        let error = crate::error::ControlError::invalid_argument();
+        self.signals.call_rejected(tool, error.code(), started.elapsed());
+        let mut envelope = error.envelope();
+        envelope.violations = vec![crate::error::ArgumentViolation {
+            path: path.to_owned(),
+            constraint: crate::error::ViolationConstraint::Other,
+        }];
+        envelope_result(envelope)
+    }
+
     /// Decodes and validates the arguments of an authorized call, recording a rejection.
     ///
     /// Authorization has already passed here, so the arguments located in a rejection reach only
@@ -329,7 +372,7 @@ impl ServerHandler for ControlServer {
             .with_server_info(Implementation::new("rocketmq-mcp-control", env!("CARGO_PKG_VERSION")))
             .with_protocol_version(ProtocolVersion::V_2025_11_25)
             .with_instructions(
-                "Isolated RocketMQ control server. Five reviewed typed mutations are available only when compile-time, runtime, server-policy, and principal authorization all intersect. rocketmq_get_mutation_result reads how your own mutation calls ended.",
+                "Isolated RocketMQ control server. Nine reviewed typed mutations are available only when compile-time, runtime, server-policy, and principal authorization all intersect. rocketmq_get_mutation_result reads how your own mutation calls ended.",
             )
     }
 
@@ -405,6 +448,26 @@ impl ServerHandler for ControlServer {
                 SET_CONSUMER_REQUEST_MODE_TOOL,
                 ControlOperation::ConsumerRequestMode.as_str(),
                 Some(ControlOperation::ConsumerRequestMode),
+            ),
+            BEGIN_PROXY_DRAIN_TOOL => (
+                BEGIN_PROXY_DRAIN_TOOL,
+                ControlOperation::ProxyDrainBegin.as_str(),
+                Some(ControlOperation::ProxyDrainBegin),
+            ),
+            CANCEL_PROXY_DRAIN_TOOL => (
+                CANCEL_PROXY_DRAIN_TOOL,
+                ControlOperation::ProxyDrainCancel.as_str(),
+                Some(ControlOperation::ProxyDrainCancel),
+            ),
+            SET_BROKER_LOG_FILTER_TTL_TOOL => (
+                SET_BROKER_LOG_FILTER_TTL_TOOL,
+                ControlOperation::BrokerLogFilterSet.as_str(),
+                Some(ControlOperation::BrokerLogFilterSet),
+            ),
+            RESTORE_BROKER_LOG_FILTER_TOOL => (
+                RESTORE_BROKER_LOG_FILTER_TOOL,
+                ControlOperation::BrokerLogFilterRestore.as_str(),
+                Some(ControlOperation::BrokerLogFilterRestore),
             ),
             _ => ("unknown", "unknown", None),
         };
@@ -492,6 +555,60 @@ impl ServerHandler for ControlServer {
                     };
                     args.dry_run = args.effective_dry_run(default_dry_run, dry_run_omitted);
                     crate::tool_runtime::MutationToolRequest::ConsumerRequestMode(args)
+                }
+                Some(drain @ (ControlOperation::ProxyDrainBegin | ControlOperation::ProxyDrainCancel)) => {
+                    let checked =
+                        self.checked_arguments::<crate::tools::ProxyDrainArgs, _>(tool, started, &raw, |args| {
+                            args.validate(default_dry_run, dry_run_omitted)
+                        });
+                    let mut args = match checked {
+                        Ok(args) => args,
+                        Err(envelope) => return Ok(envelope_result(envelope).into()),
+                    };
+                    // The aliases of a cluster are a closed set, like the clusters themselves. One
+                    // that is not configured is refused here, before the call is recorded and
+                    // before a session exists that could reach anything.
+                    let configured = self
+                        .proxy_aliases
+                        .get(authorized.cluster())
+                        .is_some_and(|aliases| aliases.contains(&args.proxy_name));
+                    if !configured {
+                        return Ok(self.rejected_argument(tool, started, "/proxy_name").into());
+                    }
+                    args.dry_run = args.effective_dry_run(default_dry_run, dry_run_omitted);
+                    if drain == ControlOperation::ProxyDrainBegin {
+                        crate::tool_runtime::MutationToolRequest::ProxyDrainBegin(args)
+                    } else {
+                        crate::tool_runtime::MutationToolRequest::ProxyDrainCancel(args)
+                    }
+                }
+                Some(ControlOperation::BrokerLogFilterSet) => {
+                    let checked = self.checked_arguments::<crate::tools::SetBrokerLogFilterTtlArgs, _>(
+                        tool,
+                        started,
+                        &raw,
+                        |args| args.validate(default_dry_run, dry_run_omitted),
+                    );
+                    let mut args = match checked {
+                        Ok(args) => args,
+                        Err(envelope) => return Ok(envelope_result(envelope).into()),
+                    };
+                    args.dry_run = args.effective_dry_run(default_dry_run, dry_run_omitted);
+                    crate::tool_runtime::MutationToolRequest::BrokerLogFilterSet(args)
+                }
+                Some(ControlOperation::BrokerLogFilterRestore) => {
+                    let checked = self.checked_arguments::<crate::tools::RestoreBrokerLogFilterArgs, _>(
+                        tool,
+                        started,
+                        &raw,
+                        |args| args.validate(default_dry_run, dry_run_omitted),
+                    );
+                    let mut args = match checked {
+                        Ok(args) => args,
+                        Err(envelope) => return Ok(envelope_result(envelope).into()),
+                    };
+                    args.dry_run = args.effective_dry_run(default_dry_run, dry_run_omitted);
+                    crate::tool_runtime::MutationToolRequest::BrokerLogFilterRestore(args)
                 }
                 _ => {
                     return Ok(self

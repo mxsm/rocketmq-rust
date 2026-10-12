@@ -24,14 +24,13 @@ use crate::dispatch::DeferredRegistration;
 use crate::dispatch::IngressRequestView;
 use crate::dispatch::InternalFailureOrigin;
 use crate::dispatch::InternalProcessorCandidate;
-use crate::dispatch::InternalProcessorOutcome;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::ProtocolNoResponse;
 use crate::dispatch::RemotingRequest;
 use crate::dispatch::RemotingResponse;
 use crate::dispatch::ResponseAction;
 use crate::dispatch::ResponseBodyKind;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseOperationalFailure;
 use crate::request_ordering::RequestOrdering;
 use crate::runtime::processor::RejectRequestDecision;
@@ -60,9 +59,9 @@ where
     pub(crate) fn embedded_reject_request(&self, request_code: i32) -> Option<InternalProcessorCandidate> {
         match self.processor.reject_request(request_code) {
             RejectRequestDecision::Proceed => None,
-            RejectRequestDecision::Reject(response) => Some(InternalProcessorCandidate::success(
-                InternalProcessorOutcome::Handled(ResponseAction::Reply(response)),
-            )),
+            RejectRequestDecision::Reject(response) => {
+                Some(InternalProcessorCandidate::success(ResponseAction::Reply(response)))
+            }
         }
     }
 
@@ -75,9 +74,7 @@ where
             None => Ok(self.processor.process(request).await),
         };
         match processed {
-            Ok(Ok(outcome)) => Ok(InternalProcessorCandidate::success(InternalProcessorOutcome::Handled(
-                outcome,
-            ))),
+            Ok(Ok(outcome)) => Ok(InternalProcessorCandidate::success(outcome)),
             Ok(Err(error)) => {
                 let context = error.context();
                 let view = PublicErrorView::try_new(error.descriptor(), context)
@@ -87,16 +84,16 @@ where
                     crate::error_response::RemotingErrorTarget::Fresh(&application_remoting_command_factory()),
                 );
                 Ok(InternalProcessorCandidate::failure(
-                    InternalProcessorOutcome::Handled(ResponseAction::Reply(RemotingResponse::command(command)?)),
+                    ResponseAction::Reply(RemotingResponse::command(command)?),
                     InternalFailureOrigin::ProcessorError,
                 ))
             }
             Err(_) => Ok(InternalProcessorCandidate::failure(
-                InternalProcessorOutcome::Handled(ResponseAction::Reply(RemotingResponse::command(
+                ResponseAction::Reply(RemotingResponse::command(
                     super::super::authorized_dispatcher::deadline_response(
                         request.original_identity().original_opaque(),
                     ),
-                )?)),
+                )?),
                 InternalFailureOrigin::Deadline,
             )),
         }
@@ -105,11 +102,10 @@ where
     pub(crate) fn resolve_embedded_response_action(
         &self,
         request: &mut RemotingRequest,
-        outcome: InternalProcessorOutcome,
+        action: ResponseAction,
     ) -> Result<EmbeddedResponseAction, TransportContractViolation> {
-        let InternalProcessorOutcome::Handled(outcome) = outcome;
         if request.original_identity().is_one_way() {
-            return match outcome {
+            return match action {
                 ResponseAction::Reply(response) => {
                     let resolved = request.resolve_response_action(ResponseAction::Reply(response))?;
                     drop(resolved);
@@ -125,7 +121,7 @@ where
                 }
             };
         }
-        match request.resolve_response_action(outcome)? {
+        match request.resolve_response_action(action)? {
             ResponseAction::Reply(response) => Ok(EmbeddedResponseAction::Reply(response)),
             ResponseAction::Deferred(registration) => Ok(EmbeddedResponseAction::Deferred(registration)),
             ResponseAction::NoReply(marker) => Ok(EmbeddedResponseAction::NoReply(marker)),
@@ -139,7 +135,7 @@ where
         body_kind: ResponseBodyKind,
         write_elapsed: Duration,
         end_to_end_elapsed: Duration,
-        result: &Result<ResponseCompletionOutcome, ResponseOperationalFailure>,
+        result: &Result<ResponseCompletionResult, ResponseOperationalFailure>,
     ) {
         self.processor.observe_response(ResponseObservation::from_write_result(
             original.request_id(),

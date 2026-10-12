@@ -62,8 +62,8 @@ use crate::error_helpers::response_timeout_caused_by_for_remote;
 use crate::error_helpers::TransportStage;
 use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
-use crate::request_outcome::OutboundRequestOutcome;
 use crate::request_outcome::OutboundRequestRejection;
+use crate::request_outcome::OutboundRequestResult;
 use crate::request_outcome::OutboundRequestStage;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
@@ -678,17 +678,17 @@ impl<PR> TransportSession<PR> {
         &mut self,
         mut request: RemotingCommand,
         deadline: RequestDeadline,
-    ) -> Result<OutboundRequestOutcome, TransportError> {
+    ) -> Result<OutboundRequestResult, TransportError> {
         const REMOTE_ADDR_PRESENT: bool = true;
 
         if !self.accepting_requests.load(Ordering::Acquire) {
-            return Ok(OutboundRequestOutcome::Rejected(
+            return Ok(OutboundRequestResult::Rejected(
                 OutboundRequestRejection::session_closed(OutboundRequestStage::BeforeWrite, REMOTE_ADDR_PRESENT),
             ));
         }
         self.last_used_millis.store(current_millis(), Ordering::Release);
         if deadline.is_expired() {
-            return Ok(OutboundRequestOutcome::Rejected(
+            return Ok(OutboundRequestResult::Rejected(
                 OutboundRequestRejection::deadline_expired(
                     OutboundRequestStage::BeforeWrite,
                     deadline.budget_millis(),
@@ -705,7 +705,7 @@ impl<PR> TransportSession<PR> {
             ));
         }
         if deadline.is_expired() {
-            return Ok(OutboundRequestOutcome::Rejected(
+            return Ok(OutboundRequestResult::Rejected(
                 OutboundRequestRejection::deadline_expired(
                     OutboundRequestStage::BeforeWrite,
                     deadline.budget_millis(),
@@ -726,7 +726,7 @@ impl<PR> TransportSession<PR> {
         ) {
             PendingRequestRegistrationResult::Registered(guard) => guard,
             PendingRequestRegistrationResult::DeadlineExpired => {
-                return Ok(OutboundRequestOutcome::Rejected(
+                return Ok(OutboundRequestResult::Rejected(
                     OutboundRequestRejection::deadline_expired(
                         OutboundRequestStage::BeforeWrite,
                         deadline.budget_millis(),
@@ -735,12 +735,12 @@ impl<PR> TransportSession<PR> {
                 ));
             }
             PendingRequestRegistrationResult::QueueSaturated => {
-                return Ok(OutboundRequestOutcome::Rejected(
+                return Ok(OutboundRequestResult::Rejected(
                     OutboundRequestRejection::queue_saturated(OutboundRequestStage::BeforeWrite, REMOTE_ADDR_PRESENT),
                 ));
             }
             PendingRequestRegistrationResult::SessionClosed => {
-                return Ok(OutboundRequestOutcome::Rejected(
+                return Ok(OutboundRequestResult::Rejected(
                     OutboundRequestRejection::session_closed(OutboundRequestStage::BeforeWrite, REMOTE_ADDR_PRESENT),
                 ));
             }
@@ -761,7 +761,7 @@ impl<PR> TransportSession<PR> {
         {
             CommandWriteResult::Written => {}
             CommandWriteResult::DeadlineExpired => {
-                return Ok(OutboundRequestOutcome::Rejected(
+                return Ok(OutboundRequestResult::Rejected(
                     OutboundRequestRejection::deadline_expired(
                         OutboundRequestStage::BeforeWrite,
                         deadline.budget_millis(),
@@ -770,18 +770,18 @@ impl<PR> TransportSession<PR> {
                 ));
             }
             CommandWriteResult::SessionClosed => {
-                return Ok(OutboundRequestOutcome::Rejected(
+                return Ok(OutboundRequestResult::Rejected(
                     OutboundRequestRejection::session_closed(OutboundRequestStage::BeforeWrite, REMOTE_ADDR_PRESENT),
                 ));
             }
             CommandWriteResult::Cancelled => {
-                return Ok(OutboundRequestOutcome::Rejected(OutboundRequestRejection::cancelled(
+                return Ok(OutboundRequestResult::Rejected(OutboundRequestRejection::cancelled(
                     OutboundRequestStage::BeforeWrite,
                     REMOTE_ADDR_PRESENT,
                 )));
             }
             CommandWriteResult::QueueSaturated => {
-                return Ok(OutboundRequestOutcome::Rejected(
+                return Ok(OutboundRequestResult::Rejected(
                     OutboundRequestRejection::queue_saturated(OutboundRequestStage::BeforeWrite, REMOTE_ADDR_PRESENT),
                 ));
             }
@@ -802,18 +802,18 @@ impl<PR> TransportSession<PR> {
         }
 
         match deadline.timeout(rx).await {
-            Ok(Ok(PendingRequestCompletion::Response(response))) => Ok(OutboundRequestOutcome::Response(response)),
-            Ok(Ok(PendingRequestCompletion::DeadlineExpired)) => Ok(OutboundRequestOutcome::Rejected(
+            Ok(Ok(PendingRequestCompletion::Response(response))) => Ok(OutboundRequestResult::Response(response)),
+            Ok(Ok(PendingRequestCompletion::DeadlineExpired)) => Ok(OutboundRequestResult::Rejected(
                 OutboundRequestRejection::deadline_expired(
                     OutboundRequestStage::AwaitingResponse,
                     deadline.budget_millis(),
                     REMOTE_ADDR_PRESENT,
                 ),
             )),
-            Ok(Ok(PendingRequestCompletion::Cancelled)) => Ok(OutboundRequestOutcome::Rejected(
+            Ok(Ok(PendingRequestCompletion::Cancelled)) => Ok(OutboundRequestResult::Rejected(
                 OutboundRequestRejection::cancelled(OutboundRequestStage::AwaitingResponse, REMOTE_ADDR_PRESENT),
             )),
-            Ok(Ok(PendingRequestCompletion::SessionClosed)) => Ok(OutboundRequestOutcome::Rejected(
+            Ok(Ok(PendingRequestCompletion::SessionClosed)) => Ok(OutboundRequestResult::Rejected(
                 OutboundRequestRejection::session_closed(OutboundRequestStage::AwaitingResponse, REMOTE_ADDR_PRESENT),
             )),
             Ok(Ok(PendingRequestCompletion::OperationalFailure(error))) => Err(TransportError::request(

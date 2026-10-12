@@ -15,18 +15,18 @@
 use super::*;
 
 fn expect_completed(
-    result: Result<ResponseCompletionOutcome, ResponseOperationalFailure>,
+    result: Result<ResponseCompletionResult, ResponseOperationalFailure>,
     context: &str,
 ) -> ResponseReceipt {
     match result {
-        Ok(ResponseCompletionOutcome::Completed(receipt)) => receipt,
+        Ok(ResponseCompletionResult::Completed(receipt)) => receipt,
         Ok(other) => panic!("{context}: unexpected normal response outcome {other:?}"),
         Err(error) => panic!("{context}: unexpected operational response failure {error:?}"),
     }
 }
 
-fn is_completed(result: &Result<ResponseCompletionOutcome, ResponseOperationalFailure>) -> bool {
-    matches!(result, Ok(ResponseCompletionOutcome::Completed(_)))
+fn is_completed(result: &Result<ResponseCompletionResult, ResponseOperationalFailure>) -> bool {
+    matches!(result, Ok(ResponseCompletionResult::Completed(_)))
 }
 
 #[tokio::test]
@@ -143,7 +143,7 @@ async fn local_receiver_and_sender_drop_publish_closed_once() {
             706,
         ))
         .await,
-        Ok(ResponseCompletionOutcome::SessionClosed)
+        Ok(ResponseCompletionResult::SessionClosed)
     ));
     assert!(matches!(
         duplicate
@@ -153,7 +153,7 @@ async fn local_receiver_and_sender_drop_publish_closed_once() {
                 707,
             ))
             .await,
-        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+        Ok(ResponseCompletionResult::AlreadyCompleted(
             ResponseTerminalState::Closed
         ))
     ));
@@ -164,7 +164,7 @@ async fn local_receiver_and_sender_drop_publish_closed_once() {
     drop(clone);
     assert!(matches!(
         receiver.receive().await,
-        Err(ResponseCompletionOutcome::SessionClosed)
+        Err(ResponseCompletionResult::SessionClosed)
     ));
 
     harness.shutdown().await;
@@ -189,7 +189,7 @@ async fn local_parent_cancellation_after_claim_prevents_handoff_and_resolves_dup
     harness.parent.cancel();
     assert!(matches!(
         receiver.receive().await,
-        Err(ResponseCompletionOutcome::Cancelled)
+        Err(ResponseCompletionResult::Cancelled)
     ));
     let duplicate = tokio::spawn(duplicate.send_response(bind(
         RemotingResponse::command(response_head(92, 831)).expect("duplicate remoting response"),
@@ -202,12 +202,12 @@ async fn local_parent_cancellation_after_claim_prevents_handoff_and_resolves_dup
     resume.notify_one();
     assert!(matches!(
         active.await.expect("active task"),
-        Ok(ResponseCompletionOutcome::Cancelled)
+        Ok(ResponseCompletionResult::Cancelled)
     ));
     assert_eq!(handoff_attempts.load(Ordering::SeqCst), 0);
     assert!(matches!(
         duplicate.await.expect("duplicate task"),
-        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+        Ok(ResponseCompletionResult::AlreadyCompleted(
             ResponseTerminalState::Cancelled
         ))
     ));
@@ -219,7 +219,7 @@ async fn local_parent_cancellation_after_claim_prevents_handoff_and_resolves_dup
                 723,
             ))
             .await,
-        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+        Ok(ResponseCompletionResult::AlreadyCompleted(
             ResponseTerminalState::Cancelled
         ))
     ));
@@ -255,12 +255,12 @@ async fn local_receiver_drop_after_claim_prevents_handoff_without_primary_close_
     resume.notify_one();
     assert!(matches!(
         active.await.expect("active task"),
-        Ok(ResponseCompletionOutcome::SessionClosed)
+        Ok(ResponseCompletionResult::SessionClosed)
     ));
     assert_eq!(handoff_attempts.load(Ordering::SeqCst), 0);
     assert!(matches!(
         duplicate.await.expect("duplicate task"),
-        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+        Ok(ResponseCompletionResult::AlreadyCompleted(
             ResponseTerminalState::Closed
         ))
     ));
@@ -272,7 +272,7 @@ async fn local_receiver_drop_after_claim_prevents_handoff_without_primary_close_
                 726,
             ))
             .await,
-        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+        Ok(ResponseCompletionResult::AlreadyCompleted(
             ResponseTerminalState::Closed
         ))
     ));
@@ -302,7 +302,7 @@ async fn local_sequential_and_concurrent_duplicates_observe_the_exact_terminal_s
                 709,
             ))
             .await,
-        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+        Ok(ResponseCompletionResult::AlreadyCompleted(
             ResponseTerminalState::Completed
         ))
     ));
@@ -328,7 +328,7 @@ async fn local_sequential_and_concurrent_duplicates_observe_the_exact_terminal_s
     let duplicate = if is_completed(&first) { second } else { first };
     assert!(matches!(
         duplicate,
-        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+        Ok(ResponseCompletionResult::AlreadyCompleted(
             ResponseTerminalState::Completed
         ))
     ));
@@ -351,7 +351,7 @@ async fn local_preserves_cancel_session_deadline_priority_and_terminal_states() 
             712,
         ))
         .await,
-        Ok(ResponseCompletionOutcome::DeadlineExpired)
+        Ok(ResponseCompletionResult::DeadlineExpired)
     ));
     assert!(matches!(
         duplicate
@@ -361,7 +361,7 @@ async fn local_preserves_cancel_session_deadline_priority_and_terminal_states() 
                 713,
             ))
             .await,
-        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+        Ok(ResponseCompletionResult::AlreadyCompleted(
             ResponseTerminalState::Failed {
                 progress: WriteProgress::NotStarted
             }
@@ -379,7 +379,7 @@ async fn local_preserves_cancel_session_deadline_priority_and_terminal_states() 
             714,
         ))
         .await,
-        Ok(ResponseCompletionOutcome::Cancelled)
+        Ok(ResponseCompletionResult::Cancelled)
     ));
     cancel_harness.shutdown().await;
 
@@ -396,7 +396,7 @@ async fn local_preserves_cancel_session_deadline_priority_and_terminal_states() 
             715,
         ))
         .await,
-        Ok(ResponseCompletionOutcome::SessionClosed)
+        Ok(ResponseCompletionResult::SessionClosed)
     ));
     closed_harness.shutdown().await;
 }
@@ -420,7 +420,7 @@ async fn local_receiver_is_cancellation_first_without_reopening_a_completed_hand
 
     assert!(matches!(
         receiver.receive().await,
-        Err(ResponseCompletionOutcome::Cancelled)
+        Err(ResponseCompletionResult::Cancelled)
     ));
     assert!(matches!(
         duplicate
@@ -430,7 +430,7 @@ async fn local_receiver_is_cancellation_first_without_reopening_a_completed_hand
                 718,
             ))
             .await,
-        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+        Ok(ResponseCompletionResult::AlreadyCompleted(
             ResponseTerminalState::Completed
         ))
     ));
@@ -446,7 +446,7 @@ async fn local_receiver_stop_reasons_publish_their_exact_terminal_states() {
     tokio::time::advance(Duration::from_secs(1)).await;
     assert!(matches!(
         receiver.receive().await,
-        Err(ResponseCompletionOutcome::DeadlineExpired)
+        Err(ResponseCompletionResult::DeadlineExpired)
     ));
     assert!(matches!(
         sink.send_response(bind(
@@ -455,7 +455,7 @@ async fn local_receiver_stop_reasons_publish_their_exact_terminal_states() {
             718,
         ))
         .await,
-        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+        Ok(ResponseCompletionResult::AlreadyCompleted(
             ResponseTerminalState::Failed {
                 progress: WriteProgress::NotStarted
             }
@@ -468,7 +468,7 @@ async fn local_receiver_stop_reasons_publish_their_exact_terminal_states() {
     cancel_harness.parent.cancel();
     assert!(matches!(
         receiver.receive().await,
-        Err(ResponseCompletionOutcome::Cancelled)
+        Err(ResponseCompletionResult::Cancelled)
     ));
     assert!(matches!(
         sink.send_response(bind(
@@ -477,7 +477,7 @@ async fn local_receiver_stop_reasons_publish_their_exact_terminal_states() {
             719,
         ))
         .await,
-        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+        Ok(ResponseCompletionResult::AlreadyCompleted(
             ResponseTerminalState::Cancelled
         ))
     ));
@@ -491,7 +491,7 @@ async fn local_receiver_stop_reasons_publish_their_exact_terminal_states() {
         .expect("session close publisher should remain open");
     assert!(matches!(
         receiver.receive().await,
-        Err(ResponseCompletionOutcome::SessionClosed)
+        Err(ResponseCompletionResult::SessionClosed)
     ));
     assert!(matches!(
         sink.send_response(bind(
@@ -500,7 +500,7 @@ async fn local_receiver_stop_reasons_publish_their_exact_terminal_states() {
             720,
         ))
         .await,
-        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+        Ok(ResponseCompletionResult::AlreadyCompleted(
             ResponseTerminalState::Closed
         ))
     ));

@@ -37,7 +37,7 @@ use crate::remoting::inner::run_before_rpc_hooks;
 use crate::request_ordering::RequestOrdering;
 use crate::runtime::processor::RejectRequestDecision;
 use crate::runtime::processor::RequestProcessor;
-use crate::runtime::processor::ResponseObservationOutcome;
+use crate::runtime::processor::ResponseLifecycleEvent;
 use crate::server::SessionHandle;
 use crate::telemetry::TransportTelemetry;
 
@@ -111,24 +111,19 @@ where
     }
 }
 
-/// Internal terminal result before immutable binding and delivery.
-pub(crate) enum InternalProcessorOutcome {
-    Handled(ResponseAction),
-}
-
 pub(crate) struct InternalProcessorCandidate {
-    pub(crate) outcome: InternalProcessorOutcome,
+    pub(crate) action: ResponseAction,
     pub(crate) failure: Option<InternalFailureOrigin>,
 }
 
 impl InternalProcessorCandidate {
-    pub(crate) fn success(outcome: InternalProcessorOutcome) -> Self {
-        Self { outcome, failure: None }
+    pub(crate) fn success(action: ResponseAction) -> Self {
+        Self { action, failure: None }
     }
 
-    pub(crate) fn failure(outcome: InternalProcessorOutcome, failure: InternalFailureOrigin) -> Self {
+    pub(crate) fn failure(action: ResponseAction, failure: InternalFailureOrigin) -> Self {
         Self {
-            outcome,
+            action,
             failure: Some(failure),
         }
     }
@@ -181,12 +176,12 @@ impl DispatchMetricsGuard {
 
     pub(crate) fn complete_oneway(&mut self) {
         let Self::Explicit { observation } = self;
-        observation.complete_no_response(ResponseObservationOutcome::Oneway);
+        observation.complete_no_response(ResponseLifecycleEvent::Oneway);
     }
 
     pub(crate) fn complete_protocol_no_response(&mut self) {
         let Self::Explicit { observation } = self;
-        observation.complete_no_response(ResponseObservationOutcome::ProtocolNoResponse);
+        observation.complete_no_response(ResponseLifecycleEvent::ProtocolNoResponse);
     }
 
     pub(crate) fn arm_deferred_metrics(&mut self, retained_bytes: usize) {
@@ -274,11 +269,11 @@ pub(crate) trait DispatchProcessor: sealed::Sealed + Clone + Send + Sync + 'stat
         response: &ResponseSink,
     ) -> impl Future<Output = Result<InternalProcessorCandidate, DispatchProcessorError>> + Send;
 
-    fn resolve_outcome(
+    fn resolve_response_action(
         &self,
         request: &mut RemotingRequest,
-        outcome: InternalProcessorOutcome,
-    ) -> Result<InternalProcessorOutcome, DispatchProcessorError>;
+        action: ResponseAction,
+    ) -> Result<ResponseAction, DispatchProcessorError>;
 }
 
 pub(crate) struct AdmittedProcessorObserver<D>
@@ -413,17 +408,14 @@ where
     fn reject_request(&self, request_code: i32) -> Result<Option<InternalProcessorCandidate>, DispatchProcessorError> {
         Ok(match self.processor.reject_request(request_code) {
             RejectRequestDecision::Proceed => None,
-            RejectRequestDecision::Reject(response) => Some(InternalProcessorCandidate::success(
-                InternalProcessorOutcome::Handled(ResponseAction::Reply(response)),
-            )),
+            RejectRequestDecision::Reject(response) => {
+                Some(InternalProcessorCandidate::success(ResponseAction::Reply(response)))
+            }
         })
     }
 
     fn deadline_candidate(&self, response: RemotingResponse) -> InternalProcessorCandidate {
-        InternalProcessorCandidate::failure(
-            InternalProcessorOutcome::Handled(ResponseAction::Reply(response)),
-            InternalFailureOrigin::Deadline,
-        )
+        InternalProcessorCandidate::failure(ResponseAction::Reply(response), InternalFailureOrigin::Deadline)
     }
 
     fn install_deferred_response(
@@ -481,7 +473,7 @@ where
                         crate::error_response::RemotingErrorTarget::Fresh(&application_remoting_command_factory()),
                     );
                     InternalProcessorCandidate::failure(
-                        InternalProcessorOutcome::Handled(ResponseAction::Reply(RemotingResponse::command(command)?)),
+                        ResponseAction::Reply(RemotingResponse::command(command)?),
                         InternalFailureOrigin::BeforeHook,
                     )
                 }
@@ -490,15 +482,12 @@ where
         }
     }
 
-    fn resolve_outcome(
+    fn resolve_response_action(
         &self,
         request: &mut RemotingRequest,
-        outcome: InternalProcessorOutcome,
-    ) -> Result<InternalProcessorOutcome, DispatchProcessorError> {
-        let InternalProcessorOutcome::Handled(outcome) = outcome;
-        Ok(InternalProcessorOutcome::Handled(
-            request.resolve_response_action(outcome)?,
-        ))
+        action: ResponseAction,
+    ) -> Result<ResponseAction, DispatchProcessorError> {
+        Ok(request.resolve_response_action(action)?)
     }
 }
 
@@ -508,9 +497,9 @@ fn apply_after_hook(
     hook_snapshot: Option<&HookSnapshot>,
     remote_address: SocketAddr,
 ) -> Result<InternalProcessorCandidate, DispatchProcessorError> {
-    let InternalProcessorCandidate { outcome, failure } = candidate;
-    let InternalProcessorOutcome::Handled(ResponseAction::Reply(mut response)) = outcome else {
-        return Ok(InternalProcessorCandidate { outcome, failure });
+    let InternalProcessorCandidate { action, failure } = candidate;
+    let ResponseAction::Reply(mut response) = action else {
+        return Ok(InternalProcessorCandidate { action, failure });
     };
     let result = request.with_body_free_hook_request(|request_head| {
         response.with_body_free_hook_head(|response_head| {
@@ -519,7 +508,7 @@ fn apply_after_hook(
     });
     match result {
         Ok(()) => Ok(InternalProcessorCandidate {
-            outcome: InternalProcessorOutcome::Handled(ResponseAction::Reply(response)),
+            action: ResponseAction::Reply(response),
             failure,
         }),
         Err(error) => {
@@ -535,7 +524,7 @@ fn apply_after_hook(
                 crate::error_response::RemotingErrorTarget::Fresh(&application_remoting_command_factory()),
             );
             Ok(InternalProcessorCandidate::failure(
-                InternalProcessorOutcome::Handled(ResponseAction::Reply(RemotingResponse::command(command)?)),
+                ResponseAction::Reply(RemotingResponse::command(command)?),
                 failure,
             ))
         }

@@ -1110,8 +1110,8 @@ fn bounded_runtime_identifier(runtime: &KVTable, key: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-#[cfg(any(feature = "read-client-adapter", test))]
-fn effective_log_level(filter: &str, logger: &str) -> Option<BrokerLogLevel> {
+#[cfg(any(feature = "read-client-adapter", feature = "mutation-client-adapter", test))]
+pub(crate) fn effective_log_level(filter: &str, logger: &str) -> Option<BrokerLogLevel> {
     let mut selected = None;
     let mut selected_target_len = 0usize;
     for directive in filter.split(',').map(str::trim).filter(|value| !value.is_empty()) {

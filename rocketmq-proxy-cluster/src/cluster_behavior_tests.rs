@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use rocketmq_error::Error as CanonicalError;
-use rocketmq_model::result::PullOutcome;
+use rocketmq_model::result::PullResponse;
 use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_proxy_core::ConsumerFilterExpression;
 use rocketmq_proxy_core::ProxyMessage;
@@ -133,7 +133,7 @@ struct ProducerStartControl {
 struct ScriptedClientIo {
     events: EventLog,
     routes: Mutex<VecDeque<Result<Option<TopicRouteData>, CanonicalError>>>,
-    pulls: Mutex<VecDeque<Result<PullOutcome<MessageExt>, CanonicalError>>>,
+    pulls: Mutex<VecDeque<Result<PullResponse<MessageExt>, CanonicalError>>>,
     pops: Mutex<VecDeque<Result<PopResult, CanonicalError>>>,
     acks: Mutex<VecDeque<Result<AckResult, CanonicalError>>>,
     broker_lookup_misses: AtomicUsize,
@@ -218,11 +218,11 @@ impl ScriptedClientIo {
             .push_back(Ok(Some(route)));
     }
 
-    fn push_pull(&self, outcome: PullOutcome<MessageExt>) {
+    fn push_pull(&self, response: PullResponse<MessageExt>) {
         self.pulls
             .lock()
             .expect("pull script lock poisoned")
-            .push_back(Ok(outcome));
+            .push_back(Ok(response));
     }
 
     fn push_pop(&self, result: PopResult) {
@@ -423,12 +423,12 @@ impl ClusterClientIo for ScriptedClientIo {
         CheetahString::from(queue.broker_name())
     }
 
-    async fn pull_outcome_from_broker(
+    async fn pull_response_from_broker(
         &self,
         _broker_addr: &str,
         _request: PullMessageRequestHeader,
         _timeout_millis: u64,
-    ) -> Result<PullOutcome<MessageExt>, CanonicalError> {
+    ) -> Result<PullResponse<MessageExt>, CanonicalError> {
         // Subscribe before publishing readiness so a broadcast cannot be lost
         // between the call count becoming visible and the wait being polled.
         let released = self.pull_block.as_ref().map(|block| block.notified());
@@ -448,7 +448,7 @@ impl ClusterClientIo for ScriptedClientIo {
         if let Some(released) = released {
             released.await;
         }
-        Self::scripted(&self.pulls, "pull_outcome_from_broker")
+        Self::scripted(&self.pulls, "pull_response_from_broker")
     }
 
     async fn consumer_send_message_back(
@@ -976,7 +976,7 @@ fn shutdown_report_panics(report: &rocketmq_runtime::ShutdownReport) -> usize {
 async fn unrelated_route_progresses_while_pull_is_blocked() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let (client, pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
-    client.push_pull(PullOutcome::new(
+    client.push_pull(PullResponse::new(
         PullStatus::NoNewMsg,
         7,
         1,
@@ -1038,14 +1038,14 @@ async fn unrelated_route_progresses_while_pull_is_blocked() {
 async fn same_consumer_key_is_fifo_without_serializing_distinct_keys() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let (client, first_pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
-    client.push_pull(PullOutcome::new(
+    client.push_pull(PullResponse::new(
         PullStatus::NoNewMsg,
         11,
         1,
         21,
         None::<Vec<MessageExt>>,
     ));
-    client.push_pull(PullOutcome::new(
+    client.push_pull(PullResponse::new(
         PullStatus::NoNewMsg,
         22,
         1,
@@ -1092,14 +1092,14 @@ async fn distinct_consumer_keys_reach_remote_io_concurrently() {
     let (mut client, first_pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
     let pull_wait_poll_gate = CancellationToken::new();
     client.pull_wait_poll_gate = Some(pull_wait_poll_gate.clone());
-    client.push_pull(PullOutcome::new(
+    client.push_pull(PullResponse::new(
         PullStatus::NoNewMsg,
         11,
         1,
         21,
         None::<Vec<MessageExt>>,
     ));
-    client.push_pull(PullOutcome::new(
+    client.push_pull(PullResponse::new(
         PullStatus::NoNewMsg,
         22,
         1,
@@ -1145,14 +1145,14 @@ async fn distinct_consumer_keys_reach_remote_io_concurrently() {
 async fn long_poll_saturation_preserves_short_data_and_control_capacity() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let (client, first_pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
-    client.push_pull(PullOutcome::new(
+    client.push_pull(PullResponse::new(
         PullStatus::NoNewMsg,
         11,
         1,
         21,
         None::<Vec<MessageExt>>,
     ));
-    client.push_pull(PullOutcome::new(
+    client.push_pull(PullResponse::new(
         PullStatus::NoNewMsg,
         22,
         1,
@@ -1286,7 +1286,7 @@ async fn idle_key_lane_is_reclaimed_without_leaking_budget_or_tasks() {
 async fn active_long_poll_uses_only_the_long_poll_budget() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let (client, pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
-    client.push_pull(PullOutcome::new(
+    client.push_pull(PullResponse::new(
         PullStatus::NoNewMsg,
         7,
         1,
@@ -1359,7 +1359,7 @@ async fn active_long_poll_uses_only_the_long_poll_budget() {
 async fn request_timeout_cancels_remote_io_and_releases_all_permits() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let (client, pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
-    client.push_pull(PullOutcome::new(
+    client.push_pull(PullResponse::new(
         PullStatus::NoNewMsg,
         7,
         1,
@@ -1461,7 +1461,7 @@ async fn worker_maps_route_pull_pop_and_ack_with_retry() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let client = Arc::new(ScriptedClientIo::new(events.clone()));
     client.push_route(TopicRouteData::default());
-    client.push_pull(PullOutcome::new(
+    client.push_pull(PullResponse::new(
         PullStatus::NoNewMsg,
         7,
         1,
@@ -1569,7 +1569,7 @@ async fn worker_maps_route_pull_pop_and_ack_with_retry() {
 async fn worker_preserves_owned_messages_for_found_pull_and_pop_results() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let client = Arc::new(ScriptedClientIo::new(events.clone()));
-    client.push_pull(PullOutcome::new(
+    client.push_pull(PullResponse::new(
         PullStatus::Found,
         8,
         1,

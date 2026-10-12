@@ -128,6 +128,19 @@ pub(crate) struct MutationClusterConfig {
     secret_key_env: Option<String>,
     #[serde(default)]
     security_token_env: Option<String>,
+    /// The Proxies of this cluster that a drain may name.
+    #[serde(default)]
+    proxies: Vec<MutationProxyConfig>,
+}
+
+/// One Proxy that a drain may name by its alias.
+///
+/// The endpoint is internal topology: a Tool takes and returns the alias only.
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MutationProxyConfig {
+    name: String,
+    endpoint: String,
 }
 
 #[cfg(feature = "write-tools")]
@@ -150,6 +163,13 @@ impl MutationClusterConfig {
             self.secret_key_env.as_deref(),
             self.security_token_env.as_deref(),
         )
+    }
+
+    /// Returns each Proxy alias of this cluster with its endpoint.
+    pub(crate) fn proxies(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.proxies
+            .iter()
+            .map(|proxy| (proxy.name.as_str(), proxy.endpoint.as_str()))
     }
 }
 
@@ -337,6 +357,8 @@ fn check_cluster_registry(clusters: &[MutationClusterConfig]) -> Result<(), Conf
             "clusters.namesrv_addr"
         } else if let Some(field) = credential_env_violation(cluster) {
             field
+        } else if let Some(field) = proxy_violation(&cluster.proxies) {
+            field
         } else {
             continue;
         };
@@ -362,6 +384,22 @@ fn valid_namesrv_addr(value: &str) -> bool {
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'[' | b']' | b':'))
                 && port.parse::<u16>().is_ok_and(|port| port != 0)
         })
+}
+
+/// Returns the Proxy field that is not an alias, repeats one, or is not one `host:port` endpoint.
+///
+/// An alias has the grammar of a cluster name, so it can never be mistaken for an address.
+fn proxy_violation(proxies: &[MutationProxyConfig]) -> Option<&'static str> {
+    let mut names = BTreeSet::new();
+    for proxy in proxies {
+        if ClusterName::try_new(proxy.name.as_str()).is_err() || !names.insert(proxy.name.as_str()) {
+            return Some("clusters.proxies.name");
+        }
+        if proxy.endpoint.contains(';') || !valid_namesrv_addr(&proxy.endpoint) {
+            return Some("clusters.proxies.endpoint");
+        }
+    }
+    None
 }
 
 /// Returns the credential variable field that breaks the both-or-neither rule or the name grammar.
@@ -1011,6 +1049,7 @@ mod tests {
             access_key_env: Some("ROCKETMQ_ACCESS_KEY".to_owned()),
             secret_key_env: Some("ROCKETMQ_SECRET_KEY".to_owned()),
             security_token_env: Some("ROCKETMQ_SECURITY_TOKEN".to_owned()),
+            proxies: Vec::new(),
         };
         let mut config = valid_config();
         config.mutations.mutations_enabled = true;
@@ -1027,5 +1066,64 @@ mod tests {
             include_str!("../conf/mcp-control.example.toml")
         );
         assert!(toml::from_str::<ControlConfig>(&inline_secret).is_err());
+    }
+
+    #[test]
+    fn proxy_aliases_are_optional_closed_and_bound_to_one_endpoint() {
+        const CLUSTER: &str = "\n[[clusters]]\nname = \"production-b\"\nnamesrv_addr = \"10.0.0.9:9876\"\n";
+        let proxy = |name: &str, endpoint: &str| {
+            format!("[[clusters.proxies]]\nname = \"{name}\"\nendpoint = \"{endpoint}\"\n")
+        };
+        let with = |proxies: &str| format!("{EXAMPLE}{CLUSTER}{proxies}");
+
+        // The example names one Proxy, and a cluster needs none.
+        let example = ControlConfig::from_toml(EXAMPLE).unwrap();
+        assert_eq!(example.clusters[0].proxies.len(), 1);
+        assert!(ControlConfig::from_toml(&with("")).unwrap().clusters[1]
+            .proxies
+            .is_empty());
+        let two = with(&format!(
+            "{}{}",
+            proxy("proxy-a", "proxy-a.example.test:8080"),
+            proxy("proxy_b", "[2001:db8::1]:8080")
+        ));
+        assert_eq!(ControlConfig::from_toml(&two).unwrap().clusters[1].proxies.len(), 2);
+
+        let duplicate = format!(
+            "{}{}",
+            proxy("proxy-a", "proxy-a.example.test:8080"),
+            proxy("proxy-a", "proxy-b.example.test:8080")
+        );
+        for (proxies, field) in [
+            (duplicate, "clusters.proxies.name"),
+            (proxy("", "proxy-a.example.test:8080"), "clusters.proxies.name"),
+            (proxy("proxy.a", "proxy-a.example.test:8080"), "clusters.proxies.name"),
+            (
+                proxy("10.0.0.7:8080", "proxy-a.example.test:8080"),
+                "clusters.proxies.name",
+            ),
+            (proxy("proxy-a", ""), "clusters.proxies.endpoint"),
+            (proxy("proxy-a", "proxy-a.example.test"), "clusters.proxies.endpoint"),
+            (proxy("proxy-a", "proxy-a.example.test:0"), "clusters.proxies.endpoint"),
+            (
+                proxy("proxy-a", "https://proxy-a.example.test:8080"),
+                "clusters.proxies.endpoint",
+            ),
+            (
+                proxy("proxy-a", "a.example.test:8080;b.example.test:8080"),
+                "clusters.proxies.endpoint",
+            ),
+        ] {
+            let error = rejection(&with(&proxies));
+            assert_eq!(error.stage(), "validate");
+            let rendered = error.to_string();
+            assert_eq!(
+                rendered,
+                format!("`{field}` has a value that is not allowed in `[[clusters]]` entry 2")
+            );
+            assert!(!rendered.contains("example.test"));
+        }
+        let unknown_key = with("[[clusters.proxies]]\nname = \"proxy-a\"\naddress = \"proxy-a.example.test:8080\"\n");
+        assert_eq!(rejection(&unknown_key).stage(), "parse");
     }
 }

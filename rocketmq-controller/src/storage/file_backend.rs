@@ -140,19 +140,19 @@ enum Mutation {
     Delete(String),
 }
 
-/// File storage for the explicitly enabled `dev-single` profile.
+/// File-backed key-value store for the explicitly enabled `dev-single` profile.
 ///
 /// Each mutation batch has a single manifest publication point. Temporary
 /// files are ignored and removed during startup, while records and manifests
 /// are checksummed before use.
-pub struct FileBackend {
+pub struct FileKeyValueStore {
     path: PathBuf,
     state: Arc<RwLock<BackendState>>,
     commit_lock: Mutex<()>,
 }
 
-impl FileBackend {
-    /// Opens or initializes a file backend.
+impl FileKeyValueStore {
+    /// Opens or initializes the file-backed key-value store.
     pub async fn new(path: PathBuf) -> Result<Self> {
         info!(path = ?path, "Opening development file storage");
         let data_dir = path.join(DATA_DIRECTORY);
@@ -379,7 +379,7 @@ impl FileBackend {
 }
 
 #[async_trait]
-impl StorageBackend for FileBackend {
+impl StorageBackend for FileKeyValueStore {
     async fn put(&self, key: &str, value: &[u8]) -> Result<()> {
         debug!(key, size = value.len(), "File storage put");
         self.commit(vec![Mutation::Put(key.to_string(), value.to_vec())]).await
@@ -519,7 +519,7 @@ mod tests {
         let storage_path = temp_dir.path().join("file-storage");
 
         {
-            let backend = FileBackend::new(storage_path.clone()).await.expect("open");
+            let backend = FileKeyValueStore::new(storage_path.clone()).await.expect("open");
             backend
                 .batch_put(vec![
                     ("alpha".to_string(), b"one".to_vec()),
@@ -530,7 +530,7 @@ mod tests {
             assert_eq!(backend.state.read().generation, 1);
         }
 
-        let backend = FileBackend::new(storage_path).await.expect("reopen");
+        let backend = FileKeyValueStore::new(storage_path).await.expect("reopen");
         assert_eq!(backend.get("alpha").await.expect("get alpha"), Some(b"one".to_vec()));
         assert_eq!(backend.get("beta").await.expect("get beta"), Some(b"two".to_vec()));
         assert_eq!(backend.state.read().generation, 1);
@@ -540,7 +540,7 @@ mod tests {
     async fn delete_and_clear_are_durable() {
         let temp_dir = TempDir::new().expect("temp directory");
         let storage_path = temp_dir.path().join("file-storage");
-        let backend = FileBackend::new(storage_path.clone()).await.expect("open");
+        let backend = FileKeyValueStore::new(storage_path.clone()).await.expect("open");
         backend.put("alpha", b"one").await.expect("put alpha");
         backend.put("beta", b"two").await.expect("put beta");
         backend.delete("alpha").await.expect("delete alpha");
@@ -548,7 +548,7 @@ mod tests {
         backend.clear().await.expect("clear");
         drop(backend);
 
-        let reopened = FileBackend::new(storage_path).await.expect("reopen");
+        let reopened = FileKeyValueStore::new(storage_path).await.expect("reopen");
         assert!(reopened.list_keys("").await.expect("list").is_empty());
     }
 
@@ -556,7 +556,7 @@ mod tests {
     async fn corrupted_record_is_rejected() {
         let temp_dir = TempDir::new().expect("temp directory");
         let storage_path = temp_dir.path().join("file-storage");
-        let backend = FileBackend::new(storage_path).await.expect("open");
+        let backend = FileKeyValueStore::new(storage_path).await.expect("open");
         backend.put("alpha", b"one").await.expect("put");
         let pointer = backend
             .state
@@ -576,12 +576,12 @@ mod tests {
     async fn incomplete_temporary_files_are_removed_on_restart() {
         let temp_dir = TempDir::new().expect("temp directory");
         let storage_path = temp_dir.path().join("file-storage");
-        let backend = FileBackend::new(storage_path.clone()).await.expect("open");
+        let backend = FileKeyValueStore::new(storage_path.clone()).await.expect("open");
         let incomplete = backend.data_dir().join("incomplete.record.tmp");
         fs::write(&incomplete, b"partial").await.expect("write temporary file");
         drop(backend);
 
-        FileBackend::new(storage_path).await.expect("reopen");
+        FileKeyValueStore::new(storage_path).await.expect("reopen");
         assert!(!incomplete.exists());
     }
 
@@ -589,14 +589,14 @@ mod tests {
     async fn uncommitted_record_is_removed_on_restart() {
         let temp_dir = TempDir::new().expect("temp directory");
         let storage_path = temp_dir.path().join("file-storage");
-        let backend = FileBackend::new(storage_path.clone()).await.expect("open");
+        let backend = FileKeyValueStore::new(storage_path.clone()).await.expect("open");
         let orphan = backend.data_dir().join("00000000000000000001-00000000.record");
         fs::write(&orphan, b"interrupted commit")
             .await
             .expect("write orphan record");
         drop(backend);
 
-        FileBackend::new(storage_path).await.expect("reopen");
+        FileKeyValueStore::new(storage_path).await.expect("reopen");
         assert!(!orphan.exists());
     }
 }

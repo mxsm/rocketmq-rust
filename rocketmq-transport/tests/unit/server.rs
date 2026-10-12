@@ -44,7 +44,7 @@ use crate::dispatch::DeferredParts;
 use crate::dispatch::DeferredRegistrationResult;
 use crate::dispatch::DeferredRegistry;
 use crate::dispatch::DeferredRequest;
-use crate::dispatch::DeferredResponderOutcome;
+use crate::dispatch::DeferredResponderTakeResult;
 use crate::dispatch::DeferredResumeResult;
 use crate::dispatch::DeferredResumeRetainedSize;
 use crate::dispatch::DeferredRetainedSizeParts;
@@ -60,7 +60,7 @@ use crate::runtime::processor::RejectRequestDecision;
 use crate::runtime::RPCHook;
 use crate::session_registry::ServerPushCommand;
 use crate::session_registry::ServerPushKind;
-use crate::session_registry::ServerPushOutcome;
+use crate::session_registry::ServerPushResult;
 use crate::session_registry::ServerRequestCommand;
 use crate::session_registry::ServerRequestResult;
 use crate::session_registry::SessionCloseReason;
@@ -346,11 +346,11 @@ impl RequestProcessor for NetworkDeferredCleanupProcessor {
 
         let opaque = request.original_identity().original_opaque();
         let responder = match request.take_deferred_responder() {
-            DeferredResponderOutcome::Taken(responder) => responder,
-            DeferredResponderOutcome::OneWayRequest
-            | DeferredResponderOutcome::Unavailable
-            | DeferredResponderOutcome::AlreadyTaken
-            | DeferredResponderOutcome::OutcomeCompleted => {
+            DeferredResponderTakeResult::Taken(responder) => responder,
+            DeferredResponderTakeResult::OneWayRequest
+            | DeferredResponderTakeResult::Unavailable
+            | DeferredResponderTakeResult::AlreadyTaken
+            | DeferredResponderTakeResult::OutcomeCompleted => {
                 return Err(crate::error_helpers::argument_invalid());
             }
         };
@@ -564,7 +564,7 @@ async fn registry_capabilities_write_typed_push_and_close_the_same_canonical_ses
         .capabilities(session_id)
         .expect("registered session capabilities");
 
-    let ServerPushOutcome::Sent(receipt) = push
+    let ServerPushResult::Sent(receipt) = push
         .send(
             ServerPushCommand::NotifyConsumerIdsChanged {
                 header: NotifyConsumerIdsChangedRequestHeader {
@@ -590,7 +590,7 @@ async fn registry_capabilities_write_typed_push_and_close_the_same_canonical_ses
     assert_eq!(pushed.opaque(), 9_858);
     assert!(pushed.is_oneway_rpc());
 
-    let ServerPushOutcome::Sent(transaction_receipt) = push
+    let ServerPushResult::Sent(transaction_receipt) = push
         .send(
             ServerPushCommand::CheckTransactionState {
                 header: CheckTransactionStateRequestHeader {
@@ -620,7 +620,7 @@ async fn registry_capabilities_write_typed_push_and_close_the_same_canonical_ses
     assert_eq!(transaction.body(), Some(&Bytes::from_static(b"transaction-message")));
     assert!(transaction.is_oneway_rpc());
 
-    let ServerPushOutcome::Sent(reset_receipt) = push
+    let ServerPushResult::Sent(reset_receipt) = push
         .send(
             ServerPushCommand::ResetConsumerClientOffset {
                 header: ResetOffsetRequestHeader {
@@ -827,7 +827,7 @@ async fn close_transition_rejects_retained_push_and_request_capabilities() {
         )
         .await
         .expect("retained push must not fail operationally"),
-        ServerPushOutcome::SessionClosed
+        ServerPushResult::SessionClosed
     ));
     let request_outcome = request
         .request(consumer_status_request(), Duration::from_secs(1))
