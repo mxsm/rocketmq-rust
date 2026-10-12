@@ -12,11 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[test]
-fn durable_authority_and_raw_queue_storage_are_not_publicly_forgeable() {
-    let cases = trybuild::TestCases::new();
-    cases.compile_fail("tests/ui/mapped_file_retirement_capability/*.rs");
-}
+// Downstream privacy checks live in mapped_file's compile-fail doctests so they
+// reuse normal build artifacts instead of launching a nested dependency build.
 
 #[test]
 fn queue_removal_surface_is_confined_to_the_capability_boundary() {

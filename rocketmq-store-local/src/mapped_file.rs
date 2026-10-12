@@ -12,6 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Mapped-file access and queue ownership boundaries.
+//!
+//! Queue generations expose immutable snapshots through the public API:
+//!
+//! ```
+//! use rocketmq_store_local::mapped_file::{DefaultMappedFile, MappedFileQueueGeneration};
+//!
+//! let generation = MappedFileQueueGeneration::<DefaultMappedFile>::new();
+//! let _ = generation.snapshot();
+//! ```
+//!
+//! Durable retirement authority is internal and cannot be imported by downstream crates:
+//!
+//! ```compile_fail,E0603
+//! use rocketmq_store_local::mapped_file::retirement::registry::DurableRetirementToken;
+//!
+//! let _ = std::mem::size_of::<DurableRetirementToken<()>>();
+//! ```
+//!
+//! Queue generations do not expose their raw storage for callers to mutate:
+//!
+//! ```compile_fail,E0609
+//! use rocketmq_store_local::mapped_file::{DefaultMappedFile, MappedFileQueueGeneration};
+//!
+//! let generation = MappedFileQueueGeneration::<DefaultMappedFile>::new();
+//! let _ = generation.files;
+//! ```
+
 #[doc(hidden)]
 pub mod allocation_policy;
 #[doc(hidden)]
