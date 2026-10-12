@@ -350,7 +350,7 @@ impl fmt::Display for PullStatus {
 
 /// Immutable pull result that owns its message values.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PullOutcome<T> {
+pub struct PullResponse<T> {
     pull_status: PullStatus,
     next_begin_offset: u64,
     min_offset: u64,
@@ -358,7 +358,7 @@ pub struct PullOutcome<T> {
     messages: Option<Vec<T>>,
 }
 
-impl<T> PullOutcome<T> {
+impl<T> PullResponse<T> {
     pub fn new<M>(
         pull_status: PullStatus,
         next_begin_offset: u64,

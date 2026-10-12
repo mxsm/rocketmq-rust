@@ -396,12 +396,12 @@ mod cluster_session {
             self.inner.get_broker_name_from_message_queue(queue).await
         }
 
-        pub async fn pull_outcome_from_broker(
+        pub async fn pull_response_from_broker(
             &self,
             broker_addr: &str,
             request: rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader,
             timeout_millis: u64,
-        ) -> crate::ClientResult<rocketmq_model::result::PullOutcome<MessageExt>> {
+        ) -> crate::ClientResult<rocketmq_model::result::PullResponse<MessageExt>> {
             let _operation = self.operation().await;
             let result = self
                 .inner
