@@ -19,7 +19,7 @@ use crate::dispatch::DeferredCommitErrorKind;
 use crate::dispatch::DeferredRegistration;
 use crate::dispatch::DeferredRegistrationResult;
 use crate::dispatch::DeferredResponder;
-use crate::dispatch::DeferredResponderOutcome;
+use crate::dispatch::DeferredResponderTakeResult;
 use crate::dispatch::DeferredResponseOutcome;
 use crate::dispatch::DeferredResumeResult;
 use crate::dispatch::DeferredResumeRetainedSize;
@@ -89,13 +89,13 @@ where
     }
 }
 
-fn expect_deferred_responder(outcome: DeferredResponderOutcome, context: &str) -> DeferredResponder {
+fn expect_deferred_responder(outcome: DeferredResponderTakeResult, context: &str) -> DeferredResponder {
     match outcome {
-        DeferredResponderOutcome::Taken(responder) => responder,
-        DeferredResponderOutcome::OneWayRequest => panic!("{context}: one-way request"),
-        DeferredResponderOutcome::Unavailable => panic!("{context}: responder unavailable"),
-        DeferredResponderOutcome::AlreadyTaken => panic!("{context}: responder already taken"),
-        DeferredResponderOutcome::OutcomeCompleted => panic!("{context}: outcome already completed"),
+        DeferredResponderTakeResult::Taken(responder) => responder,
+        DeferredResponderTakeResult::OneWayRequest => panic!("{context}: one-way request"),
+        DeferredResponderTakeResult::Unavailable => panic!("{context}: responder unavailable"),
+        DeferredResponderTakeResult::AlreadyTaken => panic!("{context}: responder already taken"),
+        DeferredResponderTakeResult::OutcomeCompleted => panic!("{context}: outcome already completed"),
     }
 }
 

@@ -90,7 +90,7 @@ pub use crate::dispatch::DeferredRegistryShutdownStats;
 pub use crate::dispatch::DeferredRegistryShutdownStatus;
 pub use crate::dispatch::DeferredRequest;
 pub use crate::dispatch::DeferredResponder;
-pub use crate::dispatch::DeferredResponderOutcome;
+pub use crate::dispatch::DeferredResponderTakeResult;
 pub use crate::dispatch::DeferredResponseOutcome;
 pub use crate::dispatch::DeferredResumeResult;
 pub use crate::dispatch::DeferredResumeRetainedSize;

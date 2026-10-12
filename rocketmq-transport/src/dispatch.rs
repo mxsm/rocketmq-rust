@@ -68,7 +68,7 @@ pub use deferred_registry::DeferredWakeReason;
 pub(in crate::dispatch) use deferred_registry::RegistryFailure;
 pub use deferred_responder::DeferredCancellationReason;
 pub use deferred_responder::DeferredResponder;
-pub use deferred_responder::DeferredResponderOutcome;
+pub use deferred_responder::DeferredResponderTakeResult;
 pub use deferred_responder::DeferredResponseOutcome;
 pub(crate) use deferred_responder::DeferredResponseSeed;
 pub use deferred_response::DeferredTerminalReason;

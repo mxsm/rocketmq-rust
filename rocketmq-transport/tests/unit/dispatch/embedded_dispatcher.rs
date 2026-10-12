@@ -40,7 +40,7 @@ use crate::admission::AdmissionScope;
 use crate::admission::ResourceLimit;
 use crate::contract::TransportContractViolation;
 use crate::dispatch::AuthenticationState;
-use crate::dispatch::DeferredResponderOutcome;
+use crate::dispatch::DeferredResponderTakeResult;
 use crate::dispatch::ProtocolNoResponseReason;
 use crate::dispatch::RemotingRequest;
 use crate::dispatch::RequestMeta;
@@ -187,7 +187,7 @@ impl RequestProcessor for TestProcessor {
             Behavior::Deferred => {
                 assert!(matches!(
                     request.take_deferred_responder(),
-                    DeferredResponderOutcome::Unavailable
+                    DeferredResponderTakeResult::Unavailable
                 ));
                 Ok(ResponseAction::Reply(
                     RemotingResponse::bytes(

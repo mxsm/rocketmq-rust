@@ -78,9 +78,9 @@ fn expect_applied<T>(result: Result<ResponseTransitionResult<T>, TransportContra
     }
 }
 
-fn expect_taken(outcome: DeferredResponderOutcome) -> DeferredResponder {
+fn expect_taken(outcome: DeferredResponderTakeResult) -> DeferredResponder {
     match outcome {
-        DeferredResponderOutcome::Taken(responder) => responder,
+        DeferredResponderTakeResult::Taken(responder) => responder,
         _ => panic!("deferred response ownership should be available"),
     }
 }
@@ -170,7 +170,7 @@ async fn take_failures_are_exact_and_only_a_success_allocates_deferred_state() {
     let mut unavailable = InlineResponseSlot::disabled();
     assert!(matches!(
         unavailable.take_deferred_responder(ordinary),
-        DeferredResponderOutcome::Unavailable
+        DeferredResponderTakeResult::Unavailable
     ));
     assert_eq!(deferred_state_allocations(), before);
 
@@ -179,7 +179,7 @@ async fn take_failures_are_exact_and_only_a_success_allocates_deferred_state() {
     let mut slot = InlineResponseSlot::with_deferred_seed(seed);
     assert!(matches!(
         slot.take_deferred_responder(one_way),
-        DeferredResponderOutcome::OneWayRequest
+        DeferredResponderTakeResult::OneWayRequest
     ));
     assert_eq!(deferred_state_allocations(), before);
 
@@ -187,7 +187,7 @@ async fn take_failures_are_exact_and_only_a_success_allocates_deferred_state() {
     assert_eq!(deferred_state_allocations(), before + 1);
     assert!(matches!(
         slot.take_deferred_responder(ordinary),
-        DeferredResponderOutcome::AlreadyTaken
+        DeferredResponderTakeResult::AlreadyTaken
     ));
     assert_eq!(deferred_state_allocations(), before + 1);
     drop(responder);
@@ -201,7 +201,7 @@ async fn take_failures_are_exact_and_only_a_success_allocates_deferred_state() {
         .expect("inline reply completes the slot");
     assert!(matches!(
         completed.take_deferred_responder(ordinary),
-        DeferredResponderOutcome::OutcomeCompleted
+        DeferredResponderTakeResult::OutcomeCompleted
     ));
     assert_eq!(deferred_state_allocations(), before + 1);
     harness.shutdown().await;
