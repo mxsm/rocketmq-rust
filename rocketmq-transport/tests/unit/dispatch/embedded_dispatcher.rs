@@ -51,8 +51,8 @@ use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseDisposition;
 use crate::error::TransportError;
 use crate::runtime::processor::RejectRequestDecision;
+use crate::runtime::processor::ResponseDeliveryEvent;
 use crate::runtime::processor::ResponseWriteObservation;
-use crate::runtime::processor::ResponseWriteOutcome;
 use crate::security::TransportSecurity;
 
 fn assert_dispatch_error(error: TransportError) {
@@ -353,7 +353,7 @@ async fn public_reply_is_channel_free_zero_copy_bound_and_observed_once_after_on
     {
         let observations = state.observations.lock().expect("observation lock");
         assert_eq!(observations.len(), 1);
-        let ResponseWriteOutcome::Written(receipt) = observations[0].outcome() else {
+        let ResponseDeliveryEvent::DeliveryCompleted(receipt) = observations[0].event() else {
             panic!("local remoting response must be accepted")
         };
         assert_eq!(receipt.disposition(), ResponseDisposition::InProcessAccepted);
@@ -415,7 +415,10 @@ async fn non_oneway_processor_error_is_observed_without_terminal_failure_reporti
     {
         let observations = state.observations.lock().expect("observation lock");
         assert_eq!(observations.len(), 1);
-        assert!(matches!(observations[0].outcome(), ResponseWriteOutcome::Written(_)));
+        assert!(matches!(
+            observations[0].event(),
+            ResponseDeliveryEvent::DeliveryCompleted(_)
+        ));
     }
     fixture.shutdown().await;
 }
@@ -523,8 +526,8 @@ async fn expired_reply_maps_once_to_deadline_with_one_failed_observation() {
         let observations = state.observations.lock().expect("observation lock");
         assert_eq!(observations.len(), 1);
         assert!(matches!(
-            observations[0].outcome(),
-            ResponseWriteOutcome::Failed {
+            observations[0].event(),
+            ResponseDeliveryEvent::Failed {
                 completion: Some(ResponseCompletionResult::DeadlineExpired),
                 progress: Some(crate::dispatch::WriteProgress::NotStarted),
             }

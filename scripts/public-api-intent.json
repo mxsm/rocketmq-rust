@@ -7941,8 +7941,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::runtime::processor::ResponseWriteOutcome",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::runtime::processor::ResponseWriteOutcome",
+          "declaration": "pub use crate::runtime::processor::ResponseDeliveryEvent",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::runtime::processor::ResponseDeliveryEvent",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",

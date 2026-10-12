@@ -1040,8 +1040,8 @@ async fn queued_deadline_expiry_attempts_one_plan_write_and_observes_not_started
         let observations = state.observations.lock().expect("observation lock");
         assert_eq!(observations.len(), 2);
         assert!(matches!(
-            observations[1].outcome(),
-            ResponseWriteOutcome::Failed {
+            observations[1].event(),
+            ResponseDeliveryEvent::Failed {
                 completion: Some(ResponseCompletionResult::DeadlineExpired),
                 progress: Some(WriteProgress::NotStarted),
             }
