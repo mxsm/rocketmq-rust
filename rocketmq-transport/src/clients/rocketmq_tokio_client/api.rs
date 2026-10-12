@@ -537,19 +537,6 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         self.reconcile_cached_connection_inner(addr)
     }
 
-    /// Retained compatibility facade for direct cached-session cleanup.
-    ///
-    /// This method is not a DNS, socket, or network reachability probe. Use
-    /// [`Self::reconcile_cached_connection`] when the caller needs the typed
-    /// cache state.
-    #[deprecated(
-        since = "1.0.0",
-        note = "use TransportClient::reconcile_cached_connection; is_address_reachable is not a network probe"
-    )]
-    pub fn is_address_reachable(&self, addr: &CheetahString) {
-        self.is_address_reachable_inner(addr);
-    }
-
     pub fn close_clients(&self, addrs: Vec<String>) {
         self.close_clients_inner(addrs);
     }
