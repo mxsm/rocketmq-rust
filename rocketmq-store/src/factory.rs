@@ -134,6 +134,18 @@ pub struct StoreFactory;
 impl StoreFactory {
     /// Opens and wires the configured backend under the injected service scope.
     ///
+    /// The caller must derive a child scope; the root service context cannot be
+    /// passed directly to store composition.
+    ///
+    /// ```compile_fail,E0308
+    /// use rocketmq_runtime::RootServiceContext;
+    /// use rocketmq_store::{StoreFactory, StoreFactoryConfig};
+    ///
+    /// fn open_with_root(config: StoreFactoryConfig, root: RootServiceContext) {
+    ///     let _ = StoreFactory::open(config, root);
+    /// }
+    /// ```
+    ///
     /// # Errors
     ///
     /// Configuration has already been validated by [`StoreFactoryConfig::try_new`],
