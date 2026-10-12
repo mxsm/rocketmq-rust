@@ -2,9 +2,10 @@
 
 `rocketmq-mcp-control` is an isolated, deny-by-default server for supervised RocketMQ mutations. It is a
 standalone Cargo project and is not part of the root workspace. The reviewed `write-tools` surface contains
-exactly five typed mutation tools: Topic and Consumer Group upsert, consumer offset reset, Broker configuration
-patch, and consumer request mode. One read-only tool, `rocketmq_get_mutation_result`, reports how a caller's own
-mutation calls ended. The default build contains neither Admin Core nor production mutation tools.
+exactly nine typed mutation tools: Topic and Consumer Group upsert, consumer offset reset, Broker configuration
+patch, consumer request mode, beginning and cancelling a Proxy drain, and setting and restoring a temporary
+Broker log level. One read-only tool, `rocketmq_get_mutation_result`, reports how a caller's own mutation calls
+ended. The default build contains neither Admin Core nor production mutation tools.
 
 Read the [reviewed mutation Tool Reference](docs/tool-reference.md) before operating the server. The
 [operations runbook](docs/operations-runbook.md) covers rollout, rollback, logs and metrics, audit, and emergency
@@ -39,13 +40,13 @@ operation is registered. Resource templates and prompts remain empty.
 
 ## Feature boundary
 
-| Build | Admin dependency | Runtime policy | `tools/list` | `mutation_supported` |
+| Build | Admin dependency | Runtime policy | Mutation tools listed | `mutation_supported` |
 |---|---|---:|---:|---:|
 | default | none | off or on | 0 | false |
 | `write-tools` | mutation-only adapter | off | 0 | false |
 | `write-tools` | mutation-only adapter | on, empty allowlist | 0 | false |
 | `write-tools` | mutation-only adapter | on, one reviewed operation | 1 | true |
-| `write-tools` | mutation-only adapter | on, all reviewed operations | 5 | true |
+| `write-tools` | mutation-only adapter | on, all reviewed operations | 9 | true |
 
 The optional feature enables only `rocketmq-admin-core/mutation-client-adapter`, whose client dependency enables
 only `admin-mutation`. It does not enable read or full Admin adapters. Delete, skip, resend, CLI, shell, and
@@ -68,12 +69,18 @@ variable names for credentials. Inline credentials are rejected. Registry values
 redacted debug behavior and never enter MCP responses or audit records. Every server-allowed cluster for a
 registered operation must have a registry entry.
 
+A cluster entry may also list Proxies under `[[clusters.proxies]]`, each with a `name` and one remoting
+`endpoint`. The name is the only way a caller can refer to a Proxy: it uses the grammar of a cluster alias, is
+unique within its cluster, and is the one part of the entry that reaches a response or an audit record. A drain
+call that names an alias the cluster does not list is refused before it is recorded.
+
 [`conf/permissions.example.toml`](conf/permissions.example.toml) documents the closed operation and cluster
 claim vocabulary for an authorization server. It is an identity-provider example, not a local authorization
 bypass.
 
-The closed policy vocabulary remains `topic_upsert`, `consumer_group_upsert`,
-`consumer_offset_reset`, `broker_config_patch`, and `consumer_request_mode`. Common request arguments reject
+The closed policy vocabulary is `topic_upsert`, `consumer_group_upsert`, `consumer_offset_reset`,
+`broker_config_patch`, `consumer_request_mode`, `proxy_drain_begin`, `proxy_drain_cancel`,
+`broker_log_filter_set`, and `broker_log_filter_restore`. Common request arguments reject
 unknown fields. Omitted `dry_run` uses the configured default and omitted `confirm` is false. Dry-run requests may
 omit `reason` and `request_key`; execution requires `confirm = true` and a trimmed 5–256 byte safe reason. A
 reason contains only ASCII letters/digits, ordinary space, and `._,#-`. That exact punctuation set supports
@@ -89,16 +96,17 @@ allowed. Safe examples
 include `CHG-1234 increase queue count` and `ticket INC_42, increase queue count`. A request key is optional and,
 when present, is a bounded safe identifier.
 
-The upsert tools accept 1–64 unique logical broker names. All five tools validate the complete selected cluster
+The upsert tools accept 1–64 unique logical broker names. All nine tools validate the complete selected cluster
 membership, embedded broker identity, master presence, and endpoint uniqueness before reading target state.
-Offset and request-mode operations use every validated master; Broker patch uses exactly one named master.
+Offset and request-mode operations use every validated master; Broker patch and the Broker log filter use
+exactly one named master, and a Proxy drain uses exactly one configured Proxy.
 Requests use closed typed fields and bounds. The Consumer Group validator reuses Admin Core's
 single canonical protected-group classifier, including RocketMQ defaults, tools/scheduler/filter/monitor groups,
 ONS groups, transaction/system prefixes, and the heartbeat syncer group. System names, addresses, inline
 secrets, and unknown fields are rejected before audit or session creation; Admin constructors repeat the same
 check as defense in depth.
 
-Each result uses `rocketmq-mcp-mutation.v1`, returns one of the five closed operations, and has an
+Each result uses `rocketmq-mcp-mutation.v1`, returns one of the nine closed operations, and has an
 operation-specific logical top-level `target`.
 Top-level `before`, `requested`, and post-read `after` preserve the complete aggregate state; broker-sorted
 `targets` retain per-target persistence, verification, and failure evidence rather than replacing that aggregate
@@ -121,6 +129,13 @@ memory of the 2,048 newest invocations that is rebuilt from the active audit seg
 `rocketmq:write` scope and the cluster but no operation, stays available when `mutations_enabled = false`,
 opens no Admin session, and writes no audit record. Lookups have a per-principal budget of their own, sized by
 `limits.dry_runs_per_minute`.
+
+A Proxy drain and a temporary Broker log level are operation-bound: the caller chooses an `operation_id` when
+it starts the state, and only a call with the same identifier ends it. The server reads the target before every
+write and never replaces a state that another identifier holds; it reports that as a conflict, and shows the
+holder only as `none`, `this_operation`, or `other_operation`. A log level override covers one
+`rocketmq_broker::` logger at `INFO` or `DEBUG` for 60 to 900 seconds, after which the Broker ends it by itself.
+An `operation_id` is never returned, logged, or stored; the audit record covers it with the request digest.
 
 Targeted Topic upserts never update or delete the NameServer-wide order-Topic KV. Before any broker state read,
 the server reads and strictly parses the complete KV: selected ordered entries must already equal the requested
@@ -150,8 +165,8 @@ without adding an MCP audit tool. A bounded memory sink supports deterministic t
 cluster alias, validated OAuth subject as `operator`, optional validated request `reason`,
 `dry_run|execute` mode, closed `started|planned|applied|partial|conflict|failed` result, terminal error code, and
 terminal monotonic duration. Version 3 adds the object and the outcome of the mutation: the validated logical
-`target` names, SHA-256 digests of the requested state, the request key and the pre-change state, whether a
-target was written, and per-target result counts. Operator and reason are a durable-audit-only exception: they
+`target` names, a Proxy alias included, SHA-256 digests of the requested state, the request key and the
+pre-change state, whether a target was written, and per-target result counts. Operator and reason are a durable-audit-only exception: they
 never enter MCP responses, error envelopes, tracing, or ordinary logs. Audit records never contain the requested
 values, tokens, credentials, network addresses, request keys, message bodies, endpoints, or raw backend errors.
 

@@ -10,5 +10,9 @@ rocketmq_operations = [
   "consumer_offset_reset",
   "broker_config_patch",
   "consumer_request_mode",
+  "proxy_drain_begin",
+  "proxy_drain_cancel",
+  "broker_log_filter_set",
+  "broker_log_filter_restore",
 ]
 rocketmq_clusters = ["production-a"]

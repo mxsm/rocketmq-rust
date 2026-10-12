@@ -37,6 +37,10 @@ pub enum ControlOperation {
     ConsumerOffsetReset,
     BrokerConfigPatch,
     ConsumerRequestMode,
+    ProxyDrainBegin,
+    ProxyDrainCancel,
+    BrokerLogFilterSet,
+    BrokerLogFilterRestore,
 }
 
 impl ControlOperation {
@@ -47,6 +51,10 @@ impl ControlOperation {
             Self::ConsumerOffsetReset => "consumer_offset_reset",
             Self::BrokerConfigPatch => "broker_config_patch",
             Self::ConsumerRequestMode => "consumer_request_mode",
+            Self::ProxyDrainBegin => "proxy_drain_begin",
+            Self::ProxyDrainCancel => "proxy_drain_cancel",
+            Self::BrokerLogFilterSet => "broker_log_filter_set",
+            Self::BrokerLogFilterRestore => "broker_log_filter_restore",
         }
     }
 }
@@ -61,6 +69,10 @@ impl FromStr for ControlOperation {
             "consumer_offset_reset" => Ok(Self::ConsumerOffsetReset),
             "broker_config_patch" => Ok(Self::BrokerConfigPatch),
             "consumer_request_mode" => Ok(Self::ConsumerRequestMode),
+            "proxy_drain_begin" => Ok(Self::ProxyDrainBegin),
+            "proxy_drain_cancel" => Ok(Self::ProxyDrainCancel),
+            "broker_log_filter_set" => Ok(Self::BrokerLogFilterSet),
+            "broker_log_filter_restore" => Ok(Self::BrokerLogFilterRestore),
             _ => Err(ControlError::permission_denied()),
         }
     }
@@ -947,13 +959,20 @@ mod tests {
             "consumer_offset_reset",
             "broker_config_patch",
             "consumer_request_mode",
+            "proxy_drain_begin",
+            "proxy_drain_cancel",
+            "broker_log_filter_set",
+            "broker_log_filter_restore",
         ] {
-            assert!(ControlOperation::from_str(operation).is_ok());
+            let parsed = ControlOperation::from_str(operation).unwrap();
+            assert_eq!(parsed.as_str(), operation);
         }
         for rejected in [
             "skip_accumulated_messages",
             "resend_dead_letter_message",
             "free_form_rpc",
+            "proxy_drain",
+            "broker_log_filter",
         ] {
             assert!(ControlOperation::from_str(rejected).is_err());
         }

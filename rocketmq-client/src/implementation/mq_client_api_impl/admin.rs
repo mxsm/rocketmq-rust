@@ -2915,7 +2915,8 @@ impl MQClientAPIImpl {
 }
 
 impl MQClientAPIImpl {
-    #[cfg(feature = "admin-read")]
+    // The mutation capability reads the state it is about to change and verifies it afterwards.
+    #[cfg(any(feature = "admin-read", feature = "admin-mutation"))]
     pub(crate) async fn get_proxy_drain_state(
         &self,
         addr: &CheetahString,

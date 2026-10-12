@@ -22,8 +22,10 @@ The example intentionally leaves `mutations_enabled = false` and both allowlists
 private logical cluster registry whose credential values come only from environment variables. The default
 build never links Admin Core. To make reviewed tools discoverable, compile with `--features write-tools`, enable
 the runtime policy, and intersect the required subset of `topic_upsert`, `consumer_group_upsert`,
-`consumer_offset_reset`, `broker_config_patch`, and `consumer_request_mode` plus the logical cluster in both the
-server policy and authenticated claims. Delete, skip, resend, and free-form operations remain unavailable.
+`consumer_offset_reset`, `broker_config_patch`, `consumer_request_mode`, `proxy_drain_begin`,
+`proxy_drain_cancel`, `broker_log_filter_set`, and `broker_log_filter_restore` plus the logical cluster in both
+the server policy and authenticated claims. The example also lists one Proxy under `[[clusters.proxies]]`; a
+drain can name only such an alias. Delete, skip, resend, and free-form operations remain unavailable.
 
 [`stage-c-dry-run-requests.json`](stage-c-dry-run-requests.json) contains closed, safe dry-run argument examples
 for the three Stage C tools. Send one named object's value as the MCP tool arguments; do not send the enclosing

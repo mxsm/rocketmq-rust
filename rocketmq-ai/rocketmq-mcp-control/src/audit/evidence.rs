@@ -29,6 +29,7 @@ use sha2::Sha256;
 
 use crate::error::ControlError;
 use crate::model::ControlOperation;
+use crate::tools::validate_alias;
 use crate::tools::validate_user_name;
 use crate::tools::NameKind;
 
@@ -48,12 +49,15 @@ pub struct AuditTarget {
     pub topic: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub consumer_group: Option<String>,
-    /// The one Broker of a Broker configuration patch.
+    /// The one Broker of a Broker configuration patch or of a temporary log filter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub broker: Option<String>,
     /// The Brokers selected by a Topic or Consumer Group upsert.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brokers: Option<AuditBrokerSet>,
+    /// The Proxy of a drain, by the alias the server configuration gives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<String>,
 }
 
 impl std::fmt::Debug for AuditTarget {
@@ -65,6 +69,7 @@ impl std::fmt::Debug for AuditTarget {
             .field("consumer_group_recorded", &self.consumer_group.is_some())
             .field("broker_recorded", &self.broker.is_some())
             .field("broker_count", &self.brokers.as_ref().map(|brokers| brokers.count))
+            .field("proxy_recorded", &self.proxy.is_some())
             .finish()
     }
 }
@@ -188,8 +193,14 @@ impl AuditSubject {
                 consumer_group: name("orders_consumers"),
                 ..AuditTarget::default()
             },
-            ControlOperation::BrokerConfigPatch => AuditTarget {
+            ControlOperation::BrokerConfigPatch
+            | ControlOperation::BrokerLogFilterSet
+            | ControlOperation::BrokerLogFilterRestore => AuditTarget {
                 broker: name("broker-a"),
+                ..AuditTarget::default()
+            },
+            ControlOperation::ProxyDrainBegin | ControlOperation::ProxyDrainCancel => AuditTarget {
+                proxy: name("proxy-a"),
                 ..AuditTarget::default()
             },
         };
@@ -219,23 +230,39 @@ pub(super) fn validate_subject(
                 && brokers
                 && target.consumer_group.is_none()
                 && target.broker.is_none()
+                && target.proxy.is_none()
         }
         ControlOperation::ConsumerGroupUpsert => {
             name(&target.consumer_group, NameKind::ConsumerGroup)
                 && brokers
                 && target.topic.is_none()
                 && target.broker.is_none()
+                && target.proxy.is_none()
         }
         ControlOperation::ConsumerOffsetReset | ControlOperation::ConsumerRequestMode => {
             name(&target.topic, NameKind::Topic)
                 && name(&target.consumer_group, NameKind::ConsumerGroup)
                 && target.broker.is_none()
                 && target.brokers.is_none()
+                && target.proxy.is_none()
         }
-        ControlOperation::BrokerConfigPatch => {
+        ControlOperation::BrokerConfigPatch
+        | ControlOperation::BrokerLogFilterSet
+        | ControlOperation::BrokerLogFilterRestore => {
             name(&target.broker, NameKind::Broker)
                 && target.topic.is_none()
                 && target.consumer_group.is_none()
+                && target.brokers.is_none()
+                && target.proxy.is_none()
+        }
+        ControlOperation::ProxyDrainBegin | ControlOperation::ProxyDrainCancel => {
+            target
+                .proxy
+                .as_deref()
+                .is_some_and(|alias| validate_alias(alias).is_ok())
+                && target.topic.is_none()
+                && target.consumer_group.is_none()
+                && target.broker.is_none()
                 && target.brokers.is_none()
         }
     };
@@ -430,18 +457,26 @@ mod tests {
             broker: Some("broker-a".to_owned()),
             ..AuditTarget::default()
         };
+        let proxy = AuditTarget {
+            proxy: Some("proxy-a".to_owned()),
+            ..AuditTarget::default()
+        };
         let accepted = [
             (ControlOperation::TopicUpsert, &topic),
             (ControlOperation::ConsumerGroupUpsert, &group),
             (ControlOperation::ConsumerOffsetReset, &pair),
             (ControlOperation::ConsumerRequestMode, &pair),
             (ControlOperation::BrokerConfigPatch, &broker),
+            (ControlOperation::BrokerLogFilterSet, &broker),
+            (ControlOperation::BrokerLogFilterRestore, &broker),
+            (ControlOperation::ProxyDrainBegin, &proxy),
+            (ControlOperation::ProxyDrainCancel, &proxy),
         ];
         for (operation, target) in accepted {
             assert!(AuditSubject::try_new(operation, target.clone(), digest("requested"), Some(digest("key"))).is_ok());
             assert!(AuditSubject::try_new(operation, target.clone(), digest("requested"), None).is_ok());
             // Every other shape belongs to a different operation.
-            for other in [&topic, &group, &pair, &broker] {
+            for other in [&topic, &group, &pair, &broker, &proxy] {
                 if other != target {
                     let rejected = AuditSubject::try_new(operation, other.clone(), digest("requested"), None);
                     assert_eq!(rejected.err(), Some(ControlError::audit_unavailable()));
@@ -462,7 +497,27 @@ mod tests {
                 AuditSubject::try_new(ControlOperation::BrokerConfigPatch, target, digest("requested"), None).is_err()
             );
         }
-        let rendered = format!("{topic:?}");
-        assert!(!rendered.contains("orders") && !rendered.contains("broker-a"));
+        // An alias has no dots or colons, so a Proxy is never recorded by an address or a host name.
+        for unsafe_alias in ["10.0.0.7", "proxy-a.example.test", "proxy-a:8080", "proxy a", ""] {
+            let target = AuditTarget {
+                proxy: Some(unsafe_alias.to_owned()),
+                ..AuditTarget::default()
+            };
+            assert!(
+                AuditSubject::try_new(ControlOperation::ProxyDrainBegin, target, digest("requested"), None).is_err()
+            );
+        }
+        // A Proxy and a Broker are different objects: neither record names both.
+        let both = AuditTarget {
+            broker: Some("broker-a".to_owned()),
+            proxy: Some("proxy-a".to_owned()),
+            ..AuditTarget::default()
+        };
+        for operation in [ControlOperation::ProxyDrainCancel, ControlOperation::BrokerLogFilterSet] {
+            assert!(AuditSubject::try_new(operation, both.clone(), digest("requested"), None).is_err());
+        }
+        for rendered in [format!("{topic:?}"), format!("{proxy:?}")] {
+            assert!(!rendered.contains("orders") && !rendered.contains("broker-a") && !rendered.contains("proxy-a"));
+        }
     }
 }

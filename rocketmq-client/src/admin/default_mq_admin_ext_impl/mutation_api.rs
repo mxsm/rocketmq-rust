@@ -64,6 +64,7 @@ use crate::admin::mq_admin_mutation_ext::ConsumerOffsetTargetReport;
 use crate::admin::mq_admin_mutation_ext::MQAdminMutationExt;
 use crate::admin::mq_admin_mutation_ext::MessageRequestModeCasReport;
 use crate::admin::mq_admin_mutation_ext::MetadataCasReport;
+use crate::admin::mq_admin_mutation_ext::MutationBrokerLogFilterStatus;
 use crate::admin::mq_admin_mutation_ext::MutationConsumerOffsetPreview;
 use crate::admin::mq_admin_mutation_ext::MutationExpectedMessageRequestMode;
 use crate::admin::mq_admin_mutation_ext::MutationExpectedState;
@@ -540,6 +541,15 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
             .await
     }
 
+    async fn mutation_proxy_drain_state(
+        &self,
+        proxy_addr: CheetahString,
+    ) -> crate::ClientResult<ProxyDrainStateResponseBody> {
+        self.mq_client_api()?
+            .get_proxy_drain_state(&proxy_addr, self.remoting_timeout_millis()?)
+            .await
+    }
+
     async fn broker_config_generation(&self, broker_addr: CheetahString) -> crate::ClientResult<u64> {
         let runtime = self
             .mq_client_api()?
@@ -928,6 +938,17 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         self.mq_client_api()?
             .update_broker_config(&broker_addr, properties, self.remoting_timeout_millis()?)
             .await
+    }
+
+    async fn mutation_broker_log_filter_status(
+        &self,
+        broker_addr: CheetahString,
+    ) -> crate::ClientResult<MutationBrokerLogFilterStatus> {
+        let runtime = self
+            .mq_client_api()?
+            .get_broker_runtime_info(&broker_addr, self.remoting_timeout_millis()?)
+            .await?;
+        Ok(log_filter::status_from_runtime(&runtime.table))
     }
 
     async fn upsert_topic_config(&self, broker_addr: CheetahString, config: TopicConfig) -> crate::ClientResult<()> {

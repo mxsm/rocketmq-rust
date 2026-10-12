@@ -15,7 +15,10 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use rocketmq_admin_core::core::supervised_operation as operation;
+
 use super::*;
+use crate::tool_runtime::remaining::Planned;
 
 #[derive(Default)]
 struct Evidence {
@@ -26,6 +29,7 @@ struct Evidence {
     request_mode_verification_failure: AtomicBool,
     request_mode_mixed_postread: AtomicBool,
     request_mode_timeout: AtomicU64,
+    proxy_endpoints: std::sync::Mutex<Vec<String>>,
     shutdowns: AtomicUsize,
 }
 
@@ -347,6 +351,53 @@ impl SupervisedMutationBackend for ProductionPathBackend {
     fn shutdown(&mut self) -> RuntimeFuture<'_, Result<(), ControlError>> {
         self.evidence.shutdowns.fetch_add(1, Ordering::SeqCst);
         Box::pin(async { Ok(()) })
+    }
+}
+
+/// The operation-bound part only records which endpoint a drain was resolved to.
+impl OperationBackend for ProductionPathBackend {
+    type ProxyDrainPlan = ();
+    type LogFilterPlan = ();
+
+    fn preflight_proxy_drain<'a>(
+        &'a mut self,
+        request: &'a operation::ProxyDrainPreflightRequest,
+    ) -> RuntimeFuture<'a, Result<Self::ProxyDrainPlan, ControlError>> {
+        self.evidence
+            .proxy_endpoints
+            .lock()
+            .unwrap()
+            .push(request.proxy_addr.clone());
+        unused()
+    }
+
+    fn planned_proxy_drain(_plan: &Self::ProxyDrainPlan) -> Planned<operation::ProxyDrainObservation> {
+        unreachable!("no drain plan is ever made")
+    }
+
+    fn execute_proxy_drain<'a>(
+        &'a mut self,
+        _plan: &'a Self::ProxyDrainPlan,
+    ) -> RuntimeFuture<'a, Result<operation::ProxyDrainReport, ControlError>> {
+        unused()
+    }
+
+    fn preflight_log_filter<'a>(
+        &'a mut self,
+        _request: &'a operation::BrokerLogFilterPreflightRequest,
+    ) -> RuntimeFuture<'a, Result<Self::LogFilterPlan, ControlError>> {
+        unused()
+    }
+
+    fn planned_log_filter(_plan: &Self::LogFilterPlan) -> Planned<operation::BrokerLogFilterObservation> {
+        unreachable!("no log-filter plan is ever made")
+    }
+
+    fn execute_log_filter<'a>(
+        &'a mut self,
+        _plan: &'a Self::LogFilterPlan,
+    ) -> RuntimeFuture<'a, Result<operation::BrokerLogFilterReport, ControlError>> {
+        unused()
     }
 }
 
@@ -710,4 +761,49 @@ async fn production_session_dry_runs_all_stage_c_operations_without_execute() {
 
     session.shutdown().await.expect("session shutdown");
     assert_eq!(evidence.shutdowns.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn unknown_proxy_alias_is_rejected_without_any_rpc() {
+    let evidence = Arc::new(Evidence::default());
+    let mut session = AdminMutationToolSession::new(ProductionPathBackend {
+        evidence: Arc::clone(&evidence),
+    })
+    .with_proxies(BTreeMap::from([("proxy-a".to_owned(), "192.0.2.7:8080".to_owned())]));
+    let drain = |proxy_name: &str| tools::ProxyDrainArgs {
+        schema_version: crate::model::MUTATION_ARGUMENTS_SCHEMA_VERSION.to_owned(),
+        cluster: "cluster-a".to_owned(),
+        proxy_name: proxy_name.to_owned(),
+        operation_id: "drain-0001".to_owned(),
+        dry_run: true,
+        confirm: false,
+        reason: None,
+        request_key: None,
+    };
+
+    // Nothing stands in for an alias the cluster does not configure: not a default Proxy, and
+    // not the alias read as an address.
+    for unknown in ["proxy-b", "PROXY-A", "192.0.2.7:8080"] {
+        for request in [
+            MutationToolRequest::ProxyDrainBegin(drain(unknown)),
+            MutationToolRequest::ProxyDrainCancel(drain(unknown)),
+        ] {
+            assert_eq!(
+                session.run(request).await.unwrap_err(),
+                ControlError::invalid_argument(),
+                "{unknown}"
+            );
+        }
+    }
+    assert!(evidence.proxy_endpoints.lock().unwrap().is_empty());
+
+    // A configured alias reaches the backend with the endpoint of its own cluster entry.
+    assert_eq!(
+        session
+            .run(MutationToolRequest::ProxyDrainBegin(drain("proxy-a")))
+            .await
+            .unwrap_err(),
+        ControlError::operation_unavailable()
+    );
+    assert_eq!(*evidence.proxy_endpoints.lock().unwrap(), ["192.0.2.7:8080"]);
 }

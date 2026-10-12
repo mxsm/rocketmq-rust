@@ -1786,6 +1786,15 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use crate::admin::MutationBrokerLogFilterStatus",
+          "identity": "rocketmq-client/src/public_api.rs:pub use crate::admin::MutationBrokerLogFilterStatus",
+          "owner": "client",
+          "path": "rocketmq-client/src/public_api.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use crate::admin::MutationConsumerOffsetPreview",
           "identity": "rocketmq-client/src/public_api.rs:pub use crate::admin::MutationConsumerOffsetPreview",
           "owner": "client",
@@ -2280,7 +2289,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 253
+      "maximum_exports": 254
     },
     "rocketmq-model": {
       "entries": [

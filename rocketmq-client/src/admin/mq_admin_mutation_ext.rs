@@ -181,6 +181,24 @@ pub struct BrokerMutationConfigState {
     pub trace_topic_enable: bool,
 }
 
+/// Broker log-filter control status allowed into mutation preflight.
+///
+/// The operation identifiers are whatever the callers of the Broker chose;
+/// a consumer must not publish one it did not issue itself.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MutationBrokerLogFilterStatus {
+    /// Whether the Broker reports the bounded log-filter control.
+    pub supported: bool,
+    /// Filter directives in effect, as the Broker reports them.
+    pub effective_filter: Option<String>,
+    /// Operation that owns the active override, when one is active.
+    pub active_operation_id: Option<String>,
+    /// Operation whose override ended last.
+    pub last_completed_operation_id: Option<String>,
+    /// When the active override expires on its own.
+    pub expires_at_millis: Option<u64>,
+}
+
 /// Exact conditional consumer-offset update result.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ConsumerOffsetCasResult {
@@ -290,6 +308,21 @@ pub trait MQAdminMutationExt: Send {
         proxy_addr: CheetahString,
         operation_id: CheetahString,
     ) -> crate::ClientResult<ProxyDrainStateResponseBody>;
+
+    /// Reads one Proxy's drain state for a supervised precheck or
+    /// postcondition.
+    ///
+    /// The default deliberately fails closed so existing trait implementers
+    /// remain source compatible.
+    async fn mutation_proxy_drain_state(
+        &self,
+        proxy_addr: CheetahString,
+    ) -> crate::ClientResult<ProxyDrainStateResponseBody> {
+        let _ = proxy_addr;
+        Err(crate::ClientError::illegal_argument(
+            "Proxy drain state preflight is not implemented by this admin client",
+        ))
+    }
 
     /// Reads the broker configuration generation used by supervised prechecks.
     async fn broker_config_generation(&self, broker_addr: CheetahString) -> crate::ClientResult<u64>;
@@ -549,6 +582,21 @@ pub trait MQAdminMutationExt: Send {
         ))
     }
 
+    /// Reads one Broker's log-filter control status for a supervised
+    /// precheck or postcondition.
+    ///
+    /// The default deliberately fails closed so existing trait implementers
+    /// remain source compatible.
+    async fn mutation_broker_log_filter_status(
+        &self,
+        broker_addr: CheetahString,
+    ) -> crate::ClientResult<MutationBrokerLogFilterStatus> {
+        let _ = broker_addr;
+        Err(crate::ClientError::illegal_argument(
+            "broker log-filter status preflight is not implemented by this admin client",
+        ))
+    }
+
     async fn upsert_topic_config(&self, broker_addr: CheetahString, config: TopicConfig) -> crate::ClientResult<()>;
 
     async fn remove_topic(&self, topic_name: CheetahString, cluster_name: CheetahString) -> crate::ClientResult<()>;
@@ -750,6 +798,13 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
         operation_id: CheetahString,
     ) -> crate::ClientResult<ProxyDrainStateResponseBody> {
         MQAdminMutationExt::cancel_proxy_drain(self.inner(), proxy_addr, operation_id).await
+    }
+
+    async fn mutation_proxy_drain_state(
+        &self,
+        proxy_addr: CheetahString,
+    ) -> crate::ClientResult<ProxyDrainStateResponseBody> {
+        MQAdminMutationExt::mutation_proxy_drain_state(self.inner(), proxy_addr).await
     }
 
     async fn broker_config_generation(&self, broker_addr: CheetahString) -> crate::ClientResult<u64> {
@@ -984,6 +1039,13 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
         operation_id: CheetahString,
     ) -> crate::ClientResult<()> {
         MQAdminMutationExt::restore_broker_log_filter(self.inner(), broker_addr, operation_id).await
+    }
+
+    async fn mutation_broker_log_filter_status(
+        &self,
+        broker_addr: CheetahString,
+    ) -> crate::ClientResult<MutationBrokerLogFilterStatus> {
+        MQAdminMutationExt::mutation_broker_log_filter_status(self.inner(), broker_addr).await
     }
 
     async fn upsert_topic_config(&self, broker_addr: CheetahString, config: TopicConfig) -> crate::ClientResult<()> {
