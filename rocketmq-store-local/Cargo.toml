@@ -63,7 +63,6 @@ loom = "=0.7.2"
 serde_json.workspace = true
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["test-util"] }
-trybuild = "1.0.116"
 
 [[bench]]
 name = "commitlog_micro_batch"

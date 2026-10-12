@@ -4839,7 +4839,6 @@ dependencies = [
  "tokio-uring",
  "tokio-util",
  "tracing",
- "trybuild",
  "windows",
 ]
 
