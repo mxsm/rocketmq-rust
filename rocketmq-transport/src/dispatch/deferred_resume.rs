@@ -657,7 +657,7 @@ where
         drop(resume);
         return result;
     }
-    enum HandlerOutcome<T> {
+    enum ResumeHandlerCompletion<T> {
         Completed(Result<T, rocketmq_error::SharedError>),
         Stopped(ResumeResult),
     }
@@ -668,7 +668,7 @@ where
     tokio::pin!(handler_future);
     let outcome = tokio::select! {
         biased;
-        stop = stop_view.wait_before_write() => HandlerOutcome::Stopped(finish_lifecycle(
+        stop = stop_view.wait_before_write() => ResumeHandlerCompletion::Stopped(finish_lifecycle(
             id,
             request_id,
             responder.take().expect("stopped handler responder"),
@@ -678,7 +678,7 @@ where
         )),
         result = &mut handler_future => {
             match stop_view.current_before_write() {
-                Some(stop) => HandlerOutcome::Stopped(finish_lifecycle(
+                Some(stop) => ResumeHandlerCompletion::Stopped(finish_lifecycle(
                     id,
                     request_id,
                     responder.take().expect("post-handler responder"),
@@ -686,13 +686,13 @@ where
                     stop,
                     None,
                 )),
-                None => HandlerOutcome::Completed(result),
+                None => ResumeHandlerCompletion::Completed(result),
             }
         },
     };
     let result = match outcome {
-        HandlerOutcome::Stopped(result) => result,
-        HandlerOutcome::Completed(Ok(response)) => {
+        ResumeHandlerCompletion::Stopped(result) => result,
+        ResumeHandlerCompletion::Completed(Ok(response)) => {
             if let Some(stop) = stop_view.current_before_write() {
                 return finish_lifecycle(
                     id,
@@ -715,7 +715,7 @@ where
             drop(marker.take());
             result
         }
-        HandlerOutcome::Completed(Err(error)) => {
+        ResumeHandlerCompletion::Completed(Err(error)) => {
             let context = error.context();
             let view = rocketmq_error::PublicErrorView::try_new(error.descriptor(), context)
                 .unwrap_or_else(|_| rocketmq_error::PublicErrorView::descriptor_only(error.descriptor()));
