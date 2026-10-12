@@ -2421,8 +2421,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use common::pop_retry_policy::PopRetryPolicyOutcome",
-          "identity": "rocketmq-model/src/lib.rs:pub use common::pop_retry_policy::PopRetryPolicyOutcome",
+          "declaration": "pub use common::pop_retry_policy::PopRetryPolicyTransitionDecision",
+          "identity": "rocketmq-model/src/lib.rs:pub use common::pop_retry_policy::PopRetryPolicyTransitionDecision",
           "owner": "model",
           "path": "rocketmq-model/src/lib.rs",
           "rationale": "deliberate root entry point",
