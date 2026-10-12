@@ -64,8 +64,8 @@ use crate::error_helpers::rpc_request_failed;
 use crate::error_helpers::rpc_request_unsupported;
 use crate::error_helpers::rpc_response_failed;
 use crate::request_outcome::OutboundRequestContractReason;
-use crate::request_outcome::OutboundRequestOutcome;
 use crate::request_outcome::OutboundRequestRejectionReason;
+use crate::request_outcome::OutboundRequestResult;
 use crate::request_processor::default_request_processor::DefaultRequestProcessor;
 use crate::rpc::client_metadata::ClientMetadata;
 use crate::rpc::rpc_client::RpcClient;
@@ -100,11 +100,11 @@ impl ResponseConfig {
 }
 
 fn rpc_request_response(
-    result: Result<OutboundRequestOutcome, crate::error::TransportError>,
+    result: Result<OutboundRequestResult, crate::error::TransportError>,
 ) -> Result<RemotingCommand, rocketmq_error::SharedError> {
     match result {
-        Ok(OutboundRequestOutcome::Response(response)) => Ok(response),
-        Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+        Ok(OutboundRequestResult::Response(response)) => Ok(response),
+        Ok(OutboundRequestResult::Rejected(rejection)) => {
             let error = match rejection.reason() {
                 OutboundRequestRejectionReason::DeadlineExpired => {
                     rocketmq_error::Error::new(&rocketmq_error::CORE_OPERATION_TIMED_OUT).with_context(
@@ -130,7 +130,7 @@ fn rpc_request_response(
             };
             Err(Arc::new(error))
         }
-        Ok(OutboundRequestOutcome::Contract(contract)) => {
+        Ok(OutboundRequestResult::Contract(contract)) => {
             let descriptor = match contract.reason() {
                 OutboundRequestContractReason::NameServerEndpointMissing => {
                     &rocketmq_error::TRANSPORT_CONNECTION_FAILED

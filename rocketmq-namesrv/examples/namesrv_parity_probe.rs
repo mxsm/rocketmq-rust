@@ -35,7 +35,7 @@ use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_transport::api::DefaultRequestProcessor;
-use rocketmq_transport::api::OutboundRequestOutcome;
+use rocketmq_transport::api::OutboundRequestResult;
 use rocketmq_transport::api::TransportClient;
 use rocketmq_transport::api::TransportClientConfig;
 
@@ -178,11 +178,11 @@ async fn expect_success(
         .await
         .with_context(|| format!("{step} request failed"))?;
     let response = match outcome {
-        OutboundRequestOutcome::Response(response) => response,
-        OutboundRequestOutcome::Rejected(rejection) => {
+        OutboundRequestResult::Response(response) => response,
+        OutboundRequestResult::Rejected(rejection) => {
             bail!("{step} request was rejected: {rejection:?}")
         }
-        OutboundRequestOutcome::Contract(contract) => {
+        OutboundRequestResult::Contract(contract) => {
             bail!("{step} request contract failed: {contract:?}")
         }
     };
@@ -209,11 +209,11 @@ async fn expect_route(
         .await
         .with_context(|| format!("{step} request failed"))?;
     let response = match outcome {
-        OutboundRequestOutcome::Response(response) => response,
-        OutboundRequestOutcome::Rejected(rejection) => {
+        OutboundRequestResult::Response(response) => response,
+        OutboundRequestResult::Rejected(rejection) => {
             bail!("{step} request was rejected: {rejection:?}")
         }
-        OutboundRequestOutcome::Contract(contract) => {
+        OutboundRequestResult::Contract(contract) => {
             bail!("{step} request contract failed: {contract:?}")
         }
     };

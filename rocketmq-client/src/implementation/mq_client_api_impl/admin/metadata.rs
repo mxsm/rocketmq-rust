@@ -249,14 +249,14 @@ impl MetadataRead {
         let remaining = metadata_remaining_timeout(self.started, self.timeout_millis, self.kind.operation())?;
         let outcome = api.remoting_client.invoke_request(Some(addr), request, remaining).await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(admin_request_error(
                     self.kind.transport_operation(),
                     RetryInput::Rejected(rejection),
                 ));
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(admin_request_error(
                     self.kind.transport_operation(),
                     RetryInput::Contract(contract),
