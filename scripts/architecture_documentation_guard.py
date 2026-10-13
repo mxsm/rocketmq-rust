@@ -282,8 +282,8 @@ def validate_schema(policy: dict[str, Any]) -> list[Finding]:
     if set(policy) != required or policy.get("schema_version") != 1:
         findings.append(Finding("policy-schema", normalized(POLICY_RELATIVE), "unexpected top-level schema"))
     standalone = policy.get("standalone", [])
-    if not isinstance(standalone, list) or len(standalone) != 7:
-        findings.append(Finding("standalone-count", normalized(POLICY_RELATIVE), "exactly seven Cargo roots required"))
+    if not isinstance(standalone, list) or len(standalone) != 8:
+        findings.append(Finding("standalone-count", normalized(POLICY_RELATIVE), "exactly eight Cargo roots required"))
     return findings
 
 

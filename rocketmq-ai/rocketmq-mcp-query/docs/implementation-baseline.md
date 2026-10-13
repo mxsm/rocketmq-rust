@@ -1,5 +1,9 @@
 # RocketMQ MCP implementation baseline
 
+The query implementation now lives in `rocketmq-ai/rocketmq-mcp-query`; `rocketmq-mcp` is its
+feature-composed entrypoint. Historical commands and validation results below retain their original
+package and directory names. Run new query implementation checks from the query crate.
+
 This document freezes the checked-in MCP surface and records the validation evidence for the current revision.
 It describes implemented behavior; it does not certify a live RocketMQ deployment.
 

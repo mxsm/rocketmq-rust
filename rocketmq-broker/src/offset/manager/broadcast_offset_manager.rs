@@ -32,7 +32,7 @@ type IsClientOnline = Arc<dyn Fn(&str, &str) -> bool + Send + Sync>;
 type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
 
 #[derive(Clone)]
-struct BroadcastOffsetPorts {
+struct BroadcastOffsetCallbacks {
     query_persisted: QueryPersistedOffset,
     commit_persisted: CommitPersistedOffset,
     query_initial: QueryInitialOffset,
@@ -40,7 +40,7 @@ struct BroadcastOffsetPorts {
     now_millis: Clock,
 }
 
-impl Default for BroadcastOffsetPorts {
+impl Default for BroadcastOffsetCallbacks {
     fn default() -> Self {
         Self {
             query_persisted: Arc::new(|_, _, _| -1),
@@ -103,7 +103,7 @@ struct BroadcastOffsetState {
 #[derive(Clone)]
 pub struct BroadcastOffsetManager {
     state: Arc<Mutex<BroadcastOffsetState>>,
-    ports: BroadcastOffsetPorts,
+    callbacks: BroadcastOffsetCallbacks,
     offline_expiry: Duration,
     online_expiry: Duration,
 }
@@ -122,7 +122,7 @@ impl Default for BroadcastOffsetManager {
     fn default() -> Self {
         Self {
             state: Arc::new(Mutex::new(BroadcastOffsetState::default())),
-            ports: BroadcastOffsetPorts::default(),
+            callbacks: BroadcastOffsetCallbacks::default(),
             offline_expiry: DEFAULT_OFFLINE_EXPIRY,
             online_expiry: DEFAULT_ONLINE_EXPIRY,
         }
@@ -137,7 +137,7 @@ impl BroadcastOffsetManager {
         is_client_online: impl Fn(&str, &str) -> bool + Send + Sync + 'static,
     ) -> Self {
         Self {
-            ports: BroadcastOffsetPorts {
+            callbacks: BroadcastOffsetCallbacks {
                 query_persisted: Arc::new(query_persisted),
                 commit_persisted: Arc::new(commit_persisted),
                 query_initial: Arc::new(query_initial),
@@ -162,7 +162,7 @@ impl BroadcastOffsetManager {
         from_proxy: bool,
     ) -> i64 {
         let key = build_key(topic, group_id);
-        let now = (self.ports.now_millis)();
+        let now = (self.callbacks.now_millis)();
         let mut state = self.state.lock();
         let Some(data) = state.offsets.get_mut(&key) else {
             drop(state);
@@ -195,7 +195,7 @@ impl BroadcastOffsetManager {
         client_id: &str,
         from_proxy: bool,
     ) {
-        let now = (self.ports.now_millis)();
+        let now = (self.callbacks.now_millis)();
         let mut state = self.state.lock();
         let data = state
             .offsets
@@ -208,7 +208,7 @@ impl BroadcastOffsetManager {
     }
 
     pub(crate) fn scan_offset_data(&self) {
-        let now = (self.ports.now_millis)();
+        let now = (self.callbacks.now_millis)();
         let offline_expiry = self.offline_expiry.as_millis() as u64;
         let online_expiry = self.online_expiry.as_millis() as u64;
         let mut commits = Vec::new();
@@ -218,7 +218,7 @@ impl BroadcastOffsetManager {
                 let mut queue_min_offsets = HashMap::<i32, i64>::new();
                 data.clients.retain(|client_id, offset_store| {
                     let elapsed = now.saturating_sub(offset_store.timestamp);
-                    let online = (self.ports.is_client_online)(&data.group, client_id);
+                    let online = (self.callbacks.is_client_online)(&data.group, client_id);
                     let include = online || elapsed < offline_expiry;
                     if include {
                         for (queue_id, offset) in &offset_store.queue_offsets {
@@ -243,7 +243,7 @@ impl BroadcastOffsetManager {
             });
         }
         for (topic, group, queue_id, offset) in commits {
-            (self.ports.commit_persisted)(&topic, &group, queue_id, offset);
+            (self.callbacks.commit_persisted)(&topic, &group, queue_id, offset);
         }
     }
 
@@ -255,11 +255,11 @@ impl BroadcastOffsetManager {
         if let Some(offset) = client_offset.filter(|offset| *offset >= 0) {
             return offset;
         }
-        let persisted = (self.ports.query_persisted)(topic, &broadcast_group_id(group), queue_id);
+        let persisted = (self.callbacks.query_persisted)(topic, &broadcast_group_id(group), queue_id);
         if persisted >= 0 {
             persisted
         } else {
-            (self.ports.query_initial)(topic, queue_id)
+            (self.callbacks.query_initial)(topic, queue_id)
         }
     }
 
@@ -270,7 +270,7 @@ impl BroadcastOffsetManager {
         offline_expiry: Duration,
         online_expiry: Duration,
     ) -> Self {
-        self.ports.now_millis = Arc::new(now_millis);
+        self.callbacks.now_millis = Arc::new(now_millis);
         self.offline_expiry = offline_expiry;
         self.online_expiry = online_expiry;
         self
@@ -368,12 +368,12 @@ mod tests {
     fn scan_expires_offline_clients_and_persists_queue_minimum() {
         let now = Arc::new(AtomicU64::new(1_000));
         let commits = Arc::new(Mutex::new(Vec::new()));
-        let commits_for_port = Arc::clone(&commits);
+        let commits_for_callback = Arc::clone(&commits);
         let now_for_clock = Arc::clone(&now);
         let manager = BroadcastOffsetManager::new(
             |_, _, _| -1,
             move |topic, group, queue_id, offset| {
-                commits_for_port
+                commits_for_callback
                     .lock()
                     .push((topic.to_owned(), group.to_owned(), queue_id, offset));
             },

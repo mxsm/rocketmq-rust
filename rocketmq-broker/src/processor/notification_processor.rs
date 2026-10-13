@@ -476,7 +476,7 @@ impl<MS: BrokerReadWriteStore> NotificationProcessor<MS> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_store::StorePorts;
+    use rocketmq_store::MessageStore;
 
     use crate::broker_runtime::BrokerMessageStore;
     use crate::broker_runtime::BrokerRuntime;
@@ -531,10 +531,10 @@ mod tests {
 
     #[tokio::test]
     async fn notification_store_and_pop_capabilities_fail_closed_after_provider_shutdown() {
-        let store = NotificationStoreCapability::<StorePorts> {
+        let store = NotificationStoreCapability::<MessageStore> {
             escape_bridge: Weak::new(),
         };
-        let pop = NotificationPopOffsetCapability::<StorePorts> {
+        let pop = NotificationPopOffsetCapability::<MessageStore> {
             merge_service: Weak::new(),
         };
         let topic = CheetahString::from_static_str("topic-a");

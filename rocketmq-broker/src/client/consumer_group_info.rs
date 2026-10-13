@@ -105,15 +105,6 @@ impl ConsumerGroupInfo {
             .map(|(_, subscription)| subscription)
     }
 
-    /// Returns the shared mutable subscription table for legacy integrations.
-    ///
-    /// Use the owned snapshot, query, and controlled command methods instead. This compatibility
-    /// API will be removed in 2.0.0.
-    #[deprecated(note = "use subscription_snapshot/query/command methods; removal in 2.0.0")]
-    pub fn get_subscription_table(&self) -> Arc<DashMap<CheetahString, Arc<SubscriptionData>>> {
-        Arc::clone(&self.subscription_table)
-    }
-
     /// Returns whether the group has no live sessions.
     pub fn channels_is_empty(&self) -> bool {
         self.session_info_table.is_empty()

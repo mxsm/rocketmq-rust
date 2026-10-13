@@ -22,6 +22,9 @@ This file applies to `rocketmq-ai/rocketmq-mcp-control/`.
   a loopback name as a host, and keep the `Host` and `Origin` checks against the configured origin.
 - The default feature set must not depend on RocketMQ Admin or client mutation adapters.
 - `write-tools` may enable only `rocketmq-admin-core/mutation-client-adapter`; it must never enable a read or full adapter.
+- These dependency restrictions apply to this standalone build. A combined entrypoint build may unify the
+  query crate's read feature through another dependency path; control source still uses only the reviewed
+  mutation interface and keeps its own transport, authorization, and audit policy.
 - The reviewed production tools are `rocketmq_upsert_topic`,
   `rocketmq_upsert_consumer_group`, `rocketmq_reset_consumer_offset`,
   `rocketmq_patch_broker_config`, `rocketmq_set_consumer_request_mode`,

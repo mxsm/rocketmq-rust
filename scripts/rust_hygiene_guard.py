@@ -153,7 +153,7 @@ REVIEWED_PANIC_INVARIANTS: dict[tuple[str, str], tuple[str, str]] = {
         "documented_state_invariant",
         "MutationAdminGuard documents that access after the guard is consumed is a programmer error",
     ),
-    ("rocketmq-ai/rocketmq-mcp/src/guard/sanitizer.rs", "<module>"): (
+    ("rocketmq-ai/rocketmq-mcp-query/src/guard/sanitizer.rs", "<module>"): (
         "static_definition_invariant",
         "literal sanitizer regular expressions are compiled once and covered by sanitizer tests",
     ),

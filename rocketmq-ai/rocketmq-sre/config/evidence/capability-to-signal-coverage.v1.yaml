@@ -33,7 +33,7 @@ semantic_registry_owners:
     backlog: tune exporter recovery and audit backlog alert thresholds from production baselines
     notable_sources:
       - name: mcp_system_resources
-        source_path: rocketmq-ai/rocketmq-mcp/src/resources/system.rs
+        source_path: rocketmq-ai/rocketmq-mcp-query/src/resources/system.rs
         source_symbol: read_result
         exposure: queryable
       - name: mcp_metrics
@@ -41,7 +41,7 @@ semantic_registry_owners:
         source_symbol: McpMetrics
         exposure: queryable
       - name: mcp_protocol_spans
-        source_path: rocketmq-ai/rocketmq-mcp/src/protocol/server.rs
+        source_path: rocketmq-ai/rocketmq-mcp-query/src/protocol/server.rs
         source_symbol: read_resource
         exposure: queryable
   - owner: name-server

@@ -493,8 +493,8 @@ mod tests {
     use bytes::Bytes;
     use rocketmq_runtime::RuntimeConfig;
     use rocketmq_runtime::RuntimeOwner;
+    use rocketmq_store::MessageStore;
     use rocketmq_store::QueryMessageResult;
-    use rocketmq_store::StorePorts;
     use rocketmq_transport::api::ResponseBodyKind;
     use rocketmq_transport::api::ServerConfig;
     use rocketmq_transport::api::TransportServer;
@@ -694,7 +694,7 @@ mod tests {
 
     #[tokio::test]
     async fn query_store_capability_fails_closed_after_provider_shutdown() {
-        let capability = QueryMessageStoreCapability::<StorePorts> {
+        let capability = QueryMessageStoreCapability::<MessageStore> {
             escape_bridge: Weak::new(),
         };
         let topic = CheetahString::from_static_str("TopicA");

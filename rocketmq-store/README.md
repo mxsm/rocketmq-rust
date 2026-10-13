@@ -21,7 +21,7 @@ performance in the Rust implementation.
 ![RocketMQ storage composition](../resources/store-composition-architecture.png)
 
 ```text
-Broker lifecycle -> StoreFactory -> StorePorts
+Broker lifecycle -> StoreFactory -> MessageStore
                       |              -> narrow read / write / admin / replication capabilities
                       -> rocketmq-store-local: CommitLog, mapped files, derived structures
                       -> rocketmq-store-rocksdb: optional RocksDB metadata
@@ -34,7 +34,7 @@ The store is organized around a few stable boundaries:
 - **`BrokerStorePort` trait**: the broker-facing API for lifecycle, message writes,
   reads, offset lookup, key query, commit-log access, HA metadata, cleanup, and
   runtime information.
-- **`StorePorts`**: feature-gated exclusive composition root that owns
+- **`rocketmq_store::MessageStore`**: feature-gated exclusive composition root that owns
   `LocalFileMessageStore` or `RocksDBMessageStore`.
 - **Local file store**: the default implementation built around CommitLog,
   mapped files, ConsumeQueue, index files, checkpoints, flush services, and
@@ -120,7 +120,7 @@ Validate configuration with `StoreFactoryConfig::try_new`, supplying `MessageSto
 `StoreRuntimeConfig`, the topic table, optional statistics manager, batch-arrival notification setting
 and `StoreTelemetry`. `None` means deterministic configuration validation failed before backend opening;
 `StoreFactory::open` performs composition. Import APIs from the crate root: the former
-`base::message_store::MessageStore` and `OwnedMessageStore` are no longer public entrypoints.
+`base::message_store::MessageStore` trait and `OwnedMessageStore` are no longer public entrypoints.
 
 This function takes an application-owned child scope and returns the detailed shutdown report.
 The caller inspects final flush progress, outstanding leases and pending file-retirement replay,
@@ -165,7 +165,7 @@ Baseline timer modules do not require either feature. `io_uring` also depends on
 
 | Area | Important Types |
 | --- | --- |
-| Store boundary | `BrokerStorePort`, `StorePorts`, `LocalFileMessageStore`, `RocksDBMessageStore` |
+| Store boundary | `BrokerStorePort`, `MessageStore`, `LocalFileMessageStore`, `RocksDBMessageStore` |
 | Configuration | `MessageStoreConfig`, `FlushDiskType`, `StoreType`, store path helpers |
 | Write path | `CommitLog`, `DefaultAppendMessageCallback`, `PutMessageResult`, `AppendMessageResult` |
 | Read path | `GetMessageResult`, `SelectMappedBufferResult`, `QueryMessageResult` |
@@ -229,7 +229,7 @@ This gives the broker a concrete RocksDB boundary without changing the shared
 
 ```text
 rocketmq-store/
-  src/base/                 MessageStore trait, results, dispatch, stats, checkpoints
+  src/base/                 Backend contracts, results, dispatch, stats, checkpoints
   src/config/               MessageStoreConfig, flush policy, store path helpers
   src/log_file/             CommitLog, mapped files, flush manager, recovery, fast load
   src/message_store/        LocalFileMessageStore and optional RocksDBMessageStore

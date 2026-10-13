@@ -48,7 +48,7 @@ def node_features(document: dict, package_name: str) -> set[str]:
 
 
 def run_query_contract(command: list[str]) -> None:
-    query_project = PROJECT.parent / "rocketmq-mcp"
+    query_project = PROJECT.parent / "rocketmq-mcp-query"
     environment = os.environ.copy()
     environment["INSTA_UPDATE"] = "no"
     environment.pop("RUST_MIN_STACK", None)

@@ -37,6 +37,7 @@ use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::HAConnectionStateNotificationRequest;
 use rocketmq_store::HAService;
+use rocketmq_store::MessageStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::MessageStoreHealthCapability;
 use rocketmq_store::PutMessageResult;
@@ -46,7 +47,6 @@ use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_store::StoreAppendReceipt;
 use rocketmq_store::StoreError as BackendStoreError;
 use rocketmq_store::StoreHealthSnapshot;
-use rocketmq_store::StorePorts;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreHealth;
 use rocketmq_store_api::StoreOperation;
@@ -202,17 +202,17 @@ struct SharedStoreAppendReport {
 
 #[derive(Clone)]
 struct SharedStoreAppendPort {
-    store: Weak<StorePorts>,
+    store: Weak<MessageStore>,
 }
 
 impl SharedStoreAppendPort {
-    fn new(store: &Arc<StorePorts>) -> Self {
+    fn new(store: &Arc<MessageStore>) -> Self {
         Self {
             store: Arc::downgrade(store),
         }
     }
 
-    fn store(&self) -> Result<Arc<StorePorts>, MessageStoreUnavailable> {
+    fn store(&self) -> Result<Arc<MessageStore>, MessageStoreUnavailable> {
         self.store.upgrade().ok_or(MessageStoreUnavailable)
     }
 
@@ -685,8 +685,8 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
     }
 }
 
-impl EscapeBridgeStoreCapability<StorePorts> {
-    pub(crate) fn bind_owned(&self, store: &Arc<StorePorts>) {
+impl EscapeBridgeStoreCapability<MessageStore> {
+    pub(crate) fn bind_owned(&self, store: &Arc<MessageStore>) {
         self.bind(store);
         *self.shared_append.write() = Some(SharedStoreAppendPort::new(store));
     }
@@ -697,8 +697,8 @@ mod tests {
     use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
     use rocketmq_model::common::broker::broker_role::BrokerRole;
+    use rocketmq_store::MessageStore;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_store::StorePorts;
 
     use super::EscapeBridgePolicyState;
     use super::EscapeBridgeStoreCapability;
@@ -774,7 +774,7 @@ mod tests {
 
     #[tokio::test]
     async fn controller_role_change_is_a_noop_before_store_binding() {
-        let store = EscapeBridgeStoreCapability::<StorePorts>::default();
+        let store = EscapeBridgeStoreCapability::<MessageStore>::default();
 
         assert!(matches!(
             store
@@ -786,7 +786,7 @@ mod tests {
 
     #[test]
     fn controller_observations_fail_closed_before_store_binding() {
-        let store = EscapeBridgeStoreCapability::<StorePorts>::default();
+        let store = EscapeBridgeStoreCapability::<MessageStore>::default();
 
         assert_eq!(store.controller_heartbeat_state(), (None, None, None));
         assert!(!store.is_local_writeable());

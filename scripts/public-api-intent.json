@@ -5712,8 +5712,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::store_ports::StorePorts",
-          "identity": "rocketmq-store/src/public_api.rs:pub use crate::store_ports::StorePorts",
+          "declaration": "pub use crate::store_ports::MessageStore",
+          "identity": "rocketmq-store/src/public_api.rs:pub use crate::store_ports::MessageStore",
           "owner": "store",
           "path": "rocketmq-store/src/public_api.rs",
           "rationale": "deliberate root entry point",

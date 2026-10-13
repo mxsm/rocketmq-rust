@@ -27,7 +27,7 @@ workspace 成员关系决定 Cargo 构建图。核心发行分类表示 registry
 | `rocketmq-namesrv` | Broker 注册与路由查询 | 发现状态与公布地址 |
 | `rocketmq-broker` | 消息处理器与服务组合 | Broker/Store 生命周期和请求结果 |
 | `rocketmq-store-api` | 与后端无关的存储契约 | 回执、持久性、进度和 HA 决策 |
-| `rocketmq-store` | 面向 Broker 的 StoreFactory/StorePorts 组合 | 独占生命周期所有权与窄能力接口 |
+| `rocketmq-store` | 面向 Broker 的 StoreFactory/MessageStore 组合 | 独占生命周期所有权与窄能力接口 |
 | `rocketmq-store-local`、`rocketmq-store-rocksdb`、`rocketmq-tieredstore` | 本地存储原语、可选 RocksDB 元数据与分层存储集成 | 主日志权威性与派生/次级进度 |
 | `rocketmq-controller` | Controller 元数据、OpenRaft 与 Broker 角色协调 | 写入权、epoch 和副本成员 |
 | `rocketmq-proxy`、`rocketmq-proxy-core`、`rocketmq-proxy-cluster`、`rocketmq-proxy-local` | Proxy 入口、共同契约以及远端/嵌入式适配器 | 不同模式的后端与运行时所有权 |

@@ -41,7 +41,7 @@ The default build exposes these read-only or diagnostic Tools:
 | `rocketmq_get_cluster_health` | Diagnose | Not applicable |
 | `rocketmq_diagnose_message_delivery` | Diagnose | Not applicable |
 
-The Tool Reference of the query MCP (`rocketmq-ai/rocketmq-mcp/docs/tool-reference.md`)
+The Tool Reference of the query MCP (`rocketmq-ai/rocketmq-mcp-query/docs/tool-reference.md`)
 lists the complete default catalog with every argument and output.
 
 The optional `change-planning` feature adds these non-mutating Tools. The

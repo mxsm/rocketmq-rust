@@ -134,6 +134,7 @@
         "diagnose",
         "observability",
         "otlp",
+        "query",
         "read-only",
         "stdio",
         "streamable-http"

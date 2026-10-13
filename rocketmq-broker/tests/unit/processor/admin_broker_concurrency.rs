@@ -38,8 +38,8 @@ use rocketmq_security_api::AuthenticatedRequestContext;
 use rocketmq_security_api::AuthorizationDecision;
 use rocketmq_security_api::Principal;
 use rocketmq_security_api::RequestPolicy;
+use rocketmq_store::MessageStore;
 use rocketmq_store::MessageStoreConfig;
-use rocketmq_store::StorePorts;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
@@ -61,7 +61,7 @@ use crate::config::broker_config::BrokerConfig;
 use crate::processor::dispatcher::BrokerProcessorType;
 use crate::transaction::queue::default_transactional_message_service::DefaultTransactionalMessageService;
 
-type TestAdminLeaf = BrokerProcessorType<StorePorts, DefaultTransactionalMessageService<StorePorts>>;
+type TestAdminLeaf = BrokerProcessorType<MessageStore, DefaultTransactionalMessageService<MessageStore>>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ObservedAdminOperation {

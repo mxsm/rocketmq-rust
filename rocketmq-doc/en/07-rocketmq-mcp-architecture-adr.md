@@ -2,7 +2,7 @@
 title: "RocketMQ MCP Architecture ADR"
 permalink: /docs/rocketmq-mcp-architecture-adr/
 excerpt: "Accepted clean-break architecture and public contract for the RocketMQ MCP server refactor."
-last_modified_at: 2026-07-31T00:00:00+08:00
+last_modified_at: 2026-10-13T00:00:00+08:00
 toc: true
 classes: wide
 ---
@@ -12,6 +12,28 @@ classes: wide
 ## Status
 
 Accepted for the unreleased `rocketmq-mcp` refactor.
+
+## Entrypoint composition (2026-10-13)
+
+`rocketmq-mcp` now composes three implementation crates through optional dependencies:
+`rocketmq-mcp-query`, `rocketmq-mcp-auth`, and `rocketmq-mcp-control`. Query owns the existing
+read-only implementation, while auth and control retain their existing security responsibilities.
+The implementation crates do not depend on the entrypoint or on one another except for each
+server's existing auth dependency.
+
+The default features remain `read-only`, `diagnose`, and `stdio`; `read-only` is a compatibility
+alias for `query`. The existing query Rust API is re-exported at the entrypoint root. This composition
+preserves the existing binary, configuration, tools, Resources, Prompts, and protocol without
+introducing additional wire aliases.
+
+`ROCKETMQ_MCP_MODE` selects one service per process: query by default, or control explicitly.
+Each delegates to its existing runtime-owning startup and graceful shutdown. Query and control
+keep separate catalogs, middleware, configuration, and audit policy. Compiling control or write tools
+does not grant mutation authority.
+
+Combined query/write builds unify shared Admin features. Independent query and control binaries
+remain available for deployments that require separate dependency closures. Their standalone
+boundary checks continue to enforce those respective closures.
 
 ## Context
 
@@ -72,8 +94,9 @@ must not apply a change. A later Apply capability requires a separate public
 contract and authorization decision.
 
 The refactor uses Rust 2021 or later and, after P1, uses one source file per
-module under `rocketmq-ai/rocketmq-mcp/src` without `mod.rs`. No legacy
-Tool, URI, schema, configuration, or feature alias is allowed.
+module under `rocketmq-ai/rocketmq-mcp-query/src` without `mod.rs`. The original P1 migration
+removed legacy Tool, URI, schema, and configuration aliases. The entrypoint composition above
+retains the existing `read-only` feature name as a query compatibility alias.
 
 ## Module Direction
 

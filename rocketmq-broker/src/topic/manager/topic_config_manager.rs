@@ -931,15 +931,6 @@ impl TopicConfigManager {
         self.topic_config_table.clone()
     }
 
-    /// Returns the shared mutable table for legacy integrations.
-    ///
-    /// Use [`Self::topic_config_snapshot`], [`Self::select_topic_config`], and manager commands
-    /// instead. This compatibility API will be removed in 2.0.0.
-    #[deprecated(note = "use topic_config_snapshot, select_topic_config, or manager commands; removal in 2.0.0")]
-    pub fn topic_config_table(&self) -> Arc<DashMap<CheetahString, Arc<TopicConfig>>> {
-        self.shared_topic_config_table()
-    }
-
     /// Returns an owned snapshot of all topic configurations.
     pub fn topic_config_snapshot(&self) -> HashMap<CheetahString, TopicConfig> {
         self.metadata_snapshot().0

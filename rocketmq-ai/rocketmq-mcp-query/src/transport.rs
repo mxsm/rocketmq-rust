@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(feature = "stdio")]
 pub mod stdio;
 
 #[cfg(feature = "streamable-http")]

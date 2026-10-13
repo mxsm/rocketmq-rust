@@ -36,6 +36,7 @@ use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
 use rocketmq_store::HAConnectionStateNotificationRequest;
+use rocketmq_store::MessageStore;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::QueryMessageResult;
@@ -43,7 +44,6 @@ use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_store::StoreAppendReceipt;
 use rocketmq_store::StoreError as BackendStoreError;
 use rocketmq_store::StoreHealthSnapshot;
-use rocketmq_store::StorePorts;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
@@ -425,8 +425,8 @@ impl<MS: BrokerReadStore> EscapeBridge<MS> {
     }
 }
 
-impl EscapeBridge<StorePorts> {
-    pub(crate) fn bind_message_store(&self, store: &Arc<StorePorts>) {
+impl EscapeBridge<MessageStore> {
+    pub(crate) fn bind_message_store(&self, store: &Arc<MessageStore>) {
         self.message_store.bind_owned(store);
     }
 }

@@ -20,19 +20,19 @@ use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerI
 
 use crate::base::message_result::PutMessageResult;
 
-/// Application composition root that exclusively owns the selected Store backend.
+/// Message store that exclusively owns the selected backend.
 ///
 /// This type does not add a shared-mutation wrapper around the concrete backend.
 /// Shared consumers should receive narrow Store capabilities while the application
 /// lifecycle retains the only mutable root owner.
-pub enum StorePorts {
+pub enum MessageStore {
     LocalFileStore(Box<LocalFileMessageStore>),
 
     #[cfg(feature = "rocksdb_store")]
     RocksDBStore(Box<RocksDBMessageStore>),
 }
 
-impl StorePorts {
+impl MessageStore {
     pub fn local_file(store: LocalFileMessageStore) -> Self {
         Self::LocalFileStore(Box::new(store))
     }

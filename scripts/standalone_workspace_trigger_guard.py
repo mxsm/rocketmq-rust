@@ -54,6 +54,16 @@ WORKSPACES = (
         manifest="rocketmq-ai/rocketmq-mcp/Cargo.toml",
         workflow=".github/workflows/rocketmq-mcp-ci.yaml",
     ),
+    WorkspaceSpec(
+        name="rocketmq-mcp-query",
+        manifest="rocketmq-ai/rocketmq-mcp-query/Cargo.toml",
+        workflow=".github/workflows/rocketmq-mcp-ci.yaml",
+    ),
+    WorkspaceSpec(
+        name="rocketmq-mcp-control",
+        manifest="rocketmq-ai/rocketmq-mcp-control/Cargo.toml",
+        workflow=".github/workflows/rocketmq-mcp-ci.yaml",
+    ),
 )
 
 

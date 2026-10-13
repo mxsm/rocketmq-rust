@@ -759,7 +759,7 @@
   <g class="k k-n134568" transform="translate(1092 280)">
     <rect class="nb" width="240" height="192" rx="16"/>
     <text class="nt" x="18" y="29">Message store</text>
-    <text class="ns" x="18" y="48">rocketmq-store · StorePorts</text>
+    <text class="ns" x="18" y="48">rocketmq-store · MessageStore</text>
     <text class="nn" x="18" y="97">dispatch: ConsumeQueue · Index</text>
     <text class="nn" x="18" y="111">put hooks · bitmap dispatcher</text>
     <text class="nn" x="18" y="125">HA service · timer store</text>

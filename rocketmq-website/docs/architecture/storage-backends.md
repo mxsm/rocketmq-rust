@@ -11,7 +11,7 @@ The [storage contract](storage.md) defines append receipts, durable boundaries, 
 | Layer | Owns | Activation |
 | --- | --- | --- |
 | `rocketmq-store-api` | Runtime-neutral read/write/admin/replication contracts and outcome types | Shared dependency; no running store |
-| `rocketmq-store` | `StoreFactory`, exclusive `StorePorts`, Broker integration, dispatch and service composition | Validated backend configuration and compiled features |
+| `rocketmq-store` | `StoreFactory`, exclusive `MessageStore`, Broker integration, dispatch and service composition | Validated backend configuration and compiled features |
 | `rocketmq-store-local` | CommitLog, mapped files, recovery, local ConsumeQueue/index, flush and HA primitives | Used by the composed store |
 | `rocketmq-store-rocksdb` | Column families, codecs, ConsumeQueue/index/timer/transaction derived state, snapshots | `rocksdb_store` integration plus runtime selection |
 | `rocketmq-tieredstore` | Secondary dispatch/fetch, segments, metadata, provider and retention services | `tieredstore` integration plus storage policy/provider |
