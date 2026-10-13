@@ -6,6 +6,8 @@ Web Dashboard 由独立的 Axum 后端和 React/TypeScript 前端组成。它查
 
 ## 请求与持久化路径
 
+HTTPS、RocketMQ 客户端信任和数据库 CA/URL Secret 参阅 [Dashboard TLS 指南](../deployment/tls.md#dashboards)。
+
 ```mermaid
 flowchart TD
   U[浏览器界面] --> H[Axum API 与会话策略]

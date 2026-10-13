@@ -4,6 +4,8 @@ title: "Configure deployment security"
 
 Treat each connection as a separate deployment boundary: client to NameServer, client to Broker, client to Proxy, Proxy to Broker, and the Controller management and peer connections. Choose encryption, authenticated identity, and operation permissions for each exposed path. Read [security design](../architecture/security.md) for evaluation and provider semantics.
 
+For certificate preparation, component TLS settings, Kubernetes Secret creation, and rotation, follow the [TLS and mTLS guide](tls.md). It also identifies paths whose current executables do not enable outbound TLS.
+
 ## Inventory the actual listeners
 
 | Path | Configuration responsibility | Observation |

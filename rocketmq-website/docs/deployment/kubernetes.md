@@ -4,6 +4,8 @@ title: "Deploy on Kubernetes"
 
 Use `distribution/helm/rocketmq-rust-core` for the NameServer, Broker, Controller, and Proxy workloads described here. Start with one profile and override its images, storage, placement, resources, and credentials for your cluster. The chart supplies infrastructure configuration; an installed release still needs a verified application message path.
 
+Use the [TLS and mTLS guide](tls.md#secrets) for certificate/CA Secret creation and component-specific mounts. The Core TLS profile configures the Proxy gRPC entrance.
+
 ## Select a topology
 
 | Profile file | NameServer / Broker / Controller / Proxy replicas | Intended topology |

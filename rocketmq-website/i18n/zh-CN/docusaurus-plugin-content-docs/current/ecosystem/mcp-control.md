@@ -2,6 +2,8 @@
 title: "MCP Control：受控变更"
 ---
 
+独立 HTTPS、issuer CA 与出站 remoting TLS 配置参阅 [TLS 指南](../deployment/tls.md#mcp)。
+
 `rocketmq-mcp-control` 是独立的 HTTPS MCP 服务器，提供九个类型化 RocketMQ 变更工具。它与[只读 MCP](./mcp.md)分开；为查询 MCP 添加规划 feature 不会启用这些工具。Control 默认构建不包含 Admin Core 依赖，也没有生产变更工具。实际使用要求编译能力、运行时策略、认证声明、配置集群和持久审计路径相互匹配。
 
 ## 支持的操作与边界

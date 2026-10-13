@@ -4,6 +4,8 @@ title: "只读 MCP 诊断服务"
 
 # 只读 MCP 诊断服务
 
+证书与 Secret 准备、HTTPS/JWKS 信任及出站 TLS 限制参阅 [TLS 指南](../deployment/tls.md#mcp)。
+
 `rocketmq-mcp` 是用于 RocketMQ 查询、诊断和运行手册提示词的独立 Model Context Protocol 服务。它运行在 Broker、NameServer、Dashboard 进程之外，使用 Admin Core 的 `read-client-adapter`。默认工具不打开变更会话；可选规划 feature 生成建议，不执行建议。
 
 ## 请求路径与所有权

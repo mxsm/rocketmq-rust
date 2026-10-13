@@ -6,6 +6,8 @@ Use the checked-in Docker Compose development environment to bring up the cooper
 
 ## Prepare the environment and ports
 
+For production TLS boundaries and the namespace-separated Connector channel Secrets, see the [SRE TLS guide](../deployment/tls.md#sre).
+
 Install Docker with Compose, Git and PowerShell; host Rust 1.95.0 and Node/npm are needed for local source development. PostgreSQL runs in Docker, so a host PostgreSQL installation is unnecessary. Ensure Docker can build the repository's Linux container images and that the intended development ports are available.
 
 | Service | Development access | Meaning |
