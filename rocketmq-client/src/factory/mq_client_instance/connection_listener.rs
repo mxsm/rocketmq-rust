@@ -53,9 +53,7 @@ async fn run(
                             info!("ConnectionNetEvent CONNECTED");
                             instance.on_channel_active(&remote_address.to_string()).await;
                         }
-                        ConnectionNetEvent::DISCONNECTED => instance.on_channel_close(""),
-                        ConnectionNetEvent::EXCEPTION => instance.on_channel_exception(""),
-                        ConnectionNetEvent::IDLE => instance.on_channel_idle(""),
+                        ConnectionNetEvent::DISCONNECTED | ConnectionNetEvent::EXCEPTION | ConnectionNetEvent::IDLE => {}
                     }
                 }
             },

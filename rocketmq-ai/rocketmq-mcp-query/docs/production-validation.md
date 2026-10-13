@@ -1,5 +1,9 @@
 # RocketMQ MCP production validation
 
+The query implementation now lives in `rocketmq-ai/rocketmq-mcp-query`; `rocketmq-mcp` is its
+feature-composed entrypoint. Historical commands and validation results below retain their original
+package and directory names. Run new query implementation checks from the query crate.
+
 This document is a release-gate checklist for operating `rocketmq-mcp`. It is not a production-readiness
 certificate. Local compilation, unit tests, contract snapshots, and in-process HTTP tests do not prove that a
 RocketMQ deployment is reachable, correctly secured, or ready for an operator workload. Record live-cluster

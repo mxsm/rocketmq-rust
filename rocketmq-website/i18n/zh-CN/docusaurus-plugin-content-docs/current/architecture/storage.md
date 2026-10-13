@@ -6,11 +6,11 @@ Store 将 Broker 读写请求转换为主日志操作，以及服务这些请求
 
 ## 组合与所有权
 
-`rocketmq-store-api` 定义与执行器无关的能力和值。`rocketmq-store-local` 提供本地 CommitLog、映射文件、恢复、派生视图、定时和 HA 原语。`rocketmq-store` 通过 `StoreFactory` 与 `StorePorts` 组合面向 Broker 的实现，可选 RocksDB 和分层存储组件参与该组合。
+`rocketmq-store-api` 定义与执行器无关的能力和值。`rocketmq-store-local` 提供本地 CommitLog、映射文件、恢复、派生视图、定时和 HA 原语。`rocketmq-store` 通过 `StoreFactory` 与 `MessageStore` 组合面向 Broker 的实现，可选 RocksDB 和分层存储组件参与该组合。
 
 ```mermaid
 flowchart TB
-    Broker["Broker 生命周期所有者"] --> Factory["StoreFactory / StorePorts"]
+    Broker["Broker 生命周期所有者"] --> Factory["StoreFactory / MessageStore"]
     Factory --> Ports["窄读 / 写 / 管理 / 复制能力"]
     Factory --> Log["主 CommitLog"]
     Log --> Dispatch["分派与恢复重放"]

@@ -7,7 +7,8 @@ This file applies to `rocketmq-ai/rocketmq-mcp-auth/`.
 ## Boundary
 
 - This directory is a standalone Rust 2021 Cargo workspace excluded from the root workspace. It is a library
-  used by `rocketmq-ai/rocketmq-mcp-control/` and, under `streamable-http`, by `rocketmq-ai/rocketmq-mcp/`.
+  used by `rocketmq-ai/rocketmq-mcp-control/` and, under `streamable-http`, by `rocketmq-ai/rocketmq-mcp-query/`.
+  The `rocketmq-ai/rocketmq-mcp/` entrypoint also re-exports it under `auth`.
 - It owns JWKS retrieval, caching, and parsing, RS256 key selection by `kid`, and Bearer token extraction.
   Signature and claims validation, principal mapping, HTTP responses, and telemetry stay in each server.
 - It also states the MCP protocol revisions that both servers answer (`src/protocol.rs`) and reads the

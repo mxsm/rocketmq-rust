@@ -116,7 +116,7 @@ COMPONENT_SURFACES = (
     ),
     ComponentSurface(
         "MCP",
-        "rocketmq-ai/rocketmq-mcp/src/resources/capability.rs",
+        "rocketmq-ai/rocketmq-mcp-query/src/resources/capability.rs",
         "CapabilityManifest",
         "queryable",
         "production-verify audit and exporter recovery alerts",

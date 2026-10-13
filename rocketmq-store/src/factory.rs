@@ -33,7 +33,7 @@ use crate::message_store::rocksdb_message_store::RocksDBMessageStore;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store_error::StoreError;
 use crate::store_error::{StoreComponent, StoreOperation};
-use crate::store_ports::StorePorts;
+use crate::store_ports::MessageStore;
 use crate::telemetry::StoreTelemetry;
 use crate::timer::timer_message_store::TimerMessageStore;
 use rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy;
@@ -114,7 +114,7 @@ impl StoreFactoryConfig {
 /// A fully wired store plus optional services owned by the selected backend.
 pub struct OpenedStore {
     backend: StoreType,
-    message_store: StorePorts,
+    message_store: MessageStore,
     timer_message_store: Option<Arc<TimerMessageStore>>,
 }
 
@@ -123,7 +123,7 @@ impl OpenedStore {
         self.backend
     }
 
-    pub fn into_parts(self) -> (StorePorts, Option<Arc<TimerMessageStore>>) {
+    pub fn into_parts(self) -> (MessageStore, Option<Arc<TimerMessageStore>>) {
         (self.message_store, self.timer_message_store)
     }
 }
@@ -177,7 +177,7 @@ impl StoreFactory {
         let timer_message_store = store.get_timer_message_store().cloned();
         Ok(OpenedStore {
             backend,
-            message_store: StorePorts::local_file(store),
+            message_store: MessageStore::local_file(store),
             timer_message_store,
         })
     }
@@ -212,7 +212,7 @@ impl StoreFactory {
         let timer_message_store = store.get_timer_message_store().cloned();
         Ok(OpenedStore {
             backend,
-            message_store: StorePorts::rocksdb(store),
+            message_store: MessageStore::rocksdb(store),
             timer_message_store,
         })
     }

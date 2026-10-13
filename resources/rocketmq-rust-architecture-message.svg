@@ -337,7 +337,7 @@
     <text x="316" y="176" class="gt">BROKER GROUP</text>
     <rect x="24" y="540" width="400" height="148" rx="20" class="grp"/>
     <text x="44" y="566" class="gt">INSIDE EACH BROKER</text>
-    <text x="408" y="566" class="nn" text-anchor="end">rocketmq-store · StorePorts</text>
+    <text x="408" y="566" class="nn" text-anchor="end">rocketmq-store · MessageStore</text>
     <rect x="440" y="540" width="416" height="148" rx="20" class="grp"/>
     <text x="460" y="566" class="gt">OPERATIONS &amp; AI · OFF THE MESSAGE PATH</text>
     <!-- Links -->

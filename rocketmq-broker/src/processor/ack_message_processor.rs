@@ -874,8 +874,8 @@ mod tests {
     use rocketmq_security_api::AuthorizationDecision;
     use rocketmq_security_api::Principal;
     use rocketmq_security_api::RequestPolicy;
+    use rocketmq_store::MessageStore;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_store::StorePorts;
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
@@ -957,7 +957,7 @@ mod tests {
         outcome
     }
 
-    fn test_processor() -> AckMessageProcessor<StorePorts> {
+    fn test_processor() -> AckMessageProcessor<MessageStore> {
         let broker_config = Arc::new(BrokerConfig::default());
         let message_store_config = MessageStoreConfig::default();
         let topic_config_manager = Arc::new(TopicConfigManager::new(
@@ -1003,12 +1003,12 @@ mod tests {
 
     #[tokio::test]
     async fn ack_message_weak_capabilities_fail_closed_after_provider_shutdown() {
-        let store = AckMessageStoreCapability::<StorePorts> {
+        let store = AckMessageStoreCapability::<MessageStore> {
             escape_bridge: Weak::new(),
         };
         let order = AckMessageOrderCapability { manager: Weak::new() };
-        let offset = AckMessageOffsetCapability::<StorePorts> { manager: Weak::new() };
-        let pop = AckMessagePopCapability::<StorePorts> {
+        let offset = AckMessageOffsetCapability::<MessageStore> { manager: Weak::new() };
+        let pop = AckMessagePopCapability::<MessageStore> {
             merge_service: Weak::new(),
             notification_service: Weak::new(),
             queue_lock_manager: QueueLockManager::new(),

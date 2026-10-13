@@ -57,6 +57,25 @@
       "toolchain": "1.95.0",
       "commands": [
         "cargo fmt --all -- --check",
+        "cargo test --locked",
+        "cargo test --locked --no-default-features",
+        "cargo test --locked --no-default-features --features streamable-http",
+        "cargo test --locked --no-default-features --features control",
+        "cargo test --locked --no-default-features --features write-tools,otlp",
+        "cargo test --locked --all-features",
+        "cargo clippy --locked --all-targets --all-features -- -D warnings",
+        "cargo doc --locked --no-deps"
+      ]
+    },
+    {
+      "id": "rocketmq-mcp-query",
+      "owner": "RocketMQ MCP maintainers",
+      "manifest": "rocketmq-ai/rocketmq-mcp-query/Cargo.toml",
+      "instructions": "rocketmq-ai/rocketmq-mcp-query/AGENTS.md",
+      "workflow": ".github/workflows/rocketmq-mcp-ci.yaml",
+      "toolchain": "1.95.0",
+      "commands": [
+        "cargo fmt --all -- --check",
         "python scripts/check_read_only_boundary.py",
         "cargo test --locked",
         "cargo test --locked --all-features",
@@ -143,6 +162,7 @@
   "tokio_full_allowed": [
     "rocketmq-example/Cargo.toml",
     "rocketmq-ai/rocketmq-mcp/Cargo.toml",
+    "rocketmq-ai/rocketmq-mcp-query/Cargo.toml",
     "rocketmq-dashboard/rocketmq-dashboard-gpui/Cargo.toml",
     "rocketmq-dashboard/rocketmq-dashboard-web/backend/Cargo.toml"
   ],

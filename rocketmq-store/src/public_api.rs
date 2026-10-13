@@ -179,7 +179,7 @@ pub use crate::store_path_config_helper::get_timer_check_path;
 pub use crate::store_path_config_helper::get_timer_log_path;
 pub use crate::store_path_config_helper::get_timer_metrics_path;
 pub use crate::store_path_config_helper::get_timer_wheel_path;
-pub use crate::store_ports::StorePorts;
+pub use crate::store_ports::MessageStore;
 pub use crate::telemetry::StoreTelemetry;
 pub use crate::timer::pipeline::TimerPipelineDiagnostics;
 #[cfg(feature = "extended_timeline")]

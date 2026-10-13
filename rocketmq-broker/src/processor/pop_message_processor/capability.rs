@@ -611,8 +611,8 @@ mod tests {
     use rocketmq_model::common::broker::broker_role::BrokerRole;
     use rocketmq_model::common::pop_retry_policy::PopRetryMigrationState;
     use rocketmq_model::common::pop_retry_policy::PopRetryPolicy;
+    use rocketmq_store::MessageStore;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_store::StorePorts;
 
     use super::PopPolicyState;
     use super::PopStoreCapability;
@@ -703,7 +703,7 @@ mod tests {
 
     #[test]
     fn pop_store_capability_fails_closed_without_provider() {
-        let capability = PopStoreCapability::<StorePorts> { provider: Weak::new() };
+        let capability = PopStoreCapability::<MessageStore> { provider: Weak::new() };
 
         assert!(capability.max_offset(&"topic".into(), 0).is_err());
         assert!(capability.timer_lag().is_err());
