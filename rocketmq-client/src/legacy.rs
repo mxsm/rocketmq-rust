@@ -43,7 +43,6 @@ pub use crate::consumer::default_mq_pull_consumer::DefaultMQPullConsumer;
 pub use crate::consumer::default_mq_pull_consumer::MQPullConsumer;
 
 const MODERN_TRANSACTION_LISTENER: &str = "TransactionListener";
-const MODERN_TRACE_HOOKS: &str = "RocketMQ trace hooks";
 
 fn unsupported_legacy_api(api: &str, replacement: &str) -> ClientError {
     ClientError::illegal_argument(format!(
@@ -545,78 +544,6 @@ pub trait TransactionCheckListener {
     }
 }
 
-#[deprecated(
-    since = "0.9.0",
-    note = "Java OpenTracing hooks are not part of the modern RocketMQ client trace API"
-)]
-#[derive(Debug, Clone, Default)]
-pub struct SendMessageOpenTracingHookImpl;
-
-impl SendMessageOpenTracingHookImpl {
-    pub fn new<T>(_tracer: T) -> Self {
-        Self
-    }
-
-    pub fn hook_name(&self) -> &'static str {
-        "SendMessageOpenTracingHook"
-    }
-
-    pub fn unsupported(&self) -> ClientResult<()> {
-        Err(unsupported_legacy_api(
-            "SendMessageOpenTracingHookImpl",
-            MODERN_TRACE_HOOKS,
-        ))
-    }
-}
-
-#[deprecated(
-    since = "0.9.0",
-    note = "Java OpenTracing hooks are not part of the modern RocketMQ client trace API"
-)]
-#[derive(Debug, Clone, Default)]
-pub struct ConsumeMessageOpenTracingHookImpl;
-
-impl ConsumeMessageOpenTracingHookImpl {
-    pub fn new<T>(_tracer: T) -> Self {
-        Self
-    }
-
-    pub fn hook_name(&self) -> &'static str {
-        "ConsumeMessageOpenTracingHook"
-    }
-
-    pub fn unsupported(&self) -> ClientResult<()> {
-        Err(unsupported_legacy_api(
-            "ConsumeMessageOpenTracingHookImpl",
-            MODERN_TRACE_HOOKS,
-        ))
-    }
-}
-
-#[deprecated(
-    since = "0.9.0",
-    note = "Java OpenTracing hooks are not part of the modern RocketMQ client trace API"
-)]
-#[derive(Debug, Clone, Default)]
-pub struct EndTransactionOpenTracingHookImpl;
-
-impl EndTransactionOpenTracingHookImpl {
-    pub fn new<T>(_tracer: T) -> Self {
-        Self
-    }
-
-    pub fn hook_name(&self) -> &'static str {
-        "EndTransactionOpenTracingHook"
-    }
-
-    pub fn unsupported(&self) -> ClientResult<()> {
-        Err(unsupported_legacy_api(
-            "EndTransactionOpenTracingHookImpl",
-            MODERN_TRACE_HOOKS,
-        ))
-    }
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct DoNothingClientRemotingProcessor;
 
@@ -704,22 +631,6 @@ mod tests {
         assert_not_initialized(
             &error,
             "MQPullConsumerScheduleService has no ClientRuntime; use with_client_runtime",
-        );
-    }
-
-    #[test]
-    fn legacy_open_tracing_hooks_keep_java_hook_names() {
-        assert_eq!(
-            SendMessageOpenTracingHookImpl::new(()).hook_name(),
-            "SendMessageOpenTracingHook"
-        );
-        assert_eq!(
-            ConsumeMessageOpenTracingHookImpl::new(()).hook_name(),
-            "ConsumeMessageOpenTracingHook"
-        );
-        assert_eq!(
-            EndTransactionOpenTracingHookImpl::new(()).hook_name(),
-            "EndTransactionOpenTracingHook"
         );
     }
 

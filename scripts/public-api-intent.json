@@ -904,15 +904,6 @@
         },
         {
           "category": "compat",
-          "declaration": "pub use crate::legacy::ConsumeMessageOpenTracingHookImpl",
-          "identity": "rocketmq-client/src/lib.rs:pub use crate::legacy::ConsumeMessageOpenTracingHookImpl",
-          "owner": "client",
-          "path": "rocketmq-client/src/lib.rs",
-          "rationale": "temporary source-level adapter; no new behavior may be added",
-          "removal_condition": "remove at the 2.0.0 source-compatibility boundary"
-        },
-        {
-          "category": "compat",
           "declaration": "pub use crate::legacy::ConsumeRequest",
           "identity": "rocketmq-client/src/lib.rs:pub use crate::legacy::ConsumeRequest",
           "owner": "client",
@@ -933,15 +924,6 @@
           "category": "compat",
           "declaration": "pub use crate::legacy::DoNothingClientRemotingProcessor",
           "identity": "rocketmq-client/src/lib.rs:pub use crate::legacy::DoNothingClientRemotingProcessor",
-          "owner": "client",
-          "path": "rocketmq-client/src/lib.rs",
-          "rationale": "temporary source-level adapter; no new behavior may be added",
-          "removal_condition": "remove at the 2.0.0 source-compatibility boundary"
-        },
-        {
-          "category": "compat",
-          "declaration": "pub use crate::legacy::EndTransactionOpenTracingHookImpl",
-          "identity": "rocketmq-client/src/lib.rs:pub use crate::legacy::EndTransactionOpenTracingHookImpl",
           "owner": "client",
           "path": "rocketmq-client/src/lib.rs",
           "rationale": "temporary source-level adapter; no new behavior may be added",
@@ -1005,15 +987,6 @@
           "category": "compat",
           "declaration": "pub use crate::legacy::RebalancePullImpl",
           "identity": "rocketmq-client/src/lib.rs:pub use crate::legacy::RebalancePullImpl",
-          "owner": "client",
-          "path": "rocketmq-client/src/lib.rs",
-          "rationale": "temporary source-level adapter; no new behavior may be added",
-          "removal_condition": "remove at the 2.0.0 source-compatibility boundary"
-        },
-        {
-          "category": "compat",
-          "declaration": "pub use crate::legacy::SendMessageOpenTracingHookImpl",
-          "identity": "rocketmq-client/src/lib.rs:pub use crate::legacy::SendMessageOpenTracingHookImpl",
           "owner": "client",
           "path": "rocketmq-client/src/lib.rs",
           "rationale": "temporary source-level adapter; no new behavior may be added",
@@ -2361,7 +2334,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 262
+      "maximum_exports": 259
     },
     "rocketmq-model": {
       "entries": [
