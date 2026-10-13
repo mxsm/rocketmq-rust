@@ -195,10 +195,6 @@ impl ConsumeMessageHook for RootConsumeHook {
     }
 }
 
-fn assert_unsupported_error(error: ClientError, _api: &str, _replacement: &str) {
-    assert!(error.is(&rocketmq_error::CORE_ARGUMENT_INVALID));
-}
-
 #[track_caller]
 fn assert_not_initialized(error: &ClientError, component: &str) {
     assert!(error.is(&rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED));
@@ -345,36 +341,6 @@ async fn crate_root_classic_pull_exports_are_functional_or_fail_closed() {
     assert_not_initialized(
         &helper_error,
         "MQHelper requires an application-owned ClientRuntime; use reset_offset_by_timestamp_with_client_runtime",
-    );
-
-    let send_hook = rocketmq_client_rust::SendMessageOpenTracingHookImpl::new(());
-    assert_eq!(send_hook.hook_name(), "SendMessageOpenTracingHook");
-    assert_unsupported_error(
-        send_hook
-            .unsupported()
-            .expect_err("OpenTracing send hook should be unavailable"),
-        "SendMessageOpenTracingHookImpl",
-        "RocketMQ trace hooks",
-    );
-
-    let consume_hook = rocketmq_client_rust::ConsumeMessageOpenTracingHookImpl::new(());
-    assert_eq!(consume_hook.hook_name(), "ConsumeMessageOpenTracingHook");
-    assert_unsupported_error(
-        consume_hook
-            .unsupported()
-            .expect_err("OpenTracing consume hook should be unavailable"),
-        "ConsumeMessageOpenTracingHookImpl",
-        "RocketMQ trace hooks",
-    );
-
-    let transaction_hook = rocketmq_client_rust::EndTransactionOpenTracingHookImpl::new(());
-    assert_eq!(transaction_hook.hook_name(), "EndTransactionOpenTracingHook");
-    assert_unsupported_error(
-        transaction_hook
-            .unsupported()
-            .expect_err("OpenTracing transaction hook should be unavailable"),
-        "EndTransactionOpenTracingHookImpl",
-        "RocketMQ trace hooks",
     );
 }
 

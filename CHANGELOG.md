@@ -151,6 +151,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **client:** Remove deprecated `SendMessageOpenTracingHookImpl`, `ConsumeMessageOpenTracingHookImpl`, and `EndTransactionOpenTracingHookImpl` placeholders (breaking); remove their construction and use the client's supported tracing configuration where needed.
 - **observability:** Remove the seven deprecated no-op functions in `metrics::mcp` (breaking); use the matching methods on `McpMetricsRecorder::from_handle(&handle)` to record metrics.
 - **transport:** Remove deprecated `TransportClient::is_address_reachable`; use `reconcile_cached_connection` for direct-cache inspection and cleanup.
 - **protocol:** Remove deprecated `FastCodesHeader` and its `SendMessageResponseHeader` adapter; use `CommandCustomHeader::encode_direct_binary` and `FromMap::from` and handle their returned errors.
