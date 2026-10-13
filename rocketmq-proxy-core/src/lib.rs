@@ -65,7 +65,7 @@ pub use error::ProxyError;
 pub use error::ProxyResult;
 pub use identity::ResourceIdentity;
 pub use ingress::remoting::classify_remoting_request;
-pub use ingress::remoting::ProxyRemotingBackend;
+pub use ingress::remoting::ProxyRemotingRequestHandler;
 pub use ingress::remoting::RemotingIngressDispatcher;
 pub use ingress::remoting::RemotingIngressRoute;
 pub use ingress::remoting::RemotingStatusMapper;
