@@ -92,6 +92,7 @@ const sidebars: SidebarsConfig = {
         'deployment/proxy',
         'deployment/kubernetes',
         'deployment/security',
+        'deployment/tls',
         'deployment/production-checklist',
       ],
     },

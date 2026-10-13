@@ -4,6 +4,8 @@ title: "在 Kubernetes 上部署"
 
 本文使用 `distribution/helm/rocketmq-rust-core` 部署 NameServer、Broker、Controller 和 Proxy。先选择一种 profile，再按目标集群覆盖镜像、存储、调度、资源和凭据配置。Chart 提供基础设施配置；Release 安装成功后，仍需验证应用的实际消息链路。
 
+证书/CA Secret 创建和各组件挂载参阅 [TLS 与 mTLS 指南](tls.md#secrets)。Core TLS profile 配置的是 Proxy gRPC 入口。
+
 ## 选择拓扑
 
 | Profile 文件 | NameServer / Broker / Controller / Proxy 副本数 | 对应拓扑 |

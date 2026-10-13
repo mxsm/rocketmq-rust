@@ -6,6 +6,8 @@ The Web Dashboard consists of an independent Axum backend and a React/TypeScript
 
 ## Request and persistence paths
 
+For HTTPS, RocketMQ client trust, and database CA/URL Secrets, follow the [Dashboard TLS guide](../deployment/tls.md#dashboards).
+
 ```mermaid
 flowchart TD
   U[Browser UI] --> H[Axum API and session policy]

@@ -123,6 +123,8 @@ Subscription or explicit assignment, start, poll, business processing, and offse
 
 ## TLS and application-owned settings
 
+See the [TLS and mTLS guide](../deployment/tls.md#clients) for certificate preparation, Secret mounts, server policies, and the Admin/CLI boundaries.
+
 Configure peer verification and optional client identity through the common builder:
 
 ```rust

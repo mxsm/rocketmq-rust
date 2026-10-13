@@ -6,6 +6,8 @@ title: "MCP Control: supervised mutations"
 
 ## Supported operations and boundaries
 
+For independent HTTPS, issuer CA, and outbound remoting TLS configuration, follow the [TLS guide](../deployment/tls.md#mcp).
+
 | MCP tool | Closed policy operation | Scope and important constraint |
 | --- | --- | --- |
 | `rocketmq_upsert_topic` | `topic_upsert` | Complete Topic replacement on 1–64 explicit logical broker masters; queue counts 1–127, supported permission and message-type values |

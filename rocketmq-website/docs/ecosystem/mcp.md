@@ -4,6 +4,8 @@ title: "Read-only MCP diagnostics"
 
 # Read-only MCP diagnostics
 
+Certificate and Secret provisioning, HTTPS/JWKS trust, and outbound TLS limits are covered in the [TLS guide](../deployment/tls.md#mcp).
+
 `rocketmq-mcp` is a standalone Model Context Protocol server for RocketMQ queries, diagnosis and runbook prompts. It runs outside Broker, NameServer and Dashboard processes and uses Admin Core's `read-client-adapter`. Its default tools do not open mutation sessions. The optional planning feature produces proposals; it does not apply them.
 
 ## Request path and ownership
