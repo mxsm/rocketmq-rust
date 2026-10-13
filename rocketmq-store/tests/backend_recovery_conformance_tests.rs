@@ -16,32 +16,32 @@
 //!
 //! The heavy recovery scenarios remain separate test binaries so crash helpers
 //! can safely terminate subprocesses. These guards prevent a backend from being
-//! selectable through `StorePorts` without retaining its recovery suite.
+//! selectable through `MessageStore` without retaining its recovery suite.
 
 const FACTORY: &str = include_str!("../src/factory.rs");
-const STORE_PORTS: &str = include_str!("../src/store_ports.rs");
+const MESSAGE_STORE: &str = include_str!("../src/store_ports.rs");
 const LOCAL_RECOVERY: &str = include_str!("architecture_correctness.rs");
 const ROCKSDB_RECOVERY: &str = include_str!("rocksdb_store_semantics_tests.rs");
 
 #[test]
 fn local_backend_selection_retains_crash_and_derived_recovery_contracts() {
-    assert!(FACTORY.contains("StorePorts::local_file"));
-    assert!(STORE_PORTS.contains("LocalFileStore"));
+    assert!(FACTORY.contains("MessageStore::local_file"));
+    assert!(MESSAGE_STORE.contains("LocalFileStore"));
     assert!(LOCAL_RECOVERY.contains("sync_flush_crash_recovery"));
     assert!(LOCAL_RECOVERY.contains("derived_replay_no_holes"));
 }
 
 #[test]
 fn rocksdb_backend_selection_retains_wal_and_offset_recovery_contracts() {
-    assert!(FACTORY.contains("StorePorts::rocksdb"));
-    assert!(STORE_PORTS.contains("RocksDBStore"));
+    assert!(FACTORY.contains("MessageStore::rocksdb"));
+    assert!(MESSAGE_STORE.contains("RocksDBStore"));
     assert!(ROCKSDB_RECOVERY.contains("rocksdb_store_load_start_recover_round_trip"));
     assert!(ROCKSDB_RECOVERY.contains("rocksdb_recovery_skips_dirty_tail"));
     assert!(ROCKSDB_RECOVERY.contains("restart_reput_advances_the_single_local_wal_queue_offset"));
 }
 
 #[test]
-fn both_backends_share_the_same_store_ports_lifecycle_boundary() {
-    assert!(STORE_PORTS.contains("pub enum StorePorts"));
-    assert!(FACTORY.contains("pub fn into_parts(self) -> (StorePorts"));
+fn both_backends_share_the_same_message_store_lifecycle_boundary() {
+    assert!(MESSAGE_STORE.contains("pub enum MessageStore"));
+    assert!(FACTORY.contains("pub fn into_parts(self) -> (MessageStore"));
 }

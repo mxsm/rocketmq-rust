@@ -66,7 +66,7 @@ pub use public_api::*;
 
 // Backend implementations and repository-internal test fakes use this sealed
 // implementation contract. Application code receives narrow capabilities or
-// the concrete `StorePorts` composition root.
+// the concrete `MessageStore` composition root.
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

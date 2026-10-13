@@ -11,7 +11,7 @@ RocketMQ Rust 提供本地主日志路径、可选 RocksDB 派生存储，以及
 | 层 | 拥有的职责 | 启用方式 |
 | --- | --- | --- |
 | `rocketmq-store-api` | 不依赖运行时的读/写/管理/复制契约及结果类型 | 共享依赖，本身不运行存储 |
-| `rocketmq-store` | `StoreFactory`、排他 `StorePorts`、Broker 集成、分发和服务装配 | 有效后端配置及编译 features |
+| `rocketmq-store` | `StoreFactory`、排他 `MessageStore`、Broker 集成、分发和服务装配 | 有效后端配置及编译 features |
 | `rocketmq-store-local` | CommitLog、映射文件、恢复、本地 ConsumeQueue/索引、刷盘和 HA 原语 | 由组合存储使用 |
 | `rocketmq-store-rocksdb` | 列族、编解码、ConsumeQueue/索引/定时/事务派生状态及快照 | `rocksdb_store` 集成与运行时选择 |
 | `rocketmq-tieredstore` | 二级分发/读取、分段、元数据、提供方及保留策略服务 | `tieredstore` 集成与存储策略/提供方 |

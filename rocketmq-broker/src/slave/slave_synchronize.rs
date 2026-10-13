@@ -674,8 +674,8 @@ mod tests {
 
     use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
+    use rocketmq_store::MessageStore;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_store::StorePorts;
 
     use super::SlaveMasterAddress;
     use super::SlaveMessageRequestModeCapability;
@@ -746,7 +746,7 @@ mod tests {
     fn slave_synchronize_weak_providers_do_not_keep_owners_alive() {
         let broker_config = Arc::new(BrokerConfig::default());
         let message_store_config = Arc::new(MessageStoreConfig::default());
-        let offset_manager = Arc::new(ConsumerOffsetManager::<StorePorts>::new(
+        let offset_manager = Arc::new(ConsumerOffsetManager::<MessageStore>::new(
             Arc::clone(&broker_config),
             Arc::clone(&message_store_config),
         ));

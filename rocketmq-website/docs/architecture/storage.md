@@ -6,11 +6,11 @@ The Store turns Broker write/read requests into primary-log operations and the d
 
 ## Composition and ownership
 
-`rocketmq-store-api` defines executor-neutral capabilities and values. `rocketmq-store-local` provides local CommitLog, mapped-file, recovery, derived-view, timer and HA primitives. `rocketmq-store` composes a Broker-facing implementation through `StoreFactory` and `StorePorts`. Optional RocksDB and tiered components participate in that composition.
+`rocketmq-store-api` defines executor-neutral capabilities and values. `rocketmq-store-local` provides local CommitLog, mapped-file, recovery, derived-view, timer and HA primitives. `rocketmq-store` composes a Broker-facing implementation through `StoreFactory` and `MessageStore`. Optional RocksDB and tiered components participate in that composition.
 
 ```mermaid
 flowchart TB
-    Broker["Broker lifecycle owner"] --> Factory["StoreFactory / StorePorts"]
+    Broker["Broker lifecycle owner"] --> Factory["StoreFactory / MessageStore"]
     Factory --> Ports["Narrow read / write / admin / replication capabilities"]
     Factory --> Log["Primary CommitLog"]
     Log --> Dispatch["Dispatch and recovery replay"]

@@ -27,7 +27,7 @@ Folder and package names can differ. The `rocketmq-client` directory contains pa
 | `rocketmq-namesrv` | Broker registration and route lookup | Discovery state and advertised addresses |
 | `rocketmq-broker` | Message processors and service composition | Broker/store lifecycle and request outcomes |
 | `rocketmq-store-api` | Backend-neutral storage contracts | Receipts, durability, progress and HA decisions |
-| `rocketmq-store` | Broker-facing StoreFactory/StorePorts composition | Exclusive lifecycle ownership and narrow capabilities |
+| `rocketmq-store` | Broker-facing StoreFactory/MessageStore composition | Exclusive lifecycle ownership and narrow capabilities |
 | `rocketmq-store-local`, `rocketmq-store-rocksdb`, `rocketmq-tieredstore` | Local storage primitives, optional RocksDB metadata and tiered integration | Primary-log authority versus derived/secondary progress |
 | `rocketmq-controller` | Controller metadata, OpenRaft and Broker-role coordination | Write authority, epochs and replica membership |
 | `rocketmq-proxy`, `rocketmq-proxy-core`, `rocketmq-proxy-cluster`, `rocketmq-proxy-local` | Proxy ingress, common contracts and remote/embedded adapters | Mode-specific backend and runtime ownership |

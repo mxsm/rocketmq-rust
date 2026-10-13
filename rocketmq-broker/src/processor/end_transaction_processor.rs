@@ -713,7 +713,7 @@ mod tests {
     use rocketmq_security_api::AuthorizationDecision;
     use rocketmq_security_api::Principal;
     use rocketmq_security_api::RequestPolicy;
-    use rocketmq_store::StorePorts;
+    use rocketmq_store::MessageStore;
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
@@ -973,7 +973,7 @@ mod tests {
 
     #[tokio::test]
     async fn end_transaction_store_capability_fails_closed_after_provider_shutdown() {
-        let capability = EndTransactionStoreCapability::<StorePorts> {
+        let capability = EndTransactionStoreCapability::<MessageStore> {
             escape_bridge: Weak::new(),
         };
 
