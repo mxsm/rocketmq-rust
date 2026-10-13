@@ -523,7 +523,7 @@ impl LocalFileMessageStore {
     }*/
 }
 
-impl BackendReadOps for LocalFileMessageStore {
+impl MessageStoreReader for LocalFileMessageStore {
     fn is_message_in_cold_area(
         &self,
         group: &CheetahString,

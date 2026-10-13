@@ -47,7 +47,7 @@ use crate::base::backend_ops::BackendOps;
 use crate::base::backend_ops::MessageStoreShutdownReport;
 use crate::base::backend_ops::PutMessagePreflight;
 use crate::base::backend_ops::StateMachineVersionView;
-use crate::base::backend_read_ops::BackendReadOps;
+use crate::base::backend_read_ops::MessageStoreReader;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::get_message_result::GetMessageResult;
@@ -154,7 +154,7 @@ macro_rules! delegate_store_async {
     };
 }
 
-impl BackendReadOps for MessageStore {
+impl MessageStoreReader for MessageStore {
     fn is_message_in_cold_area(
         &self,
         group: &CheetahString,

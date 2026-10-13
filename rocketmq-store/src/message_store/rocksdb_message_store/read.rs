@@ -14,7 +14,7 @@
 
 use super::*;
 
-impl BackendReadOps for RocksDBMessageStore {
+impl MessageStoreReader for RocksDBMessageStore {
     fn is_message_in_cold_area(
         &self,
         group: &CheetahString,
@@ -22,27 +22,33 @@ impl BackendReadOps for RocksDBMessageStore {
         queue_id: i32,
         queue_offset: i64,
     ) -> bool {
-        BackendReadOps::is_message_in_cold_area(self.local_file_store.as_ref(), group, topic, queue_id, queue_offset)
+        MessageStoreReader::is_message_in_cold_area(
+            self.local_file_store.as_ref(),
+            group,
+            topic,
+            queue_id,
+            queue_offset,
+        )
     }
 
     fn pickup_store_timestamp(&self, offset: i64, size: i32) -> i64 {
-        BackendReadOps::pickup_store_timestamp(self.local_file_store.as_ref(), offset, size)
+        MessageStoreReader::pickup_store_timestamp(self.local_file_store.as_ref(), offset, size)
     }
 
     fn lmq_queue_offset(&self, topic: &CheetahString) -> i64 {
-        BackendReadOps::lmq_queue_offset(self.local_file_store.as_ref(), topic)
+        MessageStoreReader::lmq_queue_offset(self.local_file_store.as_ref(), topic)
     }
 
     fn contains_lmq(&self, topic: &CheetahString) -> bool {
-        BackendReadOps::contains_lmq(self.local_file_store.as_ref(), topic)
+        MessageStoreReader::contains_lmq(self.local_file_store.as_ref(), topic)
     }
 
     fn get_lmq_topic_names(&self) -> Vec<CheetahString> {
-        BackendReadOps::get_lmq_topic_names(self.local_file_store.as_ref())
+        MessageStoreReader::get_lmq_topic_names(self.local_file_store.as_ref())
     }
 
     fn consume_queue_statistics(&self) -> ConsumeQueueStatistics {
-        BackendReadOps::consume_queue_statistics(self.local_file_store.as_ref())
+        MessageStoreReader::consume_queue_statistics(self.local_file_store.as_ref())
     }
 
     async fn get_message(

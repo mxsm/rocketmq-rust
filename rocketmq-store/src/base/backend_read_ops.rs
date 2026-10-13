@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Backend logical reads. Implementations own physical storage and queue-index knowledge.
+//! Logical message reads through [`MessageStoreReader`]. Implementations own physical storage and queue-index knowledge.
 
 use crate::base::get_message_result::GetMessageResult;
 use crate::base::query_message_request::QueryMessageRequest;
@@ -25,9 +25,9 @@ use cheetah_string::CheetahString;
 use rocketmq_model::common::boundary_type::BoundaryType;
 use rocketmq_model::common::message::message_ext::MessageExt;
 
-/// Logical reads implemented without exposing a concrete storage owner to capability consumers.
+/// `MessageStoreReader` provides logical reads without exposing a concrete storage owner to capability consumers.
 #[trait_variant::make(Send)]
-pub trait BackendReadOps: Send + Sync + 'static {
+pub trait MessageStoreReader: Send + Sync + 'static {
     fn is_message_in_cold_area(
         &self,
         group: &CheetahString,
