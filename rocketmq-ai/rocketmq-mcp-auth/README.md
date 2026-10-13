@@ -2,9 +2,11 @@
 
 JWKS retrieval, caching, and RS256 key selection shared by the RocketMQ MCP servers.
 
-`rocketmq-mcp-control` uses it for every request. `rocketmq-mcp` uses it for the `oauth-jwt` mode of its
+`rocketmq-mcp-control` uses it for every request. `rocketmq-mcp-query` uses it for the `oauth-jwt` mode of its
 `streamable-http` transport. Both servers accept OAuth Bearer tokens signed with RS256 and both need the same
 answer first: which public key of the issuer must verify this token.
+
+The `rocketmq-mcp` entrypoint composes both servers and re-exports this library through its `auth` feature.
 
 ## What it does
 

@@ -14,13 +14,14 @@
 
 use std::future::Future;
 
-use rocketmq_mcp::app;
-use rocketmq_mcp::app::McpApp;
-use rocketmq_mcp::app::ValidatedMcpBootstrap;
-use rocketmq_mcp::config::McpConfig;
-use rocketmq_mcp::transport;
-use rocketmq_mcp::McpError;
-use rocketmq_mcp::McpResult;
+use rocketmq_mcp_query::app;
+use rocketmq_mcp_query::app::McpApp;
+use rocketmq_mcp_query::app::ValidatedMcpBootstrap;
+use rocketmq_mcp_query::config::McpConfig;
+#[cfg(any(feature = "stdio", feature = "streamable-http"))]
+use rocketmq_mcp_query::transport;
+use rocketmq_mcp_query::McpError;
+use rocketmq_mcp_query::McpResult;
 
 #[test]
 fn canonical_public_error_boundary_compiles() {
@@ -29,8 +30,11 @@ fn canonical_public_error_boundary_compiles() {
     let _ = bootstrap_returns_mcp_result;
     let _ = bootstrap_validated_returns_mcp_result;
     let _ = init_tracing_returns_mcp_result;
-    let _ = stdio_serve_returns_mcp_result;
-    let _ = stdio_serve_with_lifecycle_returns_mcp_result;
+    #[cfg(feature = "stdio")]
+    {
+        let _ = stdio_serve_returns_mcp_result;
+        let _ = stdio_serve_with_lifecycle_returns_mcp_result;
+    }
 
     #[cfg(feature = "streamable-http")]
     {
@@ -91,10 +95,12 @@ fn init_tracing_returns_mcp_result(
     assert_mcp_result_future(app::init_tracing(config, process_telemetry, service_context));
 }
 
+#[cfg(feature = "stdio")]
 fn stdio_serve_returns_mcp_result(app: McpApp) {
     assert_mcp_result_future(transport::stdio::serve(app));
 }
 
+#[cfg(feature = "stdio")]
 fn stdio_serve_with_lifecycle_returns_mcp_result(app: McpApp, lifecycle: rocketmq_runtime::ServiceLifecycle) {
     assert_mcp_result_future(transport::stdio::serve_with_lifecycle(app, lifecycle));
 }

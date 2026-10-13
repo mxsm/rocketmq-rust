@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![cfg(feature = "stdio")]
+
 use std::collections::HashMap;
 use std::io::Write;
 use std::process::Command;
@@ -182,7 +184,7 @@ fn run_stdio_server_with_namesrv_and_security_profile(
     namesrv_addr: &str,
     security_profile: Option<&str>,
 ) -> StdioOutput {
-    let binary = env!("CARGO_BIN_EXE_rocketmq-mcp");
+    let binary = env!("CARGO_BIN_EXE_rocketmq-mcp-query");
     let config = temporary_memory_audit_config(namesrv_addr);
     let mut command = Command::new(binary);
     for name in [

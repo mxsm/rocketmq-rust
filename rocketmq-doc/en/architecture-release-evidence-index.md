@@ -62,7 +62,8 @@ soak, complete disaster recovery, Docker images, and real external adapters rema
 |---|---|---|---|---|---|
 | fuzz | Fuzz and production input maintainers | `nightly-2026-07-05` | `fuzz/Cargo.toml` | `cargo +nightly-2026-07-05 check --locked --manifest-path fuzz/Cargo.toml --all-targets --all-features` | `.github/workflows/fuzz-ci.yml` |
 | example | Examples maintainers | `1.95.0` | `rocketmq-example/Cargo.toml` | `cargo fmt --all -- --check`<br>`cargo clippy --all-targets -- -D warnings`<br>`cargo test`<br>`cargo build --examples` | `.github/workflows/rocketmq-example-ci.yaml` |
-| rocketmq-mcp | RocketMQ MCP maintainers | `1.95.0` | `rocketmq-ai/rocketmq-mcp/Cargo.toml` | `cargo fmt --all -- --check`<br>`python scripts/check_read_only_boundary.py`<br>`cargo test --locked`<br>`cargo test --locked --all-features`<br>`cargo clippy --locked --all-targets --features streamable-http -- -D warnings`<br>`cargo doc --locked --no-deps` | `.github/workflows/rocketmq-mcp-ci.yaml` |
+| rocketmq-mcp | RocketMQ MCP maintainers | `1.95.0` | `rocketmq-ai/rocketmq-mcp/Cargo.toml` | `cargo fmt --all -- --check`<br>`cargo test --locked`<br>`cargo test --locked --no-default-features`<br>`cargo test --locked --no-default-features --features streamable-http`<br>`cargo test --locked --no-default-features --features control`<br>`cargo test --locked --no-default-features --features write-tools,otlp`<br>`cargo test --locked --all-features`<br>`cargo clippy --locked --all-targets --all-features -- -D warnings`<br>`cargo doc --locked --no-deps` | `.github/workflows/rocketmq-mcp-ci.yaml` |
+| rocketmq-mcp-query | RocketMQ MCP maintainers | `1.95.0` | `rocketmq-ai/rocketmq-mcp-query/Cargo.toml` | `cargo fmt --all -- --check`<br>`python scripts/check_read_only_boundary.py`<br>`cargo test --locked`<br>`cargo test --locked --all-features`<br>`cargo clippy --locked --all-targets --features streamable-http -- -D warnings`<br>`cargo doc --locked --no-deps` | `.github/workflows/rocketmq-mcp-ci.yaml` |
 | rocketmq-sre | RocketMQ AI SRE maintainers | `1.95.0` | `rocketmq-ai/rocketmq-sre/Cargo.toml` | `cargo fmt -p rocketmq-sre-contracts -p rocketmq-sre-core -p rocketmq-sre-model-gateway -p rocketmq-sre-control-plane -p rocketmq-sre-connector -p rocketmq-sre-executor -p rocketmq-sre-execution-agent -p rocketmq-sre-probe -p rocketmq-sre-eval -p rocketmq-sre-client -p rocketmq-sre-cli -- --check`<br>`cargo test --locked --workspace --all-features`<br>`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`<br>`cargo doc --locked --workspace --no-deps`<br>`python scripts/check_source_layout.py`<br>`python scripts/check_execution_dependency_boundary.py` | `.github/workflows/rocketmq-sre-ci.yml` |
 | dashboard-gpui | Dashboard GPUI maintainers | `1.95.0` | `rocketmq-dashboard/rocketmq-dashboard-gpui/Cargo.toml` | `cargo fmt --all -- --check`<br>`cargo clippy --all-targets --all-features -- -D warnings`<br>`cargo test` | `.github/workflows/dashboard-gpui-ci.yml` |
 | dashboard-tauri-backend | Dashboard Tauri maintainers | `1.95.0` | `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/Cargo.toml` | `cargo fmt --all -- --check`<br>`cargo clippy --all-targets --all-features -- -D warnings`<br>`cargo test --all-features` | `.github/workflows/dashboard-tauri-ci.yml` |
@@ -92,12 +93,15 @@ soak, complete disaster recovery, Docker images, and real external adapters rema
 | `rocketmq-example` | `rocketmq-protocol` | `rocketmq-protocol` |
 | `rocketmq-example` | `rocketmq-runtime` | `rocketmq-runtime` |
 | `rocketmq-example` | `rocketmq-tools` | `rocketmq-tools/rocketmq-admin/rocketmq-admin-core` |
-| `rocketmq-mcp` | `rocketmq-admin-core` | `rocketmq-tools/rocketmq-admin/rocketmq-admin-core` |
 | `rocketmq-mcp` | `rocketmq-mcp-auth` | `rocketmq-ai/rocketmq-mcp-auth` |
-| `rocketmq-mcp` | `rocketmq-observability` | `rocketmq-observability` |
-| `rocketmq-mcp` | `rocketmq-runtime` | `rocketmq-runtime` |
-| `rocketmq-mcp` | `rocketmq-security-api` | `rocketmq-security-api` |
-| `rocketmq-mcp` | `rocketmq-transport` | `rocketmq-transport` |
+| `rocketmq-mcp` | `rocketmq-mcp-control` | `rocketmq-ai/rocketmq-mcp-control` |
+| `rocketmq-mcp` | `rocketmq-mcp-query` | `rocketmq-ai/rocketmq-mcp-query` |
+| `rocketmq-mcp-query` | `rocketmq-admin-core` | `rocketmq-tools/rocketmq-admin/rocketmq-admin-core` |
+| `rocketmq-mcp-query` | `rocketmq-mcp-auth` | `rocketmq-ai/rocketmq-mcp-auth` |
+| `rocketmq-mcp-query` | `rocketmq-observability` | `rocketmq-observability` |
+| `rocketmq-mcp-query` | `rocketmq-runtime` | `rocketmq-runtime` |
+| `rocketmq-mcp-query` | `rocketmq-security-api` | `rocketmq-security-api` |
+| `rocketmq-mcp-query` | `rocketmq-transport` | `rocketmq-transport` |
 | `rocketmq-rust-fuzz` | `rocketmq-broker` | `rocketmq-broker` |
 | `rocketmq-rust-fuzz` | `rocketmq-controller` | `rocketmq-controller` |
 | `rocketmq-rust-fuzz` | `rocketmq-protocol` | `rocketmq-protocol` |
@@ -144,8 +148,8 @@ libraries inherit an explicit feature union rather than the `full` meta-feature.
 | `Cargo.toml` | `tokio` | `fs, io-std, io-util, macros, net, process, rt-multi-thread, signal, sync, time` | no |
 | `Cargo.toml` | `tokio-stream` | `fs, io-util, net, signal, sync, time` | no |
 | `Cargo.toml` | `tokio-util` | `codec, compat, io-util, net, rt, time` | no |
-| `rocketmq-ai/rocketmq-mcp/Cargo.toml` | `tokio` | `full` | no |
-| `rocketmq-ai/rocketmq-mcp/Cargo.toml` | `tokio-util` | `full` | no |
+| `rocketmq-ai/rocketmq-mcp-query/Cargo.toml` | `tokio` | `full` | no |
+| `rocketmq-ai/rocketmq-mcp-query/Cargo.toml` | `tokio-util` | `full` | no |
 | `rocketmq-ai/rocketmq-sre/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | no |
 | `rocketmq-ai/rocketmq-sre/Cargo.toml` | `tokio-stream` | `net, sync` | no |
 | `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-cli/Cargo.toml` | `tokio` | `macros, net, rt, signal, sync, time` | yes |

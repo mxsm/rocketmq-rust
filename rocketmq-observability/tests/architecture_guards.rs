@@ -46,6 +46,7 @@ const WORKSPACE_CRATE_DIRS: &[&str] = &[
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui",
     "rocketmq-tools/rocketmq-store-inspect",
     "rocketmq-ai/rocketmq-mcp",
+    "rocketmq-ai/rocketmq-mcp-query",
     "rocketmq-dashboard/rocketmq-dashboard-gpui",
     "rocketmq-dashboard/rocketmq-dashboard-web/backend",
 ];
@@ -55,7 +56,7 @@ const GOVERNED_ENTRYPOINTS: &[&str] = &[
     "rocketmq-controller/src/bin/controller_bootstrap.rs",
     "rocketmq-namesrv/src/bin/namesrv_bootstrap_server.rs",
     "rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs",
-    "rocketmq-ai/rocketmq-mcp/src/app.rs",
+    "rocketmq-ai/rocketmq-mcp-query/src/app.rs",
     "rocketmq-dashboard/rocketmq-dashboard-gpui/src/main.rs",
     "rocketmq-dashboard/rocketmq-dashboard-web/backend/src/main.rs",
 ];
@@ -73,6 +74,7 @@ const TELEMETRY_ENV_GOVERNED_CRATE_DIRS: &[&str] = &[
     "rocketmq-controller",
     "rocketmq-proxy",
     "rocketmq-ai/rocketmq-mcp",
+    "rocketmq-ai/rocketmq-mcp-query",
     "rocketmq-observability",
 ];
 

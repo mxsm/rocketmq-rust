@@ -7,6 +7,10 @@ patch, consumer request mode, beginning and cancelling a Proxy drain, and settin
 Broker log level. One read-only tool, `rocketmq_get_mutation_result`, reports how a caller's own mutation calls
 ended. The default build contains neither Admin Core nor production mutation tools.
 
+The `rocketmq-mcp` entrypoint can launch this same service with `ROCKETMQ_MCP_MODE=control` and its
+`control` feature. Its `write-tools` feature forwards this crate's reviewed mutation feature. The standalone
+binary remains available; both entrypoints use the same runtime-owning startup and security policy.
+
 Read the [reviewed mutation Tool Reference](docs/tool-reference.md) before operating the server. The
 [operations runbook](docs/operations-runbook.md) covers rollout, rollback, logs and metrics, audit, and emergency
 stop-write handling; the [real-cluster E2E runbook](docs/e2e-runbook.md) covers the opt-in local harness and its

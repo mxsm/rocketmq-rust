@@ -356,8 +356,8 @@ def audit_foundation(
         "namesrv": "rocketmq-namesrv/src/bootstrap.rs",
         "controller": "rocketmq-controller/src/bin/controller_bootstrap.rs",
         "proxy": "rocketmq-proxy/src/bootstrap.rs",
-        "mcp_stdio": "rocketmq-ai/rocketmq-mcp/src/main.rs",
-        "mcp_http": "rocketmq-ai/rocketmq-mcp/src/transport/streamable_http.rs",
+        "mcp_stdio": "rocketmq-ai/rocketmq-mcp-query/src/entrypoint.rs",
+        "mcp_http": "rocketmq-ai/rocketmq-mcp-query/src/transport/streamable_http.rs",
     }
     if policy.get("signal_sources") != expected_signal_sources:
         findings.append("service signal source registry drifted")
