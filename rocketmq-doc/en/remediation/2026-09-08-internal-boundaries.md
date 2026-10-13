@@ -9,7 +9,7 @@ Core still generates the shared protobuf message types with Prost. Its optional
 `grpc-bindings` feature adds generated Tonic client/server bindings; the Proxy
 facade enables that feature. It does not put network orchestration back in Core.
 Local and Cluster adapters select their remoting response type through
-`ProxyRemotingBackend::Response` and own their Transport dependency directly.
+`ProxyRemotingRequestHandler::Response` and own their Transport dependency directly.
 
 ## Rust API migration
 
