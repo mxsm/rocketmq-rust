@@ -313,16 +313,6 @@ async fn crate_root_classic_pull_exports_are_functional_or_fail_closed() {
         &implementation_error,
         "DefaultMQPullConsumer has no ClientRuntime; create it with DefaultMQPullConsumer::builder",
     );
-    let detached_implementation = rocketmq_client_rust::DefaultMQPullConsumerImpl::new()
-        .expect("compatibility constructor should remain available");
-    let rebalance_error = match detached_implementation.rebalance_impl() {
-        Ok(_) => panic!("detached implementation must not expose a live rebalance handle"),
-        Err(error) => error,
-    };
-    assert_not_initialized(
-        &rebalance_error,
-        "DefaultMQPullConsumerImpl is detached; create a consumer with DefaultMQPullConsumer::builder",
-    );
 
     let schedule_service = rocketmq_client_rust::MQPullConsumerScheduleService::new("legacy-group");
     assert_eq!(schedule_service.consumer_group().as_str(), "legacy-group");

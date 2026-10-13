@@ -363,16 +363,6 @@ impl DefaultMQPullConsumerImpl {
         core.ensure_running().await?;
         core.lite_consumer.min_offset(message_queue).await
     }
-
-    /// Returns a live rebalance compatibility marker.
-    ///
-    /// # Errors
-    ///
-    /// Returns an initialization error for a detached implementation marker.
-    pub fn rebalance_impl(&self) -> ClientResult<crate::legacy::RebalancePullImpl> {
-        self.core()?;
-        Ok(crate::legacy::RebalancePullImpl)
-    }
 }
 
 #[cfg(test)]

@@ -963,10 +963,8 @@ pub use crate::latency::BrokerFilter;
 pub use crate::latency::MQFaultStrategy;
 pub use crate::latency::Resolver;
 pub use crate::latency::ServiceDetector;
-pub use crate::legacy::ConsumeRequest;
 #[allow(deprecated)]
 pub use crate::legacy::DefaultMQPullConsumerImpl;
-pub use crate::legacy::DoNothingClientRemotingProcessor;
 #[allow(deprecated)]
 pub use crate::legacy::MQHelper;
 #[allow(deprecated)]
@@ -975,11 +973,6 @@ pub use crate::legacy::MQPullConsumerScheduleService;
 pub use crate::legacy::PullTaskCallback;
 #[allow(deprecated)]
 pub use crate::legacy::PullTaskContext;
-#[allow(deprecated)]
-pub use crate::legacy::PullTaskImpl;
-pub use crate::legacy::RebalanceImpl;
-#[allow(deprecated)]
-pub use crate::legacy::RebalancePullImpl;
 #[allow(deprecated)]
 pub use crate::legacy::TransactionCheckListener;
 pub use crate::lock::ReadWriteCASLock;
