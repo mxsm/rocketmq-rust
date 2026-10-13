@@ -51,29 +51,3 @@ impl fmt::Debug for ComponentMetrics {
         formatter.debug_struct("ComponentMetrics").finish_non_exhaustive()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    /// The free functions in `rocketmq_observability::metrics::mcp` never read telemetry state,
-    /// so a call to one of them compiles and silently records nothing.
-    #[test]
-    fn sources_never_call_the_no_op_metric_helpers() {
-        let helper_path = ["metrics::mcp", "::record_"].concat();
-        let mut pending = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
-        while let Some(directory) = pending.pop() {
-            for entry in std::fs::read_dir(&directory).unwrap() {
-                let path = entry.unwrap().path();
-                if path.is_dir() {
-                    pending.push(path);
-                } else if path.extension().is_some_and(|extension| extension == "rs") {
-                    let source = std::fs::read_to_string(&path).unwrap();
-                    assert!(
-                        !source.contains(&helper_path),
-                        "{} calls a no-op MCP metric helper; use a bound recorder",
-                        path.display()
-                    );
-                }
-            }
-        }
-    }
-}

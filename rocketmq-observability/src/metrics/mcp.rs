@@ -382,53 +382,6 @@ impl McpMetricsRecorder {
     }
 }
 
-/// Compatibility helper that never reads global telemetry state, so it records nothing.
-#[deprecated(note = "records nothing; call the same method on an `McpMetricsRecorder` built with `from_handle`")]
-pub fn record_operation(
-    kind: McpOperationKind,
-    operation: &'static str,
-    outcome: McpOperationStatus,
-    elapsed: Duration,
-) {
-    McpMetricsRecorder::noop().record_operation(kind, operation, outcome, elapsed);
-}
-
-/// Compatibility helper that never reads global telemetry state, so it records nothing.
-#[deprecated(note = "records nothing; call the same method on an `McpMetricsRecorder` built with `from_handle`")]
-pub fn record_error(kind: McpOperationKind, operation: &'static str, failure: McpFailureLabel) {
-    McpMetricsRecorder::noop().record_error(kind, operation, failure);
-}
-
-/// Compatibility helper that never reads global telemetry state, so it records nothing.
-#[deprecated(note = "records nothing; call the same method on an `McpMetricsRecorder` built with `from_handle`")]
-pub fn record_cache_event(event: McpCacheEvent) {
-    McpMetricsRecorder::noop().record_cache_event(event);
-}
-
-/// Compatibility helper that never reads global telemetry state, so it records nothing.
-#[deprecated(note = "records nothing; call the same method on an `McpMetricsRecorder` built with `from_handle`")]
-pub fn record_rate_limit(outcome: McpRateLimitDecision) {
-    McpMetricsRecorder::noop().record_rate_limit(outcome);
-}
-
-/// Compatibility helper that never reads global telemetry state, so it records nothing.
-#[deprecated(note = "records nothing; call the same method on an `McpMetricsRecorder` built with `from_handle`")]
-pub fn record_audit_backlog(records: u64) {
-    McpMetricsRecorder::noop().record_audit_backlog(records);
-}
-
-/// Compatibility helper that never reads global telemetry state, so it records nothing.
-#[deprecated(note = "records nothing; call the same method on an `McpMetricsRecorder` built with `from_handle`")]
-pub fn record_audit_drop(reason: McpAuditDropReason) {
-    McpMetricsRecorder::noop().record_audit_drop(reason);
-}
-
-/// Compatibility helper that never reads global telemetry state, so it records nothing.
-#[deprecated(note = "records nothing; call the same method on an `McpMetricsRecorder` built with `from_handle`")]
-pub fn record_audit_failure(kind: McpAuditFailureKind) {
-    McpMetricsRecorder::noop().record_audit_failure(kind);
-}
-
 #[cfg(feature = "otel-metrics")]
 struct McpMetrics {
     requests_total: opentelemetry::metrics::Counter<u64>,
@@ -620,28 +573,25 @@ mod tests {
     }
 
     #[test]
-    #[allow(
-        deprecated,
-        reason = "the helpers must stay callable without telemetry while they are exported"
-    )]
-    fn no_feature_recorders_remain_safe() {
-        record_operation(
+    fn noop_recorder_remains_safe() {
+        let recorder = McpMetricsRecorder::noop();
+        recorder.record_operation(
             McpOperationKind::Resource,
             "read_resource",
             McpOperationStatus::Success,
             Duration::from_millis(2),
         );
-        record_error(
+        recorder.record_error(
             McpOperationKind::Tool,
             "get_cluster_overview",
             McpFailureLabel::SourceUnavailable,
         );
-        record_cache_event(McpCacheEvent::Hit);
-        record_rate_limit(McpRateLimitDecision::Accepted);
-        record_audit_backlog(3);
-        record_audit_drop(McpAuditDropReason::Closed);
-        record_audit_failure(McpAuditFailureKind::Sink);
-        McpMetricsRecorder::noop().record_failure(McpOperationKind::Tool, "get_topic_route", McpFailureClass::NotFound);
+        recorder.record_cache_event(McpCacheEvent::Hit);
+        recorder.record_rate_limit(McpRateLimitDecision::Accepted);
+        recorder.record_audit_backlog(3);
+        recorder.record_audit_drop(McpAuditDropReason::Closed);
+        recorder.record_audit_failure(McpAuditFailureKind::Sink);
+        recorder.record_failure(McpOperationKind::Tool, "get_topic_route", McpFailureClass::NotFound);
     }
 
     #[test]
