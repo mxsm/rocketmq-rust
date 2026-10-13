@@ -151,6 +151,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **broker:** Remove deprecated `ConsumerGroupInfo::get_subscription_table` and the internal `TopicConfigManager::topic_config_table` wrapper; use subscription snapshots and commands instead of the mutable table exposed through `bench_support` (breaking).
 - **observability:** Remove the seven deprecated no-op functions in `metrics::mcp` (breaking); use the matching methods on `McpMetricsRecorder::from_handle(&handle)` to record metrics.
 - **transport:** Remove deprecated `TransportClient::is_address_reachable`; use `reconcile_cached_connection` for direct-cache inspection and cleanup.
 - **protocol:** Remove deprecated `FastCodesHeader` and its `SendMessageResponseHeader` adapter; use `CommandCustomHeader::encode_direct_binary` and `FromMap::from` and handle their returned errors.
