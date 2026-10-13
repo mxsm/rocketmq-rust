@@ -65,7 +65,9 @@ struct LifecycleReadiness {
     remaining_listeners: Arc<AtomicUsize>,
 }
 
-struct DefaultBackend {
+/// Dependencies used to assemble a Proxy runtime.
+/// Includes a service manager, optional remoting adapter, and optional child context.
+struct ProxyRuntimeDependencies {
     service_manager: Arc<dyn ServiceManager>,
     remoting_backend:
         Option<Arc<dyn ProxyRemotingRequestHandler<Response = rocketmq_transport::api::EmbeddedDispatchResult>>>,
@@ -252,15 +254,15 @@ impl ProxyRuntimeBuilder {
         let transport_telemetry = rocketmq_transport::api::TransportTelemetry::from_handle(&telemetry);
         #[cfg(not(any(feature = "observability", feature = "otel-traces")))]
         let transport_telemetry = rocketmq_transport::api::TransportTelemetry::noop();
-        let backend = match self.service_manager {
-            Some(service_manager) => DefaultBackend {
+        let dependencies = match self.service_manager {
+            Some(service_manager) => ProxyRuntimeDependencies {
                 service_manager,
                 remoting_backend: self.remoting_backend,
                 context: None,
             },
-            None => default_service_manager_and_backend(&self.config, &service_context, telemetry.clone())?,
+            None => build_proxy_runtime_dependencies(&self.config, &service_context, telemetry.clone())?,
         };
-        let auth_metadata_service = Some(backend.service_manager.metadata_service());
+        let auth_metadata_service = Some(dependencies.service_manager.metadata_service());
         let session_registry = self.session_registry.unwrap_or_default();
         let resource_metrics = rocketmq_observability::metrics::resource::ResourceStabilityMetrics::from_handle(
             &telemetry,
@@ -289,7 +291,7 @@ impl ProxyRuntimeBuilder {
                 expired_before_renewal: snapshot.expired_before_renewal,
             }
         });
-        let processor = Arc::new(DefaultMessagingProcessor::new(backend.service_manager));
+        let processor = Arc::new(DefaultMessagingProcessor::new(dependencies.service_manager));
         let mut runtime = ProxyRuntime::from_processor_with_local_mode_support_and_guards(
             self.config,
             processor,
@@ -301,8 +303,8 @@ impl ProxyRuntimeBuilder {
             metrics,
             transport_telemetry,
             grpc_guards,
-            backend.remoting_backend,
-            backend.context,
+            dependencies.remoting_backend,
+            dependencies.context,
             service_context,
         );
         runtime.grpc_service = runtime
@@ -772,11 +774,11 @@ async fn shutdown_proxy_components(
     }
 }
 
-fn default_service_manager_and_backend(
+fn build_proxy_runtime_dependencies(
     config: &ProxyConfig,
     service_context: &ChildServiceContext,
     telemetry_handle: rocketmq_observability::TelemetryHandle,
-) -> ProxyResult<DefaultBackend> {
+) -> ProxyResult<ProxyRuntimeDependencies> {
     match config.mode {
         #[cfg(feature = "cluster-mode")]
         ProxyMode::Cluster => {
@@ -793,7 +795,7 @@ fn default_service_manager_and_backend(
                 telemetry_handle,
             )?);
             let service_client: Arc<dyn ClusterClient> = client.clone();
-            Ok(DefaultBackend {
+            Ok(ProxyRuntimeDependencies {
                 service_manager: Arc::new(ClusterServiceManager::from_cluster_client(service_client)),
                 remoting_backend: Some(Arc::new(ClusterRemotingBackend::new(client))),
                 context: Some(cluster_context),
@@ -812,7 +814,7 @@ fn default_service_manager_and_backend(
                 &local_context,
                 telemetry_handle,
             )?;
-            Ok(DefaultBackend {
+            Ok(ProxyRuntimeDependencies {
                 service_manager: Arc::new(manager),
                 remoting_backend: Some(Arc::new(LocalRemotingBackend::new(client))),
                 context: Some(local_context),
