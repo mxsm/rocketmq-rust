@@ -63,7 +63,7 @@ component_source_surfaces:
     exposure: "mcp_system_resource_only"
     backlog: "production-verify exporter state for every server component"
   - component: "MCP"
-    source_path: "rocketmq-ai/rocketmq-mcp/src/resources/capability.rs"
+    source_path: "rocketmq-ai/rocketmq-mcp-query/src/resources/capability.rs"
     source_symbol: "CapabilityManifest"
     exposure: "queryable"
     backlog: "production-verify audit and exporter recovery alerts"

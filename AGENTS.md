@@ -20,7 +20,8 @@ build standalone Cargo or Node projects; follow the matching local guide when wo
 | `fuzz/` | [Fuzz targets](fuzz/AGENTS.md) |
 | `rocketmq-example/` | [Standalone examples](rocketmq-example/AGENTS.md) |
 | `rocketmq-macros/tests/fixtures/renamed-consumer/` | [Renamed dependency fixture](rocketmq-macros/tests/fixtures/renamed-consumer/AGENTS.md) |
-| `rocketmq-ai/rocketmq-mcp/` | [Read-only MCP](rocketmq-ai/rocketmq-mcp/AGENTS.md) |
+| `rocketmq-ai/rocketmq-mcp/` | [Feature-composed MCP entrypoint](rocketmq-ai/rocketmq-mcp/AGENTS.md) |
+| `rocketmq-ai/rocketmq-mcp-query/` | [Read-only queries and diagnostics](rocketmq-ai/rocketmq-mcp-query/AGENTS.md) |
 | `rocketmq-ai/rocketmq-mcp-control/` | [Isolated mutation control](rocketmq-ai/rocketmq-mcp-control/AGENTS.md) |
 | `rocketmq-ai/rocketmq-mcp-auth/` | [Shared MCP JWKS verification](rocketmq-ai/rocketmq-mcp-auth/AGENTS.md) |
 | `rocketmq-ai/rocketmq-sre/` | [Standalone SRE workspace](rocketmq-ai/rocketmq-sre/AGENTS.md) |

@@ -12,22 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![recursion_limit = "256"]
+//! Feature-composed RocketMQ MCP entrypoint.
+//!
+//! The default build serves queries and diagnostics. `control` includes the separately
+//! authenticated control server, and `write-tools` compiles its reviewed mutation tools.
+//! A process starts one server selected by [`ServerMode`]; each retains its own security policy.
 
-//! Model Context Protocol server for RocketMQ-Rust diagnostics.
+mod launch;
+pub use launch::{run_from_env, LaunchError, ServerMode};
 
-pub mod adapter;
-pub mod app;
-pub(crate) mod completion;
-pub mod config;
-mod error;
-pub use error::{McpError, McpResult};
-pub mod guard;
-pub(crate) mod infrastructure;
-pub mod model;
-pub mod prompts;
-pub mod protocol;
-pub mod resources;
-pub mod service;
-pub mod tools;
-pub mod transport;
+#[cfg(feature = "query")]
+pub use rocketmq_mcp_query as query;
+// Preserve the original query embedding API at the entrypoint crate root.
+#[cfg(feature = "query")]
+pub use rocketmq_mcp_query::{
+    adapter, app, config, guard, model, prompts, protocol, resources, service, tools, transport, McpError, McpResult,
+};
+
+#[cfg(feature = "auth")]
+pub use rocketmq_mcp_auth as auth;
+
+#[cfg(feature = "control")]
+pub use rocketmq_mcp_control as control;

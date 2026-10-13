@@ -115,6 +115,7 @@ $requiredRoutePaths = @(
     "fuzz/",
     "rocketmq-example/",
     "rocketmq-ai/rocketmq-mcp/",
+    "rocketmq-ai/rocketmq-mcp-query/",
     "rocketmq-ai/rocketmq-mcp-control/",
     "rocketmq-ai/rocketmq-sre/",
     "rocketmq-ai/rocketmq-sre/ui/",

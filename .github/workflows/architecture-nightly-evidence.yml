@@ -132,6 +132,8 @@ jobs:
             manifest: rocketmq-example/Cargo.toml
           - id: rocketmq-mcp
             manifest: rocketmq-ai/rocketmq-mcp/Cargo.toml
+          - id: rocketmq-mcp-query
+            manifest: rocketmq-ai/rocketmq-mcp-query/Cargo.toml
           - id: rocketmq-sre
             manifest: rocketmq-ai/rocketmq-sre/Cargo.toml
           - id: dashboard-gpui
