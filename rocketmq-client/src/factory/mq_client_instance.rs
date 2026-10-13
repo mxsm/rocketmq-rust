@@ -649,14 +649,6 @@ impl MQClientInstance {
         producer_impl.send(message).await
     }
 
-    pub fn on_channel_connect(&self, _remote_addr: &str) {}
-
-    pub fn on_channel_close(&self, _remote_addr: &str) {}
-
-    pub fn on_channel_exception(&self, _remote_addr: &str) {}
-
-    pub fn on_channel_idle(&self, _remote_addr: &str) {}
-
     pub async fn on_channel_active(&self, remote_addr: &str) {
         let matched_brokers: Vec<_> = self
             .broker_addr_table
@@ -3980,17 +3972,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn channel_event_methods_match_java_listener_contract_without_match() {
+    async fn channel_active_without_matching_broker_is_safe() {
         let client_config = ClientConfig {
             namesrv_addr: None,
             ..Default::default()
         };
         let instance = test_instance(client_config, "channel-event-test");
 
-        instance.on_channel_connect("127.0.0.1:10911");
-        instance.on_channel_close("127.0.0.1:10911");
-        instance.on_channel_exception("127.0.0.1:10911");
-        instance.on_channel_idle("127.0.0.1:10911");
         instance.on_channel_active("127.0.0.1:10911").await;
     }
 
