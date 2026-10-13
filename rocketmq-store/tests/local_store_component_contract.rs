@@ -58,7 +58,7 @@ fn core_facade_operations_delegate_to_capability_modules() {
         );
     }
 
-    assert!(READ_PATH.contains("impl BackendReadOps for LocalFileMessageStore"));
+    assert!(READ_PATH.contains("impl MessageStoreReader for LocalFileMessageStore"));
     for delegation in [
         "self.read_messages(",
         "self.read_messages_with_size_limit(",

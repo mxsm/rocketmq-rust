@@ -2404,7 +2404,7 @@ mod tests {
     use super::TIMER_TOPIC;
     use super::TIMER_WHEEL_TTL_DAY;
     use crate::base::backend_ops::BackendOps;
-    use crate::base::backend_read_ops::BackendReadOps;
+    use crate::base::backend_read_ops::MessageStoreReader;
     use crate::message_store::local_file_message_store::LocalFileMessageStore;
     struct ManualTimerClock {
         wall_time_ms: AtomicI64,

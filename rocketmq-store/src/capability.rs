@@ -23,7 +23,7 @@ mod read;
 pub use read::BrokerReadStore;
 pub use read::ConsumeQueueStatistics;
 
-use crate::base::backend_read_ops::BackendReadOps;
+use crate::base::backend_read_ops::MessageStoreReader;
 use std::any::Any;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -285,7 +285,7 @@ pub trait BrokerAdminStore: BrokerReplicationStore {
 
     /// Returns queue counts without exposing the backend's queue table or lock.
     fn consume_queue_statistics(&self) -> ConsumeQueueStatistics {
-        BackendReadOps::consume_queue_statistics(self.backend())
+        MessageStoreReader::consume_queue_statistics(self.backend())
     }
 
     fn delete_topics(&self, delete_topics: Vec<&CheetahString>) -> i32 {
@@ -615,7 +615,7 @@ impl<MS: BackendOps> MessageStoreReadPort for MS {
         offset: i64,
         max_messages: i32,
     ) -> Option<GetMessageResult> {
-        BackendReadOps::get_message(self, group, topic, queue_id, offset, max_messages, None).await
+        MessageStoreReader::get_message(self, group, topic, queue_id, offset, max_messages, None).await
     }
 
     async fn get_message_with_size_limit(
@@ -627,7 +627,7 @@ impl<MS: BackendOps> MessageStoreReadPort for MS {
         max_messages: i32,
         max_total_size: i32,
     ) -> Option<GetMessageResult> {
-        BackendReadOps::get_message_with_size_limit(
+        MessageStoreReader::get_message_with_size_limit(
             self,
             group,
             topic,
@@ -648,13 +648,13 @@ impl<MS: BackendOps> MessageStoreReadPort for MS {
         begin: i64,
         end: i64,
     ) -> Option<QueryMessageResult> {
-        BackendReadOps::query_message(self, topic, key, max_messages, begin, end).await
+        MessageStoreReader::query_message(self, topic, key, max_messages, begin, end).await
     }
 
     fn select_message(&self, physical_offset: i64, size: Option<i32>) -> Option<SelectMappedBufferResult> {
         match size {
-            Some(size) => BackendReadOps::select_one_message_by_offset_with_size(self, physical_offset, size),
-            None => BackendReadOps::select_one_message_by_offset(self, physical_offset),
+            Some(size) => MessageStoreReader::select_one_message_by_offset_with_size(self, physical_offset, size),
+            None => MessageStoreReader::select_one_message_by_offset(self, physical_offset),
         }
     }
 }

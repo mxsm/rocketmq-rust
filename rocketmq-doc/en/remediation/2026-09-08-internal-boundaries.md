@@ -30,7 +30,7 @@ existing ownership and behavior.
 
 ## Store backend reads
 
-`BackendReadOps` contains logical message reads and queue metadata. `BackendOps`
+`MessageStoreReader` contains logical message reads and queue metadata. `BackendOps`
 composes this trait with the remaining write, lifecycle, and administration
 operations. The Broker capability delegates logical reads through that contract;
 it does not downcast a queue store or access CommitLog for timestamp/cold-area

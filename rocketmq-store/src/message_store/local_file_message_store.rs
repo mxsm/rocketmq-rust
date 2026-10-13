@@ -119,7 +119,7 @@ use crate::base::backend_ops::MessageStoreShutdownReport;
 use crate::base::backend_ops::PutMessagePreflight;
 use crate::base::backend_ops::StateMachineVersionView;
 use crate::base::backend_ops::StoreHealthRecorder;
-use crate::base::backend_read_ops::BackendReadOps;
+use crate::base::backend_read_ops::MessageStoreReader;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::commit_log_dispatcher::MessageIndexRuntimeHandle;
 use crate::base::dispatch_request::DispatchRequest;

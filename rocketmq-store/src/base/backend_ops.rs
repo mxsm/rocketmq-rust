@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base::backend_read_ops::BackendReadOps;
+use crate::base::backend_read_ops::MessageStoreReader;
 use std::any::Any;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -276,7 +276,7 @@ pub struct MessageStoreShutdownReport {
 /// Broker consumers must use the narrow capability ports. This adapter is
 /// crate-private and exists only to share concrete backend implementation.
 #[trait_variant::make(Send)]
-pub trait BackendOps: BackendReadOps + Send + Sync + 'static {
+pub trait BackendOps: MessageStoreReader + Send + Sync + 'static {
     /// Load previously stored messages.
     ///
     /// Returns true if successful, false otherwise.
