@@ -22,13 +22,13 @@ use rocketmq_store::AppendMessageStatus;
 use rocketmq_store::BrokerStorePort;
 use rocketmq_store::MessageReadRequest;
 use rocketmq_store::MessageReadResult;
+use rocketmq_store::MessageStore;
 use rocketmq_store::MessageStoreHealthCapability;
 use rocketmq_store::MessageStoreReadCapability;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::StoreComponent;
 use rocketmq_store::StoreHealthSnapshot;
-use rocketmq_store::StorePorts;
 use rocketmq_store_api::AppendStatus;
 use rocketmq_store_api::Durability;
 use rocketmq_store_api::GetStatus;
@@ -333,7 +333,7 @@ where
 
 #[test]
 fn canonical_capability_compile_fixture_is_monomorphized() {
-    assert_capability_contract::<StorePorts>();
+    assert_capability_contract::<MessageStore>();
 }
 
 #[tokio::test]

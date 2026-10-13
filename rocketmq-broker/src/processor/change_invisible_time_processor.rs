@@ -758,8 +758,8 @@ mod tests {
     use rocketmq_security_api::AuthorizationDecision;
     use rocketmq_security_api::Principal;
     use rocketmq_security_api::RequestPolicy;
+    use rocketmq_store::MessageStore;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_store::StorePorts;
     use rocketmq_store::StoreRuntimeConfig;
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
@@ -844,7 +844,7 @@ mod tests {
         outcome
     }
 
-    fn test_processor() -> ChangeInvisibleTimeProcessor<StorePorts> {
+    fn test_processor() -> ChangeInvisibleTimeProcessor<MessageStore> {
         let broker_config = Arc::new(BrokerConfig::default());
         let message_store_config = Arc::new(MessageStoreConfig::default());
         let topic_config_manager = Arc::new(TopicConfigManager::new(
@@ -900,10 +900,10 @@ mod tests {
 
     #[tokio::test]
     async fn change_invisible_time_weak_capabilities_fail_closed_after_provider_shutdown() {
-        let store = ChangeInvisibleTimeStoreCapability::<StorePorts> {
+        let store = ChangeInvisibleTimeStoreCapability::<MessageStore> {
             escape_bridge: Weak::new(),
         };
-        let pop_buffer = ChangeInvisibleTimePopCapability::<StorePorts> {
+        let pop_buffer = ChangeInvisibleTimePopCapability::<MessageStore> {
             merge_service: Weak::new(),
         };
         let order = ChangeInvisibleTimeOrderCapability { manager: Weak::new() };

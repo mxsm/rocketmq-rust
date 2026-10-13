@@ -816,7 +816,7 @@ mod tests {
     use rocketmq_model::common::message::MessageTrait;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_protocol::protocol::SerializeType;
-    use rocketmq_store::StorePorts;
+    use rocketmq_store::MessageStore;
 
     use super::add_reply_response_metadata;
     use super::get_correlation_id_with_fallback;
@@ -828,11 +828,11 @@ mod tests {
     fn reply_shared_seam_accepts_an_arc_held_leaf() {
         type TransactionService =
             crate::transaction::queue::default_transactional_message_service::DefaultTransactionalMessageService<
-                StorePorts,
+                MessageStore,
             >;
 
         fn call_shared<'a>(
-            leaf: &'a Arc<super::ReplyMessageProcessor<StorePorts, TransactionService>>,
+            leaf: &'a Arc<super::ReplyMessageProcessor<MessageStore, TransactionService>>,
             request: &'a mut super::RemotingRequest,
         ) -> impl Future<Output = crate::broker_error::BrokerResult<super::ResponseAction>> + 'a {
             leaf.process_shared(request)

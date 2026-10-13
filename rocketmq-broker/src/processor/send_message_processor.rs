@@ -2268,11 +2268,11 @@ mod tests {
     use rocketmq_protocol::protocol::SerializeType;
     use rocketmq_store::store_append_receipt;
     use rocketmq_store::FlushBacklog;
+    use rocketmq_store::MessageStore;
     use rocketmq_store::PutMessageResult;
     use rocketmq_store::PutMessageStatus;
     use rocketmq_store::StoreAppendReceipt;
     use rocketmq_store::StoreHealthSnapshot;
-    use rocketmq_store::StorePorts;
     use rocketmq_store::SyncFlushRuntimeInfo;
 
     use crate::mqtrace::send_message_context::SendMessageContext;
@@ -2299,11 +2299,11 @@ mod tests {
     fn send_shared_seam_accepts_an_arc_held_leaf() {
         type TransactionService =
             crate::transaction::queue::default_transactional_message_service::DefaultTransactionalMessageService<
-                StorePorts,
+                MessageStore,
             >;
 
         fn call_shared<'a>(
-            leaf: &'a Arc<super::SendMessageProcessor<StorePorts, TransactionService>>,
+            leaf: &'a Arc<super::SendMessageProcessor<MessageStore, TransactionService>>,
             request: &'a mut super::RemotingRequest,
         ) -> impl Future<Output = crate::broker_error::BrokerResult<super::ResponseAction>> + 'a {
             leaf.process_shared(request)

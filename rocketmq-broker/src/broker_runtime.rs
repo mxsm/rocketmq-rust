@@ -68,13 +68,13 @@ use rocketmq_store::BrokerStats;
 use rocketmq_store::BrokerStatsManager;
 use rocketmq_store::BrokerStorePort;
 use rocketmq_store::CommitLogDispatcher;
+use rocketmq_store::MessageStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::MessageStoreShutdownReport;
 use rocketmq_store::StoreError;
 use rocketmq_store::StoreFactory;
 use rocketmq_store::StoreFactoryConfig;
 use rocketmq_store::StoreOperation;
-use rocketmq_store::StorePorts;
 #[cfg(all(test, feature = "rocksdb_store"))]
 use rocketmq_store::StoreType;
 use rocketmq_store::TimerMessageStore;
@@ -279,7 +279,7 @@ pub(crate) use shutdown_report::BrokerRemotingServerShutdownReport;
 pub(crate) use shutdown_report::BrokerShutdownComponentReport;
 use shutdown_report::BrokerShutdownProgress;
 
-pub(crate) type BrokerMessageStore = StorePorts;
+pub(crate) type BrokerMessageStore = MessageStore;
 
 pub(crate) type DefaultServerProcessor = BrokerRequestProcessor<
     BrokerProcessorType<BrokerMessageStore, DefaultTransactionalMessageService<BrokerMessageStore>>,

@@ -17,7 +17,7 @@
 ![RocketMQ storage composition](../resources/store-composition-architecture.png)
 
 ```text
-Broker lifecycle -> StoreFactory -> StorePorts
+Broker lifecycle -> StoreFactory -> MessageStore
                       |              -> narrow read / write / admin / replication capabilities
                       -> rocketmq-store-local: CommitLog, mapped files, derived structures
                       -> rocketmq-store-rocksdb: optional RocksDB metadata
@@ -28,7 +28,7 @@ Contracts and durability receipts: rocketmq-store-api
 store 围绕几个稳定边界组织：
 
 - **`BrokerStorePort` trait**：面向 broker 的生命周期、消息写入、读取、offset 查询、key 查询、CommitLog 访问、HA 元数据、清理和运行时信息 API。
-- **`StorePorts`**：按 feature gate 独占持有 `LocalFileMessageStore` 或 `RocksDBMessageStore` 的组合根。
+- **`rocketmq_store::MessageStore`**：按 feature gate 独占持有 `LocalFileMessageStore` 或 `RocksDBMessageStore` 的组合根。
 - **本地文件存储**：默认实现，围绕 CommitLog、mapped file、ConsumeQueue、索引文件、checkpoint、flush 服务和恢复流程构建。
 - **RocksDB 存储**：可选实现边界，继续复用本地文件 CommitLog 路径，同时通过 RocksDB 服务保存 consume queue、index、timer 和 transaction 元数据。
 - **分发流水线**：CommitLog append 产生 dispatch request，并构建 ConsumeQueue、key index、compaction metadata、RocksDB metadata 以及可选 tiered-store dispatch。
@@ -98,7 +98,7 @@ async fn run_store(
 使用 `StoreFactoryConfig::try_new` 校验配置，参数包括 `MessageStoreConfig`、
 `StoreRuntimeConfig`、主题表、可选统计管理器、批量到达通知设置和 `StoreTelemetry`。
 返回 `None` 表示确定性的配置校验失败，尚未打开后端；`StoreFactory::open` 才执行后端装配。
-从 crate 根路径导入 API；原 `base::message_store::MessageStore` 和 `OwnedMessageStore` 不再是公开入口。
+从 crate 根路径导入 API；原 `base::message_store::MessageStore` trait 和 `OwnedMessageStore` 不再是公开入口。
 
 以上函数接收应用所有者派生的子作用域，并在退出时返回详细关闭报告。调用方负责检查
 最终刷盘进度、未释放租约及待重放的文件退休任务，然后关闭运行时所有者。
@@ -141,7 +141,7 @@ cargo build -p rocketmq-store --features rocksdb_store
 
 | 领域 | 重要类型 |
 | --- | --- |
-| Store 边界 | `BrokerStorePort`, `StorePorts`, `LocalFileMessageStore`, `RocksDBMessageStore` |
+| Store 边界 | `BrokerStorePort`, `MessageStore`, `LocalFileMessageStore`, `RocksDBMessageStore` |
 | 配置 | `MessageStoreConfig`, `FlushDiskType`, `StoreType`, store path helpers |
 | 写入路径 | `CommitLog`, `DefaultAppendMessageCallback`, `PutMessageResult`, `AppendMessageResult` |
 | 读取路径 | `GetMessageResult`, `SelectMappedBufferResult`, `QueryMessageResult` |
@@ -191,7 +191,7 @@ cargo build -p rocketmq-store --features rocksdb_store
 
 ```text
 rocketmq-store/
-  src/base/                 MessageStore trait、结果类型、dispatch、stats、checkpoint
+  src/base/                 后端契约、结果类型、dispatch、stats、checkpoint
   src/config/               MessageStoreConfig、flush policy、store path helpers
   src/log_file/             CommitLog、mapped files、flush manager、recovery、fast load
   src/message_store/        LocalFileMessageStore 和可选 RocksDBMessageStore

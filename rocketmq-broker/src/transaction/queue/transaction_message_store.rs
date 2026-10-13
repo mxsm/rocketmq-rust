@@ -134,11 +134,11 @@ impl<MS: BrokerReadStore> TransactionMessageStore<MS> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_store::StorePorts;
+    use rocketmq_store::MessageStore;
 
     #[tokio::test]
     async fn transaction_store_fails_closed_after_provider_shutdown() {
-        let store = TransactionMessageStore::<StorePorts> {
+        let store = TransactionMessageStore::<MessageStore> {
             escape_bridge: Weak::new(),
             read_results: Arc::default(),
         };

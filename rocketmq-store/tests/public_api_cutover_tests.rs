@@ -25,9 +25,9 @@ fn read(path: impl AsRef<Path>) -> String {
 fn public_store_surface_exposes_capabilities_without_the_wide_facade() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let public_api = read(root.join("src/public_api.rs"));
-    let store_ports = root.join("src/store_ports.rs");
+    let message_store = root.join("src/store_ports.rs");
 
-    assert!(store_ports.is_file(), "the StorePorts composition root must exist");
+    assert!(message_store.is_file(), "the MessageStore composition root must exist");
     assert!(
         !public_api.contains("BackendOps"),
         "the internal BackendOps adapter must not remain in the intentional public API"
@@ -37,8 +37,8 @@ fn public_store_surface_exposes_capabilities_without_the_wide_facade() {
         "the legacy broad backend trait file must be deleted"
     );
     assert!(
-        public_api.contains("StorePorts"),
-        "the selected StorePorts composition root must be intentional public API"
+        public_api.contains("pub use crate::store_ports::MessageStore;"),
+        "the selected MessageStore composition root must be intentional public API"
     );
 }
 
@@ -73,17 +73,17 @@ fn rocksdb_backend_has_no_local_backend_dependency() {
 }
 
 #[test]
-fn store_factory_selects_backends_only_through_store_ports() {
+fn store_factory_selects_backends_only_through_message_store() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let factory = read(root.join("src/factory.rs"));
-    let store_ports = read(root.join("src/store_ports.rs"));
+    let message_store = read(root.join("src/store_ports.rs"));
     let legacy_root = ["Owned", "Message", "Store"].concat();
 
-    assert!(factory.contains("StorePorts"));
+    assert!(factory.contains("message_store: MessageStore,"));
     assert!(!factory.contains(&legacy_root));
-    assert!(store_ports.contains("pub enum StorePorts"));
-    assert!(store_ports.contains("LocalFileStore"));
-    assert!(store_ports.contains("RocksDBStore"));
+    assert!(message_store.contains("pub enum MessageStore"));
+    assert!(message_store.contains("LocalFileStore"));
+    assert!(message_store.contains("RocksDBStore"));
 }
 
 #[test]

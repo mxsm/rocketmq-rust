@@ -36,11 +36,11 @@ use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::BrokerReadStore;
 use rocketmq_store::BrokerStatsManager;
 use rocketmq_store::GetMessageResult;
+#[cfg(test)]
+use rocketmq_store::MessageStore;
 use rocketmq_store::MessageStoreConfig;
 #[cfg(test)]
 use rocketmq_store::PutMessageResult;
-#[cfg(test)]
-use rocketmq_store::StorePorts;
 use rocketmq_transport::api::RpcClientImpl;
 
 use crate::broker::broker_pre_online_capability::BrokerOnlineRoleState;
@@ -351,7 +351,7 @@ impl PullMessageStoreCapability {
         let provider = self.provider()?;
         let bridge = provider
             .as_any()
-            .downcast_ref::<EscapeBridge<StorePorts>>()
+            .downcast_ref::<EscapeBridge<MessageStore>>()
             .ok_or(MessageStoreUnavailable)?;
         bridge.put_message_to_local_store(message).await
     }
@@ -550,8 +550,8 @@ mod tests {
     use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
     use rocketmq_model::common::broker::broker_role::BrokerRole;
+    use rocketmq_store::MessageStore;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_store::StorePorts;
 
     use super::EscapeBridge;
     use super::PullMessagePolicyState;
@@ -594,7 +594,7 @@ mod tests {
 
     #[test]
     fn pull_store_capability_fails_closed_without_provider() {
-        let provider: Weak<dyn PullMessageStorePort> = Weak::<EscapeBridge<StorePorts>>::new();
+        let provider: Weak<dyn PullMessageStorePort> = Weak::<EscapeBridge<MessageStore>>::new();
         let capability = PullMessageStoreCapability {
             provider,
             read_barrier: std::sync::OnceLock::new(),

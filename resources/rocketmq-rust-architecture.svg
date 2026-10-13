@@ -403,7 +403,7 @@
   <text x="346" y="607" class="lb">Topics · Offsets · Filtering · Transactions · Timer · POP</text>
   <rect x="48" y="660" width="470" height="164" rx="20" class="grp"/>
   <text x="68" y="686" class="gt">INSIDE EACH BROKER · STORAGE</text>
-  <text x="502" y="686" class="nn" text-anchor="end">rocketmq-store · StorePorts</text>
+  <text x="502" y="686" class="nn" text-anchor="end">rocketmq-store · MessageStore</text>
   <rect x="536" y="660" width="520" height="164" rx="20" class="grp"/>
   <text x="552" y="686" class="gt">OPERATIONS &amp; AI</text>
   <text x="1040" y="686" class="nn" text-anchor="end">separate processes · off the message path</text>

@@ -655,8 +655,8 @@ mod tests {
     use rocketmq_security_api::AuthorizationDecision;
     use rocketmq_security_api::Principal;
     use rocketmq_security_api::RequestPolicy;
+    use rocketmq_store::MessageStore;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_store::StorePorts;
     use rocketmq_store::StoreRuntimeConfig;
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
@@ -675,7 +675,7 @@ mod tests {
         }
     }
 
-    fn test_processor() -> RecallMessageProcessor<StorePorts> {
+    fn test_processor() -> RecallMessageProcessor<MessageStore> {
         let broker_config = BrokerConfig::default();
         let message_store_config = MessageStoreConfig::default();
         let topic_config_manager = Arc::new(TopicConfigManager::new(
@@ -793,7 +793,7 @@ mod tests {
 
     #[tokio::test]
     async fn recall_put_capability_fails_closed_after_provider_shutdown() {
-        let capability = RecallMessageStoreCapability::<StorePorts> {
+        let capability = RecallMessageStoreCapability::<MessageStore> {
             escape_bridge: Weak::new(),
         };
 

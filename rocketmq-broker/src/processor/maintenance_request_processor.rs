@@ -539,8 +539,8 @@ mod tests {
     use rocketmq_security_api::RequestPolicy;
     use rocketmq_security_api::MAINTENANCE_POLICY_SCHEMA_VERSION;
     use rocketmq_store::LocalFileMessageStore;
+    use rocketmq_store::MessageStore;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_store::StorePorts;
     use rocketmq_store::StoreRuntimeConfig;
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
@@ -629,7 +629,7 @@ mod tests {
             maintenance_policy().into_validated().expect("valid maintenance policy"),
         ));
         let checkpoint_service = Arc::new(StoreReleaseCheckpointService::new(
-            Weak::<StorePorts>::new(),
+            Weak::<MessageStore>::new(),
             PathBuf::from("maintenance-unused"),
             service_context.component("checkpoint"),
         ));
@@ -647,7 +647,7 @@ mod tests {
     }
 
     async fn maintenance_processor_with_store_for_test(
-    ) -> (MaintenanceRequestProcessor, Arc<StorePorts>, tempfile::TempDir) {
+    ) -> (MaintenanceRequestProcessor, Arc<MessageStore>, tempfile::TempDir) {
         let service_context = crate::test_service_context("maintenance-original-code");
         let auth_runtime = Arc::new(
             AuthRuntimeBuilder::new(maintenance_auth_config(), service_context.component("auth"))
@@ -660,7 +660,7 @@ mod tests {
         ));
         let root = tempfile::tempdir().expect("maintenance checkpoint root");
         let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
-        let store = Arc::new(StorePorts::local_file(
+        let store = Arc::new(MessageStore::local_file(
             LocalFileMessageStore::new(
                 Arc::new(MessageStoreConfig {
                     store_path_root_dir: root.path().to_string_lossy().into_owned().into(),
