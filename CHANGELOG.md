@@ -151,6 +151,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(store):** Remove the deprecated `BrokerStatsManager::{GROUP_GET_FALL_SIZE, GROUP_GET_FALL_TIME, GROUP_GET_LATENCY}` constants (breaking); use the identical constants on `rocketmq_observability::stats::Stats`.
 - **client:** Remove deprecated `SendMessageOpenTracingHookImpl`, `ConsumeMessageOpenTracingHookImpl`, and `EndTransactionOpenTracingHookImpl` placeholders (breaking); remove their construction and use the client's supported tracing configuration where needed.
 - **broker:** Remove deprecated `ConsumerGroupInfo::get_subscription_table` and the internal `TopicConfigManager::topic_config_table` wrapper; use subscription snapshots and commands instead of the mutable table exposed through `bench_support` (breaking).
 - **client:** Remove the four no-op `MQClientInstance::on_channel_{connect,close,exception,idle}` methods, including their `test-support` surface; remove calls to these methods.
