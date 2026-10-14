@@ -14,7 +14,7 @@
 
 use super::DatabasePool;
 use super::PersistenceError;
-use super::SqlPersistence;
+use super::SqlDashboardStore;
 use super::map_query_error;
 use crate::model::AuditAction;
 use crate::model::AuditActor;
@@ -33,7 +33,7 @@ use sqlx::Sqlite;
 use sqlx::Transaction;
 use sqlx::mysql::MySqlRow;
 
-impl SqlPersistence {
+impl SqlDashboardStore {
     pub(crate) async fn append_audit_event(&self, event: AuditEvent) -> Result<(), PersistenceError> {
         let detail = event
             .detail
@@ -477,14 +477,14 @@ mod tests {
     use serde_json::json;
     use sqlx::sqlite::SqlitePoolOptions;
 
-    async fn store() -> SqlPersistence {
+    async fn store() -> SqlDashboardStore {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
             .await
             .expect("open SQLite storage");
         let schema_version = migration::migrate_sqlite(&pool).await.expect("migrate SQLite storage");
-        SqlPersistence {
+        SqlDashboardStore {
             pool: DatabasePool::Sqlite(pool),
             backend: StorageBackend::Sqlite,
             schema_version,

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::SqlPersistence;
+use super::SqlDashboardStore;
 use crate::config::SqlPoolConfig;
 use crate::config::StorageConfig;
 use crate::model::EnvironmentId;
@@ -30,7 +30,7 @@ fn sqlite_history_cursor_multidimension_atomicity_and_cutoff_contract() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
-        let store = SqlPersistence::initialize(
+        let store = SqlDashboardStore::initialize(
             &StorageConfig {
                 backend: StorageBackend::Sqlite,
                 data_path: directory.path().join("dashboard.db"),
@@ -241,7 +241,7 @@ fn query(
 fn docker_history_identity_cursor_and_retention_contract(backend: StorageBackend, database_url: String) {
     let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
-        let store = SqlPersistence::initialize(
+        let store = SqlDashboardStore::initialize(
             &StorageConfig {
                 backend,
                 data_path: "unused".into(),
@@ -473,7 +473,11 @@ fn docker_history_identity_cursor_and_retention_contract(backend: StorageBackend
     owner.shutdown_runtime_blocking().expect("runtime shutdown");
 }
 
-async fn assert_invalid_time_boundaries(store: &SqlPersistence, environment_id: &EnvironmentId, lease: &HistoryLease) {
+async fn assert_invalid_time_boundaries(
+    store: &SqlDashboardStore,
+    environment_id: &EnvironmentId,
+    lease: &HistoryLease,
+) {
     assert!(matches!(
         store
             .query_history(HistoryQuery {
