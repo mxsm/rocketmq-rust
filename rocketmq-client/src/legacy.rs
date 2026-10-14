@@ -51,12 +51,6 @@ fn unsupported_legacy_api(api: &str, replacement: &str) -> ClientError {
     ))
 }
 
-fn unsupported_impl_api(api: &str) -> ClientError {
-    ClientError::illegal_argument(format!(
-        "{api} is a RocketMQ Java impl-package type and is not part of the rocketmq-client-rust public API"
-    ))
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScheduleServiceState {
     Created,
@@ -419,47 +413,6 @@ impl PullTaskContext {
     }
 }
 
-#[deprecated(
-    since = "0.9.0",
-    note = "Java PullTaskImpl is deprecated; use MQPullConsumerScheduleService"
-)]
-#[derive(Debug, Clone, Default)]
-pub struct PullTaskImpl {
-    message_queue: Option<MessageQueue>,
-}
-
-impl PullTaskImpl {
-    pub fn new(message_queue: MessageQueue) -> Self {
-        Self {
-            message_queue: Some(message_queue),
-        }
-    }
-
-    pub fn message_queue(&self) -> Option<&MessageQueue> {
-        self.message_queue.as_ref()
-    }
-
-    pub fn run(&self) -> ClientResult<()> {
-        self.message_queue
-            .as_ref()
-            .map(|_| ())
-            .ok_or_else(|| ClientError::not_initialized("PullTaskImpl has no message queue"))
-    }
-}
-
-#[deprecated(
-    since = "0.9.0",
-    note = "Java RebalancePullImpl is deprecated with DefaultMQPullConsumer"
-)]
-#[derive(Debug, Clone, Default)]
-pub struct RebalancePullImpl;
-
-impl RebalancePullImpl {
-    pub fn new() -> ClientResult<Self> {
-        Ok(Self)
-    }
-}
-
 #[deprecated(since = "0.9.0", note = "Java MQHelper depends on DefaultMQPullConsumer")]
 #[derive(Debug, Clone, Default)]
 pub struct MQHelper;
@@ -544,45 +497,6 @@ pub trait TransactionCheckListener {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct DoNothingClientRemotingProcessor;
-
-impl DoNothingClientRemotingProcessor {
-    pub fn new() -> Self {
-        Self
-    }
-
-    pub fn process_request(&self) -> Option<()> {
-        None
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct RebalanceImpl;
-
-impl RebalanceImpl {
-    pub fn new() -> ClientResult<Self> {
-        Err(unsupported_impl_api("RebalanceImpl"))
-    }
-
-    pub fn do_rebalance(&self) -> ClientResult<()> {
-        Err(unsupported_impl_api("RebalanceImpl"))
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct ConsumeRequest;
-
-impl ConsumeRequest {
-    pub fn new() -> Self {
-        Self
-    }
-
-    pub fn run(&self) -> ClientResult<()> {
-        Err(unsupported_impl_api("ConsumeRequest"))
-    }
-}
-
 #[cfg(test)]
 #[allow(deprecated)]
 mod tests {
@@ -644,18 +558,5 @@ mod tests {
             .expect_err("deprecated transaction listener should reject checks");
 
         assert_invalid_argument(&error);
-    }
-
-    #[test]
-    fn impl_package_markers_do_not_panic() {
-        assert!(DoNothingClientRemotingProcessor::new().process_request().is_none());
-
-        let rebalance_error = RebalanceImpl::new().expect_err("impl-package RebalanceImpl should be unsupported");
-        assert_invalid_argument(&rebalance_error);
-
-        let consume_error = ConsumeRequest::new()
-            .run()
-            .expect_err("impl-package ConsumeRequest should be unsupported");
-        assert_invalid_argument(&consume_error);
     }
 }

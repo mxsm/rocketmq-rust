@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(proxy):** Rename `ProxyRemotingBackend` to `ProxyRemotingRequestHandler` (breaking); update imports, implementations, and trait bounds ([#11494](https://github.com/mxsm/rocketmq-rust/issues/11494)).
 - **refactor(transport):** Renamed `ResponseWriteOutcome` to `ResponseDeliveryEvent`, its `Written` variant to `DeliveryCompleted`, and `ResponseWriteObservation::outcome()` to `event()` (breaking) ([#11425](https://github.com/mxsm/rocketmq-rust/issues/11425)).
 - **refactor(transport):** Renamed `ResponseCompletionOutcome` to `ResponseCompletionResult` (breaking), exported as `rocketmq_transport::api::ResponseCompletionResult`. External callers must update imports and type references; no compatibility alias is provided. Variants `Completed(ResponseReceipt)`, `AlreadyCompleted(ResponseTerminalState)`, `DeadlineExpired`, `Cancelled`, `SessionClosed`, and `QueueSaturated`, trait implementations, and `as_str()` labels are unchanged ([#11421](https://github.com/mxsm/rocketmq-rust/issues/11421)).
 - **refactor(transport):** Renamed `SessionCloseOutcome` to `SessionCloseStatus` (breaking), exported as `rocketmq_transport::api::SessionCloseStatus` and returned by `SessionCloseHandle::close()`. The variants `Closed` and `AlreadyClosed` are unchanged and still both report full close completion; only `Closed` identifies the initiating caller. External callers must update imports and type references; no compatibility alias is provided ([#11427](https://github.com/mxsm/rocketmq-rust/issues/11427)).
@@ -152,6 +153,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - **refactor(store-local):** Remove `MappedBuffer::new` and `get_mmap` (breaking); use `from_mmap`, `region`, and the scoped read/write/flush operations.
+- **refactor(client):** Remove the five legacy implementation placeholders (`ConsumeRequest`, `DoNothingClientRemotingProcessor`, `PullTaskImpl`, `RebalanceImpl`, `RebalancePullImpl`) and `DefaultMQPullConsumerImpl::rebalance_impl` (breaking); use the consumer facades and `MQPullConsumerScheduleService` for actual consumption and scheduling.
 - **client:** Remove deprecated `SendMessageOpenTracingHookImpl`, `ConsumeMessageOpenTracingHookImpl`, and `EndTransactionOpenTracingHookImpl` placeholders (breaking); remove their construction and use the client's supported tracing configuration where needed.
 - **broker:** Remove deprecated `ConsumerGroupInfo::get_subscription_table` and the internal `TopicConfigManager::topic_config_table` wrapper; use subscription snapshots and commands instead of the mutable table exposed through `bench_support` (breaking).
 - **client:** Remove the four no-op `MQClientInstance::on_channel_{connect,close,exception,idle}` methods, including their `test-support` surface; remove calls to these methods.
