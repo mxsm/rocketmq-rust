@@ -18,7 +18,7 @@ use crate::persistence::DashboardPersistence;
 use crate::persistence::Revision;
 use crate::persistence::backend::PersistenceBackend;
 use crate::persistence::error::PersistenceError;
-use crate::persistence::file_store::FilePersistence;
+use crate::persistence::file_store::FileDashboardStore;
 use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
@@ -160,7 +160,7 @@ struct FileMonitorSnapshot {
     rules: Vec<ConsumerMonitorRule>,
 }
 
-impl FilePersistence {
+impl FileDashboardStore {
     pub(crate) async fn list_monitor_rules(
         &self,
         environment_id: &EnvironmentId,

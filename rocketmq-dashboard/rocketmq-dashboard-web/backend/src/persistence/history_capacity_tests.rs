@@ -18,7 +18,7 @@ use crate::config::StorageConfig;
 use crate::model::EnvironmentId;
 use crate::model::MetricSample;
 use crate::model::StorageBackend;
-use crate::persistence::file_store::FilePersistence;
+use crate::persistence::file_store::FileDashboardStore;
 use crate::persistence::history_repository::HistoryQuery;
 use crate::persistence::history_repository::page_samples;
 use crate::persistence::sql_store::SqlPersistence;
@@ -53,7 +53,7 @@ fn docker_file_history_capacity_baseline() {
         .expect("ROCKETMQ_DASHBOARD_STORAGE_TEST_FILE_PATH must be set by the storage test runner");
     let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
-        let store = FilePersistence::initialize(
+        let store = FileDashboardStore::initialize(
             &StorageConfig {
                 backend: StorageBackend::File,
                 data_path: data_path.into(),
@@ -122,7 +122,7 @@ fn samples(environment_id: &EnvironmentId, batch: usize) -> Vec<MetricSample> {
         .collect()
 }
 
-async fn run_file_capacity(store: &FilePersistence) {
+async fn run_file_capacity(store: &FileDashboardStore) {
     let environment_id = EnvironmentId::new();
     let first = samples(&environment_id, 0);
     let started = Instant::now();

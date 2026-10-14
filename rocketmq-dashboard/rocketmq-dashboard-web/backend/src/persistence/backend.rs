@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::model::StorageBackend;
-use crate::persistence::file_store::FilePersistence;
+use crate::persistence::file_store::FileDashboardStore;
 use crate::persistence::sql_store::SqlPersistence;
 
 pub enum PersistenceBackend {
-    File(Box<FilePersistence>),
+    File(Box<FileDashboardStore>),
     Sql(Box<SqlPersistence>),
 }
 
