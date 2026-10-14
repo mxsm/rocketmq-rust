@@ -30,7 +30,7 @@ use crate::model::MetricSample;
 use crate::model::SessionTokenHash;
 use crate::model::StorageBackend;
 use crate::persistence::error::PersistenceError;
-use crate::persistence::sql_store::SqlPersistence;
+use crate::persistence::sql_store::SqlDashboardStore;
 use serde_json::Value;
 use sqlx::Database;
 use sqlx::MySqlConnection;
@@ -75,7 +75,7 @@ macro_rules! finish_write_transaction {
     }};
 }
 
-impl SqlPersistence {
+impl SqlDashboardStore {
     pub(crate) async fn snapshot_for_operations(&self) -> Result<BackupData, PersistenceError> {
         if let Some(pool) = self.sqlite_pool() {
             return snapshot_sqlite(pool).await;

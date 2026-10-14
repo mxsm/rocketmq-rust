@@ -146,7 +146,7 @@ impl DashboardPersistence {
                 file_store::FilePersistence::initialize(config, service_context).await?,
             )),
             StorageBackend::Sqlite | StorageBackend::MySql | StorageBackend::Postgres => PersistenceBackend::Sql(
-                Box::new(sql_store::SqlPersistence::initialize(config, service_context).await?),
+                Box::new(sql_store::SqlDashboardStore::initialize(config, service_context).await?),
             ),
         };
         let persistence = Self {

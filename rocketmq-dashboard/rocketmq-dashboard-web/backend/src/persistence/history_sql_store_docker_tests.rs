@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::SqlPersistence;
+use super::SqlDashboardStore;
 use crate::config::SqlPoolConfig;
 use crate::config::StorageConfig;
 use crate::model::EnvironmentId;
@@ -43,7 +43,7 @@ fn docker_sqlite_history_reopens_a_mounted_database() {
             dimensions: Vec::new(),
             value: 3.0,
         };
-        let store = SqlPersistence::initialize(&config, owner.root_context().component("docker-history-sqlite"))
+        let store = SqlDashboardStore::initialize(&config, owner.root_context().component("docker-history-sqlite"))
             .await
             .expect("SQLite persistence");
         let lease = store
@@ -58,7 +58,7 @@ fn docker_sqlite_history_reopens_a_mounted_database() {
         drop(store);
 
         let reopened =
-            SqlPersistence::initialize(&config, owner.root_context().component("docker-history-sqlite-reopen"))
+            SqlDashboardStore::initialize(&config, owner.root_context().component("docker-history-sqlite-reopen"))
                 .await
                 .expect("reopen mounted SQLite persistence");
         let page = reopened
