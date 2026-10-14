@@ -98,7 +98,7 @@ use rocketmq_proxy_core::MetadataService;
 use rocketmq_proxy_core::ProxyContext;
 use rocketmq_proxy_core::ProxyError;
 use rocketmq_proxy_core::ProxyMessage;
-use rocketmq_proxy_core::ProxyRemotingBackend;
+use rocketmq_proxy_core::ProxyRemotingRequestHandler;
 use rocketmq_proxy_core::ProxyResult;
 use rocketmq_proxy_core::ProxyServiceFuture;
 use rocketmq_proxy_core::ProxyTopicMessageType;
@@ -771,7 +771,7 @@ impl LocalRemotingBackend {
     }
 }
 
-impl ProxyRemotingBackend for LocalRemotingBackend {
+impl ProxyRemotingRequestHandler for LocalRemotingBackend {
     type Response = EmbeddedDispatchResult;
 
     fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchResult> {
@@ -2847,7 +2847,7 @@ mod tests {
     use rocketmq_proxy_core::MessageQueueTarget;
     use rocketmq_proxy_core::ProxyError;
     use rocketmq_proxy_core::ProxyMessage;
-    use rocketmq_proxy_core::ProxyRemotingBackend;
+    use rocketmq_proxy_core::ProxyRemotingRequestHandler;
     use rocketmq_proxy_core::ProxyTopicMessageType;
     use rocketmq_proxy_core::PullMessageRequest;
     use rocketmq_proxy_core::ReceiveMessageRequest;

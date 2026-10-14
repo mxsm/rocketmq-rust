@@ -15,7 +15,7 @@
 //! Backend-neutral contracts for the legacy Remoting ingress.
 //!
 //! Wire decoding and TCP lifecycle remain facade responsibilities. This ingress module
-//! owns the stable request classification and backend port used after a facade
+//! owns the stable request classification and request handler used after a facade
 //! has decoded a canonical protocol command.
 
 use rocketmq_model::result::SendResult;
@@ -29,12 +29,12 @@ use crate::proto::v2;
 use crate::status::ProxyPayloadStatus;
 use crate::ProxyServiceFuture;
 
-/// Backend port for requests that must be handled by a facade-owned runtime.
+/// Handles canonical commands already decoded by the facade.
 ///
-/// The command is the canonical protocol DTO. Implementations may bridge it to
-/// an embedded broker or another provider, but Core does not depend on those
-/// implementations.
-pub trait ProxyRemotingBackend: Send + Sync {
+/// Implementations may bridge commands to an embedded broker or another provider,
+/// but Core does not depend on those implementations. Wire decoding and TCP
+/// lifecycle remain facade responsibilities.
+pub trait ProxyRemotingRequestHandler: Send + Sync {
     type Response: Send;
 
     /// Processes a canonical command through the channel-free Broker boundary.

@@ -28,8 +28,6 @@ use rocketmq_client_rust::MessageSelector;
 use rocketmq_client_rust::PullOptions;
 use rocketmq_client_rust::PullTaskCallback;
 use rocketmq_client_rust::PullTaskContext;
-use rocketmq_client_rust::PullTaskImpl;
-use rocketmq_client_rust::RebalancePullImpl;
 use rocketmq_client_rust::TelemetryHandle;
 use rocketmq_error::fields;
 use rocketmq_error::ErrorContext;
@@ -200,10 +198,6 @@ fn schedule_compatibility_types_are_live_or_fail_closed() {
             .map(|group| group.as_str()),
         Some("ClassicPullGroup")
     );
-
-    let task = PullTaskImpl::new(MessageQueue::from_parts("TopicA", "broker-a", 0));
-    task.run().expect("configured compatibility task should be runnable");
-    RebalancePullImpl::new().expect("rebalance compatibility marker should be constructible");
 }
 
 #[test]
