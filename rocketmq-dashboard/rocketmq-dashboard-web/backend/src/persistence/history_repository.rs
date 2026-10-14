@@ -16,7 +16,7 @@ use crate::model::MetricDimension;
 use crate::model::MetricSample;
 use crate::persistence::DashboardPersistence;
 use crate::persistence::TimeRange;
-use crate::persistence::backend::PersistenceBackend;
+use crate::persistence::backend::DashboardDataStore;
 use crate::persistence::error::PersistenceError;
 use crate::persistence::lease_repository::HistoryLease;
 use chrono::TimeZone;
@@ -296,17 +296,17 @@ impl DashboardPersistence {
         if self.history_uses_sql_lease() && lease.map(HistoryLease::environment_id) != Some(environment_id) {
             return Err(PersistenceError::Conflict);
         }
-        match &self.backend {
-            PersistenceBackend::File(store) => store.append_history(samples).await,
-            PersistenceBackend::Sql(store) => store.append_history(samples, lease).await,
+        match &self.store {
+            DashboardDataStore::File(store) => store.append_history(samples).await,
+            DashboardDataStore::Sql(store) => store.append_history(samples, lease).await,
         }
     }
 
     pub async fn query_history(&self, mut query: HistoryQuery) -> Result<HistoryPage, PersistenceError> {
         query.validate_and_normalize()?;
-        match &self.backend {
-            PersistenceBackend::File(store) => page_samples(&query, store.read_history(&query).await?),
-            PersistenceBackend::Sql(store) => store.query_history(query).await,
+        match &self.store {
+            DashboardDataStore::File(store) => page_samples(&query, store.read_history(&query).await?),
+            DashboardDataStore::Sql(store) => store.query_history(query).await,
         }
     }
 
@@ -322,9 +322,9 @@ impl DashboardPersistence {
                 "history retention request is invalid".to_string(),
             ));
         }
-        match &self.backend {
-            PersistenceBackend::File(store) => store.delete_history_before(environment_id, cutoff_ms, batch_size).await,
-            PersistenceBackend::Sql(store) => {
+        match &self.store {
+            DashboardDataStore::File(store) => store.delete_history_before(environment_id, cutoff_ms, batch_size).await,
+            DashboardDataStore::Sql(store) => {
                 if lease.map(HistoryLease::environment_id) != Some(environment_id) {
                     return Err(PersistenceError::Conflict);
                 }

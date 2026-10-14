@@ -16,7 +16,7 @@ use crate::model::AuditAction;
 use crate::model::AuditEvent;
 use crate::model::AuditOutcome;
 use crate::persistence::DashboardPersistence;
-use crate::persistence::backend::PersistenceBackend;
+use crate::persistence::backend::DashboardDataStore;
 use crate::persistence::error::PersistenceError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,17 +54,17 @@ pub trait AuditRepository {
 
 impl DashboardPersistence {
     pub async fn append_audit_event(&self, event: AuditEvent) -> Result<(), PersistenceError> {
-        match &self.backend {
-            PersistenceBackend::File(store) => store.append_audit_event(event).await,
-            PersistenceBackend::Sql(store) => store.append_audit_event(event).await,
+        match &self.store {
+            DashboardDataStore::File(store) => store.append_audit_event(event).await,
+            DashboardDataStore::Sql(store) => store.append_audit_event(event).await,
         }
     }
 
     pub async fn query_audit_events(&self, query: AuditQuery) -> Result<AuditPage, PersistenceError> {
         validate_query(&query)?;
-        match &self.backend {
-            PersistenceBackend::File(store) => store.query_audit_events(query).await,
-            PersistenceBackend::Sql(store) => store.query_audit_events(query).await,
+        match &self.store {
+            DashboardDataStore::File(store) => store.query_audit_events(query).await,
+            DashboardDataStore::Sql(store) => store.query_audit_events(query).await,
         }
     }
 
@@ -74,9 +74,9 @@ impl DashboardPersistence {
                 "audit cleanup batch must be between 1 and 1000".to_string(),
             ));
         }
-        match &self.backend {
-            PersistenceBackend::File(store) => store.delete_audit_before(cutoff_ms, limit).await,
-            PersistenceBackend::Sql(store) => store.delete_audit_before(cutoff_ms, limit).await,
+        match &self.store {
+            DashboardDataStore::File(store) => store.delete_audit_before(cutoff_ms, limit).await,
+            DashboardDataStore::Sql(store) => store.delete_audit_before(cutoff_ms, limit).await,
         }
     }
 }

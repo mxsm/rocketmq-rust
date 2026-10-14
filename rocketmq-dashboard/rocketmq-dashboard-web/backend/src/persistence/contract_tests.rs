@@ -24,7 +24,7 @@ use crate::model::EndpointRole;
 use crate::model::EndpointType;
 use crate::model::EnvironmentId;
 use crate::model::StorageBackend;
-use crate::persistence::backend::PersistenceBackend;
+use crate::persistence::backend::DashboardDataStore;
 use crate::persistence::environment_repository::DEFAULT_ENVIRONMENT_ID;
 use crate::persistence::error::PersistenceError;
 use rocketmq_runtime::RuntimeOwner;
@@ -454,8 +454,8 @@ async fn corrupt_default_environment_identity(
     let mut corrupt = default_environment.clone();
     corrupt.environment_id = EnvironmentId::new();
     let invalid_id = corrupt.environment_id.0.clone();
-    match &persistence.backend {
-        PersistenceBackend::File(store) => {
+    match &persistence.store {
+        DashboardDataStore::File(store) => {
             store
                 .write_snapshot(
                     "environments/default",
@@ -471,7 +471,7 @@ async fn corrupt_default_environment_identity(
                     .join(format!("{:020}.json", default_environment.revision.0 + 1)),
             }
         }
-        PersistenceBackend::Sql(store) => match store.storage_backend() {
+        DashboardDataStore::Sql(store) => match store.storage_backend() {
             StorageBackend::Sqlite => {
                 let pool = store.sqlite_pool().expect("SQLite pool").clone();
                 sqlx::query("DELETE FROM dashboard_endpoint WHERE environment_id = ?")

@@ -15,12 +15,13 @@ use crate::model::StorageBackend;
 use crate::persistence::file_store::FileDashboardStore;
 use crate::persistence::sql_store::SqlDashboardStore;
 
-pub enum PersistenceBackend {
+/// Owns the initialized File or SQL store for durable Dashboard data.
+pub enum DashboardDataStore {
     File(Box<FileDashboardStore>),
     Sql(Box<SqlDashboardStore>),
 }
 
-impl PersistenceBackend {
+impl DashboardDataStore {
     pub const fn storage_backend(&self) -> StorageBackend {
         match self {
             Self::File(_) => StorageBackend::File,
