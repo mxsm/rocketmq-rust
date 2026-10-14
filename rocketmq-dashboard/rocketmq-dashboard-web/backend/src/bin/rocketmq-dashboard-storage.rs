@@ -179,7 +179,7 @@ async fn run(command: Command, context: rocketmq_runtime::ChildServiceContext) -
                 StorageCliError::source("STORAGE_CONFIG_INVALID", "Storage configuration is invalid", source)
             })?;
             let data = storage_operations::read_verified_backup(&input, Some(config.backend)).map_err(storage_error)?;
-            if config.backend == rocketmq_dashboard_web_backend::model::StorageBackend::File {
+            if config.backend == rocketmq_dashboard_web_backend::model::StorageEngine::File {
                 storage_operations::restore_file_target(&data, &config, context)
                     .await
                     .map_err(storage_error)?;

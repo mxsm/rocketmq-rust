@@ -13,7 +13,7 @@
 // limitations under the License.
 use crate::error::DashboardError;
 use crate::model::DashboardConfigView;
-use crate::model::StorageBackend;
+use crate::model::StorageEngine;
 use axum::http::HeaderValue;
 use axum::http::Uri;
 use rocketmq_admin_core::core::security::AdminCredentials;
@@ -94,7 +94,7 @@ impl Default for SqlPoolConfig {
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct StorageConfig {
-    pub backend: StorageBackend,
+    pub backend: StorageEngine,
     /// File data directory, or the SQLite database file.
     pub data_path: PathBuf,
     /// Present only for MySQL and PostgreSQL. It must never reach normal logs,
@@ -118,7 +118,7 @@ impl fmt::Debug for StorageConfig {
 impl StorageConfig {
     pub fn from_env() -> Result<Self, DashboardError> {
         let backend_value = env::var("DASHBOARD_WEB_STORAGE_BACKEND").unwrap_or_else(|_| "file".to_string());
-        let backend = StorageBackend::parse(&backend_value).map_err(DashboardError::Config)?;
+        let backend = StorageEngine::parse(&backend_value).map_err(DashboardError::Config)?;
         let data_path = env::var("DASHBOARD_WEB_STORAGE_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|_| default_storage_path(backend));
@@ -169,17 +169,15 @@ impl StorageConfig {
             ));
         }
         match self.backend {
-            StorageBackend::Sqlite if sqlite_memory_path(&self.data_path) => Err(DashboardError::Config(
+            StorageEngine::Sqlite if sqlite_memory_path(&self.data_path) => Err(DashboardError::Config(
                 "DASHBOARD_WEB_STORAGE_PATH must name an on-disk SQLite database; in-memory SQLite is not supported"
                     .to_string(),
             )),
-            StorageBackend::File | StorageBackend::Sqlite if self.database_url.is_some() => {
-                Err(DashboardError::Config(
-                    "DASHBOARD_WEB_DATABASE_URL is only valid for mysql and postgres storage".to_string(),
-                ))
-            }
-            StorageBackend::MySql => validate_database_url(self.database_url.as_deref(), "mysql://", "mysql"),
-            StorageBackend::Postgres => {
+            StorageEngine::File | StorageEngine::Sqlite if self.database_url.is_some() => Err(DashboardError::Config(
+                "DASHBOARD_WEB_DATABASE_URL is only valid for mysql and postgres storage".to_string(),
+            )),
+            StorageEngine::MySql => validate_database_url(self.database_url.as_deref(), "mysql://", "mysql"),
+            StorageEngine::Postgres => {
                 let Some(url) = self.database_url.as_deref() else {
                     return Err(DashboardError::Config(
                         "DASHBOARD_WEB_DATABASE_URL is required for postgres storage".to_string(),
@@ -194,7 +192,7 @@ impl StorageConfig {
                     ))
                 }
             }
-            StorageBackend::File | StorageBackend::Sqlite => Ok(()),
+            StorageEngine::File | StorageEngine::Sqlite => Ok(()),
         }
     }
 }
@@ -238,11 +236,11 @@ fn sqlite_memory_path(path: &Path) -> bool {
     value == ":memory:" || value == "file::memory:" || (value.starts_with("file:") && value.contains("mode=memory"))
 }
 
-fn default_storage_path(backend: StorageBackend) -> PathBuf {
+fn default_storage_path(backend: StorageEngine) -> PathBuf {
     match backend {
-        StorageBackend::File => PathBuf::from("data/dashboard"),
-        StorageBackend::Sqlite => PathBuf::from("data/dashboard/dashboard.db"),
-        StorageBackend::MySql | StorageBackend::Postgres => PathBuf::from("data/dashboard"),
+        StorageEngine::File => PathBuf::from("data/dashboard"),
+        StorageEngine::Sqlite => PathBuf::from("data/dashboard/dashboard.db"),
+        StorageEngine::MySql | StorageEngine::Postgres => PathBuf::from("data/dashboard"),
     }
 }
 
@@ -543,16 +541,16 @@ mod tests {
 
     #[test]
     fn storage_backend_values_are_strict() {
-        assert_eq!(StorageBackend::parse("file"), Ok(StorageBackend::File));
-        assert_eq!(StorageBackend::parse("mysql"), Ok(StorageBackend::MySql));
-        assert!(StorageBackend::parse("memory").is_err());
+        assert_eq!(StorageEngine::parse("file"), Ok(StorageEngine::File));
+        assert_eq!(StorageEngine::parse("mysql"), Ok(StorageEngine::MySql));
+        assert!(StorageEngine::parse("memory").is_err());
     }
 
     #[test]
     fn sqlite_memory_locations_are_rejected() {
         for path in [":memory:", "file::memory:", "file:dashboard?mode=memory"] {
             let config = StorageConfig {
-                backend: StorageBackend::Sqlite,
+                backend: StorageEngine::Sqlite,
                 data_path: path.into(),
                 database_url: None,
                 pool: SqlPoolConfig::default(),
@@ -564,7 +562,7 @@ mod tests {
     #[test]
     fn storage_config_debug_redacts_database_url() {
         let config = StorageConfig {
-            backend: StorageBackend::MySql,
+            backend: StorageEngine::MySql,
             data_path: "unused".into(),
             database_url: Some("mysql://dashboard:super-secret@localhost/dashboard".to_string()),
             pool: SqlPoolConfig::default(),
@@ -653,7 +651,7 @@ mod tests {
                 port: 8082,
             },
             storage: StorageConfig {
-                backend: StorageBackend::MySql,
+                backend: StorageEngine::MySql,
                 data_path: "data/dashboard".into(),
                 database_url: Some("mysql://dashboard:database-secret@localhost/dashboard".to_string()),
                 pool: SqlPoolConfig::default(),

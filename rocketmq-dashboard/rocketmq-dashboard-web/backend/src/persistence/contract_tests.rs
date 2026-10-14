@@ -23,7 +23,7 @@ use crate::model::EndpointId;
 use crate::model::EndpointRole;
 use crate::model::EndpointType;
 use crate::model::EnvironmentId;
-use crate::model::StorageBackend;
+use crate::model::StorageEngine;
 use crate::persistence::backend::PersistenceBackend;
 use crate::persistence::environment_repository::DEFAULT_ENVIRONMENT_ID;
 use crate::persistence::error::PersistenceError;
@@ -37,7 +37,7 @@ use std::path::PathBuf;
 fn file_repository_contract_persists_environment_and_monitor_revisions() {
     let directory = tempfile::tempdir().expect("temp directory");
     let config = StorageConfig {
-        backend: StorageBackend::File,
+        backend: StorageEngine::File,
         data_path: directory.path().join("file"),
         database_url: None,
         pool: SqlPoolConfig::default(),
@@ -49,7 +49,7 @@ fn file_repository_contract_persists_environment_and_monitor_revisions() {
 fn sqlite_repository_contract_persists_environment_and_monitor_revisions() {
     let directory = tempfile::tempdir().expect("temp directory");
     let config = StorageConfig {
-        backend: StorageBackend::Sqlite,
+        backend: StorageEngine::Sqlite,
         data_path: directory.path().join("sqlite/dashboard.db"),
         database_url: None,
         pool: SqlPoolConfig::default(),
@@ -63,7 +63,7 @@ fn docker_mysql_repository_contract() {
     let url = std::env::var("ROCKETMQ_DASHBOARD_STORAGE_TEST_MYSQL_URL")
         .expect("storage test runner must provide the MySQL URL");
     run_contract(StorageConfig {
-        backend: StorageBackend::MySql,
+        backend: StorageEngine::MySql,
         data_path: "unused".into(),
         database_url: Some(url),
         pool: SqlPoolConfig::default(),
@@ -76,7 +76,7 @@ fn docker_postgres_repository_contract() {
     let url = std::env::var("ROCKETMQ_DASHBOARD_STORAGE_TEST_POSTGRES_URL")
         .expect("storage test runner must provide the PostgreSQL URL");
     run_contract(StorageConfig {
-        backend: StorageBackend::Postgres,
+        backend: StorageEngine::Postgres,
         data_path: "unused".into(),
         database_url: Some(url),
         pool: SqlPoolConfig::default(),
@@ -472,7 +472,7 @@ async fn corrupt_default_environment_identity(
             }
         }
         PersistenceBackend::Sql(store) => match store.storage_backend() {
-            StorageBackend::Sqlite => {
+            StorageEngine::Sqlite => {
                 let pool = store.sqlite_pool().expect("SQLite pool").clone();
                 sqlx::query("DELETE FROM dashboard_endpoint WHERE environment_id = ?")
                     .bind(&default_environment.environment_id.0)
@@ -487,7 +487,7 @@ async fn corrupt_default_environment_identity(
                     .expect("corrupt SQLite default identity");
                 DefaultIdentityCleanup::Sqlite { pool, invalid_id }
             }
-            StorageBackend::MySql => {
+            StorageEngine::MySql => {
                 let pool = store.mysql_pool().expect("MySQL pool").clone();
                 sqlx::query("DELETE FROM dashboard_endpoint WHERE environment_id = ?")
                     .bind(&default_environment.environment_id.0)
@@ -502,7 +502,7 @@ async fn corrupt_default_environment_identity(
                     .expect("corrupt MySQL default identity");
                 DefaultIdentityCleanup::MySql { pool, invalid_id }
             }
-            StorageBackend::Postgres => {
+            StorageEngine::Postgres => {
                 let pool = store.postgres_pool().expect("PostgreSQL pool").clone();
                 sqlx::query("DELETE FROM dashboard_endpoint WHERE environment_id = $1")
                     .bind(&default_environment.environment_id.0)
@@ -517,7 +517,7 @@ async fn corrupt_default_environment_identity(
                     .expect("corrupt PostgreSQL default identity");
                 DefaultIdentityCleanup::Postgres { pool, invalid_id }
             }
-            StorageBackend::File => unreachable!("SQL persistence cannot report the File backend"),
+            StorageEngine::File => unreachable!("SQL persistence cannot report the File backend"),
         },
     }
 }

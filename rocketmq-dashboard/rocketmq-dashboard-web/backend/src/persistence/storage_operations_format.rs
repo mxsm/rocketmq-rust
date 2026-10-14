@@ -23,7 +23,7 @@ use crate::model::Endpoint;
 use crate::model::EnvironmentId;
 use crate::model::MetricSample;
 use crate::model::SessionRecord;
-use crate::model::StorageBackend;
+use crate::model::StorageEngine;
 use crate::persistence::error::PersistenceError;
 use chrono::Utc;
 use serde::Deserialize;
@@ -41,7 +41,7 @@ use std::path::Path;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BackupManifest {
     pub format_version: u32,
-    pub backend: StorageBackend,
+    pub backend: StorageEngine,
     pub created_at_ms: i64,
     pub scope: BackupScope,
     pub counts: BackupCounts,
@@ -104,7 +104,7 @@ impl fmt::Debug for BackupSession {
 }
 
 impl BackupData {
-    pub(super) fn with_backend(backend: StorageBackend) -> Self {
+    pub(super) fn with_backend(backend: StorageEngine) -> Self {
         Self {
             manifest: BackupManifest {
                 format_version: BACKUP_FORMAT_VERSION,
@@ -199,7 +199,7 @@ pub fn write_backup(output: &Path, data: &BackupData) -> Result<(), PersistenceE
 
 pub fn read_verified_backup(
     input: &Path,
-    expected_backend: Option<StorageBackend>,
+    expected_backend: Option<StorageEngine>,
 ) -> Result<BackupData, PersistenceError> {
     validate_backup_directory(input)?;
     let manifest = read_json_file::<BackupManifest>(&input.join("manifest.json"))?;

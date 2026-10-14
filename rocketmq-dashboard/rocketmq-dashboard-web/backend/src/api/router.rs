@@ -231,7 +231,7 @@ mod tests {
     use crate::config::SqlPoolConfig;
     use crate::config::StorageConfig;
     use crate::model::DashboardConfigView;
-    use crate::model::StorageBackend;
+    use crate::model::StorageEngine;
     use crate::state::AppState;
     use axum::Router;
     use axum::body::Body;
@@ -293,7 +293,7 @@ mod tests {
                 port: 0,
             },
             storage: StorageConfig {
-                backend: StorageBackend::File,
+                backend: StorageEngine::File,
                 data_path,
                 database_url: None,
                 pool: SqlPoolConfig::default(),

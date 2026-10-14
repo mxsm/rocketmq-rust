@@ -585,7 +585,7 @@ mod tests {
     use crate::config::StorageConfig;
     use crate::model::EnvironmentId;
     use crate::model::MetricSample;
-    use crate::model::StorageBackend;
+    use crate::model::StorageEngine;
     use crate::persistence::TimeRange;
     use crate::persistence::error::PersistenceError;
     use crate::persistence::history_repository::HistoryQuery;
@@ -624,7 +624,7 @@ mod tests {
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let config = StorageConfig {
-                backend: StorageBackend::File,
+                backend: StorageEngine::File,
                 data_path: directory.path().join("dashboard"),
                 database_url: None,
                 pool: SqlPoolConfig::default(),
@@ -717,7 +717,7 @@ mod tests {
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let config = StorageConfig {
-                backend: StorageBackend::File,
+                backend: StorageEngine::File,
                 data_path: data_path.into(),
                 database_url: None,
                 pool: SqlPoolConfig::default(),
@@ -790,7 +790,7 @@ mod tests {
             for (stage, expect_new) in [(1, false), (2, true), (3, true)] {
                 let directory = tempfile::tempdir().expect("temporary directory");
                 let config = StorageConfig {
-                    backend: StorageBackend::File,
+                    backend: StorageEngine::File,
                     data_path: directory.path().join("dashboard"),
                     database_url: None,
                     pool: SqlPoolConfig::default(),
@@ -860,7 +860,7 @@ mod tests {
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let config = StorageConfig {
-                backend: StorageBackend::File,
+                backend: StorageEngine::File,
                 data_path: directory.path().join("dashboard"),
                 database_url: None,
                 pool: SqlPoolConfig::default(),
@@ -901,7 +901,7 @@ mod tests {
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let config = StorageConfig {
-                backend: StorageBackend::File,
+                backend: StorageEngine::File,
                 data_path: directory.path().join("dashboard"),
                 database_url: None,
                 pool: SqlPoolConfig::default(),
@@ -956,7 +956,7 @@ mod tests {
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let config = StorageConfig {
-                backend: StorageBackend::File,
+                backend: StorageEngine::File,
                 data_path: directory.path().join("dashboard"),
                 database_url: None,
                 pool: SqlPoolConfig::default(),

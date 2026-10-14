@@ -36,7 +36,7 @@ mod history_capacity_tests;
 mod session_audit_docker_tests;
 
 use crate::config::StorageConfig;
-use crate::model::StorageBackend;
+use crate::model::StorageEngine;
 use crate::persistence::backend::PersistenceBackend;
 use crate::persistence::error::PersistenceError;
 use chrono::Utc;
@@ -65,7 +65,7 @@ pub enum StorageStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageHealth {
-    pub backend: StorageBackend,
+    pub backend: StorageEngine,
     pub mode: StorageMode,
     pub status: StorageStatus,
     pub schema_version: Option<i64>,
@@ -142,10 +142,10 @@ impl DashboardPersistence {
             .validate()
             .map_err(|error| PersistenceError::InvalidConfig(error.to_string()))?;
         let backend = match config.backend {
-            StorageBackend::File => PersistenceBackend::File(Box::new(
+            StorageEngine::File => PersistenceBackend::File(Box::new(
                 file_store::FilePersistence::initialize(config, service_context).await?,
             )),
-            StorageBackend::Sqlite | StorageBackend::MySql | StorageBackend::Postgres => PersistenceBackend::Sql(
+            StorageEngine::Sqlite | StorageEngine::MySql | StorageEngine::Postgres => PersistenceBackend::Sql(
                 Box::new(sql_store::SqlPersistence::initialize(config, service_context).await?),
             ),
         };
@@ -160,7 +160,7 @@ impl DashboardPersistence {
         Ok(persistence)
     }
 
-    pub const fn storage_backend(&self) -> StorageBackend {
+    pub const fn storage_backend(&self) -> StorageEngine {
         self.backend.storage_backend()
     }
 
@@ -241,8 +241,8 @@ fn legacy_interim_paths(config: &StorageConfig) -> Vec<PathBuf> {
 
 fn storage_root_for_legacy_check(config: &StorageConfig) -> Option<&Path> {
     match config.backend {
-        StorageBackend::Sqlite => config.data_path.parent(),
-        StorageBackend::File | StorageBackend::MySql | StorageBackend::Postgres => Some(config.data_path.as_path()),
+        StorageEngine::Sqlite => config.data_path.parent(),
+        StorageEngine::File | StorageEngine::MySql | StorageEngine::Postgres => Some(config.data_path.as_path()),
     }
 }
 
@@ -263,14 +263,14 @@ mod tests {
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             for backend in [
-                StorageBackend::File,
-                StorageBackend::Sqlite,
-                StorageBackend::MySql,
-                StorageBackend::Postgres,
+                StorageEngine::File,
+                StorageEngine::Sqlite,
+                StorageEngine::MySql,
+                StorageEngine::Postgres,
             ] {
                 let data_path = match backend {
-                    StorageBackend::Sqlite => data.join("dashboard/dashboard.db"),
-                    StorageBackend::File | StorageBackend::MySql | StorageBackend::Postgres => data.join("dashboard"),
+                    StorageEngine::Sqlite => data.join("dashboard/dashboard.db"),
+                    StorageEngine::File | StorageEngine::MySql | StorageEngine::Postgres => data.join("dashboard"),
                 };
                 let result = DashboardPersistence::initialize(
                     &StorageConfig {
@@ -303,14 +303,14 @@ mod tests {
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             for backend in [
-                StorageBackend::File,
-                StorageBackend::Sqlite,
-                StorageBackend::MySql,
-                StorageBackend::Postgres,
+                StorageEngine::File,
+                StorageEngine::Sqlite,
+                StorageEngine::MySql,
+                StorageEngine::Postgres,
             ] {
                 let deployed_path = match backend {
-                    StorageBackend::Sqlite => deployed_root.join("dashboard.db"),
-                    StorageBackend::File | StorageBackend::MySql | StorageBackend::Postgres => deployed_root.clone(),
+                    StorageEngine::Sqlite => deployed_root.join("dashboard.db"),
+                    StorageEngine::File | StorageEngine::MySql | StorageEngine::Postgres => deployed_root.clone(),
                 };
                 let deployed = DashboardPersistence::initialize(
                     &StorageConfig {

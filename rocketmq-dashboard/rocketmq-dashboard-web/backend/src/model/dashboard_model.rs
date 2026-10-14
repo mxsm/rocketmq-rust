@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::model::EnvironmentId;
-use crate::model::StorageBackend;
+use crate::model::StorageEngine;
 use chrono::TimeZone;
 use chrono::Utc;
 use serde::Deserialize;
@@ -83,7 +83,7 @@ pub struct DashboardHistoryPoint {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DashboardHistoryHealth {
-    pub backend: StorageBackend,
+    pub backend: StorageEngine,
     pub connectivity: String,
     pub role: String,
     #[serde(skip_serializing_if = "Option::is_none")]

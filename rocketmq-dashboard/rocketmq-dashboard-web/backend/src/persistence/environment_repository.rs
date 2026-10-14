@@ -494,7 +494,7 @@ mod tests {
     use crate::config::StorageConfig;
     use crate::model::ConsumerMonitorRule;
     use crate::model::DashboardConfigView;
-    use crate::model::StorageBackend;
+    use crate::model::StorageEngine;
     use rocketmq_runtime::RuntimeOwner;
 
     #[test]
@@ -504,7 +504,7 @@ mod tests {
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &StorageConfig {
-                    backend: StorageBackend::File,
+                    backend: StorageEngine::File,
                     data_path: directory.path().join("dashboard"),
                     database_url: None,
                     pool: SqlPoolConfig::default(),
@@ -583,7 +583,7 @@ mod tests {
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &StorageConfig {
-                    backend: StorageBackend::File,
+                    backend: StorageEngine::File,
                     data_path: root.clone(),
                     database_url: None,
                     pool: SqlPoolConfig::default(),
@@ -661,7 +661,7 @@ mod tests {
 
             let recovered = FilePersistence::initialize(
                 &StorageConfig {
-                    backend: StorageBackend::File,
+                    backend: StorageEngine::File,
                     data_path: root.clone(),
                     database_url: None,
                     pool: SqlPoolConfig::default(),
