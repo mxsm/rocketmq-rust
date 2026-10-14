@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(controller):** Rename the Controller storage selector and builder to `StorageEngineType`, `with_storage_engine_type` (breaking) ([#11514](https://github.com/mxsm/rocketmq-rust/issues/11514)).
 - **refactor(dashboard-web):** Rename `PersistenceBackend` to `DashboardDataStore` and its private facade field to `store` ([#11505](https://github.com/mxsm/rocketmq-rust/issues/11505)).
 - **refactor(dashboard-web):** Rename `FilePersistence` to `FileDashboardStore` ([#11506](https://github.com/mxsm/rocketmq-rust/issues/11506)).
 - **refactor(dashboard-web):** Rename `SqlPersistence` to `SqlDashboardStore` ([#11507](https://github.com/mxsm/rocketmq-rust/issues/11507)).

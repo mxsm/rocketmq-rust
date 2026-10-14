@@ -35,7 +35,7 @@ use rocketmq_controller::LogEntry;
 use rocketmq_controller::LogId;
 use rocketmq_controller::LogStore;
 use rocketmq_controller::StateMachine;
-use rocketmq_controller::StorageBackendType;
+use rocketmq_controller::StorageEngineType;
 use rocketmq_controller::StorageStats;
 use rocketmq_controller::TypeConfig;
 use rocketmq_controller::Vote;
@@ -283,7 +283,7 @@ async fn incomplete_persisted_state_is_rejected_on_open() {
 
 #[test]
 fn production_default_storage_is_rocksdb() {
-    assert_eq!(ControllerConfig::default().storage_backend, StorageBackendType::RocksDB);
+    assert_eq!(ControllerConfig::default().storage_backend, StorageEngineType::RocksDB);
 }
 
 #[cfg(feature = "storage-rocksdb")]

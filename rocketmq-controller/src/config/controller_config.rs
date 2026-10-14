@@ -44,9 +44,9 @@ pub struct RaftPeer {
     pub addr: SocketAddr,
 }
 
-/// Storage backend type
+/// Controller storage engine selection.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum StorageBackendType {
+pub enum StorageEngineType {
     /// RocksDB storage
     RocksDB,
 
@@ -65,7 +65,7 @@ const fn default_snapshot_max_log_entries_to_keep() -> u64 {
     1000
 }
 
-impl fmt::Display for StorageBackendType {
+impl fmt::Display for StorageEngineType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::RocksDB => write!(f, "rocks_db"),
@@ -239,7 +239,7 @@ pub struct ControllerConfig {
     pub storage_path: String,
 
     /// Storage backend to use for local controller artifacts
-    pub storage_backend: StorageBackendType,
+    pub storage_backend: StorageEngineType,
 
     /// Whether the controller may elect an unclean master on this node
     pub enable_elect_unclean_master_local: bool,
@@ -358,7 +358,7 @@ impl Default for ControllerConfig {
             snapshot_logs_since_last: 5000,
             snapshot_max_log_entries_to_keep: 1000,
             storage_path: String::new(),
-            storage_backend: StorageBackendType::RocksDB,
+            storage_backend: StorageEngineType::RocksDB,
             enable_elect_unclean_master_local: false,
             rw_lock: RwLock::new(()),
         }
@@ -510,9 +510,9 @@ impl ControllerConfig {
         self
     }
 
-    /// Set storage backend for this node
-    pub fn with_storage_backend(mut self, backend: StorageBackendType) -> Self {
-        self.storage_backend = backend;
+    /// Select the storage engine for this Controller node.
+    pub fn with_storage_engine_type(mut self, engine_type: StorageEngineType) -> Self {
+        self.storage_backend = engine_type;
         self
     }
 
@@ -557,7 +557,7 @@ impl ControllerConfig {
     pub fn test_config() -> Self {
         Self::default()
             .with_node_info(1, SocketAddr::from(([127, 0, 0, 1], 60109)))
-            .with_storage_backend(StorageBackendType::Memory)
+            .with_storage_engine_type(StorageEngineType::Memory)
     }
 
     /// Resolve the Raft RPC address for a node.
@@ -914,7 +914,7 @@ impl ControllerConfig {
                 }
 
                 "storageBackend" => {
-                    self.storage_backend = parse_update_value::<StorageBackendType>("storageBackend", value)?;
+                    self.storage_backend = parse_update_value::<StorageEngineType>("storageBackend", value)?;
                 }
 
                 "enableElectUncleanMasterLocal" => {
@@ -1171,7 +1171,7 @@ path = "/rocketmq"
             .with_scan_not_active_broker_interval(10000)
             .with_controller_thread_pool_nums(32)
             .with_enable_elect_unclean_master(true)
-            .with_storage_backend(StorageBackendType::RocksDB);
+            .with_storage_engine_type(StorageEngineType::RocksDB);
 
         let result = config.to_properties_string();
 

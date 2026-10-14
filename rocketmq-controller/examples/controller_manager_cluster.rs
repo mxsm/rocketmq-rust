@@ -31,7 +31,7 @@ use std::time::Duration;
 use rocketmq_controller::ControllerConfig;
 use rocketmq_controller::ControllerManager;
 use rocketmq_controller::RaftPeer;
-use rocketmq_controller::StorageBackendType;
+use rocketmq_controller::StorageEngineType;
 use rocketmq_error::Error;
 use rocketmq_error::Result;
 use rocketmq_error::CONTROLLER_INTERNAL_FAILURE;
@@ -133,7 +133,7 @@ fn create_cluster_config(node_id: u64, port: u16, peers: Vec<RaftPeer>) -> Resul
         .with_node_info(node_id, listen_addr)
         .with_raft_peers(peers)
         .with_storage_path(format!("/tmp/rocketmq-controller-cluster/node{}", node_id))
-        .with_storage_backend(StorageBackendType::Memory)
+        .with_storage_engine_type(StorageEngineType::Memory)
         .with_election_timeout_ms(1000)
         .with_heartbeat_interval_ms(300)
         .with_enable_elect_unclean_master_local(false);

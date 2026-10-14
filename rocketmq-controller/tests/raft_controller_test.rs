@@ -21,7 +21,7 @@ use rocketmq_controller::ControllerConfig;
 use rocketmq_controller::ControllerConfigReader;
 use rocketmq_controller::Node;
 use rocketmq_controller::RaftController;
-use rocketmq_controller::StorageBackendType;
+use rocketmq_controller::StorageEngineType;
 
 fn test_service_context(name: &'static str) -> rocketmq_runtime::ChildServiceContext {
     rocketmq_runtime::RuntimeContext::from_current(name).service_context("controller-test")
@@ -35,7 +35,7 @@ fn test_config() -> ControllerConfigReader {
             .with_node_info(1, address)
             .with_election_timeout_ms(300)
             .with_heartbeat_interval_ms(100)
-            .with_storage_backend(StorageBackendType::Memory),
+            .with_storage_engine_type(StorageEngineType::Memory),
     )
 }
 

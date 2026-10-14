@@ -48,7 +48,7 @@ use rocketmq_controller::MembershipChange;
 use rocketmq_controller::MembershipChangeRequest;
 use rocketmq_controller::Node;
 use rocketmq_controller::RaftPeer;
-use rocketmq_controller::StorageBackendType;
+use rocketmq_controller::StorageEngineType;
 use rocketmq_model::common::attribute::subscription_group_attributes::LITE_BIND_TOPIC_ATTRIBUTE_NAME;
 use rocketmq_model::common::attribute::topic_attributes;
 use rocketmq_model::common::attribute::Attribute;
@@ -2370,7 +2370,7 @@ async fn new_test_controller_manager(
         .with_node_info(node_id, controller_peer.addr)
         .with_controller_peers(controller_peers)
         .with_raft_peers(raft_peers)
-        .with_storage_backend(StorageBackendType::Memory)
+        .with_storage_engine_type(StorageEngineType::Memory)
         .with_storage_path(
             root.join(format!("controller-{node_id}"))
                 .to_string_lossy()

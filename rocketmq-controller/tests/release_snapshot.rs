@@ -24,7 +24,7 @@ use rocketmq_controller::ControllerConfig;
 use rocketmq_controller::ControllerConfigReader;
 use rocketmq_controller::Node;
 use rocketmq_controller::RaftController;
-use rocketmq_controller::StorageBackendType;
+use rocketmq_controller::StorageEngineType;
 use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotRequest;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_security_api::MaintenanceAuthorizationContext;
@@ -94,7 +94,7 @@ async fn authorized_release_snapshot_is_read_index_bound_and_restore_verified() 
     let config = ControllerConfigReader::new(
         ControllerConfig::default()
             .with_node_info(1, address)
-            .with_storage_backend(StorageBackendType::Memory)
+            .with_storage_engine_type(StorageEngineType::Memory)
             .with_election_timeout_ms(100)
             .with_heartbeat_interval_ms(30)
             .with_maintenance_checkpoint_root(checkpoint_directory.path().to_string_lossy()),
