@@ -19,7 +19,7 @@ use super::validation::parse_token_hash;
 use super::validation::verify_data;
 use crate::config::StorageConfig;
 use crate::model::NewSession;
-use crate::model::StorageBackend;
+use crate::model::StorageEngine;
 use crate::persistence::DashboardPersistence;
 use crate::persistence::audit_repository::AuditQuery;
 use crate::persistence::error::PersistenceError;
@@ -32,7 +32,7 @@ pub(super) async fn snapshot_file(
     persistence: &DashboardPersistence,
     store: &FileDashboardStore,
 ) -> Result<BackupData, PersistenceError> {
-    let mut data = BackupData::with_backend(StorageBackend::File);
+    let mut data = BackupData::with_backend(StorageEngine::File);
     data.environments = persistence.list_environments().await?;
     for environment in &data.environments {
         data.monitors
@@ -86,7 +86,7 @@ pub async fn restore_file_target(
     target_config: &StorageConfig,
     service_context: ChildServiceContext,
 ) -> Result<(), PersistenceError> {
-    verify_data(data, Some(StorageBackend::File))?;
+    verify_data(data, Some(StorageEngine::File))?;
     let target = &target_config.data_path;
     if target.exists() {
         return Err(PersistenceError::Conflict);

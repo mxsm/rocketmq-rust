@@ -1,4 +1,4 @@
-export type StorageBackend = 'file' | 'sqlite' | 'mysql' | 'postgres';
+export type StorageEngine = 'file' | 'sqlite' | 'mysql' | 'postgres';
 export type StorageMode = 'singleNode' | 'multiNode';
 
 export type EndpointType = 'nameserver' | 'proxy';
@@ -25,7 +25,7 @@ export interface DashboardConfigView {
   useTLS: boolean;
   currentProxyAddr?: string | null;
   proxyAddrList: string[];
-  storageBackend: StorageBackend;
+  storageBackend: StorageEngine;
   storageMode: StorageMode;
 }
 

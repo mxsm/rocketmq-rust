@@ -472,7 +472,7 @@ mod tests {
     use super::*;
     use crate::model::NewSession;
     use crate::model::SessionTokenHash;
-    use crate::model::StorageBackend;
+    use crate::model::StorageEngine;
     use crate::persistence::migration;
     use serde_json::json;
     use sqlx::sqlite::SqlitePoolOptions;
@@ -486,7 +486,7 @@ mod tests {
         let schema_version = migration::migrate_sqlite(&pool).await.expect("migrate SQLite storage");
         SqlDashboardStore {
             pool: DatabasePool::Sqlite(pool),
-            backend: StorageBackend::Sqlite,
+            backend: StorageEngine::Sqlite,
             schema_version,
             sqlite_storage_path: None,
             sqlite_storage_context: None,

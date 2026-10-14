@@ -24,7 +24,7 @@ use crate::model::DashboardConfigView;
 use crate::model::DashboardEnvironment;
 use crate::model::NewSession;
 use crate::model::SessionTokenHash;
-use crate::model::StorageBackend;
+use crate::model::StorageEngine;
 use crate::persistence::DashboardPersistence;
 use crate::persistence::Revision;
 use crate::persistence::audit_repository::AuditQuery;
@@ -38,7 +38,7 @@ fn docker_session_audit_contracts_cover_file_sqlite_mysql_and_postgres() {
     owner.block_on(async {
         let configs = [
             StorageConfig {
-                backend: StorageBackend::File,
+                backend: StorageEngine::File,
                 data_path: std::env::var("ROCKETMQ_DASHBOARD_STORAGE_TEST_FILE_PATH")
                     .expect("ROCKETMQ_DASHBOARD_STORAGE_TEST_FILE_PATH")
                     .into(),
@@ -46,7 +46,7 @@ fn docker_session_audit_contracts_cover_file_sqlite_mysql_and_postgres() {
                 pool: SqlPoolConfig::default(),
             },
             StorageConfig {
-                backend: StorageBackend::Sqlite,
+                backend: StorageEngine::Sqlite,
                 data_path: std::env::var("ROCKETMQ_DASHBOARD_STORAGE_TEST_SQLITE_PATH")
                     .expect("ROCKETMQ_DASHBOARD_STORAGE_TEST_SQLITE_PATH")
                     .into(),
@@ -54,7 +54,7 @@ fn docker_session_audit_contracts_cover_file_sqlite_mysql_and_postgres() {
                 pool: SqlPoolConfig::default(),
             },
             StorageConfig {
-                backend: StorageBackend::MySql,
+                backend: StorageEngine::MySql,
                 data_path: "unused".into(),
                 database_url: Some(
                     std::env::var("ROCKETMQ_DASHBOARD_STORAGE_TEST_MYSQL_URL")
@@ -63,7 +63,7 @@ fn docker_session_audit_contracts_cover_file_sqlite_mysql_and_postgres() {
                 pool: SqlPoolConfig::default(),
             },
             StorageConfig {
-                backend: StorageBackend::Postgres,
+                backend: StorageEngine::Postgres,
                 data_path: "unused".into(),
                 database_url: Some(
                     std::env::var("ROCKETMQ_DASHBOARD_STORAGE_TEST_POSTGRES_URL")
@@ -334,7 +334,7 @@ async fn run_contract(owner: &RuntimeOwner, config: StorageConfig, discriminator
     // Exercise this failure mode for SQLite, MySQL, and Postgres so each
     // backend proves that neither configuration nor monitor state escapes
     // without its successful audit event.
-    if !matches!(config.backend, StorageBackend::File) {
+    if !matches!(config.backend, StorageEngine::File) {
         let duplicate_configuration_audit = resource_audit_event(
             AuditAction::ConfigTlsSet,
             AuditResourceType::Environment,

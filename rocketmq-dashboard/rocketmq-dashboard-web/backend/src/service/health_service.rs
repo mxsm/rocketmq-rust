@@ -57,7 +57,7 @@ pub fn readiness_status_from_storage(storage: StorageHealth) -> HealthStatus {
 #[cfg(test)]
 mod tests {
     use super::readiness_status_from_storage;
-    use crate::model::StorageBackend;
+    use crate::model::StorageEngine;
     use crate::persistence::StorageHealth;
     use crate::persistence::StorageMode;
     use crate::persistence::StorageStatus;
@@ -65,7 +65,7 @@ mod tests {
     #[test]
     fn unavailable_storage_makes_readiness_down() {
         let status = readiness_status_from_storage(StorageHealth {
-            backend: StorageBackend::Postgres,
+            backend: StorageEngine::Postgres,
             mode: StorageMode::MultiNode,
             status: StorageStatus::Unavailable,
             schema_version: None,
@@ -85,7 +85,7 @@ mod tests {
     #[test]
     fn degraded_storage_makes_readiness_down() {
         let status = readiness_status_from_storage(StorageHealth {
-            backend: StorageBackend::File,
+            backend: StorageEngine::File,
             mode: StorageMode::SingleNode,
             status: StorageStatus::Degraded,
             schema_version: Some(2),

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::error::DashboardError;
-use crate::model::StorageBackend;
+use crate::model::StorageEngine;
 use crate::model::StorageStatusView;
 use crate::persistence::StorageStatus;
 use crate::persistence::error::PersistenceError;
@@ -54,7 +54,7 @@ impl StorageMetrics {
     /// Records a persistence operation using a fixed metric catalog.
     pub fn record_dashboard_operation<T>(
         &self,
-        backend: StorageBackend,
+        backend: StorageEngine,
         operation: DashboardStorageOperation,
         result: &Result<T, DashboardError>,
         elapsed: Duration,
@@ -73,7 +73,7 @@ impl StorageMetrics {
     /// Records a direct persistence result without exposing its source error.
     pub fn record_persistence_operation<T>(
         &self,
-        backend: StorageBackend,
+        backend: StorageEngine,
         operation: DashboardStorageOperation,
         result: &Result<T, PersistenceError>,
         elapsed: Duration,
@@ -90,12 +90,12 @@ impl StorageMetrics {
     }
 }
 
-fn storage_backend(backend: StorageBackend) -> DashboardStorageBackend {
+fn storage_backend(backend: StorageEngine) -> DashboardStorageBackend {
     match backend {
-        StorageBackend::File => DashboardStorageBackend::File,
-        StorageBackend::Sqlite => DashboardStorageBackend::Sqlite,
-        StorageBackend::MySql => DashboardStorageBackend::MySql,
-        StorageBackend::Postgres => DashboardStorageBackend::Postgres,
+        StorageEngine::File => DashboardStorageBackend::File,
+        StorageEngine::Sqlite => DashboardStorageBackend::Sqlite,
+        StorageEngine::MySql => DashboardStorageBackend::MySql,
+        StorageEngine::Postgres => DashboardStorageBackend::Postgres,
     }
 }
 
@@ -132,7 +132,7 @@ mod tests {
     use super::storage_failure_label;
     use super::storage_result;
     use crate::error::DashboardError;
-    use crate::model::StorageBackend;
+    use crate::model::StorageEngine;
     use crate::persistence::StorageStatus;
     use crate::persistence::error::PersistenceError;
     use rocketmq_observability::DashboardStorageBackend;
@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn status_labels_are_only_fixed_values() {
-        assert_eq!(storage_backend(StorageBackend::MySql), DashboardStorageBackend::MySql);
+        assert_eq!(storage_backend(StorageEngine::MySql), DashboardStorageBackend::MySql);
         assert_eq!(
             storage_result(StorageStatus::Degraded),
             DashboardStorageResult::Degraded

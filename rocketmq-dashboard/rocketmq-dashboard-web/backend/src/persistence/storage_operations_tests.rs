@@ -19,7 +19,7 @@ use crate::config::StorageConfig;
 use crate::model::ConsumerMonitorRule;
 use crate::model::DashboardEnvironment;
 use crate::model::EnvironmentId;
-use crate::model::StorageBackend;
+use crate::model::StorageEngine;
 use crate::persistence::Revision;
 use crate::persistence::error::PersistenceError;
 use rocketmq_runtime::RuntimeOwner;
@@ -36,7 +36,7 @@ fn test_data() -> BackupData {
         updated_at_ms: 1,
         endpoints: Vec::new(),
     };
-    let mut data = BackupData::with_backend(StorageBackend::File);
+    let mut data = BackupData::with_backend(StorageEngine::File);
     data.environments.push(environment);
     data.refresh_counts().expect("counts");
     data
@@ -49,14 +49,14 @@ fn backup_round_trip_and_unknown_or_extra_files_are_rejected() {
     let data = test_data();
     write_backup(&output, &data).expect("write backup");
     assert_eq!(
-        read_verified_backup(&output, Some(StorageBackend::File))
+        read_verified_backup(&output, Some(StorageEngine::File))
             .expect("verify")
             .manifest
             .counts,
         data.manifest.counts
     );
     std::fs::write(output.join("unexpected.txt"), b"x").expect("unexpected file");
-    assert!(read_verified_backup(&output, Some(StorageBackend::File)).is_err());
+    assert!(read_verified_backup(&output, Some(StorageEngine::File)).is_err());
 }
 
 #[test]
@@ -79,7 +79,7 @@ fn invalid_token_digest_and_missing_collection_are_rejected() {
     let valid_output = directory.path().join("valid-backup");
     write_backup(&valid_output, &test_data()).expect("write valid backup");
     std::fs::remove_file(valid_output.join("history.ndjson")).expect("remove collection");
-    assert!(read_verified_backup(&valid_output, Some(StorageBackend::File)).is_err());
+    assert!(read_verified_backup(&valid_output, Some(StorageEngine::File)).is_err());
 }
 
 #[test]
@@ -102,17 +102,17 @@ fn unknown_record_fields_truncated_lines_duplicate_identity_and_bad_relations_ar
         ),
     )
     .expect("write unknown record");
-    assert!(read_verified_backup(&output, Some(StorageBackend::File)).is_err());
+    assert!(read_verified_backup(&output, Some(StorageEngine::File)).is_err());
 
     let truncated = directory.path().join("truncated");
     write_backup(&truncated, &data).expect("write truncated backup");
     std::fs::write(truncated.join("sessions.ndjson"), b"{").expect("write truncated line");
-    assert!(read_verified_backup(&truncated, Some(StorageBackend::File)).is_err());
+    assert!(read_verified_backup(&truncated, Some(StorageEngine::File)).is_err());
 
     let mut duplicate = test_data();
     duplicate.environments.push(duplicate.environments[0].clone());
     duplicate.refresh_counts().expect("counts");
-    assert!(verify_data(&duplicate, Some(StorageBackend::File)).is_err());
+    assert!(verify_data(&duplicate, Some(StorageEngine::File)).is_err());
 
     let mut bad_relation = test_data();
     bad_relation.monitors.push(ConsumerMonitorRule {
@@ -125,7 +125,7 @@ fn unknown_record_fields_truncated_lines_duplicate_identity_and_bad_relations_ar
         updated_at_ms: 1,
     });
     bad_relation.refresh_counts().expect("counts");
-    assert!(verify_data(&bad_relation, Some(StorageBackend::File)).is_err());
+    assert!(verify_data(&bad_relation, Some(StorageEngine::File)).is_err());
 }
 
 #[test]
@@ -147,8 +147,8 @@ fn sqlite_backup_verify_restore_and_nonempty_target_are_atomic() {
             .expect("create source environment");
         let backup = directory.path().join("backup");
         write_backup(&backup, &snapshot(&source).await.expect("snapshot source")).expect("write backup");
-        let verified = read_verified_backup(&backup, Some(StorageBackend::Sqlite)).expect("verify backup");
-        assert!(read_verified_backup(&backup, Some(StorageBackend::File)).is_err());
+        let verified = read_verified_backup(&backup, Some(StorageEngine::Sqlite)).expect("verify backup");
+        assert!(read_verified_backup(&backup, Some(StorageEngine::File)).is_err());
 
         let target = DashboardPersistence::initialize(
             &sqlite_config(directory.path().join("target.db")),
@@ -205,7 +205,7 @@ fn file_restore_publishes_only_a_complete_target() {
     let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
         let config = StorageConfig {
-            backend: StorageBackend::File,
+            backend: StorageEngine::File,
             data_path: directory.path().join("file-target"),
             database_url: None,
             pool: SqlPoolConfig::default(),
@@ -234,7 +234,7 @@ fn file_restore_publishes_only_a_complete_target() {
 
 fn sqlite_config(path: std::path::PathBuf) -> StorageConfig {
     StorageConfig {
-        backend: StorageBackend::Sqlite,
+        backend: StorageEngine::Sqlite,
         data_path: path,
         database_url: None,
         pool: SqlPoolConfig::default(),

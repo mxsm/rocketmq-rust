@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use crate::model::StorageBackend;
+use crate::model::StorageEngine;
 use crate::persistence::file_store::FileDashboardStore;
 use crate::persistence::sql_store::SqlDashboardStore;
 
@@ -22,9 +22,9 @@ pub enum DashboardDataStore {
 }
 
 impl DashboardDataStore {
-    pub const fn storage_backend(&self) -> StorageBackend {
+    pub const fn storage_backend(&self) -> StorageEngine {
         match self {
-            Self::File(_) => StorageBackend::File,
+            Self::File(_) => StorageEngine::File,
             Self::Sql(store) => store.storage_backend(),
         }
     }

@@ -20,7 +20,7 @@ use crate::model::EndpointId;
 use crate::model::EndpointRole;
 use crate::model::EndpointType;
 use crate::model::EnvironmentId;
-use crate::model::StorageBackend;
+use crate::model::StorageEngine;
 use crate::persistence::Revision;
 use crate::persistence::StorageHealth;
 use crate::persistence::StorageMode;
@@ -69,7 +69,7 @@ pub enum DatabasePool {
 /// Owns the selected connection pool and schema metadata.
 pub struct SqlDashboardStore {
     pool: DatabasePool,
-    backend: StorageBackend,
+    backend: StorageEngine,
     schema_version: i64,
     sqlite_storage_path: Option<PathBuf>,
     sqlite_storage_context: Option<ChildServiceContext>,
@@ -84,16 +84,16 @@ impl SqlDashboardStore {
             .validate()
             .map_err(|error| PersistenceError::InvalidConfig(error.to_string()))?;
         match config.backend {
-            StorageBackend::Sqlite => Self::initialize_sqlite(config, service_context).await,
-            StorageBackend::MySql => Self::initialize_mysql(config).await,
-            StorageBackend::Postgres => Self::initialize_postgres(config).await,
-            StorageBackend::File => Err(PersistenceError::InvalidConfig(
+            StorageEngine::Sqlite => Self::initialize_sqlite(config, service_context).await,
+            StorageEngine::MySql => Self::initialize_mysql(config).await,
+            StorageEngine::Postgres => Self::initialize_postgres(config).await,
+            StorageEngine::File => Err(PersistenceError::InvalidConfig(
                 "File storage does not use a SQL pool".to_string(),
             )),
         }
     }
 
-    pub const fn storage_backend(&self) -> StorageBackend {
+    pub const fn storage_backend(&self) -> StorageEngine {
         self.backend
     }
 
@@ -128,20 +128,20 @@ impl SqlDashboardStore {
         let available_bytes = self.sqlite_safe_available_bytes().await;
         let status = match (schema_version, self.backend, available_bytes) {
             (None, _, _) => StorageStatus::Unavailable,
-            (Some(_), StorageBackend::Sqlite, Some(bytes)) if bytes < MIN_SAFE_AVAILABLE_BYTES => {
+            (Some(_), StorageEngine::Sqlite, Some(bytes)) if bytes < MIN_SAFE_AVAILABLE_BYTES => {
                 StorageStatus::Degraded
             }
-            (Some(_), StorageBackend::Sqlite, Some(_)) => StorageStatus::Available,
-            (Some(_), StorageBackend::Sqlite, None) => StorageStatus::Unavailable,
-            (Some(_), StorageBackend::MySql | StorageBackend::Postgres, _) => StorageStatus::Available,
-            (Some(_), StorageBackend::File, _) => StorageStatus::Unavailable,
+            (Some(_), StorageEngine::Sqlite, Some(_)) => StorageStatus::Available,
+            (Some(_), StorageEngine::Sqlite, None) => StorageStatus::Unavailable,
+            (Some(_), StorageEngine::MySql | StorageEngine::Postgres, _) => StorageStatus::Available,
+            (Some(_), StorageEngine::File, _) => StorageStatus::Unavailable,
         };
         StorageHealth {
             backend: self.backend,
             mode: match self.backend {
-                StorageBackend::Sqlite => StorageMode::SingleNode,
-                StorageBackend::MySql | StorageBackend::Postgres => StorageMode::MultiNode,
-                StorageBackend::File => StorageMode::SingleNode,
+                StorageEngine::Sqlite => StorageMode::SingleNode,
+                StorageEngine::MySql | StorageEngine::Postgres => StorageMode::MultiNode,
+                StorageEngine::File => StorageMode::SingleNode,
             },
             status,
             schema_version,
@@ -195,7 +195,7 @@ impl SqlDashboardStore {
         let schema_version = migration::migrate_sqlite(&pool).await?;
         let persistence = Self {
             pool: DatabasePool::Sqlite(pool),
-            backend: StorageBackend::Sqlite,
+            backend: StorageEngine::Sqlite,
             schema_version,
             sqlite_storage_path: Some(config.data_path.clone()),
             sqlite_storage_context: Some(service_context),
@@ -217,7 +217,7 @@ impl SqlDashboardStore {
         let schema_version = migration::migrate_mysql(&pool).await?;
         let persistence = Self {
             pool: DatabasePool::MySql(pool),
-            backend: StorageBackend::MySql,
+            backend: StorageEngine::MySql,
             schema_version,
             sqlite_storage_path: None,
             sqlite_storage_context: None,
@@ -239,7 +239,7 @@ impl SqlDashboardStore {
         let schema_version = migration::migrate_postgres(&pool).await?;
         let persistence = Self {
             pool: DatabasePool::Postgres(pool),
-            backend: StorageBackend::Postgres,
+            backend: StorageEngine::Postgres,
             schema_version,
             sqlite_storage_path: None,
             sqlite_storage_context: None,
@@ -1377,7 +1377,7 @@ mod tests {
 
     fn sqlite_config(path: PathBuf) -> StorageConfig {
         StorageConfig {
-            backend: StorageBackend::Sqlite,
+            backend: StorageEngine::Sqlite,
             data_path: path,
             database_url: None,
             pool: SqlPoolConfig::default(),
@@ -1543,7 +1543,7 @@ mod tests {
         let path = std::env::var("ROCKETMQ_DASHBOARD_STORAGE_TEST_SQLITE_PATH")
             .expect("ROCKETMQ_DASHBOARD_STORAGE_TEST_SQLITE_PATH must be set by the storage test runner");
         initialize_docker_backend(StorageConfig {
-            backend: StorageBackend::Sqlite,
+            backend: StorageEngine::Sqlite,
             data_path: path.into(),
             database_url: None,
             pool: SqlPoolConfig::default(),
@@ -1556,7 +1556,7 @@ mod tests {
         let url = std::env::var("ROCKETMQ_DASHBOARD_STORAGE_TEST_MYSQL_URL")
             .expect("ROCKETMQ_DASHBOARD_STORAGE_TEST_MYSQL_URL must be set by the storage test runner");
         initialize_docker_backend(StorageConfig {
-            backend: StorageBackend::MySql,
+            backend: StorageEngine::MySql,
             data_path: "unused".into(),
             database_url: Some(url),
             pool: SqlPoolConfig::default(),
@@ -1569,7 +1569,7 @@ mod tests {
         let url = std::env::var("ROCKETMQ_DASHBOARD_STORAGE_TEST_POSTGRES_URL")
             .expect("ROCKETMQ_DASHBOARD_STORAGE_TEST_POSTGRES_URL must be set by the storage test runner");
         initialize_docker_backend(StorageConfig {
-            backend: StorageBackend::Postgres,
+            backend: StorageEngine::Postgres,
             data_path: "unused".into(),
             database_url: Some(url),
             pool: SqlPoolConfig::default(),
@@ -1594,7 +1594,7 @@ mod tests {
             assert_eq!(second.schema_version(), 4);
             assert_eq!(second.storage_health().await.status, StorageStatus::Available);
         });
-        if config.backend == StorageBackend::Sqlite {
+        if config.backend == StorageEngine::Sqlite {
             assert!(config.data_path.exists(), "SQLite must initialize a real database file");
         }
         owner.shutdown_runtime_blocking().expect("runtime shutdown");

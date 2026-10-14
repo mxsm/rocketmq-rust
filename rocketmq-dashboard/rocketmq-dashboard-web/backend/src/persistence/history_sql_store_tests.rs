@@ -17,7 +17,7 @@ use crate::config::SqlPoolConfig;
 use crate::config::StorageConfig;
 use crate::model::EnvironmentId;
 use crate::model::MetricSample;
-use crate::model::StorageBackend;
+use crate::model::StorageEngine;
 use crate::persistence::TimeRange;
 use crate::persistence::error::PersistenceError;
 use crate::persistence::history_repository::HistoryQuery;
@@ -39,7 +39,7 @@ fn sqlite_history_is_idempotent_conflict_checked_and_reopens() {
     let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
         let config = StorageConfig {
-            backend: StorageBackend::Sqlite,
+            backend: StorageEngine::Sqlite,
             data_path: directory.path().join("dashboard.db"),
             database_url: None,
             pool: SqlPoolConfig::default(),
@@ -113,7 +113,7 @@ fn sqlite_history_lease_rejects_stale_holder_writes() {
     let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
         let config = StorageConfig {
-            backend: StorageBackend::Sqlite,
+            backend: StorageEngine::Sqlite,
             data_path: directory.path().join("dashboard.db"),
             database_url: None,
             pool: SqlPoolConfig::default(),
@@ -198,7 +198,7 @@ fn sqlite_history_retention_reports_exact_convergence() {
     owner.block_on(async {
         let store = SqlDashboardStore::initialize(
             &StorageConfig {
-                backend: StorageBackend::Sqlite,
+                backend: StorageEngine::Sqlite,
                 data_path: directory.path().join("dashboard.db"),
                 database_url: None,
                 pool: SqlPoolConfig::default(),
@@ -291,7 +291,7 @@ fn sqlite_history_retention_reports_exact_convergence() {
 fn docker_mysql_history_lease_contract() {
     let database_url = std::env::var("ROCKETMQ_DASHBOARD_STORAGE_TEST_MYSQL_URL")
         .expect("ROCKETMQ_DASHBOARD_STORAGE_TEST_MYSQL_URL must be set by the storage test runner");
-    docker_history_lease_contract(StorageBackend::MySql, database_url);
+    docker_history_lease_contract(StorageEngine::MySql, database_url);
 }
 
 #[test]
@@ -299,10 +299,10 @@ fn docker_mysql_history_lease_contract() {
 fn docker_postgres_history_lease_contract() {
     let database_url = std::env::var("ROCKETMQ_DASHBOARD_STORAGE_TEST_POSTGRES_URL")
         .expect("ROCKETMQ_DASHBOARD_STORAGE_TEST_POSTGRES_URL must be set by the storage test runner");
-    docker_history_lease_contract(StorageBackend::Postgres, database_url);
+    docker_history_lease_contract(StorageEngine::Postgres, database_url);
 }
 
-fn docker_history_lease_contract(backend: StorageBackend, database_url: String) {
+fn docker_history_lease_contract(backend: StorageEngine, database_url: String) {
     let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
         let store = SqlDashboardStore::initialize(
@@ -316,7 +316,7 @@ fn docker_history_lease_contract(backend: StorageBackend, database_url: String) 
         )
         .await
         .expect("SQL persistence");
-        if backend == StorageBackend::MySql {
+        if backend == StorageEngine::MySql {
             let concurrent_environment = EnvironmentId::new();
             let (left, right) = tokio::join!(
                 store.acquire_history_lease(&concurrent_environment, "concurrent-left", 30_000),
@@ -355,21 +355,21 @@ fn docker_history_lease_contract(backend: StorageBackend, database_url: String) 
             .await
             .expect("idempotent append");
         match backend {
-            StorageBackend::MySql => {
+            StorageEngine::MySql => {
                 sqlx::query("UPDATE dashboard_task_lease SET expires_at_ms = 0 WHERE lease_name = ?")
                     .bind(&first.name)
                     .execute(store.mysql_pool().expect("MySQL pool"))
                     .await
                     .expect("expire first lease");
             }
-            StorageBackend::Postgres => {
+            StorageEngine::Postgres => {
                 sqlx::query("UPDATE dashboard_task_lease SET expires_at_ms = 0 WHERE lease_name = $1")
                     .bind(&first.name)
                     .execute(store.postgres_pool().expect("PostgreSQL pool"))
                     .await
                     .expect("expire first lease");
             }
-            StorageBackend::File | StorageBackend::Sqlite => unreachable!("SQL Docker test backend"),
+            StorageEngine::File | StorageEngine::Sqlite => unreachable!("SQL Docker test backend"),
         }
         let second = store
             .acquire_history_lease(&environment_id, "second-holder", 30_000)

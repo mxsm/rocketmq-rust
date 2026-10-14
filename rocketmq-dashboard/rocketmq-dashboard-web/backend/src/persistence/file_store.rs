@@ -713,7 +713,7 @@ impl FileDashboardStore {
     pub async fn storage_health(&self) -> StorageHealth {
         if self.unavailable.load(AtomicOrdering::Acquire) {
             return StorageHealth {
-                backend: crate::model::StorageBackend::File,
+                backend: crate::model::StorageEngine::File,
                 mode: StorageMode::SingleNode,
                 status: StorageStatus::Unavailable,
                 schema_version: None,
@@ -737,7 +737,7 @@ impl FileDashboardStore {
             None => StorageStatus::Unavailable,
         };
         StorageHealth {
-            backend: crate::model::StorageBackend::File,
+            backend: crate::model::StorageEngine::File,
             mode: StorageMode::SingleNode,
             status,
             schema_version: available_bytes.map(|_| i64::from(FORMAT_VERSION)),
@@ -1671,7 +1671,7 @@ mod tests {
     use crate::model::AuditResourceType;
     use crate::model::NewSession;
     use crate::model::SessionTokenHash;
-    use crate::model::StorageBackend;
+    use crate::model::StorageEngine;
     use crate::persistence::StorageStatus;
     use crate::persistence::audit_repository::AuditQuery;
     use crate::persistence::session_repository::SessionQuery;
@@ -1692,7 +1692,7 @@ mod tests {
 
     fn file_config(root: PathBuf) -> StorageConfig {
         StorageConfig {
-            backend: StorageBackend::File,
+            backend: StorageEngine::File,
             data_path: root,
             database_url: None,
             pool: SqlPoolConfig::default(),

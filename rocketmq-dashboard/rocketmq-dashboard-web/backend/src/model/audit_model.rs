@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::EnvironmentId;
-use crate::model::StorageBackend;
+use crate::model::StorageEngine;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -337,7 +337,7 @@ pub struct AuditEventView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionAuditCleanupHealth {
-    pub backend: StorageBackend,
+    pub backend: StorageEngine,
     pub connectivity: String,
     pub role: String,
     pub last_cleanup_at_ms: Option<i64>,

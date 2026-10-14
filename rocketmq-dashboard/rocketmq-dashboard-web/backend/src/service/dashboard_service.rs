@@ -21,7 +21,7 @@ use crate::model::DashboardTopicCurrent;
 use crate::model::EnvironmentId;
 use crate::model::MetricDimension;
 use crate::model::MetricSample;
-use crate::model::StorageBackend;
+use crate::model::StorageEngine;
 use crate::persistence::DashboardPersistence;
 use crate::persistence::TimeRange;
 use crate::persistence::history_repository::HistoryQuery;
@@ -138,7 +138,7 @@ pub struct DashboardHistoryRuntime {
 }
 
 impl DashboardHistoryRuntime {
-    pub fn new(backend: StorageBackend) -> Self {
+    pub fn new(backend: StorageEngine) -> Self {
         Self {
             state: Arc::new(RwLock::new(DashboardHistoryHealth {
                 backend,
@@ -396,7 +396,7 @@ async fn collect_history_sample(
 mod tests {
     use super::DashboardHistoryRuntime;
     use super::query_date_range;
-    use crate::model::StorageBackend;
+    use crate::model::StorageEngine;
 
     #[test]
     fn history_date_is_a_single_utc_day() {
@@ -406,7 +406,7 @@ mod tests {
 
     #[tokio::test]
     async fn lease_error_remains_visible_until_a_normal_standby_or_leader_transition() {
-        let runtime = DashboardHistoryRuntime::new(StorageBackend::Sqlite);
+        let runtime = DashboardHistoryRuntime::new(StorageEngine::Sqlite);
         runtime.unavailable("history lease is unavailable").await;
         runtime.set_standby_after_error().await;
         let failed = runtime.health().await;

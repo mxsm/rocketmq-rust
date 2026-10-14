@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::model::EnvironmentId;
-use crate::model::StorageBackend;
+use crate::model::StorageEngine;
 use crate::persistence::DashboardPersistence;
 use crate::persistence::backend::DashboardDataStore;
 use crate::persistence::error::PersistenceError;
@@ -115,14 +115,14 @@ impl DashboardPersistence {
     pub fn history_uses_sql_lease(&self) -> bool {
         matches!(
             self.storage_backend(),
-            StorageBackend::Sqlite | StorageBackend::MySql | StorageBackend::Postgres
+            StorageEngine::Sqlite | StorageEngine::MySql | StorageEngine::Postgres
         )
     }
 
     /// SQLite is single-node by deployment contract. Only MySQL and
     /// PostgreSQL need a durable fenced leader for cleanup.
     pub fn session_audit_cleanup_uses_sql_lease(&self) -> bool {
-        matches!(self.storage_backend(), StorageBackend::MySql | StorageBackend::Postgres)
+        matches!(self.storage_backend(), StorageEngine::MySql | StorageEngine::Postgres)
     }
 
     pub async fn acquire_session_audit_cleanup_lease(

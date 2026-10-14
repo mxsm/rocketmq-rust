@@ -28,7 +28,7 @@ use crate::model::DashboardEnvironment;
 use crate::model::EnvironmentId;
 use crate::model::MetricSample;
 use crate::model::SessionTokenHash;
-use crate::model::StorageBackend;
+use crate::model::StorageEngine;
 use crate::persistence::error::PersistenceError;
 use crate::persistence::sql_store::SqlDashboardStore;
 use serde_json::Value;
@@ -186,9 +186,9 @@ where
     usize: sqlx::ColumnIndex<R>,
 {
     let mut data = BackupData::with_backend(match R::Database::NAME {
-        "SQLite" => StorageBackend::Sqlite,
-        "MySQL" => StorageBackend::MySql,
-        "PostgreSQL" => StorageBackend::Postgres,
+        "SQLite" => StorageEngine::Sqlite,
+        "MySQL" => StorageEngine::MySql,
+        "PostgreSQL" => StorageEngine::Postgres,
         _ => return Err(PersistenceError::ConnectionUnavailable),
     });
     for row in environments {
