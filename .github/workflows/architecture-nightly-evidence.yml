@@ -44,7 +44,7 @@ jobs:
 
       - name: Upload Loom evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: architecture-nightly-loom-${{ github.sha }}
           path: target/architecture-evidence/loom
@@ -78,7 +78,7 @@ jobs:
 
       - name: Upload property and state evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: architecture-nightly-property-state-${{ github.sha }}
           path: target/architecture-evidence/property-state
@@ -113,7 +113,7 @@ jobs:
 
       - name: Upload Miri evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: architecture-nightly-miri-${{ github.sha }}
           path: target/architecture-evidence/miri
@@ -174,7 +174,7 @@ jobs:
 
       - name: Upload standalone coverage
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: architecture-nightly-coverage-${{ matrix.id }}-${{ github.sha }}
           path: ${{ matrix.id }}.lcov
