@@ -597,11 +597,14 @@ def validate_source_assets(guard: Guard) -> None:
     validate_render(guard, "generated Kustomize base", generated)
 
     workflow = guard.read(".github/workflows/kubernetes-assets-ci.yml")
-    for pin in (
-        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
-    ):
-        guard.require(pin in workflow, f"workflow action pin missing: {pin}")
+    action_pins = container_policy.get("workflow", {}).get("actions", {})
+    for action in ("actions/checkout", "actions/upload-artifact"):
+        sha = action_pins.get(action)
+        if not isinstance(sha, str) or re.fullmatch(r"[0-9a-f]{40}", sha) is None:
+            guard.require(False, f"container policy must pin {action} to a full SHA")
+            continue
+        pin = f"uses: {action}@{sha}"
+        guard.require(pin in workflow, f"workflow action pin missing: {action}@{sha}")
     guard.require("permissions:\n  contents: read" in workflow, "workflow must retain contents:read least privilege")
     guard.require("kubernetes-assets-contract.ps1" in workflow, "workflow must execute the full asset contract")
     guard.require("test_m11_kubernetes_assets" in workflow, "workflow must execute deliberate-violation tests")

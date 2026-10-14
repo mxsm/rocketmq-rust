@@ -30,7 +30,7 @@ description = "JWKS retrieval, caching, and RS256 key selection shared by the Ro
 rust-version = "1.95.0"
 
 [dependencies]
-base64 = "0.22"
+base64 = "0.23"
 http = "1"
 # Keep RS256 on AWS-LC: the RustCrypto backend pulls rsa 0.9, which has no fix for RUSTSEC-2023-0071.
 jsonwebtoken = { version = "11.0", default-features = false, features = ["aws_lc_rs"] }
