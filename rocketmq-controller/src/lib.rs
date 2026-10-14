@@ -164,7 +164,7 @@ pub use security::MaintenanceAuthenticationFuture;
 pub use security::MaintenanceAuthenticationShutdownFuture;
 pub use security::MaintenancePrincipalAuthenticator;
 pub use storage::create_storage;
-pub use storage::StorageBackend;
+pub use storage::KeyValueStore;
 pub use storage::StorageConfig;
 pub use storage::StorageStats;
 pub use typ::BrokerIdentityInfoSnapshot;
