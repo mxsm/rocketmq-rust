@@ -46,7 +46,7 @@ use crate::grpc::ProxyGrpcService;
 #[cfg(feature = "local-mode")]
 use crate::local::local_components_from_config_with_service_context;
 #[cfg(feature = "local-mode")]
-use crate::local::LocalRemotingBackend;
+use crate::local::LocalBrokerRemotingAdapter;
 use crate::observability::ProxyHookChain;
 use crate::observability::ProxyMetrics;
 use crate::processor::DefaultMessagingProcessor;
@@ -816,7 +816,7 @@ fn build_proxy_runtime_dependencies(
             )?;
             Ok(ProxyRuntimeDependencies {
                 service_manager: Arc::new(manager),
-                remoting_backend: Some(Arc::new(LocalRemotingBackend::new(client))),
+                remoting_backend: Some(Arc::new(LocalBrokerRemotingAdapter::new(client))),
                 context: Some(local_context),
             })
         }
