@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::SqlPersistence;
+use super::SqlDashboardStore;
 use crate::config::SqlPoolConfig;
 use crate::config::StorageConfig;
 use crate::model::EnvironmentId;
@@ -45,7 +45,7 @@ fn sqlite_history_is_idempotent_conflict_checked_and_reopens() {
             pool: SqlPoolConfig::default(),
         };
         let environment_id = EnvironmentId::new();
-        let store = SqlPersistence::initialize(&config, owner.root_context().component("history-sqlite"))
+        let store = SqlDashboardStore::initialize(&config, owner.root_context().component("history-sqlite"))
             .await
             .expect("SQLite persistence");
         let lease = store
@@ -85,7 +85,7 @@ fn sqlite_history_is_idempotent_conflict_checked_and_reopens() {
         ));
         drop(store);
 
-        let reopened = SqlPersistence::initialize(&config, owner.root_context().component("history-sqlite-reopen"))
+        let reopened = SqlDashboardStore::initialize(&config, owner.root_context().component("history-sqlite-reopen"))
             .await
             .expect("reopen SQLite persistence");
         let page = reopened
@@ -118,7 +118,7 @@ fn sqlite_history_lease_rejects_stale_holder_writes() {
             database_url: None,
             pool: SqlPoolConfig::default(),
         };
-        let store = SqlPersistence::initialize(&config, owner.root_context().component("history-lease"))
+        let store = SqlDashboardStore::initialize(&config, owner.root_context().component("history-lease"))
             .await
             .expect("SQLite persistence");
         let environment_id = EnvironmentId::new();
@@ -196,7 +196,7 @@ fn sqlite_history_retention_reports_exact_convergence() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
-        let store = SqlPersistence::initialize(
+        let store = SqlDashboardStore::initialize(
             &StorageConfig {
                 backend: StorageBackend::Sqlite,
                 data_path: directory.path().join("dashboard.db"),
@@ -305,7 +305,7 @@ fn docker_postgres_history_lease_contract() {
 fn docker_history_lease_contract(backend: StorageBackend, database_url: String) {
     let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
-        let store = SqlPersistence::initialize(
+        let store = SqlDashboardStore::initialize(
             &StorageConfig {
                 backend,
                 data_path: "unused".into(),

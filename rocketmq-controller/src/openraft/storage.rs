@@ -60,7 +60,7 @@ impl Store {
 
     async fn open_with_backend(
         config: ControllerConfigReader,
-        backend: crate::storage::SharedStorageBackend,
+        backend: crate::storage::SharedKeyValueStore,
     ) -> Result<Self> {
         let log_store = LogStore::open(backend.clone())
             .await
