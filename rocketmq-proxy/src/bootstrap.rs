@@ -30,9 +30,9 @@ use std::time::Duration;
 use crate::auth::build_cluster_acl_signer;
 use crate::auth::ProxyAuthRuntime;
 #[cfg(feature = "cluster-mode")]
-use crate::cluster::ClusterClient;
+use crate::cluster::ClusterBrokerRemotingAdapter;
 #[cfg(feature = "cluster-mode")]
-use crate::cluster::ClusterRemotingBackend;
+use crate::cluster::ClusterClient;
 #[cfg(feature = "cluster-mode")]
 use crate::cluster::RocketmqClusterClient;
 use crate::config::ProxyConfig;
@@ -797,7 +797,7 @@ fn build_proxy_runtime_dependencies(
             let service_client: Arc<dyn ClusterClient> = client.clone();
             Ok(ProxyRuntimeDependencies {
                 service_manager: Arc::new(ClusterServiceManager::from_cluster_client(service_client)),
-                remoting_backend: Some(Arc::new(ClusterRemotingBackend::new(client))),
+                remoting_backend: Some(Arc::new(ClusterBrokerRemotingAdapter::new(client))),
                 context: Some(cluster_context),
             })
         }

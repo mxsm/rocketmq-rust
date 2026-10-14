@@ -32,18 +32,18 @@ use rocketmq_transport::api::RemotingResponse;
 
 use crate::cluster::RocketmqClusterClient;
 
-/// Remoting operations that require direct access to the Client runtime.
-pub struct ClusterRemotingBackend {
+/// Translates Proxy Remoting requests into cluster client operations.
+pub struct ClusterBrokerRemotingAdapter {
     client: Arc<RocketmqClusterClient>,
 }
 
-impl ClusterRemotingBackend {
+impl ClusterBrokerRemotingAdapter {
     pub fn new(client: Arc<RocketmqClusterClient>) -> Self {
         Self { client }
     }
 }
 
-impl ProxyRemotingRequestHandler for ClusterRemotingBackend {
+impl ProxyRemotingRequestHandler for ClusterBrokerRemotingAdapter {
     type Response = EmbeddedDispatchResult;
 
     fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchResult> {
