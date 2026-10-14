@@ -43,19 +43,18 @@ use crate::lifecycle::BrokerStartupError;
 
 /// In-process embedding entry point for the Broker.
 ///
-/// A `ProxyBrokerFacade` owns a `BrokerRuntime` together with the task group
+/// An `EmbeddedBroker` owns a `BrokerRuntime` together with the task group
 /// used for local request dispatch, and is the supported way to run the Broker
-/// inside another process (for example the Proxy). It is re-exported from the
-/// crate root. Owning a facade means owning the embedded Broker's lifecycle:
+/// inside another process (for example the Proxy). The host owns its lifecycle:
 /// call [`initialize`](Self::initialize) then [`start`](Self::start) before
 /// serving traffic, and [`shutdown`](Self::shutdown) to stop it.
-pub struct ProxyBrokerFacade {
+pub struct EmbeddedBroker {
     runtime: BrokerRuntime,
     local_request_tasks: TaskGroup,
     started: bool,
 }
 
-impl ProxyBrokerFacade {
+impl EmbeddedBroker {
     /// Creates an embedded Broker using the store root carried by `broker_config`.
     ///
     /// This is the narrow constructor for local Proxy composition. Callers that
@@ -73,7 +72,7 @@ impl ProxyBrokerFacade {
         )
     }
 
-    /// Creates a proxy facade from broker configuration using explicit remoting defaults.
+    /// Creates an embedded Broker from broker configuration using explicit remoting defaults.
     ///
     /// # Errors
     ///
@@ -126,7 +125,7 @@ impl ProxyBrokerFacade {
         )
     }
 
-    /// Creates a proxy facade from broker and message-store configurations using explicit remoting defaults.
+    /// Creates an embedded Broker from broker and message-store configurations using explicit remoting defaults.
     ///
     /// # Errors
     ///
@@ -149,7 +148,7 @@ impl ProxyBrokerFacade {
         ))
     }
 
-    /// Creates a proxy facade from an already-[`ValidatedBrokerConfig`], using
+    /// Creates an embedded Broker from an already-[`ValidatedBrokerConfig`], using
     /// the application's default remoting command factory.
     ///
     /// This constructor is infallible: validation happened when the
@@ -169,7 +168,7 @@ impl ProxyBrokerFacade {
         )
     }
 
-    /// Creates a proxy facade from validated configuration using explicit remoting defaults.
+    /// Creates an embedded Broker from validated configuration using explicit remoting defaults.
     pub fn from_validated_config_with_factory(
         validated_config: ValidatedBrokerConfig,
         service_context: ChildServiceContext,
