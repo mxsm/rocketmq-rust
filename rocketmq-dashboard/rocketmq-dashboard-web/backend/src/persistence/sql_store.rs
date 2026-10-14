@@ -65,7 +65,9 @@ pub enum DatabasePool {
     Postgres(PgPool),
 }
 
-pub struct SqlPersistence {
+/// Stores durable Dashboard data using SQLite, MySQL, or PostgreSQL.
+/// Owns the selected connection pool and schema metadata.
+pub struct SqlDashboardStore {
     pool: DatabasePool,
     backend: StorageBackend,
     schema_version: i64,
@@ -73,7 +75,7 @@ pub struct SqlPersistence {
     sqlite_storage_context: Option<ChildServiceContext>,
 }
 
-impl SqlPersistence {
+impl SqlDashboardStore {
     pub async fn initialize(
         config: &StorageConfig,
         service_context: ChildServiceContext,
@@ -353,7 +355,7 @@ async fn connect_with_timeout<T>(
         .map_err(map_connection_error)
 }
 
-impl SqlPersistence {
+impl SqlDashboardStore {
     pub(crate) async fn load_environment(
         &self,
         environment_id: &EnvironmentId,
@@ -1389,7 +1391,7 @@ mod tests {
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let config = sqlite_config(database_path.clone());
-            let first = SqlPersistence::initialize(&config, owner.root_context().component("sqlite-first"))
+            let first = SqlDashboardStore::initialize(&config, owner.root_context().component("sqlite-first"))
                 .await
                 .expect("first SQLite initialization");
             assert_eq!(first.schema_version(), 4);
@@ -1400,7 +1402,7 @@ mod tests {
             assert!(health.idle_connections.is_some());
             assert_schema_metadata(&first).await;
             drop(first);
-            let second = SqlPersistence::initialize(&config, owner.root_context().component("sqlite-second"))
+            let second = SqlDashboardStore::initialize(&config, owner.root_context().component("sqlite-second"))
                 .await
                 .expect("second SQLite initialization");
             assert_eq!(second.schema_version(), 4);
@@ -1414,7 +1416,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("temp dir");
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
-            let store = SqlPersistence::initialize(
+            let store = SqlDashboardStore::initialize(
                 &sqlite_config(directory.path().join("dashboard.db")),
                 owner.root_context().component("sqlite-health"),
             )
@@ -1431,7 +1433,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("temp dir");
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
-            let store = SqlPersistence::initialize(
+            let store = SqlDashboardStore::initialize(
                 &sqlite_config(directory.path().join("dashboard.db")),
                 owner.root_context().component("sqlite-migration-health"),
             )
@@ -1453,7 +1455,7 @@ mod tests {
         create_legacy_sqlite_table(&database_path);
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
-            let result = SqlPersistence::initialize(
+            let result = SqlDashboardStore::initialize(
                 &sqlite_config(database_path),
                 owner.root_context().component("legacy-sqlite"),
             )
@@ -1468,7 +1470,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary directory");
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
-            let store = SqlPersistence::initialize(
+            let store = SqlDashboardStore::initialize(
                 &sqlite_config(directory.path().join("dashboard.db")),
                 owner.root_context().component("sqlite-snapshot"),
             )
@@ -1578,7 +1580,7 @@ mod tests {
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let first =
-                SqlPersistence::initialize(&config, owner.root_context().component("docker-storage-test-first"))
+                SqlDashboardStore::initialize(&config, owner.root_context().component("docker-storage-test-first"))
                     .await
                     .expect("first storage initialization");
             assert_eq!(first.schema_version(), 4);
@@ -1586,7 +1588,7 @@ mod tests {
             assert_schema_metadata(&first).await;
             drop(first);
             let second =
-                SqlPersistence::initialize(&config, owner.root_context().component("docker-storage-test-second"))
+                SqlDashboardStore::initialize(&config, owner.root_context().component("docker-storage-test-second"))
                     .await
                     .expect("second storage initialization");
             assert_eq!(second.schema_version(), 4);
@@ -1598,7 +1600,7 @@ mod tests {
         owner.shutdown_runtime_blocking().expect("runtime shutdown");
     }
 
-    async fn assert_schema_metadata(persistence: &SqlPersistence) {
+    async fn assert_schema_metadata(persistence: &SqlDashboardStore) {
         match &persistence.pool {
             DatabasePool::Sqlite(pool) => {
                 let environment_name: i64 = sqlx::query_scalar(

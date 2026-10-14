@@ -18,10 +18,10 @@ use crate::config::StorageConfig;
 use crate::model::EnvironmentId;
 use crate::model::MetricSample;
 use crate::model::StorageBackend;
-use crate::persistence::file_store::FilePersistence;
+use crate::persistence::file_store::FileDashboardStore;
 use crate::persistence::history_repository::HistoryQuery;
 use crate::persistence::history_repository::page_samples;
-use crate::persistence::sql_store::SqlPersistence;
+use crate::persistence::sql_store::SqlDashboardStore;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ScopeId;
 use sqlx::Row;
@@ -53,7 +53,7 @@ fn docker_file_history_capacity_baseline() {
         .expect("ROCKETMQ_DASHBOARD_STORAGE_TEST_FILE_PATH must be set by the storage test runner");
     let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
-        let store = FilePersistence::initialize(
+        let store = FileDashboardStore::initialize(
             &StorageConfig {
                 backend: StorageBackend::File,
                 data_path: data_path.into(),
@@ -122,7 +122,7 @@ fn samples(environment_id: &EnvironmentId, batch: usize) -> Vec<MetricSample> {
         .collect()
 }
 
-async fn run_file_capacity(store: &FilePersistence) {
+async fn run_file_capacity(store: &FileDashboardStore) {
     let environment_id = EnvironmentId::new();
     let first = samples(&environment_id, 0);
     let started = Instant::now();
@@ -183,7 +183,7 @@ async fn run_file_capacity(store: &FilePersistence) {
 fn run_sql_capacity(backend: StorageBackend, database_url: Option<String>, data_path: std::path::PathBuf) {
     let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
-        let store = SqlPersistence::initialize(
+        let store = SqlDashboardStore::initialize(
             &StorageConfig {
                 backend,
                 data_path,
@@ -256,7 +256,7 @@ fn run_sql_capacity(backend: StorageBackend, database_url: Option<String>, data_
     owner.shutdown_runtime_blocking().expect("runtime shutdown");
 }
 
-async fn assert_query_index(store: &SqlPersistence, backend: StorageBackend, environment_id: &EnvironmentId) {
+async fn assert_query_index(store: &SqlDashboardStore, backend: StorageBackend, environment_id: &EnvironmentId) {
     let environment_id = &environment_id.0;
     match backend {
         StorageBackend::Sqlite => {

@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::model::StorageBackend;
-use crate::persistence::file_store::FilePersistence;
-use crate::persistence::sql_store::SqlPersistence;
+use crate::persistence::file_store::FileDashboardStore;
+use crate::persistence::sql_store::SqlDashboardStore;
 
+/// Owns the initialized File or SQL store for durable Dashboard data.
 pub enum DashboardDataStore {
-    File(Box<FilePersistence>),
-    Sql(Box<SqlPersistence>),
+    File(Box<FileDashboardStore>),
+    Sql(Box<SqlDashboardStore>),
 }
 
 impl DashboardDataStore {

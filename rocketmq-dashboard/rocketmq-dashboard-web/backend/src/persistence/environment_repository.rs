@@ -19,7 +19,7 @@ use crate::persistence::DashboardPersistence;
 use crate::persistence::Revision;
 use crate::persistence::backend::DashboardDataStore;
 use crate::persistence::error::PersistenceError;
-use crate::persistence::file_store::FilePersistence;
+use crate::persistence::file_store::FileDashboardStore;
 use crate::persistence::file_store::FileSnapshotTransactionWrite;
 use serde::Deserialize;
 use serde::Serialize;
@@ -191,7 +191,7 @@ impl EnvironmentRepository for DashboardPersistence {
     }
 }
 
-impl FilePersistence {
+impl FileDashboardStore {
     pub(crate) async fn load_environment(
         &self,
         environment_id: &EnvironmentId,
@@ -431,7 +431,7 @@ fn environment_collection_for_id(environment_id: &EnvironmentId) -> String {
 }
 
 async fn load_file_environment(
-    store: &FilePersistence,
+    store: &FileDashboardStore,
     collection: &str,
 ) -> Result<DashboardEnvironment, PersistenceError> {
     store
@@ -502,7 +502,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary directory");
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &StorageConfig {
                     backend: StorageBackend::File,
                     data_path: directory.path().join("dashboard"),
@@ -581,7 +581,7 @@ mod tests {
         let root = directory.path().join("dashboard");
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &StorageConfig {
                     backend: StorageBackend::File,
                     data_path: root.clone(),
@@ -659,7 +659,7 @@ mod tests {
             );
             drop(store);
 
-            let recovered = FilePersistence::initialize(
+            let recovered = FileDashboardStore::initialize(
                 &StorageConfig {
                     backend: StorageBackend::File,
                     data_path: root.clone(),

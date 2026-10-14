@@ -22,7 +22,7 @@ use chrono::Utc;
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 
-impl FilePersistence {
+impl FileDashboardStore {
     /// Reads every current history segment while the caller owns the File
     /// storage directory lock. This narrow operations hook is intentionally
     /// not exposed through HTTP query APIs.
@@ -579,7 +579,7 @@ fn read_history_samples_file(path: &Path) -> Result<Vec<MetricSample>, Persisten
 
 #[cfg(test)]
 mod tests {
-    use super::FilePersistence;
+    use super::FileDashboardStore;
     use super::history_directory;
     use crate::config::SqlPoolConfig;
     use crate::config::StorageConfig;
@@ -637,7 +637,7 @@ mod tests {
                 dimensions: Vec::new(),
                 value: 3.0,
             };
-            let store = FilePersistence::initialize(&config, owner.root_context().component("history-file"))
+            let store = FileDashboardStore::initialize(&config, owner.root_context().component("history-file"))
                 .await
                 .expect("file persistence");
             store
@@ -657,9 +657,10 @@ mod tests {
                 .await
                 .expect("append other environment history");
             drop(store);
-            let reopened = FilePersistence::initialize(&config, owner.root_context().component("history-file-reopen"))
-                .await
-                .expect("reopen file persistence");
+            let reopened =
+                FileDashboardStore::initialize(&config, owner.root_context().component("history-file-reopen"))
+                    .await
+                    .expect("reopen file persistence");
             let query = HistoryQuery {
                 environment_id,
                 metric: "broker-count".to_string(),
@@ -737,7 +738,7 @@ mod tests {
                 dimensions: Vec::new(),
                 value: 4.0,
             };
-            let store = FilePersistence::initialize(&config, owner.root_context().component("docker-history-file"))
+            let store = FileDashboardStore::initialize(&config, owner.root_context().component("docker-history-file"))
                 .await
                 .expect("file persistence");
             store
@@ -751,7 +752,7 @@ mod tests {
             drop(store);
 
             let reopened =
-                FilePersistence::initialize(&config, owner.root_context().component("docker-history-file-reopen"))
+                FileDashboardStore::initialize(&config, owner.root_context().component("docker-history-file-reopen"))
                     .await
                     .expect("reopen mounted file persistence");
             let query = HistoryQuery {
@@ -798,7 +799,7 @@ mod tests {
                 let environment_id = EnvironmentId::new();
                 let old = sample(environment_id.clone(), 1_000, 1.0);
                 let new = sample(environment_id.clone(), 2_000, 2.0);
-                let store = FilePersistence::initialize(
+                let store = FileDashboardStore::initialize(
                     &config,
                     owner.root_context().component(
                         ScopeId::try_new(format!("history-file-marker-{stage}"))
@@ -833,7 +834,7 @@ mod tests {
                 }
                 drop(store);
 
-                let reopened = FilePersistence::initialize(
+                let reopened = FileDashboardStore::initialize(
                     &config,
                     owner.root_context().component(
                         ScopeId::try_new(format!("history-file-marker-reopen-{stage}"))
@@ -868,7 +869,7 @@ mod tests {
             let environment_id = EnvironmentId::new();
             let old = sample(environment_id.clone(), 1_000, 1.0);
             let store =
-                FilePersistence::initialize(&config, owner.root_context().component("history-file-torn-marker"))
+                FileDashboardStore::initialize(&config, owner.root_context().component("history-file-torn-marker"))
                     .await
                     .expect("file persistence");
             store.append_history(vec![old.clone()]).await.expect("old sample");
@@ -878,7 +879,7 @@ mod tests {
             std::fs::write(history.join(".history-replace-empty.json"), b"").expect("empty marker");
             std::fs::write(history.join(".history-replace-partial.json"), b"{").expect("partial marker");
 
-            let reopened = FilePersistence::initialize(
+            let reopened = FileDashboardStore::initialize(
                 &config,
                 owner.root_context().component("history-file-torn-marker-reopen"),
             )
@@ -908,7 +909,7 @@ mod tests {
             };
             let environment_id = EnvironmentId::new();
             let old = sample(environment_id.clone(), 1_000, 1.0);
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &config,
                 owner.root_context().component("history-file-unpublished-marker"),
             )
@@ -929,7 +930,7 @@ mod tests {
             std::fs::write(&backup, b"defensive backup sidecar").expect("backup sidecar");
             std::fs::write(&unrelated, b"unrelated sidecar").expect("unrelated sidecar");
 
-            let reopened = FilePersistence::initialize(
+            let reopened = FileDashboardStore::initialize(
                 &config,
                 owner.root_context().component("history-file-unpublished-marker-reopen"),
             )
@@ -964,7 +965,7 @@ mod tests {
             let environment_id = EnvironmentId::new();
             let old = sample(environment_id.clone(), 1_000, 1.0);
             let new = sample(environment_id.clone(), 2_000, 2.0);
-            let store = FilePersistence::initialize(&config, owner.root_context().component("history-file-tail"))
+            let store = FileDashboardStore::initialize(&config, owner.root_context().component("history-file-tail"))
                 .await
                 .expect("file persistence");
             store.append_history(vec![old.clone()]).await.expect("old sample");
@@ -982,7 +983,7 @@ mod tests {
             std::fs::write(trash.join("1970-01-01.jsonl"), b"old").expect("retention trash payload");
 
             let reopened =
-                FilePersistence::initialize(&config, owner.root_context().component("history-file-tail-reopen"))
+                FileDashboardStore::initialize(&config, owner.root_context().component("history-file-tail-reopen"))
                     .await
                     .expect("reopen cleans retention trash");
             assert!(!trash.exists());
@@ -993,7 +994,7 @@ mod tests {
             drop(reopened);
 
             let verified =
-                FilePersistence::initialize(&config, owner.root_context().component("history-file-tail-verified"))
+                FileDashboardStore::initialize(&config, owner.root_context().component("history-file-tail-verified"))
                     .await
                     .expect("verify reopen");
             assert_eq!(
