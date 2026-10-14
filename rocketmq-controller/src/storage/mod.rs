@@ -58,12 +58,12 @@ pub enum StorageConfig {
     Memory,
 }
 
-/// Storage backend trait
+/// Key-value storage interface
 ///
 /// This trait abstracts over different storage implementations,
 /// providing a unified interface for storing and retrieving data.
 #[async_trait]
-pub trait StorageBackend: Send + Sync {
+pub trait KeyValueStore: Send + Sync {
     /// Put a key-value pair
     async fn put(&self, key: &str, value: &[u8]) -> Result<()>;
 
@@ -98,7 +98,7 @@ pub trait StorageBackend: Send + Sync {
     async fn stats(&self) -> Result<StorageStats>;
 }
 
-pub type SharedStorageBackend = Arc<dyn StorageBackend>;
+pub type SharedKeyValueStore = Arc<dyn KeyValueStore>;
 
 /// Storage statistics
 #[derive(Debug, Clone, Default)]
@@ -119,7 +119,7 @@ pub struct StorageStats {
 /// with these helpers from this module's tests.
 #[cfg(test)]
 #[async_trait]
-pub trait StorageBackendExt: StorageBackend {
+pub trait KeyValueStoreExt: KeyValueStore {
     /// Put a serializable value
     async fn put_json<T: Serialize + Send + Sync>(&self, key: &str, value: &T) -> Result<()> {
         let data = serde_json::to_vec(value).map_err(|e| controller_internal_by("serialize storage value", e))?;
@@ -139,12 +139,12 @@ pub trait StorageBackendExt: StorageBackend {
     }
 }
 
-// Blanket implementation for all StorageBackend implementors
+// Blanket implementation for all KeyValueStore implementors
 #[cfg(test)]
-impl<T: StorageBackend + ?Sized> StorageBackendExt for T {}
+impl<T: KeyValueStore + ?Sized> KeyValueStoreExt for T {}
 
 /// Create a storage backend based on configuration
-pub async fn create_storage(config: StorageConfig, storage_io: BlockingExecutor) -> Result<SharedStorageBackend> {
+pub async fn create_storage(config: StorageConfig, storage_io: BlockingExecutor) -> Result<SharedKeyValueStore> {
     // The uniform factory contract carries the executor even when the selected feature profile
     // contains no backend that performs blocking I/O.
     #[cfg(not(feature = "storage-rocksdb"))]
@@ -176,7 +176,7 @@ pub async fn create_storage(config: StorageConfig, storage_io: BlockingExecutor)
             }
 
             #[async_trait]
-            impl StorageBackend for MemoryBackend {
+            impl KeyValueStore for MemoryBackend {
                 async fn put(&self, key: &str, value: &[u8]) -> Result<()> {
                     self.data.write().insert(key.to_string(), value.to_vec());
                     Ok(())

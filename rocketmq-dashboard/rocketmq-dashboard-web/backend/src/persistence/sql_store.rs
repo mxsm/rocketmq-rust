@@ -65,6 +65,8 @@ pub enum DatabasePool {
     Postgres(PgPool),
 }
 
+/// Stores durable Dashboard data using SQLite, MySQL, or PostgreSQL.
+/// Owns the selected connection pool and schema metadata.
 pub struct SqlDashboardStore {
     pool: DatabasePool,
     backend: StorageBackend,

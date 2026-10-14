@@ -30,11 +30,11 @@ use rocketmq_controller::ControllerConfig;
 use rocketmq_controller::ControllerConfigReader;
 use rocketmq_controller::ControllerRequest;
 use rocketmq_controller::EntryPayload;
+use rocketmq_controller::KeyValueStore;
 use rocketmq_controller::LogEntry;
 use rocketmq_controller::LogId;
 use rocketmq_controller::LogStore;
 use rocketmq_controller::StateMachine;
-use rocketmq_controller::StorageBackend;
 use rocketmq_controller::StorageBackendType;
 use rocketmq_controller::StorageStats;
 use rocketmq_controller::TypeConfig;
@@ -72,7 +72,7 @@ impl FaultInjectingBackend {
 }
 
 #[async_trait]
-impl StorageBackend for FaultInjectingBackend {
+impl KeyValueStore for FaultInjectingBackend {
     async fn put(&self, key: &str, value: &[u8]) -> Result<()> {
         self.data.write().insert(key.to_string(), value.to_vec());
         Ok(())
