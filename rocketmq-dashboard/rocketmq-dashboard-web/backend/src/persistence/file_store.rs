@@ -275,10 +275,10 @@ impl FileMutationBlocker {
     }
 }
 
-/// Single-node File backend. The lock remains open for the lifetime of this
-/// instance, and every filesystem operation is delegated to storage I/O.
+/// Single-node Dashboard file store. Its lock remains open for the lifetime of
+/// the instance, and every filesystem operation is delegated to storage I/O.
 #[derive(Debug, Clone)]
-pub struct FilePersistence {
+pub struct FileDashboardStore {
     root: PathBuf,
     _lock: Arc<FileDirectoryLock>,
     service_context: ChildServiceContext,
@@ -290,7 +290,7 @@ pub struct FilePersistence {
     history_replace_failpoint: Arc<std::sync::atomic::AtomicU8>,
 }
 
-impl FilePersistence {
+impl FileDashboardStore {
     pub async fn initialize(
         config: &StorageConfig,
         service_context: ChildServiceContext,
@@ -1756,13 +1756,13 @@ mod tests {
     }
 
     fn install_mutation_blocker(
-        store: &FilePersistence,
+        store: &FileDashboardStore,
     ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::SyncSender<()>) {
         install_mutation_blocker_with_rollback_failure(store, None)
     }
 
     fn install_mutation_blocker_with_rollback_failure(
-        store: &FilePersistence,
+        store: &FileDashboardStore,
         rollback_failure_after_deletions: Option<usize>,
     ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::SyncSender<()>) {
         let (started_sender, started_receiver) = std::sync::mpsc::sync_channel(1);
@@ -1777,7 +1777,7 @@ mod tests {
     }
 
     fn install_panicking_mutation_blocker(
-        store: &FilePersistence,
+        store: &FileDashboardStore,
     ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::SyncSender<()>) {
         let (started_sender, started_receiver) = std::sync::mpsc::sync_channel(1);
         let (release_sender, release_receiver) = std::sync::mpsc::sync_channel(1);
@@ -1791,7 +1791,7 @@ mod tests {
     }
 
     fn install_committed_cleanup_blocker(
-        store: &FilePersistence,
+        store: &FileDashboardStore,
         fail_after_release: bool,
     ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::SyncSender<()>) {
         let (started_sender, started_receiver) = std::sync::mpsc::sync_channel(1);
@@ -1827,7 +1827,7 @@ mod tests {
             .build()
             .expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &file_config(directory.path().join("dashboard")),
                 owner.root_context().component("cancelled-cas-file-store"),
             )
@@ -1874,7 +1874,7 @@ mod tests {
             .build()
             .expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &file_config(directory.path().join("dashboard")),
                 owner.root_context().component("cancelled-delete-file-store"),
             )
@@ -1949,7 +1949,7 @@ mod tests {
             .build()
             .expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &file_config(directory.path().join("dashboard")),
                 owner.root_context().component("post-dispatch-file-store"),
             )
@@ -1990,7 +1990,7 @@ mod tests {
             .build()
             .expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &file_config(root.clone()),
                 owner.root_context().component("cas-timeout-file-store"),
             )
@@ -2019,7 +2019,7 @@ mod tests {
             assert_eq!(snapshot.payload, json!({"value": "before"}));
             drop(store);
 
-            let reopened = FilePersistence::initialize(
+            let reopened = FileDashboardStore::initialize(
                 &file_config(root),
                 owner.root_context().component("cas-timeout-file-store-reopen"),
             )
@@ -2047,7 +2047,7 @@ mod tests {
             .build()
             .expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &file_config(root.clone()),
                 owner.root_context().component("delete-timeout-file-store"),
             )
@@ -2106,7 +2106,7 @@ mod tests {
             );
             drop(store);
 
-            let reopened = FilePersistence::initialize(
+            let reopened = FileDashboardStore::initialize(
                 &file_config(root),
                 owner.root_context().component("delete-timeout-file-store-reopen"),
             )
@@ -2133,7 +2133,7 @@ mod tests {
             .build()
             .expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &file_config(directory.path().join("dashboard")),
                 owner.root_context().component("cleanup-timeout-file-store"),
             )
@@ -2174,7 +2174,7 @@ mod tests {
         let root = directory.path().join("dashboard");
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &file_config(root.clone()),
                 owner.root_context().component("cleanup-failure-file-store"),
             )
@@ -2213,7 +2213,7 @@ mod tests {
             );
             drop(store);
 
-            let reopened = FilePersistence::initialize(
+            let reopened = FileDashboardStore::initialize(
                 &file_config(root.clone()),
                 owner.root_context().component("cleanup-failure-file-store-reopen"),
             )
@@ -2248,7 +2248,7 @@ mod tests {
             .build()
             .expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &file_config(root.clone()),
                 owner.root_context().component("single-compensation-failure-file-store"),
             )
@@ -2274,7 +2274,7 @@ mod tests {
             ));
             drop(store);
 
-            let reopened = FilePersistence::initialize(
+            let reopened = FileDashboardStore::initialize(
                 &file_config(root.clone()),
                 owner.root_context().component("single-compensation-failure-reopen"),
             )
@@ -2309,7 +2309,7 @@ mod tests {
             .build()
             .expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &file_config(root.clone()),
                 owner.root_context().component("multi-compensation-failure-file-store"),
             )
@@ -2354,7 +2354,7 @@ mod tests {
             ));
             drop(store);
 
-            let reopened = FilePersistence::initialize(
+            let reopened = FileDashboardStore::initialize(
                 &file_config(root.clone()),
                 owner.root_context().component("multi-compensation-failure-reopen"),
             )
@@ -2388,7 +2388,7 @@ mod tests {
         let root = directory.path().join("dashboard");
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &file_config(root.clone()),
                 owner.root_context().component("prepared-interruption-file-store"),
             )
@@ -2438,7 +2438,7 @@ mod tests {
             .expect("stage multi intent");
             drop(store);
 
-            let reopened = FilePersistence::initialize(
+            let reopened = FileDashboardStore::initialize(
                 &file_config(root),
                 owner.root_context().component("prepared-interruption-reopen"),
             )
@@ -2481,7 +2481,7 @@ mod tests {
         let root = directory.path().join("dashboard");
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &file_config(root.clone()),
                 owner.root_context().component("snapshot-audit-normal"),
             )
@@ -2533,7 +2533,7 @@ mod tests {
             );
             drop(store);
 
-            let staged = FilePersistence::initialize(
+            let staged = FileDashboardStore::initialize(
                 &file_config(root.clone()),
                 owner.root_context().component("snapshot-audit-prepared"),
             )
@@ -2561,7 +2561,7 @@ mod tests {
             drop(prepared);
             drop(staged);
 
-            let reopened = FilePersistence::initialize(
+            let reopened = FileDashboardStore::initialize(
                 &file_config(root.clone()),
                 owner.root_context().component("snapshot-audit-prepared-reopen"),
             )
@@ -2595,7 +2595,7 @@ mod tests {
             );
             drop(reopened);
 
-            let committed = FilePersistence::initialize(
+            let committed = FileDashboardStore::initialize(
                 &file_config(root.clone()),
                 owner.root_context().component("snapshot-audit-committed"),
             )
@@ -2624,7 +2624,7 @@ mod tests {
             drop(committed_transaction);
             drop(committed);
 
-            let reopened = FilePersistence::initialize(
+            let reopened = FileDashboardStore::initialize(
                 &file_config(root.clone()),
                 owner.root_context().component("snapshot-audit-committed-reopen"),
             )
@@ -2664,7 +2664,7 @@ mod tests {
         let root = directory.path().join("dashboard");
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &file_config(root.clone()),
                 owner.root_context().component("snapshot-audit-failure"),
             )
@@ -2707,7 +2707,7 @@ mod tests {
             store.mutation_blocker.clear();
             drop(store);
 
-            let reopened = FilePersistence::initialize(
+            let reopened = FileDashboardStore::initialize(
                 &file_config(root),
                 owner.root_context().component("snapshot-audit-failure-reopen"),
             )
@@ -2751,7 +2751,7 @@ mod tests {
             .build()
             .expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &file_config(directory.path().join("dashboard")),
                 owner.root_context().component("cancelled-session-cleanup-file-store"),
             )
@@ -2794,7 +2794,7 @@ mod tests {
             .build()
             .expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &file_config(root.clone()),
                 owner.root_context().component("timeout-session-cleanup-file-store"),
             )
@@ -2824,7 +2824,7 @@ mod tests {
             );
             drop(store);
 
-            let reopened = FilePersistence::initialize(
+            let reopened = FileDashboardStore::initialize(
                 &file_config(root),
                 owner
                     .root_context()
@@ -2851,7 +2851,7 @@ mod tests {
             .build()
             .expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &file_config(directory.path().join("dashboard")),
                 owner.root_context().component("serialized-session-cleanup-file-store"),
             )
@@ -2914,7 +2914,7 @@ mod tests {
                 ("committed", SessionTokenHash([52; 32]), true, 2),
             ] {
                 let root = directory.path().join(name);
-                let store = FilePersistence::initialize(
+                let store = FileDashboardStore::initialize(
                     &file_config(root.clone()),
                     owner.root_context().component("touch-reopen-stage"),
                 )
@@ -2928,7 +2928,7 @@ mod tests {
                     .expect("stage interrupted touch");
                 drop(store);
 
-                let reopened = FilePersistence::initialize(
+                let reopened = FileDashboardStore::initialize(
                     &file_config(root.clone()),
                     owner.root_context().component("touch-reopen-recover"),
                 )
@@ -2960,7 +2960,7 @@ mod tests {
             .build()
             .expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &file_config(directory.path().join("dashboard")),
                 owner.root_context().component("cancelled-session-touch-file-store"),
             )
@@ -3006,7 +3006,7 @@ mod tests {
             .build()
             .expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &file_config(root.clone()),
                 owner.root_context().component("timeout-session-touch-file-store"),
             )
@@ -3019,7 +3019,7 @@ mod tests {
                 .expect("seed active session");
             // Only the blocked touch uses the short deadline; filesystem setup,
             // reads, and reopen must not depend on the runner's disk latency.
-            let mutation_store = FilePersistence {
+            let mutation_store = FileDashboardStore {
                 service_context: mutation_owner
                     .root_context()
                     .component("timeout-session-touch-mutation"),
@@ -3054,7 +3054,7 @@ mod tests {
             );
             drop(store);
 
-            let reopened = FilePersistence::initialize(
+            let reopened = FileDashboardStore::initialize(
                 &file_config(root),
                 owner
                     .root_context()
@@ -3084,7 +3084,7 @@ mod tests {
         let root = directory.path().join("dashboard");
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &file_config(root.clone()),
                 owner.root_context().component("touch-cleanup-failure-file-store"),
             )
@@ -3112,7 +3112,7 @@ mod tests {
             );
             drop(store);
 
-            let reopened = FilePersistence::initialize(
+            let reopened = FileDashboardStore::initialize(
                 &file_config(root.clone()),
                 owner
                     .root_context()
@@ -3147,7 +3147,7 @@ mod tests {
             .build()
             .expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &file_config(directory.path().join("dashboard")),
                 owner.root_context().component("serialized-session-touch-file-store"),
             )
@@ -3238,11 +3238,11 @@ mod tests {
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let config = file_config(directory.path().join("dashboard"));
-            let first = FilePersistence::initialize(&config, owner.root_context().component("first-file-store"))
+            let first = FileDashboardStore::initialize(&config, owner.root_context().component("first-file-store"))
                 .await
                 .expect("first file store");
             let second =
-                FilePersistence::initialize(&config, owner.root_context().component("second-file-store")).await;
+                FileDashboardStore::initialize(&config, owner.root_context().component("second-file-store")).await;
             assert!(matches!(second, Err(PersistenceError::LockUnavailable)));
             drop(first);
         });
@@ -3259,7 +3259,7 @@ mod tests {
 
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
-            let result = FilePersistence::initialize(
+            let result = FileDashboardStore::initialize(
                 &file_config(data.join("dashboard")),
                 owner.root_context().component("former-default-paths"),
             )
@@ -3275,10 +3275,12 @@ mod tests {
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let root = directory.path().join("dashboard");
-            let store =
-                FilePersistence::initialize(&file_config(root.clone()), owner.root_context().component("file-store"))
-                    .await
-                    .expect("file store");
+            let store = FileDashboardStore::initialize(
+                &file_config(root.clone()),
+                owner.root_context().component("file-store"),
+            )
+            .await
+            .expect("file store");
             store
                 .write_snapshot("config", 1, json!({"value": "first"}))
                 .await
@@ -3300,7 +3302,7 @@ mod tests {
             assert!(matches!(duplicate, Err(PersistenceError::Conflict)));
             drop(store);
             std::fs::remove_file(root.join("manifest.json")).expect("remove manifest");
-            let recovered = FilePersistence::initialize(
+            let recovered = FileDashboardStore::initialize(
                 &file_config(root.clone()),
                 owner.root_context().component("recovered-file-store"),
             )
@@ -3346,7 +3348,7 @@ mod tests {
         owner.block_on(async {
             let root = directory.path().join("dashboard");
             let config = file_config(root.clone());
-            let store = FilePersistence::initialize(&config, owner.root_context().component("manifest-seed"))
+            let store = FileDashboardStore::initialize(&config, owner.root_context().component("manifest-seed"))
                 .await
                 .expect("file store");
             store
@@ -3373,9 +3375,10 @@ mod tests {
                 b"torn snapshot",
             )
             .expect("write torn snapshot");
-            let recovered = FilePersistence::initialize(&config, owner.root_context().component("manifest-recovered"))
-                .await
-                .expect("recover corrupt manifest");
+            let recovered =
+                FileDashboardStore::initialize(&config, owner.root_context().component("manifest-recovered"))
+                    .await
+                    .expect("recover corrupt manifest");
             let manifest: FileManifest =
                 serde_json::from_slice(&std::fs::read(root.join("manifest.json")).expect("read rebuilt manifest"))
                     .expect("parse rebuilt manifest");
@@ -3410,7 +3413,7 @@ mod tests {
             )
             .expect("write incompatible manifest");
             let incompatible =
-                FilePersistence::initialize(&config, owner.root_context().component("manifest-incompatible")).await;
+                FileDashboardStore::initialize(&config, owner.root_context().component("manifest-incompatible")).await;
             assert!(matches!(incompatible, Err(PersistenceError::UnsupportedLayout)));
         });
         owner.shutdown_runtime_blocking().expect("runtime shutdown");
@@ -3423,9 +3426,10 @@ mod tests {
         owner.block_on(async {
             let root = directory.path().join("dashboard");
             let config = file_config(root.clone());
-            let store = FilePersistence::initialize(&config, owner.root_context().component("missing-manifest-seed"))
-                .await
-                .expect("file store");
+            let store =
+                FileDashboardStore::initialize(&config, owner.root_context().component("missing-manifest-seed"))
+                    .await
+                    .expect("file store");
             store
                 .write_snapshot("configuration", 2, json!({"revision": 2}))
                 .await
@@ -3439,7 +3443,7 @@ mod tests {
             )
             .expect("write torn snapshot");
             let recovered =
-                FilePersistence::initialize(&config, owner.root_context().component("missing-manifest-recovered"))
+                FileDashboardStore::initialize(&config, owner.root_context().component("missing-manifest-recovered"))
                     .await
                     .expect("recover missing manifest");
             assert_eq!(
@@ -3465,7 +3469,7 @@ mod tests {
         owner.block_on(async {
             let root = directory.path().join("dashboard");
             let config = file_config(root.clone());
-            let store = FilePersistence::initialize(&config, owner.root_context().component("corrupt-seed"))
+            let store = FileDashboardStore::initialize(&config, owner.root_context().component("corrupt-seed"))
                 .await
                 .expect("file store");
             drop(store);
@@ -3475,7 +3479,8 @@ mod tests {
             std::fs::write(snapshots.join("00000000000000000001.json"), b"not valid json")
                 .expect("write corrupt snapshot");
 
-            let result = FilePersistence::initialize(&config, owner.root_context().component("corrupt-recovery")).await;
+            let result =
+                FileDashboardStore::initialize(&config, owner.root_context().component("corrupt-recovery")).await;
             assert!(matches!(result, Err(PersistenceError::CorruptedData)));
         });
         owner.shutdown_runtime_blocking().expect("runtime shutdown");
@@ -3493,7 +3498,7 @@ mod tests {
         ));
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &file_config(root.clone()),
                 owner.root_context().component("docker-file-store"),
             )
@@ -3504,7 +3509,7 @@ mod tests {
                 .await
                 .expect("write snapshot");
             drop(store);
-            let reopened = FilePersistence::initialize(
+            let reopened = FileDashboardStore::initialize(
                 &file_config(root.clone()),
                 owner.root_context().component("docker-file-store-reopen"),
             )

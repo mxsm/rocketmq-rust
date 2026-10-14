@@ -25,7 +25,7 @@ use tracing::debug;
 use tracing::info;
 
 use crate::error::controller_internal_by;
-use crate::storage::StorageBackend;
+use crate::storage::KeyValueStore;
 use crate::storage::StorageStats;
 use rocketmq_error::Error;
 use rocketmq_error::Result;
@@ -109,7 +109,7 @@ fn map_blocking_error(error: rocketmq_runtime::RuntimeError) -> Error {
 }
 
 #[async_trait]
-impl StorageBackend for RocksDBKeyValueStore {
+impl KeyValueStore for RocksDBKeyValueStore {
     async fn put(&self, key: &str, value: &[u8]) -> Result<()> {
         debug!("RocksDB put: key={}, size={}", key, value.len());
 

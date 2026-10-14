@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::FileDashboardStore;
 use super::FileMutationOutcome;
-use super::FilePersistence;
 use super::OpenOptions;
 use super::PersistenceError;
 use super::Utc;
@@ -70,7 +70,7 @@ impl FileSessionRecord {
     }
 }
 
-impl FilePersistence {
+impl FileDashboardStore {
     pub(crate) async fn create_session_with_audit(
         &self,
         session: NewSession,

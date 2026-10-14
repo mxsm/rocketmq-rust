@@ -19,7 +19,7 @@ use uuid::Uuid;
 /// Selects the persistence engine used by the Dashboard.
 ///
 /// This only identifies the engine; the implementations live in
-/// `PersistenceBackend`.
+/// `DashboardDataStore`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum StorageEngine {

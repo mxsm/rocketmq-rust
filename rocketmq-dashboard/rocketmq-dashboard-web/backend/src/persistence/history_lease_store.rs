@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use super::DatabasePool;
-use super::SqlPersistence;
+use super::SqlDashboardStore;
 use super::map_query_error;
 use crate::model::EnvironmentId;
 use crate::persistence::error::PersistenceError;
@@ -24,7 +24,7 @@ const SQLITE_CLOCK_MS: &str = "CAST((julianday('now') - 2440587.5) * 86400000 AS
 const MYSQL_CLOCK_MS: &str = "TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', UTC_TIMESTAMP(3)) DIV 1000";
 const POSTGRES_CLOCK_MS: &str = "FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT";
 
-impl SqlPersistence {
+impl SqlDashboardStore {
     pub(crate) async fn acquire_history_lease(
         &self,
         environment_id: &EnvironmentId,

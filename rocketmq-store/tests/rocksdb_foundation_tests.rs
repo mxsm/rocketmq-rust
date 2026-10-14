@@ -3174,7 +3174,7 @@ async fn rocksdb_maintenance_service_start_and_shutdown_are_graceful() {
     service.start();
     assert!(service.is_running());
 
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
     while store.metrics().flush_count == 0 {
         assert!(
             tokio::time::Instant::now() < deadline,

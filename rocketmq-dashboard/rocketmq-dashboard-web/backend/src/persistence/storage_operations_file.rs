@@ -23,14 +23,14 @@ use crate::model::StorageEngine;
 use crate::persistence::DashboardPersistence;
 use crate::persistence::audit_repository::AuditQuery;
 use crate::persistence::error::PersistenceError;
-use crate::persistence::file_store::FilePersistence;
+use crate::persistence::file_store::FileDashboardStore;
 use crate::persistence::session_repository::SessionQuery;
 use rocketmq_runtime::ChildServiceContext;
 use std::fs;
 
 pub(super) async fn snapshot_file(
     persistence: &DashboardPersistence,
-    store: &FilePersistence,
+    store: &FileDashboardStore,
 ) -> Result<BackupData, PersistenceError> {
     let mut data = BackupData::with_backend(StorageEngine::File);
     data.environments = persistence.list_environments().await?;

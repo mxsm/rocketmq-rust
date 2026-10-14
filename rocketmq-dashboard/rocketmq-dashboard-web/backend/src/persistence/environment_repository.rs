@@ -17,9 +17,9 @@ use crate::model::EndpointType;
 use crate::model::EnvironmentId;
 use crate::persistence::DashboardPersistence;
 use crate::persistence::Revision;
-use crate::persistence::backend::PersistenceBackend;
+use crate::persistence::backend::DashboardDataStore;
 use crate::persistence::error::PersistenceError;
-use crate::persistence::file_store::FilePersistence;
+use crate::persistence::file_store::FileDashboardStore;
 use crate::persistence::file_store::FileSnapshotTransactionWrite;
 use serde::Deserialize;
 use serde::Serialize;
@@ -53,23 +53,23 @@ impl DashboardPersistence {
         &self,
         environment_id: &EnvironmentId,
     ) -> Result<DashboardEnvironment, PersistenceError> {
-        match &self.backend {
-            PersistenceBackend::File(store) => store.load_environment(environment_id).await,
-            PersistenceBackend::Sql(store) => store.load_environment(environment_id).await,
+        match &self.store {
+            DashboardDataStore::File(store) => store.load_environment(environment_id).await,
+            DashboardDataStore::Sql(store) => store.load_environment(environment_id).await,
         }
     }
 
     pub async fn load_default_environment(&self) -> Result<Option<DashboardEnvironment>, PersistenceError> {
-        match &self.backend {
-            PersistenceBackend::File(store) => store.load_default_environment().await,
-            PersistenceBackend::Sql(store) => store.load_environment_by_name("default").await,
+        match &self.store {
+            DashboardDataStore::File(store) => store.load_default_environment().await,
+            DashboardDataStore::Sql(store) => store.load_environment_by_name("default").await,
         }
     }
 
     pub async fn list_environments(&self) -> Result<Vec<DashboardEnvironment>, PersistenceError> {
-        match &self.backend {
-            PersistenceBackend::File(store) => store.list_environments().await,
-            PersistenceBackend::Sql(store) => store.list_environments().await,
+        match &self.store {
+            DashboardDataStore::File(store) => store.list_environments().await,
+            DashboardDataStore::Sql(store) => store.list_environments().await,
         }
     }
 
@@ -78,9 +78,9 @@ impl DashboardPersistence {
         mut environment: DashboardEnvironment,
     ) -> Result<DashboardEnvironment, PersistenceError> {
         sort_environment_endpoints(&mut environment);
-        match &self.backend {
-            PersistenceBackend::File(store) => store.create_environment(environment).await,
-            PersistenceBackend::Sql(store) => store.create_environment(environment).await,
+        match &self.store {
+            DashboardDataStore::File(store) => store.create_environment(environment).await,
+            DashboardDataStore::Sql(store) => store.create_environment(environment).await,
         }
     }
 
@@ -90,9 +90,9 @@ impl DashboardPersistence {
         mut candidate: DashboardEnvironment,
     ) -> Result<DashboardEnvironment, PersistenceError> {
         sort_environment_endpoints(&mut candidate);
-        match &self.backend {
-            PersistenceBackend::File(store) => store.update_environment(expected_revision, candidate).await,
-            PersistenceBackend::Sql(store) => store.update_environment(expected_revision, candidate).await,
+        match &self.store {
+            DashboardDataStore::File(store) => store.update_environment(expected_revision, candidate).await,
+            DashboardDataStore::Sql(store) => store.update_environment(expected_revision, candidate).await,
         }
     }
 
@@ -106,13 +106,13 @@ impl DashboardPersistence {
         audit: AuditEvent,
     ) -> Result<DashboardEnvironment, PersistenceError> {
         sort_environment_endpoints(&mut candidate);
-        match &self.backend {
-            PersistenceBackend::File(store) => {
+        match &self.store {
+            DashboardDataStore::File(store) => {
                 store
                     .update_environment_with_audit(expected_revision, candidate, audit)
                     .await
             }
-            PersistenceBackend::Sql(store) => {
+            DashboardDataStore::Sql(store) => {
                 store
                     .update_environment_with_audit(expected_revision, candidate, audit)
                     .await
@@ -130,9 +130,9 @@ impl DashboardPersistence {
                 "the fixed default environment cannot be deleted".to_string(),
             ));
         }
-        match &self.backend {
-            PersistenceBackend::File(store) => store.delete_environment(environment_id, expected_revision).await,
-            PersistenceBackend::Sql(store) => store.delete_environment(environment_id, expected_revision).await,
+        match &self.store {
+            DashboardDataStore::File(store) => store.delete_environment(environment_id, expected_revision).await,
+            DashboardDataStore::Sql(store) => store.delete_environment(environment_id, expected_revision).await,
         }
     }
 }
@@ -191,7 +191,7 @@ impl EnvironmentRepository for DashboardPersistence {
     }
 }
 
-impl FilePersistence {
+impl FileDashboardStore {
     pub(crate) async fn load_environment(
         &self,
         environment_id: &EnvironmentId,
@@ -431,7 +431,7 @@ fn environment_collection_for_id(environment_id: &EnvironmentId) -> String {
 }
 
 async fn load_file_environment(
-    store: &FilePersistence,
+    store: &FileDashboardStore,
     collection: &str,
 ) -> Result<DashboardEnvironment, PersistenceError> {
     store
@@ -502,7 +502,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary directory");
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &StorageConfig {
                     backend: StorageEngine::File,
                     data_path: directory.path().join("dashboard"),
@@ -581,7 +581,7 @@ mod tests {
         let root = directory.path().join("dashboard");
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
-            let store = FilePersistence::initialize(
+            let store = FileDashboardStore::initialize(
                 &StorageConfig {
                     backend: StorageEngine::File,
                     data_path: root.clone(),
@@ -659,7 +659,7 @@ mod tests {
             );
             drop(store);
 
-            let recovered = FilePersistence::initialize(
+            let recovered = FileDashboardStore::initialize(
                 &StorageConfig {
                     backend: StorageEngine::File,
                     data_path: root.clone(),
