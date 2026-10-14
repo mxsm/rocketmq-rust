@@ -40,7 +40,7 @@ use crate::config::ControllerConfigReader;
 use crate::event::controller_result::ControllerResult;
 use crate::manager::replicas_info_manager::ReplicasInfoManager;
 use crate::openraft::SNAPSHOT_MAX_BYTES;
-use crate::storage::SharedStorageBackend;
+use crate::storage::SharedKeyValueStore;
 use crate::typ::ControllerRequest;
 use crate::typ::ControllerResponse;
 use crate::typ::ControllerResponseHeader;
@@ -217,7 +217,7 @@ impl StateMachine {
         }
     }
 
-    pub async fn open(config: ControllerConfigReader, backend: SharedStorageBackend) -> Result<Self, std::io::Error> {
+    pub async fn open(config: ControllerConfigReader, backend: SharedKeyValueStore) -> Result<Self, std::io::Error> {
         let repository = RaftStateRepository::new(backend);
         let loaded = repository.load().await?;
         let replicas_info_manager = Arc::new(ReplicasInfoManager::new(config.clone()));

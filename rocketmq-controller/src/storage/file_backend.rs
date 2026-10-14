@@ -36,7 +36,7 @@ use tracing::debug;
 use tracing::info;
 
 use crate::error::controller_internal_by;
-use crate::storage::StorageBackend;
+use crate::storage::KeyValueStore;
 use crate::storage::StorageStats;
 use rocketmq_error::Error;
 use rocketmq_error::Result;
@@ -379,7 +379,7 @@ impl FileKeyValueStore {
 }
 
 #[async_trait]
-impl StorageBackend for FileKeyValueStore {
+impl KeyValueStore for FileKeyValueStore {
     async fn put(&self, key: &str, value: &[u8]) -> Result<()> {
         debug!(key, size = value.len(), "File storage put");
         self.commit(vec![Mutation::Put(key.to_string(), value.to_vec())]).await

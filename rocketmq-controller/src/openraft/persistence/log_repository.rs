@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::storage::SharedStorageBackend;
+use crate::storage::SharedKeyValueStore;
 use crate::typ::LogEntry;
 use crate::typ::LogId;
 use crate::typ::Vote;
@@ -31,11 +31,11 @@ pub(in crate::openraft) struct LoadedLogRepository {
 
 #[derive(Clone)]
 pub(in crate::openraft) struct RaftLogRepository {
-    backend: SharedStorageBackend,
+    backend: SharedKeyValueStore,
 }
 
 impl RaftLogRepository {
-    pub(in crate::openraft) fn new(backend: SharedStorageBackend) -> Self {
+    pub(in crate::openraft) fn new(backend: SharedKeyValueStore) -> Self {
         Self { backend }
     }
 
