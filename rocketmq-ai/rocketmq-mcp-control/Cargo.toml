@@ -43,7 +43,7 @@ rocketmq-admin-core = { version = "1.0.0", path = "../../rocketmq-tools/rocketmq
 rocketmq-mcp-auth = { version = "1.0.0", path = "../rocketmq-mcp-auth" }
 
 axum = "0.8"
-base64 = "0.22"
+base64 = "0.23"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 futures-util = "0.3"
 jsonwebtoken = { version = "11.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }

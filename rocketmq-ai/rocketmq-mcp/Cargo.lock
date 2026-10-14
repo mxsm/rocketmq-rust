@@ -3110,7 +3110,7 @@ dependencies = [
 name = "rocketmq-mcp-auth"
 version = "1.0.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "http",
  "jsonwebtoken",
  "reqwest",
@@ -3127,7 +3127,7 @@ name = "rocketmq-mcp-control"
 version = "1.0.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "futures-util",
  "jsonwebtoken",
