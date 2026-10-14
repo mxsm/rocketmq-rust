@@ -16,7 +16,7 @@ use crate::model::ConsumerMonitorRule;
 use crate::model::EnvironmentId;
 use crate::persistence::DashboardPersistence;
 use crate::persistence::Revision;
-use crate::persistence::backend::PersistenceBackend;
+use crate::persistence::backend::DashboardDataStore;
 use crate::persistence::error::PersistenceError;
 use crate::persistence::file_store::FilePersistence;
 use chrono::Utc;
@@ -49,9 +49,9 @@ impl DashboardPersistence {
         &self,
         environment_id: &EnvironmentId,
     ) -> Result<Vec<ConsumerMonitorRule>, PersistenceError> {
-        match &self.backend {
-            PersistenceBackend::File(store) => store.list_monitor_rules(environment_id).await,
-            PersistenceBackend::Sql(store) => store.list_monitor_rules(environment_id).await,
+        match &self.store {
+            DashboardDataStore::File(store) => store.list_monitor_rules(environment_id).await,
+            DashboardDataStore::Sql(store) => store.list_monitor_rules(environment_id).await,
         }
     }
 
@@ -60,9 +60,9 @@ impl DashboardPersistence {
         rule: ConsumerMonitorRule,
         expected_revision: Revision,
     ) -> Result<ConsumerMonitorRule, PersistenceError> {
-        match &self.backend {
-            PersistenceBackend::File(store) => store.upsert_monitor_rule(rule, expected_revision).await,
-            PersistenceBackend::Sql(store) => store.upsert_monitor_rule(rule, expected_revision).await,
+        match &self.store {
+            DashboardDataStore::File(store) => store.upsert_monitor_rule(rule, expected_revision).await,
+            DashboardDataStore::Sql(store) => store.upsert_monitor_rule(rule, expected_revision).await,
         }
     }
 
@@ -72,13 +72,13 @@ impl DashboardPersistence {
         expected_revision: Revision,
         audit: AuditEvent,
     ) -> Result<ConsumerMonitorRule, PersistenceError> {
-        match &self.backend {
-            PersistenceBackend::File(store) => {
+        match &self.store {
+            DashboardDataStore::File(store) => {
                 store
                     .upsert_monitor_rule_with_audit(rule, expected_revision, audit)
                     .await
             }
-            PersistenceBackend::Sql(store) => {
+            DashboardDataStore::Sql(store) => {
                 store
                     .upsert_monitor_rule_with_audit(rule, expected_revision, audit)
                     .await
@@ -92,13 +92,13 @@ impl DashboardPersistence {
         consumer_group: &str,
         expected_revision: Revision,
     ) -> Result<bool, PersistenceError> {
-        match &self.backend {
-            PersistenceBackend::File(store) => {
+        match &self.store {
+            DashboardDataStore::File(store) => {
                 store
                     .delete_monitor_rule(environment_id, consumer_group, expected_revision)
                     .await
             }
-            PersistenceBackend::Sql(store) => {
+            DashboardDataStore::Sql(store) => {
                 store
                     .delete_monitor_rule(environment_id, consumer_group, expected_revision)
                     .await
@@ -113,13 +113,13 @@ impl DashboardPersistence {
         expected_revision: Revision,
         audit: AuditEvent,
     ) -> Result<bool, PersistenceError> {
-        match &self.backend {
-            PersistenceBackend::File(store) => {
+        match &self.store {
+            DashboardDataStore::File(store) => {
                 store
                     .delete_monitor_rule_with_audit(environment_id, consumer_group, expected_revision, audit)
                     .await
             }
-            PersistenceBackend::Sql(store) => {
+            DashboardDataStore::Sql(store) => {
                 store
                     .delete_monitor_rule_with_audit(environment_id, consumer_group, expected_revision, audit)
                     .await

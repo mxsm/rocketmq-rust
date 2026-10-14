@@ -15,12 +15,12 @@ use crate::model::StorageBackend;
 use crate::persistence::file_store::FilePersistence;
 use crate::persistence::sql_store::SqlPersistence;
 
-pub enum PersistenceBackend {
+pub enum DashboardDataStore {
     File(Box<FilePersistence>),
     Sql(Box<SqlPersistence>),
 }
 
-impl PersistenceBackend {
+impl DashboardDataStore {
     pub const fn storage_backend(&self) -> StorageBackend {
         match self {
             Self::File(_) => StorageBackend::File,

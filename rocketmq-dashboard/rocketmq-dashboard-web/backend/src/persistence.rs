@@ -37,7 +37,7 @@ mod session_audit_docker_tests;
 
 use crate::config::StorageConfig;
 use crate::model::StorageBackend;
-use crate::persistence::backend::PersistenceBackend;
+use crate::persistence::backend::DashboardDataStore;
 use crate::persistence::error::PersistenceError;
 use chrono::Utc;
 use rocketmq_runtime::ChildServiceContext;
@@ -128,7 +128,7 @@ pub enum TransactionOutcome {
 /// Shared persistence entry point. Future repositories are added here rather
 /// than allowing services to open files or database connections directly.
 pub struct DashboardPersistence {
-    backend: PersistenceBackend,
+    store: DashboardDataStore,
     observation_started_at: i64,
 }
 
@@ -141,33 +141,33 @@ impl DashboardPersistence {
         config
             .validate()
             .map_err(|error| PersistenceError::InvalidConfig(error.to_string()))?;
-        let backend = match config.backend {
-            StorageBackend::File => PersistenceBackend::File(Box::new(
+        let store = match config.backend {
+            StorageBackend::File => DashboardDataStore::File(Box::new(
                 file_store::FilePersistence::initialize(config, service_context).await?,
             )),
-            StorageBackend::Sqlite | StorageBackend::MySql | StorageBackend::Postgres => PersistenceBackend::Sql(
+            StorageBackend::Sqlite | StorageBackend::MySql | StorageBackend::Postgres => DashboardDataStore::Sql(
                 Box::new(sql_store::SqlPersistence::initialize(config, service_context).await?),
             ),
         };
         let persistence = Self {
-            backend,
+            store,
             observation_started_at: Utc::now().timestamp_millis(),
         };
         // Migrations cannot repair an ambiguous historical default identity.
-        // Validate every decoded aggregate before the backend is exposed so a
+        // Validate every decoded aggregate before the store is exposed so a
         // restart fails closed instead of serving a pre-existing mismatch.
         persistence.validate_persisted_environments().await?;
         Ok(persistence)
     }
 
     pub const fn storage_backend(&self) -> StorageBackend {
-        self.backend.storage_backend()
+        self.store.storage_backend()
     }
 
     pub async fn storage_health(&self) -> StorageHealth {
-        match &self.backend {
-            PersistenceBackend::File(store) => store.storage_health().await,
-            PersistenceBackend::Sql(store) => store.storage_health().await,
+        match &self.store {
+            DashboardDataStore::File(store) => store.storage_health().await,
+            DashboardDataStore::Sql(store) => store.storage_health().await,
         }
     }
 
