@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(dashboard-web):** Rename `FilePersistence` to `FileDashboardStore` ([#11506](https://github.com/mxsm/rocketmq-rust/issues/11506)).
 - **refactor(dashboard-web):** Rename `SqlPersistence` to `SqlDashboardStore` ([#11507](https://github.com/mxsm/rocketmq-rust/issues/11507)).
 - **refactor(controller):** Rename `StorageBackend`, `SharedStorageBackend`, and `StorageBackendExt` to `KeyValueStore`, `SharedKeyValueStore`, and `KeyValueStoreExt` (breaking) ([#11503](https://github.com/mxsm/rocketmq-rust/issues/11503)).
 - **refactor(proxy):** Rename `ProxyRemotingBackend` to `ProxyRemotingRequestHandler` (breaking); update imports, implementations, and trait bounds ([#11494](https://github.com/mxsm/rocketmq-rust/issues/11494)).

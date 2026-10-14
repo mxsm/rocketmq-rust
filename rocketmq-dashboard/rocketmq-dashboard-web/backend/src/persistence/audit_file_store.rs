@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::FileDashboardStore;
 use super::FileMutationOutcome;
-use super::FilePersistence;
 use super::OpenOptions;
 use super::PersistenceError;
 use super::Utc;
@@ -38,7 +38,7 @@ struct AuditRewriteTransaction {
     backup: String,
 }
 
-impl FilePersistence {
+impl FileDashboardStore {
     pub(crate) async fn append_audit_event(&self, event: AuditEvent) -> Result<(), PersistenceError> {
         let write_guard = self.write_guard().await;
         self.ensure_available()?;

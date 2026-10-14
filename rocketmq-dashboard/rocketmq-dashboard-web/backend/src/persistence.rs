@@ -143,7 +143,7 @@ impl DashboardPersistence {
             .map_err(|error| PersistenceError::InvalidConfig(error.to_string()))?;
         let backend = match config.backend {
             StorageBackend::File => PersistenceBackend::File(Box::new(
-                file_store::FilePersistence::initialize(config, service_context).await?,
+                file_store::FileDashboardStore::initialize(config, service_context).await?,
             )),
             StorageBackend::Sqlite | StorageBackend::MySql | StorageBackend::Postgres => PersistenceBackend::Sql(
                 Box::new(sql_store::SqlDashboardStore::initialize(config, service_context).await?),
