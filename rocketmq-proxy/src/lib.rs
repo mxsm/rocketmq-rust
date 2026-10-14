@@ -81,7 +81,7 @@ pub use grpc::server::ProxyGrpcServerShutdownReport;
 pub use grpc::service::ProxyHousekeepingRunReport;
 pub use grpc::ProxyGrpcService;
 #[cfg(feature = "local-mode")]
-pub use local::LocalBrokerFacadeClient;
+pub use local::LocalBrokerCommandGateway;
 #[cfg(feature = "local-mode")]
 pub use local::LocalRemotingBackend;
 pub use observability::ProxyHook;
