@@ -152,6 +152,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(store):** Remove the deprecated `BrokerStatsManager::{GROUP_GET_FALL_SIZE, GROUP_GET_FALL_TIME, GROUP_GET_LATENCY}` constants (breaking); use the identical constants on `rocketmq_observability::stats::Stats`.
 - **refactor(store-local):** Remove `MappedBuffer::new` and `get_mmap` (breaking); use `from_mmap`, `region`, and the scoped read/write/flush operations.
 - **refactor(client):** Remove the five legacy implementation placeholders (`ConsumeRequest`, `DoNothingClientRemotingProcessor`, `PullTaskImpl`, `RebalanceImpl`, `RebalancePullImpl`) and `DefaultMQPullConsumerImpl::rebalance_impl` (breaking); use the consumer facades and `MQPullConsumerScheduleService` for actual consumption and scheduling.
 - **client:** Remove deprecated `SendMessageOpenTracingHookImpl`, `ConsumeMessageOpenTracingHookImpl`, and `EndTransactionOpenTracingHookImpl` placeholders (breaking); remove their construction and use the client's supported tracing configuration where needed.

@@ -87,13 +87,6 @@ impl BrokerStatsManager {
     pub const FAILURE_REQ_NUM: &'static str = "FAILURE_REQ_NUM";
     pub const GROUP_ACK_NUMS: &'static str = "GROUP_ACK_NUMS";
     pub const GROUP_CK_NUMS: &'static str = "GROUP_CK_NUMS";
-    #[deprecated]
-    pub const GROUP_GET_FALL_SIZE: &'static str = "GROUP_GET_FALL_SIZE";
-    #[deprecated]
-    pub const GROUP_GET_FALL_TIME: &'static str = "GROUP_GET_FALL_TIME";
-    // Pull Message Latency
-    #[deprecated]
-    pub const GROUP_GET_LATENCY: &'static str = "GROUP_GET_LATENCY";
     pub const INNER_RT: &'static str = "INNER_RT";
     pub const MSG_NUM: &'static str = "MSG_NUM";
     pub const MSG_SIZE: &'static str = "MSG_SIZE";
