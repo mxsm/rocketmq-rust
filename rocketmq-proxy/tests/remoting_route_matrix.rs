@@ -14,8 +14,8 @@
 
 use std::collections::BTreeSet;
 
-use rocketmq_proxy_core::remoting::java_proxy_active_route_policies;
-use rocketmq_proxy_core::remoting::RemotingRouteClass;
+use rocketmq_proxy_core::ingress::remoting::java_proxy_active_route_policies;
+use rocketmq_proxy_core::ingress::remoting::RemotingRouteClass;
 use serde::Deserialize;
 
 #[derive(Deserialize)]

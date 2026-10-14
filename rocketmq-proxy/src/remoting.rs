@@ -98,9 +98,9 @@ use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_proxy_core::identity::ResourceIdentity;
 pub use rocketmq_proxy_core::ingress::remoting::ProxyRemotingRequestHandler;
-use rocketmq_proxy_core::remoting::RemotingIngressDispatcher;
-use rocketmq_proxy_core::remoting::RemotingIngressRoute;
-use rocketmq_proxy_core::remoting::RemotingStatusMapper;
+use rocketmq_proxy_core::ingress::remoting::RemotingIngressDispatcher;
+use rocketmq_proxy_core::ingress::remoting::RemotingIngressRoute;
+use rocketmq_proxy_core::ingress::remoting::RemotingStatusMapper;
 use rocketmq_proxy_core::ProxyDrainController;
 use rocketmq_proxy_core::ProxyDrainError;
 use rocketmq_proxy_core::ProxyDrainPhase;
@@ -981,8 +981,9 @@ where
         context: &ProxyContext,
         request: &mut RemotingRequest,
     ) -> std::result::Result<ResponseAction, rocketmq_error::SharedError> {
-        let route =
-            rocketmq_proxy_core::remoting::classify_remoting_request(request.original_identity().original_code());
+        let route = rocketmq_proxy_core::ingress::remoting::classify_remoting_request(
+            request.original_identity().original_code(),
+        );
         if matches!(route, RemotingIngressRoute::UnregisterClient) {
             let mut dispatch_command = request.command().clone();
             dispatch_command.set_code_ref(request.original_identity().original_code());
