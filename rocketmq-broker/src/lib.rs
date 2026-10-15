@@ -28,7 +28,7 @@ pub use lifecycle::Initialized;
 pub use lifecycle::Running;
 pub use processor::query_message_processor::QueryMessageProcessor;
 pub use processor::query_message_processor::QueryMessageStore;
-pub use proxy_facade::ProxyBrokerFacade;
+pub use proxy_facade::EmbeddedBroker;
 
 pub mod command;
 pub mod proxy_facade;

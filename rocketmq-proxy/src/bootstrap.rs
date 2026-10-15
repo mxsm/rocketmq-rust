@@ -30,9 +30,9 @@ use std::time::Duration;
 use crate::auth::build_cluster_acl_signer;
 use crate::auth::ProxyAuthRuntime;
 #[cfg(feature = "cluster-mode")]
-use crate::cluster::ClusterClient;
+use crate::cluster::ClusterBrokerRemotingAdapter;
 #[cfg(feature = "cluster-mode")]
-use crate::cluster::ClusterRemotingBackend;
+use crate::cluster::ClusterClient;
 #[cfg(feature = "cluster-mode")]
 use crate::cluster::RocketmqClusterClient;
 use crate::config::ProxyConfig;
@@ -46,7 +46,7 @@ use crate::grpc::ProxyGrpcService;
 #[cfg(feature = "local-mode")]
 use crate::local::local_components_from_config_with_service_context;
 #[cfg(feature = "local-mode")]
-use crate::local::LocalRemotingBackend;
+use crate::local::LocalBrokerRemotingAdapter;
 use crate::observability::ProxyHookChain;
 use crate::observability::ProxyMetrics;
 use crate::processor::DefaultMessagingProcessor;
@@ -797,7 +797,7 @@ fn build_proxy_runtime_dependencies(
             let service_client: Arc<dyn ClusterClient> = client.clone();
             Ok(ProxyRuntimeDependencies {
                 service_manager: Arc::new(ClusterServiceManager::from_cluster_client(service_client)),
-                remoting_backend: Some(Arc::new(ClusterRemotingBackend::new(client))),
+                remoting_backend: Some(Arc::new(ClusterBrokerRemotingAdapter::new(client))),
                 context: Some(cluster_context),
             })
         }
@@ -816,7 +816,7 @@ fn build_proxy_runtime_dependencies(
             )?;
             Ok(ProxyRuntimeDependencies {
                 service_manager: Arc::new(manager),
-                remoting_backend: Some(Arc::new(LocalRemotingBackend::new(client))),
+                remoting_backend: Some(Arc::new(LocalBrokerRemotingAdapter::new(client))),
                 context: Some(local_context),
             })
         }

@@ -31,7 +31,7 @@ pub use cluster::ClusterClient;
 pub use cluster::RocketmqClusterClient;
 pub use config::ClusterConfig;
 pub use config::ClusterExecutionDiagnostics;
-pub use remoting::ClusterRemotingBackend;
+pub use remoting::ClusterBrokerRemotingAdapter;
 pub use service::ClusterAssignmentService;
 pub use service::ClusterConsumerService;
 pub use service::ClusterMessageService;

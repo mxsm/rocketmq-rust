@@ -1,0 +1,228 @@
+/*
+ * Shared keyframes and entrance utilities. Durations and easings come from tokens.css.
+ * The reduced-motion rule in base.css collapses every animation and removes delays.
+ */
+@keyframes enter-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+}
+
+@keyframes enter-down {
+  from {
+    opacity: 0;
+    transform: translateY(-18px);
+  }
+}
+
+@keyframes enter-left {
+  from {
+    opacity: 0;
+    transform: translateX(-28px);
+  }
+}
+
+@keyframes enter-scale {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@keyframes enter-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes exit-fade {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes exit-scale {
+  to {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@keyframes slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(48px);
+  }
+}
+
+@keyframes slide-out-right {
+  to {
+    opacity: 0;
+    transform: translateX(48px);
+  }
+}
+
+@keyframes slide-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-48px);
+  }
+}
+
+@keyframes slide-out-left {
+  to {
+    opacity: 0;
+    transform: translateX(-48px);
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--pop-offset, -4px));
+  }
+}
+
+@keyframes shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes halo {
+  from {
+    opacity: 0.22;
+    transform: scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: scale(2.4);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/*
+ * Entrance utilities. `--enter-index` staggers siblings and `--enter-delay` offsets a group.
+ * Fill mode is `backwards` so an element holds its first frame while it waits and carries
+ * no leftover transform once it has entered.
+ */
+.enter-up,
+.enter-down,
+.enter-left,
+.enter-scale,
+.enter-fade {
+  animation-duration: var(--duration-slow);
+  animation-timing-function: var(--ease-out);
+  animation-delay: calc(var(--enter-delay, 0ms) + var(--enter-index, 0) * var(--duration-stagger));
+  animation-fill-mode: backwards;
+}
+
+.enter-up {
+  animation-name: enter-up;
+}
+
+.enter-down {
+  animation-name: enter-down;
+}
+
+.enter-left {
+  animation-name: enter-left;
+}
+
+.enter-scale {
+  animation-name: enter-scale;
+}
+
+.enter-fade {
+  animation-name: enter-fade;
+}
+
+/*
+ * Page entrance. Blocks rise in as they mount, in reading order: page header, signal
+ * strip and metric cards, then panels. Each block animates itself, never a wrapper,
+ * because a wrapper with opacity below one would cut its blurred children off from
+ * the backdrop. Data refreshes keep blocks mounted, so they do not replay this.
+ */
+.app-shell {
+  --page-enter-base: 200ms;
+}
+
+.app-shell[data-shell-ready='true'] {
+  --page-enter-base: 40ms;
+}
+
+.content .page-header,
+.content .metric-grid > *,
+.content .broker-throughput-grid > *,
+.content [data-surface='panel'] {
+  --enter-step: 2;
+  animation: enter-up var(--duration-slow) var(--ease-out) backwards;
+  animation-delay: calc(var(--page-enter-base) + var(--enter-step) * 60ms + var(--enter-index, 0) * var(--duration-stagger));
+}
+
+.content .page-header { --enter-step: 0; }
+.content .dashboard-health-rail,
+.content .metric-grid > *,
+.content .broker-throughput-grid > * { --enter-step: 1; }
+.content .dashboard-metrics > * { --enter-step: 2; }
+.content .dashboard-main-grid > * { --enter-step: 3; }
+.content .dashboard-history-grid > * { --enter-step: 4; }
+
+.content .metric-grid > :nth-child(2),
+.content .broker-throughput-grid > :nth-child(2),
+.content .dashboard-main-grid > :nth-child(2),
+.content .dashboard-history-grid > :nth-child(2),
+.content .producer-workspace-grid > :nth-child(2),
+.content .trace-workspace-grid > :nth-child(2) { --enter-index: 1; }
+.content .metric-grid > :nth-child(3),
+.content .broker-throughput-grid > :nth-child(3) { --enter-index: 2; }
+.content .metric-grid > :nth-child(4) { --enter-index: 3; }
+.content .metric-grid > :nth-child(5) { --enter-index: 4; }
+.content .metric-grid > :nth-child(6) { --enter-index: 5; }
+
+/* A tab switch should answer at once: blocks in a tab panel skip the page delay. */
+.content .ui-tabs-content [data-surface='panel'],
+.content .ui-tabs-content .metric-grid > *,
+.content .ui-tabs-content .broker-throughput-grid > * {
+  --page-enter-base: 0ms;
+  --enter-step: 0;
+}
+
+/* Panels nested in a surface arrive with their parent. */
+.content [data-surface] [data-surface='panel'] {
+  animation: none;
+}
+
+/* Table rows fade in once, on the first data a table shows. */
+.app-data-table tbody[data-entering='true'] tr:nth-child(-n + 12) {
+  animation: enter-fade var(--duration-slow) var(--ease-out) backwards;
+  animation-delay: calc(var(--row-index, 0) * var(--duration-stagger));
+}
+
+.app-data-table tbody[data-entering='true'] tr:nth-child(2) { --row-index: 1; }
+.app-data-table tbody[data-entering='true'] tr:nth-child(3) { --row-index: 2; }
+.app-data-table tbody[data-entering='true'] tr:nth-child(4) { --row-index: 3; }
+.app-data-table tbody[data-entering='true'] tr:nth-child(5) { --row-index: 4; }
+.app-data-table tbody[data-entering='true'] tr:nth-child(6) { --row-index: 5; }
+.app-data-table tbody[data-entering='true'] tr:nth-child(7) { --row-index: 6; }
+.app-data-table tbody[data-entering='true'] tr:nth-child(8) { --row-index: 7; }
+.app-data-table tbody[data-entering='true'] tr:nth-child(9) { --row-index: 8; }
+.app-data-table tbody[data-entering='true'] tr:nth-child(10) { --row-index: 9; }
+.app-data-table tbody[data-entering='true'] tr:nth-child(11) { --row-index: 10; }
+.app-data-table tbody[data-entering='true'] tr:nth-child(12) { --row-index: 11; }
+
+/* Refresh icon: turns while a refresh runs and completes the turn it is on. */
+.refresh-icon.is-spinning {
+  animation: spin calc(var(--duration-slow) * 2) linear infinite;
+}
