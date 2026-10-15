@@ -43,6 +43,16 @@ build standalone Cargo or Node projects; follow the matching local guide when wo
 - Keep changes scoped. Follow existing modules, naming, error handling, and test style; avoid incidental
   refactors, dependency upgrades, and configuration churn.
 - Prefer `rg` / `rg --files` and patch-style manual edits. Use normal generators and formatters for their outputs.
+- Keep repository scripts, tests, and benchmarks only when they serve a necessary, ongoing maintenance
+  purpose. Do not turn one-off checks into permanent tooling or CI jobs merely to retain them.
+- Temporary scripts in any language created for a single change, development task, debugging session,
+  migration, test/validation run, or one-off performance measurement must run inline or live in the
+  system temporary directory outside the repository. Do not place them under `scripts/`, `tests/`,
+  `benches/`, or any other repository directory.
+- Keep these scripts' temporary input data, caches, logs, reports, and benchmark results outside the
+  repository and out of commits. For Python, use `python -B` or `PYTHONDONTWRITEBYTECODE=1` to avoid
+  generating bytecode caches. Do not use `__pycache__/` (including `scripts/__pycache__/`) to store
+  scripts, and do not commit `__pycache__/` directories or `.pyc` files.
 - Complete authorized implementation and necessary verification without repeated permission requests.
   Do not create commits, branches, PRs, releases, or remote changes unless the user asks.
 - Missing optional tools or unrelated historical failures should not block independent work. Use a documented
