@@ -151,8 +151,8 @@
 /*
  * Page entrance. Blocks rise in as they mount, in reading order: page header, signal
  * strip and metric cards, then panels. Each block animates itself, never a wrapper,
- * because a wrapper with opacity below one would cut its blurred children off from
- * the backdrop. Data refreshes keep blocks mounted, so they do not replay this.
+ * so the blocks can arrive one after another. Data refreshes keep blocks mounted, so
+ * they do not replay this.
  */
 .app-shell {
   --page-enter-base: 200ms;
