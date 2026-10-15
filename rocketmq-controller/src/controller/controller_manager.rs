@@ -98,6 +98,12 @@ struct PendingControllerRemotingServer {
     session_registry: Arc<SessionRegistry>,
 }
 
+/// Keeps both ports reserved until their runtime-owned servers consume them.
+pub(crate) struct ControllerListeners {
+    pub(crate) remoting: tokio::net::TcpListener,
+    pub(crate) raft: tokio::net::TcpListener,
+}
+
 impl PendingControllerRemotingServer {
     fn build(self, request_processor: ControllerRequestProcessor) -> TransportServer<ControllerRequestProcessor> {
         TransportServer::new_with_telemetry(self.config, self.service_context, request_processor, self.telemetry)

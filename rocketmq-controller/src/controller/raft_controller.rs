@@ -148,6 +148,10 @@ impl RaftController {
         self.inner.startup_shared().await
     }
 
+    pub(crate) async fn startup_shared_with_listener(&self, listener: tokio::net::TcpListener) -> Result<()> {
+        self.inner.startup_shared_with_listener(listener).await
+    }
+
     pub(crate) async fn shutdown_shared(&self) -> Result<()> {
         self.inner.shutdown_shared().await
     }

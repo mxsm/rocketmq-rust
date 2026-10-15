@@ -189,8 +189,6 @@ pub const DEFAULT_CONTROLLER_PORT: u16 = 9878;
 #[doc(hidden)]
 pub mod bench_support {
     use std::collections::BTreeMap;
-    use std::net::SocketAddr;
-    use std::net::TcpListener as StdTcpListener;
     use std::sync::Arc;
     use std::time::Duration;
     use std::time::Instant;
@@ -199,10 +197,12 @@ pub mod bench_support {
     use rocketmq_runtime::ChildServiceContext;
     use rocketmq_runtime::ShutdownReport;
     use serde::Serialize;
+    use tokio::net::TcpListener;
 
     use crate::config::ControllerConfig;
     use crate::config::ControllerConfigReader;
     use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
+    use crate::controller::controller_manager::ControllerListeners;
     use crate::controller::open_raft_controller::OpenRaftController;
     use crate::controller::Controller;
     use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
@@ -304,8 +304,12 @@ pub mod bench_support {
     pub async fn run_controller_leadership_watch_lifecycle_probe(
         service_context: ChildServiceContext,
     ) -> ControllerLeadershipWatchLifecycleProbe {
-        let remoting_addr = free_loopback_addr();
-        let raft_addr = free_loopback_addr();
+        // Transfer the sockets themselves: a released ephemeral port is no
+        // longer reserved, even when the next bind is in this same process.
+        let remoting_listener = bind_loopback_listener().await;
+        let raft_listener = bind_loopback_listener().await;
+        let remoting_addr = remoting_listener.local_addr().expect("remoting listener address");
+        let raft_addr = raft_listener.local_addr().expect("Raft listener address");
         let config = ControllerConfig::default()
             .with_node_info(1, remoting_addr)
             .with_raft_peers(vec![RaftPeer { id: 1, addr: raft_addr }])
@@ -327,7 +331,10 @@ pub mod bench_support {
             .await
             .expect("benchmark controller manager should initialize");
         manager
-            .start()
+            .start_with_bound_listeners(ControllerListeners {
+                remoting: remoting_listener,
+                raft: raft_listener,
+            })
             .await
             .expect("benchmark controller manager should start");
 
@@ -398,10 +405,11 @@ pub mod bench_support {
     pub async fn run_controller_openraft_scan_lifecycle_probe(
         service_context: ChildServiceContext,
     ) -> ControllerOpenRaftScanLifecycleProbe {
-        let remoting_addr = free_loopback_addr();
-        let raft_addr = free_loopback_addr();
+        let raft_listener = bind_loopback_listener().await;
+        let raft_addr = raft_listener.local_addr().expect("Raft listener address");
+        // This probe runs only the Raft server, with no remoting listener.
         let config = ControllerConfig::default()
-            .with_node_info(1, remoting_addr)
+            .with_node_info(1, raft_addr)
             .with_raft_peers(vec![RaftPeer { id: 1, addr: raft_addr }])
             .with_scan_not_active_broker_interval(1)
             .with_raft_scan_wait_timeout_ms(0)
@@ -410,7 +418,7 @@ pub mod bench_support {
             .with_storage_engine_type(crate::config::StorageEngineType::Memory);
         let mut controller = OpenRaftController::new(ControllerConfigReader::new(config), service_context);
         controller
-            .startup()
+            .startup_shared_with_listener(raft_listener)
             .await
             .expect("benchmark OpenRaft controller should start");
 
@@ -477,13 +485,10 @@ pub mod bench_support {
         }
     }
 
-    fn free_loopback_addr() -> SocketAddr {
-        let listener = StdTcpListener::bind("127.0.0.1:0").expect("benchmark loopback port should bind");
-        let addr = listener
-            .local_addr()
-            .expect("benchmark loopback port should have local addr");
-        drop(listener);
-        addr
+    async fn bind_loopback_listener() -> TcpListener {
+        TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("benchmark loopback listener should bind")
     }
 
     async fn wait_until<F>(timeout: Duration, mut predicate: F) -> bool
