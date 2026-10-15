@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **refactor(proxy-local):** Rename the public type to `LocalBrokerRemotingAdapter` (breaking) ([#11543](https://github.com/mxsm/rocketmq-rust/issues/11543)).
+- **refactor(proxy-cluster):** Rename the public type to `ClusterBrokerRemotingAdapter` (breaking) ([#11546](https://github.com/mxsm/rocketmq-rust/issues/11546)).
 - **refactor(dashboard-web):** Rename `PersistenceBackend` to `DashboardDataStore` and its private facade field to `store` ([#11505](https://github.com/mxsm/rocketmq-rust/issues/11505)).
 - **refactor(dashboard-web):** Rename `FilePersistence` to `FileDashboardStore` ([#11506](https://github.com/mxsm/rocketmq-rust/issues/11506)).
 - **refactor(dashboard-web):** Rename `SqlPersistence` to `SqlDashboardStore` ([#11507](https://github.com/mxsm/rocketmq-rust/issues/11507)).
@@ -157,6 +158,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(proxy-core):** Remove the deprecated `remoting` and `service` module aliases (breaking); import from `ingress::remoting` and `contracts`, respectively.
+- **refactor(client):** Remove the deprecated `TransactionCheckListener` compatibility trait (breaking); use `TransactionListener` for transaction execution and broker checks.
+- **refactor(client):** Remove the always-failing `MQHelper::reset_offset_by_timestamp` entry point (breaking); use the async `reset_offset_by_timestamp_with_client_runtime` method with an application-owned runtime and typed `MessageModel`.
 - **refactor(store):** Remove the deprecated `BrokerStatsManager::{GROUP_GET_FALL_SIZE, GROUP_GET_FALL_TIME, GROUP_GET_LATENCY}` constants (breaking); use the identical constants on `rocketmq_observability::stats::Stats`.
 - **refactor(store-local):** Remove `MappedBuffer::new` and `get_mmap` (breaking); use `from_mmap`, `region`, and the scoped read/write/flush operations.
 - **refactor(client):** Remove the five legacy implementation placeholders (`ConsumeRequest`, `DoNothingClientRemotingProcessor`, `PullTaskImpl`, `RebalanceImpl`, `RebalancePullImpl`) and `DefaultMQPullConsumerImpl::rebalance_impl` (breaking); use the consumer facades and `MQPullConsumerScheduleService` for actual consumption and scheduling.

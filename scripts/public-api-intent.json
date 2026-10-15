@@ -948,15 +948,6 @@
           "removal_condition": "remove at the 2.0.0 source-compatibility boundary"
         },
         {
-          "category": "compat",
-          "declaration": "pub use crate::legacy::TransactionCheckListener",
-          "identity": "rocketmq-client/src/lib.rs:pub use crate::legacy::TransactionCheckListener",
-          "owner": "client",
-          "path": "rocketmq-client/src/lib.rs",
-          "rationale": "temporary source-level adapter; no new behavior may be added",
-          "removal_condition": "remove at the 2.0.0 source-compatibility boundary"
-        },
-        {
           "category": "stable",
           "declaration": "pub use crate::lock::ReadWriteCASLock",
           "identity": "rocketmq-client/src/lib.rs:pub use crate::lock::ReadWriteCASLock",
@@ -2289,7 +2280,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 254
+      "maximum_exports": 253
     },
     "rocketmq-model": {
       "entries": [
