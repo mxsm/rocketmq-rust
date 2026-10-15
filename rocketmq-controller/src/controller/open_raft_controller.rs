@@ -839,6 +839,14 @@ impl OpenRaftController {
     }
 
     pub(crate) async fn startup_shared(&self) -> Result<()> {
+        self.startup_shared_inner(None).await
+    }
+
+    pub(crate) async fn startup_shared_with_listener(&self, listener: TcpListener) -> Result<()> {
+        self.startup_shared_inner(Some(listener)).await
+    }
+
+    async fn startup_shared_inner(&self, listener: Option<TcpListener>) -> Result<()> {
         let _lifecycle_guard = self.lifecycle_lock.lock().await;
         if self.node().is_some() {
             info!("OpenRaft controller is already started");
@@ -855,9 +863,20 @@ impl OpenRaftController {
 
         let addr = raft_bind_addr;
         let node_id = startup_config.node_id;
-        let listener = TcpListener::bind(addr)
-            .await
-            .map_err(|error| controller_bind_error(addr, node_id, error))?;
+        let listener = match listener {
+            Some(listener) => {
+                let bound_addr = listener
+                    .local_addr()
+                    .map_err(|error| controller_bind_error(addr, node_id, error))?;
+                if bound_addr != addr {
+                    return Err(configuration_invalid("controller.raft_listener_address"));
+                }
+                listener
+            }
+            None => TcpListener::bind(addr)
+                .await
+                .map_err(|error| controller_bind_error(addr, node_id, error))?,
+        };
         let task_group = self.ensure_task_group()?;
         let node =
             Arc::new(RaftNodeManager::new(self.config.clone(), self.service_context.storage_io().clone()).await?);

@@ -187,6 +187,23 @@ impl ControllerManager {
     /// Repeated calls while running are idempotent. A stopped or rolled-back
     /// manager cannot be restarted.
     pub async fn start(self: &Arc<Self>) -> Result<()> {
+        self.start_inner(None).await
+    }
+
+    pub(crate) async fn start_with_bound_listeners(self: &Arc<Self>, listeners: ControllerListeners) -> Result<()> {
+        let remoting_addr = listeners
+            .remoting
+            .local_addr()
+            .map_err(|error| controller_internal_by("inspect bound controller remoting listener", error))?;
+        if remoting_addr != self.config.snapshot().listen_addr {
+            return Err(crate::error::configuration_invalid(
+                "controller.remoting_listener_address",
+            ));
+        }
+        self.start_inner(Some(listeners)).await
+    }
+
+    async fn start_inner(self: &Arc<Self>, listeners: Option<ControllerListeners>) -> Result<()> {
         let _lifecycle_guard = self.lifecycle_lock.lock().await;
         if self.running.load(Ordering::Acquire) {
             warn!("Controller manager is already running");
@@ -212,8 +229,16 @@ impl ControllerManager {
 
         info!("Starting controller manager...");
 
+        let (remoting_listener, raft_listener) = match listeners {
+            Some(ControllerListeners { remoting, raft }) => (Some(remoting), Some(raft)),
+            None => (None, None),
+        };
         // Raft must start before broker-facing services can observe leadership.
-        if let Err(e) = self.raft_controller.startup_shared().await {
+        let raft_startup = match raft_listener {
+            Some(listener) => self.raft_controller.startup_shared_with_listener(listener).await,
+            None => self.raft_controller.startup_shared().await,
+        };
+        if let Err(e) = raft_startup {
             self.running.store(false, Ordering::SeqCst);
             return Err(self.cleanup_after_start_failure(e).await);
         }
@@ -240,14 +265,21 @@ impl ControllerManager {
             *self.remoting_server_shutdown_tx.lock() = Some(shutdown_tx);
             let (startup_tx, startup_rx) = oneshot::channel();
             if let Err(error) = manager_task_group.spawn_service("controller.remoting-server", async move {
-                let report = server
-                    .try_run_with_shutdown_report_and_startup(
-                        async move {
-                            let _ = shutdown_rx.await;
-                        },
-                        startup_tx,
-                    )
-                    .await;
+                let shutdown = async move {
+                    let _ = shutdown_rx.await;
+                };
+                let report = match remoting_listener {
+                    Some(listener) => {
+                        server
+                            .try_serve_bound_listener_until_with_startup(listener, None, shutdown, startup_tx)
+                            .await
+                    }
+                    None => {
+                        server
+                            .try_run_with_shutdown_report_and_startup(shutdown, startup_tx)
+                            .await
+                    }
+                };
                 match report.as_ref() {
                     Ok(report) if !report.is_healthy() => {
                         warn!(
