@@ -334,32 +334,35 @@ fn broker_group(broker_name: &str, members: &[&BrokerInfo]) -> TopologyBrokerGro
     }
 }
 
-/// Folds the per-topic producer rows into one entry per group. The rows of one group usually come
-/// from the same clients producing to several topics, so the busiest topic gives the connection
-/// count; adding the rows up would count those clients once per topic.
+/// Folds the producer rows into one entry per group. Rows of one group that name different topics
+/// usually come from the same clients, so the largest row gives the connection count; adding the
+/// rows up would count those clients once per topic. A group links to the brokers its rows report
+/// and to the brokers of its topics.
 fn aggregate_producers(rows: &[ProducerInfo], topics: Option<&[TopicInfo]>) -> Vec<TopologyProducer> {
     let topic_brokers = topics
         .unwrap_or_default()
         .iter()
         .map(|topic| (topic.topic.as_str(), topic.brokers.as_slice()))
         .collect::<HashMap<_, _>>();
-    let mut groups: BTreeMap<&str, (usize, BTreeSet<&str>)> = BTreeMap::new();
+    let mut groups: BTreeMap<&str, (usize, BTreeSet<&str>, BTreeSet<&str>)> = BTreeMap::new();
     for row in rows.iter().filter(|row| !row.producer_group.is_empty()) {
-        let (connections, group_topics) = groups.entry(row.producer_group.as_str()).or_default();
+        let (connections, group_topics, broker_names) = groups.entry(row.producer_group.as_str()).or_default();
         *connections = (*connections).max(row.connection_count);
         if !row.topic.is_empty() {
             group_topics.insert(row.topic.as_str());
         }
+        broker_names.extend(row.broker_names.iter().map(String::as_str));
     }
 
     let mut producers = groups
         .into_iter()
-        .map(|(producer_group, (connection_count, group_topics))| {
-            let broker_names = group_topics
-                .iter()
-                .flat_map(|topic| topic_brokers.get(topic).copied().unwrap_or_default())
-                .map(String::as_str)
-                .collect::<BTreeSet<_>>();
+        .map(|(producer_group, (connection_count, group_topics, mut broker_names))| {
+            broker_names.extend(
+                group_topics
+                    .iter()
+                    .flat_map(|topic| topic_brokers.get(topic).copied().unwrap_or_default())
+                    .map(String::as_str),
+            );
             TopologyProducer {
                 producer_group: producer_group.to_string(),
                 connection_count,
@@ -414,6 +417,7 @@ mod tests {
     use super::LayerResults;
     use super::TOPOLOGY_GROUP_LIMIT;
     use super::Timed;
+    use super::aggregate_producers;
     use super::assemble;
     use super::without_system_consumers;
     use super::without_system_producers;
@@ -465,6 +469,7 @@ mod tests {
             topic: topic.to_string(),
             producer_group: producer_group.to_string(),
             connection_count,
+            broker_names: Vec::new(),
         }
     }
 
@@ -716,6 +721,27 @@ mod tests {
         assert_eq!(view.consumers[0].group, "group-059");
         assert_eq!(view.totals.consumer_groups, TOPOLOGY_GROUP_LIMIT + 10);
         assert_eq!(view.totals.message_backlog, 60);
+    }
+
+    #[test]
+    fn producer_groups_link_to_their_registered_brokers_and_their_topics_brokers() {
+        let rows = vec![
+            ProducerInfo {
+                broker_names: vec!["broker-b".to_string()],
+                ..producer("", "order-service-producer", 2)
+            },
+            producer("order-events", "order-service-producer", 2),
+        ];
+        let topics = vec![topic("order-events", &["broker-a"])];
+
+        let with_topics = aggregate_producers(&rows, Some(&topics));
+        // Without the topic list, the brokers the rows report still link the group.
+        let without_topics = aggregate_producers(&rows, None);
+
+        assert_eq!(with_topics.len(), 1);
+        assert_eq!(with_topics[0].connection_count, 2);
+        assert_eq!(with_topics[0].broker_names, vec!["broker-a", "broker-b"]);
+        assert_eq!(without_topics[0].broker_names, vec!["broker-b"]);
     }
 
     #[test]

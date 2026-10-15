@@ -193,9 +193,14 @@ pub struct DashboardConsumerResetRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DashboardProducerInfo {
+    /// Empty when unknown: broker producer tables do not record the topics a group sends to.
     pub topic: String,
     pub producer_group: String,
+    /// Producer clients of the group, each counted once however many brokers it is registered with.
     pub connection_count: usize,
+    /// Sorted names of the brokers the group's clients are registered with.
+    #[serde(default)]
+    pub broker_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

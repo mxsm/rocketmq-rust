@@ -127,6 +127,16 @@ describe('aggregateProducers', () => {
 
     expect(producer.brokerNames).toEqual([]);
   });
+
+  it('links groups to the brokers their rows report, with or without the topic list', () => {
+    const rows = [
+      { topic: '', producerGroup: 'registered', connectionCount: 2, brokerNames: ['broker-d'] },
+      { topic: 'payment-events', producerGroup: 'registered', connectionCount: 2 }
+    ];
+
+    expect(aggregateProducers(rows, fixtureTopics)[0]).toMatchObject({ connectionCount: 2, brokerNames: ['broker-a', 'broker-d'] });
+    expect(aggregateProducers(rows, null)[0].brokerNames).toEqual(['broker-d']);
+  });
 });
 
 describe('mapConsumers', () => {
@@ -194,6 +204,19 @@ describe('carryForwardFailedLayers', () => {
     expect(merged.producers.find((producer) => producer.producerGroup === 'analytics-ingest')?.brokerNames).toEqual([
       'broker-c',
       'broker-d'
+    ]);
+  });
+
+  it('adds the brokers the fresh rows report to the links kept while the topic query fails', () => {
+    const producers = fixtureProducers.map((row) =>
+      row.producerGroup === 'analytics-ingest' ? { ...row, brokerNames: ['broker-e'] } : row
+    );
+    const merged = carryForwardFailedLayers(fixtureSnapshot({ producers }, ['topics']), previous);
+
+    expect(merged.producers.find((producer) => producer.producerGroup === 'analytics-ingest')?.brokerNames).toEqual([
+      'broker-c',
+      'broker-d',
+      'broker-e'
     ]);
   });
 

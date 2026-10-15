@@ -20,6 +20,9 @@ pub struct ProducerInfo {
     pub topic: String,
     pub producer_group: String,
     pub connection_count: usize,
+    /// Brokers the group's clients are registered with.
+    #[serde(default)]
+    pub broker_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

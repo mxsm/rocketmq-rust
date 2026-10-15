@@ -168,6 +168,7 @@ impl DashboardQuerySession for FakeQuerySession {
             topic: "private-topic".into(),
             producer_group: "private-producer".into(),
             connection_count: 3,
+            broker_names: Vec::new(),
         }])))
     }
 

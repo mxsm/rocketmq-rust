@@ -147,25 +147,27 @@ export function buildNameServers(
 }
 
 /**
- * Folds the per-topic producer rows into one entry per group. The rows of one group usually come from
- * the same clients producing to several topics, so the busiest topic gives the connection count;
- * adding the rows up would count those clients once per topic.
+ * Folds the producer rows into one entry per group. Rows of one group that name different topics
+ * usually come from the same clients, so the largest row gives the connection count; adding the rows
+ * up would count those clients once per topic. A group links to the brokers its rows report and to
+ * the brokers of its topics.
  */
 export function aggregateProducers(producers: readonly ProducerInfo[], topics: readonly TopicInfo[] | null): TopologyProducer[] {
   const topicBrokers = new Map((topics ?? []).map((topic) => [topic.topic, topic.brokers]));
-  const groups = new Map<string, { connectionCount: number; topics: Set<string> }>();
+  const groups = new Map<string, { connectionCount: number; topics: Set<string>; brokerNames: Set<string> }>();
   for (const row of producers) {
     if (!row.producerGroup) continue;
-    const group = groups.get(row.producerGroup) ?? { connectionCount: 0, topics: new Set<string>() };
+    const group = groups.get(row.producerGroup) ?? { connectionCount: 0, topics: new Set<string>(), brokerNames: new Set<string>() };
     group.connectionCount = Math.max(group.connectionCount, row.connectionCount);
     if (row.topic) group.topics.add(row.topic);
+    for (const brokerName of row.brokerNames ?? []) group.brokerNames.add(brokerName);
     groups.set(row.producerGroup, group);
   }
 
   return [...groups.entries()]
     .map(([producerGroup, group]) => {
       const groupTopics = [...group.topics].sort(byText);
-      const brokerNames = new Set(groupTopics.flatMap((topic) => topicBrokers.get(topic) ?? []));
+      const brokerNames = new Set([...group.brokerNames, ...groupTopics.flatMap((topic) => topicBrokers.get(topic) ?? [])]);
       return {
         producerGroup,
         connectionCount: group.connectionCount,
@@ -256,10 +258,11 @@ export function carryForwardFailedLayers(next: TopologySnapshot, previous: Topol
 
   let producers = failed.has('producers') ? previous.producers : next.producers;
   if (!failed.has('producers') && failed.has('topics')) {
+    // Brokers found through topics come from the last snapshot; the ones the rows report are current.
     const knownBrokers = new Map(previous.producers.map((producer) => [producer.producerGroup, producer.brokerNames]));
     producers = producers.map((producer) => ({
       ...producer,
-      brokerNames: knownBrokers.get(producer.producerGroup) ?? producer.brokerNames
+      brokerNames: [...new Set([...producer.brokerNames, ...(knownBrokers.get(producer.producerGroup) ?? [])])].sort(byText)
     }));
   }
   const consumersFailed = failed.has('consumers');

@@ -375,28 +375,22 @@ impl dashboard::DashboardAdmin for AdminSession {
     fn dashboard_list_producers(&self) -> AdminFuture<'_, Vec<dashboard::DashboardProducerInfo>> {
         Box::pin(async move {
             self.ensure_open()?;
-            let mut producer_counts: HashMap<String, usize> = HashMap::new();
-            for address in broker_addresses(&self.inner).await? {
+            let cluster_info = self
+                .inner
+                .examine_broker_cluster_info()
+                .await
+                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+            let mut tables = Vec::new();
+            for (address, broker_name) in broker_names_by_address(&cluster_info) {
                 if let Ok(table) = self
                     .inner
                     .get_all_producer_info(CheetahString::from(address.as_str()))
                     .await
                 {
-                    for (group, producers) in table.data() {
-                        *producer_counts.entry(group.clone()).or_default() += producers.len();
-                    }
+                    tables.push((broker_name, table));
                 }
             }
-            let mut items = producer_counts
-                .into_iter()
-                .map(|(producer_group, connection_count)| dashboard::DashboardProducerInfo {
-                    topic: String::new(),
-                    producer_group,
-                    connection_count,
-                })
-                .collect::<Vec<_>>();
-            items.sort_by(|left, right| left.producer_group.cmp(&right.producer_group));
-            Ok(items)
+            Ok(aggregate_producer_tables(&tables))
         })
     }
 
