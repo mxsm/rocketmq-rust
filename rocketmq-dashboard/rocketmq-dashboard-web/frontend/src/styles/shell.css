@@ -1,64 +1,74 @@
+/* The sidebar and topbar are solid cards on the black page, with a gutter on every side. */
 .app-shell {
-  min-height: 100vh;
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
+  min-height: 100vh;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  gap: var(--shell-gutter);
+  padding: var(--shell-gutter);
   background: var(--background);
+  isolation: isolate;
 }
 
 .desktop-sidebar {
   position: sticky;
-  top: 0;
+  top: var(--shell-gutter);
   z-index: 20;
-  height: 100vh;
+  height: calc(100vh - 2 * var(--shell-gutter));
 }
 
 .sidebar {
-  display: flex;
-  flex-direction: column;
   position: relative;
-  top: auto;
+  display: flex;
   height: 100%;
-  padding: 16px 12px;
+  flex-direction: column;
   gap: 16px;
   overflow-y: auto;
-  border-right: 1px solid var(--border);
-  background: var(--chrome);
+  padding: 16px 12px;
+  border-radius: var(--radius-lg);
+  scrollbar-width: thin;
+}
+
+/* Shell chrome enters once, when the layout first mounts. Route changes keep it in place. */
+.desktop-sidebar > .sidebar {
+  animation: enter-left var(--duration-slow) var(--ease-out) backwards;
 }
 
 .brand {
   display: flex;
+  min-height: 48px;
   align-items: center;
   gap: 10px;
-  min-height: 48px;
   padding: 0 8px 12px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .brand-mark {
   display: grid;
-  place-items: center;
   width: 32px;
   height: 32px;
-  border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--border));
-  border-radius: var(--radius-xs);
-  background: color-mix(in srgb, var(--primary) 12%, var(--chrome));
-  color: var(--primary);
+  flex: none;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--primary);
+  color: var(--icon-on-primary);
 }
 
 .brand strong {
   display: block;
   font-size: 15px;
+  font-weight: 600;
+  line-height: 20px;
 }
 
 .brand span,
 .sidebar-footer {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font: var(--text-caption);
 }
 
 .sidebar nav {
   display: grid;
-  gap: 18px;
+  gap: 16px;
 }
 
 .nav-group {
@@ -68,35 +78,43 @@
 
 .nav-group-label {
   padding: 0 10px 4px;
-  color: var(--muted-foreground);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  color: var(--subtle-foreground);
+  font: var(--text-overline);
+  letter-spacing: var(--tracking-overline);
   text-transform: uppercase;
 }
 
 .nav-link {
   display: flex;
+  min-height: 36px;
   align-items: center;
   gap: 10px;
   padding: 0 10px;
-  min-height: 36px;
   border: 1px solid transparent;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   color: var(--muted-foreground);
-  font-size: 13px;
+  font: var(--text-small-medium);
   text-decoration: none;
 }
 
+.nav-link svg {
+  flex: none;
+  color: var(--icon-muted);
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
 .nav-link:hover {
-  border-color: transparent;
-  background: var(--muted-surface);
+  background: var(--control);
   color: var(--foreground);
 }
 
+.nav-link:hover svg {
+  color: var(--icon);
+}
+
 .nav-link.active {
-  border-color: color-mix(in srgb, var(--primary) 30%, var(--border));
-  background: color-mix(in srgb, var(--primary) 12%, var(--muted-surface));
+  border-color: var(--primary-border);
+  background: var(--primary-soft);
   color: var(--foreground);
 }
 
@@ -109,28 +127,29 @@
   align-items: center;
   gap: 8px;
   margin-top: auto;
-  border: 0;
-  border-top: 1px solid var(--border);
-  border-radius: 0;
   padding: 12px 8px 0;
+  border-top: 1px solid var(--border-subtle);
 }
 
 .workspace {
+  display: flex;
   min-width: 0;
+  flex-direction: column;
+  gap: var(--shell-gutter);
 }
 
 .topbar {
   position: sticky;
-  top: 0;
+  top: var(--shell-gutter);
   z-index: 10;
   display: flex;
+  min-height: var(--topbar-height);
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  min-height: 56px;
-  padding: 0 20px;
-  background: var(--chrome);
-  border-bottom: 1px solid var(--border);
+  gap: 12px;
+  padding: 0 16px;
+  border-radius: var(--radius-lg);
+  animation: enter-down var(--duration-slow) var(--ease-out) 80ms backwards;
 }
 
 .topbar-leading {
@@ -149,16 +168,16 @@
 }
 
 .topbar-title span {
-  color: var(--muted-foreground);
-  font-size: 11px;
-  line-height: 16px;
+  color: var(--subtle-foreground);
+  font: var(--text-overline);
+  letter-spacing: var(--tracking-overline);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
 }
 
 .topbar-title strong {
-  font-size: 14px;
-  line-height: 18px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 20px;
 }
 
 .topbar-status {
@@ -173,9 +192,9 @@
 
 .topbar-actions {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 8px;
-  flex-shrink: 0;
 }
 
 .topbar-menu {
@@ -189,19 +208,23 @@
 .content {
   display: grid;
   width: 100%;
-  padding: 24px;
-  gap: 18px;
+  align-content: start;
+  gap: 16px;
+  padding: 8px 12px 12px;
 }
 
+/* In the navigation drawer the sheet is the surface; the sidebar inside it is plain content. */
 .mobile-navigation-sheet {
   width: min(320px, 92vw) !important;
-  padding: 0;
   overflow: hidden;
-  background: var(--chrome);
+  padding: 0;
 }
 
 .mobile-navigation-sheet > .sidebar {
-  padding-top: 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 @media (max-width: 1180px) {
@@ -225,8 +248,12 @@
 }
 
 @media (max-width: 767px) {
+  .app-shell {
+    --shell-gutter: 8px;
+  }
+
   .topbar {
-    padding: 0 12px;
+    padding: 0 8px;
   }
 
   .topbar-status {
@@ -235,12 +262,12 @@
 
   .topbar-user {
     width: 36px;
-    padding: 0;
     overflow: hidden;
+    padding: 0;
     font-size: 0;
   }
 
   .content {
-    padding: 16px;
+    padding: 4px 4px 8px;
   }
 }
