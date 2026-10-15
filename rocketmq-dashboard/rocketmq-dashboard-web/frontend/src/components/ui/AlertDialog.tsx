@@ -17,7 +17,7 @@ export const AlertDialogContent = forwardRef<ElementRef<typeof AlertDialogPrimit
   ({ className, ...props }, ref) => (
     <AlertDialogPrimitive.Portal>
       <AlertDialogPrimitive.Overlay className="ui-overlay" />
-      <AlertDialogPrimitive.Content ref={ref} className={cn('ui-alert-dialog-content', className)} {...props} />
+      <AlertDialogPrimitive.Content ref={ref} className={cn('ui-alert-dialog-content', className)} data-surface="overlay" {...props} />
     </AlertDialogPrimitive.Portal>
   )
 );

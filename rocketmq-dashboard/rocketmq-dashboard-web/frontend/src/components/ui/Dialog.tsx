@@ -15,7 +15,7 @@ export const DialogContent = forwardRef<ElementRef<typeof DialogPrimitive.Conten
   ({ className, children, closeDisabled = false, ...props }, ref) => (
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay className="ui-overlay" />
-      <DialogPrimitive.Content ref={ref} className={cn('ui-dialog-content', className)} {...props}>
+      <DialogPrimitive.Content ref={ref} className={cn('ui-dialog-content', className)} data-surface="overlay" {...props}>
         {children}
         <DialogPrimitive.Close
           className="ui-overlay-close"

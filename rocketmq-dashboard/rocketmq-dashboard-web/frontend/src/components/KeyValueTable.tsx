@@ -54,7 +54,7 @@ export default function KeyValueTable({ rows, emptyTitle }: KeyValueTableProps) 
   };
 
   return (
-    <section className="kv-shell">
+    <section className="kv-shell" data-surface="inset">
       <div className="kv-toolbar">
         <label className="search-box">
           <Search size={16} aria-hidden="true" />

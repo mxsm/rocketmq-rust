@@ -423,7 +423,7 @@ td code,
   font-size: 13px;
 }
 
-.field input,
+.field input:not([type='checkbox']),
 .field select,
 .field textarea {
   min-height: 36px;
@@ -1699,11 +1699,6 @@ td code,
   padding: 0 8px;
   font-size: 13px;
   color: var(--muted);
-}
-
-.compact-check input {
-  width: 14px;
-  height: 14px;
 }
 
 a {

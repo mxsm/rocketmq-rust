@@ -9,7 +9,7 @@ export const TooltipTrigger = TooltipPrimitive.Trigger;
 export const TooltipContent = forwardRef<ElementRef<typeof TooltipPrimitive.Content>, ComponentPropsWithoutRef<typeof TooltipPrimitive.Content>>(
   ({ className, sideOffset = 6, ...props }, ref) => (
     <TooltipPrimitive.Portal>
-      <TooltipPrimitive.Content ref={ref} sideOffset={sideOffset} className={cn('ui-tooltip-content', className)} {...props} />
+      <TooltipPrimitive.Content ref={ref} sideOffset={sideOffset} className={cn('ui-tooltip-content', className)} data-surface="overlay" {...props} />
     </TooltipPrimitive.Portal>
   )
 );

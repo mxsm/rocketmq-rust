@@ -13,7 +13,7 @@ export const DropdownMenuRadioGroup = DropdownMenuPrimitive.RadioGroup;
 export const DropdownMenuContent = forwardRef<ElementRef<typeof DropdownMenuPrimitive.Content>, ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>>(
   ({ className, sideOffset = 6, ...props }, ref) => (
     <DropdownMenuPrimitive.Portal>
-      <DropdownMenuPrimitive.Content ref={ref} sideOffset={sideOffset} className={cn('ui-menu-content', className)} {...props} />
+      <DropdownMenuPrimitive.Content ref={ref} sideOffset={sideOffset} className={cn('ui-menu-content', className)} data-surface="overlay" {...props} />
     </DropdownMenuPrimitive.Portal>
   )
 );
@@ -64,6 +64,6 @@ export const DropdownMenuSubTrigger = forwardRef<ElementRef<typeof DropdownMenuP
 DropdownMenuSubTrigger.displayName = DropdownMenuPrimitive.SubTrigger.displayName;
 
 export const DropdownMenuSubContent = forwardRef<ElementRef<typeof DropdownMenuPrimitive.SubContent>, ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubContent>>(
-  ({ className, ...props }, ref) => <DropdownMenuPrimitive.SubContent ref={ref} className={cn('ui-menu-content', className)} {...props} />
+  ({ className, ...props }, ref) => <DropdownMenuPrimitive.SubContent ref={ref} className={cn('ui-menu-content', className)} data-surface="overlay" {...props} />
 );
 DropdownMenuSubContent.displayName = DropdownMenuPrimitive.SubContent.displayName;

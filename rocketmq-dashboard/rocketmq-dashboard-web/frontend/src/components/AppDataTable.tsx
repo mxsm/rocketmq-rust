@@ -81,7 +81,7 @@ export default function AppDataTable<T>({
             <thead>
               <tr>
                 {columns.map((column) => (
-                  <th key={column.id} scope="col" style={{ width: column.width, textAlign: column.align }}>
+                  <th key={column.id} scope="col" data-align={column.align} style={{ width: column.width, textAlign: column.align }}>
                     {column.header}
                   </th>
                 ))}
@@ -99,7 +99,7 @@ export default function AppDataTable<T>({
                   onKeyDown={(event) => handleKeyDown(event, row)}
                 >
                   {columns.map((column) => (
-                    <td key={column.id} style={{ textAlign: column.align }}>
+                    <td key={column.id} data-align={column.align} style={{ textAlign: column.align }}>
                       {column.cell(row)}
                     </td>
                   ))}

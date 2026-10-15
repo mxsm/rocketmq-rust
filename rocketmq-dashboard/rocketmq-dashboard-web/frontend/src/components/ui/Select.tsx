@@ -20,7 +20,7 @@ SelectTrigger.displayName = SelectPrimitive.Trigger.displayName;
 export const SelectContent = forwardRef<ElementRef<typeof SelectPrimitive.Content>, ComponentPropsWithoutRef<typeof SelectPrimitive.Content>>(
   ({ className, children, position = 'popper', ...props }, ref) => (
     <SelectPrimitive.Portal>
-      <SelectPrimitive.Content ref={ref} position={position} className={cn('ui-select-content', className)} {...props}>
+      <SelectPrimitive.Content ref={ref} position={position} className={cn('ui-select-content', className)} data-surface="overlay" {...props}>
         <SelectPrimitive.ScrollUpButton className="ui-select-scroll"><ChevronUp size={14} /></SelectPrimitive.ScrollUpButton>
         <SelectPrimitive.Viewport className="ui-select-viewport">{children}</SelectPrimitive.Viewport>
         <SelectPrimitive.ScrollDownButton className="ui-select-scroll"><ChevronDown size={14} /></SelectPrimitive.ScrollDownButton>
