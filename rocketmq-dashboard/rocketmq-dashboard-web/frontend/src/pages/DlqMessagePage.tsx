@@ -305,9 +305,9 @@ export default function DlqMessagePage() {
 
       <div className="metric-grid message-metric-grid">
         <MetricCard label="Scanned through" value={total} detail="Rows visited by DLQ API" icon={<ShieldAlert size={18} />} />
-        <MetricCard label="Page" value={page} detail={exactIdMode ? `${rows.length} exact matches` : `${pageSize} rows per request`} icon={<Search size={18} />} />
-        <MetricCard label="Selected" value={selectedTargets.length} detail="Unique original messages" icon={<RotateCcw size={18} />} />
-        <MetricCard label="Consumer group" value={consumerGroup || '-'} detail="Current DLQ scope" />
+        <MetricCard label="Page" value={page} detail={exactIdMode ? `${rows.length} exact matches` : `${pageSize} rows per request`} icon={<Search size={18} />} accent="blue" />
+        <MetricCard label="Selected" value={selectedTargets.length} detail="Unique original messages" icon={<RotateCcw size={18} />} accent="amber" />
+        <MetricCard label="Consumer group" value={consumerGroup || '-'} detail="Current DLQ scope" accent="pink" />
       </div>
 
       <Card className="message-results-card">

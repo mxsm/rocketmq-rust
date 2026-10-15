@@ -549,7 +549,7 @@ export default function TopicDetailContent({
         </div>
 
         <TabsContent value="overview">
-          <div className="entity-identity-grid">
+          <div className="entity-identity-grid" data-surface="panel">
             <IdentityItem label="Topic" value={topicName} mono />
             <IdentityItem label="Broker scope" value={topicInfo?.brokerName || 'All brokers'} />
             <IdentityItem label="Category" value={topicInfo?.category || 'Unknown'} status />
@@ -564,9 +564,9 @@ export default function TopicDetailContent({
           {stats.data ? (
             <div className="metric-grid entity-detail-metrics">
               <MetricCard label="Queue entries" value={stats.data.queueCount} icon={<Database size={17} />} />
-              <MetricCard label="Messages" value={stats.data.totalMessageCount} icon={<Database size={17} />} />
-              <MetricCard label="Minimum offset" value={stats.data.totalMinOffset} icon={<SlidersHorizontal size={17} />} />
-              <MetricCard label="Maximum offset" value={stats.data.totalMaxOffset} icon={<SlidersHorizontal size={17} />} />
+              <MetricCard label="Messages" value={stats.data.totalMessageCount} icon={<Database size={17} />} accent="blue" />
+              <MetricCard label="Minimum offset" value={stats.data.totalMinOffset} icon={<SlidersHorizontal size={17} />} accent="pink" />
+              <MetricCard label="Maximum offset" value={stats.data.totalMaxOffset} icon={<SlidersHorizontal size={17} />} accent="cyan" />
             </div>
           ) : null}
         </TabsContent>
@@ -688,7 +688,7 @@ export default function TopicDetailContent({
                     </span>
                   </div>
                 ) : null}
-                <div className="entity-identity-grid">
+                <div className="entity-identity-grid" data-surface="panel">
                   <IdentityItem label="Topic" value={config.data.topicName} mono />
                   <IdentityItem label="Effective broker" value={config.data.brokerName} />
                   <IdentityItem label="Cluster" value={config.data.clusterName || 'Unknown'} />
@@ -705,7 +705,7 @@ export default function TopicDetailContent({
                     <div><h3>Attributes</h3><p>Broker-reported topic attributes.</p></div>
                   </div>
                   {Object.keys(config.data.attributes).length > 0 ? (
-                    <div className="entity-identity-grid">
+                    <div className="entity-identity-grid" data-surface="panel">
                       {Object.entries(config.data.attributes).map(([name, value]) => (
                         <IdentityItem key={name} label={name} value={value} mono />
                       ))}

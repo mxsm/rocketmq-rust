@@ -88,7 +88,7 @@ export default function MessageDetailContent({
           {copyNotice.message}
         </div>
       ) : null}
-      <div className="message-detail-identity">
+      <div className="message-detail-identity" data-surface="inset">
         <div>
           <span>Message ID</span>
           <strong className="mono" title={message.messageId}>{truncateIdentifier(message.messageId, 38)}</strong>
@@ -109,11 +109,11 @@ export default function MessageDetailContent({
         <TabsContent value="overview">
           <div className="metric-grid entity-detail-metrics">
             <MetricCard label="Body size" value={formatMessageSize(message.storeSize)} detail="Stored message bytes" icon={<Database size={18} />} />
-            <MetricCard label="Reconsume" value={message.reconsumeTimes} detail="API retry count" icon={<RotateCcw size={18} />} />
-            <MetricCard label="Queue" value={message.queueId} detail={`Offset ${message.queueOffset}`} icon={<Braces size={18} />} />
-            <MetricCard label="Stored" value={formatMessageTimestamp(message.storeTimestamp)} detail="Broker store timestamp" icon={<Clock3 size={18} />} />
+            <MetricCard label="Reconsume" value={message.reconsumeTimes} detail="API retry count" icon={<RotateCcw size={18} />} accent="blue" />
+            <MetricCard label="Queue" value={message.queueId} detail={`Offset ${message.queueOffset}`} icon={<Braces size={18} />} accent="pink" />
+            <MetricCard label="Stored" value={formatMessageTimestamp(message.storeTimestamp)} detail="Broker store timestamp" icon={<Clock3 size={18} />} accent="cyan" />
           </div>
-          <dl className="entity-description-grid">
+          <dl className="entity-description-grid" data-surface="inset">
             <div><dt>Topic</dt><dd className="mono">{message.topic}</dd></div>
             <div><dt>Tags</dt><dd>{messageTags(message)}</dd></div>
             <div><dt>Keys</dt><dd className="mono">{messageKeys(message)}</dd></div>

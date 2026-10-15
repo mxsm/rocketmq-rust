@@ -144,7 +144,7 @@ export default function ProducerListPage() {
     },
     {
       id: 'connections',
-      header: 'Discovered connections',
+      header: 'Connections',
       width: '150px',
       cell: (producer) => (
         <StatusBadge
@@ -205,13 +205,13 @@ export default function ProducerListPage() {
 
       <div className="metric-grid entity-metrics">
         <MetricCard label="Producer groups" value={metrics.producerGroups} detail="Unique discovered groups" icon={<Users size={18} />} />
-        <MetricCard label="Available topics" value={availableTopics.length} detail="Selectable query targets" icon={<DatabaseZap size={18} />} />
-        <MetricCard label="Discovered connections" value={metrics.discoveredConnections} detail="Backend discovery count" icon={<RadioTower size={18} />} />
-        <MetricCard label="Connected groups" value={metrics.connectedGroups} detail="Groups reporting clients" icon={<Server size={18} />} />
+        <MetricCard label="Available topics" value={availableTopics.length} detail="Selectable query targets" icon={<DatabaseZap size={18} />} accent="blue" />
+        <MetricCard label="Discovered connections" value={metrics.discoveredConnections} detail="Backend discovery count" icon={<RadioTower size={18} />} accent="cyan" />
+        <MetricCard label="Connected groups" value={metrics.connectedGroups} detail="Groups reporting clients" icon={<Server size={18} />} accent="pink" />
       </div>
 
       <div className="producer-workspace-grid">
-        <section className="entity-table-card producer-inventory-card">
+        <section className="entity-table-card producer-inventory-card" data-surface="panel">
           <div className="entity-card-heading">
             <div>
               <h2>Producer inventory</h2>
@@ -246,7 +246,7 @@ export default function ProducerListPage() {
           />
         </section>
 
-        <section className="entity-table-card producer-connections-card" aria-labelledby="producer-connections-heading">
+        <section className="entity-table-card producer-connections-card" data-surface="panel" aria-labelledby="producer-connections-heading">
           <div className="entity-card-heading">
             <div>
               <h2 id="producer-connections-heading">Producer connections</h2>

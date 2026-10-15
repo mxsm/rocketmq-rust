@@ -58,12 +58,12 @@ export default function ConnectionSettingsSection({
   const currentAvailability = availabilityFor(draft.currentNamesrv, availabilityByAddress, availabilityLoading);
 
   return (
-    <section className="settings-connection-panel" aria-labelledby="settings-connection-title">
+    <section className="settings-connection-panel" data-surface="panel" aria-labelledby="settings-connection-title">
       <h2 id="settings-connection-title" className="sr-only">Connection</h2>
 
       <section className="settings-current-section" aria-labelledby="current-nameserver-heading">
         <h3 id="current-nameserver-heading">Active NameServer</h3>
-        <div className="settings-current-nameserver">
+        <div className="settings-current-nameserver" data-surface="inset">
           <div className="settings-current-identity">
             <span className="settings-endpoint-icon"><Database size={18} aria-hidden="true" /></span>
             <label>
