@@ -15,5 +15,5 @@
 //! Embedded Broker-backed Local adapter exports.
 
 pub(crate) use rocketmq_proxy_local::local_components_from_config_with_service_context;
-pub use rocketmq_proxy_local::LocalBrokerFacadeClient;
+pub use rocketmq_proxy_local::LocalBrokerCommandGateway;
 pub use rocketmq_proxy_local::LocalBrokerRemotingAdapter;

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(proxy-local):** Rename the public type to `LocalBrokerCommandGateway` (breaking) ([#11544](https://github.com/mxsm/rocketmq-rust/issues/11544)).
 - **refactor(broker):** Rename the public type to `EmbeddedBroker` (breaking) ([#11545](https://github.com/mxsm/rocketmq-rust/issues/11545)).
 - **refactor(proxy-local):** Rename the public type to `LocalBrokerRemotingAdapter` (breaking) ([#11543](https://github.com/mxsm/rocketmq-rust/issues/11543)).
 - **refactor(proxy-cluster):** Rename the public type to `ClusterBrokerRemotingAdapter` (breaking) ([#11546](https://github.com/mxsm/rocketmq-rust/issues/11546)).

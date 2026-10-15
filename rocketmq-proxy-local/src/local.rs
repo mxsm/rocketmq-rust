@@ -157,7 +157,7 @@ const LOCAL_LONG_POLL_TIMEOUT_MARGIN: Duration = Duration::from_millis(500);
 const LOCAL_REMOTING_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone)]
-pub struct LocalBrokerFacadeClient {
+pub struct LocalBrokerCommandGateway {
     sender: mpsc::Sender<QueuedLocalBrokerCommand>,
     budget: ResourceBudget,
     rejected: Arc<AtomicU64>,
@@ -460,7 +460,7 @@ fn local_command_budget(config: &LocalConfig) -> ProxyResult<ResourceBudget> {
     .map_err(|error| canonical::configuration_invalid_with_source("proxy.local.command_budget", error).into())
 }
 
-impl LocalBrokerFacadeClient {
+impl LocalBrokerCommandGateway {
     /// Stops the embedded Broker while its Store and metadata I/O scopes are
     /// still open, then waits for the worker to release them.
     ///
@@ -762,11 +762,11 @@ impl LocalBrokerFacadeClient {
 
 #[derive(Clone)]
 pub struct LocalBrokerRemotingAdapter {
-    client: LocalBrokerFacadeClient,
+    client: LocalBrokerCommandGateway,
 }
 
 impl LocalBrokerRemotingAdapter {
-    pub fn new(client: LocalBrokerFacadeClient) -> Self {
+    pub fn new(client: LocalBrokerCommandGateway) -> Self {
         Self { client }
     }
 }
@@ -785,11 +785,11 @@ impl ProxyRemotingRequestHandler for LocalBrokerRemotingAdapter {
 
 #[derive(Clone)]
 pub struct LocalRouteService {
-    client: LocalBrokerFacadeClient,
+    client: LocalBrokerCommandGateway,
 }
 
 impl LocalRouteService {
-    pub fn new(client: LocalBrokerFacadeClient) -> Self {
+    pub fn new(client: LocalBrokerCommandGateway) -> Self {
         Self { client }
     }
 }
@@ -807,11 +807,11 @@ impl RouteService for LocalRouteService {
 
 #[derive(Clone)]
 pub struct LocalMetadataService {
-    client: LocalBrokerFacadeClient,
+    client: LocalBrokerCommandGateway,
 }
 
 impl LocalMetadataService {
-    pub fn new(client: LocalBrokerFacadeClient) -> Self {
+    pub fn new(client: LocalBrokerCommandGateway) -> Self {
         Self { client }
     }
 }
@@ -850,12 +850,12 @@ impl MetadataService for LocalMetadataService {
 
 #[derive(Clone)]
 pub struct LocalAssignmentService {
-    client: LocalBrokerFacadeClient,
+    client: LocalBrokerCommandGateway,
     strategy_name: String,
 }
 
 impl LocalAssignmentService {
-    pub fn new(client: LocalBrokerFacadeClient, strategy_name: impl Into<String>) -> Self {
+    pub fn new(client: LocalBrokerCommandGateway, strategy_name: impl Into<String>) -> Self {
         Self {
             client,
             strategy_name: strategy_name.into(),
@@ -887,11 +887,11 @@ impl AssignmentService for LocalAssignmentService {
 
 #[derive(Clone)]
 pub struct LocalMessageService {
-    client: LocalBrokerFacadeClient,
+    client: LocalBrokerCommandGateway,
 }
 
 impl LocalMessageService {
-    pub fn new(client: LocalBrokerFacadeClient) -> Self {
+    pub fn new(client: LocalBrokerCommandGateway) -> Self {
         Self { client }
     }
 }
@@ -934,11 +934,11 @@ impl MessageService for LocalMessageService {
 
 #[derive(Clone)]
 pub struct LocalTransactionService {
-    client: LocalBrokerFacadeClient,
+    client: LocalBrokerCommandGateway,
 }
 
 impl LocalTransactionService {
-    pub fn new(client: LocalBrokerFacadeClient) -> Self {
+    pub fn new(client: LocalBrokerCommandGateway) -> Self {
         Self { client }
     }
 }
@@ -968,11 +968,11 @@ impl TransactionService for LocalTransactionService {
 
 #[derive(Clone)]
 pub struct LocalConsumerService {
-    client: LocalBrokerFacadeClient,
+    client: LocalBrokerCommandGateway,
 }
 
 impl LocalConsumerService {
-    pub fn new(client: LocalBrokerFacadeClient) -> Self {
+    pub fn new(client: LocalBrokerCommandGateway) -> Self {
         Self { client }
     }
 }
@@ -1065,17 +1065,17 @@ pub fn local_components_from_config_with_service_context(
     strategy_name: impl Into<String>,
     service_context: &ChildServiceContext,
     telemetry_handle: TelemetryHandle,
-) -> ProxyResult<(LocalServiceManager, LocalBrokerFacadeClient)> {
+) -> ProxyResult<(LocalServiceManager, LocalBrokerCommandGateway)> {
     Ok(local_components(
-        LocalBrokerFacadeClient::new(config, service_context, telemetry_handle)?,
+        LocalBrokerCommandGateway::new(config, service_context, telemetry_handle)?,
         strategy_name,
     ))
 }
 
 fn local_components(
-    client: LocalBrokerFacadeClient,
+    client: LocalBrokerCommandGateway,
     strategy_name: impl Into<String>,
-) -> (LocalServiceManager, LocalBrokerFacadeClient) {
+) -> (LocalServiceManager, LocalBrokerCommandGateway) {
     let backend_client = client.clone();
     let manager = LocalServiceManager::with_services(
         std::sync::Arc::new(LocalRouteService::new(client.clone())),
@@ -1466,7 +1466,7 @@ where
 }
 
 async fn sync_lite_subscription_via_broker(
-    client: &LocalBrokerFacadeClient,
+    client: &LocalBrokerCommandGateway,
     client_id: &str,
     request: &LiteSubscriptionSyncRequest,
 ) -> ProxyResult<()> {
@@ -1672,7 +1672,7 @@ async fn end_transaction(
 }
 
 async fn receive_message_via_broker(
-    client: &LocalBrokerFacadeClient,
+    client: &LocalBrokerCommandGateway,
     request: &ReceiveMessageRequest,
     caller_deadline: Option<Duration>,
 ) -> ProxyResult<ReceiveMessagePlan> {
@@ -1692,7 +1692,7 @@ async fn receive_message_via_broker(
 }
 
 async fn pull_message_via_broker(
-    client: &LocalBrokerFacadeClient,
+    client: &LocalBrokerCommandGateway,
     request: &PullMessageRequest,
     caller_deadline: Option<Duration>,
 ) -> ProxyResult<PullMessagePlan> {
@@ -1712,7 +1712,7 @@ fn local_long_poll_timeout(long_polling_timeout: Duration, caller_deadline: Opti
 }
 
 async fn ack_message_via_broker(
-    client: &LocalBrokerFacadeClient,
+    client: &LocalBrokerCommandGateway,
     request: &AckMessageRequest,
 ) -> ProxyResult<Vec<AckMessageResultEntry>> {
     let group_name = request.group.to_string();
@@ -1807,7 +1807,7 @@ fn invalid_receipt_handle_status() -> rocketmq_proxy_core::ProxyPayloadStatus {
 }
 
 async fn ack_message_entry_via_broker(
-    client: &LocalBrokerFacadeClient,
+    client: &LocalBrokerCommandGateway,
     request: &AckMessageRequest,
     entry: &rocketmq_proxy_core::AckMessageEntry,
 ) -> ProxyResult<rocketmq_proxy_core::ProxyPayloadStatus> {
@@ -1846,7 +1846,7 @@ async fn ack_message_entry_via_broker(
 }
 
 async fn forward_message_to_dead_letter_queue_via_broker(
-    client: &LocalBrokerFacadeClient,
+    client: &LocalBrokerCommandGateway,
     request: &ForwardMessageToDeadLetterQueueRequest,
 ) -> ProxyResult<ForwardMessageToDeadLetterQueuePlan> {
     let topic_name = request.lite_topic.clone().unwrap_or_else(|| request.topic.to_string());
@@ -1885,7 +1885,7 @@ async fn forward_message_to_dead_letter_queue_via_broker(
 }
 
 async fn change_invisible_duration_via_broker(
-    client: &LocalBrokerFacadeClient,
+    client: &LocalBrokerCommandGateway,
     request: &ChangeInvisibleDurationRequest,
 ) -> ProxyResult<ChangeInvisibleDurationPlan> {
     let topic_name = request.lite_topic.clone().unwrap_or_else(|| request.topic.to_string());
@@ -1954,7 +1954,7 @@ async fn change_invisible_duration_via_broker(
 }
 
 async fn update_offset_via_broker(
-    client: &LocalBrokerFacadeClient,
+    client: &LocalBrokerCommandGateway,
     request: &UpdateOffsetRequest,
 ) -> ProxyResult<UpdateOffsetPlan> {
     let header = build_update_offset_request_header(client.broker_name(), request);
@@ -1974,7 +1974,7 @@ async fn update_offset_via_broker(
 }
 
 async fn get_offset_via_broker(
-    client: &LocalBrokerFacadeClient,
+    client: &LocalBrokerCommandGateway,
     request: &GetOffsetRequest,
 ) -> ProxyResult<GetOffsetPlan> {
     let header = build_query_consumer_offset_request_header(client.broker_name(), request);
@@ -1999,7 +1999,7 @@ async fn get_offset_via_broker(
 }
 
 async fn query_offset_via_broker(
-    client: &LocalBrokerFacadeClient,
+    client: &LocalBrokerCommandGateway,
     request: &QueryOffsetRequest,
 ) -> ProxyResult<QueryOffsetPlan> {
     let broker_name = CheetahString::from(client.broker_name());
@@ -2879,7 +2879,7 @@ mod tests {
     use super::split_batch_send_result;
     use super::transaction_resolution_flag;
     use super::validate_local_queue_config;
-    use super::LocalBrokerFacadeClient;
+    use super::LocalBrokerCommandGateway;
     use super::LocalBrokerRemotingAdapter;
     use super::MessageIdDecodeError;
     use crate::LocalConfig;
@@ -3324,7 +3324,7 @@ mod tests {
             store_root_dir: store.path().to_string_lossy().into_owned(),
             ..LocalConfig::default()
         };
-        let client = LocalBrokerFacadeClient::new(config, &service, TelemetryHandle::noop())
+        let client = LocalBrokerCommandGateway::new(config, &service, TelemetryHandle::noop())
             .expect("managed local client builds");
         assert_eq!(client.sender.max_capacity(), 7);
 
@@ -3350,7 +3350,7 @@ mod tests {
     #[test]
     fn local_command_queue_rejects_count_overload_immediately() {
         let (sender, _receiver) = tokio::sync::mpsc::channel(1);
-        let client = LocalBrokerFacadeClient {
+        let client = LocalBrokerCommandGateway {
             sender,
             budget: test_budget(1, 4096),
             rejected: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -3383,7 +3383,7 @@ mod tests {
     #[tokio::test]
     async fn raw_command_backend_enqueues_only_one_dispatch() {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-        let client = LocalBrokerFacadeClient {
+        let client = LocalBrokerCommandGateway {
             sender,
             budget: test_budget(1, 4096),
             rejected: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -3434,7 +3434,7 @@ mod tests {
     #[tokio::test]
     async fn client_api_preserves_timeout_and_identity() {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-        let client = LocalBrokerFacadeClient {
+        let client = LocalBrokerCommandGateway {
             sender,
             budget: test_budget(1, 4096),
             rejected: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -3528,7 +3528,7 @@ mod tests {
             ..LocalConfig::default()
         };
 
-        match LocalBrokerFacadeClient::new(config, &service, TelemetryHandle::noop()) {
+        match LocalBrokerCommandGateway::new(config, &service, TelemetryHandle::noop()) {
             Err(error) if error.descriptor() == &rocketmq_error::CORE_CONFIGURATION_INVALID => {}
             Err(error) => panic!("unexpected error: {error}"),
             Ok(_) => panic!("invalid embedded broker configuration must be rejected"),
@@ -3547,7 +3547,7 @@ mod tests {
             store_root_dir: store.path().to_string_lossy().into_owned(),
             ..LocalConfig::default()
         };
-        let client = LocalBrokerFacadeClient::new(config, &service, TelemetryHandle::noop())
+        let client = LocalBrokerCommandGateway::new(config, &service, TelemetryHandle::noop())
             .expect("managed local client builds");
         assert_eq!(service.task_group().task_count(), 0);
         assert_eq!(service.task_group().component_count(), 1);
@@ -3570,7 +3570,7 @@ mod tests {
     async fn caller_drop_cancels_envelope_but_keeps_queue_budget() {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
         let budget = test_budget(1, 4096);
-        let client = LocalBrokerFacadeClient {
+        let client = LocalBrokerCommandGateway {
             sender,
             budget: budget.clone(),
             rejected: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -3596,7 +3596,7 @@ mod tests {
     #[tokio::test]
     async fn typed_send_rejects_expired_deadline_before_admission() {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-        let client = LocalBrokerFacadeClient {
+        let client = LocalBrokerCommandGateway {
             sender,
             budget: test_budget(1, 4096),
             rejected: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -3681,7 +3681,7 @@ mod tests {
             };
             let budget = local_command_budget(&config).unwrap();
             let (sender, receiver) = mpsc::channel(config.command_queue_capacity);
-            let client = LocalBrokerFacadeClient {
+            let client = LocalBrokerCommandGateway {
                 sender,
                 budget: budget.clone(),
                 rejected: Arc::new(AtomicU64::new(0)),

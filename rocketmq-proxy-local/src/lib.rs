@@ -27,6 +27,6 @@ mod service;
 
 pub use config::LocalConfig;
 pub use local::local_components_from_config_with_service_context;
-pub use local::LocalBrokerFacadeClient;
+pub use local::LocalBrokerCommandGateway;
 pub use local::LocalBrokerRemotingAdapter;
 pub use service::LocalServiceManager;
