@@ -14,7 +14,7 @@
 
 use rocketmq_controller::ControllerConfig;
 use rocketmq_controller::EventType;
-use rocketmq_controller::StorageBackendType;
+use rocketmq_controller::StorageEngineType;
 
 #[test]
 fn controller_consumers_use_root_capabilities_and_dtos() {
@@ -43,5 +43,5 @@ fn controller_consumers_use_root_capabilities_and_dtos() {
 
     let _ = ControllerConfig::default();
     let _: Option<EventType> = None;
-    let _: Option<StorageBackendType> = None;
+    let _: Option<StorageEngineType> = None;
 }

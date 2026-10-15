@@ -1471,7 +1471,7 @@ mod tests {
         let config = ControllerConfig::default()
             .with_node_info(1, addr)
             .with_raft_peers(vec![RaftPeer { id: 1, addr }])
-            .with_storage_backend(crate::config::StorageBackendType::Memory);
+            .with_storage_engine_type(crate::config::StorageEngineType::Memory);
         let context = rocketmq_runtime::RuntimeContext::from_current("openraft-lifecycle-test");
         let controller = Arc::new(OpenRaftController::new(
             ControllerConfigReader::new(config),

@@ -23,7 +23,7 @@ use rocketmq_controller::ControllerConfigReader;
 use rocketmq_controller::ControllerRequest;
 use rocketmq_controller::Node;
 use rocketmq_controller::RaftNodeManager;
-use rocketmq_controller::StorageBackendType;
+use rocketmq_controller::StorageEngineType;
 
 fn reserve_address() -> SocketAddr {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve loopback address");
@@ -51,7 +51,7 @@ async fn read_index_observes_the_preceding_committed_write() {
     let config = ControllerConfigReader::new(
         ControllerConfig::default()
             .with_node_info(1, address)
-            .with_storage_backend(StorageBackendType::Memory)
+            .with_storage_engine_type(StorageEngineType::Memory)
             .with_election_timeout_ms(100)
             .with_heartbeat_interval_ms(30),
     );

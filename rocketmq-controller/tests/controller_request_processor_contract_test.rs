@@ -24,7 +24,7 @@ use rocketmq_controller::ControllerConfig;
 use rocketmq_controller::ControllerManager;
 use rocketmq_controller::Node;
 use rocketmq_controller::RaftPeer;
-use rocketmq_controller::StorageBackendType;
+use rocketmq_controller::StorageEngineType;
 use rocketmq_controller::MAX_BROKER_HEARTBEAT_TIMEOUT_MILLIS;
 use rocketmq_model::common::mix_all::FIRST_BROKER_CONTROLLER_ID;
 use rocketmq_protocol::code::request_code::RequestCode;
@@ -82,7 +82,7 @@ impl ProcessorHarness {
         let config = ControllerConfig::default()
             .with_node_info(1, remoting_addr)
             .with_raft_peers(vec![RaftPeer { id: 1, addr: raft_addr }])
-            .with_storage_backend(StorageBackendType::Memory)
+            .with_storage_engine_type(StorageEngineType::Memory)
             .with_heartbeat_interval_ms(100)
             .with_election_timeout_ms(300);
         let runtime = rocketmq_runtime::RuntimeContext::from_current("controller-processor-contract-test");

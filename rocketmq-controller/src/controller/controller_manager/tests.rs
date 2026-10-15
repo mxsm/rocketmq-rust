@@ -328,7 +328,7 @@ async fn concurrent_start_waits_for_the_single_lifecycle_transition() {
     let config = ControllerConfig::default()
         .with_node_info(1, remoting_addr)
         .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
-        .with_storage_backend(crate::config::StorageBackendType::Memory);
+        .with_storage_engine_type(crate::config::StorageEngineType::Memory);
     let manager = Arc::new(
         ControllerManager::new(config, test_service_context(), test_telemetry_handle())
             .await
@@ -378,7 +378,7 @@ async fn startup_failure_cleanup_stops_owned_components() {
     let config = ControllerConfig::default()
         .with_node_info(1, remoting_addr)
         .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
-        .with_storage_backend(crate::config::StorageBackendType::Memory);
+        .with_storage_engine_type(crate::config::StorageEngineType::Memory);
     let manager = Arc::new(
         ControllerManager::new(config, test_service_context(), test_telemetry_handle())
             .await
@@ -416,7 +416,7 @@ async fn occupied_remoting_listener_fails_startup_and_cleans_up_owned_components
     let config = ControllerConfig::default()
         .with_node_info(1, remoting_addr)
         .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
-        .with_storage_backend(crate::config::StorageBackendType::Memory);
+        .with_storage_engine_type(crate::config::StorageEngineType::Memory);
     let manager = Arc::new(
         ControllerManager::new(config, test_service_context(), test_telemetry_handle())
             .await
@@ -453,7 +453,7 @@ async fn shutdown_before_start_does_not_consume_lifecycle() {
     let config = ControllerConfig::default()
         .with_node_info(1, remoting_addr)
         .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
-        .with_storage_backend(crate::config::StorageBackendType::Memory);
+        .with_storage_engine_type(crate::config::StorageEngineType::Memory);
 
     let manager = ControllerManager::new(config, test_service_context(), test_telemetry_handle())
         .await
@@ -500,7 +500,7 @@ async fn leadership_watch_enables_scheduling_for_openraft_leader() {
         .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
         .with_heartbeat_interval_ms(100)
         .with_election_timeout_ms(300)
-        .with_storage_backend(crate::config::StorageBackendType::Memory);
+        .with_storage_engine_type(crate::config::StorageEngineType::Memory);
 
     let manager = Arc::new(
         ControllerManager::new(config, test_service_context(), test_telemetry_handle())
@@ -547,7 +547,7 @@ async fn leadership_gate_recovers_from_pre_start_notifier_poisoning() {
     let config = ControllerConfig::default()
         .with_node_info(1, remoting_addr)
         .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
-        .with_storage_backend(crate::config::StorageBackendType::Memory);
+        .with_storage_engine_type(crate::config::StorageEngineType::Memory);
     let manager = Arc::new(
         ControllerManager::new(config, test_service_context(), test_telemetry_handle())
             .await
@@ -592,7 +592,7 @@ async fn leadership_gate_orders_authoritative_promotion_and_demotion_before_noti
     let config = ControllerConfig::default()
         .with_node_info(1, remoting_addr)
         .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
-        .with_storage_backend(crate::config::StorageBackendType::Memory);
+        .with_storage_engine_type(crate::config::StorageEngineType::Memory);
     let manager = Arc::new(
         ControllerManager::new(config, test_service_context(), test_telemetry_handle())
             .await
@@ -658,7 +658,7 @@ async fn inactive_slave_does_not_elect_but_inactive_master_does() {
         .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
         .with_heartbeat_interval_ms(100)
         .with_election_timeout_ms(300)
-        .with_storage_backend(crate::config::StorageBackendType::Memory)
+        .with_storage_engine_type(crate::config::StorageEngineType::Memory)
         .with_notify_broker_role_changed(false);
 
     let manager = Arc::new(
@@ -844,7 +844,7 @@ async fn processor_successful_manual_election_records_role_change_notification()
         .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
         .with_heartbeat_interval_ms(100)
         .with_election_timeout_ms(300)
-        .with_storage_backend(crate::config::StorageBackendType::Memory)
+        .with_storage_engine_type(crate::config::StorageEngineType::Memory)
         .with_notify_broker_role_changed(true);
 
     let manager = Arc::new(

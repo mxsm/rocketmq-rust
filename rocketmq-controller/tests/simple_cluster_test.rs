@@ -24,7 +24,7 @@ use rocketmq_controller::ControllerConfigReader;
 use rocketmq_controller::Node;
 use rocketmq_controller::RaftNodeManager;
 use rocketmq_controller::RaftPeer;
-use rocketmq_controller::StorageBackendType;
+use rocketmq_controller::StorageEngineType;
 use tonic::transport::Server;
 
 fn test_storage_io(name: &'static str) -> rocketmq_runtime::BlockingExecutor {
@@ -65,7 +65,7 @@ async fn test_simple_cluster_setup() {
             .with_node_info(node_id, addr)
             .with_election_timeout_ms(1000)
             .with_heartbeat_interval_ms(300)
-            .with_storage_backend(StorageBackendType::Memory)
+            .with_storage_engine_type(StorageEngineType::Memory)
             .with_raft_peers(peers);
 
         let node = Arc::new(

@@ -98,7 +98,7 @@ pub use config::ControllerConfig;
 pub use config::ControllerConfigReader;
 pub use config::ControllerPeerEndpoint;
 pub use config::RaftPeer;
-pub use config::StorageBackendType;
+pub use config::StorageEngineType;
 pub use controller::broker_heartbeat_manager::BrokerHeartbeatAdmission;
 pub use controller::broker_heartbeat_manager::BrokerHeartbeatManager;
 pub use controller::broker_heartbeat_manager::BrokerSession;
@@ -315,7 +315,7 @@ pub mod bench_support {
             }])
             .with_heartbeat_interval_ms(100)
             .with_election_timeout_ms(300)
-            .with_storage_backend(crate::config::StorageBackendType::Memory);
+            .with_storage_engine_type(crate::config::StorageEngineType::Memory);
 
         let manager = Arc::new(
             ControllerManager::new(config, service_context, rocketmq_observability::TelemetryHandle::noop())
@@ -407,7 +407,7 @@ pub mod bench_support {
             .with_raft_scan_wait_timeout_ms(0)
             .with_heartbeat_interval_ms(100)
             .with_election_timeout_ms(300)
-            .with_storage_backend(crate::config::StorageBackendType::Memory);
+            .with_storage_engine_type(crate::config::StorageEngineType::Memory);
         let mut controller = OpenRaftController::new(ControllerConfigReader::new(config), service_context);
         controller
             .startup()

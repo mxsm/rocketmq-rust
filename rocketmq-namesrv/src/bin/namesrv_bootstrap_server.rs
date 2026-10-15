@@ -32,7 +32,7 @@ use rocketmq_controller::ControllerConfig;
 #[cfg(feature = "embedded-controller")]
 use rocketmq_controller::RaftPeer;
 #[cfg(feature = "embedded-controller")]
-use rocketmq_controller::StorageBackendType;
+use rocketmq_controller::StorageEngineType;
 use rocketmq_error::fields;
 use rocketmq_error::CliErrorView;
 use rocketmq_error::CliVerbosity;
@@ -1080,9 +1080,9 @@ fn apply_controller_config_overrides(
     }
     if let Some(storage_backend) = overrides.storage_backend {
         controller_config.storage_backend = match storage_backend.to_ascii_lowercase().as_str() {
-            "rocks_db" | "rocksdb" => StorageBackendType::RocksDB,
-            "file" => StorageBackendType::File,
-            "memory" => StorageBackendType::Memory,
+            "rocks_db" | "rocksdb" => StorageEngineType::RocksDB,
+            "file" => StorageEngineType::File,
+            "memory" => StorageEngineType::Memory,
             _ => bail!("invalid storageBackend: {}", storage_backend),
         };
     }

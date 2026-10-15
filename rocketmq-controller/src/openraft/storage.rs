@@ -21,7 +21,7 @@ use std::path::PathBuf;
 
 use crate::config::ControllerConfig;
 use crate::config::ControllerConfigReader;
-use crate::config::StorageBackendType;
+use crate::config::StorageEngineType;
 #[cfg(any(not(feature = "dev-single"), not(feature = "storage-rocksdb")))]
 use crate::error::configuration_invalid;
 use crate::error::controller_internal_by;
@@ -78,8 +78,8 @@ impl Store {
 
 fn storage_config(config: &ControllerConfig) -> Result<StorageConfig> {
     match config.storage_backend {
-        StorageBackendType::Memory => Ok(StorageConfig::Memory),
-        StorageBackendType::File => {
+        StorageEngineType::Memory => Ok(StorageConfig::Memory),
+        StorageEngineType::File => {
             #[cfg(feature = "dev-single")]
             {
                 Ok(StorageConfig::File {
@@ -91,7 +91,7 @@ fn storage_config(config: &ControllerConfig) -> Result<StorageConfig> {
                 Err(configuration_invalid("controller.storage_backend"))
             }
         }
-        StorageBackendType::RocksDB => {
+        StorageEngineType::RocksDB => {
             #[cfg(feature = "storage-rocksdb")]
             {
                 Ok(StorageConfig::RocksDB {
