@@ -48,7 +48,13 @@ export default function AppLayout({ children }: AppLayoutProps) {
   }, []);
 
   return (
-    <div className="app-shell">
+    <div
+      className="app-shell"
+      onAnimationEnd={(event) => {
+        // Later route changes start their page entrance sooner than the first paint does.
+        if (event.animationName === 'enter-down') event.currentTarget.dataset.shellReady = 'true';
+      }}
+    >
       <div className="desktop-sidebar">
         <Sidebar />
       </div>

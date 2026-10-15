@@ -72,7 +72,7 @@ select {
   color-scheme: dark;
 }
 
-/* Native option lists are drawn by the browser and cannot blur, so they stay opaque. */
+/* Native option lists are drawn by the browser; give them the card colors explicitly. */
 select option {
   background-color: var(--card);
   color: var(--foreground);
