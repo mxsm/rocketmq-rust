@@ -4,7 +4,7 @@ Client-backed cluster adapter for [rocketmq-proxy-core](../rocketmq-proxy-core/R
 
 ## Components
 
-`ClusterClient` is the adapter contract and `RocketmqClusterClient` is the concrete client. `ClusterServiceManager` composes route, metadata, assignment, message, consumer, and transaction services. `ClusterRemotingBackend` implements the remoting backend boundary.
+`ClusterClient` is the adapter contract and `RocketmqClusterClient` is the concrete client. `ClusterServiceManager` composes route, metadata, assignment, message, consumer, and transaction services. `ClusterBrokerRemotingAdapter` adapts `ProxyRemotingRequestHandler` to `RocketmqClusterClient`.
 
 [`ClusterConfig`](src/config.rs) controls cluster addresses, client identity, RPC settings, and bounded execution/admission parameters. Execution is managed under supplied service contexts; cancellation, deadlines, queue capacity, retained-byte limits, and shutdown remain part of the request lifecycle. Outbound signing is supplied through the security API rather than inferred from an authenticated inbound connection.
 
