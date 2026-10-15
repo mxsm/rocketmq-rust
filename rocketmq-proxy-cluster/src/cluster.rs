@@ -930,12 +930,18 @@ impl ClusterProducerFactory for DefaultClusterProducerFactory {
     }
 }
 
-pub struct RocketmqClusterClient {
+/// Proxy entry point for cluster operations, implementing [`ClusterClient`] by submitting
+/// commands through an owned `ClusterTaskExecutor`.
+///
+/// The gateway covers route and metadata queries, messaging, consumption, transactions, and
+/// Remoting forwarding. Queue admission, keyed scheduling, cancellation, and remote I/O are
+/// handled by the execution layer; the gateway only builds requests and maps typed responses.
+pub struct ClusterCommandGateway {
     executor: ClusterTaskExecutor,
     producer_group_prefix: String,
 }
 
-impl RocketmqClusterClient {
+impl ClusterCommandGateway {
     pub fn new(
         config: ClusterConfig,
         signer: Option<Arc<dyn OutboundSigner>>,
@@ -975,7 +981,7 @@ impl RocketmqClusterClient {
 }
 
 #[async_trait]
-impl ClusterClient for RocketmqClusterClient {
+impl ClusterClient for ClusterCommandGateway {
     fn transaction_producer_group(&self, context: &ProxyContext) -> Option<String> {
         let prefix = sanitize_group_component(self.producer_group_prefix.as_str());
         let identity = sanitize_group_component(context.client_id().unwrap_or(context.request_id()));
@@ -3214,12 +3220,12 @@ mod tests {
     use super::test_client_runtime;
     use super::CachedValue;
     use super::ClusterCommand;
+    use super::ClusterCommandGateway;
     use super::ClusterExecutionLanes;
     use super::ClusterExecutionPolicy;
     use super::ClusterTaskExecutor;
     use super::ClusterWorkerState;
     use super::MessageIdDecodeError;
-    use super::RocketmqClusterClient;
     use super::TelemetryHandle;
     use crate::cluster::cluster_admission::ClusterCommandClass;
     use crate::config::ClusterConfig;
@@ -3868,7 +3874,7 @@ mod tests {
         let runtime =
             rocketmq_runtime::RuntimeContext::try_from_current("proxy-cluster-test").expect("test runtime context");
         let service = runtime.service_context("proxy-cluster-test.service");
-        let client = RocketmqClusterClient::new(ClusterConfig::default(), None, &service, TelemetryHandle::noop())
+        let client = ClusterCommandGateway::new(ClusterConfig::default(), None, &service, TelemetryHandle::noop())
             .expect("managed client builds");
         assert_eq!(service.task_group().task_count(), 0);
         assert_eq!(service.task_group().component_count(), 1);
