@@ -1749,10 +1749,19 @@ mod tests {
 
     fn cancellation_runtime_config() -> RuntimeConfig {
         let mut config = timeout_runtime_config();
-        // The request is aborted immediately after the blocking hook reports
-        // admission, so this remains a pre-timeout cancellation regression.
-        config.blocking_lane_policies.storage_io.task_timeout = Duration::from_millis(500);
+        // Cancellation and serialization are controlled by the hook, not by a
+        // deadline. Keep the normal I/O budget even on a busy test runner.
+        config.blocking_lane_policies.storage_io.task_timeout = BlockingPoolPolicy::default().task_timeout;
         config
+    }
+
+    fn mutation_store_with_timeout(store: &FileDashboardStore, owner: &RuntimeOwner) -> FileDashboardStore {
+        // The clone shares the directory lock, write gate and health state;
+        // only the injected mutation uses the separate deadline policy.
+        FileDashboardStore {
+            service_context: owner.root_context().component("timeout-file-mutation"),
+            ..store.clone()
+        }
     }
 
     fn install_mutation_blocker(
@@ -1801,22 +1810,26 @@ mod tests {
     }
 
     async fn release_mutation_after_storage_timeout(
+        store: &FileDashboardStore,
         started: std::sync::mpsc::Receiver<()>,
         release: std::sync::mpsc::SyncSender<()>,
     ) {
-        tokio::task::spawn_blocking(move || started.recv())
-            .await
-            .expect("wait for mutation hook task")
-            .expect("mutation hook must start");
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        wait_for_mutation_start(started).await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !store.unavailable.load(AtomicOrdering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("mutation owner must observe the storage timeout before release");
         release.send(()).expect("release mutation hook");
     }
 
     async fn wait_for_mutation_start(started: std::sync::mpsc::Receiver<()>) {
-        tokio::task::spawn_blocking(move || started.recv())
+        tokio::task::spawn_blocking(move || started.recv_timeout(Duration::from_secs(5)))
             .await
             .expect("wait for mutation hook task")
-            .expect("mutation hook must start");
+            .expect("mutation hook must start within the test deadline");
     }
 
     #[test]
@@ -1944,10 +1957,9 @@ mod tests {
     #[test]
     fn post_dispatch_join_failure_poisons_the_active_file_store() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let owner = RuntimeOwner::plan(timeout_runtime_config())
-            .expect("runtime configuration is valid")
-            .build()
-            .expect("runtime owner");
+        // This tests a join failure, not a deadline. Ordinary filesystem I/O
+        // and the injected panic must not race a short storage timeout.
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let store = FileDashboardStore::initialize(
                 &file_config(directory.path().join("dashboard")),
@@ -1985,7 +1997,8 @@ mod tests {
     fn cas_timeout_waits_for_rollback_before_exposing_or_reopening_file_state() {
         let directory = tempfile::tempdir().expect("temp dir");
         let root = directory.path().join("dashboard");
-        let owner = RuntimeOwner::plan(timeout_runtime_config())
+        let owner = RuntimeOwner::new().expect("runtime owner");
+        let mutation_owner = RuntimeOwner::plan(timeout_runtime_config())
             .expect("runtime configuration is valid")
             .build()
             .expect("runtime owner");
@@ -2001,15 +2014,17 @@ mod tests {
                 .await
                 .expect("seed snapshot");
             let (started, release) = install_mutation_blocker(&store);
+            let mutation_store = mutation_store_with_timeout(&store, &mutation_owner);
             let (result, ()) = tokio::join!(
-                store.compare_and_write_snapshot("config", 1, json!({"value": "late"})),
-                release_mutation_after_storage_timeout(started, release),
+                mutation_store.compare_and_write_snapshot("config", 1, json!({"value": "late"})),
+                release_mutation_after_storage_timeout(&store, started, release),
             );
             assert_eq!(
                 runtime_condition(result.expect_err("mutation must time out")),
                 CanonicalCondition::DeadlineExceeded
             );
             store.mutation_blocker.clear();
+            drop(mutation_store);
             let snapshot = store
                 .load_latest_snapshot("config")
                 .await
@@ -2035,6 +2050,9 @@ mod tests {
                 json!({"value": "before"})
             );
         });
+        mutation_owner
+            .shutdown_runtime_blocking()
+            .expect("mutation runtime shutdown");
         owner.shutdown_runtime_blocking().expect("runtime shutdown");
     }
 
@@ -2042,7 +2060,8 @@ mod tests {
     fn multi_collection_delete_timeout_rolls_back_before_active_or_reopened_reads() {
         let directory = tempfile::tempdir().expect("temp dir");
         let root = directory.path().join("dashboard");
-        let owner = RuntimeOwner::plan(timeout_runtime_config())
+        let owner = RuntimeOwner::new().expect("runtime owner");
+        let mutation_owner = RuntimeOwner::plan(timeout_runtime_config())
             .expect("runtime configuration is valid")
             .build()
             .expect("runtime owner");
@@ -2062,9 +2081,10 @@ mod tests {
                 .await
                 .expect("seed monitor rules");
             let (started, release) = install_mutation_blocker(&store);
+            let mutation_store = mutation_store_with_timeout(&store, &mutation_owner);
             let write_guard = store.write_guard().await;
             let (result, ()) = tokio::join!(
-                store.publish_snapshot_transaction_locked(
+                mutation_store.publish_snapshot_transaction_locked(
                     write_guard,
                     vec![
                         FileSnapshotTransactionWrite {
@@ -2079,13 +2099,14 @@ mod tests {
                         },
                     ]
                 ),
-                release_mutation_after_storage_timeout(started, release),
+                release_mutation_after_storage_timeout(&store, started, release),
             );
             assert_eq!(
                 runtime_condition(result.expect_err("mutation must time out")),
                 CanonicalCondition::DeadlineExceeded
             );
             store.mutation_blocker.clear();
+            drop(mutation_store);
             assert_eq!(
                 store
                     .load_latest_snapshot("environments/timeout-delete")
@@ -2122,13 +2143,17 @@ mod tests {
                 json!({"deleted": false})
             );
         });
+        mutation_owner
+            .shutdown_runtime_blocking()
+            .expect("mutation runtime shutdown");
         owner.shutdown_runtime_blocking().expect("runtime shutdown");
     }
 
     #[test]
     fn committed_cleanup_timeout_waits_for_completion_without_poisoning_the_active_store() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let owner = RuntimeOwner::plan(timeout_runtime_config())
+        let owner = RuntimeOwner::new().expect("runtime owner");
+        let mutation_owner = RuntimeOwner::plan(timeout_runtime_config())
             .expect("runtime configuration is valid")
             .build()
             .expect("runtime owner");
@@ -2143,12 +2168,72 @@ mod tests {
                 .write_snapshot("config", 1, json!({"value": "before"}))
                 .await
                 .expect("seed snapshot");
+            // Commit using the normal I/O budget. A short deadline during CAS
+            // preparation could roll back before the cleanup hook ever starts.
+            let write_guard = store.write_guard().await;
+            let root = store.root.clone();
+            let prepared = store
+                .service_context
+                .storage_io()
+                .spawn_io("prepare-committed-cleanup-test", move || {
+                    let prepared = prepare_snapshot_transaction(
+                        &root,
+                        vec![PreparedSnapshotWrite {
+                            collection: "config".to_string(),
+                            revision: 2,
+                            payload: json!({"value": "committed"}),
+                        }],
+                        None,
+                        None,
+                    )?;
+                    prepared.finalize()?;
+                    Ok::<_, PersistenceError>(prepared)
+                })
+                .await
+                .expect("commit task")
+                .expect("commit snapshot");
+            let mutation_store = mutation_store_with_timeout(&store, &mutation_owner);
             let (started, release) = install_committed_cleanup_blocker(&store, false);
+            let cleanup_blocker = store.mutation_blocker.clone();
             let (result, ()) = tokio::join!(
-                store.compare_and_write_snapshot("config", 1, json!({"value": "committed"})),
-                release_mutation_after_storage_timeout(started, release),
+                mutation_store.dispatch_file_mutation(write_guard, "committed-cleanup-test", move || {
+                    Ok(FileMutationOutcome {
+                        value: (),
+                        finalize: Box::new(|| Ok(())),
+                        cleanup: Box::new(move || {
+                            cleanup_blocker.wait_after_committed_cleanup()?;
+                            prepared.cleanup()
+                        }),
+                        rollback: Box::new(|| panic!("committed cleanup must not roll back")),
+                    })
+                }),
+                async {
+                    wait_for_mutation_start(started).await;
+                    tokio::time::timeout(Duration::from_secs(5), async {
+                        while !mutation_store
+                            .service_context
+                            .storage_io()
+                            .snapshot()
+                            .tasks
+                            .iter()
+                            .any(|task| {
+                                task.name == "dashboard-file-storage-cleanup-committed-mutation"
+                                    && task.state == rocketmq_runtime::blocking::BlockingTaskState::TimedOutStillRunning
+                            })
+                        {
+                            tokio::task::yield_now().await;
+                        }
+                    })
+                    .await
+                    .expect("cleanup must time out before its blocking closure is released");
+                    assert!(
+                        store.write_lock.try_write().is_err(),
+                        "the mutation owner must retain its gate until cleanup completes"
+                    );
+                    release.send(()).expect("release timed-out cleanup");
+                },
             );
-            assert_eq!(result.expect("committed CAS"), 2);
+            result.expect("committed cleanup");
             store.clear_test_committed_cleanup_blocker();
             assert_eq!(store.storage_health().await.status, StorageStatus::Available);
             assert_eq!(
@@ -2165,6 +2250,9 @@ mod tests {
                 .await
                 .expect("post-cleanup write must remain available");
         });
+        mutation_owner
+            .shutdown_runtime_blocking()
+            .expect("mutation runtime shutdown");
         owner.shutdown_runtime_blocking().expect("runtime shutdown");
     }
 
@@ -2243,7 +2331,8 @@ mod tests {
     fn single_snapshot_timeout_with_failed_compensation_poisoning_recovers_on_reopen() {
         let directory = tempfile::tempdir().expect("temp dir");
         let root = directory.path().join("dashboard");
-        let owner = RuntimeOwner::plan(timeout_runtime_config())
+        let owner = RuntimeOwner::new().expect("runtime owner");
+        let mutation_owner = RuntimeOwner::plan(timeout_runtime_config())
             .expect("runtime configuration is valid")
             .build()
             .expect("runtime owner");
@@ -2259,15 +2348,17 @@ mod tests {
                 .await
                 .expect("seed snapshot");
             let (started, release) = install_mutation_blocker_with_rollback_failure(&store, Some(0));
+            let mutation_store = mutation_store_with_timeout(&store, &mutation_owner);
             let (result, ()) = tokio::join!(
-                store.compare_and_write_snapshot("config", 1, json!({"value": "staged"})),
-                release_mutation_after_storage_timeout(started, release),
+                mutation_store.compare_and_write_snapshot("config", 1, json!({"value": "staged"})),
+                release_mutation_after_storage_timeout(&store, started, release),
             );
             assert_eq!(
                 runtime_condition(result.expect_err("mutation must time out")),
                 CanonicalCondition::DeadlineExceeded
             );
             store.mutation_blocker.clear();
+            drop(mutation_store);
             assert!(matches!(
                 store.load_latest_snapshot("config").await,
                 Err(PersistenceError::ConnectionUnavailable)
@@ -2297,6 +2388,9 @@ mod tests {
                 "successful reopen cleanup must consume the prepared marker"
             );
         });
+        mutation_owner
+            .shutdown_runtime_blocking()
+            .expect("mutation runtime shutdown");
         owner.shutdown_runtime_blocking().expect("runtime shutdown");
     }
 
@@ -2304,7 +2398,8 @@ mod tests {
     fn multi_snapshot_timeout_with_failed_compensation_poisoning_recovers_on_reopen() {
         let directory = tempfile::tempdir().expect("temp dir");
         let root = directory.path().join("dashboard");
-        let owner = RuntimeOwner::plan(timeout_runtime_config())
+        let owner = RuntimeOwner::new().expect("runtime owner");
+        let mutation_owner = RuntimeOwner::plan(timeout_runtime_config())
             .expect("runtime configuration is valid")
             .build()
             .expect("runtime owner");
@@ -2324,9 +2419,10 @@ mod tests {
                 .await
                 .expect("seed monitors");
             let (started, release) = install_mutation_blocker_with_rollback_failure(&store, Some(0));
+            let mutation_store = mutation_store_with_timeout(&store, &mutation_owner);
             let write_guard = store.write_guard().await;
             let (result, ()) = tokio::join!(
-                store.publish_snapshot_transaction_locked(
+                mutation_store.publish_snapshot_transaction_locked(
                     write_guard,
                     vec![
                         FileSnapshotTransactionWrite {
@@ -2341,13 +2437,14 @@ mod tests {
                         },
                     ],
                 ),
-                release_mutation_after_storage_timeout(started, release),
+                release_mutation_after_storage_timeout(&store, started, release),
             );
             assert_eq!(
                 runtime_condition(result.expect_err("mutation must time out")),
                 CanonicalCondition::DeadlineExceeded
             );
             store.mutation_blocker.clear();
+            drop(mutation_store);
             assert!(matches!(
                 store.load_latest_snapshot("environments/compensation").await,
                 Err(PersistenceError::ConnectionUnavailable)
@@ -2379,6 +2476,9 @@ mod tests {
                 json!({"rules": ["before"]})
             );
         });
+        mutation_owner
+            .shutdown_runtime_blocking()
+            .expect("mutation runtime shutdown");
         owner.shutdown_runtime_blocking().expect("runtime shutdown");
     }
 
@@ -2789,7 +2889,8 @@ mod tests {
     fn timed_out_session_cleanup_rolls_back_before_active_or_reopened_reads() {
         let directory = tempfile::tempdir().expect("temp dir");
         let root = directory.path().join("dashboard");
-        let owner = RuntimeOwner::plan(timeout_runtime_config())
+        let owner = RuntimeOwner::new().expect("runtime owner");
+        let mutation_owner = RuntimeOwner::plan(timeout_runtime_config())
             .expect("runtime configuration is valid")
             .build()
             .expect("runtime owner");
@@ -2806,15 +2907,17 @@ mod tests {
                 .await
                 .expect("seed expired session");
             let (started, release) = install_mutation_blocker(&store);
+            let mutation_store = mutation_store_with_timeout(&store, &mutation_owner);
             let (result, ()) = tokio::join!(
-                store.delete_sessions_before(3, 10),
-                release_mutation_after_storage_timeout(started, release),
+                mutation_store.delete_sessions_before(3, 10),
+                release_mutation_after_storage_timeout(&store, started, release),
             );
             assert_eq!(
                 runtime_condition(result.expect_err("mutation must time out")),
                 CanonicalCondition::DeadlineExceeded
             );
             store.mutation_blocker.clear();
+            drop(mutation_store);
             assert!(
                 store
                     .find_session(&token_hash)
@@ -2840,6 +2943,9 @@ mod tests {
                     .is_some()
             );
         });
+        mutation_owner
+            .shutdown_runtime_blocking()
+            .expect("mutation runtime shutdown");
         owner.shutdown_runtime_blocking().expect("runtime shutdown");
     }
 
@@ -3019,24 +3125,12 @@ mod tests {
                 .expect("seed active session");
             // Only the blocked touch uses the short deadline; filesystem setup,
             // reads, and reopen must not depend on the runner's disk latency.
-            let mutation_store = FileDashboardStore {
-                service_context: mutation_owner
-                    .root_context()
-                    .component("timeout-session-touch-mutation"),
-                ..store.clone()
-            };
+            let mutation_store = mutation_store_with_timeout(&store, &mutation_owner);
             let (started, release) = install_mutation_blocker(&store);
-            let (result, ()) = tokio::join!(mutation_store.touch_session(&token_hash, 2), async {
-                wait_for_mutation_start(started).await;
-                tokio::time::timeout(Duration::from_secs(5), async {
-                    while !store.unavailable.load(AtomicOrdering::Acquire) {
-                        tokio::task::yield_now().await;
-                    }
-                })
-                .await
-                .expect("touch owner must observe the storage timeout before release");
-                release.send(()).expect("release timed-out touch mutation");
-            },);
+            let (result, ()) = tokio::join!(
+                mutation_store.touch_session(&token_hash, 2),
+                release_mutation_after_storage_timeout(&store, started, release),
+            );
             assert_eq!(
                 runtime_condition(result.expect_err("mutation must time out")),
                 CanonicalCondition::DeadlineExceeded

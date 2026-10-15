@@ -1049,7 +1049,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2303,9 +2303,9 @@ dependencies = [
 
 [[package]]
 name = "opentelemetry-appender-tracing"
-version = "0.33.0"
+version = "0.33.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2b304e8d8f11326ba366a99ca5c7aaf7cd397b67268a332437175aeb42a40db"
+checksum = "1f01f1c53c46ce80e5fd8cb7a646f13766fd8f315a8a5b75b9bad59a08d2c5c7"
 dependencies = [
  "opentelemetry",
  "tracing",
@@ -2315,9 +2315,9 @@ dependencies = [
 
 [[package]]
 name = "opentelemetry-otlp"
-version = "0.33.0"
+version = "0.33.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "699a67345e21962a231955b9059a157e428b219fa5df8efe11f08346fb23a344"
+checksum = "0756af24841e367128ef31c831999937b8b5c5197d47914590d8f4e2e88c2e1a"
 dependencies = [
  "http",
  "opentelemetry",
@@ -2332,9 +2332,9 @@ dependencies = [
 
 [[package]]
 name = "opentelemetry-proto"
-version = "0.33.0"
+version = "0.33.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25da1ac11a0aeccf38d7f77ee0348715adaf8340f65ad46c94a02c6b20e2f65d"
+checksum = "d576f5dddc3299341bcd85a04be17b2564844c0c9563214f02d85f2524d1afae"
 dependencies = [
  "opentelemetry",
  "opentelemetry_sdk",
@@ -2712,7 +2712,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3410,7 +3410,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3468,7 +3468,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4029,7 +4029,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4772,7 +4772,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
