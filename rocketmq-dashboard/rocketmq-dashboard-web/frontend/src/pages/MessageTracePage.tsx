@@ -194,9 +194,9 @@ export default function MessageTracePage() {
 
       <div className="metric-grid message-metric-grid">
         <MetricCard label="Candidates" value={rows.length} detail="Returned by message query" icon={<Search size={18} />} />
-        <MetricCard label="Trace nodes" value={trace?.nodes.length ?? 0} detail="Returned without inference" icon={<GitBranch size={18} />} />
-        <MetricCard label="Trace topic" value={traceTopic || '-'} detail="Forwarded to trace API" icon={<Network size={18} />} />
-        <MetricCard label="Query" value={query.mode === 'id' ? 'Message ID' : 'Message key'} detail="One active query path" icon={<Hash size={18} />} />
+        <MetricCard label="Trace nodes" value={trace?.nodes.length ?? 0} detail="Returned without inference" icon={<GitBranch size={18} />} accent="blue" />
+        <MetricCard label="Trace topic" value={traceTopic || '-'} detail="Forwarded to trace API" icon={<Network size={18} />} accent="pink" />
+        <MetricCard label="Query" value={query.mode === 'id' ? 'Message ID' : 'Message key'} detail="One active query path" icon={<Hash size={18} />} accent="cyan" />
       </div>
 
       <div className="trace-workspace-grid">

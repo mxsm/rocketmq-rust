@@ -302,7 +302,7 @@ export default function AclPage() {
       {notice ? <div className={`notice notice-${notice.tone}`}>{notice.message}</div> : null}
       <AclScopePicker brokers={brokers} draftScope={draftScope} confirmedScope={confirmedScope} disabled={loadingRecords} onDraftScopeChange={changeDraftScope} onConfirm={confirmScope} />
       {scopeReady && !loadingRecords && !recordsError ? (
-        <section className="acl-stat-grid" aria-label="Confirmed ACL scope summary">
+        <section className="acl-stat-grid" data-surface="panel" aria-label="Confirmed ACL scope summary">
           <article className="acl-stat-card"><div><span>Users</span><strong>{users.length}</strong><small>Accounts in this broker scope</small></div><span className="acl-stat-icon"><Users size={19} aria-hidden="true" /></span></article>
           <article className="acl-stat-card"><div><span>Enabled</span><strong>{enabledUsers}</strong><small>Users currently enabled</small></div><span className="acl-stat-icon"><UserCheck size={19} aria-hidden="true" /></span></article>
           <article className="acl-stat-card"><div><span>Policy rules</span><strong>{policyRows.length}</strong><small>Flattened resource permissions</small></div><span className="acl-stat-icon"><FileKey2 size={19} aria-hidden="true" /></span></article>
@@ -313,7 +313,7 @@ export default function AclPage() {
           <TabsTrigger value="users"><UserPlus size={15} aria-hidden="true" /> ACL Users</TabsTrigger>
           <TabsTrigger value="policies"><FileKey2 size={15} aria-hidden="true" /> ACL Policies</TabsTrigger>
         </TabsList>
-        <TabsContent value="users" className="acl-table-panel">
+        <TabsContent value="users" className="acl-table-panel" data-surface="panel">
           <AclTableHeader title="ACL Users" description="Manage credentials, account status, and access changes for the selected broker." search={usersSearch} onSearchChange={setUsersSearch} searchLabel="Search ACL users" placeholder="Search users" actions={<>
             {hasRevealablePasswords ? <Button type="button" variant="secondary" aria-label={showPasswords ? 'Hide passwords' : 'Reveal passwords'} aria-pressed={showPasswords} onClick={() => setShowPasswords((value) => !value)} disabled={!scopeReady}>{showPasswords ? <EyeOff size={15} aria-hidden="true" /> : <Eye size={15} aria-hidden="true" />}{showPasswords ? 'Hide' : 'Reveal'}</Button> : null}
             <Button type="button" disabled={!scopeReady || mutating} onClick={() => openUserDialog(null)}><Plus size={15} aria-hidden="true" /> Add User</Button>
@@ -321,7 +321,7 @@ export default function AclPage() {
           {userDeleteError ? <div className="acl-action-error" role="alert">{userDeleteError}</div> : null}
           {scopeReady ? <AclUsersTable rows={pagedUsers} total={visibleUsers.length} page={usersPage} pageSize={pageSize} loading={loadingRecords} error={recordsError} onRetry={refresh} showPasswords={showPasswords} disabled={mutating} onPageChange={setUsersPage} onEdit={openUserDialog} onDelete={(username) => void deleteUser(username)} /> : <AclScopeEmptyState />}
         </TabsContent>
-        <TabsContent value="policies" className="acl-table-panel">
+        <TabsContent value="policies" className="acl-table-panel" data-surface="panel">
           <AclTableHeader title="ACL Policies" description="Review and manage subject permissions for resources in the selected broker." search={policiesSearch} onSearchChange={setPoliciesSearch} searchLabel="Search ACL policies" placeholder="Search subject, resource, action, source IP" actions={<Button type="button" disabled={!scopeReady || mutating} onClick={() => openPolicyDialog(null)}><Plus size={15} aria-hidden="true" /> Add ACL Policy</Button>} />
           {policyDeleteError ? <div className="acl-action-error" role="alert">{policyDeleteError}</div> : null}
           {scopeReady ? <AclPoliciesTable rows={pagedPolicies} total={visiblePolicies.length} page={policiesPage} pageSize={pageSize} loading={loadingRecords} error={recordsError} onRetry={refresh} disabled={mutating} onPageChange={setPoliciesPage} onEdit={openPolicyDialog} onDelete={(policy) => void deletePolicy(policy)} /> : <AclScopeEmptyState />}

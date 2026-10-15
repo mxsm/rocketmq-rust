@@ -151,12 +151,12 @@ export default function BrokerListPage() {
 
       <div className="metric-grid cluster-metrics">
         <MetricCard label="Clusters" value={clusters.length} detail="Unique cluster names" icon={<Layers3 size={18} />} />
-        <MetricCard label="Brokers" value={brokers.length} detail="Visible broker entries" icon={<RadioTower size={18} />} />
-        <MetricCard label="Roles" value={roles.length} detail="Distinct reported roles" icon={<ShieldCheck size={18} />} />
-        <MetricCard label="Combined TPS" value={combinedTps} detail="Produce plus consume" icon={<Gauge size={18} />} />
+        <MetricCard label="Brokers" value={brokers.length} detail="Visible broker entries" icon={<RadioTower size={18} />} accent="blue" />
+        <MetricCard label="Roles" value={roles.length} detail="Distinct reported roles" icon={<ShieldCheck size={18} />} accent="pink" />
+        <MetricCard label="Combined TPS" value={combinedTps} detail="Produce plus consume" icon={<Gauge size={18} />} accent="cyan" />
       </div>
 
-      <section className="cluster-table-card">
+      <section className="cluster-table-card" data-surface="panel">
         <QueryToolbar
           searchValue={search}
           searchPlaceholder="Filter brokers"

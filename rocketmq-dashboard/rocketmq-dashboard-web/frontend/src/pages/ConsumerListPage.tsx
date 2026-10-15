@@ -278,12 +278,12 @@ export default function ConsumerListPage() {
 
       <div className="metric-grid entity-metrics">
         <MetricCard label="Consumer groups" value={metrics.groups} detail="Visible API inventory" icon={<Users size={18} />} />
-        <MetricCard label="Connected clients" value={metrics.connectedClients} detail="Across all groups" icon={<Activity size={18} />} />
-        <MetricCard label="Total lag" value={metrics.totalLag} detail="Aggregate diffTotal" icon={<RotateCcw size={18} />} />
-        <MetricCard label="Lagging groups" value={metrics.laggingGroups} detail="Groups with lag above zero" icon={<ListRestart size={18} />} />
+        <MetricCard label="Connected clients" value={metrics.connectedClients} detail="Across all groups" icon={<Activity size={18} />} accent="blue" />
+        <MetricCard label="Total lag" value={metrics.totalLag} detail="Aggregate diffTotal" icon={<RotateCcw size={18} />} accent="amber" />
+        <MetricCard label="Lagging groups" value={metrics.laggingGroups} detail="Groups with lag above zero" icon={<ListRestart size={18} />} accent="pink" />
       </div>
 
-      <section className="entity-table-card">
+      <section className="entity-table-card" data-surface="panel">
         {refreshError ? (
           <div className="notice notice-danger" role="alert">
             <span>{refreshError}</span>

@@ -276,9 +276,9 @@ export default function MessageQueryPage() {
 
       <div className="metric-grid message-metric-grid">
         <MetricCard label="Returned" value={rows.length} detail={`${total} reported by API`} icon={<DatabaseZap size={18} />} />
-        <MetricCard label="Query path" value={form.mode === 'topic' ? 'Topic range' : form.mode === 'key' ? 'Message key' : 'Message ID'} detail="One active API contract" icon={<Search size={18} />} />
-        <MetricCard label="Topic" value={form.topic || '-'} detail="Current scope" icon={<Hash size={18} />} />
-        <MetricCard label="Window" value={form.mode === 'topic' ? 'Time bounded' : 'Identifier'} detail="Current condition" icon={<Clock3 size={18} />} />
+        <MetricCard label="Query path" value={form.mode === 'topic' ? 'Topic range' : form.mode === 'key' ? 'Message key' : 'Message ID'} detail="One active API contract" icon={<Search size={18} />} accent="blue" />
+        <MetricCard label="Topic" value={form.topic || '-'} detail="Current scope" icon={<Hash size={18} />} accent="pink" />
+        <MetricCard label="Window" value={form.mode === 'topic' ? 'Time bounded' : 'Identifier'} detail="Current condition" icon={<Clock3 size={18} />} accent="cyan" />
       </div>
 
       <Card className="message-results-card">

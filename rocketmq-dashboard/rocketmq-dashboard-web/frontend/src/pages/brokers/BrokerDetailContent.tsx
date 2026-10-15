@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, Pencil, Save, X } from 'lucide-react';
+import { AlertTriangle, ArrowDown, ArrowUpRight, CheckCircle2, Gauge, Pencil, Save, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { brokerApi } from '../../api/broker_api';
 import { userErrorMessage } from '../../api/client';
@@ -184,7 +184,7 @@ export default function BrokerDetailContent({ brokerName, broker, initialTab = '
         </TabsList>
 
         <TabsContent value="overview">
-          <div className="broker-identity-grid">
+          <div className="broker-identity-grid" data-surface="panel">
             <IdentityItem label="Broker" value={brokerName} mono />
             <IdentityItem label="Cluster" value={broker?.clusterName ?? 'Available from cluster inventory'} />
             <IdentityItem label="Address" value={broker?.address ?? 'Available in runtime data'} mono />
@@ -194,9 +194,9 @@ export default function BrokerDetailContent({ brokerName, broker, initialTab = '
           </div>
           {broker ? (
             <div className="broker-throughput-grid">
-              <MetricCard label="Produce TPS" value={formatTps(broker.produceTps)} detail="Current reported ingress" />
-              <MetricCard label="Consume TPS" value={formatTps(broker.consumeTps)} detail="Current reported egress" />
-              <MetricCard label="Combined TPS" value={formatTps(broker.produceTps + broker.consumeTps)} detail="Produce plus consume" />
+              <MetricCard label="Produce TPS" value={formatTps(broker.produceTps)} detail="Current reported ingress" icon={<ArrowUpRight size={18} />} />
+              <MetricCard label="Consume TPS" value={formatTps(broker.consumeTps)} detail="Current reported egress" icon={<ArrowDown size={18} />} accent="blue" />
+              <MetricCard label="Combined TPS" value={formatTps(broker.produceTps + broker.consumeTps)} detail="Produce plus consume" icon={<Gauge size={18} />} accent="cyan" />
             </div>
           ) : null}
         </TabsContent>
