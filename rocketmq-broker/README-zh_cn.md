@@ -27,7 +27,7 @@
 `BrokerBootstrap` 按 `Configured`、`Initialized`、`Running` 顺序推进状态；启动失败时回滚已完成的启动工作。
 二进制程序通过 `boot_with_lifecycle` 发布就绪状态，并在进程共享的截止时间内关闭服务。
 
-普通和快速远程监听器与内嵌的 `ProxyBrokerFacade` 使用同一分发器。分发器执行已配置的安全检查，
+普通和快速远程监听器与 `EmbeddedBroker` 使用同一分发器。分发器执行已配置的安全检查，
 将请求路由到使用存储和元数据服务的处理器。NameServer 注册和可选的 Controller 协调独立于客户端请求分发。
 
 | 公共 API | 契约 |
@@ -36,7 +36,7 @@
 | `BrokerBootstrap::initialize` / `start` | 消费前一阶段的状态，返回下一阶段的状态或 `BrokerStartupError`。 |
 | `BrokerBootstrap<Running>` | 提供 `readiness()` 和消费自身的异步 `shutdown()`。 |
 | `BrokerBootstrap::boot_with_lifecycle` | 在 `ServiceLifecycle` 管理下运行，将生命周期和启动错误返回调用方。 |
-| `ProxyBrokerFacade` | 为内嵌代理提供 Broker 请求处理入口。 |
+| `EmbeddedBroker` | 管理内嵌 Broker 的生命周期并分发进程内请求。 |
 | `config` | 公开原始配置加载、Java properties 转换、类型化分区和校验后配置的 API。 |
 
 便捷方法 `boot()` 会记录启动错误并返回 `()`；需要处理错误的调用方应使用分阶段方法或 `boot_with_lifecycle`。

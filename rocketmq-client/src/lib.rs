@@ -973,8 +973,6 @@ pub use crate::legacy::MQPullConsumerScheduleService;
 pub use crate::legacy::PullTaskCallback;
 #[allow(deprecated)]
 pub use crate::legacy::PullTaskContext;
-#[allow(deprecated)]
-pub use crate::legacy::TransactionCheckListener;
 pub use crate::lock::ReadWriteCASLock;
 pub use crate::producer::send_callback::ArcSendCallback;
 pub use crate::producer::transaction_listener::ArcTransactionListener;

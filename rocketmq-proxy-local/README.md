@@ -4,7 +4,7 @@ Embedded broker adapter for [rocketmq-proxy-core](../rocketmq-proxy-core/README.
 
 ## Integration
 
-`local_components_from_config_with_service_context` assembles local components from `LocalConfig` and supplied runtime/telemetry capabilities. The public exports also include `LocalBrokerCommandGateway`, `LocalRemotingBackend`, and `LocalServiceManager`.
+`local_components_from_config_with_service_context` assembles local components from `LocalConfig` and supplied runtime/telemetry capabilities. The public exports also include `LocalBrokerCommandGateway`, `LocalBrokerRemotingAdapter`, and `LocalServiceManager`.
 
 `LocalBrokerCommandGateway` submits commands through a bounded queue with retained-byte and age limits and waits for typed responses. Control capacity is separate from ordinary I/O, and long-poll operations are tracked. Broker work and the command-processing service have explicit lifecycle owners. Embedded dispatch still traverses the broker request pipeline; it is not a direct unrestricted storage API.
 
