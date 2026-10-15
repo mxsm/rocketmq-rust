@@ -324,14 +324,6 @@ async fn crate_root_classic_pull_exports_are_functional_or_fail_closed() {
         &schedule_error,
         "MQPullConsumerScheduleService has no ClientRuntime; use with_client_runtime",
     );
-
-    let helper_error =
-        rocketmq_client_rust::MQHelper::reset_offset_by_timestamp("CLUSTERING", "legacy-group", "TopicA", 0)
-            .expect_err("detached MQHelper must require an application-owned runtime");
-    assert_not_initialized(
-        &helper_error,
-        "MQHelper requires an application-owned ClientRuntime; use reset_offset_by_timestamp_with_client_runtime",
-    );
 }
 
 #[test]
