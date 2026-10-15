@@ -25,7 +25,7 @@ const TopicListPage = lazy(() => import('./pages/TopicListPage'));
 
 export default function App() {
   return (
-    <Suspense fallback={<RouteLoading />}>
+    <Suspense fallback={<RouteLoading fullscreen />}>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route
@@ -33,30 +33,33 @@ export default function App() {
           element={
             <AppLayout>
               <ConsumerQueryScopeProvider>
-                <Routes>
-                  <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                  <Route path="/ops" element={<Navigate to="/config" replace />} />
-                  <Route path="/proxy" element={<ProxyPage />} />
-                  <Route path="/dashboard" element={<DashboardPage />} />
-                  <Route path="/cluster" element={<Navigate to="/brokers" replace />} />
-                  <Route path="/topics" element={<TopicListPage />} />
-                  <Route path="/topics/:topic" element={<TopicDetailPage />} />
-                  <Route path="/consumers" element={<ConsumerListPage />} />
-                  <Route path="/consumers/:group" element={<ConsumerDetailPage />} />
-                  <Route path="/producers" element={<ProducerListPage />} />
-                  <Route path="/brokers" element={<BrokerListPage />} />
-                  <Route path="/brokers/:brokerName" element={<BrokerDetailPage />} />
-                  <Route path="/messages" element={<MessageQueryPage />} />
-                  <Route path="/messages/dlq" element={<DlqMessagePage />} />
-                  <Route path="/dlq" element={<Navigate to="/messages/dlq" replace />} />
-                  <Route path="/message-trace" element={<MessageTracePage />} />
-                  <Route path="/acl" element={<AclPage />} />
-                  <Route path="/audit" element={<AuditPage />} />
-                  <Route path="/monitors" element={<MonitorPage />} />
-                  <Route path="/sessions" element={<SessionAdminPage />} />
-                  <Route path="/config" element={<ConfigPage />} />
-                  <Route path="*" element={<Navigate to="/dashboard" replace />} />
-                </Routes>
+                {/* The inner boundary keeps the shell mounted while a workspace module loads. */}
+                <Suspense fallback={<RouteLoading />}>
+                  <Routes>
+                    <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                    <Route path="/ops" element={<Navigate to="/config" replace />} />
+                    <Route path="/proxy" element={<ProxyPage />} />
+                    <Route path="/dashboard" element={<DashboardPage />} />
+                    <Route path="/cluster" element={<Navigate to="/brokers" replace />} />
+                    <Route path="/topics" element={<TopicListPage />} />
+                    <Route path="/topics/:topic" element={<TopicDetailPage />} />
+                    <Route path="/consumers" element={<ConsumerListPage />} />
+                    <Route path="/consumers/:group" element={<ConsumerDetailPage />} />
+                    <Route path="/producers" element={<ProducerListPage />} />
+                    <Route path="/brokers" element={<BrokerListPage />} />
+                    <Route path="/brokers/:brokerName" element={<BrokerDetailPage />} />
+                    <Route path="/messages" element={<MessageQueryPage />} />
+                    <Route path="/messages/dlq" element={<DlqMessagePage />} />
+                    <Route path="/dlq" element={<Navigate to="/messages/dlq" replace />} />
+                    <Route path="/message-trace" element={<MessageTracePage />} />
+                    <Route path="/acl" element={<AclPage />} />
+                    <Route path="/audit" element={<AuditPage />} />
+                    <Route path="/monitors" element={<MonitorPage />} />
+                    <Route path="/sessions" element={<SessionAdminPage />} />
+                    <Route path="/config" element={<ConfigPage />} />
+                    <Route path="*" element={<Navigate to="/dashboard" replace />} />
+                  </Routes>
+                </Suspense>
               </ConsumerQueryScopeProvider>
             </AppLayout>
           }

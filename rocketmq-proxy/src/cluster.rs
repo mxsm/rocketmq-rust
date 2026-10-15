@@ -15,4 +15,4 @@
 //! Client-backed Cluster adapter exports.
 
 pub use rocketmq_proxy_cluster::cluster::*;
-pub use rocketmq_proxy_cluster::ClusterRemotingBackend;
+pub use rocketmq_proxy_cluster::ClusterBrokerRemotingAdapter;

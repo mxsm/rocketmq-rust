@@ -34,7 +34,7 @@ consumer.shutdown().await?;
 | `updateConsumeOffset` | `update_consume_offset` | Updates the configured client offset store. |
 | `fetchConsumeOffset` | `fetch_consume_offset` | Selects memory-first or store-only reads. |
 | `searchOffset` / `maxOffset` / `minOffset` | `search_offset` / `max_offset` / `min_offset` | Reuses the client admin path. |
-| `MQHelper.resetOffsetByTimestamp` | `MQHelper::reset_offset_by_timestamp_with_client_runtime` | Uses an injected runtime, updates every queue, and persists offsets during shutdown. The detached legacy signature fails closed instead of creating a hidden runtime. |
+| `MQHelper.resetOffsetByTimestamp` | `MQHelper::reset_offset_by_timestamp_with_client_runtime` | Uses an injected runtime, updates every queue, and persists offsets during shutdown. |
 | `MQPullConsumerScheduleService` | `with_client_runtime`, `register_pull_task_callback`, `start`, `shutdown` | The coordinator is runtime-owned and its callback returns an async future. |
 
 ## Typed pull options

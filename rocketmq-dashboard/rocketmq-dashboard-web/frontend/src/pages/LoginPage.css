@@ -2,8 +2,14 @@
   display: grid;
   min-height: 100vh;
   grid-template-rows: auto 1fr auto;
-  padding: 28px;
+  padding: 32px;
   background: var(--background);
+  isolation: isolate;
+}
+
+/* Session checks render a lone state block; keep it in the middle row. */
+.login-shell > .state-block {
+  grid-row: 2;
 }
 
 .login-brand {
@@ -15,13 +21,13 @@
 
 .login-brand-mark {
   display: grid;
-  width: 48px;
-  height: 48px;
+  width: 44px;
+  height: 44px;
+  flex: none;
   place-items: center;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--chrome);
-  color: var(--primary);
+  border-radius: var(--radius-sm);
+  background: var(--primary);
+  color: var(--icon-on-primary);
 }
 
 .login-brand strong,
@@ -30,77 +36,70 @@
 }
 
 .login-brand strong {
-  font-size: 20px;
-  line-height: 1.2;
+  font: var(--text-page-title);
+  letter-spacing: var(--tracking-title);
 }
 
 .login-brand span,
 .login-footer {
   color: var(--muted-foreground);
-}
-
-.login-brand span {
-  margin-top: 2px;
-  font-size: 14px;
+  font: var(--text-small);
 }
 
 .login-content {
   display: grid;
-  width: min(572px, 100%);
+  width: min(480px, 100%);
   align-self: center;
   justify-self: center;
-  gap: 20px;
+  gap: 16px;
 }
 
-.login-session-note {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 0;
-  padding: 16px 20px;
-  border: 1px solid color-mix(in srgb, var(--info) 70%, var(--border));
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--info) 8%, var(--background));
-  color: var(--foreground);
-  font-size: 16px;
-}
-
+.login-session-note,
 .login-session-notice {
-  margin: 0 0 14px;
-  color: var(--warning);
-  font-size: 13px;
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 10px 16px;
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius-sm);
+  background: var(--info-soft);
+  color: var(--foreground);
+  font: var(--text-small);
 }
 
 .login-session-note svg {
-  flex: 0 0 auto;
+  flex: none;
   color: var(--info);
 }
 
-.login-card {
-  box-shadow: var(--shadow);
+.login-session-notice {
+  border-color: var(--warning-border);
+  background: var(--warning-soft);
 }
 
 .login-card .ui-card-header {
-  gap: 8px;
-  padding: 28px 30px 0;
+  gap: 6px;
+  padding: 32px 32px 0;
 }
 
 .login-card .ui-card-title {
-  font-size: 27px;
-  line-height: 1.2;
+  font: var(--text-hero);
+  letter-spacing: var(--tracking-display);
 }
 
 .login-card .ui-card-description {
-  font-size: 16px;
+  font: var(--text-body);
 }
 
 .login-card .ui-card-content {
-  padding: 28px 30px 30px;
+  padding: 24px 32px 32px;
 }
 
 .login-form {
   display: grid;
-  gap: 22px;
+  gap: 20px;
 }
 
 .login-field {
@@ -108,25 +107,24 @@
   gap: 8px;
 }
 
-.login-field .ui-input {
-  min-height: 48px;
-  font-size: 16px;
+.login-field .ui-input,
+.login-submit {
+  min-height: 44px;
 }
 
 .login-submit {
   width: 100%;
-  min-height: 48px;
-  font-size: 16px;
 }
 
 .login-form .state-block {
+  min-height: 0;
   margin: 0;
+  padding: 12px;
 }
 
 .login-footer {
   justify-self: center;
   margin: 20px 0 0;
-  font-size: 14px;
 }
 
 @media (max-width: 640px) {
@@ -134,17 +132,9 @@
     padding: 20px;
   }
 
-  .login-content {
-    gap: 16px;
-  }
-
   .login-card .ui-card-header,
   .login-card .ui-card-content {
     padding-right: 20px;
     padding-left: 20px;
-  }
-
-  .login-card .ui-card-title {
-    font-size: 23px;
   }
 }
