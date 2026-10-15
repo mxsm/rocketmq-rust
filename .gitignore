@@ -23,6 +23,11 @@ target/
 **/Gemfile.lock
 **/vendor/bundle
 
+# Python bytecode caches
+__pycache__/
+*.pyc
+*.pyo
+
 # Node.js and NPM
 node_modules
 npm-debug.log*

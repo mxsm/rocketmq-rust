@@ -62,6 +62,11 @@ and V2/V3 or remoting refactor baseline collectors are no longer development gat
 Historical review reports remain reference material. Use the maintained crate tests
 and benchmark targets when investigating behavior or performance.
 
+The M10 target-hardware report collectors and the Transport P0, persistent-TCP, and
+TLS RSS probes are retired. Package-owned Criterion benchmarks and behavior tests
+remain maintained. Run one-off measurement helpers inline or from a system temporary
+directory outside the repository, and keep their outputs there as well.
+
 The completed M04-M09 migration suites have been retired, including source-text,
 fixed-layout, line-count, and exact-ledger assertions. Their `milestone_contract`
 runner tier is no longer available. Use the owning crate's behavior tests and the
