@@ -509,39 +509,41 @@ struct MeasurementEnvelope<'a> {
     metrics: BTreeMap<&'static str, MetricSamples>,
 }
 
-enum CollectorBackend {
+/// The message-store implementations the performance collector benchmarks: the local
+/// file store, or the RocksDB store behind the `rocksdb_store` feature.
+enum BenchmarkMessageStore {
     Local(Box<LocalFileMessageStore>),
     #[cfg(feature = "rocksdb_store")]
     Rocks(Box<RocksDBMessageStore>),
 }
 
 struct CollectorStore {
-    backend: CollectorBackend,
+    backend: BenchmarkMessageStore,
     _temp_dir: TempDir,
 }
 
 impl CollectorStore {
     fn local_file_store(&self) -> &LocalFileMessageStore {
         match &self.backend {
-            CollectorBackend::Local(store) => store,
+            BenchmarkMessageStore::Local(store) => store,
             #[cfg(feature = "rocksdb_store")]
-            CollectorBackend::Rocks(store) => store.local_file_store(),
+            BenchmarkMessageStore::Rocks(store) => store.local_file_store(),
         }
     }
 
     fn local_file_store_mut(&mut self) -> &mut LocalFileMessageStore {
         match &mut self.backend {
-            CollectorBackend::Local(store) => store,
+            BenchmarkMessageStore::Local(store) => store,
             #[cfg(feature = "rocksdb_store")]
-            CollectorBackend::Rocks(store) => store.local_file_store_mut(),
+            BenchmarkMessageStore::Rocks(store) => store.local_file_store_mut(),
         }
     }
 
     async fn put_message(&mut self, message: MessageExtBrokerInner) -> PutMessageResult {
         match &mut self.backend {
-            CollectorBackend::Local(store) => store.put_message(message).await,
+            BenchmarkMessageStore::Local(store) => store.put_message(message).await,
             #[cfg(feature = "rocksdb_store")]
-            CollectorBackend::Rocks(store) => store.put_message(message).await,
+            BenchmarkMessageStore::Rocks(store) => store.put_message(message).await,
         }
     }
 
@@ -556,17 +558,17 @@ impl CollectorStore {
         batch_messages: i32,
     ) -> Option<GetMessageResult> {
         match &self.backend {
-            CollectorBackend::Local(store) => store.get_message(group, topic, 0, 0, batch_messages, None).await,
+            BenchmarkMessageStore::Local(store) => store.get_message(group, topic, 0, 0, batch_messages, None).await,
             #[cfg(feature = "rocksdb_store")]
-            CollectorBackend::Rocks(store) => store.get_message(group, topic, 0, 0, batch_messages, None).await,
+            BenchmarkMessageStore::Rocks(store) => store.get_message(group, topic, 0, 0, batch_messages, None).await,
         }
     }
 
     fn rocks_read_counters(&self) -> Option<RocksReadCounters> {
         match &self.backend {
-            CollectorBackend::Local(_) => None,
+            BenchmarkMessageStore::Local(_) => None,
             #[cfg(feature = "rocksdb_store")]
-            CollectorBackend::Rocks(store) => {
+            BenchmarkMessageStore::Rocks(store) => {
                 let rocksdb = store.rocksdb_store();
                 let operations = rocksdb.metrics();
                 let ticker = rocksdb.ticker_metrics();
@@ -582,7 +584,7 @@ impl CollectorStore {
 
     fn close_rocksdb(&self) {
         #[cfg(feature = "rocksdb_store")]
-        if let CollectorBackend::Rocks(store) = &self.backend {
+        if let BenchmarkMessageStore::Rocks(store) = &self.backend {
             store.close_rocksdb();
         }
     }
@@ -1325,7 +1327,7 @@ fn new_collector_store(scenario: Scenario, service_context: ChildServiceContext)
         .context("create RocksDB store performance sample")?
         .context("RocksDB performance sample Timer Store configuration is valid")?;
         return Ok(CollectorStore {
-            backend: CollectorBackend::Rocks(Box::new(store)),
+            backend: BenchmarkMessageStore::Rocks(Box::new(store)),
             _temp_dir: temp_dir,
         });
     }
@@ -1347,7 +1349,7 @@ fn new_collector_store(scenario: Scenario, service_context: ChildServiceContext)
         .context("wire owned store performance sample dependencies")?;
 
     Ok(CollectorStore {
-        backend: CollectorBackend::Local(Box::new(store)),
+        backend: BenchmarkMessageStore::Local(Box::new(store)),
         _temp_dir: temp_dir,
     })
 }
