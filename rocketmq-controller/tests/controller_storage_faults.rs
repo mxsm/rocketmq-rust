@@ -283,7 +283,10 @@ async fn incomplete_persisted_state_is_rejected_on_open() {
 
 #[test]
 fn production_default_storage_is_rocksdb() {
-    assert_eq!(ControllerConfig::default().storage_backend, StorageEngineType::RocksDB);
+    assert_eq!(
+        ControllerConfig::default().storage_engine_type,
+        StorageEngineType::RocksDB
+    );
 }
 
 #[cfg(feature = "storage-rocksdb")]

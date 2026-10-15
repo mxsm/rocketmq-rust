@@ -979,7 +979,8 @@ struct ControllerConfigOverrides {
     election_timeout_ms: Option<u64>,
     heartbeat_interval_ms: Option<u64>,
     storage_path: Option<String>,
-    storage_backend: Option<String>,
+    #[serde(rename = "storageBackend")]
+    storage_engine_type: Option<String>,
     enable_elect_unclean_master_local: Option<bool>,
 }
 
@@ -1078,12 +1079,12 @@ fn apply_controller_config_overrides(
     if let Some(storage_path) = overrides.storage_path {
         controller_config.storage_path = storage_path;
     }
-    if let Some(storage_backend) = overrides.storage_backend {
-        controller_config.storage_backend = match storage_backend.to_ascii_lowercase().as_str() {
+    if let Some(storage_engine_type) = overrides.storage_engine_type {
+        controller_config.storage_engine_type = match storage_engine_type.to_ascii_lowercase().as_str() {
             "rocks_db" | "rocksdb" => StorageEngineType::RocksDB,
             "file" => StorageEngineType::File,
             "memory" => StorageEngineType::Memory,
-            _ => bail!("invalid storageBackend: {}", storage_backend),
+            _ => bail!("invalid storageBackend: {}", storage_engine_type),
         };
     }
     if let Some(enable_elect_unclean_master_local) = overrides.enable_elect_unclean_master_local {
@@ -1180,6 +1181,25 @@ mod tests {
     use rocketmq_protocol::code::request_code::RequestCode;
 
     use super::*;
+
+    #[cfg(feature = "embedded-controller")]
+    #[test]
+    fn controller_storage_engine_override_preserves_storage_backend_key() {
+        let overrides: ControllerConfigOverrides = Config::builder()
+            .add_source(config::File::from_str(
+                "storageBackend = \"memory\"",
+                config::FileFormat::Toml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        assert_eq!(overrides.storage_engine_type.as_deref(), Some("memory"));
+
+        let mut controller_config = ControllerConfig::default();
+        apply_controller_config_overrides(&mut controller_config, overrides).unwrap();
+        assert_eq!(controller_config.storage_engine_type, StorageEngineType::Memory);
+    }
 
     #[test]
     fn tls_properties_reject_invalid_policy_without_partial_updates() {
