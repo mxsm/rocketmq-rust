@@ -26,5 +26,6 @@ pub mod producer_api;
 mod request;
 pub mod router;
 pub mod topic_api;
+pub mod topology_api;
 
 pub use router::*;

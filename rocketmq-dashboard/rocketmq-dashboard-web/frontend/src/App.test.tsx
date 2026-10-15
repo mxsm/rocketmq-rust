@@ -35,6 +35,7 @@ vi.mock('./pages/ProducerListPage', () => pageModule('Producers workspace'));
 vi.mock('./pages/ProxyPage', () => pageModule('Proxy workspace'));
 vi.mock('./pages/TopicDetailPage', () => pageModule('Topic detail workspace'));
 vi.mock('./pages/TopicListPage', () => pageModule('Topics workspace'));
+vi.mock('./pages/TopologyPage', () => pageModule('Topology workspace'));
 
 function renderApp(path: string) {
   return render(
@@ -53,6 +54,7 @@ const canonicalPages = [
   ['/login', 'Login workspace'],
   ['/proxy', 'Proxy workspace'],
   ['/dashboard', 'Dashboard workspace'],
+  ['/topology', 'Topology workspace'],
   ['/topics', 'Topics workspace'],
   ['/topics/Orders', 'Topic detail workspace'],
   ['/consumers', 'Consumers workspace'],
