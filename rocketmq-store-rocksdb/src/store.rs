@@ -256,10 +256,10 @@ impl RocksDbStore {
             .collect::<Result<Vec<_>, _>>()?;
         let db = if descriptors.is_empty() {
             ::rocksdb::DB::open(&db_options, &config.path)
-                .map_store(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Load)?
+                .map_store(&rocketmq_error::STORAGE_UNAVAILABLE, StoreOperation::Load)?
         } else {
             ::rocksdb::DB::open_cf_descriptors(&db_options, &config.path, descriptors)
-                .map_store(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Load)?
+                .map_store(&rocketmq_error::STORAGE_UNAVAILABLE, StoreOperation::Load)?
         };
 
         Ok(Self {

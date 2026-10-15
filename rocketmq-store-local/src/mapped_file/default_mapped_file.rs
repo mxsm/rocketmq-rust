@@ -3566,7 +3566,7 @@ mod tests {
         mapped_file
             .unlock_region_with(&manager, &mut handle, |_| {
                 Err(rocketmq_store_api::StoreError::new(
-                    &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                    &rocketmq_error::STORAGE_UNAVAILABLE,
                     rocketmq_store_api::StoreOperation::Admin,
                 )
                 .in_component(rocketmq_store_api::StoreComponent::MappedFile)

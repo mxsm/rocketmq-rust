@@ -116,7 +116,7 @@ fn bootstrap_descriptor(error: &ManagedLifecycleBootstrapFailure) -> Option<&'st
             Some(foundation_descriptor(source))
         }
         ManagedLifecycleBootstrapFailure::Execution(InitialBootstrapExecutionFailure::NeedsRecovery(_)) => {
-            Some(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE)
+            Some(&rocketmq_error::STORAGE_UNAVAILABLE)
         }
         ManagedLifecycleBootstrapFailure::Execution(InitialBootstrapExecutionFailure::ActionBoundExceeded) => None,
         ManagedLifecycleBootstrapFailure::Execution(InitialBootstrapExecutionFailure::Plan(_)) => {

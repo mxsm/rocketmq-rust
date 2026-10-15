@@ -109,17 +109,16 @@ fn failed_active_unlock_preserves_identity_for_retry() -> StoreResult<()> {
     let error = state
         .unlock_current_with(|manager, handle| {
             manager.unlock_region_with(handle, |_| {
-                Err(rocketmq_store_api::StoreError::new(
-                    &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
-                    StoreOperation::Admin,
+                Err(
+                    rocketmq_store_api::StoreError::new(&rocketmq_error::STORAGE_UNAVAILABLE, StoreOperation::Admin)
+                        .in_component(StoreComponent::MappedFile)
+                        .with_detail("retry active unlock"),
                 )
-                .in_component(StoreComponent::MappedFile)
-                .with_detail("retry active unlock"))
             })
         })
         .expect_err("failed unlock must remain observable");
 
-    assert_eq!(error.code(), rocketmq_error::STORAGE_BACKEND_UNAVAILABLE.code());
+    assert_eq!(error.code(), rocketmq_error::STORAGE_UNAVAILABLE.code());
     assert!(state.is_current(200, target));
     assert_eq!(state.manager().locked_bytes(), 1);
 

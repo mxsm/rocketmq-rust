@@ -16,7 +16,7 @@ use std::future::ready;
 use std::future::Future;
 
 use bytes::Bytes;
-use rocketmq_error::STORAGE_BACKEND_UNAVAILABLE;
+use rocketmq_error::STORAGE_UNAVAILABLE;
 use rocketmq_model::message::MessageQueue;
 use rocketmq_store_api::AdminStore;
 use rocketmq_store_api::DerivedRecordSink;
@@ -146,9 +146,9 @@ fn capabilities_use_store_error_with_static_append_future() {
 
 #[test]
 fn store_error_uses_catalog_identity_and_closed_operation_vocabulary() {
-    let error = StoreError::new(&STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Append);
+    let error = StoreError::new(&STORAGE_UNAVAILABLE, StoreOperation::Append);
 
-    assert_eq!(&STORAGE_BACKEND_UNAVAILABLE, error.descriptor());
+    assert_eq!(&STORAGE_UNAVAILABLE, error.descriptor());
     assert_eq!(StoreOperation::Append, error.operation());
     assert_eq!(
         "storage.backend.unavailable: Storage backend is unavailable",

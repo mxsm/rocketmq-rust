@@ -150,7 +150,7 @@ impl From<HAError> for rocketmq_store_api::StoreError {
             .in_component(rocketmq_store_api::StoreComponent::HighAvailability)
             .with_source(error),
             error => rocketmq_store_api::StoreError::new(
-                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                &rocketmq_error::STORAGE_UNAVAILABLE,
                 rocketmq_store_api::StoreOperation::Start,
             )
             .in_component(rocketmq_store_api::StoreComponent::HighAvailability)
@@ -230,7 +230,7 @@ mod failure_mapping_tests {
     #[test]
     fn startup_wire_budget_and_boxed_operation_follow_the_owner_table() {
         let startup: StoreError = HAError::StartIo(std::io::Error::other("bind failed")).into();
-        assert_eq!(startup.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+        assert_eq!(startup.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
         assert_eq!(startup.operation(), StoreOperation::Start);
         assert_eq!(startup.component(), StoreComponent::HighAvailability);
         let startup_source = startup
@@ -268,7 +268,7 @@ mod failure_mapping_tests {
 
         let operation: StoreError =
             HAError::operation("start sensitive operation", std::io::Error::other("operation failed")).into();
-        assert_eq!(operation.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+        assert_eq!(operation.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
         assert_eq!(operation.operation(), StoreOperation::Start);
         assert_eq!(operation.component(), StoreComponent::HighAvailability);
         let operation_source = operation

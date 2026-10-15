@@ -55,14 +55,14 @@ fn strict_manager_preserves_lock_error_and_failure_counters() {
     let error = manager
         .lock_region_with(MemoryLockCategory::CommitLogActiveFile, vec![0u8; 4096], |_| {
             Err(
-                StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Admin)
+                StoreError::new(&rocketmq_error::STORAGE_UNAVAILABLE, StoreOperation::Admin)
                     .in_component(StoreComponent::MappedFile)
                     .with_detail("injected strict failure"),
             )
         })
         .expect_err("strict manager must return the injected error");
 
-    assert_eq!(error.code(), rocketmq_error::STORAGE_BACKEND_UNAVAILABLE.code());
+    assert_eq!(error.code(), rocketmq_error::STORAGE_UNAVAILABLE.code());
     assert_eq!(error.component(), StoreComponent::MappedFile);
     assert_eq!(manager.lock_attempt_count(), 1);
     assert_eq!(manager.locked_buffer_count(), 0);

@@ -501,7 +501,7 @@ pub(crate) enum ManagedReconciliationFailure {
 
 fn reconciliation_store_error(error: ManagedReconciliationFailure) -> StoreError {
     let descriptor = match &error {
-        ManagedReconciliationFailure::Inventory(_) => &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+        ManagedReconciliationFailure::Inventory(_) => &rocketmq_error::STORAGE_UNAVAILABLE,
         ManagedReconciliationFailure::ReplayRecoveryRequired
         | ManagedReconciliationFailure::MissingStoreUuid
         | ManagedReconciliationFailure::State(_) => &rocketmq_error::STORAGE_STATE_CORRUPTED,

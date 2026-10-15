@@ -435,7 +435,7 @@ fn runtime_error_descriptor(source: &RuntimeError) -> &'static rocketmq_error::E
     }
     match source.condition() {
         rocketmq_error::CanonicalCondition::InvalidArgument => &rocketmq_error::STORAGE_REQUEST_INVALID,
-        rocketmq_error::CanonicalCondition::Unavailable => &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+        rocketmq_error::CanonicalCondition::Unavailable => &rocketmq_error::STORAGE_UNAVAILABLE,
         rocketmq_error::CanonicalCondition::ResourceExhausted => &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
         rocketmq_error::CanonicalCondition::DeadlineExceeded => &rocketmq_error::STORAGE_OPERATION_TIMED_OUT,
         rocketmq_error::CanonicalCondition::Unimplemented => &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED,

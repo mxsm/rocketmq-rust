@@ -173,7 +173,7 @@ impl StoreRootLease {
             )
         })?;
         lock.try_lock_exclusive().map_err(|error| {
-            StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, operation)
+            StoreError::new(&rocketmq_error::STORAGE_UNAVAILABLE, operation)
                 .with_detail(format!(
                     "message store lock file is held by another instance: {}",
                     configured_root.join(LOCK_FILE_NAME).display()

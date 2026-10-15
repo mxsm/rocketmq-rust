@@ -1432,9 +1432,7 @@ impl AllocateMappedFileService {
             Err(error) => {
                 let descriptor = match &error {
                     ManagedMappedFileAllocationFailure::WorkerUnavailable
-                    | ManagedMappedFileAllocationFailure::LifecycleUnavailable => {
-                        &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE
-                    }
+                    | ManagedMappedFileAllocationFailure::LifecycleUnavailable => &rocketmq_error::STORAGE_UNAVAILABLE,
                     ManagedMappedFileAllocationFailure::Budget(_) => &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
                     ManagedMappedFileAllocationFailure::InvalidFileSize(_)
                     | ManagedMappedFileAllocationFailure::QueueOutsideStoreRoot

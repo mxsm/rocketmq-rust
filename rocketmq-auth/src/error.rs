@@ -25,8 +25,8 @@ use rocketmq_error::AUTH_CONFIGURATION_INVALID;
 use rocketmq_error::AUTH_OPERATION_FAILED;
 use rocketmq_error::CORE_ARGUMENT_INVALID;
 use rocketmq_error::CORE_SERIALIZATION_FAILED;
-use rocketmq_error::STORAGE_BACKEND_UNAVAILABLE;
 use rocketmq_error::STORAGE_READ_FAILED;
+use rocketmq_error::STORAGE_UNAVAILABLE;
 use rocketmq_error::STORAGE_WRITE_FAILED;
 use rocketmq_security_api::SecurityProviderError;
 
@@ -316,7 +316,7 @@ impl From<AuthServiceError> for CanonicalError {
             ),
             (AuthOperation::ReadMetadata, _) => project_storage(error, &STORAGE_READ_FAILED, "read"),
             (AuthOperation::WriteMetadata, _) => project_storage(error, &STORAGE_WRITE_FAILED, "write"),
-            (AuthOperation::LockMetadata, _) => project_storage(error, &STORAGE_BACKEND_UNAVAILABLE, "lock"),
+            (AuthOperation::LockMetadata, _) => project_storage(error, &STORAGE_UNAVAILABLE, "lock"),
             (AuthOperation::EncodeMetadata, _) => project_serialization(error, "encode"),
             (AuthOperation::DecodeMetadata, _) => project_serialization(error, "decode"),
             (_, AuthFailureKind::Unauthenticated | AuthFailureKind::Expired) => project_canonical(
@@ -470,7 +470,7 @@ mod tests {
             ),
             (
                 AuthServiceError::new(AuthOperation::LockMetadata, AuthFailureKind::Unavailable),
-                &STORAGE_BACKEND_UNAVAILABLE,
+                &STORAGE_UNAVAILABLE,
             ),
             (
                 AuthServiceError::new(AuthOperation::EncodeMetadata, AuthFailureKind::InvalidData),

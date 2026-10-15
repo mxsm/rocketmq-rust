@@ -454,7 +454,7 @@ impl IndexFile {
     }
 
     fn closing_error() -> StoreError {
-        StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Flush)
+        StoreError::new(&rocketmq_error::STORAGE_UNAVAILABLE, StoreOperation::Flush)
             .in_component(StoreComponent::MappedFile)
     }
 }

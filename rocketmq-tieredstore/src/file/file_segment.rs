@@ -409,7 +409,7 @@ mod tests {
             .await
             .expect_err("deleted derived segment must reject append");
         assert_eq!(error.operation(), StoreOperation::AppendDerived);
-        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
         Ok(())
     }
 

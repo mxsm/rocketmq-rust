@@ -248,7 +248,7 @@ impl<D: RetirementBatchDriver> MappedFileRetirementService<D> {
             self.accepting.store(false, Ordering::Release);
             task_group.cancel();
             return Err(
-                StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Start)
+                StoreError::new(&rocketmq_error::STORAGE_UNAVAILABLE, StoreOperation::Start)
                     .in_component(StoreComponent::MappedFile)
                     .with_detail("failed to schedule the managed mapped-file retirement service")
                     .with_source(source),

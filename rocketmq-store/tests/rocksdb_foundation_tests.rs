@@ -2272,7 +2272,7 @@ fn rocksdb_store_reloading_state_rejects_new_operations() {
             b"value",
         )
         .expect_err("reloading store should reject writes");
-    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
     assert_eq!(error.operation(), StoreOperation::AppendDerived);
     assert_eq!(error.component(), rocketmq_store::StoreComponent::RocksDb);
     assert!(std::error::Error::source(&error).is_none());
@@ -2305,7 +2305,7 @@ fn rocksdb_store_closed_state_cannot_be_marked_recovered() {
     let error = store
         .mark_recovered()
         .expect_err("closed store should not be marked recovered");
-    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
     assert_eq!(error.operation(), StoreOperation::Start);
     assert_eq!(error.component(), rocketmq_store::StoreComponent::RocksDb);
     assert!(std::error::Error::source(&error).is_none());
