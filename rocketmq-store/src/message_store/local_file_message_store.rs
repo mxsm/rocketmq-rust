@@ -112,12 +112,12 @@ use rocketmq_store_local::message_store::reput::ReputPolicy;
 use rocketmq_store_local::message_store::LocalStoreComposition;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
-use crate::base::backend_ops::canonical_health_snapshot;
-use crate::base::backend_ops::BackendHealthSnapshot;
+use crate::base::backend_ops::build_store_health_snapshot;
 use crate::base::backend_ops::BackendOps;
 use crate::base::backend_ops::MessageStoreShutdownReport;
 use crate::base::backend_ops::PutMessagePreflight;
 use crate::base::backend_ops::StateMachineVersionView;
+use crate::base::backend_ops::StoreHealthIndicators;
 use crate::base::backend_ops::StoreHealthRecorder;
 use crate::base::backend_read_ops::MessageStoreReader;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
@@ -1825,8 +1825,8 @@ impl BackendOps for LocalFileMessageStore {
     }
 
     fn health_snapshot(&self) -> rocketmq_store_api::StoreHealthSnapshot {
-        canonical_health_snapshot(
-            self.store_health_snapshot(),
+        build_store_health_snapshot(
+            self.collect_health_indicators(),
             self.get_max_phy_offset(),
             self.get_flushed_where(),
         )
