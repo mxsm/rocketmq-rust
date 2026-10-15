@@ -17,6 +17,7 @@ const pageLabels = [
   ['/messages/dlq', 'DLQ Message', 'Messaging'],
   ['/message-trace', 'Message Trace', 'Messaging'],
   ['/dashboard', 'Dashboard', 'Operate'],
+  ['/topology', 'Topology', 'Operate'],
   ['/brokers', 'Cluster', 'Messaging'],
   ['/topics', 'Topic', 'Messaging'],
   ['/consumers', 'Consumer', 'Messaging'],

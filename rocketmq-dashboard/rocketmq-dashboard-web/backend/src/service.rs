@@ -26,6 +26,7 @@ pub mod producer_service;
 pub mod session_audit_cleanup;
 pub mod storage_metrics;
 pub mod topic_service;
+pub mod topology_service;
 
 pub use acl_service::*;
 pub use audit_service::*;
@@ -42,3 +43,4 @@ pub use producer_service::*;
 pub use session_audit_cleanup::*;
 pub use storage_metrics::*;
 pub use topic_service::*;
+pub use topology_service::*;

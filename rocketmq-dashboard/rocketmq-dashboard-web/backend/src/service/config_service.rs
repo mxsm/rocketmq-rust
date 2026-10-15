@@ -46,19 +46,37 @@ pub async fn get_nameserver_availability(state: &AppState) -> Result<NameserverA
     Ok(NameserverAvailabilityView { endpoints })
 }
 
+/// An entry may list several NameServers separated by `;`, as `NAMESRV_ADDR` does. It is
+/// available when it names at least one address and every address accepts a connection.
 async fn check_nameserver_endpoint(address: String) -> NameserverEndpointAvailability {
-    let status = match timeout(NAMESERVER_AVAILABILITY_TIMEOUT, TcpStream::connect(&address)).await {
-        Ok(Ok(stream)) => {
-            drop(stream);
-            NameserverAvailabilityStatus::Available
-        }
-        Ok(Err(_)) | Err(_) => NameserverAvailabilityStatus::Unavailable,
+    let targets = address
+        .split(';')
+        .map(str::trim)
+        .filter(|target| !target.is_empty())
+        .collect::<Vec<_>>();
+    let mut status = if targets.is_empty() {
+        NameserverAvailabilityStatus::Unavailable
+    } else {
+        NameserverAvailabilityStatus::Available
     };
+    for target in targets {
+        if !accepts_connection(target).await {
+            status = NameserverAvailabilityStatus::Unavailable;
+            break;
+        }
+    }
     NameserverEndpointAvailability {
         address,
         status,
         checked_at: Utc::now().timestamp_millis(),
     }
+}
+
+async fn accepts_connection(address: &str) -> bool {
+    matches!(
+        timeout(NAMESERVER_AVAILABILITY_TIMEOUT, TcpStream::connect(address)).await,
+        Ok(Ok(_))
+    )
 }
 
 pub async fn replace_nameservers(
@@ -469,4 +487,44 @@ fn normalize_address(value: &str, label: &str) -> Result<String, DashboardError>
         .parse()
         .map_err(|_| DashboardError::Validation(format!("{label} port is invalid")))?;
     Ok(format!("{host}:{port_number}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_nameserver_endpoint;
+    use crate::model::NameserverAvailabilityStatus;
+    use tokio::net::TcpListener;
+
+    async fn listening_address() -> (TcpListener, String) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind test listener");
+        let address = listener.local_addr().expect("listener address").to_string();
+        (listener, address)
+    }
+
+    #[tokio::test]
+    async fn an_entry_with_several_nameservers_is_available_when_every_one_accepts() {
+        let (_first, first) = listening_address().await;
+        let (_second, second) = listening_address().await;
+
+        let entry = check_nameserver_endpoint(format!("{first};{second}")).await;
+
+        assert_eq!(entry.address, format!("{first};{second}"));
+        assert_eq!(entry.status, NameserverAvailabilityStatus::Available);
+    }
+
+    #[tokio::test]
+    async fn an_entry_is_unavailable_when_one_nameserver_refuses_or_none_is_named() {
+        let (_open, open) = listening_address().await;
+        let closed = {
+            let (listener, address) = listening_address().await;
+            drop(listener);
+            address
+        };
+
+        let partial = check_nameserver_endpoint(format!("{open};{closed}")).await;
+        let empty = check_nameserver_endpoint(" ; ".to_string()).await;
+
+        assert_eq!(partial.status, NameserverAvailabilityStatus::Unavailable);
+        assert_eq!(empty.status, NameserverAvailabilityStatus::Unavailable);
+    }
 }

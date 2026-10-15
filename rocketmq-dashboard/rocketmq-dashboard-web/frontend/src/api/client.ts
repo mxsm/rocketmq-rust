@@ -44,7 +44,8 @@ function decodeResponse<T>(value: unknown): ApiResponse<T> | null {
   return value as unknown as ApiResponse<T>;
 }
 
-function safeServerErrorMessage(code: string, status: number): string {
+/** The user-facing text for a public error code from the backend. */
+export function safeServerErrorMessage(code: string, status: number): string {
   switch (code) {
     case 'AUTH_ERROR':
     case 'AUTH_TOKEN_AMBIGUOUS':

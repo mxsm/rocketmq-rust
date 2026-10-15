@@ -11,12 +11,13 @@ import {
   TriangleAlert,
   Users
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { dashboardApi } from '../api/dashboard_api';
 import { userErrorMessage } from '../api/client';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
+import HealthSignal from '../components/HealthSignal';
 import LoadingState from '../components/LoadingState';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
@@ -26,7 +27,6 @@ import StatusBadge from '../components/StatusBadge';
 import TrendAreaChart, { type TrendSeries } from '../components/TrendAreaChart';
 import { buttonVariants } from '../components/ui/Button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/Card';
-import { StatusDot } from '../components/ui/StatusDot';
 import type { DashboardHistorySeries, DashboardOverview, DashboardTopicCurrent } from '../types/dashboard';
 import { buildDashboardAdvisories, formatDashboardMetric, sortTopTopics } from './dashboard/dashboard-model';
 
@@ -303,24 +303,6 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
-    </div>
-  );
-}
-
-interface HealthSignalProps {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  tone?: 'success' | 'warning' | 'danger';
-}
-
-function HealthSignal({ icon, label, value, tone }: HealthSignalProps) {
-  return (
-    <div className={`health-signal${tone ? ` health-${tone}` : ''}`}>
-      <span className="health-signal-icon" aria-hidden="true">{icon}</span>
-      <span>{label}</span>
-      <strong title={value}>{value}</strong>
-      <StatusDot className="health-signal-dot" tone={tone ?? 'neutral'} />
     </div>
   );
 }

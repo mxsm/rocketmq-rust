@@ -3,6 +3,7 @@ import {
   Bell,
   Database,
   Gauge,
+  Globe,
   MailSearch,
   Network,
   RadioTower,
@@ -38,7 +39,8 @@ const navGroups: NavGroup[] = [
     items: [
       { to: '/config', label: 'OPS', icon: Settings, match: (pathname, hash) => pathname === '/config' && hash !== '#proxy' },
       { to: '/proxy', label: 'Proxy', icon: Split },
-      { to: '/dashboard', label: 'Dashboard', icon: Gauge }
+      { to: '/dashboard', label: 'Dashboard', icon: Gauge },
+      { to: '/topology', label: 'Topology', icon: Network }
     ]
   },
   {
@@ -110,7 +112,7 @@ export default function Sidebar({ className, onNavigate }: SidebarProps) {
         ))}
       </nav>
       <div className="sidebar-footer">
-        <Network size={16} aria-hidden="true" />
+        <Globe size={16} aria-hidden="true" />
         <span>Web Dashboard</span>
       </div>
     </aside>

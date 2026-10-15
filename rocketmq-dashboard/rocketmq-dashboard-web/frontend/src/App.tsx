@@ -22,6 +22,7 @@ const ProxyPage = lazy(() => import('./pages/ProxyPage'));
 const SessionAdminPage = lazy(() => import('./pages/SessionAdminPage'));
 const TopicDetailPage = lazy(() => import('./pages/TopicDetailPage'));
 const TopicListPage = lazy(() => import('./pages/TopicListPage'));
+const TopologyPage = lazy(() => import('./pages/TopologyPage'));
 
 export default function App() {
   return (
@@ -40,6 +41,7 @@ export default function App() {
                     <Route path="/ops" element={<Navigate to="/config" replace />} />
                     <Route path="/proxy" element={<ProxyPage />} />
                     <Route path="/dashboard" element={<DashboardPage />} />
+                    <Route path="/topology" element={<TopologyPage />} />
                     <Route path="/cluster" element={<Navigate to="/brokers" replace />} />
                     <Route path="/topics" element={<TopicListPage />} />
                     <Route path="/topics/:topic" element={<TopicDetailPage />} />
