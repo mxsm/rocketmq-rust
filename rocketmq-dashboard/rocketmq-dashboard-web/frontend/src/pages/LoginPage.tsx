@@ -1,5 +1,5 @@
-import { Activity, LogIn } from 'lucide-react';
-import { FormEvent, useEffect, useRef, useState } from 'react';
+import { Activity, Info, LogIn } from 'lucide-react';
+import { type CSSProperties, FormEvent, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { authApi } from '../api/auth_api';
 import { ApiClientError } from '../api/client';
@@ -101,12 +101,12 @@ export default function LoginPage() {
       </div>
 
       <div className="login-content">
-        <p className="login-session-note" role="status">
-          <LogIn size={18} aria-hidden="true" />
+        <p className="login-session-note enter-up" role="status">
+          <Info size={16} aria-hidden="true" />
           Authentication is required for this dashboard.
         </p>
         {sessionNotice ? <p className="login-session-notice" role="status">{sessionNotice}</p> : null}
-        <Card className="login-card">
+        <Card className="login-card enter-up" style={{ '--enter-index': 2 } as CSSProperties}>
           <CardHeader>
             <CardTitle>Sign in to RocketMQ Operations</CardTitle>
             <CardDescription>Use your dashboard credentials to continue.</CardDescription>
@@ -139,6 +139,7 @@ export default function LoginPage() {
               </div>
               {credentialError ? <ErrorState message={credentialError} /> : null}
               <Button type="submit" className="login-submit" loading={submitting} disabled={!username || !password}>
+                {submitting ? null : <LogIn size={16} aria-hidden="true" />}
                 {submitting ? 'Signing in' : 'Sign in'}
               </Button>
             </form>

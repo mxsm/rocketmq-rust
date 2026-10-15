@@ -73,7 +73,7 @@ export default function Sidebar({ className, onNavigate }: SidebarProps) {
   const location = useLocation();
 
   return (
-    <aside className={cn('sidebar', className)}>
+    <aside className={cn('sidebar', className)} data-surface="chrome">
       <div className="brand">
         <div className="brand-mark">
           <Activity size={18} aria-hidden="true" />
