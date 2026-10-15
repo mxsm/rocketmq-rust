@@ -6,6 +6,7 @@ const badgeVariants = cva('ui-badge', {
   variants: {
     tone: {
       neutral: 'ui-badge-neutral',
+      primary: 'ui-badge-primary',
       success: 'ui-badge-success',
       warning: 'ui-badge-warning',
       destructive: 'ui-badge-destructive',

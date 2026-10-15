@@ -15,7 +15,7 @@ export const SheetContent = forwardRef<ElementRef<typeof DialogPrimitive.Content
   ({ className, children, side = 'right', ...props }, ref) => (
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay className="ui-overlay" />
-      <DialogPrimitive.Content ref={ref} className={cn('ui-sheet-content', className)} data-side={side} {...props}>
+      <DialogPrimitive.Content ref={ref} className={cn('ui-sheet-content', className)} data-side={side} data-surface="overlay" {...props}>
         {children}
         <DialogPrimitive.Close className="ui-overlay-close" aria-label="Close details">
           <X size={16} aria-hidden="true" />

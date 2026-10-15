@@ -2,7 +2,7 @@ import { forwardRef, type HTMLAttributes } from 'react';
 import { cn } from '../../lib/cn';
 
 export const Card = forwardRef<HTMLElement, HTMLAttributes<HTMLElement>>(({ className, ...props }, ref) => (
-  <section ref={ref} className={cn('ui-card', className)} {...props} />
+  <section ref={ref} className={cn('ui-card', className)} data-surface="panel" {...props} />
 ));
 Card.displayName = 'Card';
 
