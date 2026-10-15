@@ -18,7 +18,7 @@ import { Button } from '../components/ui/Button';
 import type { ProducerConnectionInfo, ProducerConnectionView, ProducerInfo } from '../types/producer';
 import type { TopicInfo } from '../types/topic';
 import ProducerDetailContent from './producers/ProducerDetailContent';
-import { filterProducers, getProducerMetrics } from './producers/producer-model';
+import { filterProducers, getProducerMetrics, summarizeProducerBrokers } from './producers/producer-model';
 
 const PAGE_SIZE = 10;
 
@@ -141,6 +141,12 @@ export default function ProducerListPage() {
       header: 'Producer group',
       width: '180px',
       cell: (producer) => <strong className="mono">{producer.producerGroup}</strong>
+    },
+    {
+      id: 'brokers',
+      header: 'Brokers',
+      width: '140px',
+      cell: (producer) => <span title={producer.brokerNames?.join(', ')}>{summarizeProducerBrokers(producer)}</span>
     },
     {
       id: 'connections',
