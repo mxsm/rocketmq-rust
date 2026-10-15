@@ -29,6 +29,24 @@ belong here. Keep one-time migration edits and ad hoc report converters out of t
 Before removing a script, check imports, callers, workflow routes, fixture generators, and documentation;
 the absence of a CI invocation alone does not make a manual tool obsolete.
 
+## Cargo version upgrades
+
+1. Choose the next version based on public API compatibility. Update
+   `workspace.package.version` and the corresponding internal dependency versions in
+   the root `Cargo.toml`. Members keep `version.workspace = true` and inherit shared
+   dependencies through `workspace.dependencies`.
+2. Update existing version requirements in standalone `Cargo.toml` files that point
+   to the changed root workspace crates. Keep independent package versions and
+   unrelated dependency requirements unchanged.
+3. Run `cargo update --workspace` at the repository root. Refresh each affected
+   standalone lockfile with `cargo update --workspace --manifest-path <path/to/Cargo.toml>`,
+   including consumers with path-only dependencies. Review the Cargo-generated diffs;
+   do not edit lockfiles by hand. Add `--offline` when all dependencies are cached.
+4. Run the relevant package and consumer checks with `--locked`, following their
+   `AGENTS.md` guides. At release time, move the relevant `CHANGELOG.md` entries from
+   `Unreleased` into a dated version section with a comparison link. The release tag
+   must match `v<workspace.package.version>`.
+
 ## Subdirectories
 
 | Directory | Current purpose |
