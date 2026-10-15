@@ -54,14 +54,18 @@ impl std::fmt::Display for InjectedStorageFailure {
 
 impl std::error::Error for InjectedStorageFailure {}
 
+/// Test-only in-memory key-value store that can reject batch writes.
+///
+/// When batch rejection is enabled, `batch_put` and `write_batch` fail with an injected storage
+/// error. `batch_writes` counts every mixed-batch `write_batch` attempt, including rejected ones.
 #[derive(Default)]
-struct FaultInjectingBackend {
+struct FaultInjectingKeyValueStore {
     data: RwLock<HashMap<String, Vec<u8>>>,
     reject_batch: AtomicBool,
     batch_writes: AtomicUsize,
 }
 
-impl FaultInjectingBackend {
+impl FaultInjectingKeyValueStore {
     fn rejecting_batches() -> Self {
         Self {
             data: RwLock::new(HashMap::new()),
@@ -72,7 +76,7 @@ impl FaultInjectingBackend {
 }
 
 #[async_trait]
-impl KeyValueStore for FaultInjectingBackend {
+impl KeyValueStore for FaultInjectingKeyValueStore {
     async fn put(&self, key: &str, value: &[u8]) -> Result<()> {
         self.data.write().insert(key.to_string(), value.to_vec());
         Ok(())
@@ -156,7 +160,7 @@ impl KeyValueStore for FaultInjectingBackend {
 
 #[tokio::test]
 async fn opening_v1_records_does_not_rewrite_them() {
-    let backend = Arc::new(FaultInjectingBackend::default());
+    let backend = Arc::new(FaultInjectingKeyValueStore::default());
     let mut state_machine = StateMachine::open(test_config(), backend.clone())
         .await
         .expect("open empty state machine");
@@ -205,7 +209,7 @@ fn broker_id_entry(index: u64) -> LogEntry {
 
 #[tokio::test]
 async fn failed_state_batch_does_not_publish_candidate_state() {
-    let backend = Arc::new(FaultInjectingBackend::rejecting_batches());
+    let backend = Arc::new(FaultInjectingKeyValueStore::rejecting_batches());
     let mut state_machine = StateMachine::open(test_config(), backend.clone())
         .await
         .expect("open state machine");
@@ -238,7 +242,7 @@ async fn failed_state_batch_does_not_publish_candidate_state() {
 
 #[tokio::test]
 async fn failed_vote_write_does_not_publish_in_memory_vote() {
-    let backend = Arc::new(FaultInjectingBackend::rejecting_batches());
+    let backend = Arc::new(FaultInjectingKeyValueStore::rejecting_batches());
     let mut log_store = LogStore::open(backend).await.expect("open log store");
     let vote = Vote::new(2, 1);
 
@@ -254,7 +258,7 @@ async fn failed_vote_write_does_not_publish_in_memory_vote() {
 
 #[tokio::test]
 async fn failed_log_append_does_not_publish_in_memory_log() {
-    let backend = Arc::new(FaultInjectingBackend::rejecting_batches());
+    let backend = Arc::new(FaultInjectingKeyValueStore::rejecting_batches());
     let mut log_store = LogStore::open(backend).await.expect("open log store");
 
     RaftLogStorage::append(&mut log_store, [broker_id_entry(1)], IOFlushed::<TypeConfig>::noop())
@@ -268,7 +272,7 @@ async fn failed_log_append_does_not_publish_in_memory_log() {
 
 #[tokio::test]
 async fn incomplete_persisted_state_is_rejected_on_open() {
-    let backend = Arc::new(FaultInjectingBackend::default());
+    let backend = Arc::new(FaultInjectingKeyValueStore::default());
     backend
         .put("openraft/state_machine/replicas_info_manager", b"partial")
         .await
