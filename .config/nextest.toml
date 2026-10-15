@@ -1,0 +1,65 @@
+# Copyright 2026 The RocketMQ Rust Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# cargo-nextest configuration for the root workspace.
+#
+# nextest runs every test in its own process, so a `static` lock in a test binary
+# no longer serializes tests the way it does under `cargo test`. The groups below
+# restore that serialization for tests that share ports or other process-external
+# resources. Keep a group in sync with the lock it replaces.
+
+[test-groups]
+# `BROKER_TEST_LOCK` in rocketmq-broker/tests/broker_transactional_startup.rs:
+# the tests reserve listener pairs, release them, and then start a broker on them.
+broker-transactional-startup = { max-threads = 1 }
+# Multi-node cluster tests that probe, release, and then bind fixed port blocks:
+# - `CONTROLLER_INTEGRATION_TEST_LOCK` in rocketmq-broker/tests/broker_runtime/unit.rs
+#   (blocks between ports 20000 and 60000);
+# - `NEXT_TEST_BASE_PORT` in rocketmq-controller/tests/multi_node_cluster_test.rs, a
+#   per-process counter that restarts at port 15000 in every nextest test process;
+# - rocketmq-controller/tests/simple_cluster_test.rs, which binds ports from 55001.
+# They share one group so that blocks cannot collide within or across these binaries.
+cluster-port-blocks = { max-threads = 1 }
+# `REMOTING_INGRESS_TEST_LOCK` in rocketmq-proxy/tests/remoting_ingress.rs.
+proxy-remoting-ingress = { max-threads = 1 }
+
+# Overrides in the default profile also apply to the `ci` profile.
+[[profile.default.overrides]]
+filter = "binary_id(rocketmq-broker::broker_transactional_startup)"
+test-group = "broker-transactional-startup"
+
+[[profile.default.overrides]]
+filter = """
+package(rocketmq-broker) & kind(lib) & test(/three_controller_two_broker_controller/)
+| binary_id(rocketmq-controller::multi_node_cluster_test)
+| binary_id(rocketmq-controller::simple_cluster_test)
+"""
+test-group = "cluster-port-blocks"
+
+[[profile.default.overrides]]
+filter = "binary_id(rocketmq-proxy::remoting_ingress)"
+test-group = "proxy-remoting-ingress"
+
+[profile.ci]
+# Retries would hide flaky tests and skew timing comparisons with `cargo test`.
+retries = 0
+# Report every failure in one run instead of stopping at the first one.
+fail-fast = false
+failure-output = "immediate-final"
+# Flag slow tests without terminating them; `cargo test` has no per-test timeout.
+slow-timeout = { period = "120s" }
+
+[profile.ci.junit]
+# Written to target/nextest/ci/junit.xml.
+path = "junit.xml"

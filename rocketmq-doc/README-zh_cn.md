@@ -56,6 +56,7 @@ rocketmq-doc/
 
 #### 贡献指南 (19-*)
 - 贡献指南
+- [cargo-nextest 评估（英文）](en/19-nextest-evaluation.md)
 - 代码审查流程
 - 文档规范
 

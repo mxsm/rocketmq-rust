@@ -151,6 +151,7 @@ jobs:
       rocksdb: ${{ steps.scope.outputs.rocksdb }}
       header: ${{ steps.scope.outputs.header }}
       errors: ${{ steps.scope.outputs.errors }}
+      nextest: ${{ steps.scope.outputs.nextest }}
 
     steps:
       - name: Checkout
@@ -475,6 +476,164 @@ jobs:
           else
             cargo test --workspace
           fi
+
+  # =========================
+  # cargo-nextest pilot (Linux only, non-blocking)
+  # =========================
+  nextest-pilot:
+    name: Nextest Pilot (ubuntu-latest)
+    needs: check
+    if: needs.check.outputs.nextest == 'true'
+    runs-on: ubuntu-latest
+    # Evaluation only: Build & Test stays the required test path.
+    continue-on-error: true
+    env:
+      NEXTEST_VERSION: 0.9.146
+      PILOT_RUNS: 3
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install system dependencies (Ubuntu)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang llvm libclang-dev \
+            cmake make ninja-build pkg-config \
+            protobuf-compiler \
+            libsnappy-dev liblz4-dev libzstd-dev zlib1g-dev \
+            libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
+
+          {
+            echo "CC=clang"
+            echo "CXX=clang++"
+            echo "LIBCLANG_PATH=$(llvm-config --libdir)"
+          } >> "$GITHUB_ENV"
+
+      - name: Use repository Rust 1.95 toolchain
+        run: rustup show active-toolchain
+
+      - name: Cache Rust + RocksDB
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rocketmq-rust-nextest-pilot
+          workspaces: |
+            .
+          env-vars: |
+            CC
+            CXX
+            LIBCLANG_PATH
+            ROCKSDB_DISABLE_JEMALLOC
+
+      - name: Select feature set
+        env:
+          FULL_FEATURES: ${{ github.event_name != 'pull_request' || needs.check.outputs.full_features == 'true' }}
+        run: |
+          # Same selection as Build & Test.
+          if [ "$FULL_FEATURES" = true ]; then
+            echo "CARGO_FEATURE_ARGS=--all-features" >> "$GITHUB_ENV"
+          else
+            echo "CARGO_FEATURE_ARGS=" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install cargo-nextest
+        run: |
+          start=$(date +%s)
+          curl -LsSf "https://get.nexte.st/${NEXTEST_VERSION}/linux" | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+          cargo nextest --version
+          echo "NEXTEST_INSTALL_SECONDS=$(( $(date +%s) - start ))" >> "$GITHUB_ENV"
+
+      - name: Build test targets
+        run: |
+          start=$(date +%s)
+          # nextest reuses these artifacts; doctests are compiled when they run.
+          cargo test --workspace --locked ${CARGO_FEATURE_ARGS:+"$CARGO_FEATURE_ARGS"} --no-run
+          echo "BUILD_SECONDS=$(( $(date +%s) - start ))" >> "$GITHUB_ENV"
+
+      - name: Test pilot reconciliation
+        run: python3 -m unittest discover -s scripts/tests -p test_nextest_pilot_compare.py -v
+
+      - name: Compare cargo test with cargo nextest
+        env:
+          # Results are parsed from the logs below.
+          CARGO_TERM_COLOR: never
+        run: |
+          mkdir -p target/nextest-pilot
+          logs=target/nextest-pilot
+          # Also kept in the job log and the uploaded artifact, so results stay readable without the UI.
+          summary_file="$logs/summary.md"
+          : > "$summary_file"
+          trap 'cat "$summary_file"; cat "$summary_file" >> "$GITHUB_STEP_SUMMARY"' EXIT
+          seconds() {
+            local start status
+            start=$(date +%s.%N)
+            "$@"; status=$?
+            LAST_SECONDS=$(awk -v a="$start" -v b="$(date +%s.%N)" 'BEGIN { printf "%.1f", b - a }')
+            return $status
+          }
+          run_cargo() {
+            seconds cargo test --workspace --locked ${CARGO_FEATURE_ARGS:+"$CARGO_FEATURE_ARGS"} --no-fail-fast \
+              > "$logs/cargo-test-$1.log" 2>&1 && cargo_status=0 || cargo_status=$?
+            cargo_s=$LAST_SECONDS
+          }
+          run_nextest() {
+            seconds cargo nextest run --workspace --locked ${CARGO_FEATURE_ARGS:+"$CARGO_FEATURE_ARGS"} --profile ci \
+              > "$logs/nextest-$1.log" 2>&1 && nextest_status=0 || nextest_status=$?
+            nextest_s=$LAST_SECONDS
+            # A round that writes no report is then reported as missing, not as the previous round's.
+            cp target/nextest/ci/junit.xml "$logs/junit-$1.xml" || true
+            rm -f target/nextest/ci/junit.xml
+            seconds cargo test --workspace --locked ${CARGO_FEATURE_ARGS:+"$CARGO_FEATURE_ARGS"} --doc --no-fail-fast \
+              > "$logs/doc-$1.log" 2>&1 && doc_status=0 || doc_status=$?
+            doc_s=$LAST_SECONDS
+          }
+
+          # Maps cargo test binary paths to nextest binary IDs so failures can be compared by identity.
+          cargo nextest list --workspace --locked ${CARGO_FEATURE_ARGS:+"$CARGO_FEATURE_ARGS"} \
+            --message-format json > "$logs/nextest-list.json"
+          rm -f target/nextest/ci/junit.xml
+
+          # Untimed warm-up: tests that invoke Cargo themselves (trybuild, feature-closure checks)
+          # are much slower on a cold target/tests cache, which would favor whichever runner goes second.
+          seconds cargo test --workspace --locked ${CARGO_FEATURE_ARGS:+"$CARGO_FEATURE_ARGS"} --no-fail-fast \
+            > "$logs/warm-up.log" 2>&1 || true
+          warm_up_s=$LAST_SECONDS
+
+          {
+            echo "### cargo-nextest pilot"
+            echo
+            echo "nextest ${NEXTEST_VERSION} on $(nproc) vCPU, $(free -g | awk '/^Mem:/ {print $2}') GiB RAM;" \
+              "features: \`${CARGO_FEATURE_ARGS:-default}\`; nextest install ${NEXTEST_INSTALL_SECONDS}s;" \
+              "shared test build ${BUILD_SECONDS}s; untimed warm-up ${warm_up_s}s"
+            echo
+            echo "| Run | First | cargo test (s) | nextest (s) | cargo test --doc (s) | nextest + doc (s) | Exit codes (cargo / nextest / doc) |"
+            echo "| --- | --- | ---: | ---: | ---: | ---: | --- |"
+          } >> "$summary_file"
+          # Alternate which runner goes first so neither consistently benefits from the other's caches.
+          for run in $(seq 1 "$PILOT_RUNS"); do
+            if [ $(( run % 2 )) -eq 1 ]; then first="cargo test"; run_cargo "$run"; run_nextest "$run"
+            else first="nextest"; run_nextest "$run"; run_cargo "$run"; fi
+            printf '| %s | %s | %.0f | %.0f | %.0f | %.0f | %s / %s / %s |\n' "$run" "$first" "$cargo_s" "$nextest_s" \
+              "$doc_s" "$(awk -v a="$nextest_s" -v b="$doc_s" 'BEGIN { print a + b }')" \
+              "$cargo_status" "$nextest_status" "$doc_status" >> "$summary_file"
+          done
+
+          # Every round is reconciled: tests run, ignored tests, doctests, and the identities of failed
+          # tests and doctests. Failures shared by both runners are left to Build & Test.
+          echo >> "$summary_file"
+          python3 scripts/nextest_pilot_compare.py --logs "$logs" --runs "$PILOT_RUNS" >> "$summary_file" || {
+            echo "::error::cargo test and cargo nextest diverged; see the reconciliation table"
+            exit 1
+          }
+
+      - name: Upload nextest pilot logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nextest-pilot-logs
+          path: target/nextest-pilot/
+          retention-days: 14
 
   interface-contracts:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
