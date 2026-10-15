@@ -4,7 +4,7 @@
   justify-content: center;
   gap: 8px;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs);
   font-weight: 600;
   line-height: 1;
   white-space: nowrap;
@@ -19,7 +19,7 @@
 .ui-button-ghost:hover { background: color-mix(in srgb, var(--foreground) 7%, var(--card)); }
 .ui-button-outline { background: transparent; border-color: var(--border); color: var(--foreground); }
 .ui-button-ghost { background: transparent; color: var(--muted-foreground); }
-.ui-button-destructive { background: var(--destructive-control-default); color: var(--foreground); }
+.ui-button-destructive { background: var(--destructive-control-default); color: var(--destructive-foreground); }
 .ui-button-destructive:hover { background: var(--destructive-control-hover); }
 .ui-button-link { background: transparent; color: var(--primary); text-decoration: underline; text-underline-offset: 4px; }
 .ui-button-size-default { min-height: 36px; padding: 0 14px; }
@@ -43,10 +43,10 @@
   white-space: nowrap;
 }
 .ui-badge-neutral { background: var(--muted-surface); color: var(--muted-foreground); }
-.ui-badge-success { background: color-mix(in srgb, var(--success) 13%, transparent); border-color: color-mix(in srgb, var(--success) 35%, transparent); color: var(--success); }
-.ui-badge-warning { background: color-mix(in srgb, var(--warning) 13%, transparent); border-color: color-mix(in srgb, var(--warning) 35%, transparent); color: var(--warning); }
-.ui-badge-destructive { background: color-mix(in srgb, var(--destructive) 13%, transparent); border-color: color-mix(in srgb, var(--destructive) 35%, transparent); color: var(--destructive); }
-.ui-badge-info { background: color-mix(in srgb, var(--info) 13%, transparent); border-color: color-mix(in srgb, var(--info) 35%, transparent); color: #60a5fa; }
+.ui-badge-success { background: var(--success-soft); border-color: var(--success-border); color: var(--success); }
+.ui-badge-warning { background: var(--warning-soft); border-color: var(--warning-border); color: var(--warning); }
+.ui-badge-destructive { background: var(--destructive-soft); border-color: var(--destructive-border); color: var(--destructive); }
+.ui-badge-info { background: var(--info-soft); border-color: var(--info-border); color: var(--info); }
 
 .ui-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); }
 .ui-card-header { display: grid; gap: 4px; padding: 16px 16px 0; }
@@ -60,7 +60,7 @@
   width: 100%;
   min-height: 36px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs);
   background: var(--background);
   color: var(--foreground);
 }
@@ -72,13 +72,13 @@
 .ui-separator { flex-shrink: 0; background: var(--border); }
 .ui-separator[data-orientation='horizontal'] { width: 100%; height: 1px; }
 .ui-separator[data-orientation='vertical'] { width: 1px; height: 100%; }
-.ui-skeleton { min-height: 16px; border-radius: var(--radius-sm); background: var(--muted-surface); animation: ui-pulse 1.6s ease-in-out infinite; }
+.ui-skeleton { min-height: 16px; border-radius: var(--radius-xs); background: var(--muted-surface); animation: ui-pulse 1.6s ease-in-out infinite; }
 .state-skeleton { display: grid; width: min(320px, 100%); gap: 8px; }
 .state-skeleton .ui-skeleton:nth-child(2) { width: 82%; }
 .state-skeleton .ui-skeleton:nth-child(3) { width: 64%; }
 @keyframes ui-pulse { 50% { opacity: 0.48; } }
 
-.ui-overlay { position: fixed; inset: 0; z-index: 50; background: rgb(0 0 0 / 0.66); }
+.ui-overlay { position: fixed; inset: 0; z-index: 50; background: var(--overlay-scrim); }
 .ui-dialog-content,
 .ui-alert-dialog-content,
 .ui-sheet-content {
@@ -95,7 +95,7 @@
 .ui-sheet-content[data-side='left'] { top: 0; left: 0; width: min(360px, 100vw); height: 100vh; border-width: 0 1px 0 0; }
 .ui-sheet-content[data-side='top'] { top: 0; left: 0; width: 100vw; max-height: 85vh; border-width: 0 0 1px; }
 .ui-sheet-content[data-side='bottom'] { bottom: 0; left: 0; width: 100vw; max-height: 85vh; border-width: 1px 0 0; }
-.ui-overlay-close { position: absolute; top: 14px; right: 14px; display: grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted-foreground); cursor: pointer; }
+.ui-overlay-close { position: absolute; top: 14px; right: 14px; display: grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--muted-foreground); cursor: pointer; }
 .ui-overlay-close:hover { background: var(--muted-surface); color: var(--foreground); }
 .ui-dialog-header,
 .ui-sheet-header { display: grid; gap: 6px; padding-right: 36px; }
@@ -108,7 +108,7 @@
 
 .ui-tooltip-content,
 .ui-menu-content,
-.ui-select-content { z-index: 70; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--card); color: var(--foreground); box-shadow: var(--shadow); }
+.ui-select-content { z-index: 70; border: 1px solid var(--border); border-radius: var(--radius-xs); background: var(--card); color: var(--foreground); box-shadow: var(--shadow); }
 .ui-tooltip-content { max-width: 280px; padding: 6px 8px; font-size: 12px; }
 .ui-menu-content,
 .ui-select-content { min-width: 180px; padding: 4px; }
@@ -131,7 +131,7 @@
 .ui-select-viewport { padding: 0; }
 .ui-select-scroll { display: grid; height: 24px; place-items: center; }
 
-.ui-tabs-list { display: inline-flex; min-height: 36px; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--background); }
+.ui-tabs-list { display: inline-flex; min-height: 36px; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: var(--radius-xs); background: var(--background); }
 .ui-tabs-trigger { min-height: 28px; border: 0; border-radius: 4px; padding: 0 10px; background: transparent; color: var(--muted-foreground); font-size: 13px; font-weight: 600; cursor: pointer; }
 .ui-tabs-trigger[data-state='active'] { background: var(--muted-surface); color: var(--foreground); }
 .ui-tabs-content { margin-top: 16px; outline: none; }

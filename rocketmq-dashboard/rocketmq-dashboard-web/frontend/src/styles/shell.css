@@ -40,7 +40,7 @@
   width: 32px;
   height: 32px;
   border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--border));
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs);
   background: color-mix(in srgb, var(--primary) 12%, var(--chrome));
   color: var(--primary);
 }
@@ -82,7 +82,7 @@
   padding: 0 10px;
   min-height: 36px;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs);
   color: var(--muted-foreground);
   font-size: 13px;
   text-decoration: none;
@@ -131,7 +131,6 @@
   padding: 0 20px;
   background: var(--chrome);
   border-bottom: 1px solid var(--border);
-  backdrop-filter: none;
 }
 
 .topbar-leading {

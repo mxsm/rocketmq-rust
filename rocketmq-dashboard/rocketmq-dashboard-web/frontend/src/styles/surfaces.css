@@ -1,0 +1,43 @@
+/*
+ * Surface levels. A component or page block declares its level with `data-surface`
+ * instead of writing its own fill, border and shadow. Every level is opaque.
+ *
+ *   panel    in-page cards, table containers, query areas
+ *   chrome   sidebar and topbar
+ *   overlay  dialogs, sheets, menus, tooltips
+ *   inset    wells: table headers, code blocks, key-value blocks
+ *   frosted  older name: the overlay level on a sheet, a plain marker on a full page
+ */
+[data-surface='panel'] {
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+[data-surface='chrome'] {
+  border: 0;
+  background: var(--chrome);
+}
+
+[data-surface='overlay'],
+.ui-sheet-content[data-surface='frosted'] {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-overlay);
+  box-shadow: var(--shadow-overlay);
+}
+
+[data-surface='inset'] {
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--surface-inset);
+}
+
+/* A panel inside another surface steps up one shade so it stays visible on the same fill. */
+[data-surface='panel'] [data-surface='panel'],
+[data-surface='chrome'] [data-surface='panel'],
+[data-surface='overlay'] [data-surface='panel'],
+.ui-sheet-content[data-surface='frosted'] [data-surface='panel'] {
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
