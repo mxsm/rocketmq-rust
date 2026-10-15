@@ -30,7 +30,7 @@ The binary resolves configuration into `ValidatedBrokerConfig` and passes runtim
 of completed startup work. The binary uses `boot_with_lifecycle` to publish readiness and shut down services under the
 shared process deadline.
 
-Normal and fast remoting listeners use the same dispatcher as the embedded `ProxyBrokerFacade`. The dispatcher applies
+Normal and fast remoting listeners use the same dispatcher as `EmbeddedBroker`. The dispatcher applies
 configured security checks and routes requests to processors backed by storage and metadata services. NameServer
 registration and optional controller coordination are separate from client request dispatch.
 
@@ -40,7 +40,7 @@ registration and optional controller coordination are separate from client reque
 | `BrokerBootstrap::initialize` / `start` | Consume the preceding state and return the next state or `BrokerStartupError`. |
 | `BrokerBootstrap<Running>` | Exposes `readiness()` and an asynchronous, consuming `shutdown()`. |
 | `BrokerBootstrap::boot_with_lifecycle` | Runs under `ServiceLifecycle` and returns lifecycle/startup errors to the caller. |
-| `ProxyBrokerFacade` | Provides embedded proxy access to broker request processing. |
+| `EmbeddedBroker` | Owns the embedded Broker lifecycle and dispatches in-process requests. |
 | `config` | Exposes raw loading, Java-properties conversion, typed sections, and validated configuration APIs. |
 
 The convenience `boot()` method logs startup failures and returns `()`; callers that need to handle errors should use

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(broker):** Rename the public type to `EmbeddedBroker` (breaking) ([#11545](https://github.com/mxsm/rocketmq-rust/issues/11545)).
 - **refactor(proxy-local):** Rename the public type to `LocalBrokerRemotingAdapter` (breaking) ([#11543](https://github.com/mxsm/rocketmq-rust/issues/11543)).
 - **refactor(proxy-cluster):** Rename the public type to `ClusterBrokerRemotingAdapter` (breaking) ([#11546](https://github.com/mxsm/rocketmq-rust/issues/11546)).
 - **refactor(dashboard-web):** Rename `PersistenceBackend` to `DashboardDataStore` and its private facade field to `store` ([#11505](https://github.com/mxsm/rocketmq-rust/issues/11505)).
