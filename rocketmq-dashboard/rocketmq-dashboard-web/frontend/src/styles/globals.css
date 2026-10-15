@@ -204,21 +204,6 @@ td code,
   font-size: 14px;
 }
 
-.config-editor {
-  width: 100%;
-  min-height: 320px;
-  margin: 12px 0;
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-inset);
-  color: var(--foreground);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.5;
-  resize: vertical;
-}
-
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -983,61 +968,11 @@ td code,
   grid-column: 1 / -1;
 }
 
-.broker-drawer {
-  width: min(760px, 100vw);
-  display: grid;
-  align-content: start;
-  gap: 14px;
-}
-
 .drawer-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-}
-
-.drawer-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.drawer-tabs {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-inset);
-}
-
-.drawer-tabs button {
-  min-height: 34px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: var(--muted-foreground);
-}
-
-.drawer-tabs button.active {
-  color: var(--foreground);
-  border-color: color-mix(in srgb, var(--primary) 35%, var(--border));
-  background: color-mix(in srgb, var(--primary) 12%, transparent);
-}
-
-.drawer-section {
-  display: grid;
-  gap: 12px;
-}
-
-.drawer-section-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
 }
 
 .kv-shell {
@@ -1159,41 +1094,6 @@ a {
 
 a:hover {
   text-decoration: underline;
-}
-
-.drawer-content {
-  position: fixed;
-  top: 0;
-  right: 0;
-  z-index: 51;
-  width: min(560px, 100vw);
-  height: 100vh;
-  background: var(--surface);
-  border-left: 1px solid var(--border);
-  padding: 20px;
-  overflow: auto;
-}
-
-.drawer-content.broker-drawer {
-  width: min(760px, calc(100vw - 32px));
-}
-
-.drawer-content h2,
-.drawer-content h3,
-.drawer-content [data-radix-dialog-title] {
-  margin-top: 0;
-}
-
-.drawer-content pre {
-  margin: 14px 0;
-  padding: 14px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--surface-inset);
-  color: var(--foreground);
-  overflow: auto;
-  font-family: var(--font-mono);
-  font-size: 12px;
 }
 
 /* Dense Topic operations workspace */
