@@ -57,7 +57,7 @@ commit after a replacement generation starts.
 
 ## Diagnostics
 
-`RocketmqClusterClient::execution_diagnostics` exposes only low-cardinality
+`ClusterCommandGateway::execution_diagnostics` exposes only low-cardinality
 aggregates: active keys and lane tasks, retained items and bytes, oldest queued
 age, current and maximum inflight work, admission/rejection/timeout/
 cancellation/shutdown counters, and closed state. Ordering keys, topics,

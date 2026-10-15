@@ -30,15 +30,15 @@ use rocketmq_proxy_core::ProxyServiceFuture;
 use rocketmq_transport::api::EmbeddedDispatchResult;
 use rocketmq_transport::api::RemotingResponse;
 
-use crate::cluster::RocketmqClusterClient;
+use crate::cluster::ClusterCommandGateway;
 
 /// Translates Proxy Remoting requests into cluster client operations.
 pub struct ClusterBrokerRemotingAdapter {
-    client: Arc<RocketmqClusterClient>,
+    client: Arc<ClusterCommandGateway>,
 }
 
 impl ClusterBrokerRemotingAdapter {
-    pub fn new(client: Arc<RocketmqClusterClient>) -> Self {
+    pub fn new(client: Arc<ClusterCommandGateway>) -> Self {
         Self { client }
     }
 }

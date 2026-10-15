@@ -34,7 +34,7 @@ use crate::cluster::ClusterBrokerRemotingAdapter;
 #[cfg(feature = "cluster-mode")]
 use crate::cluster::ClusterClient;
 #[cfg(feature = "cluster-mode")]
-use crate::cluster::RocketmqClusterClient;
+use crate::cluster::ClusterCommandGateway;
 use crate::config::ProxyConfig;
 use crate::config::ProxyMode;
 use crate::dependency_health::{DependencyHealth, DependencyHealthMonitor};
@@ -788,7 +788,7 @@ fn build_proxy_runtime_dependencies(
             }
             let signer = build_cluster_acl_signer(config)?.map(|signer| signer.into_outbound_signer());
             let cluster_context = service_context.component("cluster-backend");
-            let client = Arc::new(RocketmqClusterClient::new(
+            let client = Arc::new(ClusterCommandGateway::new(
                 cluster_config,
                 signer,
                 &cluster_context,

@@ -28,7 +28,7 @@ pub mod service;
 #[doc(hidden)]
 pub use cluster::bench_support;
 pub use cluster::ClusterClient;
-pub use cluster::RocketmqClusterClient;
+pub use cluster::ClusterCommandGateway;
 pub use config::ClusterConfig;
 pub use config::ClusterExecutionDiagnostics;
 pub use remoting::ClusterBrokerRemotingAdapter;

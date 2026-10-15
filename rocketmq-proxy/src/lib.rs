@@ -48,7 +48,7 @@ pub use bootstrap::ProxyRuntimeBuilder;
 #[cfg(feature = "cluster-mode")]
 pub use cluster::ClusterClient;
 #[cfg(feature = "cluster-mode")]
-pub use cluster::RocketmqClusterClient;
+pub use cluster::ClusterCommandGateway;
 #[cfg(feature = "cluster-mode")]
 pub use config::ClusterConfig;
 pub use config::GrpcConfig;
