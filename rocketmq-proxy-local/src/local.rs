@@ -761,17 +761,17 @@ impl LocalBrokerFacadeClient {
 }
 
 #[derive(Clone)]
-pub struct LocalRemotingBackend {
+pub struct LocalBrokerRemotingAdapter {
     client: LocalBrokerFacadeClient,
 }
 
-impl LocalRemotingBackend {
+impl LocalBrokerRemotingAdapter {
     pub fn new(client: LocalBrokerFacadeClient) -> Self {
         Self { client }
     }
 }
 
-impl ProxyRemotingRequestHandler for LocalRemotingBackend {
+impl ProxyRemotingRequestHandler for LocalBrokerRemotingAdapter {
     type Response = EmbeddedDispatchResult;
 
     fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchResult> {
@@ -2880,7 +2880,7 @@ mod tests {
     use super::transaction_resolution_flag;
     use super::validate_local_queue_config;
     use super::LocalBrokerFacadeClient;
-    use super::LocalRemotingBackend;
+    use super::LocalBrokerRemotingAdapter;
     use super::MessageIdDecodeError;
     use crate::LocalConfig;
 
@@ -3392,7 +3392,7 @@ mod tests {
             cancellation: tokio_util::sync::CancellationToken::new(),
             worker_shutdown: None,
         };
-        let backend = LocalRemotingBackend::new(client);
+        let backend = LocalBrokerRemotingAdapter::new(client);
         let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig).set_opaque(9_852);
 
         let call = tokio::spawn(async move { backend.process(request).await });

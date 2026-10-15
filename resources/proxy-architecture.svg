@@ -114,7 +114,7 @@
   <text x="658" y="684" class="label">LocalServiceManager</text>
   <text x="658" y="700" class="tiny">embedded broker-backed services</text>
   <rect x="900" y="666" width="236" height="42" rx="9" class="chip-gray"/>
-  <text x="922" y="684" class="label">LocalRemotingBackend</text>
+  <text x="922" y="684" class="label">LocalBrokerRemotingAdapter</text>
   <text x="922" y="700" class="tiny">local-mode remoting passthrough</text>
 
   <rect x="106" y="628" width="176" height="64" rx="12" class="subpanel"/>
