@@ -18,10 +18,18 @@ export function getProducerMetrics(producers: ProducerInfo[]) {
   };
 }
 
+/** The first broker a group is registered with and how many more; `Unknown` when the backend does not say. */
+export function summarizeProducerBrokers(producer: ProducerInfo): string {
+  const brokers = producer.brokerNames;
+  if (brokers === undefined) return 'Unknown';
+  if (brokers.length === 0) return 'None';
+  return brokers.length === 1 ? brokers[0] : `${brokers[0]} +${brokers.length - 1}`;
+}
+
 export function filterProducers(producers: ProducerInfo[], query: string) {
   const normalizedQuery = query.trim().toLowerCase();
   if (!normalizedQuery) return producers;
   return producers.filter((producer) => (
-    `${producer.producerGroup} ${producer.topic}`.toLowerCase().includes(normalizedQuery)
+    [producer.producerGroup, producer.topic, ...(producer.brokerNames ?? [])].join(' ').toLowerCase().includes(normalizedQuery)
   ));
 }
