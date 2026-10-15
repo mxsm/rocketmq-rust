@@ -511,6 +511,7 @@ impl DashboardAdminClient {
                 topic: item.topic,
                 producer_group: item.producer_group,
                 connection_count: item.connection_count,
+                broker_names: item.broker_names,
             })
             .collect();
         Ok(items)

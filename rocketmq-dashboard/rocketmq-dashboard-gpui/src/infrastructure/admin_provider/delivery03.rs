@@ -550,6 +550,7 @@ mod tests {
             topic: "private-topic".into(),
             producer_group: "private-producer".into(),
             connection_count: 3,
+            broker_names: Vec::new(),
         }]);
         assert_eq!(producers.distinct_group_count, 1);
         let producer_debug = format!("{producers:?}");

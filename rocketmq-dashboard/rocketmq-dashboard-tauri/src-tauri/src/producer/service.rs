@@ -281,6 +281,7 @@ mod tests {
             topic: String::new(),
             producer_group: "idle-group".into(),
             connection_count: 0,
+            broker_names: Vec::new(),
         });
         assert_eq!(item.producer_group, "idle-group");
         assert_eq!(item.reported_connection_count, 0);
