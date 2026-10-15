@@ -407,25 +407,6 @@ impl PullTaskContext {
 pub struct MQHelper;
 
 impl MQHelper {
-    /// Retains the Java-shaped helper signature without creating a hidden runtime.
-    ///
-    /// Use [`Self::reset_offset_by_timestamp_with_client_runtime`] for the runnable equivalent.
-    ///
-    /// # Errors
-    ///
-    /// Always returns an initialization error because this compatibility signature has no
-    /// application-owned [`ClientRuntime`].
-    pub fn reset_offset_by_timestamp(
-        _message_model: impl Into<CheetahString>,
-        _consumer_group: impl Into<CheetahString>,
-        _topic: impl Into<CheetahString>,
-        _timestamp: u64,
-    ) -> ClientResult<()> {
-        Err(ClientError::not_initialized(
-            "MQHelper requires an application-owned ClientRuntime; use reset_offset_by_timestamp_with_client_runtime",
-        ))
-    }
-
     /// Resets every queue offset for a topic to the position nearest the timestamp.
     ///
     /// The temporary Classic Pull consumer persists updated offsets during its bounded shutdown.
