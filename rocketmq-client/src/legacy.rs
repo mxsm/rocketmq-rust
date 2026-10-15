@@ -27,13 +27,11 @@ use std::time::Instant;
 use crate::ClientError;
 use crate::ClientResult;
 use cheetah_string::CheetahString;
-use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_runtime::ChildServiceContext;
 use tokio::sync::Mutex;
 
-use crate::producer::local_transaction_state::LocalTransactionState;
 use crate::runtime::schedule_client_fixed_delay_task_with_context;
 use crate::runtime::ClientRuntime;
 use crate::runtime::ClientScheduledTaskHandle;
@@ -41,15 +39,6 @@ use crate::runtime::ClientScheduledTaskHandle;
 pub use crate::consumer::consumer_impl::default_mq_pull_consumer_impl::DefaultMQPullConsumerImpl;
 pub use crate::consumer::default_mq_pull_consumer::DefaultMQPullConsumer;
 pub use crate::consumer::default_mq_pull_consumer::MQPullConsumer;
-
-const MODERN_TRANSACTION_LISTENER: &str = "TransactionListener";
-
-fn unsupported_legacy_api(api: &str, replacement: &str) -> ClientError {
-    ClientError::illegal_argument(format!(
-        "{api} is deprecated in the RocketMQ Java client and is not supported by rocketmq-client-rust; use \
-         {replacement} instead"
-    ))
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScheduleServiceState {
@@ -465,24 +454,10 @@ impl MQHelper {
     }
 }
 
-#[deprecated(
-    since = "0.9.0",
-    note = "Java TransactionCheckListener is deprecated; use TransactionListener"
-)]
-pub trait TransactionCheckListener {
-    fn check_local_transaction_state(&self, _message: &MessageExt) -> ClientResult<LocalTransactionState> {
-        Err(unsupported_legacy_api(
-            "TransactionCheckListener",
-            MODERN_TRANSACTION_LISTENER,
-        ))
-    }
-}
-
 #[cfg(test)]
 #[allow(deprecated)]
 mod tests {
     use super::*;
-    use crate::test_support::error_assertions::assert_invalid_argument;
     use crate::test_support::error_assertions::assert_not_initialized;
 
     #[tokio::test]
@@ -527,17 +502,5 @@ mod tests {
             &error,
             "MQPullConsumerScheduleService has no ClientRuntime; use with_client_runtime",
         );
-    }
-
-    #[test]
-    fn transaction_check_listener_returns_typed_unsupported_error() {
-        struct Listener;
-        impl TransactionCheckListener for Listener {}
-
-        let error = Listener
-            .check_local_transaction_state(&MessageExt::default())
-            .expect_err("deprecated transaction listener should reject checks");
-
-        assert_invalid_argument(&error);
     }
 }
