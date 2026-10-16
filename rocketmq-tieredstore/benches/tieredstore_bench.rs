@@ -40,7 +40,7 @@ fn bench_flat_file_append_commit(c: &mut Criterion) {
     let temp_dir = tempfile::tempdir().unwrap_or_else(|error| panic!("failed to create temp dir: {error}"));
     let config = Arc::new(TieredStoreConfig {
         store_path_root_dir: temp_dir.path().to_path_buf(),
-        backend_provider: "memory".to_owned(),
+        storage_provider_id: "memory".to_owned(),
         commit_log_segment_size: 1024 * 1024,
         consume_queue_segment_size: 20 * 1024,
         file_reserved_time: Duration::from_secs(60 * 60),
@@ -99,7 +99,7 @@ fn bench_index_query(c: &mut Criterion) {
     let temp_dir = tempfile::tempdir().unwrap_or_else(|error| panic!("failed to create temp dir: {error}"));
     let config = TieredStoreConfig {
         store_path_root_dir: temp_dir.path().to_path_buf(),
-        backend_provider: "memory".to_owned(),
+        storage_provider_id: "memory".to_owned(),
         index_file_max_hash_slot_num: 4_096,
         index_file_max_index_num: 65_536,
         ..TieredStoreConfig::default()

@@ -144,7 +144,7 @@ pub mod bench_support {
 
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: root.clone(),
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             commit_log_segment_size: 1024 * 1024,
             consume_queue_segment_size: 64 * 1024,
             max_pending_tasks: request_count.max(4),
@@ -235,7 +235,7 @@ pub mod bench_support {
 
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: root.clone(),
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             commit_log_segment_size: 8,
             consume_queue_segment_size: CONSUME_QUEUE_UNIT_SIZE as u64,
             file_reserved_time: Duration::from_millis(1),

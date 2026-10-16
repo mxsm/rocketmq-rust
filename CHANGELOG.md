@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **refactor(store):** Rename the checkpoint discriminator to `CheckpointStoreKind` and its fields/accessor to `store_kind` (breaking), preserving the `backend` JSON key ([#11611](https://github.com/mxsm/rocketmq-rust/issues/11611)).
+- **refactor(tieredstore):** Rename the provider ID field to `storage_provider_id` and migrate configuration to `storageProviderId` (breaking) ([#11603](https://github.com/mxsm/rocketmq-rust/issues/11603)).
+- **refactor(store):** Align the internal logical-read module name with `MessageStoreReader` ([#11595](https://github.com/mxsm/rocketmq-rust/issues/11595)).
 - **chore(proxy):** Replace the single-line Proxy usage with readable `-h`/`--help` output that names `rocketmq-proxy-rust`, shows the Cargo version, lists every option, and describes the Proxy with RocketMQ-Rust wording ([#11634](https://github.com/mxsm/rocketmq-rust/issues/11634)).
 - **chore(controller):** Name the Controller CLI `rocketmq-controller-rust` to match its executable, take author and version from Cargo metadata, and describe the Controller in `-h`/`--help` with RocketMQ-Rust wording ([#11633](https://github.com/mxsm/rocketmq-rust/issues/11633)).
 - **chore(broker):** Name the Broker CLI `rocketmq-broker-rust`, take its author from Cargo metadata, and describe the Broker in `-h`/`--help` with RocketMQ-Rust wording ([#11632](https://github.com/mxsm/rocketmq-rust/issues/11632)).
@@ -74,6 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(controller):** Align the OpenRaft core, macros, and runtimes at `0.10.0-alpha.37`, adapt the snapshot and leadership APIs while preserving persisted snapshot identity, and refresh the standalone fuzz lockfile to restore locked builds for all four targets ([#11640](https://github.com/mxsm/rocketmq-rust/issues/11640)).
 - **build:** Inherit the Controller MSRV and centralize the Admin Core dependency version used by the Admin CLI and TUI.
 - **fix(fuzz):** Align the standalone OpenRaft macro pin and lockfile with the Controller's `0.10.0-alpha.37` requirement, restoring locked builds for all four fuzz targets ([#11581](https://github.com/mxsm/rocketmq-rust/issues/11581)).
 - **fix(fuzz):** Align the OpenRaft macro pin and standalone lockfile with the controller's `0.10.0-alpha.36` requirement so locked builds resolve all four fuzz targets ([#11115](https://github.com/mxsm/rocketmq-rust/issues/11115)).

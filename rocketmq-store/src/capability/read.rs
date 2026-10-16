@@ -15,7 +15,7 @@
 //! Logical reads and queue metadata projections. Backend objects stay inside Store.
 
 use super::*;
-use crate::base::backend_read_ops::MessageStoreReader;
+use crate::base::message_store_reader::MessageStoreReader;
 
 /// Backend queue inventory used by Broker administration.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

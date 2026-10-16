@@ -229,7 +229,7 @@ fn valid_config(config: &TieredStoreConfig, descriptor: Option<TieredProviderDes
             return false;
         }
     }
-    if config.backend_provider != descriptor.id() {
+    if config.storage_provider_id != descriptor.id() {
         return false;
     }
     let missing = INDEX_PROVIDER_CAPABILITIES

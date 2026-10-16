@@ -136,7 +136,7 @@ async fn incompatible_persisted_provider_contract_fails_before_recovery() -> Res
     let context = RuntimeContext::from_current("tiered-provider-contract-test");
     let store = TieredStore::new(
         TieredStoreConfig {
-            backend_provider: "posix".to_owned(),
+            storage_provider_id: "posix".to_owned(),
             store_path_root_dir: root,
             ..TieredStoreConfig::default()
         },

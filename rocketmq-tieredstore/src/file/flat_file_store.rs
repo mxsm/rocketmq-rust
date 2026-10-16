@@ -381,7 +381,7 @@ mod tests {
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             file_reserved_time: Duration::from_millis(10_000),
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             index_file_max_hash_slot_num: 8,
             index_file_max_index_num: 16,
             ..TieredStoreConfig::default()
@@ -428,7 +428,7 @@ mod tests {
         })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             index_file_max_hash_slot_num: 8,
             index_file_max_index_num: 16,
             ..TieredStoreConfig::default()
@@ -464,7 +464,7 @@ mod tests {
         })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().join("metadata-a"),
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             index_file_max_hash_slot_num: 8,
             index_file_max_index_num: 16,
             ..TieredStoreConfig::default()
@@ -478,7 +478,7 @@ mod tests {
 
         let reloaded_config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().join("metadata-b"),
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             index_file_max_hash_slot_num: 8,
             index_file_max_index_num: 16,
             ..TieredStoreConfig::default()
@@ -505,7 +505,7 @@ mod tests {
         })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             index_file_max_hash_slot_num: 8,
             index_file_max_index_num: 16,
             ..TieredStoreConfig::default()
@@ -546,7 +546,7 @@ mod tests {
         })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             commit_log_segment_size: 8,
             consume_queue_segment_size: crate::file::CONSUME_QUEUE_UNIT_SIZE as u64,
             ..TieredStoreConfig::default()

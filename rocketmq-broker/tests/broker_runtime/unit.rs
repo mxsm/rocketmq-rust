@@ -1953,13 +1953,20 @@ fn tieredstore_message_store_config(root: &Path) -> MessageStoreConfig {
         "timerWheelEnable": false,
         "tieredStoreConfig": {
             "storageLevel": "force",
-            "backendProvider": "memory",
+            "storageProviderId": "memory",
             "metadataProvider": "json",
             "storePathRootDir": root.join("tieredstore").to_string_lossy(),
             "maxPendingTasks": 16
         }
     }))
     .expect("deserialize tieredstore-enabled message store config")
+}
+
+#[cfg(feature = "tieredstore")]
+#[test]
+fn tieredstore_storage_provider_id_deserializes() {
+    let config = tieredstore_message_store_config(Path::new("store"));
+    assert_eq!(config.tiered_store_config.unwrap().storage_provider_id, "memory");
 }
 
 #[cfg(feature = "tieredstore")]

@@ -48,7 +48,7 @@ pub struct TieredStoreConfig {
     pub index_file_max_hash_slot_num: u32,
     pub index_file_max_index_num: u32,
     pub message_index_enable: bool,
-    pub backend_provider: String,
+    pub storage_provider_id: String,
     pub metadata_provider: String,
     pub delete_file_enable: bool,
     pub file_reserved_time: Duration,
@@ -96,7 +96,7 @@ impl Default for TieredStoreConfig {
             index_file_max_hash_slot_num: 5_000_000,
             index_file_max_index_num: 20_000_000,
             message_index_enable: true,
-            backend_provider: "posix".to_owned(),
+            storage_provider_id: "posix".to_owned(),
             metadata_provider: "json".to_owned(),
             delete_file_enable: true,
             file_reserved_time: Duration::from_secs(72 * 60 * 60),
@@ -138,6 +138,33 @@ fn default_store_root() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn storage_provider_id_round_trips_with_canonical_key() {
+        let config: TieredStoreConfig = serde_json::from_value(serde_json::json!({
+            "storageProviderId": "memory"
+        }))
+        .unwrap();
+        assert_eq!(config.storage_provider_id, "memory");
+
+        let value = serde_json::to_value(&config).unwrap();
+        assert_eq!(value["storageProviderId"], "memory");
+        assert!(value.get("backendProvider").is_none());
+        assert_eq!(serde_json::from_value::<TieredStoreConfig>(value).unwrap(), config);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn storage_provider_id_defaults_without_canonical_key() {
+        for value in [
+            serde_json::json!({}),
+            serde_json::json!({ "backendProvider": "memory" }),
+        ] {
+            let config: TieredStoreConfig = serde_json::from_value(value).unwrap();
+            assert_eq!(config.storage_provider_id, "posix");
+        }
+    }
 
     #[test]
     fn default_config_matches_java_tieredstore_defaults() {

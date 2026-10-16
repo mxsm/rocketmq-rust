@@ -88,13 +88,13 @@ use super::ReputMessageService;
 use super::ReputMessageServiceInner;
 use super::StoreRootLeaseState;
 use crate::base::backend_ops::BackendOps;
-use crate::base::backend_read_ops::MessageStoreReader;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::message_arriving_listener::MessageArrivingListener;
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::message_status_enum::PutMessageStatus;
+use crate::base::message_store_reader::MessageStoreReader;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::base::store_enum::StoreType;
 use crate::config::flush_disk_type::FlushDiskType;
@@ -1863,7 +1863,7 @@ async fn tieredstore_write_path_dispatches_commitlog_reput_messages() {
             timer_wheel_enable: false,
             tiered_store_config: Some(TieredStoreConfig {
                 storage_level: TieredStorageLevel::Force,
-                backend_provider: "memory".to_string(),
+                storage_provider_id: "memory".to_string(),
                 store_path_root_dir: temp_dir.path().join("tieredstore"),
                 max_pending_tasks: 16,
                 ..TieredStoreConfig::default()
@@ -1925,7 +1925,7 @@ async fn tieredstore_read_path_falls_back_when_local_queue_is_missing() {
             timer_wheel_enable: false,
             tiered_store_config: Some(TieredStoreConfig {
                 storage_level: TieredStorageLevel::Force,
-                backend_provider: "memory".to_string(),
+                storage_provider_id: "memory".to_string(),
                 store_path_root_dir: temp_dir.path().join("tieredstore"),
                 delete_file_enable: false,
                 max_pending_tasks: 16,
