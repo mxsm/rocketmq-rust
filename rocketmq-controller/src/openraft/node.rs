@@ -251,6 +251,7 @@ impl RaftNodeManager {
         self.raft
             .ensure_linearizable(ReadPolicy::ReadIndex)
             .await
+            .map(|read_log_id| Some(*read_log_id.log_id()))
             .map_err(|error| consensus_failed("read linearizable Raft index", error))
     }
 

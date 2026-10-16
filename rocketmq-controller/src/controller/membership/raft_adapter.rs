@@ -53,7 +53,7 @@ impl ConsensusMembershipPort for RaftNodeManager {
         }
         if let Some(replication) = metrics.replication {
             for (node_id, matched) in replication {
-                let reached_commit = match (metrics.committed, matched) {
+                let reached_commit = match (metrics.local_committed, matched) {
                     (Some(committed), Some(matched)) => matched >= committed,
                     (None, Some(_)) => true,
                     _ => false,

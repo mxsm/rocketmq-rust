@@ -2344,6 +2344,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2992,9 +3001,9 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "openraft"
-version = "0.10.0-alpha.21"
+version = "0.10.0-alpha.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f40148cf75ead81993d5910bc72275e542e4e01a90241bf1905236843fe3009d"
+checksum = "225e445aeba04deb36474dfc77d7b8f54364cfbee968851e31d50f4db4b7c53a"
 dependencies = [
  "anyerror",
  "backoff-series",
@@ -3003,12 +3012,13 @@ dependencies = [
  "derive_more",
  "display-more",
  "futures-util",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "maplit",
  "openraft-macros",
  "openraft-rt",
  "openraft-rt-tokio",
  "peel-off",
+ "quorum-set",
  "rand 0.10.3",
  "serde",
  "smallvec",
@@ -3032,9 +3042,9 @@ dependencies = [
 
 [[package]]
 name = "openraft-rt"
-version = "0.10.0-alpha.21"
+version = "0.10.0-alpha.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a31c2d12e376df204612bb2016d652ea2d48b8edeaa04263facbe2fc7a11e3ef"
+checksum = "abdbb3b5cbb27c4f6520b60b385a1dd4f170dd9a971cc057da3641c4baa7e649"
 dependencies = [
  "futures-channel",
  "futures-util",
@@ -3045,9 +3055,9 @@ dependencies = [
 
 [[package]]
 name = "openraft-rt-tokio"
-version = "0.10.0-alpha.21"
+version = "0.10.0-alpha.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d8c01f2a456a864282bc4eaf76f1f78ab040d80416fd30fd15b8ab88faa337a"
+checksum = "fc4f79eaaf4c90b816235b72376b48b96f72167d15f0aaadaee50f965e8ba909"
 dependencies = [
  "futures-util",
  "openraft-rt",
@@ -3812,6 +3822,16 @@ dependencies = [
  "socket2 0.6.5",
  "tracing",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "quorum-set"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65fbaef7c5116d9b9c8764bf8e33bad95ec88cee358d414f99eabc667d5a8daf"
+dependencies = [
+ "sha2 0.10.9",
+ "validit",
 ]
 
 [[package]]

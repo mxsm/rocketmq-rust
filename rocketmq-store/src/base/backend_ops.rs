@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base::backend_read_ops::MessageStoreReader;
+use crate::base::message_store_reader::MessageStoreReader;
 use std::any::Any;
 use std::collections::HashMap;
 use std::collections::HashSet;
