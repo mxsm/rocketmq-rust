@@ -77,7 +77,7 @@ impl Store {
 }
 
 fn storage_config(config: &ControllerConfig) -> Result<StorageConfig> {
-    match config.storage_backend {
+    match config.storage_engine_type {
         StorageEngineType::Memory => Ok(StorageConfig::Memory),
         StorageEngineType::File => {
             #[cfg(feature = "dev-single")]

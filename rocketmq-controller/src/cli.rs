@@ -234,7 +234,7 @@ impl ControllerCli {
 
         println!("\n========== Storage Configuration ==========");
         println!("Storage Path:            {}", config.storage_path);
-        println!("Storage Backend:         {:?}", config.storage_backend);
+        println!("Storage Engine Type:     {:?}", config.storage_engine_type);
         println!("Mapped File Size:        {} bytes", config.mapped_file_size);
         println!();
     }

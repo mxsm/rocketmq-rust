@@ -238,8 +238,9 @@ pub struct ControllerConfig {
     /// Local storage path for controller artifacts
     pub storage_path: String,
 
-    /// Storage backend to use for local controller artifacts
-    pub storage_backend: StorageEngineType,
+    /// Storage engine selected for local Controller artifacts.
+    #[serde(rename = "storageBackend")]
+    pub storage_engine_type: StorageEngineType,
 
     /// Whether the controller may elect an unclean master on this node
     pub enable_elect_unclean_master_local: bool,
@@ -286,7 +287,7 @@ impl Clone for ControllerConfig {
             snapshot_logs_since_last: self.snapshot_logs_since_last,
             snapshot_max_log_entries_to_keep: self.snapshot_max_log_entries_to_keep,
             storage_path: self.storage_path.clone(),
-            storage_backend: self.storage_backend.clone(),
+            storage_engine_type: self.storage_engine_type.clone(),
             enable_elect_unclean_master_local: self.enable_elect_unclean_master_local,
             rw_lock: RwLock::new(()),
         }
@@ -358,7 +359,7 @@ impl Default for ControllerConfig {
             snapshot_logs_since_last: 5000,
             snapshot_max_log_entries_to_keep: 1000,
             storage_path: String::new(),
-            storage_backend: StorageEngineType::RocksDB,
+            storage_engine_type: StorageEngineType::RocksDB,
             enable_elect_unclean_master_local: false,
             rw_lock: RwLock::new(()),
         }
@@ -512,7 +513,7 @@ impl ControllerConfig {
 
     /// Select the storage engine for this Controller node.
     pub fn with_storage_engine_type(mut self, engine_type: StorageEngineType) -> Self {
-        self.storage_backend = engine_type;
+        self.storage_engine_type = engine_type;
         self
     }
 
@@ -765,7 +766,7 @@ impl ControllerConfig {
         write_property!("snapshotLogsSinceLast={}", self.snapshot_logs_since_last);
         write_property!("snapshotMaxLogEntriesToKeep={}", self.snapshot_max_log_entries_to_keep);
         write_property!("storagePath={}", self.storage_path);
-        write_property!("storageBackend={}", self.storage_backend);
+        write_property!("storageBackend={}", self.storage_engine_type);
         write_property!(
             "enableElectUncleanMasterLocal={}",
             self.enable_elect_unclean_master_local
@@ -914,7 +915,7 @@ impl ControllerConfig {
                 }
 
                 "storageBackend" => {
-                    self.storage_backend = parse_update_value::<StorageEngineType>("storageBackend", value)?;
+                    self.storage_engine_type = parse_update_value::<StorageEngineType>("storageBackend", value)?;
                 }
 
                 "enableElectUncleanMasterLocal" => {
@@ -964,6 +965,26 @@ path = "/rocketmq"
         assert_eq!(value["observability"]["prometheus"]["host"], "127.0.0.1");
         assert_eq!(value["observability"]["prometheus"]["port"], 9464);
         assert_eq!(value["observability"]["prometheus"]["path"], "/rocketmq");
+    }
+
+    #[test]
+    fn storage_engine_type_round_trips_through_storage_backend_key() {
+        let config = parse_controller_toml(
+            r#"
+storageBackend = "Memory"
+"#,
+        )
+        .expect("storageBackend should select the Controller storage engine");
+        assert_eq!(config.storage_engine_type, StorageEngineType::Memory);
+
+        let value = serde_json::to_value(&config).expect("Controller configuration should serialize");
+        let object = value.as_object().expect("controller config is an object");
+        assert_eq!(value["storageBackend"], "Memory");
+        assert!(!object.contains_key("storageEngineType"));
+
+        let restored: ControllerConfig =
+            serde_json::from_value(value).expect("serialized Controller configuration should deserialize");
+        assert_eq!(restored.storage_engine_type, StorageEngineType::Memory);
     }
 
     #[test]
