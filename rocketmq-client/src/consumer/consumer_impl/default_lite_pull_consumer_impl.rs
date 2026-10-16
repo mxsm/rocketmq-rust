@@ -2826,14 +2826,6 @@ impl DefaultLitePullConsumerImpl {
         Ok(result)
     }
 
-    /// Returns the offset for the specified message queue at the given timestamp.
-    ///
-    /// This is an alias for `search_offset`.
-    #[allow(dead_code)]
-    pub async fn offset_for_timestamp(&self, mq: &MessageQueue, timestamp: u64) -> ClientResult<i64> {
-        self.search_offset(mq, timestamp).await
-    }
-
     /// Returns the earliest message store time for the specified message queue.
     #[allow(dead_code)]
     pub async fn earliest_msg_store_time(&self, mq: &MessageQueue) -> ClientResult<i64> {
@@ -2844,18 +2836,6 @@ impl DefaultLitePullConsumerImpl {
             .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?;
 
         client_instance.mq_admin_impl.earliest_msg_store_time(mq).await
-    }
-
-    /// Returns the maximum offset of the specified message queue.
-    #[allow(dead_code)]
-    pub async fn max_offset_public(&self, mq: &MessageQueue) -> ClientResult<i64> {
-        self.max_offset(mq).await
-    }
-
-    /// Returns the minimum offset of the specified message queue.
-    #[allow(dead_code)]
-    pub async fn min_offset_public(&self, mq: &MessageQueue) -> ClientResult<i64> {
-        self.min_offset(mq).await
     }
 
     /// Returns whether auto-commit is enabled.
@@ -3166,7 +3146,7 @@ impl DefaultLitePullConsumerImpl {
         self.update_consumer_config(|config| config.consume_max_span = consume_max_span);
     }
 
-    async fn max_offset(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
+    pub(crate) async fn max_offset(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
         self.make_sure_state_ok()?;
 
         let client_instance = self
@@ -3188,7 +3168,7 @@ impl DefaultLitePullConsumerImpl {
             .await
     }
 
-    async fn min_offset(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
+    pub(crate) async fn min_offset(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
         self.make_sure_state_ok()?;
 
         let client_instance = self
