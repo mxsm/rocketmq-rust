@@ -64,11 +64,14 @@ pub enum ConfigFileFormat {
 /// - `-n, --namesrvAddr`: Name server address list (optional)
 #[derive(Parser, Debug)]
 #[command(
-    author = "mxsm",
+    name = "rocketmq-broker-rust",
+    author,
     version,
-    about = "RocketMQ Broker Server (Rust)",
-    long_about = "Apache RocketMQ Broker Server implemented in Rust\n\
-                  For more information: https://github.com/mxsm/rocketmq-rust"
+    about = "RocketMQ-Rust Broker",
+    long_about = "Message broker for RocketMQ-Rust, a Rust implementation of Apache RocketMQ.\n\n\
+                  Provides message storage and delivery, topic and subscription management, \
+                  and consumer offset tracking.\n\n\
+                  Project: https://github.com/mxsm/rocketmq-rust"
 )]
 pub struct Args {
     /// Broker configuration file path (TOML or Java properties)
