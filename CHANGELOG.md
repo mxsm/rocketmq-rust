@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(store):** Align the internal logical-read module name with `MessageStoreReader` ([#11595](https://github.com/mxsm/rocketmq-rust/issues/11595)).
 - **chore(proxy):** Replace the single-line Proxy usage with readable `-h`/`--help` output that names `rocketmq-proxy-rust`, shows the Cargo version, lists every option, and describes the Proxy with RocketMQ-Rust wording ([#11634](https://github.com/mxsm/rocketmq-rust/issues/11634)).
 - **chore(controller):** Name the Controller CLI `rocketmq-controller-rust` to match its executable, take author and version from Cargo metadata, and describe the Controller in `-h`/`--help` with RocketMQ-Rust wording ([#11633](https://github.com/mxsm/rocketmq-rust/issues/11633)).
 - **chore(broker):** Name the Broker CLI `rocketmq-broker-rust`, take its author from Cargo metadata, and describe the Broker in `-h`/`--help` with RocketMQ-Rust wording ([#11632](https://github.com/mxsm/rocketmq-rust/issues/11632)).
