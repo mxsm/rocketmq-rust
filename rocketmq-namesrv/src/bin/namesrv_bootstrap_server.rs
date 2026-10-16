@@ -35,12 +35,15 @@ use rocketmq_controller::RaftPeer;
 use rocketmq_controller::StorageEngineType;
 use rocketmq_error::fields;
 use rocketmq_error::CliErrorView;
+use rocketmq_error::CliExitCode;
 use rocketmq_error::CliVerbosity;
 use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
 use rocketmq_error::CORE_CONFIGURATION_INVALID;
+use rocketmq_error::CORE_CONFIGURATION_MISSING;
 use rocketmq_error::CORE_SERVICE_FAILED;
 use rocketmq_model::common::mix_all::string_to_properties;
+use rocketmq_model::common::mix_all::ROCKETMQ_HOME_ENV;
 use rocketmq_model::utils::env_utils::EnvUtils;
 use rocketmq_model::version::CURRENT_VERSION;
 use rocketmq_namesrv::bootstrap::Builder;
@@ -125,6 +128,18 @@ impl std::error::Error for StartupRuntimeConfigError {
     }
 }
 
+/// Neither `ROCKETMQ_HOME` nor `--rocketmqHome` supplied a home directory.
+#[derive(Debug)]
+struct RocketmqHomeNotSet;
+
+impl std::fmt::Display for RocketmqHomeNotSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("set the ROCKETMQ_HOME environment variable or pass --rocketmqHome")
+    }
+}
+
+impl std::error::Error for RocketmqHomeNotSet {}
+
 const LOGO: &str = r#"
       _____            _        _   __  __  ____         _____           _     _   _                         _____
      |  __ \          | |      | | |  \/  |/ __ \       |  __ \         | |   | \ | |                       / ____|
@@ -169,35 +184,49 @@ fn print_release_version_if_requested(component: &str) -> bool {
 
 fn main() {
     if let Err(source) = try_main() {
-        let diagnostic = source
-            .downcast_ref::<StartupRuntimeConfigError>()
-            .map(ToString::to_string);
-        let (descriptor, context) = if diagnostic.is_some() {
-            (
-                &CORE_CONFIGURATION_INVALID,
-                ErrorContext::new()
-                    .with_text(fields::KEY, "runtime")
-                    .with_secret_presence(fields::REASON_PRESENT),
-            )
-        } else {
-            (
-                &CORE_SERVICE_FAILED,
-                ErrorContext::new()
-                    .with_text(fields::OPERATION_DIAGNOSTIC, "run-nameserver-service")
-                    .with_secret_presence(fields::SOURCE_PRESENT),
-            )
-        };
-        let error = Error::new(descriptor)
-            .with_boxed_source(source.into_boxed_dyn_error())
-            .with_context(context);
-        let output = CliErrorView::from_error(&error).output(CliVerbosity::Default);
-        if let Some(diagnostic) = diagnostic {
-            eprintln!("{}: {diagnostic}", output.stderr());
-        } else {
-            eprintln!("{}", output.stderr());
-        }
-        std::process::exit(output.exit_code().as_i32());
+        let (stderr, exit_code) = startup_failure_output(source);
+        eprintln!("{stderr}");
+        std::process::exit(exit_code.as_i32());
     }
+}
+
+/// Projects a startup failure onto the CLI boundary.
+///
+/// Typed startup errors render fixed, redaction-safe diagnostics after the stable error line.
+/// Every other source stays hidden behind the generic service failure.
+fn startup_failure_output(source: anyhow::Error) -> (String, CliExitCode) {
+    let (descriptor, context, diagnostic) = if let Some(error) = source.downcast_ref::<StartupRuntimeConfigError>() {
+        (
+            &CORE_CONFIGURATION_INVALID,
+            ErrorContext::new()
+                .with_text(fields::KEY, "runtime")
+                .with_secret_presence(fields::REASON_PRESENT),
+            Some(error.to_string()),
+        )
+    } else if let Some(error) = source.downcast_ref::<RocketmqHomeNotSet>() {
+        (
+            &CORE_CONFIGURATION_MISSING,
+            ErrorContext::new().with_text(fields::KEY, ROCKETMQ_HOME_ENV),
+            Some(error.to_string()),
+        )
+    } else {
+        (
+            &CORE_SERVICE_FAILED,
+            ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "run-nameserver-service")
+                .with_secret_presence(fields::SOURCE_PRESENT),
+            None,
+        )
+    };
+    let error = Error::new(descriptor)
+        .with_boxed_source(source.into_boxed_dyn_error())
+        .with_context(context);
+    let output = CliErrorView::from_error(&error).output(CliVerbosity::Default);
+    let stderr = match diagnostic {
+        Some(diagnostic) => format!("{}: {diagnostic}", output.stderr()),
+        None => output.stderr().to_string(),
+    };
+    (stderr, output.exit_code())
 }
 
 fn try_main() -> Result<()> {
@@ -295,12 +324,8 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle, 
         return Ok(());
     }
 
-    // Validate ROCKETMQ_HOME is set
     if namesrv_config.rocketmq_home.is_empty() {
-        bail!(
-            "Please set the ROCKETMQ_HOME variable in your environment to match the location of the RocketMQ \
-             installation"
-        );
+        return Err(RocketmqHomeNotSet.into());
     }
 
     let mut telemetry_bootstrap = build_namesrv_telemetry_bootstrap_config(&namesrv_config);
@@ -1747,6 +1772,28 @@ mod tests {
                 Err(StartupRuntimeConfigError::Fields(_))
             ));
         }
+    }
+
+    #[test]
+    fn startup_failure_output_names_missing_rocketmq_home() {
+        let (stderr, exit_code) = startup_failure_output(anyhow::Error::from(RocketmqHomeNotSet));
+
+        assert_eq!(
+            stderr,
+            "ERROR core.configuration.missing: Required configuration is missing: set the ROCKETMQ_HOME environment \
+             variable or pass --rocketmqHome"
+        );
+        assert_eq!(exit_code, CliExitCode::CONFIG);
+    }
+
+    #[test]
+    fn startup_failure_output_hides_untyped_sources() {
+        let source = anyhow::anyhow!("token=secret-value").context("failed to parse namesrv configuration");
+
+        let (stderr, exit_code) = startup_failure_output(source);
+
+        assert_eq!(stderr, "ERROR core.service.failed: Service lifecycle operation failed");
+        assert_eq!(exit_code, CliExitCode::SOFTWARE);
     }
 
     #[test]

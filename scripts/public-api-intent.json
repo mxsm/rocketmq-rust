@@ -5226,8 +5226,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::log_file::mapped_file::IoUringBackendStatus",
-          "identity": "rocketmq-store/src/public_api.rs:pub use crate::log_file::mapped_file::IoUringBackendStatus",
+          "declaration": "pub use crate::log_file::mapped_file::IoUringBuildSupport",
+          "identity": "rocketmq-store/src/public_api.rs:pub use crate::log_file::mapped_file::IoUringBuildSupport",
           "owner": "store",
           "path": "rocketmq-store/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -5307,8 +5307,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::log_file::mapped_file::io_uring_backend_status",
-          "identity": "rocketmq-store/src/public_api.rs:pub use crate::log_file::mapped_file::io_uring_backend_status",
+          "declaration": "pub use crate::log_file::mapped_file::io_uring_build_support",
+          "identity": "rocketmq-store/src/public_api.rs:pub use crate::log_file::mapped_file::io_uring_build_support",
           "owner": "store",
           "path": "rocketmq-store/src/public_api.rs",
           "rationale": "deliberate root entry point",

@@ -20,25 +20,35 @@ pub const MIN_IO_URING_KERNEL_VERSION: LinuxKernelVersion = LinuxKernelVersion {
     patch: 0,
 };
 
+/// Whether this build of the store can use io_uring at all.
+///
+/// This only reflects the compilation target and the `io_uring` Cargo feature.
+/// It does not look at the running kernel or create an io_uring instance, so
+/// [`IoUringBuildSupport::Available`] does not mean io_uring is ready at runtime
+/// or that any I/O path is using it. Use [`probe_io_uring_runtime_capability`]
+/// for the runtime view, which combines this value with kernel and opcode checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IoUringBackendStatus {
+pub enum IoUringBuildSupport {
     Available,
     FeatureDisabled,
     UnsupportedPlatform,
 }
 
-impl IoUringBackendStatus {
+impl IoUringBuildSupport {
+    /// Returns `true` only for [`IoUringBuildSupport::Available`], meaning the
+    /// build satisfies the target and feature conditions. This is not a runtime
+    /// readiness check.
     #[inline]
-    pub fn is_available(self) -> bool {
-        matches!(self, IoUringBackendStatus::Available)
+    pub fn is_supported(self) -> bool {
+        matches!(self, IoUringBuildSupport::Available)
     }
 
     #[inline]
     pub fn as_str(self) -> &'static str {
         match self {
-            IoUringBackendStatus::Available => "available",
-            IoUringBackendStatus::FeatureDisabled => "feature_disabled",
-            IoUringBackendStatus::UnsupportedPlatform => "unsupported_platform",
+            IoUringBuildSupport::Available => "available",
+            IoUringBuildSupport::FeatureDisabled => "feature_disabled",
+            IoUringBuildSupport::UnsupportedPlatform => "unsupported_platform",
         }
     }
 }
@@ -124,7 +134,7 @@ pub enum IoUringFallbackReason {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IoUringRuntimeCapability {
-    pub backend_status: IoUringBackendStatus,
+    pub build_support: IoUringBuildSupport,
     pub kernel_version: Option<LinuxKernelVersion>,
     pub opcode_support: IoUringOpcodeSupport,
     pub fallback_reason: Option<IoUringFallbackReason>,
@@ -133,14 +143,14 @@ pub struct IoUringRuntimeCapability {
 
 impl IoUringRuntimeCapability {
     pub fn classify(
-        backend_status: IoUringBackendStatus,
+        build_support: IoUringBuildSupport,
         kernel_version: Option<LinuxKernelVersion>,
         opcode_support: IoUringOpcodeSupport,
     ) -> Self {
-        let fallback_reason = match backend_status {
-            IoUringBackendStatus::FeatureDisabled => Some(IoUringFallbackReason::FeatureDisabled),
-            IoUringBackendStatus::UnsupportedPlatform => Some(IoUringFallbackReason::UnsupportedPlatform),
-            IoUringBackendStatus::Available => match kernel_version {
+        let fallback_reason = match build_support {
+            IoUringBuildSupport::FeatureDisabled => Some(IoUringFallbackReason::FeatureDisabled),
+            IoUringBuildSupport::UnsupportedPlatform => Some(IoUringFallbackReason::UnsupportedPlatform),
+            IoUringBuildSupport::Available => match kernel_version {
                 Some(version) if version.supports_io_uring() => {
                     (!opcode_support.required_supported()).then_some(IoUringFallbackReason::MissingRequiredOpcodes)
                 }
@@ -152,7 +162,7 @@ impl IoUringRuntimeCapability {
         };
 
         Self {
-            backend_status,
+            build_support,
             kernel_version,
             opcode_support,
             fallback_reason,
@@ -166,34 +176,41 @@ impl IoUringRuntimeCapability {
     }
 }
 
+/// Reports whether this build supports io_uring, based only on the compilation
+/// target and the `io_uring` Cargo feature. See [`IoUringBuildSupport`].
 #[inline]
-pub fn io_uring_backend_status() -> IoUringBackendStatus {
+pub fn io_uring_build_support() -> IoUringBuildSupport {
     if !cfg!(target_os = "linux") {
-        IoUringBackendStatus::UnsupportedPlatform
+        IoUringBuildSupport::UnsupportedPlatform
     } else if !cfg!(feature = "io_uring") {
-        IoUringBackendStatus::FeatureDisabled
+        IoUringBuildSupport::FeatureDisabled
     } else {
-        IoUringBackendStatus::Available
+        IoUringBuildSupport::Available
     }
 }
 
 pub fn probe_io_uring_runtime_capability() -> IoUringRuntimeCapability {
-    let backend_status = io_uring_backend_status();
+    let build_support = io_uring_build_support();
     let kernel_version = current_linux_kernel_version();
     let opcode_support = IoUringOpcodeSupport::from_kernel_version(kernel_version);
 
-    IoUringRuntimeCapability::classify(backend_status, kernel_version, opcode_support)
+    IoUringRuntimeCapability::classify(build_support, kernel_version, opcode_support)
 }
 
+/// Returns `Ok(())` when this build supports io_uring.
+///
+/// Otherwise returns an [`io::ErrorKind::Unsupported`] error naming the missing
+/// requirement (the `io_uring` feature or Linux). Like [`io_uring_build_support`],
+/// this does not check runtime readiness.
 #[inline]
-pub fn ensure_io_uring_backend_available() -> io::Result<()> {
-    match io_uring_backend_status() {
-        IoUringBackendStatus::Available => Ok(()),
-        IoUringBackendStatus::FeatureDisabled => Err(io::Error::new(
+pub fn ensure_io_uring_build_support() -> io::Result<()> {
+    match io_uring_build_support() {
+        IoUringBuildSupport::Available => Ok(()),
+        IoUringBuildSupport::FeatureDisabled => Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "io_uring mapped-file backend requires the io_uring feature",
         )),
-        IoUringBackendStatus::UnsupportedPlatform => Err(io::Error::new(
+        IoUringBuildSupport::UnsupportedPlatform => Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "io_uring mapped-file backend requires Linux",
         )),
@@ -224,24 +241,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn backend_status_matches_target_and_feature() {
-        let status = io_uring_backend_status();
+    fn build_support_matches_target_and_feature() {
+        let build_support = io_uring_build_support();
 
         if cfg!(all(target_os = "linux", feature = "io_uring")) {
-            assert_eq!(status, IoUringBackendStatus::Available);
-            ensure_io_uring_backend_available().expect("io_uring should be available");
+            assert_eq!(build_support, IoUringBuildSupport::Available);
+            ensure_io_uring_build_support().expect("io_uring should be available");
         } else {
-            assert!(!status.is_available());
-            assert!(ensure_io_uring_backend_available().is_err());
+            assert!(!build_support.is_supported());
+            assert!(ensure_io_uring_build_support().is_err());
         }
     }
 
     #[test]
-    fn backend_status_string_is_stable() {
-        assert_eq!(IoUringBackendStatus::Available.as_str(), "available");
-        assert_eq!(IoUringBackendStatus::FeatureDisabled.as_str(), "feature_disabled");
+    fn build_support_string_is_stable() {
+        assert_eq!(IoUringBuildSupport::Available.as_str(), "available");
+        assert_eq!(IoUringBuildSupport::FeatureDisabled.as_str(), "feature_disabled");
         assert_eq!(
-            IoUringBackendStatus::UnsupportedPlatform.as_str(),
+            IoUringBuildSupport::UnsupportedPlatform.as_str(),
             "unsupported_platform"
         );
     }
@@ -277,7 +294,7 @@ mod tests {
         };
 
         let capability = IoUringRuntimeCapability::classify(
-            IoUringBackendStatus::Available,
+            IoUringBuildSupport::Available,
             Some(LinuxKernelVersion {
                 major: 5,
                 minor: 1,
@@ -290,7 +307,7 @@ mod tests {
         assert_eq!(capability.fallback_reason, None);
 
         let missing_opcode = IoUringRuntimeCapability::classify(
-            IoUringBackendStatus::Available,
+            IoUringBuildSupport::Available,
             Some(LinuxKernelVersion {
                 major: 6,
                 minor: 1,
@@ -311,7 +328,7 @@ mod tests {
         );
 
         let old_kernel = IoUringRuntimeCapability::classify(
-            IoUringBackendStatus::Available,
+            IoUringBuildSupport::Available,
             Some(LinuxKernelVersion {
                 major: 5,
                 minor: 0,
@@ -360,10 +377,10 @@ mod tests {
     }
 
     #[test]
-    fn runtime_probe_reports_backend_gate_and_experimental_status() {
+    fn runtime_probe_reports_build_support_and_experimental_status() {
         let capability = probe_io_uring_runtime_capability();
 
-        assert_eq!(capability.backend_status, io_uring_backend_status());
+        assert_eq!(capability.build_support, io_uring_build_support());
         assert!(capability.experimental);
 
         if !cfg!(target_os = "linux") {

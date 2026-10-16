@@ -53,10 +53,10 @@ use thiserror::Error;
 use crate::timer::engine::WorkBudget;
 use crate::timer::error::TimerEngineError;
 use crate::timer::index::TimerIndex;
-use crate::timer::index::TimerIndexBackendCursor;
 use crate::timer::index::TimerIndexCheckpoint;
 use crate::timer::index::TimerIndexCursor;
 use crate::timer::index::TimerIndexPage;
+use crate::timer::index::TimerIndexResumeState;
 use crate::timer::index::TimerRecordState;
 use crate::timer::index::TimerSnapshotPin;
 use crate::timer::request::DueTimerRecord;
@@ -605,9 +605,9 @@ fn index_cursor_key(cursor: &TimerIndexCursor) -> TimelineSegmentKey {
 }
 
 fn index_cursor_native(cursor: &TimerIndexCursor) -> Option<SegmentedTimelineContinuation> {
-    match &cursor.backend {
-        TimerIndexBackendCursor::OrderedKey => None,
-        TimerIndexBackendCursor::Segmented {
+    match &cursor.resume_state {
+        TimerIndexResumeState::OrderedKey => None,
+        TimerIndexResumeState::Segmented {
             manifest_generation,
             due_day_utc,
             due_hour_utc,
@@ -637,7 +637,7 @@ fn native_cursor_to_index(cursor: SegmentedTimelineContinuation) -> TimerIndexCu
         lane: key.lane,
         timer_id: key.timer_id,
         generation: key.generation.get(),
-        backend: TimerIndexBackendCursor::Segmented {
+        resume_state: TimerIndexResumeState::Segmented {
             manifest_generation: cursor.manifest_generation,
             due_day_utc: cursor.partition.due_day_utc,
             due_hour_utc: cursor.partition.due_hour_utc,

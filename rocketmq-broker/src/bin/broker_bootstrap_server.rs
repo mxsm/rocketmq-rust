@@ -23,6 +23,7 @@ use anyhow::Result;
 use clap::Parser;
 use rocketmq_broker::build_broker_telemetry_bootstrap_config;
 use rocketmq_broker::command::Args;
+use rocketmq_broker::command::BrokerArgsError;
 use rocketmq_broker::command::ConfigFileFormat;
 use rocketmq_broker::config::broker_config::BrokerConfig;
 use rocketmq_broker::config::java_properties::JavaBrokerProperties;
@@ -31,9 +32,12 @@ use rocketmq_broker::config::validated::ValidatedBrokerConfig;
 use rocketmq_broker::Builder;
 use rocketmq_error::fields;
 use rocketmq_error::CliErrorView;
+use rocketmq_error::CliExitCode;
 use rocketmq_error::CliVerbosity;
 use rocketmq_error::ErrorContext;
+use rocketmq_error::CORE_CONFIGURATION_MISSING;
 use rocketmq_error::CORE_SERVICE_FAILED;
+use rocketmq_model::common::mix_all::ROCKETMQ_HOME_ENV;
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
 use rocketmq_model::utils::env_utils::EnvUtils;
 use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_defaults;
@@ -97,17 +101,44 @@ fn main() {
     let result = try_main();
     report_main_stack_if_requested();
     if let Err(source) = result {
-        let error = rocketmq_error::Error::new(&CORE_SERVICE_FAILED)
-            .with_boxed_source(source.into_boxed_dyn_error())
-            .with_context(
-                ErrorContext::new()
-                    .with_text(fields::OPERATION_DIAGNOSTIC, "run-broker-service")
-                    .with_secret_presence(fields::SOURCE_PRESENT),
-            );
-        let output = CliErrorView::from_error(&error).output(CliVerbosity::Default);
-        eprintln!("{}", output.stderr());
-        std::process::exit(output.exit_code().as_i32());
+        let (stderr, exit_code) = startup_failure_output(source);
+        eprintln!("{stderr}");
+        std::process::exit(exit_code.as_i32());
     }
+}
+
+/// Projects a startup failure onto the CLI boundary.
+///
+/// A missing `ROCKETMQ_HOME` renders its fixed hint after the stable error line. Every other
+/// source stays hidden behind the generic service failure.
+fn startup_failure_output(source: anyhow::Error) -> (String, CliExitCode) {
+    let home_not_set = matches!(
+        source.downcast_ref::<BrokerArgsError>(),
+        Some(BrokerArgsError::RocketmqHomeNotSet)
+    );
+    let (descriptor, context) = if home_not_set {
+        (
+            &CORE_CONFIGURATION_MISSING,
+            ErrorContext::new().with_text(fields::KEY, ROCKETMQ_HOME_ENV),
+        )
+    } else {
+        (
+            &CORE_SERVICE_FAILED,
+            ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "run-broker-service")
+                .with_secret_presence(fields::SOURCE_PRESENT),
+        )
+    };
+    let error = rocketmq_error::Error::new(descriptor)
+        .with_boxed_source(source.into_boxed_dyn_error())
+        .with_context(context);
+    let output = CliErrorView::from_error(&error).output(CliVerbosity::Default);
+    let stderr = if home_not_set {
+        format!("{}: {}", output.stderr(), BrokerArgsError::RocketmqHomeNotSet)
+    } else {
+        output.stderr().to_string()
+    };
+    (stderr, output.exit_code())
 }
 
 /// Prints the main thread's committed stack once the runtime is gone.
@@ -418,9 +449,7 @@ fn log_telemetry_bootstrap(
 fn verify_rocketmq_home() -> Result<()> {
     let home = EnvUtils::get_rocketmq_home();
     if home.is_empty() {
-        anyhow::bail!(
-            "Please set the ROCKETMQ_HOME environment variable to match the location of the RocketMQ installation"
-        );
+        return Err(BrokerArgsError::RocketmqHomeNotSet.into());
     }
 
     let home_path = PathBuf::from(&home);
@@ -694,6 +723,33 @@ fn print_tieredstore_startup_info(message_store_config: &MessageStoreConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_failure_output_names_missing_rocketmq_home() {
+        let (stderr, exit_code) = startup_failure_output(BrokerArgsError::RocketmqHomeNotSet.into());
+
+        assert!(stderr.starts_with("ERROR core.configuration.missing: Required configuration is missing: "));
+        assert!(stderr.contains("ROCKETMQ_HOME environment variable is not set"));
+        assert_eq!(exit_code, CliExitCode::CONFIG);
+    }
+
+    #[test]
+    fn startup_failure_output_hides_untyped_and_other_argument_sources() {
+        let sources = [
+            anyhow::anyhow!("token=secret-value").context("failed to parse broker configuration"),
+            anyhow::Error::from(BrokerArgsError::ConfigFileNotFound(PathBuf::from(
+                "secret-path/broker.toml",
+            )))
+            .context("invalid broker arguments"),
+        ];
+
+        for source in sources {
+            let (stderr, exit_code) = startup_failure_output(source);
+
+            assert_eq!(stderr, "ERROR core.service.failed: Service lifecycle operation failed");
+            assert_eq!(exit_code, CliExitCode::SOFTWARE);
+        }
+    }
 
     #[test]
     fn secure_profile_rejects_disabled_request_protection_before_material_loading() {
