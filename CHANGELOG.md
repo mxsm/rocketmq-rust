@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **chore(proxy):** Replace the single-line Proxy usage with readable `-h`/`--help` output that names `rocketmq-proxy-rust`, shows the Cargo version, lists every option, and describes the Proxy with RocketMQ-Rust wording ([#11634](https://github.com/mxsm/rocketmq-rust/issues/11634)).
+- **refactor(store):** Rename `IoUringBackendStatus` to `IoUringBuildSupport`, `io_uring_backend_status()` to `io_uring_build_support()`, `is_available()` to `is_supported()`, `ensure_io_uring_backend_available()` to `ensure_io_uring_build_support()`, `IoUringRuntimeCapability.backend_status` to `build_support`, and the runtime-info key `ioUringBackendStatus` to `ioUringBuildSupport` (breaking). Variants and their string values are unchanged; no compatibility aliases are kept ([#11612](https://github.com/mxsm/rocketmq-rust/issues/11612)).
 - **refactor(store):** Rename the sealed capability trait `BackendAccess` to `MessageStoreAccess`, its associated type `Backend` to `MessageStore`, and its accessors to `message_store()`/`message_store_mut()` (breaking) ([#11594](https://github.com/mxsm/rocketmq-rust/issues/11594)).
 - **refactor(controller):** Rename the Controller storage selector and builder to `StorageEngineType`, `with_storage_engine_type` (breaking) ([#11514](https://github.com/mxsm/rocketmq-rust/issues/11514)).
 - **refactor(proxy-local):** Rename the public type to `LocalBrokerCommandGateway` (breaking) ([#11544](https://github.com/mxsm/rocketmq-rust/issues/11544)).

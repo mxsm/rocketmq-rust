@@ -661,11 +661,10 @@ Project: https://github.com/mxsm/rocketmq-rust";
 /// Renders the help text. `-h` passes `detailed = false` for the concise form;
 /// `--help` adds the detailed description and project URL.
 fn usage_text(detailed: bool) -> String {
-    let mut text = format!("{PROXY_COMMAND_NAME} {}\n", env!("CARGO_PKG_VERSION"));
+    let mut text = format!("{PROXY_COMMAND_NAME} {}\n{PROXY_ABOUT}", env!("CARGO_PKG_VERSION"));
     if detailed {
+        text.push_str("\n\n");
         text.push_str(PROXY_LONG_ABOUT);
-    } else {
-        text.push_str(PROXY_ABOUT);
     }
     text.push_str(
         "
