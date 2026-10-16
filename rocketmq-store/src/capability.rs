@@ -23,7 +23,7 @@ mod read;
 pub use read::BrokerReadStore;
 pub use read::ConsumeQueueStatistics;
 
-use crate::base::backend_read_ops::MessageStoreReader;
+use crate::base::message_store_reader::MessageStoreReader;
 use std::any::Any;
 use std::collections::HashMap;
 use std::collections::HashSet;
