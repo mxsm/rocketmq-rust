@@ -212,8 +212,12 @@ Rust 结构体字段使用 snake_case。主要默认值及作用范围如下：
 如果导入期间发生元数据操作或持久化错误，可能留下部分更新。只有导入成功后才发布新的白名单和代数。
 监听任务会记录失败并在后续轮询中重试；这不代表并发请求能够观察到原子的整体快照切换。
 
-使用自定义存储时，通过 `ProviderBundle` 注入 `UserMetadataPort`、`AclMetadataPort`
-和 `ProviderControl` 实现。配置 ACL 文件导入或 v1 迁移还需要 `AclSnapshotImport`；
+元数据提供程序名称 `local`、`file` 及其支持的类名别名均选择同一组内置本地提供程序。
+是否持久化 JSON 快照由 `authConfigPath` 控制。
+
+使用自定义元数据存储时，通过 `AuthRuntimeBuilder::with_provider_bundle` 注入包含
+`UserMetadataPort`、`AclMetadataPort` 和 `ProviderControl` 实现的 `ProviderBundle`，
+将并发元数据操作与初始化、刷新及关闭分开。配置 ACL 文件导入或 v1 迁移还需要 `AclSnapshotImport`；
 缺少该能力时，构建器会在启动修改操作之前拒绝该组合。
 
 有状态评估器需要显式接入。认证策略按代数、通道和用户名缓存成功及失败结果；
