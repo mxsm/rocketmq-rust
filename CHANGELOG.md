@@ -55,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - **refactor(proxy-core):** Remove the deprecated `remoting` and `service` module aliases (breaking); import from `ingress::remoting` and `contracts`, respectively.
+- **refactor(client):** Remove three internal LitePull offset forwarders while retaining the public consumer methods and existing offset implementations ([#11653](https://github.com/mxsm/rocketmq-rust/issues/11653)).
 - **refactor(client):** Remove the deprecated `TransactionCheckListener` compatibility trait (breaking); use `TransactionListener` for transaction execution and broker checks.
 - **refactor(client):** Remove the always-failing `MQHelper::reset_offset_by_timestamp` entry point (breaking); use the async `reset_offset_by_timestamp_with_client_runtime` method with an application-owned runtime and typed `MessageModel`.
 - **refactor(store):** Remove the deprecated `BrokerStatsManager::{GROUP_GET_FALL_SIZE, GROUP_GET_FALL_TIME, GROUP_GET_LATENCY}` constants (breaking); use the identical constants on `rocketmq_observability::stats::Stats`.
