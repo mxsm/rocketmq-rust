@@ -46,14 +46,15 @@ pub struct MaintenanceCapabilitiesResponse {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct MaintenanceStoreCapabilities {
     pub member_id: String,
-    pub backend: ReleaseCheckpointBackend,
+    #[serde(rename = "backend")]
+    pub store_kind: ReleaseCheckpointStoreKind,
     pub storage_identity: ReleaseCheckpointStorageIdentity,
 }
 
 /// Store implementation that produced a checkpoint.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ReleaseCheckpointBackend {
+pub enum ReleaseCheckpointStoreKind {
     /// Local CommitLog/ConsumeQueue/Index files.
     Local,
     /// RocksDB-managed Store state.
@@ -311,8 +312,9 @@ pub struct StoreReleaseCheckpointManifest {
     pub artifact: ReleaseCheckpointArtifact,
     /// Store member bound by the checkpoint set.
     pub member_id: String,
-    /// Backend that created the artifact.
-    pub backend: ReleaseCheckpointBackend,
+    /// Store implementation that created the artifact.
+    #[serde(rename = "backend")]
+    pub store_kind: ReleaseCheckpointStoreKind,
     /// Offsets observed after all required flushes completed.
     pub offsets: ReleaseCheckpointOffsets,
     /// Persistent storage identity that rollback must retain.
@@ -511,6 +513,23 @@ fn require_sha256(value: &str) -> Result<(), ProtocolContractViolation> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn maintenance_capabilities_json_preserves_store_kind() {
+        for (store_kind, name) in [
+            (ReleaseCheckpointStoreKind::Local, "local"),
+            (ReleaseCheckpointStoreKind::RocksDb, "rocks_db"),
+        ] {
+            let value = serde_json::json!({
+                "memberId": "broker-a",
+                "backend": name,
+                "storageIdentity": { "volumeId": "pvc-a", "walGeneration": 7 }
+            });
+            let capabilities: MaintenanceStoreCapabilities = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(capabilities.store_kind, store_kind);
+            assert_eq!(serde_json::to_value(capabilities).unwrap(), value);
+        }
+    }
+
     fn artifact(id: &str) -> ReleaseCheckpointArtifact {
         ReleaseCheckpointArtifact {
             schema_version: 1,
@@ -529,7 +548,7 @@ mod tests {
         StoreReleaseCheckpointManifest {
             artifact: artifact(&format!("store-{member}")),
             member_id: member.to_string(),
-            backend: ReleaseCheckpointBackend::Local,
+            store_kind: ReleaseCheckpointStoreKind::Local,
             offsets: ReleaseCheckpointOffsets {
                 appended_offset: 120,
                 durable_offset: 120,

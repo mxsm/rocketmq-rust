@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(store):** Rename the checkpoint discriminator to `CheckpointStoreKind` and its fields/accessor to `store_kind` (breaking), preserving the `backend` JSON key ([#11611](https://github.com/mxsm/rocketmq-rust/issues/11611)).
 - **refactor(tieredstore):** Rename the provider ID field to `storage_provider_id` and migrate configuration to `storageProviderId` (breaking) ([#11603](https://github.com/mxsm/rocketmq-rust/issues/11603)).
 - **refactor(store):** Align the internal logical-read module name with `MessageStoreReader` ([#11595](https://github.com/mxsm/rocketmq-rust/issues/11595)).
 - **chore(proxy):** Replace the single-line Proxy usage with readable `-h`/`--help` output that names `rocketmq-proxy-rust`, shows the Cargo version, lists every option, and describes the Proxy with RocketMQ-Rust wording ([#11634](https://github.com/mxsm/rocketmq-rust/issues/11634)).

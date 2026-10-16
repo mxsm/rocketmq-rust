@@ -29,7 +29,7 @@ pub const CHECKPOINT_SCHEMA_VERSION: u16 = 1;
 /// Store implementation that produced a checkpoint.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CheckpointBackend {
+pub enum CheckpointStoreKind {
     /// Local CommitLog/ConsumeQueue/Index files.
     Local,
     /// RocksDB-managed Store state.
@@ -205,8 +205,9 @@ pub struct CheckpointManifest {
     pub artifact: CheckpointArtifact,
     /// Store member bound by the checkpoint set.
     pub member_id: String,
-    /// Backend that created the artifact.
-    pub backend: CheckpointBackend,
+    /// Store implementation that created the artifact.
+    #[serde(rename = "backend")]
+    pub store_kind: CheckpointStoreKind,
     /// Offsets observed after all required flushes completed.
     pub offsets: CheckpointOffsets,
     /// Persistent storage identity that rollback must retain.
@@ -315,6 +316,42 @@ fn invalid_field<T>(field: &'static str, reason: impl Into<String>) -> Result<T,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checkpoint_manifest_json_preserves_store_kind() {
+        for (store_kind, name) in [
+            (CheckpointStoreKind::Local, "local"),
+            (CheckpointStoreKind::RocksDb, "rocks_db"),
+        ] {
+            let value = serde_json::json!({
+                "artifact": {
+                    "schemaVersion": 1,
+                    "checkpointId": "checkpoint-7",
+                    "checkpointSetId": "set-7",
+                    "generation": 7,
+                    "barrierId": "barrier-42",
+                    "createdAtUnixMillis": 1_800_000_000_000_u64,
+                    "lengthBytes": 512,
+                    "sha256": "a".repeat(64),
+                    "uri": "file:///checkpoints/checkpoint-7"
+                },
+                "memberId": "broker-a",
+                "backend": name,
+                "offsets": {
+                    "appendedOffset": 120,
+                    "durableOffset": 120,
+                    "consumeQueueOffset": 100,
+                    "indexOffset": 100
+                },
+                "storageIdentity": { "volumeId": "pvc-a", "walGeneration": 7 },
+                "walRetained": true,
+                "persistentVolumeRetained": true
+            });
+            let manifest: CheckpointManifest = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(manifest.store_kind, store_kind);
+            assert_eq!(serde_json::to_value(manifest).unwrap(), value);
+        }
+    }
 
     #[test]
     fn domain_json_preserves_the_stable_wire_field_names() {
