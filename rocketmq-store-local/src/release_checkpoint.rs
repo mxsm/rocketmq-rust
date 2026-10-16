@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Atomic, checksummed release checkpoints for the local Store backend.
+//! Atomic, checksummed release checkpoints for the local Store.
 
 use std::fmt;
 use std::fs;
@@ -35,12 +35,12 @@ use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_security_api::MaintenanceAuthorizationGrant;
 use rocketmq_security_api::MaintenanceCapability;
 use rocketmq_store_api::checkpoint::CheckpointArtifact as ReleaseCheckpointArtifact;
-use rocketmq_store_api::checkpoint::CheckpointBackend as ReleaseCheckpointBackend;
 use rocketmq_store_api::checkpoint::CheckpointManifest as StoreReleaseCheckpointManifest;
 use rocketmq_store_api::checkpoint::CheckpointOffsets as ReleaseCheckpointOffsets;
 use rocketmq_store_api::checkpoint::CheckpointRequest as StoreReleaseCheckpointRequest;
 use rocketmq_store_api::checkpoint::CheckpointRestoreVerification as ReleaseCheckpointRestoreVerification;
 use rocketmq_store_api::checkpoint::CheckpointStorageIdentity as ReleaseCheckpointStorageIdentity;
+use rocketmq_store_api::checkpoint::CheckpointStoreKind;
 use rocketmq_store_api::checkpoint::CHECKPOINT_SCHEMA_VERSION as RELEASE_CHECKPOINT_SCHEMA_VERSION;
 use rocketmq_store_api::file_uri_to_path;
 use rocketmq_store_api::hash_checkpoint_directory;
@@ -227,8 +227,8 @@ where
     ) -> Result<ReleaseCheckpointRestoreVerification, LocalReleaseCheckpointFailure> {
         validate_authorization(authorization)?;
         manifest.validate()?;
-        if manifest.backend != ReleaseCheckpointBackend::Local {
-            return Err(LocalReleaseCheckpointFailure::WrongBackend);
+        if manifest.store_kind != CheckpointStoreKind::Local {
+            return Err(LocalReleaseCheckpointFailure::StoreKindMismatch);
         }
         let deadline = authorization_deadline(authorization)?;
         let checkpoint_path = file_uri_to_path(&manifest.artifact.uri)?;
@@ -354,7 +354,7 @@ fn local_checkpoint_error(operation: StoreOperation, error: LocalReleaseCheckpoi
             let descriptor = match &error {
                 LocalReleaseCheckpointFailure::InvalidConfiguration(_)
                 | LocalReleaseCheckpointFailure::StorageIdentityMismatch
-                | LocalReleaseCheckpointFailure::WrongBackend
+                | LocalReleaseCheckpointFailure::StoreKindMismatch
                 | LocalReleaseCheckpointFailure::OverlappingRoots
                 | LocalReleaseCheckpointFailure::ReservedManifestInSource
                 | LocalReleaseCheckpointFailure::EmptyCheckpoint
@@ -473,7 +473,7 @@ fn create_atomic_checkpoint(
             uri: path_to_file_uri(&final_path),
         },
         member_id: request.member_id,
-        backend: ReleaseCheckpointBackend::Local,
+        store_kind: CheckpointStoreKind::Local,
         offsets: request.offsets,
         storage_identity: request.storage_identity,
         wal_retained: true,
@@ -689,8 +689,8 @@ pub(crate) enum LocalReleaseCheckpointFailure {
     },
     #[error("checkpoint artifact checksum or length does not match its manifest")]
     ArtifactChecksumMismatch,
-    #[error("checkpoint backend is not local")]
-    WrongBackend,
+    #[error("checkpoint store kind is not local")]
+    StoreKindMismatch,
     #[error("checkpoint root overlaps the live Store root")]
     OverlappingRoots,
     #[error("checkpoint '{0}' already exists or has an unfinished publication")]

@@ -27,11 +27,11 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_security_api::MaintenanceAuthorizationGrant;
-use rocketmq_store_api::checkpoint::CheckpointBackend as ReleaseCheckpointBackend;
 use rocketmq_store_api::checkpoint::CheckpointManifest as StoreReleaseCheckpointManifest;
 use rocketmq_store_api::checkpoint::CheckpointOffsets as ReleaseCheckpointOffsets;
 use rocketmq_store_api::checkpoint::CheckpointRequest as StoreReleaseCheckpointRequest;
 use rocketmq_store_api::checkpoint::CheckpointStorageIdentity as ReleaseCheckpointStorageIdentity;
+use rocketmq_store_api::checkpoint::CheckpointStoreKind;
 use rocketmq_store_api::ReleaseCheckpointCreateRejection;
 use rocketmq_store_api::ReleaseCheckpointCreationResult;
 use rocketmq_store_api::ReleaseCheckpointRestoreRejection;
@@ -52,7 +52,7 @@ use crate::message_store::local_file_message_store::LocalReleaseCheckpointWriteL
 
 const STORAGE_IDENTITY_FILE: &str = ".rocketmq-storage-identity.json";
 
-/// Release-checkpoint service bound to the Broker-owned Store backend.
+/// Release-checkpoint service bound to the Broker-owned Store.
 ///
 /// The service retains only a weak Store reference, so it cannot extend the
 /// Store lifecycle beyond the Broker composition root.
@@ -75,21 +75,21 @@ impl StoreReleaseCheckpointService {
         }
     }
 
-    /// Returns the currently selected Store backend.
+    /// Returns the currently selected Store implementation kind.
     ///
     /// # Errors
     ///
     /// Returns an unavailable error after the Broker detaches its Store.
-    pub fn backend(&self) -> Result<ReleaseCheckpointBackend, StoreError> {
+    pub fn store_kind(&self) -> Result<CheckpointStoreKind, StoreError> {
         match self
             .store
             .upgrade()
             .ok_or_else(|| store_unavailable(StoreOperation::Admin))?
             .as_ref()
         {
-            MessageStore::LocalFileStore(_) => Ok(ReleaseCheckpointBackend::Local),
+            MessageStore::LocalFileStore(_) => Ok(CheckpointStoreKind::Local),
             #[cfg(feature = "rocksdb_store")]
-            MessageStore::RocksDBStore(_) => Ok(ReleaseCheckpointBackend::RocksDb),
+            MessageStore::RocksDBStore(_) => Ok(CheckpointStoreKind::RocksDb),
         }
     }
 

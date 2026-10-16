@@ -27,10 +27,10 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::body::release_checkpoint::MaintenanceCapabilitiesResponse;
 use rocketmq_protocol::protocol::body::release_checkpoint::MaintenanceStoreCapabilities;
 use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointArtifact;
-use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointBackend;
 use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointOffsets;
 use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointRestoreVerification;
 use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointStorageIdentity;
+use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointStoreKind;
 use rocketmq_protocol::protocol::body::release_checkpoint::StoreReleaseCheckpointManifest;
 use rocketmq_protocol::protocol::body::release_checkpoint::StoreReleaseCheckpointRequest;
 use rocketmq_protocol::protocol::body::release_checkpoint::RELEASE_CHECKPOINT_SCHEMA_VERSION;
@@ -45,12 +45,12 @@ use rocketmq_security_api::MaintenanceCapability;
 use rocketmq_security_api::MaintenanceRequestClass;
 use rocketmq_store::StoreReleaseCheckpointService;
 use rocketmq_store_api::checkpoint::CheckpointArtifact;
-use rocketmq_store_api::checkpoint::CheckpointBackend;
 use rocketmq_store_api::checkpoint::CheckpointManifest;
 use rocketmq_store_api::checkpoint::CheckpointOffsets;
 use rocketmq_store_api::checkpoint::CheckpointRequest;
 use rocketmq_store_api::checkpoint::CheckpointRestoreVerification;
 use rocketmq_store_api::checkpoint::CheckpointStorageIdentity;
+use rocketmq_store_api::checkpoint::CheckpointStoreKind;
 use rocketmq_store_api::ReleaseCheckpointCreateRejection;
 use rocketmq_store_api::ReleaseCheckpointCreationResult;
 use rocketmq_store_api::ReleaseCheckpointRestoreRejection;
@@ -217,7 +217,7 @@ impl MaintenanceRequestProcessor {
                 "encode expired Broker maintenance capabilities",
             );
         };
-        let backend = self.checkpoint_service.backend().map_err(checkpoint_error)?;
+        let store_kind = self.checkpoint_service.store_kind().map_err(checkpoint_error)?;
         let response = MaintenanceCapabilitiesResponse {
             schema_version: RELEASE_CHECKPOINT_SCHEMA_VERSION,
             policy_id: self.authorizer.policy().policy_id.clone(),
@@ -233,7 +233,7 @@ impl MaintenanceRequestProcessor {
             max_concurrent_operations: grant.resource_budget().max_concurrent_operations,
             store: Some(MaintenanceStoreCapabilities {
                 member_id: self.broker_config.broker_identity.get_canonical_name(),
-                backend: checkpoint_backend_to_wire(backend),
+                store_kind: checkpoint_store_kind_to_wire(store_kind),
                 storage_identity: checkpoint_identity_to_wire(storage_identity),
             }),
         };
@@ -402,7 +402,7 @@ fn checkpoint_manifest_from_wire(manifest: StoreReleaseCheckpointManifest) -> Ch
     CheckpointManifest {
         artifact: checkpoint_artifact_from_wire(manifest.artifact),
         member_id: manifest.member_id,
-        backend: checkpoint_backend_from_wire(manifest.backend),
+        store_kind: checkpoint_store_kind_from_wire(manifest.store_kind),
         offsets: checkpoint_offsets_from_wire(manifest.offsets),
         storage_identity: checkpoint_identity_from_wire(manifest.storage_identity),
         wal_retained: manifest.wal_retained,
@@ -414,7 +414,7 @@ fn checkpoint_manifest_to_wire(manifest: CheckpointManifest) -> StoreReleaseChec
     StoreReleaseCheckpointManifest {
         artifact: checkpoint_artifact_to_wire(manifest.artifact),
         member_id: manifest.member_id,
-        backend: checkpoint_backend_to_wire(manifest.backend),
+        store_kind: checkpoint_store_kind_to_wire(manifest.store_kind),
         offsets: checkpoint_offsets_to_wire(manifest.offsets),
         storage_identity: checkpoint_identity_to_wire(manifest.storage_identity),
         wal_retained: manifest.wal_retained,
@@ -450,17 +450,17 @@ fn checkpoint_artifact_to_wire(artifact: CheckpointArtifact) -> ReleaseCheckpoin
     }
 }
 
-const fn checkpoint_backend_from_wire(backend: ReleaseCheckpointBackend) -> CheckpointBackend {
-    match backend {
-        ReleaseCheckpointBackend::Local => CheckpointBackend::Local,
-        ReleaseCheckpointBackend::RocksDb => CheckpointBackend::RocksDb,
+const fn checkpoint_store_kind_from_wire(store_kind: ReleaseCheckpointStoreKind) -> CheckpointStoreKind {
+    match store_kind {
+        ReleaseCheckpointStoreKind::Local => CheckpointStoreKind::Local,
+        ReleaseCheckpointStoreKind::RocksDb => CheckpointStoreKind::RocksDb,
     }
 }
 
-const fn checkpoint_backend_to_wire(backend: CheckpointBackend) -> ReleaseCheckpointBackend {
-    match backend {
-        CheckpointBackend::Local => ReleaseCheckpointBackend::Local,
-        CheckpointBackend::RocksDb => ReleaseCheckpointBackend::RocksDb,
+const fn checkpoint_store_kind_to_wire(store_kind: CheckpointStoreKind) -> ReleaseCheckpointStoreKind {
+    match store_kind {
+        CheckpointStoreKind::Local => ReleaseCheckpointStoreKind::Local,
+        CheckpointStoreKind::RocksDb => ReleaseCheckpointStoreKind::RocksDb,
     }
 }
 
@@ -741,7 +741,7 @@ mod tests {
         .set_opaque(opaque)
     }
 
-    fn wire_manifest(backend: ReleaseCheckpointBackend) -> StoreReleaseCheckpointManifest {
+    fn wire_manifest(store_kind: ReleaseCheckpointStoreKind) -> StoreReleaseCheckpointManifest {
         StoreReleaseCheckpointManifest {
             artifact: ReleaseCheckpointArtifact {
                 schema_version: RELEASE_CHECKPOINT_SCHEMA_VERSION,
@@ -755,7 +755,7 @@ mod tests {
                 uri: "file:///checkpoints/checkpoint-7".to_string(),
             },
             member_id: "broker-a".to_string(),
-            backend,
+            store_kind,
             offsets: ReleaseCheckpointOffsets {
                 appended_offset: 100,
                 durable_offset: 90,
@@ -783,7 +783,7 @@ mod tests {
             },
         )
         .set_body(
-            serde_json::to_vec(&wire_manifest(ReleaseCheckpointBackend::Local))
+            serde_json::to_vec(&wire_manifest(ReleaseCheckpointStoreKind::Local))
                 .expect("serialize maintenance manifest"),
         )
         .set_opaque(opaque)
@@ -949,9 +949,9 @@ mod tests {
     }
 
     #[test]
-    fn wire_domain_manifest_mapping_is_lossless_for_every_backend() {
-        for backend in [ReleaseCheckpointBackend::Local, ReleaseCheckpointBackend::RocksDb] {
-            let wire = wire_manifest(backend);
+    fn wire_domain_manifest_mapping_is_lossless_for_every_store_kind() {
+        for store_kind in [ReleaseCheckpointStoreKind::Local, ReleaseCheckpointStoreKind::RocksDb] {
+            let wire = wire_manifest(store_kind);
 
             let round_trip = checkpoint_manifest_to_wire(checkpoint_manifest_from_wire(wire.clone()));
 
@@ -961,38 +961,41 @@ mod tests {
 
     #[test]
     fn checkpoint_wire_json_field_names_remain_compatible() {
-        let wire = wire_manifest(ReleaseCheckpointBackend::Local);
-
-        assert_eq!(
-            serde_json::to_value(wire).expect("serialize wire manifest"),
-            serde_json::json!({
-                "artifact": {
-                    "schemaVersion": 1,
-                    "checkpointId": "checkpoint-7",
-                    "checkpointSetId": "set-4",
-                    "generation": 9,
-                    "barrierId": "barrier-3",
-                    "createdAtUnixMillis": 123456,
-                    "lengthBytes": 4096,
-                    "sha256": "a".repeat(64),
-                    "uri": "file:///checkpoints/checkpoint-7"
-                },
-                "memberId": "broker-a",
-                "backend": "local",
-                "offsets": {
-                    "appendedOffset": 100,
-                    "durableOffset": 90,
-                    "consumeQueueOffset": 80,
-                    "indexOffset": 70
-                },
-                "storageIdentity": {
-                    "volumeId": "volume-a",
-                    "walGeneration": 5
-                },
-                "walRetained": true,
-                "persistentVolumeRetained": true
-            })
-        );
+        let mut expected = serde_json::json!({
+            "artifact": {
+                "schemaVersion": 1,
+                "checkpointId": "checkpoint-7",
+                "checkpointSetId": "set-4",
+                "generation": 9,
+                "barrierId": "barrier-3",
+                "createdAtUnixMillis": 123456,
+                "lengthBytes": 4096,
+                "sha256": "a".repeat(64),
+                "uri": "file:///checkpoints/checkpoint-7"
+            },
+            "memberId": "broker-a",
+            "backend": "local",
+            "offsets": {
+                "appendedOffset": 100,
+                "durableOffset": 90,
+                "consumeQueueOffset": 80,
+                "indexOffset": 70
+            },
+            "storageIdentity": {
+                "volumeId": "volume-a",
+                "walGeneration": 5
+            },
+            "walRetained": true,
+            "persistentVolumeRetained": true
+        });
+        for (store_kind, name) in [
+            (ReleaseCheckpointStoreKind::Local, "local"),
+            (ReleaseCheckpointStoreKind::RocksDb, "rocks_db"),
+        ] {
+            expected["backend"] = name.into();
+            let wire = wire_manifest(store_kind);
+            assert_eq!(serde_json::to_value(wire).expect("serialize wire manifest"), expected);
+        }
     }
 
     #[test]
