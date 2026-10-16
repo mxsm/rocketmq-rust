@@ -71,6 +71,10 @@ Use it as a workspace dependency:
 rocketmq-tieredstore = { path = "../rocketmq-tieredstore" }
 ```
 
+Configuration migration: rename `tieredStoreConfig.backendProvider` to
+`tieredStoreConfig.storageProviderId`. The old key is ignored, leaving the default
+`"posix"` provider unless the new key is set.
+
 Create a store with the in-memory provider, dispatch one message, drain the
 dispatcher on shutdown, and fetch the message by queue offset:
 
@@ -86,7 +90,7 @@ async fn example(parent_task_group: TaskGroup) -> Result<(), StoreError> {
     let Some(store) = TieredStore::new(
         TieredStoreConfig {
             storage_level: TieredStorageLevel::Force,
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             max_pending_tasks: 16,
             ..TieredStoreConfig::default()
         },
@@ -147,7 +151,7 @@ use rocketmq_tieredstore::{TieredStorageLevel, TieredStore, TieredStoreConfig};
 let Some(store) = TieredStore::new(
     TieredStoreConfig {
         storage_level: TieredStorageLevel::Force,
-        backend_provider: "posix".to_owned(),
+        storage_provider_id: "posix".to_owned(),
         store_path_root_dir: "./store/tieredstore".into(),
         ..TieredStoreConfig::default()
     },

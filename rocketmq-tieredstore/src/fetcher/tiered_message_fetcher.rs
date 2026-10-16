@@ -463,7 +463,7 @@ mod tests {
         })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             index_file_max_hash_slot_num: 8,
             index_file_max_index_num: 16,
             ..TieredStoreConfig::default()
@@ -513,7 +513,7 @@ mod tests {
         })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             index_file_max_hash_slot_num: 8,
             index_file_max_index_num: 16,
             ..TieredStoreConfig::default()
@@ -553,7 +553,7 @@ mod tests {
         })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             ..TieredStoreConfig::default()
         });
         let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
@@ -637,7 +637,7 @@ mod tests {
         })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             read_ahead_message_count: 10,
             read_ahead_message_size: 6,
             ..TieredStoreConfig::default()
@@ -683,7 +683,7 @@ mod tests {
         })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             commit_log_segment_size: 1024 * 1024,
             consume_queue_segment_size: 64 * 1024,
             read_ahead_cache_enable: true,
@@ -879,7 +879,7 @@ mod tests {
         })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             ..TieredStoreConfig::default()
         });
         let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));

@@ -793,7 +793,7 @@ mod tests {
     fn test_config(root: std::path::PathBuf) -> Arc<TieredStoreConfig> {
         Arc::new(TieredStoreConfig {
             store_path_root_dir: root,
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             commit_log_segment_size: 8,
             consume_queue_segment_size: CONSUME_QUEUE_UNIT_SIZE as u64 * 2,
             file_reserved_time: Duration::from_millis(1),
@@ -1000,7 +1000,7 @@ mod tests {
         })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             commit_log_segment_size: 512,
             consume_queue_segment_size: CONSUME_QUEUE_UNIT_SIZE as u64 * 4,
             ..TieredStoreConfig::default()
@@ -1141,7 +1141,7 @@ mod tests {
         })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             commit_log_segment_size: 8,
             consume_queue_segment_size: CONSUME_QUEUE_UNIT_SIZE as u64 * 3,
             file_reserved_time: Duration::from_millis(1),
