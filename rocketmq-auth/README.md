@@ -222,9 +222,14 @@ the entire import**. A metadata/persistence failure during import can leave part
 whitelist and generation are published only after import succeeds. Watcher failures are recorded and
 retried on later polls; this is not a guarantee of an atomic snapshot switch for concurrent requests.
 
-For custom storage, inject a `ProviderBundle` with `UserMetadataPort`, `AclMetadataPort`, and
-`ProviderControl` implementations. Configured ACL imports and v1 migration also require
-`AclSnapshotImport`; the builder rejects a bundle missing that capability before startup mutations.
+The metadata provider names `local` and `file`, including their accepted class-name aliases, select
+the same built-in local providers. JSON persistence is controlled by `authConfigPath`.
+
+For custom metadata storage, use `AuthRuntimeBuilder::with_provider_bundle` to inject a `ProviderBundle`
+with `UserMetadataPort`, `AclMetadataPort`, and `ProviderControl` implementations. These interfaces
+separate concurrent metadata operations from initialization, flushing, and closure. Configured ACL
+imports and v1 migration also require `AclSnapshotImport`; the builder rejects a bundle missing that
+capability before startup mutations.
 
 Stateful evaluators require explicit composition. Authentication caches success and failure by
 generation, channel, and username; a cache hit skips signature/timestamp revalidation for that request.

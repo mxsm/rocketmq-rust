@@ -60,30 +60,25 @@ use crate::AuthOperation;
 use crate::AuthServiceError;
 use crate::AuthServiceResult;
 
-/// Local authorization metadata provider backed by an in-memory snapshot and an optional JSON
-/// snapshot file.
+/// ACL metadata stored in memory, with an optional JSON snapshot and a separate lookup cache.
 ///
-/// This provider implements ACL metadata storage with the following features:
-/// - Persistent local snapshot storage when `auth_config_path` is configured
-/// - In-memory caching for performance
-/// - Thread-safe operations
-/// - Automatic cache invalidation on updates
+/// An empty [`AuthConfig::auth_config_path`] keeps metadata in memory only. A configured path
+/// selects `acls.json`; initialization loads that snapshot, and mutations persist updated
+/// snapshots. Cache refresh reads the canonical in-memory ACL map rather than reloading the file.
 ///
 /// # Architecture
 ///
 /// ```text
 /// LocalAuthorizationMetadataProvider
-/// |- JSON snapshot file (persistent, optional)
-/// |  `- acls.json
-/// `- Cache (in-memory)
-///    `- subject_key -> ACL
+/// |- Canonical ACL map (in-memory): subject_key -> ACL
+/// |- Lookup cache (in-memory): subject_key -> cached ACL or absence
+/// `- Optional JSON snapshot: acls.json
 /// ```
 ///
 /// # Storage Format
 ///
-/// ACLs are stored in a JSON snapshot with the following layout:
-/// - **Key**: Subject key (e.g., "User:alice", "Role:admin")
-/// - **Value**: JSON-serialized ACL object
+/// The JSON snapshot contains an `acls` array. Each record contains a `subject`, such as
+/// `User:alice`, and its `policies`. YAML ACL loading is handled separately by the auth runtime.
 ///
 /// # Thread Safety
 ///
@@ -92,17 +87,19 @@ use crate::AuthServiceResult;
 ///
 /// # Examples
 ///
-/// ```rust,ignore
-/// use rocketmq_auth::LocalAuthorizationMetadataProvider;
-/// use rocketmq_auth::AuthConfig;
+/// ```no_run
+/// use rocketmq_auth::{
+///     AuthConfig, AuthorizationMetadataProvider, LocalAuthorizationMetadataProvider,
+/// };
 ///
 /// let config = AuthConfig {
-///     auth_config_path: "/path/to/config".to_string(),
+///     auth_config_path: "store/auth".into(),
 ///     ..Default::default()
 /// };
 ///
 /// let mut provider = LocalAuthorizationMetadataProvider::new();
 /// provider.initialize(config, None)?;
+/// # Ok::<(), rocketmq_auth::AuthServiceError>(())
 /// ```
 pub struct LocalAuthorizationMetadataProvider {
     /// Path to the JSON snapshot file.

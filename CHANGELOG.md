@@ -76,6 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **docs(auth):** Describe the built-in in-memory metadata providers, optional JSON snapshots, and `ProviderBundle` extension interfaces, and align the ACL provider examples with the current public API ([#11645](https://github.com/mxsm/rocketmq-rust/issues/11645)).
 - **fix(controller):** Align the OpenRaft core, macros, and runtimes at `0.10.0-alpha.37`, adapt the snapshot and leadership APIs while preserving persisted snapshot identity, and refresh the standalone fuzz lockfile to restore locked builds for all four targets ([#11640](https://github.com/mxsm/rocketmq-rust/issues/11640)).
 - **build:** Inherit the Controller MSRV and centralize the Admin Core dependency version used by the Admin CLI and TUI.
 - **fix(fuzz):** Align the standalone OpenRaft macro pin and lockfile with the Controller's `0.10.0-alpha.37` requirement, restoring locked builds for all four fuzz targets ([#11581](https://github.com/mxsm/rocketmq-rust/issues/11581)).
