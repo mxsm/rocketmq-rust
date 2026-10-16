@@ -106,21 +106,26 @@ impl StoreFactoryConfig {
         })
     }
 
-    pub fn backend(&self) -> StoreType {
+    pub fn store_type(&self) -> StoreType {
         self.message_store.store_type
     }
 }
 
-/// A fully wired store plus optional services owned by the selected backend.
+/// A fully wired store plus optional services owned by the selected store type.
 pub struct OpenedStore {
-    backend: StoreType,
+    store_type: StoreType,
     message_store: MessageStore,
     timer_message_store: Option<Arc<TimerMessageStore>>,
 }
 
 impl OpenedStore {
-    pub const fn backend(&self) -> StoreType {
-        self.backend
+    /// Returns the store type selected during successful composition.
+    ///
+    /// The configuration accessor reports the requested type. This value describes
+    /// the successfully opened store; failed composition returns an error instead
+    /// of an `OpenedStore`.
+    pub const fn store_type(&self) -> StoreType {
+        self.store_type
     }
 
     pub fn into_parts(self) -> (MessageStore, Option<Arc<TimerMessageStore>>) {
@@ -152,14 +157,14 @@ impl StoreFactory {
     /// so this method returns [`StoreError`] only when the selected backend is
     /// unavailable or cannot establish its owned operational dependencies.
     pub fn open(config: StoreFactoryConfig, service_context: ChildServiceContext) -> Result<OpenedStore, StoreError> {
-        match config.backend() {
+        match config.store_type() {
             StoreType::LocalFile => Self::open_local(config, service_context),
             StoreType::RocksDB => Self::open_rocksdb(config, service_context),
         }
     }
 
     fn open_local(config: StoreFactoryConfig, service_context: ChildServiceContext) -> Result<OpenedStore, StoreError> {
-        let backend = StoreType::LocalFile;
+        let store_type = StoreType::LocalFile;
         let mut store = LocalFileMessageStore::try_new_with_telemetry_validated(
             config.message_store,
             config.micro_batch_policy,
@@ -176,7 +181,7 @@ impl StoreFactory {
         store.wire_owned_root_dependencies()?;
         let timer_message_store = store.get_timer_message_store().cloned();
         Ok(OpenedStore {
-            backend,
+            store_type,
             message_store: MessageStore::local_file(store),
             timer_message_store,
         })
@@ -187,7 +192,7 @@ impl StoreFactory {
         config: StoreFactoryConfig,
         service_context: ChildServiceContext,
     ) -> Result<OpenedStore, StoreError> {
-        let backend = StoreType::RocksDB;
+        let store_type = StoreType::RocksDB;
         let Some((rocksdb_open_plan, message_rocksdb_open_plan)) = config.rocksdb_open_plans else {
             return Err(
                 StoreError::new(&rocketmq_error::STORAGE_INTERNAL_FAILURE, StoreOperation::Load)
@@ -211,7 +216,7 @@ impl StoreFactory {
         )?;
         let timer_message_store = store.get_timer_message_store().cloned();
         Ok(OpenedStore {
-            backend,
+            store_type,
             message_store: MessageStore::rocksdb(store),
             timer_message_store,
         })
