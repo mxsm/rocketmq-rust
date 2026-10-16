@@ -4361,7 +4361,11 @@ async fn runtime_info_includes_store_offsets_and_timer_defaults_when_timer_disab
     assert_eq!(runtime_info["storeType"], "LocalFile");
     assert_eq!(runtime_info["rocksdbCqDoubleWriteEnable"], "false");
     assert_eq!(runtime_info["rocksdbCompatibilityMode"], "disabled");
-    assert!(runtime_info.contains_key("ioUringBackendStatus"));
+    assert_eq!(
+        runtime_info["ioUringBuildSupport"],
+        crate::log_file::mapped_file::io_uring_build_support().as_str()
+    );
+    assert!(!runtime_info.contains_key("ioUringBackendStatus"));
     assert_eq!(runtime_info["timerReadBehind"], "0");
     assert_eq!(runtime_info["timerOffsetBehind"], "0");
     assert_eq!(runtime_info["timerCongestNum"], "0");

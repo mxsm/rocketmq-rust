@@ -1059,8 +1059,8 @@ impl BackendOps for LocalFileMessageStore {
             .to_string(),
         );
         result.insert(
-            "ioUringBackendStatus".to_string(),
-            crate::log_file::mapped_file::io_uring_backend_status()
+            "ioUringBuildSupport".to_string(),
+            crate::log_file::mapped_file::io_uring_build_support()
                 .as_str()
                 .to_string(),
         );

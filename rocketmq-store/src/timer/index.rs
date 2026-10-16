@@ -44,7 +44,8 @@ pub(crate) struct TimerIndexCursor {
     pub(crate) lane: u16,
     pub(crate) timer_id: TimerId,
     pub(crate) generation: u64,
-    pub(crate) backend: TimerIndexBackendCursor,
+    /// In-memory state for resuming `scan_due()` pagination after this key.
+    pub(crate) resume_state: TimerIndexResumeState,
 }
 
 impl TimerIndexCursor {
@@ -54,14 +55,21 @@ impl TimerIndexCursor {
             lane,
             timer_id,
             generation,
-            backend: TimerIndexBackendCursor::OrderedKey,
+            resume_state: TimerIndexResumeState::OrderedKey,
         }
     }
 }
 
+/// How a paginated `scan_due()` resumes from a [`TimerIndexCursor`].
+///
+/// This is in-memory pagination state only and is never persisted.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum TimerIndexBackendCursor {
+pub(crate) enum TimerIndexResumeState {
+    /// Resume from the outer cursor's ordered key alone.
     OrderedKey,
+    /// Resume a segmented timeline scan. The outer cursor key is supplemented
+    /// with the manifest generation, the UTC day/hour partition, and the
+    /// per-run consumed positions needed to rebuild the native continuation.
     Segmented {
         manifest_generation: u64,
         due_day_utc: i32,

@@ -33,12 +33,15 @@ use rocketmq_controller::ControllerManager;
 use rocketmq_controller::Node;
 use rocketmq_error::fields;
 use rocketmq_error::CliErrorView;
+use rocketmq_error::CliExitCode;
 use rocketmq_error::CliVerbosity;
 use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
 use rocketmq_error::CONTROLLER_CONFIGURATION_INVALID;
 use rocketmq_error::CONTROLLER_CONSENSUS_TIMED_OUT;
 use rocketmq_error::CONTROLLER_INTERNAL_FAILURE;
+use rocketmq_error::CORE_CONFIGURATION_MISSING;
+use rocketmq_model::common::mix_all::ROCKETMQ_HOME_ENV;
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
 use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_defaults;
 use rocketmq_runtime::common::parse_config_file;
@@ -80,6 +83,18 @@ use controller_security::build_controller_security;
 /// rocketmq-controller-rust --print-config-item
 /// ```
 const CONTROLLER_AUTO_INITIALIZE_CLUSTER_ENV: &str = "ROCKETMQ_CONTROLLER_AUTO_INITIALIZE_CLUSTER";
+
+/// `ROCKETMQ_HOME` did not supply a home directory.
+#[derive(Debug)]
+struct RocketmqHomeNotSet;
+
+impl std::fmt::Display for RocketmqHomeNotSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("set the ROCKETMQ_HOME environment variable")
+    }
+}
+
+impl std::error::Error for RocketmqHomeNotSet {}
 
 fn controller_internal(operation: &'static str) -> Error {
     Error::new(&CONTROLLER_INTERNAL_FAILURE)
@@ -197,17 +212,41 @@ fn print_release_version_if_requested(component: &str) -> bool {
 
 pub fn main() {
     if let Err(source) = try_main() {
-        let error = Error::new(&CONTROLLER_INTERNAL_FAILURE)
-            .with_boxed_source(source.into_boxed_dyn_error())
-            .with_context(
-                ErrorContext::new()
-                    .with_text(fields::OPERATION_DIAGNOSTIC, "run-controller-service")
-                    .with_secret_presence(fields::SOURCE_PRESENT),
-            );
-        let output = CliErrorView::from_error(&error).output(CliVerbosity::Default);
-        eprintln!("{}", output.stderr());
-        std::process::exit(output.exit_code().as_i32());
+        let (stderr, exit_code) = startup_failure_output(source);
+        eprintln!("{stderr}");
+        std::process::exit(exit_code.as_i32());
     }
+}
+
+/// Projects a startup failure onto the CLI boundary.
+///
+/// A missing `ROCKETMQ_HOME` renders its fixed hint after the stable error line. Every other
+/// source stays hidden behind the generic controller failure.
+fn startup_failure_output(source: anyhow::Error) -> (String, CliExitCode) {
+    let home_not_set = source.downcast_ref::<RocketmqHomeNotSet>().is_some();
+    let (descriptor, context) = if home_not_set {
+        (
+            &CORE_CONFIGURATION_MISSING,
+            ErrorContext::new().with_text(fields::KEY, ROCKETMQ_HOME_ENV),
+        )
+    } else {
+        (
+            &CONTROLLER_INTERNAL_FAILURE,
+            ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "run-controller-service")
+                .with_secret_presence(fields::SOURCE_PRESENT),
+        )
+    };
+    let error = Error::new(descriptor)
+        .with_boxed_source(source.into_boxed_dyn_error())
+        .with_context(context);
+    let output = CliErrorView::from_error(&error).output(CliVerbosity::Default);
+    let stderr = if home_not_set {
+        format!("{}: {RocketmqHomeNotSet}", output.stderr())
+    } else {
+        output.stderr().to_string()
+    };
+    (stderr, output.exit_code())
 }
 
 fn try_main() -> Result<()> {
@@ -268,7 +307,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
 
     let rocketmq_home = &config.rocketmq_home;
     if rocketmq_home.is_empty() {
-        bail!("Please set the ROCKETMQ_HOME environment variable. Example: export ROCKETMQ_HOME=/opt/rocketmq");
+        return Err(RocketmqHomeNotSet.into());
     }
 
     let logging_overrides = load_logging_overrides(cli.config_file.as_deref())?;
@@ -816,6 +855,28 @@ fn parse_auto_initialize_cluster_flag(raw: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_failure_output_names_missing_rocketmq_home() {
+        let (stderr, exit_code) = startup_failure_output(RocketmqHomeNotSet.into());
+
+        assert_eq!(
+            stderr,
+            "ERROR core.configuration.missing: Required configuration is missing: set the ROCKETMQ_HOME environment \
+             variable"
+        );
+        assert_eq!(exit_code, CliExitCode::CONFIG);
+    }
+
+    #[test]
+    fn startup_failure_output_hides_untyped_sources() {
+        let source = anyhow::anyhow!("token=secret-value").context("failed to load controller configuration");
+
+        let (stderr, exit_code) = startup_failure_output(source);
+
+        assert_eq!(stderr, "ERROR controller.internal.failure: Controller operation failed");
+        assert_eq!(exit_code, CliExitCode::SOFTWARE);
+    }
 
     #[test]
     fn secure_profile_rejects_disabled_request_protection_before_material_loading() {

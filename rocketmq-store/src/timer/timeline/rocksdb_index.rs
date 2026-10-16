@@ -37,10 +37,10 @@ use rocketmq_store_rocksdb::timer::timeline_index::TimelineSnapshotPin;
 use crate::timer::engine::WorkBudget;
 use crate::timer::error::TimerEngineError;
 use crate::timer::index::TimerIndex;
-use crate::timer::index::TimerIndexBackendCursor;
 use crate::timer::index::TimerIndexCheckpoint;
 use crate::timer::index::TimerIndexCursor;
 use crate::timer::index::TimerIndexPage;
+use crate::timer::index::TimerIndexResumeState;
 use crate::timer::index::TimerRecordState;
 use crate::timer::index::TimerSnapshotPin;
 use crate::timer::request::DueTimerRecord;
@@ -383,7 +383,7 @@ const fn key_to_index_cursor(key: TimelineKeyV1) -> TimerIndexCursor {
 }
 
 fn index_cursor_to_key(cursor: TimerIndexCursor) -> TimelineKeyV1 {
-    debug_assert!(matches!(cursor.backend, TimerIndexBackendCursor::OrderedKey));
+    debug_assert!(matches!(cursor.resume_state, TimerIndexResumeState::OrderedKey));
     TimelineKeyV1 {
         due_time_ms: cursor.due_time_ms,
         lane: cursor.lane,
