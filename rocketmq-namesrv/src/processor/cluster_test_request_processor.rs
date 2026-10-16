@@ -30,7 +30,7 @@ use tracing::info;
 use crate::bootstrap::NameServerRuntimeHandle;
 use crate::processor::client_request_processor::encode_topic_route_response_for_zone;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
-use crate::route::route_info_manager::TopicRouteLookupOutcome;
+use crate::route::route_info_manager::TopicRouteLookupStatus;
 use crate::route::zone_filter::filter_route_by_zone;
 use crate::route::zone_filter::ZoneRequest;
 use crate::route::zone_filter::TYPED_ZONE_ROUTE_ENABLED;
@@ -72,8 +72,8 @@ impl ClusterTestRequestProcessor {
             .route_info_manager()
             .pickup_topic_route_data(request_header.topic.as_ref())
         {
-            Ok(TopicRouteLookupOutcome::Found(route_data)) => Some(route_data),
-            Ok(TopicRouteLookupOutcome::NotFound) => None,
+            Ok(TopicRouteLookupStatus::Found(route_data)) => Some(route_data),
+            Ok(TopicRouteLookupStatus::NotFound) => None,
             Err(error) => return Err(error),
         };
 

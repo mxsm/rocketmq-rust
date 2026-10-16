@@ -44,7 +44,7 @@ use crate::route::response_cache::JsonEncoding;
 use crate::route::response_cache::RouteCacheKey;
 use crate::route::response_cache::RouteCacheOutcomeKind;
 use crate::route::response_cache::RouteCachePolicy;
-use crate::route::route_info_manager::TopicRouteLookupOutcome;
+use crate::route::route_info_manager::TopicRouteLookupStatus;
 use crate::route::zone_filter::filter_route_by_zone;
 use crate::route::zone_filter::ZoneRequest;
 use crate::route::zone_filter::TYPED_ZONE_ROUTE_ENABLED;
@@ -142,8 +142,8 @@ impl ClientRequestProcessor {
             .route_info_manager()
             .load_topic_route_view(request_header.topic.as_ref())
         {
-            Ok(TopicRouteLookupOutcome::Found(data)) => data,
-            Ok(TopicRouteLookupOutcome::NotFound) => {
+            Ok(TopicRouteLookupStatus::Found(data)) => data,
+            Ok(TopicRouteLookupStatus::NotFound) => {
                 route_span.record("result", "not_found");
                 return Ok(Some(error_response(
                     PublicErrorView::descriptor_only(&rocketmq_error::ROUTE_TOPIC_NOT_FOUND),
