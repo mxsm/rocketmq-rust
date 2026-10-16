@@ -975,7 +975,7 @@ mod tests {
         let memory = vec![0u8; 4096];
         let result = manager.lock_buffer_with(&memory, |_| {
             Err(memory_lock_failure(
-                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                &rocketmq_error::STORAGE_UNAVAILABLE,
                 "test mlock failure",
             ))
         });
@@ -1116,13 +1116,13 @@ mod tests {
         let error = manager
             .unlock_region_with(&mut handle, |_| {
                 Err(memory_lock_failure(
-                    &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                    &rocketmq_error::STORAGE_UNAVAILABLE,
                     "retryable unlock failure",
                 ))
             })
             .expect_err("warn-only unlock failure must remain observable");
 
-        assert_eq!(error.code(), rocketmq_error::STORAGE_BACKEND_UNAVAILABLE.code());
+        assert_eq!(error.code(), rocketmq_error::STORAGE_UNAVAILABLE.code());
         assert_eq!(manager.locked_bytes(), 64);
         assert_eq!(drops.load(Ordering::Relaxed), 0);
 
@@ -1215,7 +1215,7 @@ mod tests {
         manager
             .unlock_owned_region_with(&mut handle, |_, _| {
                 Err(memory_lock_failure(
-                    &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                    &rocketmq_error::STORAGE_UNAVAILABLE,
                     "retryable owned unlock failure",
                 ))
             })

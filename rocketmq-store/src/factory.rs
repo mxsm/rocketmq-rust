@@ -223,7 +223,7 @@ impl StoreFactory {
         _service_context: ChildServiceContext,
     ) -> Result<OpenedStore, StoreError> {
         Err(
-            StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Load)
+            StoreError::new(&rocketmq_error::STORAGE_UNAVAILABLE, StoreOperation::Load)
                 .in_component(StoreComponent::RocksDb),
         )
     }

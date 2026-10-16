@@ -447,7 +447,7 @@ mod tests {
 
         let result = pool.init_with_locker(|_| {
             Err(transient_pool_failure(
-                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                &rocketmq_error::STORAGE_UNAVAILABLE,
                 StoreOperation::Start,
                 "test mlock failure",
             ))
@@ -502,7 +502,7 @@ mod tests {
         let pool = TransientStorePool::new(2, 32);
         pool.init_with_locker(|_| {
             Err(transient_pool_failure(
-                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                &rocketmq_error::STORAGE_UNAVAILABLE,
                 StoreOperation::Start,
                 "injected lock failure",
             ))
@@ -557,14 +557,14 @@ mod tests {
             .destroy_with_unlocker(|_| {
                 unlock_calls += 1;
                 Err(transient_pool_failure(
-                    &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                    &rocketmq_error::STORAGE_UNAVAILABLE,
                     StoreOperation::Shutdown,
                     "injected unlock failure",
                 ))
             })
             .expect_err("first unlock error is returned");
 
-        assert_eq!(error.code(), rocketmq_error::STORAGE_BACKEND_UNAVAILABLE.code());
+        assert_eq!(error.code(), rocketmq_error::STORAGE_UNAVAILABLE.code());
         assert_eq!(unlock_calls, 1);
         assert_eq!(pool.available_buffer_nums(), 0);
     }

@@ -233,7 +233,7 @@ async fn cancellation_releases_a_sender_waiting_for_byte_capacity() -> Result<()
             )
         })?
         .expect_err("cancelled sender must return an interruption");
-    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
     assert!(dispatcher.is_shutdown());
     Ok(())
 }
@@ -283,7 +283,7 @@ async fn try_dispatch_distinguishes_full_capacity_from_closed_backend() -> Resul
     let closed = closed_dispatcher
         .try_dispatch_derived(record, valid_dispatch_request(0))
         .expect_err("a closed dispatch channel must report backend unavailability");
-    assert_eq!(closed.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(closed.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
     assert_eq!(closed.recovery_hint(), rocketmq_error::RecoveryHint::Backoff);
     assert_eq!(closed.operation(), StoreOperation::AppendDerived);
     assert_eq!(closed.component(), StoreComponent::TieredStore);

@@ -353,12 +353,12 @@ mod tests {
     #[test]
     fn memory_lock_errors_preserve_the_typed_source() {
         let lock = MappedFileFailure::MemoryLockFailed(
-            StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Admin)
+            StoreError::new(&rocketmq_error::STORAGE_UNAVAILABLE, StoreOperation::Admin)
                 .in_component(StoreComponent::MappedFile)
                 .with_source(io::Error::other("lock failed")),
         );
         let unlock = MappedFileFailure::MemoryUnlockFailed(
-            StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Admin)
+            StoreError::new(&rocketmq_error::STORAGE_UNAVAILABLE, StoreOperation::Admin)
                 .in_component(StoreComponent::MappedFile)
                 .with_source(io::Error::other("unlock failed")),
         );

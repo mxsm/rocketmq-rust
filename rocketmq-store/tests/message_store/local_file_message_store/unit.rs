@@ -696,7 +696,7 @@ async fn destroy_store_is_write_disabled_and_retries_without_namespace_mutation(
         Ok(_) => panic!("destroy retry state must retain the Store root lease across shutdown"),
         Err(error) => error,
     };
-    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
     assert!(std::error::Error::source(&error)
         .and_then(|source| source.downcast_ref::<std::io::Error>())
         .is_some());
@@ -743,7 +743,7 @@ fn destroyed_store_outcome_is_idempotent_and_retains_root_lease_until_drop() {
         Ok(_) => panic!("terminal destroy state must retain the Store root lease until owner drop"),
         Err(error) => error,
     };
-    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
 
     drop(store);
     drop(new_configured_test_store(&temp_dir, MessageStoreConfig::default()));
@@ -842,7 +842,7 @@ fn assert_destroy_is_non_mutating_after_root_replacement(replacement_contents: O
         Ok(_) => panic!("the retained physical root must stay leased until owner drop"),
         Err(error) => error,
     };
-    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
 
     drop(store);
     drop(
@@ -2306,7 +2306,7 @@ async fn store_root_lease_outlives_shutdown_until_owner_drop() {
         Ok(_) => panic!("second store must not inspect the root while its lock is held"),
         Err(error) => error,
     };
-    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
 
     first.shutdown().await;
 
@@ -2314,7 +2314,7 @@ async fn store_root_lease_outlives_shutdown_until_owner_drop() {
         Ok(_) => panic!("shutdown must not expose a stale Store object alongside a replacement owner"),
         Err(error) => error,
     };
-    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
 
     drop(first);
     let mut second = new_configured_test_store(&temp_dir, config);
@@ -2345,7 +2345,7 @@ fn constructor_checks_store_lock_before_checkpoint_creation() {
         Err(error) => error,
     };
 
-    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
     assert!(
         !std::path::PathBuf::from(get_store_checkpoint(temp_dir.path().to_string_lossy().as_ref())).exists(),
         "checkpoint construction must remain behind the exclusive root lock"
@@ -2432,7 +2432,7 @@ fn managed_lifecycle_session_owns_the_exclusive_root_lease() {
         Ok(_) => panic!("the managed session must keep the exclusive root lease alive"),
         Err(error) => error,
     };
-    assert_eq!(competing.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(competing.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
 
     drop(inspection);
     drop(

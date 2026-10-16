@@ -104,7 +104,7 @@ impl TieredReadPolicy {
             && matches!(
                 error.descriptor(),
                 descriptor
-                    if descriptor == &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE
+                    if descriptor == &rocketmq_error::STORAGE_UNAVAILABLE
                         || descriptor == &rocketmq_error::STORAGE_OPERATION_TIMED_OUT
                         || descriptor == &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED
                         || descriptor == &rocketmq_error::STORAGE_READ_FAILED
@@ -154,7 +154,7 @@ mod tests {
     #[test]
     fn falls_back_only_for_eligible_errors_when_local_storage_is_available() {
         for descriptor in [
-            &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+            &rocketmq_error::STORAGE_UNAVAILABLE,
             &rocketmq_error::STORAGE_OPERATION_TIMED_OUT,
             &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
             &rocketmq_error::STORAGE_READ_FAILED,

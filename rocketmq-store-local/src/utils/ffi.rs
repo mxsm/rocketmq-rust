@@ -334,7 +334,7 @@ unsafe fn sys_mlock(addr: *const u8, len: usize) -> StoreResult<()> {
         let result = unsafe { libc::mlock(addr as *const c_void, len) };
         if result != 0 {
             return Err(
-                mapped_memory_failure(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, "memory lock (mlock)")
+                mapped_memory_failure(&rocketmq_error::STORAGE_UNAVAILABLE, "memory lock (mlock)")
                     .with_source(io::Error::last_os_error()),
             );
         }
@@ -348,11 +348,7 @@ unsafe fn sys_mlock(addr: *const u8, len: usize) -> StoreResult<()> {
         // SAFETY: the caller upholds the live-range and concurrent-unmapping contract.
         let result = unsafe { VirtualLock(addr as _, len) };
         result.map_err(|error| {
-            mapped_memory_failure(
-                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
-                "memory lock (VirtualLock)",
-            )
-            .with_source(error)
+            mapped_memory_failure(&rocketmq_error::STORAGE_UNAVAILABLE, "memory lock (VirtualLock)").with_source(error)
         })?;
         Ok(())
     }
@@ -382,7 +378,7 @@ unsafe fn sys_munlock(addr: *const u8, len: usize) -> StoreResult<()> {
         let result = unsafe { libc::munlock(addr as *const c_void, len) };
         if result != 0 {
             return Err(
-                mapped_memory_failure(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, "memory unlock (munlock)")
+                mapped_memory_failure(&rocketmq_error::STORAGE_UNAVAILABLE, "memory unlock (munlock)")
                     .with_source(io::Error::last_os_error()),
             );
         }
@@ -395,11 +391,8 @@ unsafe fn sys_munlock(addr: *const u8, len: usize) -> StoreResult<()> {
         // SAFETY: the caller upholds the live, previously locked range contract.
         let result = unsafe { VirtualUnlock(addr as _, len) };
         result.map_err(|error| {
-            mapped_memory_failure(
-                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
-                "memory unlock (VirtualUnlock)",
-            )
-            .with_source(error)
+            mapped_memory_failure(&rocketmq_error::STORAGE_UNAVAILABLE, "memory unlock (VirtualUnlock)")
+                .with_source(error)
         })?;
         Ok(())
     }

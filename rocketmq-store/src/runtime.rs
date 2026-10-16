@@ -181,7 +181,7 @@ fn runtime_error(name: &'static str, operation: StoreOperation, error: rocketmq_
     let descriptor = match error.condition() {
         CanonicalCondition::DeadlineExceeded => &rocketmq_error::STORAGE_OPERATION_TIMED_OUT,
         CanonicalCondition::ResourceExhausted => &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
-        CanonicalCondition::Unavailable | CanonicalCondition::Cancelled => &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+        CanonicalCondition::Unavailable | CanonicalCondition::Cancelled => &rocketmq_error::STORAGE_UNAVAILABLE,
         _ => &rocketmq_error::STORAGE_INTERNAL_FAILURE,
     };
     StoreError::new(descriptor, operation)

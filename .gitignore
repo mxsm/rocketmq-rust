@@ -73,3 +73,6 @@ docs
 !rocketmq-ai/rocketmq-mcp-control/docs/**
 !rocketmq-dashboard/rocketmq-dashboard-web/docs/
 !rocketmq-dashboard/rocketmq-dashboard-web/docs/**
+
+# pycache
+**/__pycache__/

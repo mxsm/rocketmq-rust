@@ -172,7 +172,7 @@ impl MessageAppender<()> for ProbeAppender {
                 StoreBehavior::ImmediateError => {
                     state.events.lock().push("store_failed");
                     Err(StoreError::new(
-                        &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                        &rocketmq_error::STORAGE_UNAVAILABLE,
                         StoreOperation::Append,
                     ))
                 }

@@ -50,7 +50,7 @@ pub(super) fn merge_existing_column_families(
     }
 
     let existing_column_families = ::rocksdb::DB::list_cf(db_options, &config.path)
-        .map_store(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Load)?;
+        .map_store(&rocketmq_error::STORAGE_UNAVAILABLE, StoreOperation::Load)?;
     for existing_name in existing_column_families {
         if column_families
             .iter()
@@ -143,5 +143,5 @@ pub(super) fn range_scan_on_db(
 }
 
 pub(super) fn unavailable_state(operation: StoreOperation) -> StoreError {
-    rocksdb_contract_error(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, operation)
+    rocksdb_contract_error(&rocketmq_error::STORAGE_UNAVAILABLE, operation)
 }

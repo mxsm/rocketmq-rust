@@ -1593,14 +1593,14 @@ impl StoreApiErrorProjection {
 }
 
 fn map_store_api_error(error: rocketmq_store_api::StoreError) -> StoreApiErrorProjection {
-    use rocketmq_error::STORAGE_BACKEND_UNAVAILABLE;
     use rocketmq_error::STORAGE_MAPPED_FILE_NOT_FOUND;
     use rocketmq_error::STORAGE_OPERATION_TIMED_OUT;
     use rocketmq_error::STORAGE_OPERATION_UNSUPPORTED;
+    use rocketmq_error::STORAGE_UNAVAILABLE;
     use rocketmq_store_api::StoreOperation;
 
     let descriptor = error.descriptor();
-    let retry = if (descriptor == &STORAGE_BACKEND_UNAVAILABLE && error.operation() == StoreOperation::Append)
+    let retry = if (descriptor == &STORAGE_UNAVAILABLE && error.operation() == StoreOperation::Append)
         || (descriptor == &STORAGE_MAPPED_FILE_NOT_FOUND && error.operation() == StoreOperation::Append)
         || descriptor == &STORAGE_OPERATION_UNSUPPORTED
     {
@@ -2423,7 +2423,7 @@ mod tests {
         ) -> impl Future<Output = Result<Self::Receipt, rocketmq_store_api::StoreError>> + Send {
             let result = self.receipt.take().ok_or_else(|| {
                 rocketmq_store_api::StoreError::new(
-                    &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                    &rocketmq_error::STORAGE_UNAVAILABLE,
                     rocketmq_store_api::StoreOperation::Append,
                 )
             });
@@ -2590,7 +2590,7 @@ mod tests {
                 StoreApiRetryDisposition::Never,
             ),
             (
-                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                &rocketmq_error::STORAGE_UNAVAILABLE,
                 RemotingResponseCode::SystemError,
                 "Storage backend is unavailable",
                 StoreApiRetryDisposition::SwitchBroker,
@@ -2690,12 +2690,12 @@ mod tests {
 
         let cases = [
             (
-                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                &rocketmq_error::STORAGE_UNAVAILABLE,
                 StoreOperation::Append,
                 StoreApiRetryDisposition::SwitchBroker,
             ),
             (
-                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                &rocketmq_error::STORAGE_UNAVAILABLE,
                 StoreOperation::Read,
                 StoreApiRetryDisposition::Never,
             ),

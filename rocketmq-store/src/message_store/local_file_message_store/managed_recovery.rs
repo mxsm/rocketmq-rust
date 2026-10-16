@@ -151,7 +151,7 @@ pub(super) fn stage_and_activate_managed_queues(
 ) -> Result<Option<ActivatedManagedQueues>, StoreError> {
     let mut queues = Vec::new();
     queues.try_reserve_exact(routes.len()).map_err(|_| {
-        StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Load)
+        StoreError::new(&rocketmq_error::STORAGE_UNAVAILABLE, StoreOperation::Load)
             .in_component(StoreComponent::MappedFile)
             .with_detail("failed to reserve managed queue staging inventory")
     })?;
@@ -513,7 +513,7 @@ pub(super) fn require_wave_b_ready(
     match disposition {
         ManagedReadOnlyDisposition::Ready(prepared) => Ok(prepared),
         ManagedReadOnlyDisposition::RecoveryRequired(recovery) => Err(StoreError::new(
-            &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+            &rocketmq_error::STORAGE_UNAVAILABLE,
             StoreOperation::Load,
         )
         .in_component(StoreComponent::MappedFile)

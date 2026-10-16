@@ -541,7 +541,7 @@ impl CommitLog {
             append_processor,
         )
         .map_err(|error| {
-            StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Start)
+            StoreError::new(&rocketmq_error::STORAGE_UNAVAILABLE, StoreOperation::Start)
                 .in_component(StoreComponent::CommitLog)
                 .with_detail("failed to initialize CommitLog append sequencer")
                 .with_source(error)
@@ -3724,13 +3724,13 @@ mod tests {
         let error = commit_log
             .release_active_memory_lock_if_present(|_, _| {
                 Err(
-                    StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Admin)
+                    StoreError::new(&rocketmq_error::STORAGE_UNAVAILABLE, StoreOperation::Admin)
                         .in_component(StoreComponent::MappedFile)
                         .with_detail("retryable active unlock"),
                 )
             })
             .expect_err("warn-only unlock failure must be returned");
-        assert_eq!(error.code(), rocketmq_error::STORAGE_BACKEND_UNAVAILABLE.code());
+        assert_eq!(error.code(), rocketmq_error::STORAGE_UNAVAILABLE.code());
         assert_eq!(error.operation(), StoreOperation::Admin);
         assert_eq!(error.component(), StoreComponent::MappedFile);
         let (active_memory_lock, active_memory_lock_present) = commit_log.runtime_state.active_memory_lock_parts();
@@ -3824,7 +3824,7 @@ mod tests {
         commit_log.release_active_memory_lock_for_drop_with(|manager, handle| {
             manager.unlock_owned_region_with(handle, |_, _| {
                 Err(
-                    StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Admin)
+                    StoreError::new(&rocketmq_error::STORAGE_UNAVAILABLE, StoreOperation::Admin)
                         .in_component(StoreComponent::MappedFile)
                         .with_detail("drop retry"),
                 )

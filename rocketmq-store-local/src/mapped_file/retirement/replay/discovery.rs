@@ -731,7 +731,7 @@ fn lifecycle_read_store_error(error: ManagedLifecycleReadFailure) -> StoreError 
             &rocketmq_error::STORAGE_IO_FAILED
         }
         ManagedLifecycleReadFailure::Platform(platform::PlatformFailure::Changed { .. })
-        | ManagedLifecycleReadFailure::InventoryChanged(_) => &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+        | ManagedLifecycleReadFailure::InventoryChanged(_) => &rocketmq_error::STORAGE_UNAVAILABLE,
         ManagedLifecycleReadFailure::Platform(platform::PlatformFailure::Limit { .. })
         | ManagedLifecycleReadFailure::Limit(_)
         | ManagedLifecycleReadFailure::ReplayLimit(_) => &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,

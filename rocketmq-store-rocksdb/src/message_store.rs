@@ -664,7 +664,7 @@ impl StoreLifecycle for RocksDbDerivedStore {
 
 fn rocksdb_failure_descriptor(operation: StoreOperation) -> &'static rocketmq_error::ErrorDescriptor {
     match operation {
-        StoreOperation::Load | StoreOperation::Start => &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+        StoreOperation::Load | StoreOperation::Start => &rocketmq_error::STORAGE_UNAVAILABLE,
         StoreOperation::Read | StoreOperation::QueryOffset => &rocketmq_error::STORAGE_READ_FAILED,
         StoreOperation::Append | StoreOperation::Flush | StoreOperation::Replicate | StoreOperation::AppendDerived => {
             &rocketmq_error::STORAGE_WRITE_FAILED

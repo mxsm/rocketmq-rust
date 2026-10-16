@@ -231,7 +231,7 @@ impl MessageAppender<()> for ReplyAppender {
                 ))
             }
             StoreBehavior::Error => Err(StoreError::new(
-                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                &rocketmq_error::STORAGE_UNAVAILABLE,
                 StoreOperation::Append,
             )),
         })
