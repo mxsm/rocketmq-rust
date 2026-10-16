@@ -670,7 +670,7 @@ mod tests {
         let tiered_store = TieredStore::new(
             TieredStoreConfig {
                 storage_level: TieredStorageLevel::Force,
-                backend_provider: "memory".to_owned(),
+                storage_provider_id: "memory".to_owned(),
                 store_path_root_dir: temp_dir.path().join("tieredstore"),
                 ..TieredStoreConfig::default()
             },
@@ -707,7 +707,7 @@ mod tests {
         let tiered_store = TieredStore::new(
             TieredStoreConfig {
                 storage_level: TieredStorageLevel::Force,
-                backend_provider: "memory".to_owned(),
+                storage_provider_id: "memory".to_owned(),
                 store_path_root_dir: temp_dir.path().join("tieredstore"),
                 max_pending_tasks: 8,
                 ..TieredStoreConfig::default()

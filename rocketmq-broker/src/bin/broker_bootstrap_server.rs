@@ -608,7 +608,10 @@ fn print_important_tieredstore_config(config: &MessageStoreConfig) {
 
     println!("    tieredStoreEnable: {}", tiered_store_config.storage_level.enabled());
     println!("    tieredStorageLevel: {:?}", tiered_store_config.storage_level);
-    println!("    tieredBackendProvider: {}", tiered_store_config.backend_provider);
+    println!(
+        "    tieredStorageProviderId: {}",
+        tiered_store_config.storage_provider_id
+    );
     println!(
         "    tieredStorePathRootDir: {}",
         tiered_store_config.store_path_root_dir.display()
@@ -645,7 +648,7 @@ fn print_all_tieredstore_config(config: &MessageStoreConfig) {
 
     println!("    tieredStoreConfig:");
     println!("      storageLevel: {:?}", tiered_store_config.storage_level);
-    println!("      backendProvider: {}", tiered_store_config.backend_provider);
+    println!("      storageProviderId: {}", tiered_store_config.storage_provider_id);
     println!("      metadataProvider: {}", tiered_store_config.metadata_provider);
     println!(
         "      storePathRootDir: {}",
@@ -705,9 +708,9 @@ fn print_tieredstore_startup_info(message_store_config: &MessageStoreConfig) {
     match message_store_config.tiered_store_config.as_ref() {
         Some(config) if config.storage_level.enabled() => {
             info!(
-                "Tieredstore enabled: storageLevel={:?}, backendProvider={}, storePathRootDir={}",
+                "Tieredstore enabled: storageLevel={:?}, storageProviderId={}, storePathRootDir={}",
                 config.storage_level,
-                config.backend_provider,
+                config.storage_provider_id,
                 config.store_path_root_dir.display()
             );
         }

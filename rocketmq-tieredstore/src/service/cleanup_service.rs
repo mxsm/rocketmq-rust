@@ -205,7 +205,7 @@ mod tests {
         })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             commit_log_segment_size: 8,
             consume_queue_segment_size: CONSUME_QUEUE_UNIT_SIZE as u64,
             file_reserved_time: Duration::from_millis(1),

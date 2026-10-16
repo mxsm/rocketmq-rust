@@ -336,7 +336,7 @@ mod store_api_tests {
         let context = RuntimeContext::from_current("tiered-store-api-test");
         let mut store = TieredStore::new(
             TieredStoreConfig {
-                backend_provider: "memory".to_owned(),
+                storage_provider_id: "memory".to_owned(),
                 store_path_root_dir: temp_dir.path().join("tiered-lifecycle"),
                 ..TieredStoreConfig::default()
             },

@@ -98,7 +98,7 @@ impl TieredProviderDescriptor {
         }
     }
 
-    /// Provider identifier selected by the `backend_provider` field on
+    /// Provider identifier selected by the `storage_provider_id` field on
     /// [`crate::config::TieredStoreConfig`].
     pub const fn id(self) -> &'static str {
         self.id
@@ -197,7 +197,7 @@ impl BuiltinTieredStoreProviderFactory {
     ///
     /// Returns `None` when the configured provider is not built in.
     pub fn select(config: &crate::config::TieredStoreConfig) -> Option<Self> {
-        match config.backend_provider.as_str() {
+        match config.storage_provider_id.as_str() {
             "posix" => Some(Self::Posix(PosixProviderFactory)),
             "memory" => Some(Self::Memory(MemoryProviderFactory)),
             _ => None,

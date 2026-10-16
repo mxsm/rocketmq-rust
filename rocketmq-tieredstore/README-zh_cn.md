@@ -52,6 +52,9 @@ cargo build -p rocketmq-tieredstore
 rocketmq-tieredstore = { path = "../rocketmq-tieredstore" }
 ```
 
+配置迁移：将 `tieredStoreConfig.backendProvider` 改为
+`tieredStoreConfig.storageProviderId`。旧键会被忽略；未设置新键时使用默认的 `"posix"` provider。
+
 使用 memory provider 创建 store、分发一条消息、通过 shutdown drain dispatcher，然后按 queue offset 读取消息：
 
 ```rust
@@ -66,7 +69,7 @@ async fn example(parent_task_group: TaskGroup) -> Result<(), StoreError> {
     let Some(store) = TieredStore::new(
         TieredStoreConfig {
             storage_level: TieredStorageLevel::Force,
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             max_pending_tasks: 16,
             ..TieredStoreConfig::default()
         },
@@ -127,7 +130,7 @@ use rocketmq_tieredstore::{TieredStorageLevel, TieredStore, TieredStoreConfig};
 let Some(store) = TieredStore::new(
     TieredStoreConfig {
         storage_level: TieredStorageLevel::Force,
-        backend_provider: "posix".to_owned(),
+        storage_provider_id: "posix".to_owned(),
         store_path_root_dir: "./store/tieredstore".into(),
         ..TieredStoreConfig::default()
     },

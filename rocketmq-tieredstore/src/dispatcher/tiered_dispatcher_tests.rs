@@ -81,7 +81,7 @@ async fn dispatch_writes_commit_log_and_consume_queue_unit() -> Result<(), Store
     })?;
     let config = Arc::new(TieredStoreConfig {
         store_path_root_dir: temp_dir.path().to_path_buf(),
-        backend_provider: "memory".to_owned(),
+        storage_provider_id: "memory".to_owned(),
         max_pending_tasks: 4,
         ..TieredStoreConfig::default()
     });
@@ -146,7 +146,7 @@ async fn new_with_task_group_parents_dispatcher_task() -> Result<(), StoreError>
     })?;
     let config = Arc::new(TieredStoreConfig {
         store_path_root_dir: temp_dir.path().to_path_buf(),
-        backend_provider: "memory".to_owned(),
+        storage_provider_id: "memory".to_owned(),
         max_pending_tasks: 4,
         ..TieredStoreConfig::default()
     });
@@ -186,7 +186,7 @@ async fn cancellation_releases_a_sender_waiting_for_byte_capacity() -> Result<()
     })?;
     let config = Arc::new(TieredStoreConfig {
         store_path_root_dir: temp_dir.path().to_path_buf(),
-        backend_provider: "memory".to_owned(),
+        storage_provider_id: "memory".to_owned(),
         max_pending_tasks: 1,
         max_pending_bytes: 4,
         ..TieredStoreConfig::default()
@@ -245,7 +245,7 @@ async fn try_dispatch_distinguishes_full_capacity_from_closed_backend() -> Resul
     })?;
     let config = Arc::new(TieredStoreConfig {
         store_path_root_dir: temp_dir.path().to_path_buf(),
-        backend_provider: "memory".to_owned(),
+        storage_provider_id: "memory".to_owned(),
         max_pending_tasks: 1,
         ..TieredStoreConfig::default()
     });
