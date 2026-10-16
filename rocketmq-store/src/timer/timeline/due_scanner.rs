@@ -52,7 +52,7 @@ enum FormalDueContinuation {
 #[derive(Clone, Debug, Default)]
 struct FormalDuePage {
     entries: Vec<TimelineIndexEntry>,
-    continuation: Option<FormalDueContinuation>,
+    scan_continuation: Option<FormalDueContinuation>,
     retained_bytes: usize,
 }
 
@@ -63,7 +63,7 @@ trait TimelineDueIndex: Send + Sync {
         &self,
         start_due_ms: i64,
         end_due_exclusive_ms: i64,
-        continuation: Option<FormalDueContinuation>,
+        scan_continuation: Option<FormalDueContinuation>,
         max_messages: usize,
         max_bytes: usize,
     ) -> Result<FormalDuePage, TimelineDueScannerError>;
@@ -78,25 +78,27 @@ impl TimelineDueIndex for RocksTimelineDueIndex {
         &self,
         start_due_ms: i64,
         end_due_exclusive_ms: i64,
-        continuation: Option<FormalDueContinuation>,
+        scan_continuation: Option<FormalDueContinuation>,
         max_messages: usize,
         max_bytes: usize,
     ) -> Result<FormalDuePage, TimelineDueScannerError> {
-        let continuation = match continuation {
-            Some(FormalDueContinuation::Rocks(key)) => Some(key),
-            Some(FormalDueContinuation::Segmented(_)) => return Err(TimelineDueScannerError::CursorBackendMismatch),
+        let rocks_resume_key = match scan_continuation {
+            Some(FormalDueContinuation::Rocks(resume_key)) => Some(resume_key),
+            Some(FormalDueContinuation::Segmented(_)) => {
+                return Err(TimelineDueScannerError::ContinuationIndexKindMismatch)
+            }
             None => None,
         };
         let page = self.timeline.range_scan(
             start_due_ms,
             end_due_exclusive_ms,
-            continuation,
+            rocks_resume_key,
             max_messages,
             max_bytes,
         )?;
         Ok(FormalDuePage {
             entries: page.entries,
-            continuation: page.continuation.map(FormalDueContinuation::Rocks),
+            scan_continuation: page.continuation.map(FormalDueContinuation::Rocks),
             retained_bytes: page.retained_bytes,
         })
     }
@@ -111,13 +113,15 @@ impl TimelineDueIndex for SegmentedTimelineDueIndex {
         &self,
         start_due_ms: i64,
         end_due_exclusive_ms: i64,
-        continuation: Option<FormalDueContinuation>,
+        scan_continuation: Option<FormalDueContinuation>,
         max_messages: usize,
         max_bytes: usize,
     ) -> Result<FormalDuePage, TimelineDueScannerError> {
-        let continuation = match continuation {
-            Some(FormalDueContinuation::Segmented(cursor)) => Some(cursor),
-            Some(FormalDueContinuation::Rocks(_)) => return Err(TimelineDueScannerError::CursorBackendMismatch),
+        let segmented_continuation = match scan_continuation {
+            Some(FormalDueContinuation::Segmented(segmented_continuation)) => Some(segmented_continuation),
+            Some(FormalDueContinuation::Rocks(_)) => {
+                return Err(TimelineDueScannerError::ContinuationIndexKindMismatch)
+            }
             None => None,
         };
         let Some(page) = self.timeline.scan_due(
@@ -130,19 +134,19 @@ impl TimelineDueIndex for SegmentedTimelineDueIndex {
             end_due_exclusive_ms,
             max_messages,
             max_bytes.max(max_messages.saturating_mul(TimelineSegmentRecord::encoded_size())),
-            continuation,
+            segmented_continuation,
         )?
         else {
             return Ok(FormalDuePage {
                 entries: Vec::new(),
-                continuation: None,
+                scan_continuation: None,
                 retained_bytes: 0,
             });
         };
         let retained_bytes = page.records.len().saturating_mul(TimelineSegmentRecord::encoded_size());
         Ok(FormalDuePage {
             entries: page.records.into_iter().map(native_entry).collect(),
-            continuation: page.continuation.map(FormalDueContinuation::Segmented),
+            scan_continuation: page.continuation.map(FormalDueContinuation::Segmented),
             retained_bytes,
         })
     }
@@ -337,7 +341,7 @@ impl TimelineDueScanner {
             .due_cursor
             .due_time_ms()
             .saturating_sub(self.config.safety_overlap_ms);
-        let mut continuation = None;
+        let mut scan_continuation = None;
         loop {
             let remaining_messages = max_messages.saturating_sub(result.observed);
             let remaining_bytes = max_bytes.saturating_sub(result.bytes);
@@ -347,7 +351,7 @@ impl TimelineDueScanner {
             let page = self.formal_index.range_scan(
                 start_ms,
                 now_ms.saturating_add(1),
-                continuation,
+                scan_continuation,
                 remaining_messages,
                 remaining_bytes,
             )?;
@@ -407,8 +411,8 @@ impl TimelineDueScanner {
             result.observed = result.observed.saturating_add(page.entries.len());
             result.bytes = result.bytes.saturating_add(page.retained_bytes);
             result.pages = result.pages.saturating_add(1);
-            continuation = page.continuation;
-            if continuation.is_none() {
+            scan_continuation = page.scan_continuation;
+            if scan_continuation.is_none() {
                 break;
             }
         }
@@ -522,8 +526,8 @@ pub(crate) enum TimelineDueScannerError {
     LaneOverflow,
     #[error("CLOCK_UNSAFE prevents formal due promotion")]
     ClockUnsafe,
-    #[error("Timeline continuation belongs to a different index backend")]
-    CursorBackendMismatch,
+    #[error("Timeline scan continuation does not match the selected index kind")]
+    ContinuationIndexKindMismatch,
     #[error("Timeline storage failure: {0}")]
     Store(#[from] rocketmq_store_api::StoreError),
 }
