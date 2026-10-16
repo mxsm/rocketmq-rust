@@ -549,7 +549,7 @@ gate.
 | `rocketmq_broker::long_polling::pull_deferred::service::PullDeferredPrepareError` | `rocketmq-broker` — [rocketmq-broker/src/long_polling/pull_deferred/service.rs:1181](../../rocketmq-broker/src/long_polling/pull_deferred/service.rs#L1181) | pub(crate); not externally reachable | same crate only | Outcome | `PullDeferredPreparationStatus` | N/A | yes — every arm retains PullSuspensionCandidate plus build/deadline/index/admission cause | Service and boundary crates / rocketmq-broker | 4 (Service/boundary) | pending implementation |
 | `rocketmq_broker::long_polling::pull_deferred::service::PullDeferredRegisterError` | `rocketmq-broker` — [rocketmq-broker/src/long_polling/pull_deferred/service.rs:1272](../../rocketmq-broker/src/long_polling/pull_deferred/service.rs#L1272) | pub(crate); not externally reachable | same crate only | Outcome | `PullDeferredRegistrationStatus` | N/A | yes — preserve prepared registration, responder source, and expiry/registry request identity | Service and boundary crates / rocketmq-broker | 4 (Service/boundary) | pending implementation |
 | `rocketmq_broker::long_polling::pull_deferred::service::continuation::PullContinuationError` | `rocketmq-broker` — [rocketmq-broker/src/long_polling/pull_deferred/service/continuation.rs:281](../../rocketmq-broker/src/long_polling/pull_deferred/service/continuation.rs#L281) | pub(crate); not externally reachable | same crate only | Outcome | `PullContinuationAdmissionStatus` | N/A | N/A — retain count/bytes/overflow/allocation rejection | Service and boundary crates / rocketmq-broker | 4 (Service/boundary) | pending implementation |
-| `rocketmq_broker::metrics::consumer_attr::ConsumerAttrError` | `rocketmq-broker` — [rocketmq-broker/src/metrics/consumer_attr.rs:190](../../rocketmq-broker/src/metrics/consumer_attr.rs#L190) | pub; private module and no re-export (not Rustdoc-reachable) | same crate only | Contract | `BrokerContractViolation` | N/A | N/A — retain the missing group/language/version/consume-mode field | Service and boundary crates / rocketmq-broker | 4 (Service/boundary) | pending implementation |
+| `rocketmq_broker::metrics::consumer_attr::ConsumerAttrError` | `rocketmq-broker` — `rocketmq-broker/src/metrics/consumer_attr.rs` | removed; was crate-private through its module | none outside its own tests | Delete | N/A | N/A | N/A — unused private metrics model | Service and boundary crates / rocketmq-broker | 4 (Service/boundary) | removed by issue #11652 |
 | `rocketmq_broker::processor::fast_failure_dispatch::FastFailureAwaitError` | `rocketmq-broker` — [rocketmq-broker/src/processor/fast_failure_dispatch.rs:286](../../rocketmq-broker/src/processor/fast_failure_dispatch.rs#L286) | pub(super); not externally reachable | same crate only | Outcome | `FastFailureAwaitOutcome` | N/A | yes — preserve FastFailureRejection versus lifecycle-stopped state | Service and boundary crates / rocketmq-broker | 4 (Service/boundary) | pending implementation |
 | `rocketmq_broker::processor::pull_message_processor::PullClientIdentityError` | `rocketmq-broker` — [rocketmq-broker/src/processor/pull_message_processor.rs:118](../../rocketmq-broker/src/processor/pull_message_processor.rs#L118) | private; not externally reachable | same crate only | PrivateLeaf | `private identity-lookup leaf with contract split` | N/A | repair — distinguish lookup unavailable from missing registration; no source is currently retained | Service and boundary crates / rocketmq-broker | 4 (Service/boundary) | pending implementation |
 | `rocketmq_broker::processor::pull_message_processor::StaticTopicRewriteError` | `rocketmq-broker` — [rocketmq-broker/src/processor/pull_message_processor.rs:207](../../rocketmq-broker/src/processor/pull_message_processor.rs#L207) | pub(super); not externally reachable | same crate only | Contract | `BrokerContractViolation` | N/A | N/A — retain mapping field/item, logical offset, and request/response-header invariant | Service and boundary crates / rocketmq-broker | 4 (Service/boundary) | pending implementation |
@@ -880,16 +880,15 @@ API authority.
 
 | Reviewed scope | Lexical enum/struct declarations | Rustdoc-reachable supported types | Disposition |
 | --- | ---: | ---: | --- |
-| Historical eight high-priority crates | 9 | 8 | Below the 16-type target; the ninth is the private-module `ConsumerAttrError` false positive |
-| Complete root workspace outside `rocketmq-error` | 24 | 23 | Below the 40-type target; includes four `rocketmq-dashboard-common` types and one feature-gated observability export |
+| Historical eight high-priority crates | 8 | 8 | Below the 16-type target |
+| Complete root workspace outside `rocketmq-error` | 23 | 23 | Below the 40-type target; includes four `rocketmq-dashboard-common` types and one feature-gated observability export |
 | `rocketmq-store-local` | — | 0 public `Error` | No supported public Error remains |
 | Supported public Error with neither a checked consumer nor public-signature purpose | — | 0 | No orphan supported public Error |
 
-The complete-root 24/23 count includes the historical-eight candidates plus
+The complete-root 23/23 count includes the historical-eight candidates plus
 the current client, controller, dashboard-common, filter, observability, and
-proxy-core surfaces. `ConsumerAttrError` is the only lexical false positive:
-its declaration is `pub`, but `rocketmq-broker::metrics` is private and the
-type has no public re-export or Rustdoc path. `InfrastructureObservationReadError`
+proxy-core surfaces. The unused private `ConsumerAttrError` has been removed.
+`InfrastructureObservationReadError`
 is public only under the Client `admin-read` feature, and
 `ReleaseIdentityRegistrationError` is public only under Observability's
 `otel-metrics` feature; both are reachable in their enabled profiles. Private

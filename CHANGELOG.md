@@ -54,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(broker):** Remove unused private metrics attribute/status models and constant re-export modules ([#11652](https://github.com/mxsm/rocketmq-rust/issues/11652)).
 - **refactor(proxy-core):** Remove the deprecated `remoting` and `service` module aliases (breaking); import from `ingress::remoting` and `contracts`, respectively.
 - **refactor(client):** Remove the deprecated `TransactionCheckListener` compatibility trait (breaking); use `TransactionListener` for transaction execution and broker checks.
 - **refactor(client):** Remove the always-failing `MQHelper::reset_offset_by_timestamp` entry point (breaking); use the async `reset_offset_by_timestamp_with_client_runtime` method with an application-owned runtime and typed `MessageModel`.
