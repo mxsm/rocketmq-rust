@@ -76,12 +76,14 @@ fn parse_controller_config_file(config_path: &Path) -> ControllerResult<Controll
 /// Supports loading configuration from files (TOML/JSON/YAML) and printing config items.
 #[derive(Parser, Debug, Clone)]
 #[command(
-    name = "mqcontroller",
-    author = "mxsm",
-    version = env!("CARGO_PKG_VERSION"),
-    about = "RocketMQ Controller Server (Rust)",
-    long_about = "RocketMQ Controller Server implemented in Rust.\n\
-                  Responsible for broker metadata management and leader election."
+    name = "rocketmq-controller-rust",
+    author,
+    version,
+    about = "RocketMQ-Rust Controller",
+    long_about = "Controller for RocketMQ-Rust, a Rust implementation of Apache RocketMQ.\n\n\
+                  Provides broker master election, heartbeat tracking, replica metadata \
+                  management, and replicated controller state.\n\n\
+                  Project: https://github.com/mxsm/rocketmq-rust"
 )]
 pub struct ControllerCli {
     /// Controller configuration file path (TOML, JSON, YAML, etc.)
