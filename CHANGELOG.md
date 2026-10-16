@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **chore(controller):** Name the Controller CLI `rocketmq-controller-rust` to match its executable, take author and version from Cargo metadata, and describe the Controller in `-h`/`--help` with RocketMQ-Rust wording ([#11633](https://github.com/mxsm/rocketmq-rust/issues/11633)).
 - **refactor(store):** Rename the sealed capability trait `BackendAccess` to `MessageStoreAccess`, its associated type `Backend` to `MessageStore`, and its accessors to `message_store()`/`message_store_mut()` (breaking) ([#11594](https://github.com/mxsm/rocketmq-rust/issues/11594)).
 - **refactor(controller):** Rename the Controller storage selector and builder to `StorageEngineType`, `with_storage_engine_type` (breaking) ([#11514](https://github.com/mxsm/rocketmq-rust/issues/11514)).
 - **refactor(proxy-local):** Rename the public type to `LocalBrokerCommandGateway` (breaking) ([#11544](https://github.com/mxsm/rocketmq-rust/issues/11544)).
