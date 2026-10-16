@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(proxy):** Rename `RemotingRouteClass::ForwardBackend` and `RemotingIngressRoute::ForwardBackend` to `ForwardToBroker` (breaking Rust source API change; wire behavior unchanged) ([#11644](https://github.com/mxsm/rocketmq-rust/issues/11644)).
 - **refactor(store):** Rename the checkpoint discriminator to `CheckpointStoreKind` and its fields/accessor to `store_kind` (breaking), preserving the `backend` JSON key ([#11611](https://github.com/mxsm/rocketmq-rust/issues/11611)).
 - **refactor(tieredstore):** Rename the provider ID field to `storage_provider_id` and migrate configuration to `storageProviderId` (breaking) ([#11603](https://github.com/mxsm/rocketmq-rust/issues/11603)).
 - **refactor(store):** Align the internal logical-read module name with `MessageStoreReader` ([#11595](https://github.com/mxsm/rocketmq-rust/issues/11595)).

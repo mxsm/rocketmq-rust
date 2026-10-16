@@ -964,7 +964,7 @@ where
             RemotingIngressRoute::GetProxyDrainState => self.dispatch_get_proxy_drain_state(request),
             RemotingIngressRoute::BeginProxyDrain => self.dispatch_begin_proxy_drain(request),
             RemotingIngressRoute::CancelProxyDrain => self.dispatch_cancel_proxy_drain(request),
-            RemotingIngressRoute::ForwardBackend
+            RemotingIngressRoute::ForwardToBroker
             | RemotingIngressRoute::AuthAdminUnsupported
             | RemotingIngressRoute::Unsupported => error_response(
                 PublicErrorView::descriptor_only(&PROTOCOL_REQUEST_UNSUPPORTED),
@@ -995,7 +995,7 @@ where
         }
         if matches!(
             route,
-            RemotingIngressRoute::ForwardBackend
+            RemotingIngressRoute::ForwardToBroker
                 | RemotingIngressRoute::LockBatchMessageQueue
                 | RemotingIngressRoute::UnlockBatchMessageQueue
         ) {
