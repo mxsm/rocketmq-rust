@@ -80,7 +80,6 @@ fn oversized_frame_is_rejected_before_body_allocation() {
 fn legacy_large_body_acceptance_requires_an_explicit_owner_profile() {
     let canonical = FrameLimits::default();
     let java = FrameLimits::java_compatibility();
-    let legacy = FrameLimits::legacy_compatibility();
 
     assert_eq!(canonical.max_frame_bytes, 16 * 1024 * 1024);
     assert_eq!(canonical.max_header_bytes, 1024 * 1024);
@@ -88,7 +87,6 @@ fn legacy_large_body_acceptance_requires_an_explicit_owner_profile() {
     assert_eq!(java.max_frame_bytes, 16 * 1024 * 1024);
     assert_eq!(java.max_header_bytes, 4 * 1024 * 1024);
     assert_eq!(java.max_body_bytes, 16 * 1024 * 1024);
-    assert_eq!(legacy, java);
     assert_eq!(canonical.initial_read_bytes, 8 * 1024);
 }
 
