@@ -121,8 +121,9 @@ pub struct OpenedStore {
 impl OpenedStore {
     /// Returns the store type selected during successful composition.
     ///
-    /// This is the concrete backend chosen by the factory, which may differ from the
-    /// originally configured type if composition failed or selected an alternative.
+    /// The configuration accessor reports the requested type. This value describes
+    /// the successfully opened store; failed composition returns an error instead
+    /// of an `OpenedStore`.
     pub const fn store_type(&self) -> StoreType {
         self.store_type
     }
