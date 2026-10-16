@@ -239,10 +239,7 @@ impl StateMachine {
             let meta = snapshot.meta;
             let snapshot_data = validate_snapshot_bytes(&data)?;
             let snapshot_membership = snapshot_data.last_membership.unwrap_or_default();
-            if snapshot_data.last_applied != meta.last_log_id
-                || snapshot_membership != meta.last_membership
-                || snapshot_data.snapshot_id != meta.snapshot_id
-            {
+            if snapshot_data.last_applied != meta.last_log_id || snapshot_membership != meta.last_membership {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "Persisted controller snapshot metadata does not match its checksummed payload",
@@ -552,12 +549,13 @@ pub(crate) fn inspect_snapshot_payload(bytes: &[u8]) -> Result<ValidatedSnapshot
 }
 
 impl RaftSnapshotBuilder<TypeConfig> for StateMachine {
+    type SnapshotData = std::io::Cursor<Vec<u8>>;
+
     async fn build_snapshot(&mut self) -> Result<Snapshot, std::io::Error> {
         let _state_guard = self.state_lock.lock().await;
         let data = self.build_snapshot_data().await?;
         let last_applied = data.last_applied;
         let last_membership = data.last_membership.clone().unwrap_or_default();
-        let snapshot_id = data.snapshot_id.clone();
         let snapshot_data = encode_v1(RaftRecordKey::SnapshotData, &data)?;
         if snapshot_data.len() > SNAPSHOT_MAX_BYTES {
             return Err(std::io::Error::new(
@@ -573,7 +571,6 @@ impl RaftSnapshotBuilder<TypeConfig> for StateMachine {
             meta: SnapshotMeta {
                 last_log_id: last_applied,
                 last_membership,
-                snapshot_id,
             },
             data: snapshot_data.clone(),
         };
@@ -588,6 +585,7 @@ impl RaftSnapshotBuilder<TypeConfig> for StateMachine {
 }
 
 impl RaftStateMachine<TypeConfig> for StateMachine {
+    type SnapshotData = std::io::Cursor<Vec<u8>>;
     type SnapshotBuilder = Self;
 
     async fn applied_state(&mut self) -> Result<(Option<LogId>, StoredMembership), std::io::Error> {
@@ -661,10 +659,6 @@ impl RaftStateMachine<TypeConfig> for StateMachine {
         self.clone()
     }
 
-    async fn begin_receiving_snapshot(&mut self) -> Result<std::io::Cursor<Vec<u8>>, std::io::Error> {
-        Ok(std::io::Cursor::new(Vec::new()))
-    }
-
     async fn install_snapshot(
         &mut self,
         meta: &SnapshotMeta,
@@ -673,10 +667,7 @@ impl RaftStateMachine<TypeConfig> for StateMachine {
         let _state_guard = self.state_lock.lock().await;
         let snapshot_data = validate_snapshot_bytes(snapshot.get_ref())?;
         let snapshot_membership = snapshot_data.last_membership.clone().unwrap_or_default();
-        if snapshot_data.last_applied != meta.last_log_id
-            || snapshot_membership != meta.last_membership
-            || snapshot_data.snapshot_id != meta.snapshot_id
-        {
+        if snapshot_data.last_applied != meta.last_log_id || snapshot_membership != meta.last_membership {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "Controller snapshot metadata does not match its checksummed payload",

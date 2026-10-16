@@ -132,7 +132,6 @@ async fn oversized_snapshot_is_rejected_before_install() {
             &SnapshotMeta {
                 last_log_id: None,
                 last_membership: Default::default(),
-                snapshot_id: "oversized".to_string(),
             },
             Cursor::new(vec![0; SNAPSHOT_MAX_BYTES + 1]),
         )
@@ -147,7 +146,7 @@ async fn mismatched_snapshot_metadata_is_rejected() {
     apply_broker_id(&mut source, "broker-a", 1).await;
     let snapshot = source.build_snapshot().await.expect("build snapshot");
     let mut mismatched_meta = snapshot.meta.clone();
-    mismatched_meta.snapshot_id = "different-id".to_string();
+    mismatched_meta.last_log_id = None;
 
     let mut target = state_machine();
     let error = target

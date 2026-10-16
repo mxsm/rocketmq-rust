@@ -73,6 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(controller):** Align the OpenRaft core, macros, and runtimes at `0.10.0-alpha.37`, adapt the snapshot and leadership APIs while preserving persisted snapshot identity, and refresh the standalone fuzz lockfile to restore locked builds for all four targets ([#11640](https://github.com/mxsm/rocketmq-rust/issues/11640)).
 - **build:** Inherit the Controller MSRV and centralize the Admin Core dependency version used by the Admin CLI and TUI.
 - **fix(fuzz):** Align the standalone OpenRaft macro pin and lockfile with the Controller's `0.10.0-alpha.37` requirement, restoring locked builds for all four fuzz targets ([#11581](https://github.com/mxsm/rocketmq-rust/issues/11581)).
 - **fix(fuzz):** Align the OpenRaft macro pin and standalone lockfile with the controller's `0.10.0-alpha.36` requirement so locked builds resolve all four fuzz targets ([#11115](https://github.com/mxsm/rocketmq-rust/issues/11115)).

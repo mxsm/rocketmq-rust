@@ -369,7 +369,6 @@ openraft::declare_raft_types!(
         D = ControllerRequest,
         R = ControllerResponse,
         Node = Node,
-        SnapshotData = std::io::Cursor<Vec<u8>>,
 );
 
 pub type Raft = openraft::Raft<TypeConfig, crate::openraft::StateMachine>;
@@ -378,7 +377,7 @@ pub type LogEntry = openraft::type_config::alias::EntryOf<TypeConfig>;
 pub type Vote = openraft::type_config::alias::VoteOf<TypeConfig>;
 pub type EntryPayload = openraft::type_config::alias::EntryPayloadOf<TypeConfig>;
 pub type SnapshotMeta = openraft::type_config::alias::SnapshotMetaOf<TypeConfig>;
-pub type Snapshot = openraft::type_config::alias::SnapshotOf<TypeConfig>;
+pub type Snapshot = openraft::type_config::alias::SnapshotOf<TypeConfig, std::io::Cursor<Vec<u8>>>;
 pub type StoredMembership = openraft::type_config::alias::StoredMembershipOf<TypeConfig>;
 pub type RaftMetrics = openraft::metrics::RaftMetrics<TypeConfig>;
 pub type ClientWriteResponse = openraft::raft::ClientWriteResponse<TypeConfig>;

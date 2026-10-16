@@ -116,6 +116,7 @@ fn encode_log_id(log_id: crate::typ::LogId) -> ProtoLogId {
 struct SnapshotStreamAssembler {
     vote: Option<crate::typ::Vote>,
     meta: Option<crate::typ::SnapshotMeta>,
+    snapshot_id: Option<String>,
     data: Vec<u8>,
     expected_offset: u64,
     expected_total_size: Option<u64>,
@@ -128,6 +129,7 @@ impl SnapshotStreamAssembler {
         Self {
             vote: None,
             meta: None,
+            snapshot_id: None,
             data: Vec::new(),
             expected_offset: 0,
             expected_total_size: None,
@@ -178,13 +180,13 @@ impl SnapshotStreamAssembler {
                 .ok_or_else(|| Status::invalid_argument("First snapshot chunk is missing metadata"))?;
             let last_membership: crate::typ::StoredMembership = serde_json::from_slice(&meta.last_membership)
                 .map_err(|source| request_invalid_status("decode snapshot membership", source))?;
+            self.snapshot_id = Some(meta.snapshot_id);
             self.meta = Some(crate::typ::SnapshotMeta {
                 last_log_id: meta.last_log_id.map(|id| crate::typ::LogId {
                     leader_id: crate::typ::Vote::new(id.term, id.node_id).leader_id,
                     index: id.index,
                 }),
                 last_membership,
-                snapshot_id: meta.snapshot_id,
             });
         } else {
             if chunk.total_size != self.expected_total_size.unwrap_or_default()
@@ -215,6 +217,19 @@ impl SnapshotStreamAssembler {
         self.data.extend_from_slice(&chunk.data);
         self.completed = chunk.done;
         Ok(())
+    }
+
+    fn finish_snapshot(self) -> Result<(crate::typ::Vote, crate::typ::SnapshotMeta, Vec<u8>), Status> {
+        let snapshot_id = self.snapshot_id.clone();
+        let (vote, meta, data) = self.finish()?;
+        let identity = crate::openraft::inspect_snapshot_payload(&data)
+            .map_err(|source| request_invalid_status("validate snapshot payload", source))?;
+        if snapshot_id.as_ref() != Some(&identity.snapshot_id) {
+            return Err(Status::invalid_argument(
+                "Snapshot ID does not match its checksummed payload",
+            ));
+        }
+        Ok((vote, meta, data))
     }
 
     fn finish(self) -> Result<(crate::typ::Vote, crate::typ::SnapshotMeta, Vec<u8>), Status> {
@@ -347,6 +362,7 @@ impl OpenRaftService for GrpcRaftService {
         });
 
         let vote_req = openraft::raft::VoteRequest {
+            leadership_transfer: req.leadership_transfer,
             vote: raft_vote,
             last_log_id,
         };
@@ -386,7 +402,7 @@ impl OpenRaftService for GrpcRaftService {
                 chunk_result.map_err(|source| operation_internal_status("receive Raft snapshot stream", source))?;
             assembler.push(chunk)?;
         }
-        let (vote, meta, snapshot_data) = assembler.finish()?;
+        let (vote, meta, snapshot_data) = assembler.finish_snapshot()?;
 
         debug!(
             "Received snapshot: size={} bytes, last_log_id={:?}",
@@ -473,6 +489,34 @@ mod tests {
         assert_eq!(internal_status.code(), tonic::Code::Internal);
         assert_eq!(internal_status.message(), "Controller operation failed");
         assert!(!internal_status.message().contains("internal-source-canary"));
+    }
+
+    #[tokio::test]
+    async fn snapshot_stream_preserves_and_checks_payload_identity() {
+        use openraft::storage::RaftSnapshotBuilder;
+
+        let config = crate::ControllerConfigReader::new(crate::ControllerConfig::default());
+        let mut state = crate::openraft::StateMachine::new(config);
+        let snapshot = state.build_snapshot().await.expect("build snapshot");
+        let data = snapshot.snapshot.into_inner();
+        let identity = crate::openraft::inspect_snapshot_payload(&data).expect("snapshot identity");
+
+        for matches in [true, false] {
+            let mut chunk = first_chunk(data.clone(), data.len() as u64, crc32(&data), true);
+            chunk.meta.as_mut().unwrap().snapshot_id = if matches {
+                identity.snapshot_id.clone()
+            } else {
+                "different-snapshot".to_string()
+            };
+            let mut assembler = SnapshotStreamAssembler::new();
+            assembler.push(chunk).expect("accept bounded chunk");
+            let result = assembler.finish_snapshot();
+            if matches {
+                assert_eq!(result.expect("matching identity").2, data);
+            } else {
+                assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+            }
+        }
     }
 
     fn continuation_chunk(
