@@ -696,11 +696,12 @@ impl OpenRaftController {
             tokio::task::yield_now().await;
         };
 
-        let snapshot_id = snapshot.meta.snapshot_id.clone();
         let last_applied = snapshot.meta.last_log_id.ok_or_else(controller_snapshot_error)?;
         let voter_ids = snapshot.meta.last_membership.voter_ids().collect::<Vec<_>>();
         let payload = snapshot.snapshot.into_inner();
-        crate::openraft::validate_snapshot_payload(&payload).map_err(controller_snapshot_error_by)?;
+        let snapshot_id = crate::openraft::inspect_snapshot_payload(&payload)
+            .map_err(controller_snapshot_error_by)?
+            .snapshot_id;
         let max_snapshot_bytes =
             (crate::openraft::SNAPSHOT_MAX_BYTES as u64).min(authorization.resource_budget().max_checkpoint_bytes);
         if payload.len() as u64 > max_snapshot_bytes {
@@ -1335,7 +1336,7 @@ impl Controller for OpenRaftController {
                     (
                         metrics.current_leader,
                         metrics.last_log_index,
-                        metrics.committed.map(|log_id| log_id.index),
+                        metrics.local_committed.map(|log_id| log_id.index),
                         metrics.last_applied.map(|log_id| log_id.index),
                     )
                 } else {

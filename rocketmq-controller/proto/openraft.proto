@@ -61,6 +61,8 @@ message OpenRaftAppendResponse {
 message OpenRaftVoteRequest {
   OpenRaftVote vote = 1;
   optional OpenRaftLogId last_log_id = 2;
+  // Absent on older peers, where ordinary elections remain the default.
+  bool leadership_transfer = 3;
 }
 
 // Vote response

@@ -43,16 +43,15 @@ tokio      = { workspace = true }
 tokio-util = { workspace = true }
 
 # Raft consensus algorithm
-openraft = { version = "=0.10.0-alpha.21", default-features = false, features = [
+openraft = { version = "=0.10.0-alpha.37", default-features = false, features = [
   "serde",
   "tokio-rt",
 ] }
 # OpenRaft prereleases use caret constraints internally. Keep the runtime crates
-# aligned with the core ABI. Pin macros separately: alpha.35 preserves the
-# runtime-related expansions used by alpha.21.
+# and macros aligned with the core ABI.
 openraft-macros   = "=0.10.0-alpha.37"
-openraft-rt       = "=0.10.0-alpha.21"
-openraft-rt-tokio = "=0.10.0-alpha.21"
+openraft-rt       = "=0.10.0-alpha.37"
+openraft-rt-tokio = "=0.10.0-alpha.37"
 
 # gRPC networking
 tonic       = { version = "0.14.6", features = ["transport", "codegen"] }
