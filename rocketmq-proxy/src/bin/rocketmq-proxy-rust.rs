@@ -568,8 +568,12 @@ impl Args {
                 "--namesrvAddr" | "-n" => parsed.namesrv_addr = Some(next_value(&mut args, arg.as_str())?),
                 "--printConfig" => parsed.print_config = true,
                 "--log-filter" => parsed.log_filter = Some(next_value(&mut args, arg.as_str())?),
-                "--help" | "-h" => {
-                    print_usage();
+                "-h" => {
+                    print_usage(false);
+                    std::process::exit(0);
+                }
+                "--help" => {
+                    print_usage(true);
                     std::process::exit(0);
                 }
                 _ => {
@@ -644,12 +648,51 @@ fn apply_overrides(config: &mut ProxyConfig, args: &Args) -> ProxyResult<()> {
     Ok(())
 }
 
-fn print_usage() {
-    println!(
-        "rocketmq-proxy-rust [-c <proxy.toml>] [--mode cluster|local] [--grpcListenAddr <host:port>] \
-         [--enableRemoting] [--remotingListenAddr <host:port>] [--namesrvAddr <host:port>] [--log-filter <directive>] \
-         [--printConfig]"
+const PROXY_COMMAND_NAME: &str = "rocketmq-proxy-rust";
+const PROXY_ABOUT: &str = "RocketMQ-Rust Proxy";
+const PROXY_LONG_ABOUT: &str = "Proxy for RocketMQ-Rust, a Rust implementation of Apache RocketMQ.
+
+Provides the Apache RocketMQ v2 gRPC MessagingService and routes requests to
+RocketMQ clusters or an embedded local broker, depending on enabled features.
+Supports optional remoting ingress.
+
+Project: https://github.com/mxsm/rocketmq-rust";
+
+/// Renders the help text. `-h` passes `detailed = false` for the concise form;
+/// `--help` adds the detailed description and project URL.
+fn usage_text(detailed: bool) -> String {
+    let mut text = format!("{PROXY_COMMAND_NAME} {}\n{PROXY_ABOUT}", env!("CARGO_PKG_VERSION"));
+    if detailed {
+        text.push_str("\n\n");
+        text.push_str(PROXY_LONG_ABOUT);
+    }
+    text.push_str(
+        "
+
+Usage: rocketmq-proxy-rust [OPTIONS]
+
+Options:
+  -c, --config <FILE>                Proxy configuration file (TOML)
+      --mode <MODE>                  Proxy mode: cluster or local (each requires its build feature)
+      --grpcListenAddr <HOST:PORT>   gRPC listen address, overrides grpc.listenAddr
+      --enableRemoting               Enable the remoting ingress
+      --remotingListenAddr <HOST:PORT>
+                                     Remoting listen address, overrides remoting.listenAddr
+  -n, --namesrvAddr <HOST:PORT>      NameServer address for cluster mode (requires 'cluster-mode')
+      --log-filter <DIRECTIVE>       Override the process log filter for this startup
+      --printConfig                  Print the effective configuration and exit
+  -h, --help                         Print help (see more with '--help')
+
+Release information:
+      --version                      Print the release version and exit
+      --version --verbose            Also print the artifact id and build features
+",
     );
+    text
+}
+
+fn print_usage(detailed: bool) {
+    print!("{}", usage_text(detailed));
 }
 
 fn print_config(config: &ProxyConfig) {
