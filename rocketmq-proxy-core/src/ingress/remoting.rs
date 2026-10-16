@@ -82,7 +82,7 @@ pub enum RemotingIngressRoute {
     GetProxyDrainState,
     BeginProxyDrain,
     CancelProxyDrain,
-    ForwardBackend,
+    ForwardToBroker,
     AuthAdminUnsupported,
     Unsupported,
 }
@@ -92,8 +92,8 @@ pub enum RemotingIngressRoute {
 pub enum RemotingRouteClass {
     /// The Proxy decodes the request and invokes a backend-neutral service.
     Translate,
-    /// The Proxy preserves the command and forwards it to exactly one Broker backend.
-    ForwardBackend,
+    /// The Proxy preserves the command and delegates execution to an embedded or remote Broker.
+    ForwardToBroker,
     /// The request is outside the supported Proxy surface.
     Unsupported,
 }
@@ -133,9 +133,9 @@ impl RemotingRoutePolicy {
     /// Returns who owns execution for this route.
     pub const fn route_class(self) -> RemotingRouteClass {
         match self.route {
-            RemotingIngressRoute::ForwardBackend
+            RemotingIngressRoute::ForwardToBroker
             | RemotingIngressRoute::LockBatchMessageQueue
-            | RemotingIngressRoute::UnlockBatchMessageQueue => RemotingRouteClass::ForwardBackend,
+            | RemotingIngressRoute::UnlockBatchMessageQueue => RemotingRouteClass::ForwardToBroker,
             RemotingIngressRoute::AuthAdminUnsupported | RemotingIngressRoute::Unsupported => {
                 RemotingRouteClass::Unsupported
             }
@@ -163,17 +163,17 @@ const JAVA_PROXY_ACTIVE_ROUTE_POLICIES: &[RemotingRoutePolicy] = &[
     RemotingRoutePolicy::new(
         RequestCode::ConsumerSendMsgBack,
         "CONSUMER_SEND_MSG_BACK",
-        RemotingIngressRoute::ForwardBackend,
+        RemotingIngressRoute::ForwardToBroker,
     ),
     RemotingRoutePolicy::new(
         RequestCode::EndTransaction,
         "END_TRANSACTION",
-        RemotingIngressRoute::ForwardBackend,
+        RemotingIngressRoute::ForwardToBroker,
     ),
     RemotingRoutePolicy::new(
         RequestCode::RecallMessage,
         "RECALL_MESSAGE",
-        RemotingIngressRoute::ForwardBackend,
+        RemotingIngressRoute::ForwardToBroker,
     ),
     RemotingRoutePolicy::new(RequestCode::HeartBeat, "HEART_BEAT", RemotingIngressRoute::Heartbeat),
     RemotingRoutePolicy::new(
@@ -199,7 +199,7 @@ const JAVA_PROXY_ACTIVE_ROUTE_POLICIES: &[RemotingRoutePolicy] = &[
     RemotingRoutePolicy::new(
         RequestCode::PopMessage,
         "POP_MESSAGE",
-        RemotingIngressRoute::ForwardBackend,
+        RemotingIngressRoute::ForwardToBroker,
     ),
     RemotingRoutePolicy::new(
         RequestCode::UpdateConsumerOffset,
@@ -209,12 +209,12 @@ const JAVA_PROXY_ACTIVE_ROUTE_POLICIES: &[RemotingRoutePolicy] = &[
     RemotingRoutePolicy::new(
         RequestCode::AckMessage,
         "ACK_MESSAGE",
-        RemotingIngressRoute::ForwardBackend,
+        RemotingIngressRoute::ForwardToBroker,
     ),
     RemotingRoutePolicy::new(
         RequestCode::ChangeMessageInvisibleTime,
         "CHANGE_MESSAGE_INVISIBLETIME",
-        RemotingIngressRoute::ForwardBackend,
+        RemotingIngressRoute::ForwardToBroker,
     ),
     RemotingRoutePolicy::new(
         RequestCode::GetConsumerConnectionList,
