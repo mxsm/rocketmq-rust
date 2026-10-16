@@ -21,7 +21,7 @@
 pub mod rocksdb_backend;
 
 #[cfg(feature = "storage-file")]
-pub mod file_backend;
+pub mod file_key_value_store;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -159,7 +159,7 @@ pub async fn create_storage(config: StorageConfig, storage_io: BlockingExecutor)
 
         #[cfg(feature = "storage-file")]
         StorageConfig::File { path } => {
-            let backend = file_backend::FileKeyValueStore::new(path).await?;
+            let backend = file_key_value_store::FileKeyValueStore::new(path).await?;
             Ok(Arc::new(backend))
         }
 
