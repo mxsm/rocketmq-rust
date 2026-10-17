@@ -37,7 +37,7 @@ pub const TOPIC: &str = "SendWithSelectorTestTopic";
 pub const TAG: &str = "SelectorTag";
 pub const TIMEOUT_MS: u64 = 3000;
 
-#[path = "../support/mod.rs"]
+#[path = "../support.rs"]
 mod support;
 
 pub fn main() -> ClientResult<()> {

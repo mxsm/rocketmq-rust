@@ -33,7 +33,7 @@
 //!
 //! Run with: cargo bench --bench concurrent_optimization_benchmark
 
-#[path = "support/mod.rs"]
+#[path = "support.rs"]
 mod support;
 
 use std::hint::black_box;

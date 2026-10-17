@@ -110,7 +110,11 @@ source = "\n".join(path.read_text(encoding="utf-8") for path in source_paths)
 
 def is_test_only_source(path: pathlib.Path) -> bool:
     relative = path.relative_to(PROJECT / "src")
-    return path.name == "tests.rs" or relative.parts[:2] == ("transport", "real_cluster_e2e")
+    return (
+        path.name == "tests.rs"
+        or relative.parts == ("transport", "real_cluster_e2e.rs")
+        or relative.parts[:2] == ("transport", "real_cluster_e2e")
+    )
 
 
 # Dedicated test source may own explicit E2E process orchestration. It must not

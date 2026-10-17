@@ -25,7 +25,9 @@ keywords               = ["rocketmq-rust", "async", "rocketmq-client", "futures"
 categories             = ["api-bindings", "asynchronous"]
 readme                 = "README.md"
 description            = "Rust implementation of Apache rocketmq client"
+autobenches            = false
 rust-version.workspace = true
+autoexamples           = false
 autotests              = false
 
 [features]

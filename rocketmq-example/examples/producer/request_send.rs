@@ -24,7 +24,7 @@ pub const TOPIC: &str = "RequestSendTestTopic";
 pub const TAG: &str = "RequestTag";
 pub const REQUEST_TIMEOUT_MS: u64 = 3000;
 
-#[path = "../support/mod.rs"]
+#[path = "../support.rs"]
 mod support;
 
 pub fn main() -> ClientResult<()> {
