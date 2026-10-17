@@ -95,8 +95,33 @@
 
 .topology-legend [data-kind='produce'] { --legend-color: var(--primary); }
 .topology-legend [data-kind='consume'] { --legend-color: var(--accent-cyan); }
+.topology-legend [data-kind='replication'] { --legend-color: var(--success); }
 .topology-legend [data-kind='heartbeat'] { --legend-color: var(--accent-pink); }
-.topology-legend [data-kind='route'] { --legend-color: var(--accent-blue); }
+.topology-legend [data-kind='route'] { --legend-color: var(--accent-violet); }
+
+/* Sphere and Map share the card: the style switch sits beside the legend. */
+.topology-map-tabs {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+}
+
+.topology-map-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px 18px;
+}
+
+.topology-map-tabs > .topology-map-view {
+  margin-top: 0;
+}
+
+.topology-sphere-loading {
+  min-height: 420px;
+  border-radius: var(--radius-md);
+}
 
 .topology-map-scroll {
   min-width: 0;
@@ -153,7 +178,7 @@
 }
 
 .topology-link[data-kind='route'] {
-  stroke: var(--accent-blue-border);
+  stroke: var(--accent-violet-border);
   stroke-dasharray: 4 5;
 }
 
@@ -182,7 +207,7 @@
 
 .topology-port[data-kind='produce'] { color: var(--primary); }
 .topology-port[data-kind='consume'] { color: var(--accent-cyan); }
-.topology-port[data-kind='route'] { color: var(--accent-blue); }
+.topology-port[data-kind='route'] { color: var(--accent-violet); }
 
 .topology-port-dot {
   fill: var(--card);
@@ -697,8 +722,8 @@
 }
 
 .topology-pulse[data-kind='route'] {
-  background: var(--accent-blue);
-  box-shadow: 0 0 8px var(--accent-blue);
+  background: var(--accent-violet);
+  box-shadow: 0 0 8px var(--accent-violet);
   animation: topology-route 1.1s var(--ease-in-out) both;
 }
 

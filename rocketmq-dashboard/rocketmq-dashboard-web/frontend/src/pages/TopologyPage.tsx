@@ -1,5 +1,5 @@
 import { Layers, RadioTower, RefreshCw, Send, Server, Users, Inbox } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import ErrorState from '../components/ErrorState';
 import HealthSignal from '../components/HealthSignal';
@@ -10,6 +10,7 @@ import { Card, CardDescription, CardTitle } from '../components/ui/Card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/Select';
 import { Skeleton } from '../components/ui/Skeleton';
 import { StatusDot } from '../components/ui/StatusDot';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/Tabs';
 import { usePrefersReducedMotion } from '../lib/usePrefersReducedMotion';
 import type { TopologySnapshot, TopologySourceId, TopologySourceStatus } from '../types/topology';
 import TopologyMap, { GROUP_PREVIEW, type GroupSide } from './topology/TopologyMap';
@@ -25,8 +26,34 @@ import {
   type TopologyView
 } from './topology/topology-model';
 import { ChangesPanel, SourcesPanel, TrafficPanel } from './topology/TopologyPanels';
+import { supportsWebGL } from './topology/sphere/webgl';
 import { useTopologySnapshot } from './topology/useTopologySnapshot';
 import './topology/topology.css';
+
+// three.js only loads with the sphere view.
+const TopologySphere = lazy(() => import('./topology/sphere/TopologySphere'));
+
+type MapStyle = 'sphere' | 'map';
+
+const MAP_STYLE_KEY = 'rocketmq-dashboard.topology.map-style';
+
+/** The style chosen last time, or the sphere when the browser can draw it. */
+function readMapStyle(webgl: boolean): MapStyle {
+  if (!webgl) return 'map';
+  try {
+    return window.localStorage.getItem(MAP_STYLE_KEY) === 'map' ? 'map' : 'sphere';
+  } catch {
+    return 'sphere';
+  }
+}
+
+function storeMapStyle(style: MapStyle) {
+  try {
+    window.localStorage.setItem(MAP_STYLE_KEY, style);
+  } catch {
+    // Storage can be blocked; the choice then lasts until the page is left.
+  }
+}
 
 const INTERVALS = [
   { value: '5', label: 'Every 5 s', ms: 5_000 },
@@ -135,12 +162,25 @@ function SignalRail({ snapshot }: { snapshot: TopologySnapshot }) {
   );
 }
 
-const LEGEND = [
-  { kind: 'produce', label: 'Produce' },
-  { kind: 'consume', label: 'Consume' },
-  { kind: 'heartbeat', label: 'Heartbeat' },
-  { kind: 'route', label: 'Route lookup' }
-] as const;
+const LEGEND = {
+  map: [
+    { kind: 'produce', label: 'Produce' },
+    { kind: 'consume', label: 'Consume' },
+    { kind: 'heartbeat', label: 'Heartbeat' },
+    { kind: 'route', label: 'Route lookup' }
+  ],
+  sphere: [
+    { kind: 'produce', label: 'Produce' },
+    { kind: 'consume', label: 'Consume' },
+    { kind: 'replication', label: 'Replication' },
+    { kind: 'heartbeat', label: 'Heartbeat' },
+    { kind: 'route', label: 'Route lookup' }
+  ]
+} as const;
+
+function SphereFallback() {
+  return <Skeleton className="topology-sphere-loading" role="status" aria-label="Loading the sphere view" />;
+}
 
 export default function TopologyPage() {
   const [intervalValue, setIntervalValue] = useState<IntervalValue>(DEFAULT_INTERVAL);
@@ -151,6 +191,17 @@ export default function TopologyPage() {
   const [expanded, setExpanded] = useState<Record<GroupSide, boolean>>({ producers: false, consumers: false });
   const reducedMotion = usePrefersReducedMotion();
   const hidden = usePageHidden();
+  const [webgl, setWebgl] = useState(supportsWebGL);
+  const [mapStyle, setMapStyle] = useState<MapStyle>(() => readMapStyle(webgl));
+  const chooseMapStyle = (style: MapStyle) => {
+    setMapStyle(style);
+    storeMapStyle(style);
+  };
+  const sphereUnavailable = () => {
+    setWebgl(false);
+    setMapStyle('map');
+  };
+  const toggleGroups = (side: GroupSide) => setExpanded((current) => ({ ...current, [side]: !current[side] }));
 
   const clusterNames = useMemo(() => snapshot?.clusters.map((cluster) => cluster.clusterName) ?? [], [snapshot]);
   // A cluster that is no longer reported drops the scope back to every cluster.
@@ -201,11 +252,11 @@ export default function TopologyPage() {
   } else if (!snapshot || !view) {
     body = <TopologySkeleton />;
   } else {
-    let map;
+    let emptyState = null;
     if (snapshot.clusters.length === 0 && !brokersLoaded) {
-      map = <ErrorState message="The broker list could not be loaded, so the map cannot be drawn." onRetry={refresh} />;
+      emptyState = <ErrorState message="The broker list could not be loaded, so the map cannot be drawn." onRetry={refresh} />;
     } else if (snapshot.clusters.length === 0) {
-      map = (
+      emptyState = (
         <div className="state-block topology-empty">
           <Server size={24} aria-hidden="true" />
           <strong>No brokers are registered</strong>
@@ -213,34 +264,60 @@ export default function TopologyPage() {
           <Link className={buttonVariants({ variant: 'secondary' })} to="/config">Open OPS</Link>
         </div>
       );
-    } else {
-      map = (
-        <TopologyMap
-          view={view}
-          refreshCount={topology.refreshCount}
-          newAlerts={newAlerts}
-          reducedMotion={reducedMotion}
-          paused={hidden}
-          expanded={expanded}
-          onToggleGroups={(side) => setExpanded((current) => ({ ...current, [side]: !current[side] }))}
-        />
-      );
     }
+    const activeStyle: MapStyle = webgl ? mapStyle : 'map';
 
     body = (
       <>
         <SignalRail snapshot={snapshot} />
         <Card className="topology-map-panel">
-          <div className="topology-map-header">
-            <div>
-              <CardTitle>Cluster map</CardTitle>
-              <CardDescription>{mapSummary(view)}</CardDescription>
+          <Tabs className="topology-map-tabs" value={activeStyle} onValueChange={(value) => chooseMapStyle(value as MapStyle)}>
+            <div className="topology-map-header">
+              <div>
+                <CardTitle>Cluster map</CardTitle>
+                <CardDescription>{mapSummary(view)}</CardDescription>
+              </div>
+              <div className="topology-map-tools">
+                <TabsList aria-label="Map style">
+                  <TabsTrigger value="sphere" disabled={!webgl} title={webgl ? undefined : 'The sphere needs WebGL, which this browser does not provide'}>
+                    Sphere
+                  </TabsTrigger>
+                  <TabsTrigger value="map">Map</TabsTrigger>
+                </TabsList>
+                <ul className="topology-legend" aria-label="Legend">
+                  {LEGEND[activeStyle].map((item) => <li key={item.kind} data-kind={item.kind}>{item.label}</li>)}
+                </ul>
+              </div>
             </div>
-            <ul className="topology-legend" aria-label="Legend">
-              {LEGEND.map((item) => <li key={item.kind} data-kind={item.kind}>{item.label}</li>)}
-            </ul>
-          </div>
-          {map}
+            <TabsContent value="sphere" className="topology-map-view">
+              {emptyState ?? (
+                <Suspense fallback={<SphereFallback />}>
+                  <TopologySphere
+                    view={view}
+                    refreshCount={topology.refreshCount}
+                    reducedMotion={reducedMotion}
+                    hidden={hidden}
+                    expanded={expanded}
+                    onToggleGroups={toggleGroups}
+                    onUnavailable={sphereUnavailable}
+                  />
+                </Suspense>
+              )}
+            </TabsContent>
+            <TabsContent value="map" className="topology-map-view">
+              {emptyState ?? (
+                <TopologyMap
+                  view={view}
+                  refreshCount={topology.refreshCount}
+                  newAlerts={newAlerts}
+                  reducedMotion={reducedMotion}
+                  paused={hidden}
+                  expanded={expanded}
+                  onToggleGroups={toggleGroups}
+                />
+              )}
+            </TabsContent>
+          </Tabs>
         </Card>
         <div className="topology-panels">
           <TrafficPanel clusters={view.clusters} />

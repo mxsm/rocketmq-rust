@@ -1,0 +1,455 @@
+/* Sphere view of the topology: a WebGL stage with HTML labels, and the focus panel beside it. */
+
+/* The focus panel is exactly as tall as the stage and scrolls its own lists, so neither side leaves a gap. */
+.topology-sphere {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  align-items: stretch;
+  gap: 16px;
+  min-width: 0;
+}
+
+.topology-sphere-column {
+  display: grid;
+  align-content: start;
+  min-width: 0;
+  gap: 8px;
+}
+
+.topology-sphere-stage {
+  /* Colours of the spheres themselves, read by the scene. */
+  --sphere-body: #0c1820;
+  --sphere-glow: #02070a;
+  --sphere-grid: #1d2b35;
+  --sphere-stage: #030608;
+  --sphere-stage-glow: #071219;
+  position: relative;
+  /* A grid item with an aspect ratio otherwise narrows to keep it once the height hits its maximum. */
+  width: 100%;
+  min-width: 0;
+  aspect-ratio: 5 / 4;
+  min-height: 420px;
+  /* Tall windows get a taller stage, with the card still in view; wide ones spread the spheres apart. */
+  max-height: max(740px, calc(100vh - 380px));
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: radial-gradient(circle at 50% 48%, var(--sphere-stage-glow) 0%, var(--sphere-stage) 62%);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.topology-sphere-stage[data-dragging='true'] {
+  cursor: grabbing;
+}
+
+.topology-sphere-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.topology-sphere-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.topology-sphere-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: grid;
+  max-width: 220px;
+  gap: 1px;
+  margin: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  color: var(--foreground);
+  font: var(--text-label);
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+  visibility: hidden;
+  cursor: pointer;
+  pointer-events: auto;
+  will-change: transform, opacity;
+}
+
+.topology-sphere-label:hover {
+  border-color: var(--border-strong);
+}
+
+.topology-sphere-label:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.topology-sphere-label[aria-pressed='true'] {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.topology-sphere-label-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.topology-sphere-label-metric {
+  color: var(--muted-foreground);
+  font: var(--text-mono-small);
+  font-size: 11px;
+  line-height: 14px;
+}
+
+.topology-sphere-label[data-tone='warning'] .topology-sphere-label-metric {
+  color: var(--warning);
+}
+
+.topology-sphere-label[data-tone='danger'] .topology-sphere-label-metric {
+  color: var(--destructive);
+}
+
+.topology-sphere-label[data-kind='slave'] {
+  padding: 2px 7px;
+  border-radius: var(--radius-xs);
+}
+
+.topology-sphere-title {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  text-align: center;
+  white-space: nowrap;
+  visibility: hidden;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.topology-sphere-title[data-kind='cluster'] {
+  padding: 3px 9px 4px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--sphere-stage) 72%, transparent);
+}
+
+.topology-sphere-title .topology-overline {
+  color: var(--subtle-foreground);
+  font-size: 10px;
+}
+
+.topology-sphere-title-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: var(--text-label);
+  font-size: 12px;
+}
+
+.topology-sphere-title-metric {
+  color: var(--muted-foreground);
+  font: var(--text-mono-small);
+  font-size: 11px;
+  line-height: 14px;
+}
+
+.topology-sphere-badge {
+  --badge-tone: var(--success);
+  padding: 0 7px;
+  border: 1px solid color-mix(in srgb, var(--badge-tone) 42%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--badge-tone) 14%, var(--sphere-stage));
+  color: var(--badge-tone);
+  font: var(--text-caption);
+  font-size: 10px;
+}
+
+.topology-sphere-badge[data-tone='single'] {
+  --badge-tone: var(--primary);
+}
+
+.topology-sphere-badge[data-tone='degraded'] {
+  --badge-tone: var(--warning);
+}
+
+/* Top right: the NameServer sphere and its title take the top left. */
+.topology-sphere-controls {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1;
+  display: flex;
+  gap: 8px;
+}
+
+.topology-sphere-control {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--control);
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.topology-sphere-control:hover {
+  background: var(--control-hover);
+}
+
+.topology-sphere-control:focus-visible,
+.topology-sphere-row:focus-visible,
+.topology-sphere-toggle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.topology-sphere-hint {
+  margin: 0;
+  color: var(--subtle-foreground);
+  font: var(--text-caption);
+}
+
+.topology-sphere-focus {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  overflow-y: auto;
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  /* Its content does not size the row; the stage column does. */
+  contain: size;
+  scrollbar-width: thin;
+}
+
+.topology-sphere-focus h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font: var(--text-body-medium);
+  font-size: 16px;
+}
+
+.topology-sphere-focus-intro {
+  display: grid;
+  gap: 6px;
+}
+
+.topology-sphere-focus-intro p {
+  margin: 0;
+  color: var(--muted-foreground);
+  font: var(--text-caption);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.topology-sphere-focus-intro svg {
+  color: var(--primary);
+}
+
+.topology-sphere-focus-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.topology-sphere-focus-head > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.topology-sphere-section {
+  display: grid;
+  gap: 8px;
+}
+
+.topology-sphere-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.topology-sphere-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-inset);
+  color: var(--foreground);
+  font: var(--text-caption);
+  text-align: left;
+  cursor: pointer;
+}
+
+.topology-sphere-row:hover {
+  border-color: var(--border-strong);
+  background: var(--control);
+}
+
+.topology-sphere-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topology-sphere-row-value {
+  color: var(--subtle-foreground);
+  font: var(--text-mono-small);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.topology-sphere-row[data-tone='warning'] {
+  border-color: var(--warning-border);
+  background: var(--warning-soft);
+}
+
+.topology-sphere-row[data-tone='warning'] .topology-sphere-row-value {
+  color: var(--warning);
+}
+
+.topology-sphere-row[data-tone='danger'] {
+  border-color: var(--destructive-border);
+  background: var(--destructive-soft);
+}
+
+.topology-sphere-row[data-tone='danger'] .topology-sphere-row-value {
+  color: var(--destructive);
+}
+
+.topology-sphere-toggle {
+  display: inline-flex;
+  justify-self: start;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--link);
+  font: var(--text-caption);
+  cursor: pointer;
+}
+
+.topology-sphere-toggle:hover {
+  text-decoration: underline;
+}
+
+.topology-sphere-facts {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.topology-sphere-facts > div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+}
+
+.topology-sphere-facts dt {
+  color: var(--subtle-foreground);
+  font: var(--text-caption);
+  line-height: 18px;
+}
+
+.topology-sphere-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--foreground);
+  font: var(--text-mono-small);
+  line-height: 18px;
+  text-align: right;
+}
+
+.topology-sphere-facts dd[data-tone='primary'] { color: var(--primary); }
+.topology-sphere-facts dd[data-tone='cyan'] { color: var(--accent-cyan); }
+.topology-sphere-facts dd[data-tone='success'] { color: var(--success); }
+.topology-sphere-facts dd[data-tone='warning'] { color: var(--warning); }
+.topology-sphere-facts dd[data-tone='danger'] { color: var(--destructive); }
+
+.topology-sphere-page-link {
+  display: inline-flex;
+  justify-self: start;
+  align-items: center;
+  gap: 6px;
+  color: var(--link);
+  font: var(--text-label);
+  text-decoration: none;
+}
+
+.topology-sphere-page-link:hover {
+  text-decoration: underline;
+}
+
+.topology-sphere-key {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  color: var(--muted-foreground);
+  font: var(--text-caption);
+  list-style: none;
+}
+
+.topology-sphere-key li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.topology-sphere-key li::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: var(--radius-full);
+  background: var(--key-color);
+}
+
+.topology-sphere-key [data-kind='nameserver']::before {
+  border: 2px solid var(--accent-blue);
+  background: none;
+}
+
+.topology-sphere-key [data-kind='producer'] { --key-color: var(--primary); }
+.topology-sphere-key [data-kind='broker'] { --key-color: var(--success); }
+
+.topology-sphere-key [data-kind='consumer']::before {
+  border: 2px solid var(--accent-cyan);
+  background: none;
+}
+
+/* Lines are keyed with a short dash. */
+.topology-sphere-key [data-kind='heartbeat']::before,
+.topology-sphere-key [data-kind='route']::before {
+  width: 12px;
+  height: 0;
+  border-top: 2px dashed var(--key-color);
+  border-radius: 0;
+  background: none;
+}
+
+.topology-sphere-key [data-kind='heartbeat'] { --key-color: var(--accent-pink); }
+.topology-sphere-key [data-kind='route'] { --key-color: var(--accent-violet); }
