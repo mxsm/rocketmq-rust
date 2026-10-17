@@ -3,10 +3,16 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderAtRoute } from '../test/render';
 import TopologyPage from './TopologyPage';
+import { supportsWebGL } from './topology/sphere/webgl';
 import { consumerGroup, fixtureConsumers, fixtureSnapshot } from './topology/topology-fixtures';
 import { useTopologySnapshot, type TopologySnapshotState } from './topology/useTopologySnapshot';
 
 vi.mock('./topology/useTopologySnapshot', () => ({ useTopologySnapshot: vi.fn() }));
+// jsdom has no WebGL, like a browser without it; one test pretends otherwise.
+vi.mock('./topology/sphere/webgl', () => ({ supportsWebGL: vi.fn(() => false) }));
+vi.mock('./topology/sphere/TopologySphere', () => ({
+  default: () => <div role="group" aria-label="Cluster sphere" />
+}));
 
 const refresh = vi.fn();
 
@@ -121,6 +127,31 @@ describe('TopologyPage', () => {
     expect(consumerLinks()).toHaveLength(8);
     await user.click(screen.getByRole('button', { name: 'Show the top 6 consumer groups' }));
     expect(consumerLinks()).toHaveLength(6);
+  });
+
+  it('keeps the flat map and disables the sphere when the browser has no WebGL', () => {
+    renderPage();
+
+    expect(screen.getByRole('tab', { name: 'Sphere' })).toBeDisabled();
+    expect(screen.getByRole('tab', { name: 'Map' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('group', { name: 'Cluster map' })).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Legend' })).not.toHaveTextContent('Replication');
+  });
+
+  it('opens the sphere when the browser has WebGL and remembers the style chosen last', async () => {
+    vi.mocked(supportsWebGL).mockReturnValue(true);
+    const user = userEvent.setup();
+    const { unmount } = renderPage();
+
+    expect(await screen.findByRole('group', { name: 'Cluster sphere' })).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Legend' })).toHaveTextContent('Replication');
+    await user.click(screen.getByRole('tab', { name: 'Map' }));
+    expect(screen.getByRole('group', { name: 'Cluster map' })).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Cluster sphere' })).not.toBeInTheDocument();
+
+    unmount();
+    renderPage();
+    expect(screen.getByRole('tab', { name: 'Map' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('lists the changes of the latest refresh and announces one summary', () => {
