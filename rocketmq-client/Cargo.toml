@@ -26,6 +26,7 @@ categories             = ["api-bindings", "asynchronous"]
 readme                 = "README.md"
 description            = "Rust implementation of Apache rocketmq client"
 rust-version.workspace = true
+autoexamples           = false
 
 [features]
 default = ["admin-full"]
