@@ -81,7 +81,7 @@ Before consuming, `pop-consumer` calls the Admin API
 requires that administrative permission and does not restore the previous
 request mode on exit.
 
-The shared [support module](examples/support/mod.rs) creates the RuntimeOwner,
+The shared [support module](examples/support.rs) creates the RuntimeOwner,
 telemetry guard and shared ClientRuntime, then closes client runtime,
 RuntimeOwner and telemetry after the example returns.
 

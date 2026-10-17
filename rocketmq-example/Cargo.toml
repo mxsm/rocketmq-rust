@@ -35,6 +35,7 @@ readme = "README.md"
 description = "Examples for RocketMQ Rust implementation"
 rust-version = "1.95.0"
 resolver = "3"
+autoexamples = false
 
 [dependencies]
 

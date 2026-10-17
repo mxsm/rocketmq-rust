@@ -79,7 +79,7 @@ bin\mqadmin.cmd updateSubGroup -n 127.0.0.1:9876 -c DefaultCluster -g consumer_r
 把对应 Topic/Group 切换为 POP；需要相应管理权限，退出时不会自动恢复请求模式。
 这与仅收发消息的示例不同。
 
-公共 [support 模块](examples/support/mod.rs) 创建 RuntimeOwner、遥测 guard 和共享
+公共 [support 模块](examples/support.rs) 创建 RuntimeOwner、遥测 guard 和共享
 ClientRuntime，在示例返回后关闭客户端运行时、RuntimeOwner 和遥测。
 
 ## 验证
