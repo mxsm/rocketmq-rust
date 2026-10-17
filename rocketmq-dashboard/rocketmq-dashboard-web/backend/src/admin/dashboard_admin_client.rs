@@ -54,7 +54,6 @@ use crate::model::ConsumerProgress;
 use crate::model::ConsumerQueueProgress;
 use crate::model::ConsumerResetOffsetRequest;
 use crate::model::DashboardOverview;
-use crate::model::DashboardTopicCurrent;
 use crate::model::DlqBatchResendRequest;
 use crate::model::DlqExportView;
 use crate::model::DlqMessageQuery;
@@ -71,7 +70,6 @@ use crate::model::ProducerConnectionInfo;
 use crate::model::ProducerConnectionView;
 use crate::model::ProducerInfo;
 use crate::model::PublishedEnvironment;
-use crate::model::TopicCurrentMetric;
 use crate::model::TopicInfo;
 use crate::model::TopicListView;
 use crate::model::TopicMutationRequest;
@@ -238,6 +236,7 @@ where
 }
 
 mod topic;
+mod topic_current;
 mod topic_session;
 
 use self::topic_session::*;
@@ -401,40 +400,6 @@ impl DashboardAdminClient {
             producer_count,
             message_backlog,
             system_status: system_status.to_string(),
-        })
-    }
-
-    pub async fn topic_current(&self) -> Result<DashboardTopicCurrent, DashboardError> {
-        let topics = match self.list_topics().await {
-            Ok(topics) => topics,
-            Err(DashboardError::Admin(error)) => {
-                tracing::warn!(error = %error, "RocketMQ cluster is not reachable while building topic-current metrics");
-                return Ok(DashboardTopicCurrent {
-                    total_topics: 0,
-                    top_topics: Vec::new(),
-                });
-            }
-            Err(error) => return Err(error),
-        };
-
-        let mut top_topics = run_admin_rpc!(self, |admin| async {
-            let mut top_topics = Vec::new();
-            for topic in topics.items.iter().take(20) {
-                if let Ok(stats) = admin.dashboard_topic_stats(&topic.topic).await {
-                    top_topics.push(TopicCurrentMetric {
-                        topic: topic.topic.clone(),
-                        total_msg: stats.total_max_offset.saturating_sub(stats.total_min_offset),
-                        in_tps: 0.0,
-                        out_tps: 0.0,
-                    });
-                }
-            }
-            Ok::<_, DashboardError>(top_topics)
-        })?;
-        top_topics.sort_by_key(|topic| Reverse(topic.total_msg));
-        Ok(DashboardTopicCurrent {
-            total_topics: topics.total,
-            top_topics,
         })
     }
 
