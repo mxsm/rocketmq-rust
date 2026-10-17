@@ -35,7 +35,7 @@ use uuid::Uuid;
 use crate::admission::AdmissionClass;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScopeHandle;
-use crate::backend::ReadBackend;
+use crate::backend::TransportReadHalf;
 use crate::backend::WriteBackend;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::codec::remoting_command_codec::RemotingCommandCodec;
@@ -148,8 +148,8 @@ pub trait ConnectionTransport: AsyncRead + AsyncWrite + Send + Unpin {}
 impl<T> ConnectionTransport for T where T: AsyncRead + AsyncWrite + Send + Unpin {}
 
 pub type BoxedConnectionTransport = Box<dyn ConnectionTransport>;
-type ConnectionReadHalf = FramedRead<ReadBackend, RemotingCommandCodec>;
-pub(crate) type SessionConnectionReadHalf = FramedRead<ReadBackend, SessionCommandDecoder>;
+type ConnectionReadHalf = FramedRead<TransportReadHalf, RemotingCommandCodec>;
+pub(crate) type SessionConnectionReadHalf = FramedRead<TransportReadHalf, SessionCommandDecoder>;
 pub(crate) type ConnectionFrameWriter = FrameWriter<WriteBackend>;
 
 enum ConnectionWriter {
@@ -701,9 +701,9 @@ impl Connection {
     }
 
     pub fn new_with_limits(tcp_stream: TcpStream, limits: FrameLimits) -> Connection {
-        let (read_half, write_half) = tcp_stream.into_split();
-        Self::new_with_backends(
-            ReadBackend::Tcp(read_half),
+        let (tcp_read_half, write_half) = tcp_stream.into_split();
+        Self::new_with_io_halves(
+            TransportReadHalf::Tcp(tcp_read_half),
             WriteBackend::Tcp(write_half),
             limits,
             FrameWriteMode::PlainVectored,
@@ -759,23 +759,23 @@ impl Connection {
         S: ConnectionTransport + 'static,
     {
         let transport = Box::new(stream) as BoxedConnectionTransport;
-        let (read_half, write_half) = tokio::io::split(transport);
-        Self::new_with_backends(
-            ReadBackend::Compat(read_half),
+        let (stream_read_half, write_half) = tokio::io::split(transport);
+        Self::new_with_io_halves(
+            TransportReadHalf::Compat(stream_read_half),
             WriteBackend::Compat(write_half),
             limits,
             write_mode,
         )
     }
 
-    fn new_with_backends(
-        read_half: ReadBackend,
+    fn new_with_io_halves(
+        transport_read_half: TransportReadHalf,
         write_half: WriteBackend,
         limits: FrameLimits,
         write_mode: FrameWriteMode,
     ) -> Connection {
         let inbound = FramedRead::with_capacity(
-            read_half,
+            transport_read_half,
             RemotingCommandCodec::with_limits(limits),
             limits.safe_initial_read_bytes(),
         );

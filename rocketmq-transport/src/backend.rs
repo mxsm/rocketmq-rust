@@ -26,20 +26,24 @@ use tokio::net::tcp::OwnedWriteHalf;
 
 use crate::connection::BoxedConnectionTransport;
 
-pub(crate) enum ReadBackend {
+/// Owns the read half of a connection transport: either a native TCP
+/// `OwnedReadHalf` or the split read half of a boxed async transport
+/// (generic streams, including negotiated TLS). Byte reads are delegated to
+/// the selected half; framing stays in `FramedRead`.
+pub(crate) enum TransportReadHalf {
     Tcp(OwnedReadHalf),
     Compat(tokio::io::ReadHalf<BoxedConnectionTransport>),
 }
 
-impl AsyncRead for ReadBackend {
+impl AsyncRead for TransportReadHalf {
     fn poll_read(
         mut self: Pin<&mut Self>,
         context: &mut Context<'_>,
         buffer: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         match &mut *self {
-            Self::Tcp(reader) => Pin::new(reader).poll_read(context, buffer),
-            Self::Compat(reader) => Pin::new(reader).poll_read(context, buffer),
+            Self::Tcp(tcp_read_half) => Pin::new(tcp_read_half).poll_read(context, buffer),
+            Self::Compat(stream_read_half) => Pin::new(stream_read_half).poll_read(context, buffer),
         }
     }
 }

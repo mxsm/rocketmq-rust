@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(transport):** Rename the crate-private connection read-half enum to `TransportReadHalf`, the private common connection constructor to `new_with_io_halves()`, and its read-half parameter, locals and match bindings to `transport_read_half`, `tcp_read_half` and `stream_read_half`; public APIs, framing and behavior are unchanged ([#11658](https://github.com/mxsm/rocketmq-rust/issues/11658)).
 - **refactor(store):** Rename the Timeline due-scanner error `CursorBackendMismatch` to `ContinuationIndexKindMismatch` with a clearer message, and give the formal scan's continuation variables distinct names ([#11650](https://github.com/mxsm/rocketmq-rust/issues/11650)).
 - **refactor(proxy):** Rename `RemotingRouteClass::ForwardBackend` and `RemotingIngressRoute::ForwardBackend` to `ForwardToBroker` (breaking Rust source API change; wire behavior unchanged) ([#11644](https://github.com/mxsm/rocketmq-rust/issues/11644)).
 - **refactor(store):** Rename the checkpoint discriminator to `CheckpointStoreKind` and its fields/accessor to `store_kind` (breaking), preserving the `backend` JSON key ([#11611](https://github.com/mxsm/rocketmq-rust/issues/11611)).
