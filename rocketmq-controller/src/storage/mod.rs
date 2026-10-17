@@ -18,7 +18,7 @@
 //! allowing the controller to use either RocksDB or file-based storage.
 
 #[cfg(feature = "storage-rocksdb")]
-pub mod rocksdb_backend;
+pub mod rocksdb_key_value_store;
 
 #[cfg(feature = "storage-file")]
 pub mod file_key_value_store;
@@ -153,7 +153,7 @@ pub async fn create_storage(config: StorageConfig, storage_io: BlockingExecutor)
     match config {
         #[cfg(feature = "storage-rocksdb")]
         StorageConfig::RocksDB { path } => {
-            let backend = rocksdb_backend::RocksDBKeyValueStore::new(path, storage_io).await?;
+            let backend = rocksdb_key_value_store::RocksDBKeyValueStore::new(path, storage_io).await?;
             Ok(Arc::new(backend))
         }
 
