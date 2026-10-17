@@ -144,6 +144,7 @@ jobs:
       - name: Install system dependencies (macOS)
         if: matrix.os == 'macos-latest'
         env:
+          # Use the runner's Homebrew metadata without a network-wide refresh.
           HOMEBREW_NO_AUTO_UPDATE: "1"
         run: |
           brew install cmake protobuf snappy lz4 zstd
