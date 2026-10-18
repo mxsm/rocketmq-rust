@@ -22,4 +22,3 @@ pub mod trace_dispatcher;
 pub mod trace_dispatcher_type;
 pub mod trace_transfer_bean;
 pub mod trace_type;
-pub mod trace_view;
