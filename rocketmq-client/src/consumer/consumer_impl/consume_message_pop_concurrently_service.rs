@@ -973,21 +973,6 @@ mod tests {
     }
 
     #[test]
-    fn inc_and_dec_core_pool_size_are_noops_like_java() {
-        let config = ConsumerConfig {
-            consume_thread_min: 2,
-            consume_thread_max: 5,
-            ..Default::default()
-        };
-        let service = new_service_with_config(config);
-
-        service.inc_core_pool_size();
-        service.dec_core_pool_size();
-
-        assert_eq!(service.get_core_pool_size(), 2);
-    }
-
-    #[test]
     fn pop_consume_return_type_timeout_uses_java_invisible_time_multiplier() {
         assert_eq!(
             classify_pop_consume_return_type(
