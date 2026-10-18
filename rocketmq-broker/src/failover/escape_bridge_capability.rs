@@ -562,9 +562,9 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
     where
         MS: BrokerAdminStore,
     {
-        let store = self.store().map_err(|_| {
-            StoreError::new(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, StoreOperation::Admin)
-        })?;
+        let store = self
+            .store()
+            .map_err(|_| StoreError::new(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, StoreOperation::Admin))?;
         store.set_commitlog_read_mode(read_ahead_mode)
     }
 
