@@ -283,6 +283,53 @@ fn ha_projection_enforces_connection_caps_identity_and_numeric_invariants() {
     assert!(project_ha_runtime("broker-a", 0, MAX_HA_CONNECTIONS_PER_BROKER, runtime, &identities).is_none());
 }
 
+#[test]
+fn ha_projection_finds_a_slave_by_the_host_of_its_client_connection() {
+    // A master reports each slave by the socket address of its HA connection: the slave's host
+    // with a client port, never the remoting endpoint the NameServer lists.
+    let (mut connections, identities) = valid_connections(2);
+    connections[0].addr = "replica-0.internal:53122".to_string();
+    connections[1].addr = "replica-1.internal:41870".to_string();
+    let observation = project_ha_runtime(
+        "broker-a",
+        0,
+        MAX_HA_CONNECTIONS_PER_BROKER,
+        master_runtime(connections.clone()),
+        &identities,
+    )
+    .expect("each connection belongs to the one replica on its host");
+    assert_eq!(
+        observation
+            .connections
+            .iter()
+            .map(|connection| connection.replica.broker_id)
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
+
+    // Two replicas of the group on one host: the client port cannot tell them apart.
+    let mut shared_host = BTreeMap::new();
+    for broker_id in [1, 2] {
+        shared_host.insert(
+            format!("shared.internal:{}", 10_911 + broker_id * 20),
+            Some(LogicalBrokerInstance {
+                broker_name: "broker-a".to_string(),
+                broker_id,
+            }),
+        );
+    }
+    let mut connection = connections[0].clone();
+    connection.addr = "shared.internal:53122".to_string();
+    assert!(project_ha_runtime(
+        "broker-a",
+        0,
+        MAX_HA_CONNECTIONS_PER_BROKER,
+        master_runtime(vec![connection]),
+        &shared_host
+    )
+    .is_none());
+}
+
 #[tokio::test]
 async fn ha_address_reverse_lookup_failure_is_sanitized_partial_or_total() {
     let connection = HAConnectionRuntimeInfo {
@@ -632,6 +679,68 @@ fn sync_projection_requires_exact_complete_canonical_replica_sets() {
     assert!(project_sync_state("controller-a", exact, &selected, &identities).is_some());
     let (overflow, selected, identities) = bounded_sync_broker_table(MAX_SYNC_BROKERS + 1);
     assert!(project_sync_state("controller-a", overflow, &selected, &identities).is_none());
+}
+
+#[test]
+fn sync_projection_matches_the_elected_master_registered_as_master_id() {
+    // The Controller numbers the replicas from 1. The master it elects, Controller id 1 here,
+    // registers with the NameServer as MASTER_ID; the other replica keeps its Controller id.
+    let topology = resolve_ha_topology(
+        &topology(&[(CLUSTER, "broker-a", &[(0, ADDRESS_A), (2, ADDRESS_A_SLAVE)])]),
+        CLUSTER,
+        &[],
+    )
+    .unwrap();
+    let selected = BTreeSet::from(["broker-a".to_string()]);
+    let reported = |in_sync: Vec<ReplicaIdentity>, not_in_sync: Vec<ReplicaIdentity>| {
+        sync_state_from(ReplicasInfo::new(1, ADDRESS_A, 3, 5, in_sync, not_in_sync))
+    };
+
+    let state = project_sync_state(
+        "controller-a",
+        reported(
+            vec![
+                ReplicaIdentity::new_with_alive("broker-a", 1, ADDRESS_A, true),
+                ReplicaIdentity::new_with_alive("broker-a", 2, ADDRESS_A_SLAVE, true),
+            ],
+            Vec::new(),
+        ),
+        &selected,
+        &topology.identities,
+    )
+    .expect("the elected master and its replica are projected");
+    let broker = &state.brokers[0];
+    assert_eq!(broker.master_broker_id, 0);
+    assert_eq!((broker.master_epoch, broker.sync_state_set_epoch), (3, 5));
+    assert_eq!(
+        broker
+            .in_sync_replicas
+            .iter()
+            .map(|replica| replica.broker_id)
+            .collect::<Vec<_>>(),
+        [0, 2]
+    );
+    assert!(broker.not_in_sync_replicas.is_empty());
+
+    // Only the elected master may stand for MASTER_ID; any other id must match exactly.
+    for in_sync in [
+        vec![
+            ReplicaIdentity::new("broker-a", 1, ADDRESS_A),
+            ReplicaIdentity::new("broker-a", 1, ADDRESS_A_SLAVE),
+        ],
+        vec![
+            ReplicaIdentity::new("broker-a", 1, ADDRESS_A),
+            ReplicaIdentity::new("broker-a", 3, ADDRESS_A_SLAVE),
+        ],
+    ] {
+        assert!(project_sync_state(
+            "controller-a",
+            reported(in_sync, Vec::new()),
+            &selected,
+            &topology.identities
+        )
+        .is_none());
+    }
 }
 
 #[tokio::test]

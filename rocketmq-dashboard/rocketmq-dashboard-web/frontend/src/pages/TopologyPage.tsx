@@ -178,6 +178,9 @@ const LEGEND = {
   ]
 } as const;
 
+/** Shown in the sphere's legend when brokers name Controllers. */
+const CONTROLLER_LEGEND = { kind: 'election', label: 'Controller' } as const;
+
 function SphereFallback() {
   return <Skeleton className="topology-sphere-loading" role="status" aria-label="Loading the sphere view" />;
 }
@@ -285,7 +288,9 @@ export default function TopologyPage() {
                   <TabsTrigger value="map">Map</TabsTrigger>
                 </TabsList>
                 <ul className="topology-legend" aria-label="Legend">
-                  {LEGEND[activeStyle].map((item) => <li key={item.kind} data-kind={item.kind}>{item.label}</li>)}
+                  {[...LEGEND[activeStyle], ...(activeStyle === 'sphere' && view.controllers.length > 0 ? [CONTROLLER_LEGEND] : [])].map((item) => (
+                    <li key={item.kind} data-kind={item.kind}>{item.label}</li>
+                  ))}
                 </ul>
               </div>
             </div>
