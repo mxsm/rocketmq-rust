@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(transport):** Rename the crate-private connection write-half enum to `TransportWriteHalf` and its write-half bindings to `tcp_write_half`, `stream_write_half` and `transport_write_half`, aligning it with the read-half naming; public APIs and behavior are unchanged ([#11719](https://github.com/mxsm/rocketmq-rust/issues/11719)).
 - **refactor(client):** Move the shared integration-test helper from `rocketmq-client/tests/support/mod.rs` to `tests/support.rs`, set `autotests = false` and register the previously auto-discovered test targets explicitly so the 34-target set is unchanged and `support` does not become a test target ([#11684](https://github.com/mxsm/rocketmq-rust/issues/11684)).
 - **refactor(transport):** Rename the crate-private connection read-half enum to `TransportReadHalf`, the private common connection constructor to `new_with_io_halves()`, and its read-half parameter, locals and match bindings to `transport_read_half`, `tcp_read_half` and `stream_read_half`; public APIs, framing and behavior are unchanged ([#11658](https://github.com/mxsm/rocketmq-rust/issues/11658)).
 - **refactor(store):** Rename the Timeline due-scanner error `CursorBackendMismatch` to `ContinuationIndexKindMismatch` with a clearer message, and give the formal scan's continuation variables distinct names ([#11650](https://github.com/mxsm/rocketmq-rust/issues/11650)).
