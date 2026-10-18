@@ -1492,21 +1492,6 @@ mod tests {
     }
 
     #[test]
-    fn inc_and_dec_core_pool_size_are_noops_like_java() {
-        let config = ConsumerConfig {
-            consume_thread_min: 2,
-            consume_thread_max: 5,
-            ..Default::default()
-        };
-        let service = new_service_with_config(config);
-
-        service.inc_core_pool_size();
-        service.dec_core_pool_size();
-
-        assert_eq!(service.get_core_pool_size(), 2);
-    }
-
-    #[test]
     fn reset_namespace_removes_configured_namespace_like_java() {
         let mut client_config = ClientConfig::default();
         client_config.set_namespace(CheetahString::from_static_str("ns"));

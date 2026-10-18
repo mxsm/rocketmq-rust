@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **refactor(transport):** Consolidate duplicate internal `ChannelInner` constructors without changing task or pending-request ownership ([#11726](https://github.com/mxsm/rocketmq-rust/issues/11726)).
+- **refactor(transport):** Rename the crate-private connection write-half enum to `TransportWriteHalf` and its write-half bindings to `tcp_write_half`, `stream_write_half` and `transport_write_half`, aligning it with the read-half naming; public APIs and behavior are unchanged ([#11719](https://github.com/mxsm/rocketmq-rust/issues/11719)).
 - **refactor(client):** Move the shared integration-test helper from `rocketmq-client/tests/support/mod.rs` to `tests/support.rs`, set `autotests = false` and register the previously auto-discovered test targets explicitly so the 34-target set is unchanged and `support` does not become a test target ([#11684](https://github.com/mxsm/rocketmq-rust/issues/11684)).
 - **refactor(transport):** Rename the crate-private connection read-half enum to `TransportReadHalf`, the private common connection constructor to `new_with_io_halves()`, and its read-half parameter, locals and match bindings to `transport_read_half`, `tcp_read_half` and `stream_read_half`; public APIs, framing and behavior are unchanged ([#11658](https://github.com/mxsm/rocketmq-rust/issues/11658)).
 - **refactor(store):** Rename the Timeline due-scanner error `CursorBackendMismatch` to `ContinuationIndexKindMismatch` with a clearer message, and give the formal scan's continuation variables distinct names ([#11650](https://github.com/mxsm/rocketmq-rust/issues/11650)).
@@ -58,6 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(client):** Remove unused internal consumer core-pool increment/decrement no-ops; explicit pool resizing is unchanged ([#11724](https://github.com/mxsm/rocketmq-rust/issues/11724)).
 - **refactor(broker):** Remove unused private metrics attribute/status models and constant re-export modules ([#11652](https://github.com/mxsm/rocketmq-rust/issues/11652)).
 - **refactor(proxy-core):** Remove the deprecated `remoting` and `service` module aliases (breaking); import from `ingress::remoting` and `contracts`, respectively.
 - **refactor(client):** Remove three internal LitePull offset forwarders while retaining the public consumer methods and existing offset implementations ([#11653](https://github.com/mxsm/rocketmq-rust/issues/11653)).
@@ -79,6 +81,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **broker:** Remove the no-op `BrokerOuterAPI::refresh_metadata` method and its periodic task (breaking); remove calls to this method.
 - **protocol:** Remove deprecated `RemotingCommand` response and custom-header compatibility aliases; use the explicit and fallible APIs instead.
 - **model:** Remove deprecated `SerdeJsonUtils::decode`; use `from_json_slice` or `from_json_bytes` instead.
+- **refactor(client):** Remove the unused internal `TraceView`; Admin trace queries and client trace encoding remain unchanged ([#11725](https://github.com/mxsm/rocketmq-rust/issues/11725)).
 - **client:** Remove the no-op `AsyncTraceDispatcher::{register_shutdown_hook, register_shut_down_hook, remove_shutdown_hook}` and `DefaultMQProducerImpl::semaphore_processor` methods; remove calls to these methods.
 - **model:** Remove the ten deprecated `Message` constructors and `with_details_body`; use `Message::builder()` instead.
 

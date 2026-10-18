@@ -19,10 +19,9 @@ use crate::base::message_status_enum::PutMessageStatus;
 
 pub use rocketmq_store_local::flush::SyncFlushRuntimeInfo;
 
-/// The `RocketMQFlushManager` trait defines the operations for managing the flushing of messages to
-/// disk in RocketMQ.
-#[trait_variant::make(FlushManager: Send)]
-pub trait RocketMQFlushManager {
+/// Manages message flushing to disk, including disk-flush requests through shared references.
+#[trait_variant::make(Send)]
+pub trait FlushManager: Sync {
     /// Starts the flush manager. This should be called when the broker starts up.
     fn start(&mut self);
 
@@ -50,7 +49,7 @@ pub trait RocketMQFlushManager {
     ///
     /// * `PutMessageStatus` - The status of the put message operation.
     async fn handle_disk_flush(
-        &mut self,
+        &self,
         result: &AppendMessageResult,
         message_ext: &MessageExtBrokerInner,
     ) -> PutMessageStatus;

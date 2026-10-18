@@ -99,11 +99,15 @@
   text-overflow: ellipsis;
 }
 
+/* `pre` keeps the line break of a replica's state; a reading too wide for the label is cut, not spilled under the node. */
 .topology-sphere-label-metric {
+  overflow: hidden;
   color: var(--muted-foreground);
   font: var(--text-mono-small);
   font-size: 11px;
   line-height: 14px;
+  white-space: pre;
+  text-overflow: ellipsis;
 }
 
 .topology-sphere-label[data-tone='warning'] .topology-sphere-label-metric {

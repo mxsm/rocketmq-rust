@@ -42,7 +42,6 @@ use rocketmq_store::PutMessageStatus;
 use rocketmq_store::QueryMessageResult;
 use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_store::StoreAppendReceipt;
-use rocketmq_store::StoreError as BackendStoreError;
 use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::TimerRecallRequest;
@@ -288,7 +287,7 @@ impl<MS: BrokerReadStore> EscapeBridge<MS> {
     pub(crate) fn set_commitlog_read_mode(
         &self,
         read_ahead_mode: rocketmq_store::CommitLogReadMode,
-    ) -> Result<(), BackendStoreError>
+    ) -> Result<(), StoreError>
     where
         MS: rocketmq_store::BrokerAdminStore,
     {
