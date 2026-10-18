@@ -14,8 +14,8 @@
 
 use crate::ha::ha_connection_state::HAConnectionState;
 
-#[trait_variant::make(HAClient: Send)]
-pub trait RocketmqHAClient: Sync {
+#[trait_variant::make(Send)]
+pub trait HAClient: Sync {
     /// Start the HA client
     ///
     /// This initializes the client and begins connection attempts to the master.
