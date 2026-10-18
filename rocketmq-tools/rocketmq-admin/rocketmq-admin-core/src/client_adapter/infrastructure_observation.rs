@@ -640,7 +640,7 @@ fn project_ha_runtime(
     let mut unique_endpoints = BTreeSet::new();
     for connection in runtime.ha_connection_info {
         let canonical = canonical_remoting_endpoint(&connection.addr)?;
-        let replica = identities.get(&canonical).and_then(Option::as_ref)?.clone();
+        let replica = connection_replica(&canonical, broker_name, identities)?.clone();
         let expected_diff = runtime
             .master_commit_log_max_offset
             .checked_sub(connection.slave_ack_offset)?;
@@ -686,6 +686,34 @@ fn project_ha_runtime(
     })
 }
 
+/// The replica behind an HA connection. A master reports the socket address of each slave's
+/// connection, whose port is a client port rather than the slave's remoting port, so a connection
+/// that matches no registered endpoint belongs to the one replica of the group on its host. A host
+/// shared by several replicas of the group identifies none of them.
+fn connection_replica<'a>(
+    endpoint: &str,
+    broker_name: &str,
+    identities: &'a BTreeMap<String, Option<LogicalBrokerInstance>>,
+) -> Option<&'a LogicalBrokerInstance> {
+    if let Some(identity) = identities.get(endpoint) {
+        return identity.as_ref();
+    }
+    let host = endpoint_host(endpoint)?;
+    let mut candidates = identities.iter().filter_map(|(registered, identity)| {
+        let identity = identity.as_ref()?;
+        (identity.broker_name == broker_name
+            && identity.broker_id != mix_all::MASTER_ID
+            && endpoint_host(registered) == Some(host))
+        .then_some(identity)
+    });
+    let replica = candidates.next()?;
+    candidates.next().is_none().then_some(replica)
+}
+
+fn endpoint_host(endpoint: &str) -> Option<&str> {
+    endpoint.rsplit_once(':').map(|(host, _)| host)
+}
+
 fn project_sync_state(
     controller_name: &str,
     sync_state: BrokerReplicasInfo,
@@ -718,7 +746,10 @@ fn project_sync_state(
         }
         let master_endpoint = canonical_remoting_endpoint(replicas.get_master_address())?;
         let master = identities.get(&master_endpoint).and_then(Option::as_ref)?;
-        if master.broker_name != broker_name.as_str() || master.broker_id != replicas.get_master_broker_id() {
+        let controller_master_id = replicas.get_master_broker_id();
+        if master.broker_name != broker_name.as_str()
+            || !same_replica_id(master.broker_id, controller_master_id, controller_master_id)
+        {
             return None;
         }
         let mut seen = BTreeSet::new();
@@ -726,6 +757,7 @@ fn project_sync_state(
             replicas.get_in_sync_replicas(),
             identities,
             broker_name.as_str(),
+            controller_master_id,
             &mut seen,
         )?;
         if !in_sync_replicas.iter().any(|replica| replica == master) {
@@ -735,13 +767,15 @@ fn project_sync_state(
             replicas.get_not_in_sync_replicas(),
             identities,
             broker_name.as_str(),
+            controller_master_id,
             &mut seen,
         )?;
         in_sync_replicas.sort_by(logical_broker_order);
         not_in_sync_replicas.sort_by(logical_broker_order);
         brokers.push(BrokerSyncStateObservation {
             broker_name: broker_name.to_string(),
-            master_broker_id: replicas.get_master_broker_id(),
+            // The NameServer identity, like every replica of the observation.
+            master_broker_id: master.broker_id,
             master_epoch: replicas.get_master_epoch(),
             sync_state_set_epoch: replicas.get_sync_state_set_epoch(),
             in_sync_replicas,
@@ -755,10 +789,18 @@ fn project_sync_state(
     })
 }
 
+/// Whether the NameServer and the Controller name the same replica. The Controller numbers the
+/// replicas of a group itself; the master it elects registers with the NameServer as
+/// [`mix_all::MASTER_ID`], every other replica under its Controller id.
+fn same_replica_id(nameserver_id: u64, controller_id: u64, controller_master_id: u64) -> bool {
+    nameserver_id == controller_id || (controller_id == controller_master_id && nameserver_id == mix_all::MASTER_ID)
+}
+
 fn project_replicas(
     replicas: &[rocketmq_protocol::protocol::body::broker_replicas_info::ReplicaIdentity],
     identities: &BTreeMap<String, Option<LogicalBrokerInstance>>,
     broker_name: &str,
+    controller_master_id: u64,
     seen: &mut BTreeSet<(String, u64)>,
 ) -> Option<Vec<LogicalBrokerInstance>> {
     let mut rows = Vec::new();
@@ -768,7 +810,7 @@ fn project_replicas(
         if replica.get_broker_name().as_str() != broker_name
             || identity.broker_name != broker_name
             || identity.broker_name != replica.get_broker_name().as_str()
-            || identity.broker_id != replica.get_broker_id()
+            || !same_replica_id(identity.broker_id, replica.get_broker_id(), controller_master_id)
             || identity.broker_id > MAX_WIRE_I64
             || !seen.insert((identity.broker_name.clone(), identity.broker_id))
         {

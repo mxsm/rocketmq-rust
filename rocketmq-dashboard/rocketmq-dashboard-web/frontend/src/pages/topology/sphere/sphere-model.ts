@@ -1,8 +1,10 @@
 import type {
   TopologyBrokerGroup,
   TopologyConsumer,
+  TopologyController,
   TopologyNameServer,
-  TopologyProducer
+  TopologyProducer,
+  TopologyReplica
 } from '../../../types/topology';
 import { nodeId } from '../topology-layout';
 import {
@@ -18,14 +20,20 @@ import {
 /** A point in the frame of its sphere, in units of the broker sphere's radius. */
 export type Vec3 = readonly [number, number, number];
 
-/** The broker sphere holds clusters and client groups; the NameServer sphere floats beside it. */
-export type SphereKey = 'brokers' | 'nameservers';
+/**
+ * The broker sphere holds clusters and client groups; the NameServer sphere floats beside it, and
+ * the Controller sphere when brokers name Controllers.
+ */
+export type SphereKey = 'brokers' | 'nameservers' | 'controllers';
 
 /** Height of node centres on the broker sphere, so markers never sink into it. */
 export const SURFACE = 1.012;
 /** Radius of the NameServer sphere relative to the broker sphere. */
 export const NAMESERVER_RADIUS = 0.34;
-const NAMESERVER_LIFT = 1.04;
+/** Radius of the Controller sphere relative to the broker sphere. */
+export const CONTROLLER_RADIUS = 0.34;
+/** Height of node centres on a small sphere, relative to its radius. */
+const SMALL_SPHERE_LIFT = 1.04;
 /** Widest angle between two broker groups of one cluster, in degrees. */
 const GROUP_SPACING = 26;
 /** Angle between a master and its slaves, in degrees. */
@@ -35,7 +43,8 @@ const HEARTBEAT_SPREAD = 0.028;
 /** Above this many groups per side the clients get a third ring. */
 const TWO_RING_LIMIT = 16;
 
-export type ClusterMode = 'master-slave' | 'single';
+/** `controller`: the Controllers elect the masters of the cluster's groups. */
+export type ClusterMode = 'master-slave' | 'single' | 'controller';
 
 interface Placed {
   id: string;
@@ -63,6 +72,10 @@ export interface SlaveNode extends OnBrokerSphere {
   group: TopologyBrokerGroup;
   address: string;
   masterId: string;
+  /** The master's view of its replication; `null` when the backend did not read it. */
+  replica: TopologyReplica | null;
+  /** In Controller mode, whether the Controllers count it in the sync state set. */
+  inSyncStateSet: boolean | null;
 }
 
 export interface ProducerNode extends OnBrokerSphere {
@@ -81,14 +94,24 @@ export interface NameServerNode extends Placed {
   nameServer: TopologyNameServer;
 }
 
-export type SphereNode = MasterNode | SlaveNode | ProducerNode | ConsumerNode | NameServerNode;
+export interface ControllerNode extends Placed {
+  kind: 'controller';
+  sphere: 'controllers';
+  controller: TopologyController;
+  /** Broker groups whose masters this Controller's Raft group elects. */
+  brokerNames: string[];
+}
+
+export type SphereNode = MasterNode | SlaveNode | ProducerNode | ConsumerNode | NameServerNode | ControllerNode;
 export type SphereNodeKind = SphereNode['kind'];
 
 /**
  * `heartbeat`: a master registering with a NameServer. `route`: a client group looking up its
- * routes on a NameServer, drawn from the NameServer toward the group.
+ * routes on a NameServer, drawn from the NameServer toward the group. `election`: a broker in
+ * Controller mode reporting to the Controller that leads, which elects its group's master. `raft`:
+ * the leading Controller replicating its log to a follower.
  */
-export type SphereLinkKind = 'produce' | 'consume' | 'replication' | 'heartbeat' | 'route';
+export type SphereLinkKind = 'produce' | 'consume' | 'replication' | 'heartbeat' | 'route' | 'election' | 'raft';
 
 export interface SphereLink {
   id: string;
@@ -99,8 +122,10 @@ export interface SphereLink {
   tps: number;
   /** A client group without clients: dashed, without particles. */
   idle: boolean;
-  /** A heartbeat to a NameServer that failed its latest check. */
+  /** A heartbeat to a NameServer that failed its latest check, or a link to an unreachable Controller. */
   unavailable: boolean;
+  /** A replication link to a replica that is not in sync. */
+  outOfSync: boolean;
   /** Sideways offset that fans the heartbeat lines of one bundle apart, in sphere units. */
   offset: number;
 }
@@ -231,6 +256,25 @@ function placeClients<Client>(
 }
 
 const slaveId = (brokerName: string, address: string) => `slave:${brokerName}:${address}`;
+const controllerId = (address: string) => `controller:${address}`;
+
+/** In Controller mode, whether the Controllers count a replica in the sync state set. */
+function inSyncStateSet(group: TopologyBrokerGroup, replica: TopologyReplica | null): boolean | null {
+  const state = group.election === 'controller' ? group.controllerState : undefined;
+  if (!state || !replica) return null;
+  if (state.inSyncBrokerIds.includes(replica.brokerId)) return true;
+  return state.outOfSyncBrokerIds.includes(replica.brokerId) ? false : null;
+}
+
+/** The Controller sets the groups name; each set is one Raft group. */
+function controllerSets(groups: readonly TopologyBrokerGroup[]): string[][] {
+  const sets = new Map<string, string[]>();
+  for (const group of groups) {
+    const addresses = [...new Set(group.controllerAddresses ?? [])].sort();
+    if (group.election === 'controller' && addresses.length > 0) sets.set(addresses.join(';'), addresses);
+  }
+  return [...sets.values()];
+}
 
 /**
  * One entry per NameServer. A configured entry may list several addresses joined by `;`, the way
@@ -276,6 +320,7 @@ export function buildSphereModel(view: TopologyView): SphereModel {
         const turn = (-90 + (slave * 360) / group.slaveAddresses.length) * DEG;
         const lat = SLAVE_OFFSET * Math.sin(turn);
         const slaveLon = lon + SLAVE_OFFSET * Math.cos(turn);
+        const replica = group.replicas?.find((candidate) => candidate.address === address) ?? null;
         nodes.push({
           id: slaveId(group.brokerName, address),
           kind: 'slave',
@@ -286,14 +331,18 @@ export function buildSphereModel(view: TopologyView): SphereModel {
           clusterName: cluster.clusterName,
           group,
           address,
-          masterId
+          masterId,
+          replica,
+          inSyncStateSet: inSyncStateSet(group, replica)
         });
       });
     });
     const pad = Math.min(17, arc / 2 - 2);
+    let mode: ClusterMode = cluster.brokers.some((group) => group.slaveAddresses.length > 0) ? 'master-slave' : 'single';
+    if (cluster.brokers.some((group) => group.election === 'controller')) mode = 'controller';
     clusters.push({
       clusterName: cluster.clusterName,
-      mode: cluster.brokers.some((group) => group.slaveAddresses.length > 0) ? 'master-slave' : 'single',
+      mode,
       centre,
       from: Math.min(...lons) - pad,
       to: Math.max(...lons) + pad,
@@ -311,7 +360,7 @@ export function buildSphereModel(view: TopologyView): SphereModel {
   for (const { client, lat, lon } of placeClients(view.consumers, 'consumer', (consumer) => consumer.group, (consumer) => consumer.brokerNames, brokerLon)) {
     nodes.push({ id: nodeId.consumer(client.group), kind: 'consumer', sphere: 'brokers', lat, lon, position: surfacePoint(lat, lon), consumer: client });
   }
-  const nameServerRadius = NAMESERVER_RADIUS * NAMESERVER_LIFT;
+  const nameServerRadius = NAMESERVER_RADIUS * SMALL_SPHERE_LIFT;
   const nameServers = splitNameServers(view.nameServers);
   nameServers.forEach((nameServer, index) => {
     nodes.push({
@@ -322,16 +371,29 @@ export function buildSphereModel(view: TopologyView): SphereModel {
       nameServer
     });
   });
+  const allGroups = view.clusters.flatMap((cluster) => cluster.brokers);
+  view.controllers.forEach((controller, index) => {
+    nodes.push({
+      id: controllerId(controller.address),
+      kind: 'controller',
+      sphere: 'controllers',
+      position: capPoint(index, view.controllers.length, CONTROLLER_RADIUS * SMALL_SPHERE_LIFT),
+      controller,
+      brokerNames: allGroups
+        .filter((group) => group.election === 'controller' && (group.controllerAddresses ?? []).includes(controller.address))
+        .map((group) => group.brokerName)
+    });
+  });
 
   const byId = new Map(nodes.map((node) => [node.id, node]));
-  const groups = new Map(view.clusters.flatMap((cluster) => cluster.brokers).map((group) => [group.brokerName, group]));
+  const groups = new Map(allGroups.map((group) => [group.brokerName, group]));
   for (const producer of view.producers) {
     for (const brokerName of producer.brokerNames) {
       const group = groups.get(brokerName);
       if (!group) continue;
       const from = nodeId.producer(producer.producerGroup);
       const to = nodeId.broker(brokerName);
-      links.push({ id: `produce:${from}>${to}`, kind: 'produce', from, to, tps: group.produceTps, idle: producer.connectionCount === 0, unavailable: false, offset: 0 });
+      links.push({ id: `produce:${from}>${to}`, kind: 'produce', from, to, tps: group.produceTps, idle: producer.connectionCount === 0, unavailable: false, outOfSync: false, offset: 0 });
     }
   }
   for (const consumer of view.consumers) {
@@ -339,13 +401,23 @@ export function buildSphereModel(view: TopologyView): SphereModel {
       if (!groups.has(brokerName)) continue;
       const from = nodeId.broker(brokerName);
       const to = nodeId.consumer(consumer.group);
-      links.push({ id: `consume:${from}>${to}`, kind: 'consume', from, to, tps: consumer.consumeTps, idle: consumer.connectionCount === 0, unavailable: false, offset: 0 });
+      links.push({ id: `consume:${from}>${to}`, kind: 'consume', from, to, tps: consumer.consumeTps, idle: consumer.connectionCount === 0, unavailable: false, outOfSync: false, offset: 0 });
     }
   }
   const masters = nodes.filter((node): node is MasterNode => node.kind === 'master');
   for (const node of nodes) {
     if (node.kind !== 'slave' || !node.group.masterAddress) continue;
-    links.push({ id: `replication:${node.masterId}>${node.id}`, kind: 'replication', from: node.masterId, to: node.id, tps: node.group.produceTps, idle: false, unavailable: false, offset: 0 });
+    links.push({
+      id: `replication:${node.masterId}>${node.id}`,
+      kind: 'replication',
+      from: node.masterId,
+      to: node.id,
+      tps: node.group.produceTps,
+      idle: false,
+      unavailable: false,
+      outOfSync: replicaBehind(node),
+      offset: 0
+    });
   }
   // Every broker registers with every NameServer; the masters stand for their groups.
   const registered = masters.filter((master) => master.group.masterAddress);
@@ -360,7 +432,43 @@ export function buildSphereModel(view: TopologyView): SphereModel {
         tps: 0,
         idle: false,
         unavailable: nameServer.status === 'unavailable',
+        outOfSync: false,
         offset: (index - (registered.length - 1) / 2) * HEARTBEAT_SPREAD
+      });
+    });
+  }
+
+  // In Controller mode every broker of a group reports to the Controller that leads its Raft
+  // group, which elects the master; the leader replicates its log to the followers.
+  const controllers = new Map(view.controllers.map((controller) => [controller.address, controller]));
+  for (const set of controllerSets(allGroups)) {
+    const leader = set.map((address) => controllers.get(address)).find((controller) => controller?.leader === true);
+    if (!leader) continue;
+    const leaderId = controllerId(leader.address);
+    for (const address of set) {
+      const follower = controllers.get(address);
+      if (!follower || follower === leader) continue;
+      const to = controllerId(address);
+      links.push({ id: `raft:${leaderId}>${to}`, kind: 'raft', from: leaderId, to, tps: 0, idle: false, unavailable: follower.status === 'unavailable', outOfSync: false, offset: 0 });
+    }
+    const managed = nodes.filter(
+      (node): node is MasterNode | SlaveNode =>
+        (node.kind === 'master' || node.kind === 'slave') &&
+        node.group.election === 'controller' &&
+        [...new Set(node.group.controllerAddresses ?? [])].sort().join(';') === set.join(';') &&
+        (node.kind === 'slave' || node.group.masterAddress !== null)
+    );
+    managed.forEach((node, index) => {
+      links.push({
+        id: `election:${node.id}>${leaderId}`,
+        kind: 'election',
+        from: node.id,
+        to: leaderId,
+        tps: 0,
+        idle: false,
+        unavailable: false,
+        outOfSync: false,
+        offset: (index - (managed.length - 1) / 2) * HEARTBEAT_SPREAD
       });
     });
   }
@@ -378,7 +486,7 @@ export function buildSphereModel(view: TopologyView): SphereModel {
       const from = nodeId.nameServer(reachable[index % reachable.length].address);
       const position = share.get(from) ?? 0;
       share.set(from, position + 1);
-      links.push({ id: `route:${from}>${client}`, kind: 'route', from, to: client, tps: 0, idle: false, unavailable: false, offset: position });
+      links.push({ id: `route:${from}>${client}`, kind: 'route', from, to: client, tps: 0, idle: false, unavailable: false, outOfSync: false, offset: position });
     });
     // Fan each NameServer's bundle around its middle line.
     for (const link of links) {
@@ -390,7 +498,7 @@ export function buildSphereModel(view: TopologyView): SphereModel {
   const busiest = [...clusters].sort((left, right) => right.produceTps + right.consumeTps - (left.produceTps + left.consumeTps))[0];
   const structure = [
     ...nodes.map((node) => `${node.id}|${nodeTone(node)}`),
-    ...links.map((link) => `${link.id}|${link.idle ? 'idle' : ''}|${link.unavailable ? 'down' : ''}`)
+    ...links.map((link) => `${link.id}|${link.idle ? 'idle' : ''}|${link.unavailable ? 'down' : ''}|${link.outOfSync ? 'behind' : ''}`)
   ].join('\n');
   const groupCounts = {
     producers: view.producers.length,
@@ -403,12 +511,31 @@ export function buildSphereModel(view: TopologyView): SphereModel {
 
 export type SphereNodeTone = 'normal' | 'warning' | 'danger' | 'idle' | 'current' | 'unknown';
 
+/**
+ * RocketMQ counts a slave in sync while it is less than this far behind its master
+ * (`haMaxGapNotInSync`). A master's own in-sync flag is not used: some brokers set it only for a
+ * slave that acknowledged every byte, which a slave under steady traffic never has.
+ */
+export const IN_SYNC_GAP_BYTES = 256 * 1024 * 1024;
+
+/**
+ * Whether a slave falls behind: in Controller mode, outside the sync state set the Controllers
+ * keep; otherwise not connected to its master's HA service, or too far behind it. A slave whose
+ * replication was not read is not flagged.
+ */
+export function replicaBehind(node: SlaveNode): boolean {
+  if (node.inSyncStateSet !== null) return !node.inSyncStateSet;
+  const { replica } = node;
+  if (!replica || replica.inSync === undefined) return false;
+  return replica.lagBytes === undefined || replica.lagBytes >= IN_SYNC_GAP_BYTES;
+}
+
 export function nodeTone(node: SphereNode): SphereNodeTone {
   switch (node.kind) {
     case 'master':
       return brokerTone(node.group);
     case 'slave':
-      return 'normal';
+      return replicaBehind(node) ? 'warning' : 'normal';
     case 'producer':
       return producerTone(node.producer);
     case 'consumer':
@@ -417,6 +544,11 @@ export function nodeTone(node: SphereNode): SphereNodeTone {
       if (node.nameServer.status === 'unavailable') return 'danger';
       if (node.nameServer.status === 'unknown') return 'unknown';
       return node.nameServer.current ? 'current' : 'normal';
+    case 'controller':
+      if (node.controller.status === 'unavailable') return 'danger';
+      // Without a known leader no master can be elected.
+      if (node.controller.leader === undefined) return 'warning';
+      return node.controller.leader ? 'current' : 'normal';
   }
 }
 
@@ -435,6 +567,8 @@ export function nodeTitle(node: SphereNode): string {
       return node.consumer.displayName;
     case 'nameserver':
       return node.nameServer.address;
+    case 'controller':
+      return node.controller.address;
   }
 }
 
@@ -445,8 +579,10 @@ export function nodeMetric(node: SphereNode): string {
       return node.group.masterAddress
         ? `in ${formatTps(node.group.produceTps)} · out ${formatTps(node.group.consumeTps)}`
         : 'no master registered';
-    case 'slave':
-      return `slave · ${node.address}`;
+    case 'slave': {
+      const role = node.group.election === 'controller' ? 'replica' : 'slave';
+      return `${role} · ${node.address}${replicaBehind(node) ? ' · out of sync' : ''}`;
+    }
     case 'producer':
       return plural(node.producer.connectionCount, 'connection', 'connections');
     case 'consumer': {
@@ -457,6 +593,10 @@ export function nodeMetric(node: SphereNode): string {
       if (node.nameServer.status === 'unavailable') return 'unavailable';
       if (node.nameServer.status === 'unknown') return 'status unknown';
       return node.nameServer.current ? 'current' : 'available';
+    case 'controller':
+      if (node.controller.status === 'unavailable') return 'unavailable';
+      if (node.controller.leader === undefined) return 'no leader known';
+      return node.controller.leader ? 'leader' : 'follower';
   }
 }
 
@@ -465,16 +605,28 @@ const KIND_NAMES: Record<SphereNodeKind, string> = {
   slave: 'Slave',
   producer: 'Producer group',
   consumer: 'Consumer group',
-  nameserver: 'NameServer'
+  nameserver: 'NameServer',
+  controller: 'Controller'
 };
 
 export function kindName(kind: SphereNodeKind): string {
   return KIND_NAMES[kind];
 }
 
-/** Full name of a node for lists and screen readers. */
+/**
+ * Full name of a node for lists and screen readers. A replica goes by its broker ID once replication
+ * was read: an address is too long for a list row, and the replicas of a group often differ only in
+ * the last digits. The address stays in its label and metric.
+ */
 export function nodeName(node: SphereNode): string {
-  return node.kind === 'slave' ? `${node.group.brokerName} slave ${node.address}` : nodeTitle(node);
+  if (node.kind !== 'slave') return nodeTitle(node);
+  return `${node.group.brokerName} ${node.group.election === 'controller' ? 'replica' : 'slave'} ${node.replica?.brokerId ?? node.address}`;
+}
+
+/** What a screen reader announces for a node on a sphere; the name of a slave already says what it is. */
+export function nodeDescription(node: SphereNode): string {
+  const name = node.kind === 'slave' ? nodeName(node) : `${kindName(node.kind)} ${nodeName(node)}`;
+  return `${name}, ${nodeMetric(node)}`;
 }
 
 /** The nodes a node is linked to, with the kind of each link. */

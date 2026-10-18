@@ -235,9 +235,16 @@ where
     operation.await
 }
 
+mod replication;
 mod topic;
 mod topic_current;
 mod topic_session;
+
+pub use self::replication::ControllerReading;
+pub use self::replication::GroupReplication;
+pub use self::replication::MasterElection;
+pub use self::replication::ReplicationObservation;
+pub use self::replication::ReplicationTarget;
 
 use self::topic_session::*;
 
