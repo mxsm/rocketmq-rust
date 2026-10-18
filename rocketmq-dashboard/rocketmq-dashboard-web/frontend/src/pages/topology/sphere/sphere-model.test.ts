@@ -8,6 +8,7 @@ import {
   IN_SYNC_GAP_BYTES,
   linkedNodes,
   nodeDescription,
+  nodeLabelMetric,
   nodeMetric,
   nodeName,
   nodeTone,
@@ -213,6 +214,12 @@ describe('Controllers and replication', () => {
     expect([nodeName(replica), nodeName(disconnected)]).toEqual(['broker-d replica 1', 'broker-b slave 1']);
     expect(nodeDescription(replica)).toBe('broker-d replica 1, replica · 10.0.5.123:10911 · out of sync');
     expect(nodeDescription(node(model, 'controller:10.0.9.1:9878'))).toBe('Controller 10.0.9.1:9878, leader');
+    // On the sphere the state takes a line of its own, so the label is no wider than the address.
+    expect([replica, behind, disconnected].map(nodeLabelMetric)).toEqual([
+      'replica · 10.0.5.123:10911\nout of sync',
+      'slave · 10.0.4.121:10911',
+      'slave · 10.0.4.123:10911\nout of sync'
+    ]);
     expect([replica, behind, disconnected].map((item) => replicationTo(item.id)?.outOfSync)).toEqual([true, false, true]);
     // A slave as far behind as RocketMQ's own limit is out of sync too.
     expect(replicaBehind({ ...behind, replica: { ...behind.replica!, lagBytes: IN_SYNC_GAP_BYTES } })).toBe(true);
