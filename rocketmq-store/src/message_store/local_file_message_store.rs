@@ -298,7 +298,8 @@ enum PendingHAService {
 ///
 /// The handle deliberately excludes queue, index, dispatcher, and lifecycle
 /// mutation APIs while retaining replica append/read, confirm publication, and
-/// replication progress state shared by the owning Store.
+/// replication progress state shared by the owning Store. Its one queue operation
+/// rebuilds the queue offset table when the Store becomes master.
 #[derive(Clone)]
 pub(crate) struct HAReplicaStoreHandle {
     message_store_config: Arc<MessageStoreConfig>,
@@ -309,6 +310,7 @@ pub(crate) struct HAReplicaStoreHandle {
     state_machine_version: Arc<AtomicI64>,
     controller_epoch_start_offset: Arc<AtomicI64>,
     commit_log: CommitLogReplicaHandle,
+    consume_queue_store: ConsumeQueueStore,
 }
 
 impl HAReplicaStoreHandle {
@@ -381,6 +383,20 @@ impl HAReplicaStoreHandle {
     pub(crate) fn publish_controller_epoch_start_offset(&self, epoch_start_offset: i64) {
         self.controller_epoch_start_offset
             .store(epoch_start_offset, Ordering::SeqCst);
+    }
+
+    #[inline]
+    pub(crate) fn get_controller_epoch_start_offset(&self) -> i64 {
+        self.controller_epoch_start_offset.load(Ordering::SeqCst)
+    }
+
+    /// Rebuilds the next queue offsets that the write path assigns from.
+    ///
+    /// A replica appends and dispatches without assigning offsets, so its table goes stale. Java's
+    /// `AutoSwitchHAService#changeToMaster` rebuilds it before the Store accepts writes as master.
+    pub(crate) fn recover_topic_queue_table(&self) {
+        let mut consume_queue_store = self.consume_queue_store.clone();
+        consume_queue_store.recover_offset_table(self.get_min_phy_offset());
     }
 
     pub(crate) async fn append_replica_data(

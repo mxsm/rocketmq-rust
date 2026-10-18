@@ -699,6 +699,10 @@ mod defaults {
         10 * 1000
     }
 
+    pub const fn check_sync_state_set_period() -> u64 {
+        5 * 1000
+    }
+
     pub const fn broker_election_priority() -> i32 {
         i32::MAX
     }
@@ -767,6 +771,11 @@ pub struct BrokerConfig {
     /// Interval, in milliseconds, between syncs of controller metadata.
     #[serde(default = "defaults::sync_controller_metadata_period")]
     pub sync_controller_metadata_period: u64,
+
+    /// Interval, in milliseconds, at which a controller-mode master drops replicas that stopped
+    /// catching up from its sync state set and reports the change to the controller.
+    #[serde(default = "defaults::check_sync_state_set_period")]
+    pub check_sync_state_set_period: u64,
 
     /// Region identifier stamped into messages for region routing / tracing.
     #[serde(default = "defaults::region_id")]
@@ -1427,6 +1436,7 @@ impl Default for BrokerConfig {
             controller_addr: CheetahString::new(),
             sync_broker_metadata_period: 5_000,
             sync_controller_metadata_period: 10_000,
+            check_sync_state_set_period: 5_000,
             region_id: CheetahString::from_static_str(mix_all::DEFAULT_TRACE_REGION_ID),
             trace_on: true,
             broker_permission: PermName::PERM_WRITE | PermName::PERM_READ,
@@ -1735,6 +1745,10 @@ impl BrokerConfig {
         properties.insert(
             "syncControllerMetadataPeriod".into(),
             self.sync_controller_metadata_period.to_string().into(),
+        );
+        properties.insert(
+            "checkSyncStateSetPeriod".into(),
+            self.check_sync_state_set_period.to_string().into(),
         );
         properties.insert("regionId".into(), self.region_id.clone());
         properties.insert("brokerName".into(), self.broker_identity.broker_name.clone());

@@ -1193,6 +1193,7 @@ impl BrokerRuntime {
             self.schedule_send_heartbeat();
             self.schedule_sync_controller_metadata();
             self.schedule_sync_controller_replica_info();
+            self.schedule_sync_state_set_reporter();
         }
 
         if broker_config.skip_pre_online && !broker_config.enable_controller_mode {

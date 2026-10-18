@@ -15,6 +15,7 @@
 #![allow(unused_variables)]
 
 use std::any::Any;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -45,11 +46,13 @@ use rocketmq_store_local::mapped_file::ManagedMappedFileQueueGeneration;
 use tokio::sync::Semaphore;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::config::message_store_config::MessageStoreConfig;
+use crate::log_file::commit_log::check_message_and_return_size;
 use crate::log_file::commit_log::CommitLogReadHandle;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::queue::batch_consume_queue::BatchConsumeQueue;
@@ -1208,6 +1211,9 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn recover_offset_table(&mut self, min_phy_offset: i64) {
+        // Read the dispatch frontier before the queues, so that a message dispatched in between is
+        // counted either by its queue or by the CommitLog scan.
+        let dispatch_frontier = self.get_max_phy_offset_in_consume_queue_global();
         let mut cq_offset_table = HashMap::with_capacity(1024);
         let mut bcq_offset_table = HashMap::with_capacity(1024);
         for (topic, consume_queue_table) in self.inner.consume_queue_table.lock().iter_mut() {
@@ -1228,14 +1234,10 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
             }
         }
         if self.inner.message_store_config.duplication_enable || self.inner.broker_config.enable_controller_mode {
-            // In duplication/controller mode, use LMQ offset table
-            self.inner
-                .queue_offset_operator
-                .set_lmq_topic_queue_table(cq_offset_table);
-        } else {
-            self.set_topic_queue_table(cq_offset_table);
-            self.set_batch_topic_queue_table(bcq_offset_table);
+            self.compensate_for_ha(&mut cq_offset_table, dispatch_frontier.max(min_phy_offset));
         }
+        self.set_topic_queue_table(cq_offset_table);
+        self.set_batch_topic_queue_table(bcq_offset_table);
     }
 
     fn set_topic_queue_table(&mut self, topic_queue_table: HashMap<CheetahString, i64>) {
@@ -1369,6 +1371,82 @@ impl ConsumeQueueStore {
         self.inner
             .queue_offset_operator
             .set_batch_topic_queue_table(batch_topic_queue_table)
+    }
+
+    /// Continues each queue after the CommitLog messages that its consume queue does not hold yet.
+    ///
+    /// In controller and duplication modes the reput service dispatches only up to the confirm
+    /// offset, so messages after the dispatch frontier already own queue offsets. This mirrors Java's
+    /// `ConsumeQueueStore#compensateForHA`, except that an entry only moves forward: a stale queue
+    /// offset left in the CommitLog cannot rewind a queue.
+    fn compensate_for_ha(&self, cq_offset_table: &mut HashMap<CheetahString, i64>, scan_from: i64) {
+        let Some(context) = self.inner.context.read().clone() else {
+            warn!("consume queue store context is not wired; queue offsets are not compensated");
+            return;
+        };
+        let commit_log = context.commit_log();
+        let message_store_config = Arc::clone(&self.inner.message_store_config);
+        // Delay levels only shape the tags code of scheduled messages, which is not read here.
+        let delay_level_table = BTreeMap::new();
+        let max_offset = commit_log.get_max_offset();
+        let mut offset = scan_from;
+        let mut compensated_messages = 0u64;
+        'segments: while offset < max_offset {
+            let Some(mut result) = commit_log.get_data(offset) else {
+                break;
+            };
+            let segment_start = offset;
+            let mut read_size = 0i32;
+            while read_size < result.size() {
+                let Some(bytes) = result.bytes_mut() else {
+                    break 'segments;
+                };
+                let request = check_message_and_return_size(
+                    bytes,
+                    false,
+                    false,
+                    false,
+                    &message_store_config,
+                    0,
+                    &delay_level_table,
+                );
+                if !request.success {
+                    break 'segments;
+                }
+                if request.msg_size == 0 {
+                    offset = commit_log.roll_next_file(offset);
+                    continue 'segments;
+                }
+                let size = if request.buffer_size == -1 {
+                    request.msg_size
+                } else {
+                    request.buffer_size
+                };
+                if size <= 0 {
+                    break 'segments;
+                }
+                let next_queue_offset = request.consume_queue_offset + 1;
+                cq_offset_table
+                    .entry(CheetahString::from_string(format!(
+                        "{}-{}",
+                        request.topic, request.queue_id
+                    )))
+                    .and_modify(|queue_offset| *queue_offset = (*queue_offset).max(next_queue_offset))
+                    .or_insert(next_queue_offset);
+                compensated_messages += 1;
+                offset += i64::from(size);
+                read_size += size;
+            }
+            if offset == segment_start {
+                break;
+            }
+        }
+        if compensated_messages > 0 {
+            info!(
+                "compensated queue offsets from {} CommitLog messages in [{}, {})",
+                compensated_messages, scan_from, offset
+            );
+        }
     }
 
     /// Load consume queues from the given directory path for a specific queue type

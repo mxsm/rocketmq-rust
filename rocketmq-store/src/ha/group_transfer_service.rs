@@ -536,6 +536,60 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn async_flush_counts_the_master_copy_before_the_background_flush() {
+        use rocketmq_store_api::MasterEpoch;
+        use rocketmq_store_api::ReplicaCount;
+        use rocketmq_store_api::WriteAuthority;
+
+        use crate::base::backend_ops::BackendOps;
+        use crate::config::flush_disk_type::FlushDiskType;
+        use crate::ha::test_support::new_test_message_store_with_flush;
+
+        let authority =
+            WriteAuthority::try_new(0, MasterEpoch::try_from(1).expect("positive epoch")).expect("valid authority");
+        let policy = AckPolicy::ReplicaCount(ReplicaCount::try_new(2).expect("two replicas"));
+        for (flush_disk_type, acknowledged) in [(FlushDiskType::AsyncFlush, true), (FlushDiskType::SyncFlush, false)] {
+            let temp_root = tempfile::tempdir().expect("create temp root dir");
+            let mut store = new_test_message_store_with_flush(temp_root.path(), false, flush_disk_type);
+            store.init().await.expect("init message store");
+            store
+                .get_commit_log_mut()
+                .append_data(0, &[1, 2, 3, 4], 0, 4)
+                .await
+                .expect("append data");
+            assert!(
+                store.get_flushed_where() < 4,
+                "the appended bytes must still be unflushed"
+            );
+            let mut ha_service = GeneralHAService::new_with_default_ha_service(DefaultHAService::new(
+                store.ha_replica_store_handle(),
+                crate::runtime::test_scope("group-transfer-flush-policy-test"),
+            ));
+            ha_service.init().expect("init default ha service");
+
+            let frontier = AckFrontier::from_snapshots(
+                Some(authority),
+                Some(std::collections::HashSet::from([0, 1])),
+                ha_service.local_durable_watermark(),
+                &[crate::ha::ha_service::HAAckedReplicaSnapshot {
+                    slave_broker_id: Some(1),
+                    slave_ack_offset: 4,
+                }],
+                true,
+            );
+
+            assert_eq!(
+                matches!(
+                    frontier.decide(Some(authority), policy, 4),
+                    ReplicationDecision::Acknowledge(_)
+                ),
+                acknowledged,
+                "{flush_disk_type:?}"
+            );
+        }
+    }
+
     #[test]
     fn general_service_reference_does_not_retain_root() {
         let ha_service = new_test_ha_service();

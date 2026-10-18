@@ -701,6 +701,7 @@ impl LocalFileMessageStore {
             state_machine_version: self.state_machine_version.clone(),
             controller_epoch_start_offset: self.controller_epoch_start_offset.clone(),
             commit_log: self.commit_log.replica_handle(),
+            consume_queue_store: self.consume_queue_store.clone(),
         }
     }
 
