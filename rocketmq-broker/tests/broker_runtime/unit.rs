@@ -2688,6 +2688,7 @@ fn new_controller_mode_runtime_with_store_key(
         controller_addr: controller_addrs,
         sync_broker_metadata_period: 500,
         sync_controller_metadata_period: 500,
+        check_sync_state_set_period: 500,
         broker_heartbeat_interval: 500,
         send_heartbeat_timeout_millis: 1000,
         controller_heartbeat_timeout_mills: 2000,
@@ -6791,6 +6792,26 @@ async fn three_controller_two_broker_controller_mode_bootstrap() {
         "brokers to finish controller bootstrap",
     )
     .await;
+    // The caught-up slave joins the sync state set right after bootstrap; compare the broker and
+    // controller views only after that change has settled.
+    wait_until(
+        Duration::from_secs(30),
+        || match (
+            broker_a.composition.state.replicas_manager(),
+            broker_b.composition.state.replicas_manager(),
+        ) {
+            (Some(manager_a), Some(manager_b)) => {
+                let both_brokers = HashSet::from([
+                    manager_a.broker_controller_id() as i64,
+                    manager_b.broker_controller_id() as i64,
+                ]);
+                manager_a.sync_state_set() == &both_brokers && manager_b.sync_state_set() == &both_brokers
+            }
+            _ => false,
+        },
+        "both brokers to observe the caught-up slave in the sync state set",
+    )
+    .await;
 
     let manager_a = broker_a
         .composition
@@ -6898,6 +6919,219 @@ async fn three_controller_two_broker_controller_mode_bootstrap() {
     }
 
     let ((), ()) = tokio::join!(broker_a.shutdown(), broker_b.shutdown());
+    shutdown_controller_cluster(&controllers).await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+fn replicas_sync_state_view(runtime: &BrokerRuntime) -> Option<(HashSet<i64>, i32)> {
+    runtime
+        .composition
+        .state
+        .replicas_manager()
+        .map(|manager| (manager.sync_state_set().clone(), manager.sync_state_set_epoch()))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn three_controller_two_broker_controller_mode_sync_state_set_follows_replica_catch_up() {
+    let _controller_test_guard = CONTROLLER_INTEGRATION_TEST_LOCK.lock().await;
+    let base_port = allocate_controller_test_base_port();
+    let root = controller_cluster_root("controller-mode-sync-state-set");
+
+    let (controllers, controller_peers) = start_controller_cluster(base_port, &root).await;
+    let controller_addrs = controller_addr_list(&controller_peers);
+    let controller_leader_manager = controllers
+        .iter()
+        .find(|manager| manager.is_leader())
+        .expect("controller cluster should elect a leader")
+        .clone();
+
+    let mut broker_a = new_controller_mode_runtime(
+        &root,
+        "controller-mode-broker",
+        base_port + 21,
+        base_port + 22,
+        controller_addrs.clone(),
+    );
+    let mut broker_b = new_controller_mode_runtime(
+        &root,
+        "controller-mode-broker",
+        base_port + 31,
+        base_port + 32,
+        controller_addrs,
+    );
+
+    initialize_controller_mode_broker(&mut broker_a, "broker A").await;
+    initialize_controller_mode_broker(&mut broker_b, "broker B").await;
+    broker_a.start().await.expect("broker A should start");
+    broker_b.start().await.expect("broker B should start");
+    bootstrap_broker_against_controller(&mut broker_a, &controller_leader_manager).await;
+    broker_a
+        .composition
+        .state
+        .build_controller_runtime()
+        .send_heartbeat()
+        .await;
+    let broker_a_controller_id = broker_a
+        .composition
+        .state
+        .replicas_manager()
+        .expect("broker A replicas manager should exist after bootstrap")
+        .broker_controller_id();
+    wait_until(
+        Duration::from_secs(5),
+        || {
+            controller_leader_manager.heartbeat_manager().is_broker_active(
+                "controller-test-cluster",
+                "controller-mode-broker",
+                broker_a_controller_id as i64,
+            )
+        },
+        "controller leader to mark broker A active",
+    )
+    .await;
+    bootstrap_broker_against_controller(&mut broker_b, &controller_leader_manager).await;
+
+    wait_until(
+        Duration::from_secs(10),
+        || {
+            let manager_a = broker_a.composition.state.replicas_manager();
+            let manager_b = broker_b.composition.state.replicas_manager();
+            match (manager_a, manager_b) {
+                (Some(manager_a), Some(manager_b)) => {
+                    manager_a.register_state() == RegisterState::Registered
+                        && manager_b.register_state() == RegisterState::Registered
+                        && manager_a.master_broker_id().is_some()
+                        && manager_a.master_broker_id() == manager_b.master_broker_id()
+                }
+                _ => false,
+            }
+        },
+        "brokers to finish controller bootstrap",
+    )
+    .await;
+
+    let manager_a = broker_a
+        .composition
+        .state
+        .replicas_manager()
+        .expect("broker A replicas manager should exist");
+    let manager_b = broker_b
+        .composition
+        .state
+        .replicas_manager()
+        .expect("broker B replicas manager should exist");
+    let master_broker_id = manager_a.master_broker_id().expect("controller should elect a master");
+    let broker_a_is_master = manager_a.broker_controller_id() == master_broker_id;
+    let slave_broker_id = if broker_a_is_master {
+        manager_b.broker_controller_id()
+    } else {
+        manager_a.broker_controller_id()
+    };
+    let master_only_sync_state_set = HashSet::from([master_broker_id as i64]);
+    let expanded_sync_state_set = HashSet::from([master_broker_id as i64, slave_broker_id as i64]);
+
+    // Election installs {master}; only the master's AlterSyncStateSet report can add the
+    // caught-up slave, and the Controller commits it under a new sync-state-set epoch.
+    wait_until(
+        Duration::from_secs(30),
+        || match (replicas_sync_state_view(&broker_a), replicas_sync_state_view(&broker_b)) {
+            (Some(view_a), Some(view_b)) => view_a.0 == expanded_sync_state_set && view_a == view_b,
+            _ => false,
+        },
+        "the master to report the caught-up slave into the controller sync state set",
+    )
+    .await;
+    let (_, expanded_epoch) = replicas_sync_state_view(&broker_a).expect("broker A sync state view");
+    assert!(
+        expanded_epoch >= 2,
+        "adding the slave must advance the sync-state-set epoch committed by the election, got {expanded_epoch}"
+    );
+
+    let master_broker = if broker_a_is_master { &broker_a } else { &broker_b };
+    let controller_leader = master_broker
+        .composition
+        .state
+        .replicas_manager()
+        .and_then(|manager| manager.controller_leader_address().cloned())
+        .expect("master should know the controller leader");
+    let (replica_header, replica_body) = master_broker
+        .composition
+        .state
+        .broker_outer_api
+        .get_replica_info(
+            &controller_leader,
+            CheetahString::from_static_str("controller-mode-broker"),
+        )
+        .await
+        .expect("query controller replica info after expansion");
+    assert_eq!(replica_header.master_broker_id, Some(master_broker_id as i64));
+    assert_eq!(
+        replica_body.get_sync_state_set().cloned().unwrap_or_default(),
+        expanded_sync_state_set,
+        "the controller should commit the caught-up slave"
+    );
+    assert_eq!(replica_body.get_sync_state_set_epoch(), expanded_epoch);
+    {
+        let master_store = master_broker
+            .composition
+            .state
+            .message_store()
+            .expect("master message store should exist");
+        let master_ha_info = master_store
+            .get_ha_service()
+            .expect("controller mode master should run an HA service")
+            .get_runtime_info(0);
+        assert!(master_ha_info.master);
+        assert_eq!(master_ha_info.in_sync_slave_nums, 1);
+        assert!(
+            master_ha_info
+                .ha_connection_info
+                .iter()
+                .any(|connection| connection.in_sync),
+            "the master HA view should mark the slave connection in sync: {master_ha_info:?}"
+        );
+    }
+
+    // A stopped slave no longer catches up; the master reports it out of the sync state set.
+    if broker_a_is_master {
+        shutdown_controller_mode_broker_for_rejoin(&mut broker_b, "slave broker B").await;
+    } else {
+        shutdown_controller_mode_broker_for_rejoin(&mut broker_a, "slave broker A").await;
+    }
+    let master_broker = if broker_a_is_master { &broker_a } else { &broker_b };
+    wait_until(
+        Duration::from_secs(45),
+        || {
+            replicas_sync_state_view(master_broker).is_some_and(|(sync_state_set, epoch)| {
+                sync_state_set == master_only_sync_state_set && epoch > expanded_epoch
+            })
+        },
+        "the master to report the stopped slave out of the controller sync state set",
+    )
+    .await;
+    let (_, shrunk_epoch) = replicas_sync_state_view(master_broker).expect("master sync state view");
+    let (_, replica_body) = master_broker
+        .composition
+        .state
+        .broker_outer_api
+        .get_replica_info(
+            &controller_leader,
+            CheetahString::from_static_str("controller-mode-broker"),
+        )
+        .await
+        .expect("query controller replica info after shrink");
+    assert_eq!(
+        replica_body.get_sync_state_set().cloned().unwrap_or_default(),
+        master_only_sync_state_set,
+        "the controller should drop the stopped slave"
+    );
+    assert_eq!(replica_body.get_sync_state_set_epoch(), shrunk_epoch);
+
+    if broker_a_is_master {
+        broker_a.shutdown().await;
+    } else {
+        broker_b.shutdown().await;
+    }
     shutdown_controller_cluster(&controllers).await;
     let _ = std::fs::remove_dir_all(root);
 }
@@ -7131,9 +7365,12 @@ async fn three_controller_two_broker_controller_mode_failover_and_rejoin() {
         .send_heartbeat()
         .await;
 
+    // Once the returning broker catches up, the surviving master adds it to the sync state set.
+    let rejoined_sync_state_set = HashSet::from([surviving_controller_id as i64, old_master_controller_id as i64]);
     wait_until(
         Duration::from_secs(30),
         || {
+            let surviving_broker = if broker_a_is_master { &broker_b } else { &broker_a };
             rejoining_broker
                 .composition
                 .state
@@ -7142,8 +7379,13 @@ async fn three_controller_two_broker_controller_mode_failover_and_rejoin() {
                     manager.register_state() == RegisterState::Registered
                         && manager.broker_controller_id() == old_master_controller_id
                         && manager.master_broker_id() == Some(surviving_controller_id)
-                        && manager.sync_state_set().contains(&(surviving_controller_id as i64))
+                        && manager.sync_state_set() == &rejoined_sync_state_set
                 })
+                && surviving_broker
+                    .composition
+                    .state
+                    .replicas_manager()
+                    .is_some_and(|manager| manager.sync_state_set() == &rejoined_sync_state_set)
                 && rejoining_broker.composition.state.message_store_config().broker_role == BrokerRole::Slave
         },
         "old master to rejoin as slave",
@@ -7574,18 +7816,26 @@ async fn three_controller_two_broker_controller_leader_failover_keeps_broker_vie
     bootstrap_broker_against_controller(&mut broker_b, &controller_leader_manager).await;
 
     wait_until(
-        Duration::from_secs(10),
+        Duration::from_secs(30),
         || {
             let manager_a = broker_a.composition.state.replicas_manager();
             let manager_b = broker_b.composition.state.replicas_manager();
             match (manager_a, manager_b) {
                 (Some(manager_a), Some(manager_b)) => {
+                    // Wait for the caught-up slave to join the sync state set, so that the
+                    // membership is stable across the controller leader failover.
+                    let both_brokers = HashSet::from([
+                        manager_a.broker_controller_id() as i64,
+                        manager_b.broker_controller_id() as i64,
+                    ]);
                     manager_a.register_state() == RegisterState::Registered
                         && manager_b.register_state() == RegisterState::Registered
                         && manager_a.master_broker_id().is_some()
                         && manager_b.master_broker_id().is_some()
                         && manager_a.controller_leader_address().is_some()
                         && manager_b.controller_leader_address().is_some()
+                        && manager_a.sync_state_set() == &both_brokers
+                        && manager_b.sync_state_set() == &both_brokers
                 }
                 _ => false,
             }

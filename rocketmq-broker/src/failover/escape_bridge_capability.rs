@@ -427,6 +427,32 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
         self.with_store(|store| store.sync_controller_sync_state_set(local_broker_id, sync_state_set))
     }
 
+    /// Returns the sync state set the HA service proposes, or `None` outside controller mode.
+    pub(crate) fn sync_state_set_proposal(&self) -> Result<Option<HashSet<i64>>, MessageStoreUnavailable>
+    where
+        MS: BrokerReplicationStore,
+    {
+        self.with_store(|store| {
+            store
+                .get_ha_service()
+                .and_then(|ha_service| ha_service.maybe_shrink_sync_state_set())
+        })
+    }
+
+    /// Subscribes to HA sync-state-set proposal changes, or `None` outside controller mode.
+    pub(crate) fn subscribe_sync_state_set_changes(&self) -> Option<tokio::sync::watch::Receiver<u64>>
+    where
+        MS: BrokerReplicationStore,
+    {
+        self.with_store(|store| {
+            store
+                .get_ha_service()
+                .and_then(|ha_service| ha_service.subscribe_sync_state_set_changes())
+        })
+        .ok()
+        .flatten()
+    }
+
     pub(crate) async fn apply_controller_role(
         &self,
         previous_store_role: BrokerRole,

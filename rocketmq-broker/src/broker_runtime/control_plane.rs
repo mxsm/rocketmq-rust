@@ -760,6 +760,20 @@ impl BrokerRuntime {
         );
     }
 
+    /// Starts the master-side reporter that sends sync-state-set changes to the Controller.
+    ///
+    /// The reporter belongs to the scheduled-task group, so broker shutdown cancels and awaits it.
+    pub(crate) fn schedule_sync_state_set_reporter(&mut self) {
+        let controller_runtime = self.composition.state.build_controller_runtime();
+        let task_group = self.lifecycle.scheduled_tasks.group();
+        let cancellation = task_group.cancellation_token();
+        if let Err(error) = task_group.spawn_service("broker.controller.sync-state-set-report", async move {
+            controller_runtime.run_sync_state_set_reporter(cancellation).await;
+        }) {
+            error!("Failed to start scheduled task sync_state_set_report: {error}");
+        }
+    }
+
     pub(crate) async fn start_service_without_condition(&mut self) -> Result<(), BrokerStartupError> {
         info!(
             "{} start service",

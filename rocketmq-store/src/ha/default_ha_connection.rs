@@ -15,6 +15,7 @@
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
+use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -67,15 +68,55 @@ pub(crate) use rocketmq_store_local::ha::wire::TransferHeader;
 
 type HAConnectionResult<T> = Result<T, HAError>;
 
+/// The latest data transfer to a replica (Java `AutoSwitchHAConnection#updateLastTransferInfo`).
+///
+/// An acknowledgement at or beyond `master_max_offset` proves the replica caught up with the
+/// master log as of `transfer_time_ms`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LastTransfer {
+    pub(crate) master_max_offset: i64,
+    pub(crate) transfer_time_ms: u64,
+}
+
+impl LastTransfer {
+    const NONE: Self = Self {
+        master_max_offset: -1,
+        transfer_time_ms: 0,
+    };
+}
+
 #[derive(Clone)]
 pub(crate) struct HAConnectionRuntimeHandle {
     connection_id: HAConnectionId,
     remote_address: String,
     current_state: Arc<RwLock<HAConnectionState>>,
     slave_broker_id: Option<Arc<AtomicI64>>,
+    last_transfer: Arc<parking_lot::Mutex<LastTransfer>>,
+    counted: Arc<AtomicBool>,
 }
 
 impl HAConnectionRuntimeHandle {
+    /// Gives back this connection's share of the HA service connection count.
+    ///
+    /// Only the first call counts, whether it comes from an explicit shutdown or from the socket
+    /// services ending on their own.
+    pub(crate) fn release_connection_count(&self, connection_count: &AtomicU32) {
+        if self.counted.swap(false, Ordering::AcqRel) {
+            let _ = connection_count.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| count.checked_sub(1));
+        }
+    }
+
+    pub(crate) fn record_transfer(&self, master_max_offset: i64, transfer_time_ms: u64) {
+        *self.last_transfer.lock() = LastTransfer {
+            master_max_offset,
+            transfer_time_ms,
+        };
+    }
+
+    pub(crate) fn last_transfer(&self) -> LastTransfer {
+        *self.last_transfer.lock()
+    }
+
     pub(crate) fn connection_id(&self) -> &HAConnectionId {
         &self.connection_id
     }
@@ -136,6 +177,8 @@ pub struct DefaultHAConnection {
     message_store_config: Arc<MessageStoreConfig>,
     next_transfer_from_where: Arc<AtomicI64>,
     runtime_slave_broker_id: Option<Arc<AtomicI64>>,
+    last_transfer: Arc<parking_lot::Mutex<LastTransfer>>,
+    counted: Arc<AtomicBool>,
     id: HAConnectionId,
     remote_addr: SocketAddr,
 }
@@ -209,6 +252,8 @@ impl DefaultHAConnection {
             message_store_config,
             next_transfer_from_where: Arc::new(AtomicI64::new(-1)),
             runtime_slave_broker_id: None,
+            last_transfer: Arc::new(parking_lot::Mutex::new(LastTransfer::NONE)),
+            counted: Arc::new(AtomicBool::new(true)),
             id: HAConnectionId::default(),
             remote_addr,
         })
@@ -227,6 +272,8 @@ impl DefaultHAConnection {
             remote_address: self.remote_addr.to_string(),
             current_state: Arc::clone(&self.current_state),
             slave_broker_id: self.runtime_slave_broker_id.clone(),
+            last_transfer: Arc::clone(&self.last_transfer),
+            counted: Arc::clone(&self.counted),
         }
     }
 
@@ -276,6 +323,7 @@ impl HAConnection for DefaultHAConnection {
             self.slave_ack_offset.clone(),
             self.message_store_config.clone(),
             connection_runtime.clone(),
+            shutdown_tx.clone(),
         )
         .await?;
 
@@ -290,6 +338,7 @@ impl HAConnection for DefaultHAConnection {
             connection_runtime,
             self.next_transfer_from_where.clone(),
             self.runtime_scope.storage_io(),
+            shutdown_tx.clone(),
         )
         .await?;
 
@@ -350,11 +399,8 @@ impl HAConnection for DefaultHAConnection {
         // Close socket
         self.close();
 
-        // Decrement connection count
-        let connection_count = self.connection_context.get_connection_count();
-        if connection_count.load(Ordering::SeqCst) > 0 {
-            connection_count.fetch_sub(1, Ordering::SeqCst);
-        }
+        self.runtime_handle()
+            .release_connection_count(self.connection_context.get_connection_count());
     }
 
     fn close(&self) {
@@ -415,6 +461,7 @@ pub struct ReadSocketService {
     message_store_config: Arc<MessageStoreConfig>,
     last_read_timestamp: AtomicU64,
     connection_runtime: HAConnectionRuntimeHandle,
+    stop_connection: tokio::sync::broadcast::Sender<()>,
 }
 
 impl ReadSocketService {
@@ -427,6 +474,7 @@ impl ReadSocketService {
         slave_ack_offset: Arc<AtomicI64>,
         message_store_config: Arc<MessageStoreConfig>,
         connection_runtime: HAConnectionRuntimeHandle,
+        stop_connection: tokio::sync::broadcast::Sender<()>,
     ) -> Result<Self, HAError> {
         Ok(Self {
             reader,
@@ -440,6 +488,7 @@ impl ReadSocketService {
             message_store_config,
             last_read_timestamp: AtomicU64::new(current_millis()),
             connection_runtime,
+            stop_connection,
         })
     }
 
@@ -447,22 +496,23 @@ impl ReadSocketService {
         info!("HA read service started");
 
         loop {
-            //let select_result = timeout(SELECT_TIMEOUT, self.reader.next()).await;
             let select_result = select! {
                 _ = shutdown_rx.recv() => {
                     info!("Received shutdown signal");
                     break;
                 }
-                select_result = self.reader.next() => {
+                select_result = timeout(SELECT_TIMEOUT, self.reader.next()) => {
                     select_result
                 }
             };
             match select_result {
-                None => {
+                // Nothing arrived; still run housekeeping so that a silent replica expires.
+                Err(_elapsed) => {}
+                Ok(None) => {
                     info!("Stream closed by peer");
                     break;
                 }
-                Some(Ok(OffsetFrame { offset, broker_id })) => {
+                Ok(Some(Ok(OffsetFrame { offset, broker_id }))) => {
                     self.last_read_timestamp.store(current_millis(), Ordering::Relaxed);
                     self.slave_ack_offset.store(offset, Ordering::Relaxed);
 
@@ -481,7 +531,7 @@ impl ReadSocketService {
                         .handle_runtime_connection_ack(&self.connection_runtime, offset);
                     self.connection_context.notify_transfer_some(offset).await;
                 }
-                Some(Err(_error)) => {
+                Ok(Some(Err(_error))) => {
                     error!(source_present = true, "HA replica stream read failed");
                     break;
                 }
@@ -489,7 +539,7 @@ impl ReadSocketService {
 
             let current_time = current_millis();
             let last_read = self.last_read_timestamp.load(Ordering::Relaxed);
-            let interval = current_time - last_read;
+            let interval = current_time.saturating_sub(last_read);
 
             if interval > self.message_store_config.ha_housekeeping_interval {
                 warn!("HA housekeeping expired a replica connection");
@@ -577,7 +627,11 @@ impl ReadSocketService {
         }
     }
 
-    async fn cleanup(&self) {}
+    /// Stops the write half too, which then removes the connection from the HA service.
+    async fn cleanup(&self) {
+        *self.current_state.write().await = HAConnectionState::Shutdown;
+        let _ = self.stop_connection.send(());
+    }
 
     async fn is_stopped(&self) -> bool {
         matches!(*self.current_state.read().await, HAConnectionState::Shutdown)
@@ -604,6 +658,7 @@ pub struct WriteSocketService {
     last_write_timestamp: AtomicU64,
     last_print_timestamp: AtomicU64,
     last_write_over: AtomicBool,
+    stop_connection: tokio::sync::broadcast::Sender<()>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -612,7 +667,6 @@ enum TransferStep {
     CaughtUp,
     WaitingForReplica,
     FlowControlled,
-    Retry,
 }
 
 impl WriteSocketService {
@@ -627,6 +681,7 @@ impl WriteSocketService {
         connection_runtime: HAConnectionRuntimeHandle,
         next_transfer_from_where: Arc<AtomicI64>,
         storage_io: BlockingExecutor,
+        stop_connection: tokio::sync::broadcast::Sender<()>,
     ) -> Result<Self, HAError> {
         let enable_controller_mode = message_store_config.enable_controller_mode;
         let preference = transfer_engine_preference(&message_store_config);
@@ -667,6 +722,7 @@ impl WriteSocketService {
             last_print_timestamp: AtomicU64::new(current_millis()),
             byte_buffer_header: BytesMut::with_capacity(transfer_header_size(enable_controller_mode)),
             last_write_over: AtomicBool::new(true),
+            stop_connection,
         })
     }
 
@@ -733,9 +789,9 @@ impl WriteSocketService {
                     Ok(_) => {
                         self.last_write_over.store(true, Ordering::Relaxed);
                     }
-                    Err(_) => {
+                    Err(error) => {
                         self.last_write_over.store(false, Ordering::Relaxed);
-                        return Ok(TransferStep::Retry);
+                        return Err(error);
                     }
                 }
             }
@@ -744,9 +800,9 @@ impl WriteSocketService {
                 Ok(_) => {
                     self.last_write_over.store(true, Ordering::Relaxed);
                 }
-                Err(_) => {
+                Err(error) => {
                     self.last_write_over.store(false, Ordering::Relaxed);
-                    return Ok(TransferStep::Retry);
+                    return Err(error);
                 }
             }
         }
@@ -793,6 +849,8 @@ impl WriteSocketService {
         if let TransferPlan::Data(batch) = plan {
             self.next_transfer_from_where
                 .store(batch.next_offset, Ordering::Relaxed);
+            self.connection_runtime
+                .record_transfer(max_commit_log_offset, current_millis());
             self.send_data(batch).await?;
             return Ok(TransferStep::Progress);
         }
@@ -809,7 +867,6 @@ impl WriteSocketService {
             TransferStep::WaitingForReplica => Duration::from_secs(3600),
             TransferStep::CaughtUp => self.heartbeat_wait_duration(),
             TransferStep::FlowControlled => self.heartbeat_wait_duration().min(SELECT_TIMEOUT),
-            TransferStep::Retry => SELECT_TIMEOUT,
             TransferStep::Progress => Duration::ZERO,
         };
         if wait_duration.is_zero() {
@@ -951,6 +1008,8 @@ impl WriteSocketService {
 
     async fn cleanup(&mut self) {
         *self.current_state.write().await = HAConnectionState::Shutdown;
+        // Either half ending closes the connection, as in Java: stop the read half too.
+        let _ = self.stop_connection.send(());
 
         self.connection_context
             .remove_runtime_connection(&self.connection_runtime)
@@ -977,7 +1036,7 @@ fn transfer_became_ready(
     match step {
         TransferStep::WaitingForReplica => slave_request_offset >= 0,
         TransferStep::CaughtUp => next_transfer_offset < max_commit_log_offset,
-        TransferStep::Progress | TransferStep::FlowControlled | TransferStep::Retry => true,
+        TransferStep::Progress | TransferStep::FlowControlled => true,
     }
 }
 
