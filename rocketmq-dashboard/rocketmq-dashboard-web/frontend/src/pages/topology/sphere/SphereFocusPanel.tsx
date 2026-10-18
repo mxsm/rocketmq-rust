@@ -10,9 +10,12 @@ import {
   nodeMetric,
   nodeName,
   nodeTone,
+  replicaBehind,
   type ConsumerNode,
+  type ControllerNode,
   type MasterNode,
   type ProducerNode,
+  type SlaveNode,
   type SphereModel,
   type SphereNode
 } from './sphere-model';
@@ -28,6 +31,18 @@ interface SphereFocusPanelProps {
 const plural = (count: number, one: string, many: string) => `${formatCount(count)} ${count === 1 ? one : many}`;
 const formatTime = (timestamp: number) =>
   new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${formatCount(bytes)} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unit]}`;
+}
 
 function dotTone(node: SphereNode): StatusDotTone {
   switch (nodeTone(node)) {
@@ -45,8 +60,8 @@ function dotTone(node: SphereNode): StatusDotTone {
   }
 }
 
-/** The page a node opens, with the label of the link. */
-function pageOf(node: SphereNode): { to: string; label: string } {
+/** The page a node opens, with the label of the link; the dashboard has no page for a Controller. */
+function pageOf(node: SphereNode): { to: string; label: string } | null {
   switch (node.kind) {
     case 'master':
     case 'slave':
@@ -57,18 +72,54 @@ function pageOf(node: SphereNode): { to: string; label: string } {
       return { to: '/producers', label: 'Open producers' };
     case 'nameserver':
       return { to: '/config', label: 'Open OPS' };
+    case 'controller':
+      return null;
   }
 }
 
 function overline(node: SphereNode) {
   if (node.kind === 'master') return `Broker group · ${node.clusterName}`;
-  if (node.kind === 'slave') return `Slave · ${node.group.brokerName}`;
+  if (node.kind === 'slave') return `${node.group.election === 'controller' ? 'Replica' : 'Slave'} · ${node.group.brokerName}`;
+  if (node.kind === 'controller') return 'Controller · Raft';
   return kindName(node.kind);
 }
 
 function modeText(node: MasterNode) {
-  if (!node.group.masterAddress) return 'No master registered';
-  return node.group.slaveAddresses.length === 0 ? 'Single master' : `Master/Slave · ${plural(node.group.slaveAddresses.length, 'slave', 'slaves')}`;
+  const { group } = node;
+  if (!group.masterAddress) return 'No master registered';
+  if (group.election === 'controller') return `Controller mode · ${plural(group.slaveAddresses.length, 'replica', 'replicas')}`;
+  return group.slaveAddresses.length === 0 ? 'Single master' : `Master/Slave · ${plural(group.slaveAddresses.length, 'slave', 'slaves')}`;
+}
+
+/** The Controller that leads the Raft group of a Controller-mode broker group. */
+function leaderOf(group: MasterNode['group'], model: SphereModel): ControllerNode | undefined {
+  const addresses = new Set(group.controllerAddresses ?? []);
+  return model.nodes.find(
+    (node): node is ControllerNode => node.kind === 'controller' && node.controller.leader === true && addresses.has(node.controller.address)
+  );
+}
+
+const ELECTION_TEXT = { configured: 'Configured', controller: 'Controllers', unknown: 'Unknown' } as const;
+
+/** Why a node needs attention, short enough to leave its name readable. */
+function attentionText(node: SphereNode) {
+  if (node.kind !== 'slave') return nodeMetric(node);
+  if (node.inSyncStateSet === false) return 'out of sync set';
+  const lag = node.replica?.lagBytes;
+  return lag === undefined ? 'not connected' : `lag ${formatBytes(lag)}`;
+}
+
+function replicaFacts(node: SlaveNode): Fact[] {
+  const facts: Fact[] = [];
+  const behind = replicaBehind(node);
+  if (node.inSyncStateSet !== null) facts.push(['Sync state set', node.inSyncStateSet ? 'In' : 'Out', node.inSyncStateSet ? 'success' : 'warning']);
+  const { replica } = node;
+  if (replica && replica.inSync !== undefined) {
+    if (replica.lagBytes === undefined) facts.push(['Replication', 'Not connected', 'warning']);
+    else facts.push(['Lag', formatBytes(replica.lagBytes), behind && node.inSyncStateSet === null ? 'warning' : undefined]);
+    if (replica.transferBytesPerSecond !== undefined) facts.push(['Transfer', `${formatBytes(replica.transferBytesPerSecond)}/s`]);
+  }
+  return facts;
 }
 
 type Fact = [label: string, value: string, tone?: 'primary' | 'cyan' | 'warning' | 'danger' | 'success'];
@@ -77,22 +128,52 @@ function factsOf(node: SphereNode, model: SphereModel): Fact[] {
   switch (node.kind) {
     case 'master': {
       const { group } = node;
-      return [
+      const controllerMode = group.election === 'controller';
+      const facts: Fact[] = [
         ['Master', group.masterAddress ?? 'Not registered', group.masterAddress ? undefined : 'danger'],
-        ['Slaves', group.slaveAddresses.length === 0 ? 'None' : group.slaveAddresses.join(', ')],
-        ['Cluster', node.clusterName],
-        ['Produce', `${formatTps(group.produceTps)} TPS`, 'primary'],
-        ['Consume', `${formatTps(group.consumeTps)} TPS`, 'cyan'],
-        ['Version', group.version || 'Unknown']
+        [controllerMode ? 'Replicas' : 'Slaves', group.slaveAddresses.length === 0 ? 'None' : group.slaveAddresses.join(', ')],
+        ['Cluster', node.clusterName]
       ];
+      if (group.election) facts.push(['Master chosen by', ELECTION_TEXT[group.election]]);
+      if (controllerMode) {
+        const leader = leaderOf(group, model);
+        facts.push(['Controller leader', leader?.controller.address ?? 'None known', leader ? undefined : 'warning']);
+      }
+      const state = group.controllerState;
+      if (state) {
+        facts.push(['Master epoch', formatCount(state.masterEpoch)]);
+        const members = state.inSyncBrokerIds.length + state.outOfSyncBrokerIds.length;
+        facts.push(['Sync state set', `${formatCount(state.inSyncBrokerIds.length)} of ${plural(members, 'replica', 'replicas')} · epoch ${formatCount(state.syncStateSetEpoch)}`, state.outOfSyncBrokerIds.length > 0 ? 'warning' : 'success']);
+      } else if (group.inSyncSlaveCount !== undefined && group.slaveAddresses.length > 0) {
+        facts.push(['Connected slaves', formatCount((group.replicas ?? []).filter((replica) => replica.lagBytes !== undefined).length)]);
+      }
+      facts.push(['Produce', `${formatTps(group.produceTps)} TPS`, 'primary'], ['Consume', `${formatTps(group.consumeTps)} TPS`, 'cyan'], ['Version', group.version || 'Unknown']);
+      return facts;
     }
     case 'slave':
       return [
         ['Address', node.address],
+        ...(node.replica ? [['Broker ID', String(node.replica.brokerId)] as Fact] : []),
         ['Broker group', node.group.brokerName],
         ['Master', node.group.masterAddress ?? 'Not registered', node.group.masterAddress ? undefined : 'danger'],
+        ...replicaFacts(node),
         ['Cluster', node.clusterName]
       ];
+    case 'controller': {
+      const { controller } = node;
+      const role = controller.leader === undefined ? 'No leader known' : controller.leader ? 'Leader' : 'Follower';
+      const facts: Fact[] = [
+        ['Status', controller.status === 'available' ? 'Available' : 'Unavailable', controller.status === 'available' ? 'success' : 'danger'],
+        ['Role', role, controller.leader === undefined ? 'warning' : controller.leader ? 'primary' : undefined]
+      ];
+      if (controller.leaderId !== undefined) facts.push(['Raft leader', `node ${controller.leaderId}`]);
+      if (controller.group !== undefined) facts.push(['Raft group', controller.group]);
+      if (controller.peerCount !== undefined) facts.push(['Peers', formatCount(controller.peerCount)]);
+      if (controller.appliedLogIndex !== undefined) facts.push(['Applied index', formatCount(controller.appliedLogIndex)]);
+      if (controller.committedLogIndex !== undefined) facts.push(['Committed index', formatCount(controller.committedLogIndex)]);
+      facts.push(['Elects masters of', node.brokerNames.join(', ') || 'None']);
+      return facts;
+    }
     case 'nameserver': {
       const { nameServer } = node;
       const status = { available: 'Available', unavailable: 'Unavailable', unknown: 'Unknown' }[nameServer.status];
@@ -146,10 +227,12 @@ function NodeDetails({ node, model, onSelect }: { node: SphereNode; model: Spher
           </div>
         ))}
       </dl>
-      <Link className="topology-sphere-page-link" to={page.to}>
-        {page.label}
-        <ExternalLink size={13} aria-hidden="true" />
-      </Link>
+      {page ? (
+        <Link className="topology-sphere-page-link" to={page.to}>
+          {page.label}
+          <ExternalLink size={13} aria-hidden="true" />
+        </Link>
+      ) : null}
       {linked.length > 0 ? (
         <section className="topology-sphere-section" aria-label="Linked nodes">
           <span className="topology-overline">{`Linked · ${formatCount(linked.length)}`}</span>
@@ -216,6 +299,7 @@ function Row({ node, value, onSelect }: { node: SphereNode; value: string; onSel
 
 function Overview({ model, onSelect, expanded, onToggleGroups }: Omit<SphereFocusPanelProps, 'selected'>) {
   const masters = model.nodes.filter((node): node is MasterNode => node.kind === 'master');
+  const controllers = model.nodes.filter((node): node is ControllerNode => node.kind === 'controller');
   const consumers = model.nodes
     .filter((node): node is ConsumerNode => node.kind === 'consumer')
     .sort((left, right) => right.consumer.diffTotal - left.consumer.diffTotal || nodeName(left).localeCompare(nodeName(right)));
@@ -244,7 +328,7 @@ function Overview({ model, onSelect, expanded, onToggleGroups }: Omit<SphereFocu
       {attention.length > 0 ? (
         <Section title="Needs attention">
           <ul className="topology-sphere-list">
-            {attention.map((node) => <Row key={node.id} node={node} value={nodeMetric(node)} onSelect={onSelect} />)}
+            {attention.map((node) => <Row key={node.id} node={node} value={attentionText(node)} onSelect={onSelect} />)}
           </ul>
         </Section>
       ) : null}
@@ -253,6 +337,13 @@ function Overview({ model, onSelect, expanded, onToggleGroups }: Omit<SphereFocu
           {masters.map((node) => <Row key={node.id} node={node} value={modeText(node)} onSelect={onSelect} />)}
         </ul>
       </Section>
+      {controllers.length > 0 ? (
+        <Section title={`Controllers · ${formatCount(controllers.length)}`}>
+          <ul className="topology-sphere-list">
+            {controllers.map((node) => <Row key={node.id} node={node} value={nodeMetric(node)} onSelect={onSelect} />)}
+          </ul>
+        </Section>
+      ) : null}
       <Section title={`Consumer groups · ${formatCount(groups.consumers)} of ${formatCount(groups.consumersInScope)}`}>
         <ul className="topology-sphere-list">
           {consumers.map((node) => <Row key={node.id} node={node} value={`lag ${formatCount(node.consumer.diffTotal)}`} onSelect={onSelect} />)}
@@ -273,6 +364,12 @@ function Overview({ model, onSelect, expanded, onToggleGroups }: Omit<SphereFocu
           <li data-kind="consumer">Southern half: consumer groups</li>
           <li data-kind="heartbeat">Pink lines: masters register with the NameServers</li>
           <li data-kind="route">Violet lines: client groups look up their routes</li>
+          {controllers.length > 0 ? (
+            <>
+              <li data-kind="controller">Right sphere: the Controllers, the leader ringed</li>
+              <li data-kind="election">Silver lines: brokers report to the leading Controller, which elects their master</li>
+            </>
+          ) : null}
         </ul>
       </Section>
     </>

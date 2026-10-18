@@ -5,10 +5,10 @@ import { consumerApi } from '../../api/consumer_api';
 import { producerApi } from '../../api/producer_api';
 import { topicApi } from '../../api/topic_api';
 import { topologyApi } from '../../api/topology_api';
-import type { TopologySnapshot, TopologySourceId, TopologySourceStatus } from '../../types/topology';
+import type { TopologyLayerId, TopologySnapshot, TopologySourceStatus } from '../../types/topology';
 import { buildTopologySnapshot, sortClusters, TOPOLOGY_SOURCES, type TopologyLayers } from './topology-model';
 
-type LayerQueries = { [Source in TopologySourceId]: () => Promise<NonNullable<TopologyLayers[Source]>> };
+type LayerQueries = { [Source in TopologyLayerId]: () => Promise<NonNullable<TopologyLayers[Source]>> };
 
 export interface TopologyLoaderDeps {
   aggregated: () => Promise<TopologySnapshot>;
@@ -47,6 +47,7 @@ export function failedTopologySnapshot(error: unknown, durationMs: number, gener
     sources: TOPOLOGY_SOURCES.map((source) => ({ source, status: 'failed', durationMs, message })),
     nameServers: [],
     clusters: [],
+    controllers: [],
     producers: [],
     consumers: [],
     totals: { producerGroups: 0, consumerGroups: 0, messageBacklog: 0 }
@@ -66,13 +67,14 @@ function normalize(snapshot: TopologySnapshot, now: number): TopologySnapshot {
     })),
     nameServers: snapshot.nameServers ?? [],
     clusters: sortClusters(snapshot.clusters ?? []),
+    controllers: snapshot.controllers ?? [],
     producers: snapshot.producers ?? [],
     consumers: (snapshot.consumers ?? []).map((consumer) => ({ ...consumer, displayName: consumer.displayName || consumer.group })),
     totals: snapshot.totals ?? { producerGroups: 0, consumerGroups: 0, messageBacklog: 0 }
   };
 }
 
-async function timed<Source extends TopologySourceId>(
+async function timed<Source extends TopologyLayerId>(
   source: Source,
   query: LayerQueries[Source],
   elapsed: () => number

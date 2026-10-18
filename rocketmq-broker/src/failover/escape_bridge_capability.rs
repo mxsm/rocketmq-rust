@@ -45,7 +45,6 @@ use rocketmq_store::QueryMessageRequest;
 use rocketmq_store::QueryMessageResult;
 use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_store::StoreAppendReceipt;
-use rocketmq_store::StoreError as BackendStoreError;
 use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreHealth;
@@ -585,13 +584,13 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
     pub(crate) fn set_commitlog_read_mode(
         &self,
         read_ahead_mode: rocketmq_store::CommitLogReadMode,
-    ) -> Result<(), BackendStoreError>
+    ) -> Result<(), StoreError>
     where
         MS: BrokerAdminStore,
     {
-        let store = self.store().map_err(|_| {
-            BackendStoreError::new(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, StoreOperation::Admin)
-        })?;
+        let store = self
+            .store()
+            .map_err(|_| StoreError::new(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, StoreOperation::Admin))?;
         store.set_commitlog_read_mode(read_ahead_mode)
     }
 

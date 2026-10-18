@@ -1,13 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import type { ConsumerGroupListItem } from '../../../types/consumer';
-import { fixtureConfig, fixtureConsumers, fixtureSnapshot } from '../topology-fixtures';
+import { fixtureConfig, fixtureConsumers, fixtureControllerAddresses, fixtureSnapshot, withReplication } from '../topology-fixtures';
 import { ALL_CLUSTERS, selectTopologyView } from '../topology-model';
 import {
   buildSphereModel,
   capPoint,
+  IN_SYNC_GAP_BYTES,
   linkedNodes,
+  nodeDescription,
+  nodeLabelMetric,
   nodeMetric,
+  nodeName,
+  nodeTone,
+  replicaBehind,
   spreadAround,
+  type SlaveNode,
   type SphereNode,
   type Vec3
 } from './sphere-model';
@@ -150,6 +157,75 @@ describe('buildSphereModel', () => {
       'heartbeat nameserver:10.0.4.11:9876',
       'heartbeat nameserver:10.0.4.12:9876'
     ]);
+  });
+});
+
+describe('Controllers and replication', () => {
+  const replicationModel = (leader = 0) =>
+    buildSphereModel(selectTopologyView(withReplication(fixtureSnapshot(), leader), { scope: ALL_CLUSTERS, producerLimit: 50, consumerLimit: 50 }));
+  const [leaderAddress, ...followerAddresses] = fixtureControllerAddresses;
+  const leaderId = `controller:${leaderAddress}`;
+
+  it('puts the Controllers on a sphere of their own, the leader replicating to the followers', () => {
+    const model = replicationModel();
+    const controllers = model.nodes.filter((item) => item.kind === 'controller');
+
+    expect(controllers.map((item) => item.id)).toEqual(fixtureControllerAddresses.map((address) => `controller:${address}`));
+    expect(controllers.every((item) => item.sphere === 'controllers')).toBe(true);
+    expect(model.links.filter((link) => link.kind === 'raft').map((link) => `${link.from}>${link.to}`)).toEqual(
+      followerAddresses.map((address) => `${leaderId}>controller:${address}`)
+    );
+    expect(model.clusters.find((cluster) => cluster.clusterName === 'cluster-east')?.mode).toBe('controller');
+    expect(model.clusters.find((cluster) => cluster.clusterName === 'DefaultCluster')?.mode).toBe('master-slave');
+    expect([nodeTone(node(model, leaderId)), nodeMetric(node(model, leaderId))]).toEqual(['current', 'leader']);
+  });
+
+  it('links every broker of a Controller-mode group to the leading Controller', () => {
+    const model = replicationModel();
+    const elections = model.links.filter((link) => link.kind === 'election');
+
+    expect(elections.map((link) => `${link.from}>${link.to}`)).toEqual([
+      `broker:broker-d>${leaderId}`,
+      `slave:broker-d:10.0.5.123:10911>${leaderId}`
+    ]);
+    expect(linkedNodes(model, leaderId).map(({ node: other, kind }) => `${kind} ${other.id}`)).toEqual([
+      ...followerAddresses.map((address) => `raft controller:${address}`),
+      'election broker:broker-d',
+      'election slave:broker-d:10.0.5.123:10911'
+    ]);
+  });
+
+  it('draws no Raft or election links while no leader is known', () => {
+    const model = replicationModel(-1);
+    const follower = node(model, `controller:${followerAddresses[0]}`);
+
+    expect(model.links.filter((link) => link.kind === 'raft' || link.kind === 'election')).toEqual([]);
+    expect([nodeTone(follower), nodeMetric(follower)]).toEqual(['warning', 'no leader known']);
+  });
+
+  it('flags replicas outside the sync state set and unconnected slaves, not slaves a little behind', () => {
+    const model = replicationModel();
+    const replica = node(model, 'slave:broker-d:10.0.5.123:10911') as SlaveNode;
+    const behind = node(model, 'slave:broker-a:10.0.4.121:10911') as SlaveNode;
+    const disconnected = node(model, 'slave:broker-b:10.0.4.123:10911') as SlaveNode;
+    const replicationTo = (id: string) => model.links.find((link) => link.kind === 'replication' && link.to === id);
+
+    expect([replica, behind, disconnected].map(nodeTone)).toEqual(['warning', 'normal', 'warning']);
+    expect([nodeName(replica), nodeName(disconnected)]).toEqual(['broker-d replica 1', 'broker-b slave 1']);
+    expect(nodeDescription(replica)).toBe('broker-d replica 1, replica · 10.0.5.123:10911 · out of sync');
+    expect(nodeDescription(node(model, 'controller:10.0.9.1:9878'))).toBe('Controller 10.0.9.1:9878, leader');
+    // On the sphere the state takes a line of its own, so the label is no wider than the address.
+    expect([replica, behind, disconnected].map(nodeLabelMetric)).toEqual([
+      'replica · 10.0.5.123:10911\nout of sync',
+      'slave · 10.0.4.121:10911',
+      'slave · 10.0.4.123:10911\nout of sync'
+    ]);
+    expect([replica, behind, disconnected].map((item) => replicationTo(item.id)?.outOfSync)).toEqual([true, false, true]);
+    // A slave as far behind as RocketMQ's own limit is out of sync too.
+    expect(replicaBehind({ ...behind, replica: { ...behind.replica!, lagBytes: IN_SYNC_GAP_BYTES } })).toBe(true);
+    // Without a replication reading nothing is flagged, and a slave goes by its address.
+    const unread = node(buildSphereModel(viewOf()), 'slave:broker-b:10.0.4.123:10911');
+    expect([nodeTone(unread), nodeName(unread)]).toEqual(['normal', 'broker-b slave 10.0.4.123:10911']);
   });
 });
 

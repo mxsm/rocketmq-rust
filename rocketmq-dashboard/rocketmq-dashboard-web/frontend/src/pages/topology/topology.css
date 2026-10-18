@@ -98,6 +98,7 @@
 .topology-legend [data-kind='replication'] { --legend-color: var(--success); }
 .topology-legend [data-kind='heartbeat'] { --legend-color: var(--accent-pink); }
 .topology-legend [data-kind='route'] { --legend-color: var(--accent-violet); }
+.topology-legend [data-kind='election'] { --legend-color: var(--accent-silver); }
 
 /* Sphere and Map share the card: the style switch sits beside the legend. */
 .topology-map-tabs {

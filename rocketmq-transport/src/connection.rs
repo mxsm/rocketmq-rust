@@ -36,7 +36,7 @@ use crate::admission::AdmissionClass;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScopeHandle;
 use crate::backend::TransportReadHalf;
-use crate::backend::WriteBackend;
+use crate::backend::TransportWriteHalf;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::codec::remoting_command_codec::RemotingCommandCodec;
 use crate::codec::remoting_command_codec::SessionCommandDecoder;
@@ -150,7 +150,7 @@ impl<T> ConnectionTransport for T where T: AsyncRead + AsyncWrite + Send + Unpin
 pub type BoxedConnectionTransport = Box<dyn ConnectionTransport>;
 type ConnectionReadHalf = FramedRead<TransportReadHalf, RemotingCommandCodec>;
 pub(crate) type SessionConnectionReadHalf = FramedRead<TransportReadHalf, SessionCommandDecoder>;
-pub(crate) type ConnectionFrameWriter = FrameWriter<WriteBackend>;
+pub(crate) type ConnectionFrameWriter = FrameWriter<TransportWriteHalf>;
 
 enum ConnectionWriter {
     Direct(ConnectionFrameWriter),
@@ -701,10 +701,10 @@ impl Connection {
     }
 
     pub fn new_with_limits(tcp_stream: TcpStream, limits: FrameLimits) -> Connection {
-        let (tcp_read_half, write_half) = tcp_stream.into_split();
+        let (tcp_read_half, tcp_write_half) = tcp_stream.into_split();
         Self::new_with_io_halves(
             TransportReadHalf::Tcp(tcp_read_half),
-            WriteBackend::Tcp(write_half),
+            TransportWriteHalf::Tcp(tcp_write_half),
             limits,
             FrameWriteMode::PlainVectored,
         )
@@ -759,10 +759,10 @@ impl Connection {
         S: ConnectionTransport + 'static,
     {
         let transport = Box::new(stream) as BoxedConnectionTransport;
-        let (stream_read_half, write_half) = tokio::io::split(transport);
+        let (stream_read_half, stream_write_half) = tokio::io::split(transport);
         Self::new_with_io_halves(
             TransportReadHalf::Compat(stream_read_half),
-            WriteBackend::Compat(write_half),
+            TransportWriteHalf::Compat(stream_write_half),
             limits,
             write_mode,
         )
@@ -770,7 +770,7 @@ impl Connection {
 
     fn new_with_io_halves(
         transport_read_half: TransportReadHalf,
-        write_half: WriteBackend,
+        transport_write_half: TransportWriteHalf,
         limits: FrameLimits,
         write_mode: FrameWriteMode,
     ) -> Connection {
@@ -779,7 +779,7 @@ impl Connection {
             RemotingCommandCodec::with_limits(limits),
             limits.safe_initial_read_bytes(),
         );
-        let outbound = FrameWriter::new(write_half, write_mode)
+        let outbound = FrameWriter::new(transport_write_half, write_mode)
             .expect("constructing a frame writer does not perform fallible I/O");
         // Initialize watch channel with Healthy state
         let (state_tx, state_rx) = watch::channel(ConnectionState::Healthy);

@@ -54,4 +54,11 @@ describe('placeLabels', () => {
       label('on', { placement: 'centre', x: 200 })
     ])).toEqual({ over: [350, 60], under: [350, 510], on: [150, 285] });
   });
+
+  it('slides a title over or under a sphere near an edge sideways to keep it inside the stage', () => {
+    expect(positions([
+      label('under', { placement: 'below', x: 780, y: 500, width: 120 }),
+      label('over', { placement: 'above', x: 10, y: 100, width: 120 })
+    ])).toEqual({ under: [676, 510], over: [4, 60] });
+  });
 });

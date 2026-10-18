@@ -84,26 +84,6 @@ where
         }
     }
 
-    pub fn inc_core_pool_size(&self) {
-        if let Some(consume_message_concurrently_service) = &self.consume_message_concurrently_service {
-            consume_message_concurrently_service.inc_core_pool_size();
-        }
-
-        if let Some(consume_message_orderly_service) = &self.consume_message_orderly_service {
-            consume_message_orderly_service.inc_core_pool_size();
-        }
-    }
-
-    pub fn dec_core_pool_size(&self) {
-        if let Some(consume_message_concurrently_service) = &self.consume_message_concurrently_service {
-            consume_message_concurrently_service.dec_core_pool_size();
-        }
-
-        if let Some(consume_message_orderly_service) = &self.consume_message_orderly_service {
-            consume_message_orderly_service.dec_core_pool_size();
-        }
-    }
-
     pub fn get_core_pool_size(&self) -> usize {
         if let Some(consume_message_concurrently_service) = &self.consume_message_concurrently_service {
             return consume_message_concurrently_service.get_core_pool_size();
@@ -232,26 +212,6 @@ where
         }
     }
 
-    pub fn inc_core_pool_size(&self) {
-        if let Some(consume_message_pop_concurrently_service) = &self.consume_message_pop_concurrently_service {
-            consume_message_pop_concurrently_service.inc_core_pool_size();
-        }
-
-        if let Some(consume_message_pop_orderly_service) = &self.consume_message_pop_orderly_service {
-            consume_message_pop_orderly_service.inc_core_pool_size();
-        }
-    }
-
-    pub fn dec_core_pool_size(&self) {
-        if let Some(consume_message_pop_concurrently_service) = &self.consume_message_pop_concurrently_service {
-            consume_message_pop_concurrently_service.dec_core_pool_size();
-        }
-
-        if let Some(consume_message_pop_orderly_service) = &self.consume_message_pop_orderly_service {
-            consume_message_pop_orderly_service.dec_core_pool_size();
-        }
-    }
-
     pub fn get_core_pool_size(&self) -> usize {
         if let Some(consume_message_pop_concurrently_service) = &self.consume_message_pop_concurrently_service {
             return consume_message_pop_concurrently_service.get_core_pool_size();
@@ -341,12 +301,6 @@ pub trait ConsumeMessageServiceTrait {
     ///
     /// * `core_pool_size` - The new core pool size.
     fn update_core_pool_size(&self, _core_pool_size: usize) {}
-
-    /// Increases the core pool size of the service by one.
-    fn inc_core_pool_size(&self) {}
-
-    /// Decreases the core pool size of the service by one.
-    fn dec_core_pool_size(&self) {}
 
     /// Gets the current core pool size of the service.
     ///

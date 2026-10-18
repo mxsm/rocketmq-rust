@@ -616,40 +616,24 @@ impl ChannelInner {
         response_table: PendingRequestTable,
         parent_task_group: TaskGroup,
     ) -> Result<Self, rocketmq_error::SharedError> {
-        Self::try_new_with_pending_requests_and_task_group(connection, response_table, parent_task_group)
-    }
-
-    pub fn try_new_with_pending_requests_and_task_group(
-        connection: Connection,
-        response_table: PendingRequestTable,
-        parent_task_group: TaskGroup,
-    ) -> Result<Self, rocketmq_error::SharedError> {
         let owner = response_table.new_owner();
         Self::try_new_with_send_task_group(connection, response_table, Some(owner), parent_task_group, true)
     }
 
+    /// Creates a transport-backed channel under the supplied task group without a second send task.
     pub(crate) fn new_transport_session(
         connection: Connection,
         response_table: PendingRequestTable,
         parent_task_group: TaskGroup,
     ) -> Result<Self, rocketmq_error::SharedError> {
-        Self::new_transport_session_with_task_group(connection, response_table, parent_task_group)
-    }
-
-    /// Creates a transport-backed channel snapshot under an already-owned task group.
-    ///
-    /// Unlike `new_transport_session`, this does not register another fixed child. The caller
-    /// chooses the registration lifetime and the returned `ChannelInner` keeps the supplied
-    /// group alive for exactly as long as the snapshot remains reachable. Its
-    /// request APIs write through the supplied queued connection directly and
-    /// therefore do not create a second background send task.
-    pub(crate) fn new_transport_session_with_task_group(
-        connection: Connection,
-        response_table: PendingRequestTable,
-        task_group: TaskGroup,
-    ) -> Result<Self, rocketmq_error::SharedError> {
         let pending_request_owner = Some(response_table.new_owner());
-        Self::try_new_with_send_task_group(connection, response_table, pending_request_owner, task_group, false)
+        Self::try_new_with_send_task_group(
+            connection,
+            response_table,
+            pending_request_owner,
+            parent_task_group,
+            false,
+        )
     }
 
     fn try_new_with_send_task_group(

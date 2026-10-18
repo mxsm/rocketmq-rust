@@ -2330,31 +2330,71 @@ where
     }
 }
 
-async fn wait_for_controller_learner_to_reach_committed_frontier(
+async fn promote_controller_learner(
     manager: &TestControllerManager,
     node_id: u64,
+    membership_version: u64,
     timeout: Duration,
-) -> u64 {
-    let start = std::time::Instant::now();
-    loop {
-        let membership = manager
-            .raft()
-            .consensus_membership()
-            .await
-            .expect("read controller membership while waiting for learner replication");
-        if membership.caught_up().contains(&node_id) {
-            return membership.version();
+) {
+    let mut expected_version = Some(membership_version);
+    let mut last_membership = None;
+    let mut last_rejection = None;
+    let result = tokio::time::timeout(timeout, async {
+        loop {
+            let membership = manager
+                .raft()
+                .consensus_membership()
+                .await
+                .expect("read controller membership while waiting for learner replication");
+            last_membership = Some(membership.clone());
+            if membership.caught_up().contains(&node_id) {
+                let request = MembershipChangeRequest::new(
+                    format!("broker-runtime-promote-controller-voter-{node_id}"),
+                    expected_version.take().unwrap_or_else(|| membership.version()),
+                    MembershipChange::PromoteVoter { node_id },
+                    "form broker runtime Controller voting set",
+                )
+                .expect("valid promote-voter request");
+                match manager
+                    .raft()
+                    .apply_membership_change(&controller_membership_authorization(), request)
+                    .await
+                {
+                    Ok(_) => return,
+                    Err(error) => {
+                        // Readiness is a snapshot: membership commits can advance before admission.
+                        // Only retry pre-mutation rejections; uncertain outcomes must fail immediately.
+                        let precondition_changed = error.descriptor() == &rocketmq_error::CONTROLLER_REQUEST_INVALID
+                            && error.diagnostic_view().is_ok_and(|view| {
+                                view.fields().any(|field| {
+                                    field.name() == "operation"
+                                        && matches!(
+                                            field.value(),
+                                            rocketmq_error::ViewValueRef::Text(
+                                                "validate membership version"
+                                                    | "promote uncaught-up Controller learner"
+                                            )
+                                        )
+                                })
+                            });
+                        assert!(
+                            precondition_changed,
+                            "promote controller learner {node_id} to voter: {:?}",
+                            error.diagnostic_view()
+                        );
+                        last_rejection = Some(error);
+                    }
+                }
+            }
+            sleep(Duration::from_millis(50)).await;
         }
-        if start.elapsed() >= timeout {
-            panic!(
-                "Timed out waiting for controller learner {node_id} to reach the committed log frontier; \
-                 membership_version={}, caught_up={:?}",
-                membership.version(),
-                membership.caught_up()
-            );
-        }
-        sleep(Duration::from_millis(50)).await;
-    }
+    })
+    .await;
+    assert!(
+        result.is_ok(),
+        "Timed out promoting controller learner {node_id}; membership={last_membership:?}, last_rejection={:?}",
+        last_rejection.as_ref().map(|error| error.diagnostic_view())
+    );
 }
 
 async fn wait_for_tcp_listener(addr: std::net::SocketAddr, context: &str) {
@@ -2446,7 +2486,7 @@ fn controller_membership_authorization() -> MaintenanceAuthorizationGrant {
         .expect("controller membership authorization")
 }
 
-async fn start_controller_cluster(base_port: u16, root: &Path) -> (Vec<Arc<TestControllerManager>>, Vec<RaftPeer>) {
+async fn start_controller_learners(base_port: u16, root: &Path) -> (Vec<Arc<TestControllerManager>>, Vec<RaftPeer>) {
     let controller_peers = vec![
         RaftPeer {
             id: 1,
@@ -2567,44 +2607,26 @@ async fn start_controller_cluster(base_port: u16, root: &Path) -> (Vec<Arc<TestC
             .expect("add controller learner");
     }
 
+    (managers, controller_peers)
+}
+
+async fn start_controller_cluster(base_port: u16, root: &Path) -> (Vec<Arc<TestControllerManager>>, Vec<RaftPeer>) {
+    let (managers, controller_peers) = start_controller_learners(base_port, root).await;
+    let bootstrap_manager = &managers[0];
     for controller_peer in controller_peers.iter().skip(1) {
-        let membership_version = wait_for_controller_learner_to_reach_committed_frontier(
+        let membership_version = bootstrap_manager
+            .raft()
+            .consensus_membership()
+            .await
+            .expect("read controller membership before promoting learner")
+            .version();
+        promote_controller_learner(
             bootstrap_manager.as_ref(),
             controller_peer.id,
+            membership_version,
             Duration::from_secs(20),
         )
         .await;
-        let request = MembershipChangeRequest::new(
-            format!("broker-runtime-promote-controller-voter-{}", controller_peer.id),
-            membership_version,
-            MembershipChange::PromoteVoter {
-                node_id: controller_peer.id,
-            },
-            "form broker runtime Controller voting set",
-        )
-        .expect("valid promote-voter request");
-        match tokio::time::timeout(
-            Duration::from_secs(20),
-            bootstrap_manager
-                .raft()
-                .apply_membership_change(&controller_membership_authorization(), request),
-        )
-        .await
-        {
-            Ok(result) => {
-                result.expect("promote controller learner to voter");
-            }
-            Err(_) => {
-                panic!(
-                    "Timed out promoting controller learner {}; states={:?}",
-                    controller_peer.id,
-                    managers
-                        .iter()
-                        .map(|manager| (manager.is_leader(), manager.raft().has_committed_log().unwrap_or(false)))
-                        .collect::<Vec<_>>()
-                );
-            }
-        }
     }
 
     wait_until(
@@ -2639,6 +2661,59 @@ async fn start_controller_cluster(base_port: u16, root: &Path) -> (Vec<Arc<TestC
     .await;
 
     (managers, controller_peers)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn controller_bootstrap_refreshes_stale_learner_promotion_version() {
+    let _controller_test_guard = CONTROLLER_INTEGRATION_TEST_LOCK.lock().await;
+    let base_port = allocate_controller_test_base_port();
+    let root = controller_cluster_root("controller-stale-promotion");
+    let (controllers, controller_peers) = start_controller_learners(base_port, &root).await;
+    let leader = &controllers[0];
+    let observed_version = leader
+        .raft()
+        .consensus_membership()
+        .await
+        .expect("observe membership before promotions")
+        .version();
+
+    promote_controller_learner(
+        leader,
+        controller_peers[1].id,
+        observed_version,
+        Duration::from_secs(20),
+    )
+    .await;
+    let membership = leader
+        .raft()
+        .consensus_membership()
+        .await
+        .expect("membership after first promotion");
+    assert!(membership.version() > observed_version);
+
+    // The first promotion invalidates the snapshot retained for the second learner.
+    promote_controller_learner(
+        leader,
+        controller_peers[2].id,
+        observed_version,
+        Duration::from_secs(20),
+    )
+    .await;
+    let membership = leader
+        .raft()
+        .consensus_membership()
+        .await
+        .expect("membership after both promotions");
+    assert_eq!(membership.voters(), &BTreeSet::from([1, 2, 3]));
+    assert!(membership.learners().is_empty());
+
+    for controller in &controllers {
+        controller
+            .shutdown()
+            .await
+            .expect("shutdown bootstrap regression controller");
+    }
+    let _ = std::fs::remove_dir_all(root);
 }
 
 fn new_controller_mode_runtime(

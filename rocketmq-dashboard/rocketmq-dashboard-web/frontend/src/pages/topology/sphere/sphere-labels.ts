@@ -60,11 +60,13 @@ interface Box {
 function candidates(request: LabelRequest, stage: { width: number; height: number }): Box[] {
   const { x, y, width, height } = request;
   const box = (left: number, top: number) => ({ x: left, y: top, width, height });
+  // A title wider than the room beside a sphere near an edge slides sideways to stay inside.
+  const slid = Math.min(Math.max(x - width / 2, EDGE), stage.width - width - EDGE);
   switch (request.placement) {
     case 'above':
-      return [box(x - width / 2, y - height - TITLE_GAP)];
+      return [box(x - width / 2, y - height - TITLE_GAP), box(slid, y - height - TITLE_GAP)];
     case 'below':
-      return [box(x - width / 2, y + TITLE_GAP)];
+      return [box(x - width / 2, y + TITLE_GAP), box(slid, y + TITLE_GAP)];
     case 'centre':
       return [box(x - width / 2, y - height / 2)];
     default: {

@@ -42,13 +42,15 @@ import { Bridge, FunctionCurve, surfaceCurve } from './sphere-geometry';
 import { placeLabels, type LabelObstacle, type LabelPlacement, type LabelRequest } from './sphere-labels';
 import {
   capAngle,
-  kindName,
+  CONTROLLER_RADIUS,
   NAMESERVER_RADIUS,
-  nodeMetric,
-  nodeName,
+  nodeDescription,
+  nodeLabelMetric,
   nodeTitle,
   nodeTone,
   surfacePoint,
+  type ClusterMode,
+  type ControllerNode,
   type SphereKey,
   type SphereLink,
   type SphereLinkKind,
@@ -68,15 +70,19 @@ const BROKER_TURN_SECONDS = 60;
  */
 const NAMESERVER_CENTRE = new Vector3(-1.46, 0.98, 0);
 const NAMESERVER_WIDE = { centre: new Vector3(-3.2, 0.35, 0), scale: 1.5 };
-const NAMESERVER_TILT = 8 * DEG;
+/** The Controller sphere mirrors it, lower right, and is drawn only when brokers name Controllers. */
+const CONTROLLER_CENTRE = new Vector3(1.46, -0.98, 0);
+const CONTROLLER_WIDE = { centre: new Vector3(3.2, -0.35, 0), scale: 1.5 };
+const SMALL_TILT = 8 * DEG;
 const SWAY = 18 * DEG;
-const SWAY_SECONDS = 17;
+/** The two small spheres sway at different speeds, so they never move in step. */
+const SWAY_SECONDS: Record<SphereKey, number> = { brokers: 0, nameservers: 17, controllers: 21 };
 /**
  * Room around each sphere the camera keeps in view, in broker-sphere radii: beside the broker sphere
- * for the labels of its edge nodes, above and below it for the hemisphere titles, above a small
- * sphere for its title.
+ * for the labels of its edge nodes, above and below it for the hemisphere titles, on the title side
+ * of a small sphere for its title (above the NameServers, below the Controllers).
  */
-const MARGIN = { brokerSide: 0.35, brokerTitle: 0.3, smallSide: 0.12, smallBelow: 0.1, smallTitle: 0.26 };
+const MARGIN = { brokerSide: 0.35, brokerTitle: 0.3, smallSide: 0.18, smallBelow: 0.1, smallTitle: 0.26 };
 /** The busiest cluster starts this far left of the front, so its neighbour is in view too. */
 const FRONT_OFFSET = 30;
 const FLIGHT_MS = 900;
@@ -84,9 +90,11 @@ const ROUTE_TRAVEL_S = 1.6;
 const ROUTE_WINDOW_S = 2.4;
 /** Segments of each line between two spheres, rewritten every frame. */
 const BRIDGE_STEPS = 64;
-/** Tilt of the broker sphere after flying to a node of each kind; NameServers turn their own sphere. */
-const FOCUS_TILT: Record<SphereNodeKind, number> = { master: 10, slave: 10, producer: 20, consumer: -12, nameserver: 0 };
-const NODE_SIZE: Record<SphereNodeKind, number> = { master: 0.04, slave: 0.025, nameserver: 0.032, producer: 0.022, consumer: 0.022 };
+/** Tilt of the broker sphere after flying to a node of each kind; the small spheres turn on their own. */
+const FOCUS_TILT: Record<SphereNodeKind, number> = { master: 10, slave: 10, producer: 20, consumer: -12, nameserver: 0, controller: 0 };
+const NODE_SIZE: Record<SphereNodeKind, number> = { master: 0.04, slave: 0.025, nameserver: 0.032, controller: 0.03, producer: 0.022, consumer: 0.022 };
+/** Badge of a healthy cluster's title. */
+const MODE_TEXT: Record<ClusterMode, string> = { single: 'Single master', 'master-slave': 'Master/Slave', controller: 'Controller mode' };
 
 /** A stable fraction per id, so particles start spread along their paths. */
 function phaseOf(id: string) {
@@ -100,6 +108,7 @@ interface Palette {
   consume: string;
   nameserver: string;
   route: string;
+  controller: string;
   heartbeat: string;
   success: string;
   warning: string;
@@ -120,6 +129,8 @@ function readPalette(element: HTMLElement): Palette {
     nameserver: read('--accent-blue', '#00d5ff'),
     // Its own hue: the producer, consumer and NameServer blues are too close to tell the lines apart.
     route: read('--accent-violet', '#b15cff'),
+    // The control plane in a neutral silver, apart from every message path and from warnings.
+    controller: read('--accent-silver', '#cfd8e6'),
     heartbeat: read('--accent-pink', '#f72585'),
     success: read('--success', '#00e64d'),
     warning: read('--warning', '#ffc300'),
@@ -141,7 +152,9 @@ const LINK_STYLE: Record<SphereLinkKind, { color: keyof Palette; radius: number;
   consume: { color: 'consume', radius: 0.0045, opacity: 0.5, width: 1.4 },
   replication: { color: 'success', radius: 0.0075, opacity: 0.8, width: 1.4 },
   heartbeat: { color: 'heartbeat', radius: 0, opacity: 0.85, width: 2 },
-  route: { color: 'route', radius: 0, opacity: 0.7, width: 1.7 }
+  route: { color: 'route', radius: 0, opacity: 0.7, width: 1.7 },
+  election: { color: 'controller', radius: 0, opacity: 0.75, width: 1.7 },
+  raft: { color: 'controller', radius: 0.0045, opacity: 0.85, width: 1.4 }
 };
 /** Speed of the dashes on NameServer lines, in broker-sphere radii per second. */
 const DASH_SPEED = 0.12;
@@ -292,7 +305,7 @@ interface RouteFlight {
   delay: number;
 }
 
-type TitleKind = 'cluster' | 'nameservers' | 'producers' | 'consumers';
+type TitleKind = 'cluster' | 'nameservers' | 'controllers' | 'producers' | 'consumers';
 
 interface TitleView {
   kind: TitleKind;
@@ -315,6 +328,7 @@ interface Content {
   /** Per-sphere groups holding this model's objects, turning with their sphere. */
   layers: Record<SphereKey, Group>;
   nameServers: boolean;
+  controllers: boolean;
   disposables: Disposable[];
   nodes: Map<string, NodeView>;
   links: LinkView[];
@@ -356,6 +370,7 @@ function basePriority(node: SphereNode) {
     case 'master':
       return 90;
     case 'nameserver':
+    case 'controller':
       return 85;
     case 'consumer':
       return nodeTone(node) === 'warning' ? 75 : 60;
@@ -368,7 +383,8 @@ function basePriority(node: SphereNode) {
 
 /**
  * The three.js scene behind the sphere view: the broker sphere with its clusters and client groups,
- * the NameServer sphere, the links between them, particles, and the HTML labels over the canvas.
+ * the NameServer sphere, the Controller sphere when brokers name Controllers, the links between them,
+ * particles, and the HTML labels over the canvas.
  *
  * # Errors
  *
@@ -439,8 +455,10 @@ export class TopologySphereScene {
 
     this.rigs = {
       brokers: this.buildRig('brokers', new Vector3(0, 0, 0), 1, this.palette.primary, BROKER_TILT),
-      nameservers: this.buildRig('nameservers', NAMESERVER_CENTRE, NAMESERVER_RADIUS, this.palette.nameserver, NAMESERVER_TILT)
+      nameservers: this.buildRig('nameservers', NAMESERVER_CENTRE, NAMESERVER_RADIUS, this.palette.nameserver, SMALL_TILT),
+      controllers: this.buildRig('controllers', CONTROLLER_CENTRE, CONTROLLER_RADIUS, this.palette.controller, SMALL_TILT)
     };
+    this.rigs.controllers.group.visible = false;
     this.rigs.brokers.pivot.add(this.loop((lon) => toVector(surfacePoint(0, lon, 1.003)), 120, this.keep(new LineBasicMaterial({ color: this.palette.equator }))));
 
     const { stage } = elements;
@@ -593,7 +611,11 @@ export class TopologySphereScene {
       roots.push(group);
       return group;
     };
-    const layers: Record<SphereKey, Group> = { brokers: layer(this.rigs.brokers.pivot), nameservers: layer(this.rigs.nameservers.pivot) };
+    const layers: Record<SphereKey, Group> = {
+      brokers: layer(this.rigs.brokers.pivot),
+      nameservers: layer(this.rigs.nameservers.pivot),
+      controllers: layer(this.rigs.controllers.pivot)
+    };
     const world = layer(this.scene);
     const palette = this.palette;
 
@@ -605,17 +627,20 @@ export class TopologySphereScene {
       const color = cluster.healthy ? (cluster.mode === 'single' ? palette.primary : palette.success) : palette.danger;
       layers.brokers.add(new Mesh(keep(new TubeGeometry(curve, 48, 0.013, 6, false)), keep(new MeshBasicMaterial({ color, transparent: true, opacity: 0.36, depthWrite: false }))));
     }
-    const nameServerCount = model.nodes.filter((node) => node.kind === 'nameserver').length;
-    if (nameServerCount > 1) {
-      const alpha = capAngle(nameServerCount);
-      const radius = NAMESERVER_RADIUS * 1.006;
-      layers.nameservers.add(this.loop(
-        (degrees) => new Vector3(Math.sin(alpha) * Math.cos(degrees * DEG), Math.sin(alpha) * Math.sin(degrees * DEG), Math.cos(alpha)).multiplyScalar(radius),
+    // The nodes of a small sphere sit on one circle around its front; the circle ties them together.
+    const ring = (sphere: 'nameservers' | 'controllers', radius: number, color: string) => {
+      const count = model.nodes.filter((node) => node.sphere === sphere).length;
+      if (count < 2) return;
+      const alpha = capAngle(count);
+      layers[sphere].add(this.loop(
+        (degrees) => new Vector3(Math.sin(alpha) * Math.cos(degrees * DEG), Math.sin(alpha) * Math.sin(degrees * DEG), Math.cos(alpha)).multiplyScalar(radius * 1.006),
         96,
-        keep(new LineBasicMaterial({ color: palette.nameserver, transparent: true, opacity: 0.5 })),
+        keep(new LineBasicMaterial({ color, transparent: true, opacity: 0.5 })),
         disposables
       ));
-    }
+    };
+    ring('nameservers', NAMESERVER_RADIUS, palette.nameserver);
+    ring('controllers', CONTROLLER_RADIUS, palette.controller);
 
     const nodes = new Map<string, NodeView>();
     const hitTargets: Mesh[] = [];
@@ -643,7 +668,8 @@ export class TopologySphereScene {
       consume: this.particleKit(palette.consume, keep),
       replication: this.particleKit(palette.success, keep),
       heartbeat: this.particleKit(palette.heartbeat, keep),
-      route: this.particleKit(palette.route, keep)
+      route: this.particleKit(palette.route, keep),
+      control: this.particleKit(palette.controller, keep)
     };
     const particles: Particle[] = [];
     const addParticle = (link: LinkView, kit: ParticleKit, offset: number, timing: Timing) => {
@@ -673,6 +699,16 @@ export class TopologySphereScene {
       if (view.link.kind !== 'heartbeat' || view.link.unavailable) continue;
       addParticle(view, kits.heartbeat, 0, { kind: 'pulse', every: 3, travel: 1.4, delay: phaseOf(view.link.from) * 2.5 + phaseOf(view.link.to) * 0.5 });
     }
+    // Brokers report to the leading Controller, which keeps its followers' logs in step; both are
+    // shown as a beat, like the heartbeats.
+    for (const view of links) {
+      if (view.link.unavailable) continue;
+      if (view.link.kind === 'election') {
+        addParticle(view, kits.control, 0, { kind: 'pulse', every: 2, travel: 1.2, delay: phaseOf(view.link.from) * 0.8 });
+      } else if (view.link.kind === 'raft') {
+        addParticle(view, kits.control, 0, { kind: 'pulse', every: 1.5, travel: 0.6, delay: phaseOf(view.link.to) * 0.5 });
+      }
+    }
     // On every refresh one answer travels each route line, from the NameServer to the client group.
     const flights: RouteFlight[] = [];
     for (const view of links) {
@@ -692,8 +728,10 @@ export class TopologySphereScene {
 
     const titles = this.buildTitles(model);
     const nameServers = model.nodes.some((node) => node.sphere === 'nameservers');
+    const controllers = model.nodes.some((node) => node.sphere === 'controllers');
     this.rigs.nameservers.group.visible = nameServers;
-    this.content = { roots, layers, disposables, nodes, links, particles, flights, titles, hitTargets, selection, nameServers };
+    this.rigs.controllers.group.visible = controllers;
+    this.content = { roots, layers, disposables, nodes, links, particles, flights, titles, hitTargets, selection, nameServers, controllers };
     // Framing depends on which spheres are drawn; resizing also measures the new labels.
     this.resize();
   }
@@ -722,11 +760,18 @@ export class TopologySphereScene {
     };
     const decorations: MeshBasicMaterial[] = [];
     if (node.kind === 'master') decorations.push(ring(0.054, 0.06, color, 0.8).material);
+    // A second, silver ring: the Controllers elect this master.
+    if (node.kind === 'master' && node.group.election === 'controller') decorations.push(ring(0.068, 0.073, this.palette.controller, 0.85).material);
     if (node.kind === 'nameserver' && node.nameServer.current) decorations.push(ring(0.048, 0.055, this.palette.primary, 0.85).material);
+    if (node.kind === 'controller' && node.controller.leader) decorations.push(ring(0.046, 0.054, this.palette.controller, 0.9).material);
     // Consumers carry a ring so they read apart from producers, whose palette colour is close.
     if (node.kind === 'consumer') decorations.push(ring(0.034, 0.04, color, 0.9).material);
     const tone = nodeTone(node);
-    const pulse = (node.kind === 'consumer' && tone === 'warning') || (node.kind === 'master' && tone === 'danger') ? ring(0.04, 0.046, color, 0.7) : null;
+    const alarming =
+      ((node.kind === 'consumer' || node.kind === 'slave') && tone === 'warning') ||
+      (node.kind === 'master' && tone === 'danger') ||
+      (node.kind === 'controller' && (tone === 'danger' || tone === 'warning'));
+    const pulse = alarming ? ring(0.04, 0.046, color, 0.7) : null;
 
     const element = document.createElement('button');
     element.type = 'button';
@@ -744,9 +789,9 @@ export class TopologySphereScene {
     }
     const metric = document.createElement('span');
     metric.className = 'topology-sphere-label-metric';
-    metric.textContent = nodeMetric(node);
+    metric.textContent = nodeLabelMetric(node);
     element.append(metric);
-    element.setAttribute('aria-label', `${kindName(node.kind)} ${nodeName(node)}, ${nodeMetric(node)}`);
+    element.setAttribute('aria-label', nodeDescription(node));
     element.addEventListener('click', (event) => {
       event.stopPropagation();
       this.select(this.selected === node.id ? null : node.id);
@@ -785,6 +830,8 @@ export class TopologySphereScene {
         return this.palette.consume;
       case 'nameserver':
         return tone === 'current' ? this.palette.primary : this.palette.success;
+      case 'controller':
+        return this.palette.controller;
       default:
         return this.palette.success;
     }
@@ -811,7 +858,8 @@ export class TopologySphereScene {
       parent.add(line);
       return { link, material, baseOpacity: style.opacity, length, pointAt, bridge: null };
     }
-    const material = keep(new MeshBasicMaterial({ color: this.palette[style.color], transparent: true, opacity: style.opacity, depthWrite: false }));
+    const color = link.outOfSync ? this.palette.warning : this.palette[style.color];
+    const material = keep(new MeshBasicMaterial({ color, transparent: true, opacity: style.opacity, depthWrite: false }));
     parent.add(new Mesh(keep(new TubeGeometry(curve, 72, style.radius, 5, false)), material));
     return { link, material, baseOpacity: style.opacity, length, pointAt, bridge: null };
   }
@@ -869,6 +917,7 @@ export class TopologySphereScene {
       return view;
     };
     if (model.nodes.some((node) => node.kind === 'nameserver')) add('nameservers', null, null);
+    if (model.nodes.some((node) => node.kind === 'controller')) add('controllers', null, null);
     add('producers', null, null);
     add('consumers', null, null);
     for (const cluster of model.clusters) add('cluster', toVector(surfacePoint(18, cluster.centre, 1)), cluster.clusterName);
@@ -880,10 +929,15 @@ export class TopologySphereScene {
     const servers = model.nodes.filter((node) => node.kind === 'nameserver');
     const checked = servers.filter((node) => node.kind === 'nameserver' && node.nameServer.status !== 'unknown');
     const available = checked.filter((node) => node.kind === 'nameserver' && node.nameServer.status === 'available').length;
+    const controllers = model.nodes.filter((node): node is ControllerNode => node.kind === 'controller');
+    const leader = controllers.find((node) => node.controller.leader === true);
     for (const title of titles) {
       if (title.kind === 'nameservers') {
         title.heading.textContent = 'NameServers';
         title.metric.textContent = checked.length > 0 ? `${formatCount(available)} of ${formatCount(servers.length)} available` : `${formatCount(servers.length)} configured`;
+      } else if (title.kind === 'controllers') {
+        title.heading.textContent = 'Controllers · Raft';
+        title.metric.textContent = `${leader ? `leader ${leader.controller.address}` : 'no leader known'} · ${plural(controllers.length, 'peer', 'peers')}`;
       } else if (title.kind === 'producers') {
         title.heading.textContent = 'Producer groups · northern half';
         title.metric.textContent = `${formatCount(model.groups.producers)} of ${plural(model.groups.producersInScope, 'group', 'groups')}`;
@@ -896,7 +950,7 @@ export class TopologySphereScene {
         const badge = document.createElement('span');
         badge.className = 'topology-sphere-badge';
         badge.dataset.tone = cluster.healthy ? cluster.mode : 'degraded';
-        badge.textContent = cluster.healthy ? (cluster.mode === 'single' ? 'Single master' : 'Master/Slave') : 'Degraded';
+        badge.textContent = cluster.healthy ? MODE_TEXT[cluster.mode] : 'Degraded';
         title.heading.replaceChildren(cluster.clusterName, badge);
         title.metric.textContent = `${plural(cluster.groups, 'group', 'groups')} · ${plural(cluster.instances, 'broker', 'brokers')}`;
       }
@@ -912,8 +966,8 @@ export class TopologySphereScene {
       if (!view) continue;
       view.node = node;
       if (view.title) view.title.textContent = nodeTitle(node);
-      view.metric.textContent = nodeMetric(node);
-      view.label.element.setAttribute('aria-label', `${kindName(node.kind)} ${nodeName(node)}, ${nodeMetric(node)}`);
+      view.metric.textContent = nodeLabelMetric(node);
+      view.label.element.setAttribute('aria-label', nodeDescription(node));
     }
     const links = new Map(model.links.map((link) => [link.id, link]));
     for (const view of content.links) view.link = links.get(view.link.id) ?? view.link;
@@ -1010,7 +1064,10 @@ export class TopologySphereScene {
     const box = this.canvas.getBoundingClientRect();
     this.pointer.set(((event.clientX - box.left) / box.width) * 2 - 1, -((event.clientY - box.top) / box.height) * 2 + 1);
     this.raycaster.setFromCamera(this.pointer, this.camera);
-    const targets: Object3D[] = [this.rigs.brokers.body, this.rigs.nameservers.body, ...(this.content?.hitTargets ?? [])];
+    const spheres = Object.values(this.rigs)
+      .filter((rig) => rig.group.visible)
+      .map((rig) => rig.body);
+    const targets: Object3D[] = [...spheres, ...(this.content?.hitTargets ?? [])];
     const first = this.raycaster.intersectObjects(targets, false)[0];
     if (!first) return { node: null, sphere: null };
     const nodeId = first.object.userData.nodeId as string | undefined;
@@ -1091,25 +1148,31 @@ export class TopologySphereScene {
     this.camera.lookAt(centreX, centreY, 0);
     this.camera.updateProjectionMatrix();
     this.camera.updateMatrixWorld();
-    // The small sphere sits off-centre; turning its front to the camera keeps its nodes facing the viewer.
+    // The small spheres sit off-centre; turning their fronts to the camera keeps their nodes facing the viewer.
     this.rigs.nameservers.group.lookAt(this.camera.position);
+    this.rigs.controllers.group.lookAt(this.camera.position);
     for (const material of this.lineMaterials) material.resolution.set(width, height);
     this.renderer.setSize(width, height, false);
     this.measureLabels();
   }
 
   /**
-   * Places the NameServer sphere for a stage of `aspect` (width / height): as far toward
-   * `NAMESERVER_WIDE` as it takes for the framed spheres to be as wide as the stage. Beyond that the
-   * spheres stay centred with room on both sides.
+   * Places the small spheres for a stage of `aspect` (width / height): as far toward
+   * `NAMESERVER_WIDE` and `CONTROLLER_WIDE` as it takes for the framed spheres to be as wide as the
+   * stage. Beyond that the spheres stay centred with room on both sides.
    */
   private spread(aspect: number) {
-    const small = this.rigs.nameservers;
+    const moves = [
+      { rig: this.rigs.nameservers, near: NAMESERVER_CENTRE, wide: NAMESERVER_WIDE, radius: NAMESERVER_RADIUS },
+      { rig: this.rigs.controllers, near: CONTROLLER_CENTRE, wide: CONTROLLER_WIDE, radius: CONTROLLER_RADIUS }
+    ];
     const place = (amount: number) => {
-      const scale = 1 + (NAMESERVER_WIDE.scale - 1) * amount;
-      small.group.position.lerpVectors(NAMESERVER_CENTRE, NAMESERVER_WIDE.centre, amount);
-      small.group.scale.setScalar(scale);
-      small.radius = NAMESERVER_RADIUS * scale;
+      for (const { rig, near, wide, radius } of moves) {
+        const scale = 1 + (wide.scale - 1) * amount;
+        rig.group.position.lerpVectors(near, wide.centre, amount);
+        rig.group.scale.setScalar(scale);
+        rig.radius = radius * scale;
+      }
     };
     // The framed bounds widen steadily with the spread, so halving the interval finds the fit.
     let low = 0;
@@ -1133,12 +1196,17 @@ export class TopologySphereScene {
       bottom: -radius - MARGIN.brokerTitle,
       top: radius + MARGIN.brokerTitle
     };
-    const small = this.rigs.nameservers;
-    if (small.group.visible) {
-      bounds.left = Math.min(bounds.left, small.centre.x - small.radius - MARGIN.smallSide);
-      bounds.right = Math.max(bounds.right, small.centre.x + small.radius + MARGIN.smallSide);
-      bounds.bottom = Math.min(bounds.bottom, small.centre.y - small.radius - MARGIN.smallBelow);
-      bounds.top = Math.max(bounds.top, small.centre.y + small.radius + MARGIN.smallTitle);
+    // The NameServer title sits above its sphere, the Controller title below.
+    const small = [
+      { rig: this.rigs.nameservers, above: MARGIN.smallTitle, below: MARGIN.smallBelow },
+      { rig: this.rigs.controllers, above: MARGIN.smallBelow, below: MARGIN.smallTitle }
+    ];
+    for (const { rig, above, below } of small) {
+      if (!rig.group.visible) continue;
+      bounds.left = Math.min(bounds.left, rig.centre.x - rig.radius - MARGIN.smallSide);
+      bounds.right = Math.max(bounds.right, rig.centre.x + rig.radius + MARGIN.smallSide);
+      bounds.bottom = Math.min(bounds.bottom, rig.centre.y - rig.radius - below);
+      bounds.top = Math.max(bounds.top, rig.centre.y + rig.radius + above);
     }
     return bounds;
   }
@@ -1171,7 +1239,7 @@ export class TopologySphereScene {
         if (progress >= 1) view.flight = null;
       } else if (auto) {
         if (rig.key === 'brokers') view.spin += (dt * Math.PI * 2) / BROKER_TURN_SECONDS;
-        else view.phase += (dt * Math.PI * 2) / SWAY_SECONDS;
+        else view.phase += (dt * Math.PI * 2) / SWAY_SECONDS[rig.key];
       }
       const sway = rig.key === 'brokers' ? 0 : SWAY * Math.sin(view.phase);
       rig.pivot.rotation.set(view.tilt, view.spin + sway, 0);
@@ -1315,10 +1383,15 @@ export class TopologySphereScene {
     const focus = this.selected ?? this.hovered;
     const brokers = this.disc(this.rigs.brokers, width, height);
     const servers = this.disc(this.rigs.nameservers, width, height);
-    const reach = (servers.bottom - servers.top) / 2 + 6;
-    // The NameServer sphere keeps its disc clear of other labels; its own labels may overlap it.
+    const controllers = this.disc(this.rigs.controllers, width, height);
+    // A small sphere keeps its disc clear of other labels; its own labels may overlap it.
+    const keepClear = (disc: { x: number; y: number; top: number; bottom: number }, owner: SphereKey): LabelObstacle => {
+      const reach = (disc.bottom - disc.top) / 2 + 6;
+      return { x: disc.x - reach, y: disc.y - reach, width: reach * 2, height: reach * 2, owner };
+    };
     const obstacles: LabelObstacle[] = [this.controlsBox];
-    if (content.nameServers) obstacles.push({ x: servers.x - reach, y: servers.y - reach, width: reach * 2, height: reach * 2, owner: 'nameservers' });
+    if (content.nameServers) obstacles.push(keepClear(servers, 'nameservers'));
+    if (content.controllers) obstacles.push(keepClear(controllers, 'controllers'));
     const requests: LabelRequest[] = [];
     const fades = new Map<string, number>();
     const views = new Map<string, LabelView>();
@@ -1342,6 +1415,8 @@ export class TopologySphereScene {
         request(id, title.label, 95, position.x, position.y, 'centre', brokers.x, null, Math.min(1, (facing - 0.3) / 0.25) * dimmed);
       } else if (title.kind === 'nameservers') {
         request(id, title.label, 95, servers.x, servers.top, 'above', servers.x, 'nameservers', dimmed);
+      } else if (title.kind === 'controllers') {
+        request(id, title.label, 95, controllers.x, controllers.bottom, 'below', controllers.x, 'controllers', dimmed);
       } else {
         request(id, title.label, 95, brokers.x, title.kind === 'producers' ? brokers.top : brokers.bottom, title.kind === 'producers' ? 'above' : 'below', brokers.x, null, dimmed);
       }
@@ -1360,7 +1435,7 @@ export class TopologySphereScene {
       if (view.node.id === this.hovered) priority = 900;
       if (view.node.id === this.selected) priority = 1000;
       const position = this.project(view.world, width, height);
-      const brokersSphere = rig.key === 'brokers';
+      const centreX = { brokers: brokers.x, nameservers: servers.x, controllers: controllers.x }[rig.key];
       request(
         view.node.id,
         view.label,
@@ -1368,8 +1443,8 @@ export class TopologySphereScene {
         position.x,
         position.y,
         view.node.kind === 'slave' ? 'near' : 'side',
-        brokersSphere ? brokers.x : servers.x,
-        brokersSphere ? null : 'nameservers',
+        centreX,
+        rig.key === 'brokers' ? null : rig.key,
         fade * (focus && !inFocus ? 0.35 : 1)
       );
     }

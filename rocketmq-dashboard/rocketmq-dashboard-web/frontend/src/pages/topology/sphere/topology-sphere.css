@@ -99,11 +99,15 @@
   text-overflow: ellipsis;
 }
 
+/* `pre` keeps the line break of a replica's state; a reading too wide for the label is cut, not spilled under the node. */
 .topology-sphere-label-metric {
+  overflow: hidden;
   color: var(--muted-foreground);
   font: var(--text-mono-small);
   font-size: 11px;
   line-height: 14px;
+  white-space: pre;
+  text-overflow: ellipsis;
 }
 
 .topology-sphere-label[data-tone='warning'] .topology-sphere-label-metric {
@@ -172,6 +176,10 @@
 
 .topology-sphere-badge[data-tone='single'] {
   --badge-tone: var(--primary);
+}
+
+.topology-sphere-badge[data-tone='controller'] {
+  --badge-tone: var(--accent-silver);
 }
 
 .topology-sphere-badge[data-tone='degraded'] {
@@ -441,9 +449,15 @@
   background: none;
 }
 
+.topology-sphere-key [data-kind='controller']::before {
+  border: 2px solid var(--accent-silver);
+  background: none;
+}
+
 /* Lines are keyed with a short dash. */
 .topology-sphere-key [data-kind='heartbeat']::before,
-.topology-sphere-key [data-kind='route']::before {
+.topology-sphere-key [data-kind='route']::before,
+.topology-sphere-key [data-kind='election']::before {
   width: 12px;
   height: 0;
   border-top: 2px dashed var(--key-color);
@@ -453,3 +467,4 @@
 
 .topology-sphere-key [data-kind='heartbeat'] { --key-color: var(--accent-pink); }
 .topology-sphere-key [data-kind='route'] { --key-color: var(--accent-violet); }
+.topology-sphere-key [data-kind='election'] { --key-color: var(--accent-silver); }

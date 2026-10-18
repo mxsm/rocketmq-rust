@@ -11,6 +11,9 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+mod replication;
+
+use crate::admin::ReplicationObservation;
 use crate::error::DashboardError;
 use crate::model::BrokerInfo;
 use crate::model::ConsumerGroupListItem;
@@ -23,9 +26,11 @@ use crate::model::TopicInfo;
 use crate::model::TopologyBrokerGroup;
 use crate::model::TopologyCluster;
 use crate::model::TopologyConsumer;
+use crate::model::TopologyMasterElection;
 use crate::model::TopologyNameServer;
 use crate::model::TopologyNameServerStatus;
 use crate::model::TopologyProducer;
+use crate::model::TopologyReplica;
 use crate::model::TopologySource;
 use crate::model::TopologySourceState;
 use crate::model::TopologySourceStatus;
@@ -41,10 +46,15 @@ use chrono::Utc;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::time::Duration;
 use std::time::Instant;
 
 /// Most producer and consumer groups in a topology view, busiest first.
 pub const TOPOLOGY_GROUP_LIMIT: usize = 50;
+
+/// The longest the replication layer may delay a topology response; past it the view is sent
+/// with that layer marked failed.
+const REPLICATION_BUDGET: Duration = Duration::from_secs(3);
 
 /// Producer groups the RocketMQ client and tools register on their own.
 const SYSTEM_PRODUCER_GROUPS: [&str; 3] = ["CLIENT_INNER_PRODUCER", "DEFAULT_PRODUCER", "SELF_TEST_P_GROUP"];
@@ -83,6 +93,11 @@ pub async fn topology(state: &AppState, query: ConsumerQuery) -> Result<Topology
                 .map(|view| without_system_consumers(view.items, skip_system))
         }),
     );
+    // Replication is read from the masters the broker layer found.
+    let replication = match &brokers.result {
+        Ok(rows) => Some(timed(TopologySource::Replication, read_replication(state, rows)).await),
+        Err(_) => None,
+    };
     assemble(
         LayerResults {
             config,
@@ -91,9 +106,17 @@ pub async fn topology(state: &AppState, query: ConsumerQuery) -> Result<Topology
             topics,
             producers,
             consumers,
+            replication,
         },
         Utc::now().timestamp_millis(),
     )
+}
+
+async fn read_replication(state: &AppState, brokers: &[BrokerInfo]) -> Result<ReplicationObservation, DashboardError> {
+    let targets = replication::replication_targets(brokers);
+    tokio::time::timeout(REPLICATION_BUDGET, state.admin_client.replication(targets))
+        .await
+        .map_err(|_| DashboardError::Internal("Replication reading took longer than its time budget".to_string()))?
 }
 
 struct Timed<T> {
@@ -156,6 +179,8 @@ struct LayerResults {
     topics: Timed<Vec<TopicInfo>>,
     producers: Timed<Vec<ProducerInfo>>,
     consumers: Timed<Vec<ConsumerGroupListItem>>,
+    /// Not read when the broker layer failed.
+    replication: Option<Timed<ReplicationObservation>>,
 }
 
 /// Responses of the layer queries; `None` marks a layer whose query failed.
@@ -167,6 +192,7 @@ struct TopologyLayers {
     topics: Option<Vec<TopicInfo>>,
     producers: Option<Vec<ProducerInfo>>,
     consumers: Option<Vec<ConsumerGroupListItem>>,
+    replication: Option<ReplicationObservation>,
 }
 
 fn keep<T>(
@@ -185,7 +211,7 @@ fn keep<T>(
 }
 
 fn assemble(results: LayerResults, generated_at: i64) -> Result<TopologyView, DashboardError> {
-    let mut sources = Vec::with_capacity(6);
+    let mut sources = Vec::with_capacity(7);
     let mut first_error = None;
     let layers = TopologyLayers {
         config: keep(results.config, &mut sources, &mut first_error),
@@ -194,6 +220,9 @@ fn assemble(results: LayerResults, generated_at: i64) -> Result<TopologyView, Da
         topics: keep(results.topics, &mut sources, &mut first_error),
         producers: keep(results.producers, &mut sources, &mut first_error),
         consumers: keep(results.consumers, &mut sources, &mut first_error),
+        replication: results
+            .replication
+            .and_then(|layer| keep(layer, &mut sources, &mut first_error)),
     };
     if sources
         .iter()
@@ -221,12 +250,18 @@ fn build_topology(layers: TopologyLayers, sources: Vec<TopologySourceStatus>, ge
     };
     producers.truncate(TOPOLOGY_GROUP_LIMIT);
     consumers.truncate(TOPOLOGY_GROUP_LIMIT);
+    let mut clusters = layers.brokers.as_deref().map(group_brokers).unwrap_or_default();
+    let controllers = layers
+        .replication
+        .map(|observation| replication::apply_replication(&mut clusters, observation))
+        .unwrap_or_default();
 
     TopologyView {
         generated_at,
         sources,
         name_servers: name_servers(layers.config.as_ref(), layers.nameservers.as_ref()),
-        clusters: layers.brokers.as_deref().map(group_brokers).unwrap_or_default(),
+        clusters,
+        controllers,
         producers,
         consumers,
         totals,
@@ -314,11 +349,12 @@ fn group_brokers(brokers: &[BrokerInfo]) -> Vec<TopologyCluster> {
 
 fn broker_group(broker_name: &str, members: &[&BrokerInfo]) -> TopologyBrokerGroup {
     let master = members.iter().find(|member| member.broker_id == 0);
-    let mut slave_addresses = members
+    let mut slaves = members
         .iter()
         .filter(|member| member.broker_id != 0)
-        .map(|member| member.address.clone())
         .collect::<Vec<_>>();
+    slaves.sort_by_key(|member| member.broker_id);
+    let mut slave_addresses = slaves.iter().map(|member| member.address.clone()).collect::<Vec<_>>();
     slave_addresses.sort();
     TopologyBrokerGroup {
         broker_name: broker_name.to_string(),
@@ -331,6 +367,21 @@ fn broker_group(broker_name: &str, members: &[&BrokerInfo]) -> TopologyBrokerGro
         // Same reading as the broker list: every instance of the group reports its own traffic.
         produce_tps: round_tps(finite_sum(members.iter().map(|member| member.produce_tps))),
         consume_tps: round_tps(finite_sum(members.iter().map(|member| member.consume_tps))),
+        // The replication layer fills these in when it can be read.
+        election: TopologyMasterElection::Unknown,
+        controller_addresses: Vec::new(),
+        replicas: slaves
+            .iter()
+            .map(|member| TopologyReplica {
+                broker_id: member.broker_id,
+                address: member.address.clone(),
+                lag_bytes: None,
+                in_sync: None,
+                transfer_bytes_per_second: None,
+            })
+            .collect(),
+        in_sync_slave_count: None,
+        controller_state: None,
     }
 }
 
@@ -421,6 +472,10 @@ mod tests {
     use super::assemble;
     use super::without_system_consumers;
     use super::without_system_producers;
+    use crate::admin::ControllerReading;
+    use crate::admin::GroupReplication;
+    use crate::admin::MasterElection;
+    use crate::admin::ReplicationObservation;
     use crate::error::DashboardError;
     use crate::model::BrokerInfo;
     use crate::model::ConsumerGroupListItem;
@@ -575,6 +630,7 @@ mod tests {
                     consumer("order-consumer", 12, 8_420, &["broker-a", "broker-a"]),
                 ],
             ),
+            replication: None,
         }
     }
 
@@ -673,6 +729,7 @@ mod tests {
             topics: failed(TopologySource::Topics),
             producers: failed(TopologySource::Producers),
             consumers: failed(TopologySource::Consumers),
+            replication: None,
         };
 
         let error = assemble(results, 42).expect_err("every layer failed");
@@ -767,6 +824,45 @@ mod tests {
         assert_eq!(json["producers"][0]["brokerNames"], serde_json::json!([]));
         assert_eq!(json["consumers"][0]["displayName"], "order-consumer");
         assert_eq!(json["totals"]["messageBacklog"], 8_420);
+    }
+
+    #[test]
+    fn adds_the_replication_layer_with_the_field_names_the_frontend_reads() {
+        let mut results = results();
+        results.replication = Some(ok(
+            TopologySource::Replication,
+            ReplicationObservation {
+                groups: vec![GroupReplication {
+                    cluster_name: "DefaultCluster".to_string(),
+                    broker_name: "broker-a".to_string(),
+                    election: MasterElection::Controller,
+                    controller_addresses: vec!["10.0.6.1:9878".to_string()],
+                    ha: None,
+                    sync_state: None,
+                }],
+                controllers: vec![ControllerReading {
+                    address: "10.0.6.1:9878".to_string(),
+                    metadata: None,
+                }],
+            },
+        ));
+
+        let view = assemble(results, 42).expect("topology view");
+        let json = serde_json::to_value(&view).expect("topology JSON");
+
+        assert_eq!(json["sources"][6]["source"], "replication");
+        let broker_a = &json["clusters"][0]["brokers"][0];
+        assert_eq!(broker_a["election"], "controller");
+        assert_eq!(broker_a["controllerAddresses"][0], "10.0.6.1:9878");
+        assert_eq!(broker_a["replicas"][0]["brokerId"], 1);
+        assert_eq!(broker_a["replicas"][0]["address"], "10.0.4.121:10911");
+        // Without an HA reading the replica carries no replication state.
+        assert!(broker_a["replicas"][0].get("inSync").is_none());
+        assert!(broker_a.get("controllerState").is_none());
+        // A group the replication layer did not read keeps an unknown election.
+        assert_eq!(json["clusters"][1]["brokers"][0]["election"], "unknown");
+        assert_eq!(json["controllers"][0]["address"], "10.0.6.1:9878");
+        assert_eq!(json["controllers"][0]["status"], "unavailable");
     }
 
     #[test]

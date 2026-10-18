@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderAtRoute } from '../../../test/render';
-import { fixtureProducers, fixtureSnapshot } from '../topology-fixtures';
+import { fixtureProducers, fixtureSnapshot, withReplication } from '../topology-fixtures';
 import { ALL_CLUSTERS, selectTopologyView } from '../topology-model';
 import TopologySphere, { type TopologySphereProps } from './TopologySphere';
 import { TopologySphereScene, type SphereSceneHandlers } from './sphere-scene';
@@ -93,6 +93,42 @@ describe('TopologySphere', () => {
     expect(screen.getByRole('region', { name: 'Producer groups · 6 of 7' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /^Show all producer groups/ }));
     expect(props.onToggleGroups).toHaveBeenCalledWith('producers');
+  });
+
+  it('lists the Controllers, says why replicas need attention and shows their replication', () => {
+    const view = selectTopologyView(withReplication(fixtureSnapshot()), { scope: ALL_CLUSTERS, producerLimit: 6, consumerLimit: 6 });
+    renderSphere({ view });
+    const focus = screen.getByRole('complementary', { name: 'Focus' });
+    const fact = (label: string) => within(focus).getByText(label).nextElementSibling;
+
+    const attention = within(focus).getByRole('region', { name: 'Needs attention' });
+    expect(within(attention).getAllByRole('button').map((row) => row.textContent)).toEqual(
+      expect.arrayContaining(['broker-d replica 1out of sync set', 'broker-b slave 1not connected'])
+    );
+    expect(within(focus).getByRole('region', { name: 'Broker groups · 4' })).toHaveTextContent('broker-dController mode · 1 replica');
+    expect(within(focus).getByRole('region', { name: 'Controllers · 3' })).toHaveTextContent('10.0.9.1:9878leader');
+    expect(within(focus).getByRole('region', { name: 'Reading the spheres' })).toHaveTextContent('Right sphere: the Controllers');
+
+    act(() => handlers.onSelect('controller:10.0.9.1:9878'));
+    expect(within(focus).getByRole('heading', { name: '10.0.9.1:9878' })).toBeInTheDocument();
+    expect(fact('Role')).toHaveTextContent('Leader');
+    expect(fact('Applied index')).toHaveTextContent('42');
+    expect(fact('Elects masters of')).toHaveTextContent('broker-d');
+    // The dashboard has no page of its own for a Controller.
+    expect(within(focus).queryByRole('link')).not.toBeInTheDocument();
+
+    act(() => handlers.onSelect('broker:broker-d'));
+    expect(fact('Master chosen by')).toHaveTextContent('Controllers');
+    expect(fact('Controller leader')).toHaveTextContent('10.0.9.1:9878');
+    expect(fact('Sync state set')).toHaveTextContent('1 of 2 replicas · epoch 5');
+
+    act(() => handlers.onSelect('slave:broker-d:10.0.5.123:10911'));
+    expect(within(focus).getByRole('heading', { name: 'broker-d replica 1' })).toBeInTheDocument();
+    expect(fact('Address')).toHaveTextContent('10.0.5.123:10911');
+    expect(fact('Broker ID')).toHaveTextContent('1');
+    expect(fact('Sync state set')).toHaveTextContent('Out');
+    expect(fact('Lag')).toHaveTextContent('0 B');
+    expect(fact('Transfer')).toHaveTextContent('2.0 KB/s');
   });
 
   it('pauses motion and turns the spheres back on request', async () => {
