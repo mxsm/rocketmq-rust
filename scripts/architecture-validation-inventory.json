@@ -176,7 +176,7 @@
   },
   "critical_action_pins": {
     "checkout": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-    "upload_artifact": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+    "upload_artifact": "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9"
   },
   "critical_workflows": [
     ".github/workflows/fuzz-ci.yml",
