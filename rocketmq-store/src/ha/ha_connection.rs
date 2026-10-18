@@ -21,8 +21,9 @@ use rocketmq_store_api::StoreError;
 
 use crate::ha::ha_connection_state::HAConnectionState;
 
-#[trait_variant::make(HAConnection: Send)]
-pub trait RocketmqHAConnection: Sync {
+/// Defines the lifecycle and state of a replication connection.
+#[trait_variant::make(Send)]
+pub trait HAConnection: Sync {
     /// Start the HA connection
     ///
     /// This initiates the connection threads and begins processing.
