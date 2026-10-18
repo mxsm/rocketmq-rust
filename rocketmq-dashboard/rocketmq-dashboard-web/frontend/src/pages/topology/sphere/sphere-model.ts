@@ -572,6 +572,10 @@ export function nodeTitle(node: SphereNode): string {
   }
 }
 
+function slaveRole(node: SlaveNode): string {
+  return node.group.election === 'controller' ? 'replica' : 'slave';
+}
+
 /** Second line of a node's label, the reading that changes between refreshes. */
 export function nodeMetric(node: SphereNode): string {
   switch (node.kind) {
@@ -579,10 +583,8 @@ export function nodeMetric(node: SphereNode): string {
       return node.group.masterAddress
         ? `in ${formatTps(node.group.produceTps)} · out ${formatTps(node.group.consumeTps)}`
         : 'no master registered';
-    case 'slave': {
-      const role = node.group.election === 'controller' ? 'replica' : 'slave';
-      return `${role} · ${node.address}${replicaBehind(node) ? ' · out of sync' : ''}`;
-    }
+    case 'slave':
+      return `${slaveRole(node)} · ${node.address}${replicaBehind(node) ? ' · out of sync' : ''}`;
     case 'producer':
       return plural(node.producer.connectionCount, 'connection', 'connections');
     case 'consumer': {
@@ -598,6 +600,15 @@ export function nodeMetric(node: SphereNode): string {
       if (node.controller.leader === undefined) return 'no leader known';
       return node.controller.leader ? 'leader' : 'follower';
   }
+}
+
+/**
+ * The metric as a label shows it. An address and the state of a replica that is out of sync are
+ * too wide for one label line, so the state goes on a line of its own.
+ */
+export function nodeLabelMetric(node: SphereNode): string {
+  if (node.kind === 'slave' && replicaBehind(node)) return `${slaveRole(node)} · ${node.address}\nout of sync`;
+  return nodeMetric(node);
 }
 
 const KIND_NAMES: Record<SphereNodeKind, string> = {
@@ -620,7 +631,7 @@ export function kindName(kind: SphereNodeKind): string {
  */
 export function nodeName(node: SphereNode): string {
   if (node.kind !== 'slave') return nodeTitle(node);
-  return `${node.group.brokerName} ${node.group.election === 'controller' ? 'replica' : 'slave'} ${node.replica?.brokerId ?? node.address}`;
+  return `${node.group.brokerName} ${slaveRole(node)} ${node.replica?.brokerId ?? node.address}`;
 }
 
 /** What a screen reader announces for a node on a sphere; the name of a slave already says what it is. */

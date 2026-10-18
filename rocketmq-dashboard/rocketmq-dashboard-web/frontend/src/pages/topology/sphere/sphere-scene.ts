@@ -45,7 +45,7 @@ import {
   CONTROLLER_RADIUS,
   NAMESERVER_RADIUS,
   nodeDescription,
-  nodeMetric,
+  nodeLabelMetric,
   nodeTitle,
   nodeTone,
   surfacePoint,
@@ -789,7 +789,7 @@ export class TopologySphereScene {
     }
     const metric = document.createElement('span');
     metric.className = 'topology-sphere-label-metric';
-    metric.textContent = nodeMetric(node);
+    metric.textContent = nodeLabelMetric(node);
     element.append(metric);
     element.setAttribute('aria-label', nodeDescription(node));
     element.addEventListener('click', (event) => {
@@ -966,7 +966,7 @@ export class TopologySphereScene {
       if (!view) continue;
       view.node = node;
       if (view.title) view.title.textContent = nodeTitle(node);
-      view.metric.textContent = nodeMetric(node);
+      view.metric.textContent = nodeLabelMetric(node);
       view.label.element.setAttribute('aria-label', nodeDescription(node));
     }
     const links = new Map(model.links.map((link) => [link.id, link]));
