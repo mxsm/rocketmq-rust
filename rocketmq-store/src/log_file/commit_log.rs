@@ -1427,7 +1427,7 @@ impl CommitLog {
 
         let status = self
             .flush_manager
-            .handle_disk_flush_shared(put_message_result, msg)
+            .handle_disk_flush(put_message_result, msg)
             .instrument(rocketmq_observability::trace::store::flush_span(&self.telemetry_handle))
             .await;
 
