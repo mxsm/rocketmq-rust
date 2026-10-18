@@ -58,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(client):** Remove unused internal consumer core-pool increment/decrement no-ops; explicit pool resizing is unchanged ([#11724](https://github.com/mxsm/rocketmq-rust/issues/11724)).
 - **refactor(broker):** Remove unused private metrics attribute/status models and constant re-export modules ([#11652](https://github.com/mxsm/rocketmq-rust/issues/11652)).
 - **refactor(proxy-core):** Remove the deprecated `remoting` and `service` module aliases (breaking); import from `ingress::remoting` and `contracts`, respectively.
 - **refactor(client):** Remove three internal LitePull offset forwarders while retaining the public consumer methods and existing offset implementations ([#11653](https://github.com/mxsm/rocketmq-rust/issues/11653)).
