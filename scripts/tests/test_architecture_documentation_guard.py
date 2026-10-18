@@ -59,6 +59,7 @@ class ArchitectureDocumentationGuardTest(unittest.TestCase):
         findings = guard.validate_routes(root, policy, facts)
         findings.extend(guard.validate_python_tests(root, policy))
         findings.extend(guard.validate_coverage(root, policy))
+        findings.extend(guard.validate_action_pins(root, policy))
         self.assertEqual([], findings)
 
     def test_observability_cache_key_is_normalized_for_feature_lists(self) -> None:
