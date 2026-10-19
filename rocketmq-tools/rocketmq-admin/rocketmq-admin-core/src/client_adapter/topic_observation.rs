@@ -401,6 +401,9 @@ pub(crate) fn source_failure(
     AdminSourceFailure::new(source, code, crate::canonical_is_retryable(error), broker_name)
 }
 
+/// Promotes a failure while preserving canonical metadata and typed sources.
+///
+/// The operation name labels the Admin error without replacing canonical context.
 pub(crate) fn promote_to_admin_error(
     operation_name: &'static str,
     source: impl crate::IntoCanonicalError,
