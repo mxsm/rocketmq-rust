@@ -13,8 +13,15 @@
 // limitations under the License.
 
 /// Detects whether a remote service endpoint is healthy.
-#[trait_variant::make(ServiceDetector: Send)]
-pub trait ServiceDetectorLocal: Send + Sync + 'static {
+///
+/// Implementations are used by the latency-aware fault tolerance strategy to
+/// probe whether a remote endpoint is reachable before traffic is routed back
+/// to it. Implementations must be `Send + Sync + 'static` so detectors can be
+/// shared across threads and stored in long-lived client state, and
+/// [`detect`](Self::detect) returns a `Send` future so probing never pins the
+/// caller to a single thread.
+#[trait_variant::make(Send)]
+pub trait ServiceDetector: Sync + 'static {
     /// Checks if the remote service at the given endpoint is reachable.
     ///
     /// Returns `true` if the service is back to normal; `false` otherwise.
