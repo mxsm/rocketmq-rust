@@ -27,7 +27,7 @@ pub(super) async fn resolve_acl_targets(
     let cluster_info = admin
         .examine_broker_cluster_info()
         .await
-        .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
     let broker_table = cluster_info
         .broker_addr_table
         .as_ref()

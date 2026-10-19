@@ -32,7 +32,7 @@ use crate::core::query::AdminQuerySource;
 use crate::core::AdminError;
 use crate::core::AdminResult;
 use crate::exact_broker::resolve_exact_broker_targets;
-use crate::topic_observation::backend_error;
+use crate::topic_observation::promote_to_admin_error;
 
 const OPERATION: &str = "query_lite_broker_info";
 
@@ -73,7 +73,7 @@ async fn query_lite_broker_info_from<S: LiteBrokerSource>(
     let cluster_info = source
         .cluster_info()
         .await
-        .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
     let (targets, _) = resolve_exact_broker_targets(
         cluster_info,
         &request.cluster,

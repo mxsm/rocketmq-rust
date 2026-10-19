@@ -23,8 +23,8 @@ use rocketmq_protocol::protocol::body::{
 };
 
 use super::{
-    backend_error, classify_consumer_group, collect_master_broker_targets, map_consumer_connection,
-    map_consumer_progress, map_consumer_running_info, normalize_consumer_group, ConsumerGroupMeta,
+    classify_consumer_group, collect_master_broker_targets, map_consumer_connection, map_consumer_progress,
+    map_consumer_running_info, normalize_consumer_group, promote_to_admin_error, ConsumerGroupMeta,
 };
 use crate::{
     client_adapter::{lifecycle::AdminSession, services::consumer::ConsumerService},
@@ -57,7 +57,7 @@ impl ConsumerWorkspaceAdmin for AdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
             let discovery = discover_groups(&self.inner, &cluster_info).await;
             let forwarded_address = request
                 .forwarded_address
@@ -235,7 +235,7 @@ impl ConsumerWorkspaceAdmin for AdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
             let discovery = discover_groups(&self.inner, &cluster_info).await;
             let mut targets = Vec::new();
             let mut failures = discovery.failures;
@@ -397,7 +397,7 @@ impl ConsumerWorkspaceAdmin for AdminSession {
             self.ensure_open()?;
             let running_info = ConsumerService::query_dashboard_consumer_running_info_with_admin(&self.inner, request)
                 .await
-                .map_err(|error| backend_error("get_consumer_running_info", error))?;
+                .map_err(|source| promote_to_admin_error("get_consumer_running_info", source))?;
             Ok(map_consumer_running_info(
                 request.consumer_group(),
                 request.client_id(),
@@ -415,7 +415,7 @@ impl ConsumerWorkspaceAdmin for AdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
             let targets = collect_master_broker_targets(&cluster_info);
             let mut clients_by_group = BTreeMap::<String, BTreeSet<ProducerClientIdentity>>::new();
             let mut failures = Vec::new();
@@ -620,7 +620,7 @@ async fn first_group_target(
     let cluster_info = admin
         .examine_broker_cluster_info()
         .await
-        .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
     let discovery = discover_groups(admin, &cluster_info).await;
     Ok(discovery.groups.get(group).and_then(|meta| {
         let mut addresses = meta.broker_addresses.iter().collect::<Vec<_>>();

@@ -252,7 +252,7 @@ async fn query_ha_status_from<S: InfrastructureObservationSource>(
     let cluster_info = source
         .cluster_info()
         .await
-        .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
     let topology = resolve_ha_topology(&cluster_info, &request.cluster, &request.broker_names)?;
 
     let mut failures = topology.failures;
@@ -1090,8 +1090,11 @@ fn invalid_failure(source: AdminQuerySource, logical_target: &str) -> AdminSourc
     AdminSourceFailure::new(source, AdminQueryFailureCode::InvalidResponse, false, logical_target)
 }
 
-fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
-    AdminError::from_error(operation, error.into_canonical_error())
+/// Promotes a failure while preserving canonical metadata and typed sources.
+///
+/// The operation name labels the Admin error without replacing canonical context.
+fn promote_to_admin_error(operation_name: &'static str, source: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation_name, source.into_canonical_error())
 }
 
 fn safe_logical_identifier(value: &str) -> bool {

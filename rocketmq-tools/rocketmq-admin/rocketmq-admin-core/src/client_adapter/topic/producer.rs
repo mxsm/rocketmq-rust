@@ -100,13 +100,13 @@ pub(crate) async fn send_normal_message(
     producer
         .start()
         .await
-        .map_err(|error| backend_error("start_topic_test_producer", error))?;
+        .map_err(|source| promote_to_admin_error("start_topic_test_producer", source))?;
     let send_result = producer
         .send_with_timeout(build_send_message(request), SEND_TIMEOUT_MILLIS)
         .await;
     producer.shutdown().await;
     let send_result = send_result
-        .map_err(|error| backend_error("send_topic_test_message", error))?
+        .map_err(|source| promote_to_admin_error("send_topic_test_message", source))?
         .ok_or_else(|| {
             AdminError::operation_failed(
                 "send_topic_test_message",
@@ -138,14 +138,14 @@ pub(crate) async fn send_transaction_message(
     producer
         .start()
         .await
-        .map_err(|error| backend_error("start_topic_transaction_test_producer", error))?;
+        .map_err(|source| promote_to_admin_error("start_topic_transaction_test_producer", source))?;
     let send_result = producer
         .send_message_in_transaction::<(), _>(build_send_message(request), None)
         .await;
     producer.shutdown().await;
     map_transaction_send_result(
         request.topic.clone(),
-        send_result.map_err(|error| backend_error("send_topic_transaction_test_message", error))?,
+        send_result.map_err(|source| promote_to_admin_error("send_topic_transaction_test_message", source))?,
     )
 }
 
@@ -186,6 +186,9 @@ pub(crate) fn map_transaction_send_result(
     Ok(result)
 }
 
-fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
-    AdminError::from_error(operation, error.into_canonical_error())
+/// Promotes a failure while preserving canonical metadata and typed sources.
+///
+/// The operation name labels the Admin error without replacing canonical context.
+fn promote_to_admin_error(operation_name: &'static str, source: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation_name, source.into_canonical_error())
 }

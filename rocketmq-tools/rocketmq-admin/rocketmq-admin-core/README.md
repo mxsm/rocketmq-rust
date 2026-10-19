@@ -136,6 +136,16 @@ typed cause through `std::error::Error::source`. For an existing canonical error
 use `AdminError::from_error` to preserve its descriptor, context, protocol mappings,
 and typed source chain instead of assigning a generic operation-failure descriptor.
 
+### Canonical Error Promotion
+
+Adapter modules use internal `promote_to_admin_error` helpers. Each calls
+`source.into_canonical_error()` followed by `AdminError::from_error(operation_name, ...)`,
+preserving the canonical descriptor, context, protocol error information, typed
+cause chain, and redaction behavior. `AdminError::operation()` records the Admin
+operation label; promotion does not add or overwrite the canonical
+`OPERATION_DIAGNOSTIC` context field. These helpers are internal implementation
+details, with their existing module or crate visibility.
+
 ## Local Validation
 
 ```bash

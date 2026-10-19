@@ -33,7 +33,7 @@ use crate::core::security::MAX_ACL_USER_BROKERS;
 use crate::core::security::MAX_ACL_USER_ROWS;
 use crate::core::AdminError;
 use crate::core::AdminResult;
-use crate::topic_observation::backend_error;
+use crate::topic_observation::promote_to_admin_error;
 
 const OPERATION: &str = "query_acl_users";
 const MAX_USERNAME_BYTES: usize = 255;
@@ -79,7 +79,7 @@ async fn query_acl_users_from<S: AclUserSource>(
     let cluster_info = source
         .cluster_info()
         .await
-        .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
     let ClusterMasters {
         targets,
         mut unanswered,

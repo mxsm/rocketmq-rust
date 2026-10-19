@@ -39,7 +39,7 @@ pub(super) fn query_dlq<'a>(
             .inner
             .examine_topic_route_info(topic.as_str().into())
             .await
-            .map_err(|error| backend_error("examine_topic_route_info", error))?
+            .map_err(|source| promote_to_admin_error("examine_topic_route_info", source))?
             .is_none()
         {
             return Ok(dashboard::DashboardMessageList::default());
@@ -74,7 +74,7 @@ pub(super) fn trace<'a>(
             .inner
             .message_track_detail(message)
             .await
-            .map_err(|error| backend_error("message_track_detail", error))?;
+            .map_err(|source| promote_to_admin_error("message_track_detail", source))?;
         let mut nodes = tracks
             .into_iter()
             .map(|track| dashboard::DashboardMessageTraceNode {
@@ -111,7 +111,7 @@ pub(super) fn consume_directly<'a>(
                 request.message_id.as_str().into(),
             )
             .await
-            .map_err(|error| backend_error("consume_message_directly", error))?;
+            .map_err(|source| promote_to_admin_error("consume_message_directly", source))?;
         let consume_result = result
             .consume_result()
             .map(ToString::to_string)
@@ -189,7 +189,7 @@ pub(super) async fn query_messages(
                 None,
             )
             .await
-            .map_err(|error| backend_error("query_message_by_key", error))?;
+            .map_err(|source| promote_to_admin_error("query_message_by_key", source))?;
         let items = result.message_list().iter().map(map_message).collect::<Vec<_>>();
         return Ok(dashboard::DashboardMessageList {
             total: items.len(),
@@ -208,7 +208,7 @@ pub(super) async fn query_messages(
                 request.end.unwrap_or(i64::MAX),
             )
             .await
-            .map_err(|error| backend_error("query_message_by_unique_key", error))?;
+            .map_err(|source| promote_to_admin_error("query_message_by_unique_key", source))?;
         let items = result
             .message_list()
             .iter()
@@ -233,7 +233,7 @@ pub(super) async fn scan_messages(
         .inner
         .examine_topic_route_info(topic.into())
         .await
-        .map_err(|error| backend_error("examine_topic_route_info", error))?;
+        .map_err(|source| promote_to_admin_error("examine_topic_route_info", source))?;
     let route = route.ok_or_else(|| AdminError::topic_not_found(topic))?;
     let targets = topic_queue_targets(topic, &route);
     let page_size = request
@@ -258,13 +258,13 @@ pub(super) async fn scan_messages(
                     PULL_TIMEOUT_MILLIS,
                 )
                 .await
-                .map_err(|error| backend_error("search_offset", error))? as i64
+                .map_err(|source| promote_to_admin_error("search_offset", source))? as i64
         } else {
             session
                 .inner
                 .min_offset(broker_addr.as_str().into(), queue.clone(), PULL_TIMEOUT_MILLIS)
                 .await
-                .map_err(|error| backend_error("min_offset", error))?
+                .map_err(|source| promote_to_admin_error("min_offset", source))?
         };
         let max_offset = if let Some(end) = request.end.filter(|value| *value > 0) {
             session
@@ -277,13 +277,13 @@ pub(super) async fn scan_messages(
                     PULL_TIMEOUT_MILLIS,
                 )
                 .await
-                .map_err(|error| backend_error("search_offset", error))? as i64
+                .map_err(|source| promote_to_admin_error("search_offset", source))? as i64
         } else {
             session
                 .inner
                 .max_offset(broker_addr.as_str().into(), queue.clone(), PULL_TIMEOUT_MILLIS)
                 .await
-                .map_err(|error| backend_error("max_offset", error))?
+                .map_err(|source| promote_to_admin_error("max_offset", source))?
         };
         while has_remaining_offset(min_offset, max_offset, inclusive_end_offset) && items.len() < page_size {
             let batch_size = scan_batch_size(min_offset, max_offset, inclusive_end_offset);
@@ -291,7 +291,7 @@ pub(super) async fn scan_messages(
                 .inner
                 .pull_message_from_queue(&broker_addr, &queue, "*", min_offset, batch_size, PULL_TIMEOUT_MILLIS)
                 .await
-                .map_err(|error| backend_error("pull_message_from_queue", error))?;
+                .map_err(|source| promote_to_admin_error("pull_message_from_queue", source))?;
             let next_offset = result.next_begin_offset() as i64;
             min_offset = if next_offset > min_offset {
                 next_offset

@@ -125,6 +125,14 @@ rocketmq-admin-core/
 使用 `AdminError::from_error` 保留其描述符、上下文、协议映射和类型化源错误链，
 避免将其替换成通用操作失败描述符。
 
+### 规范错误提升
+
+适配器模块使用内部 `promote_to_admin_error` 辅助函数。函数先调用
+`source.into_canonical_error()`，再调用 `AdminError::from_error(operation_name, ...)`，
+保留规范描述符、上下文、协议错误信息、类型化原因链和脱敏行为。
+`AdminError::operation()` 记录 Admin 操作标签；提升过程不会添加或覆盖规范上下文中的
+`OPERATION_DIAGNOSTIC` 字段。这些函数属于内部实现细节，保持原有的模块内或 crate 内可见性。
+
 ## 本地验证
 
 ```bash
