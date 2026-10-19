@@ -1143,12 +1143,14 @@ fn parse_raft_peers(value: &str) -> Result<Vec<RaftPeer>> {
 /// Command line arguments structure
 #[derive(Parser, Debug)]
 #[command(
-    name = "mqnamesrv",
-    author = "Apache RocketMQ",
-    version = "0.1.0",
-    about = "RocketMQ Name Server (Rust Implementation)",
-    long_about = "Apache RocketMQ Name Server - Rust implementation providing lightweight service discovery and \
-                  routing"
+    name = "rocketmq-namesrv-rust",
+    author,
+    version,
+    about = "RocketMQ-Rust NameServer",
+    long_about = "NameServer for RocketMQ-Rust, a Rust implementation of Apache RocketMQ.\n\n\
+                  Provides broker registration, liveness tracking, topic route discovery, \
+                  and namespaced key-value configuration management.\n\n\
+                  Project: https://github.com/mxsm/rocketmq-rust"
 )]
 struct Args {
     /// Name server config properties file
