@@ -34,9 +34,33 @@ fn broker_response_code(error: &ClientError) -> Option<ResponseCode> {
     error.broker_response_code().map(ResponseCode::from)
 }
 
-#[trait_variant::make(PullCallback: Send)]
-pub trait PullCallbackLocal: Sync {
+/// Callback for handling the result of an asynchronous message pull.
+///
+/// Implementations receive either the successful [`PullResultExt`] via
+/// [`PullCallback::on_success`] or the failure [`ClientError`] via
+/// [`PullCallback::on_exception`]. Implementations must be `Send + Sync`
+/// (the trait requires `Sync` and the macro requires `Send`), and the future
+/// returned by [`PullCallback::on_success`] is `Send` so that callbacks can be
+/// driven from multi-threaded runtimes. Receivers are mutable so that
+/// implementations can drain their internal pull-request state exactly once.
+#[trait_variant::make(Send)]
+pub trait PullCallback: Sync {
+    /// Handles a successful pull.
+    ///
+    /// Receives the extended pull result (`pull_result`) produced by the
+    /// broker and asynchronously processes it (for example by dispatching
+    /// found messages for consumption and scheduling the next pull). Being an
+    /// `async` method, the returned future is `Send` and may be awaited from
+    /// any worker thread.
     async fn on_success(&mut self, pull_result: PullResultExt);
+
+    /// Handles a failed pull.
+    ///
+    /// Receives the error (`e`) describing why the pull did not complete and
+    /// handles it synchronously (for example by logging and scheduling a
+    /// delayed retry of the pull request). This method defines only the
+    /// error-reporting contract; implementations decide their own retry
+    /// policy.
     fn on_exception(&mut self, e: ClientError);
 }
 
