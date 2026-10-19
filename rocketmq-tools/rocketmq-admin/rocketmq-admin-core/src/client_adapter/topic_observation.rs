@@ -208,11 +208,11 @@ async fn resolve_topic_targets<S: TopicObservationSource>(
     let cluster_info = source
         .cluster_info()
         .await
-        .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
     let route = source
         .topic_route(topic)
         .await
-        .map_err(|error| backend_error("examine_topic_route_info", error))?
+        .map_err(|source| promote_to_admin_error("examine_topic_route_info", source))?
         .ok_or_else(|| AdminError::topic_not_found(topic))?;
     selected_cluster_route_masters(&cluster_info, &route, cluster, failure_source)
 }
@@ -401,8 +401,11 @@ pub(crate) fn source_failure(
     AdminSourceFailure::new(source, code, crate::canonical_is_retryable(error), broker_name)
 }
 
-pub(crate) fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
-    AdminError::from_error(operation, error.into_canonical_error())
+pub(crate) fn promote_to_admin_error(
+    operation_name: &'static str,
+    source: impl crate::IntoCanonicalError,
+) -> AdminError {
+    AdminError::from_error(operation_name, source.into_canonical_error())
 }
 
 #[cfg(test)]

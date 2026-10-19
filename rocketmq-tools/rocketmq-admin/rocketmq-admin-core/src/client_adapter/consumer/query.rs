@@ -27,11 +27,11 @@ use rocketmq_protocol::protocol::body::consumer_connection::ConsumerConnection;
 use rocketmq_protocol::protocol::body::consumer_running_info::ConsumerRunningInfo;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 
-use super::backend_error;
 use super::classify_consumer_group;
 use super::collect_master_broker_targets;
 use super::consume_from_where_label;
 use super::now_timestamp_millis;
+use super::promote_to_admin_error;
 use super::serialize_group_retry_policy_json;
 use crate::core::consumer;
 use crate::core::AdminError;
@@ -116,7 +116,7 @@ pub(super) async fn collect_consumer_group_meta(
                     "No broker subscription metadata could be loaded.",
                 )
             },
-            |error| backend_error("get_all_subscription_group", error),
+            |source| promote_to_admin_error("get_all_subscription_group", source),
         ));
     }
     Ok(group_map)

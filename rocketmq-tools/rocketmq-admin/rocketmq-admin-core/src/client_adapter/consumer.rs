@@ -88,7 +88,7 @@ impl ConsumerAdmin for AdminSession {
                 .inner
                 .fetch_all_topic_list()
                 .await
-                .map_err(|error| backend_error("fetch_all_topic_list", error))?;
+                .map_err(|source| promote_to_admin_error("fetch_all_topic_list", source))?;
             let mut groups = Vec::new();
             for retry_topic in topic_list
                 .topic_list
@@ -147,7 +147,7 @@ impl ConsumerAdmin for AdminSession {
                 .inner
                 .fetch_all_topic_list()
                 .await
-                .map_err(|error| backend_error("fetch_all_topic_list", error))?;
+                .map_err(|source| promote_to_admin_error("fetch_all_topic_list", source))?;
             let mut groups = Vec::new();
             let mut failures = Vec::new();
             let mut successful_sources = 1usize;
@@ -238,7 +238,7 @@ impl ConsumerAdmin for AdminSession {
                     None,
                 )
                 .await
-                .map_err(|error| backend_error("examine_consume_stats", error))?;
+                .map_err(|source| promote_to_admin_error("examine_consume_stats", source))?;
             let allocation = if request.include_client_ip {
                 message_queue_allocation(&self.inner, request.consumer_group.as_str()).await
             } else {
@@ -335,7 +335,7 @@ impl ConsumerAdmin for AdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
             let group_map = collect_consumer_group_meta(&mut self.inner, &cluster_info).await?;
             let address = normalize_address(request.address.as_deref());
             let mut items = Vec::with_capacity(group_map.len());
@@ -362,7 +362,7 @@ impl ConsumerAdmin for AdminSession {
                     self.inner.examine_consumer_connection_info(group, address)
                 })
                 .await
-                .map_err(|error| backend_error("examine_consumer_connection_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_consumer_connection_info", source))?;
             Ok(map_consumer_connection(&group, connection))
         })
     }
@@ -380,7 +380,7 @@ impl ConsumerAdmin for AdminSession {
                     self.inner.examine_consume_stats(group, None, None, address, timeout)
                 })
                 .await
-                .map_err(|error| backend_error("examine_consume_stats", error))?
+                .map_err(|source| promote_to_admin_error("examine_consume_stats", source))?
             } else {
                 let mut merged_stats = ConsumeStats::new();
                 for broker_addr in broker_addresses {
@@ -391,7 +391,7 @@ impl ConsumerAdmin for AdminSession {
                         |group, address, timeout| self.inner.examine_consume_stats(group, None, None, address, timeout),
                     )
                     .await
-                    .map_err(|error| backend_error("examine_consume_stats", error))?;
+                    .map_err(|source| promote_to_admin_error("examine_consume_stats", source))?;
                     merged_stats.consume_tps += stats.get_consume_tps();
                     merged_stats
                         .get_offset_table_mut()
@@ -417,7 +417,7 @@ impl ConsumerAdmin for AdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
             let broker_address = match normalize_address(request.address.as_deref()) {
                 Some(address) => address,
                 None => {
@@ -440,7 +440,7 @@ impl ConsumerAdmin for AdminSession {
                 .inner
                 .examine_subscription_group_config(broker_address.clone(), CheetahString::from(group.as_str()))
                 .await
-                .map_err(|error| backend_error("examine_subscription_group_config", error))?;
+                .map_err(|source| promote_to_admin_error("examine_subscription_group_config", source))?;
             let broker_name =
                 resolve_broker_name_by_address(&cluster_info, broker_address.as_str()).unwrap_or_default();
             Ok(map_consumer_config(
@@ -464,7 +464,7 @@ impl ConsumerAdmin for AdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
             let broker_names = resolve_consumer_target_broker_names(
                 &cluster_info,
                 &request.cluster_name_list,
@@ -495,7 +495,7 @@ impl ConsumerAdmin for AdminSession {
                 self.inner
                     .create_and_update_subscription_group_config(broker_addr, config.clone())
                     .await
-                    .map_err(|error| backend_error("create_and_update_subscription_group_config", error))?;
+                    .map_err(|source| promote_to_admin_error("create_and_update_subscription_group_config", source))?;
             }
 
             Ok(consumer::DashboardConsumerMutationResult {
@@ -532,7 +532,7 @@ impl ConsumerAdmin for AdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
             let group_map = collect_consumer_group_meta(&mut self.inner, &cluster_info).await?;
             let meta = group_map.get(&group).ok_or_else(|| {
                 AdminError::invalid_argument(
@@ -556,7 +556,7 @@ impl ConsumerAdmin for AdminSession {
                 self.inner
                     .delete_subscription_group(broker_addr.clone(), CheetahString::from(group.as_str()), Some(true))
                     .await
-                    .map_err(|error| backend_error("delete_subscription_group", error))?;
+                    .map_err(|source| promote_to_admin_error("delete_subscription_group", source))?;
 
                 for topic in consumer_internal_topics(&group) {
                     self.inner
@@ -565,7 +565,7 @@ impl ConsumerAdmin for AdminSession {
                             CheetahString::from(topic.as_str()),
                         )
                         .await
-                        .map_err(|error| backend_error("delete_topic_in_broker", error))?;
+                        .map_err(|source| promote_to_admin_error("delete_topic_in_broker", source))?;
                     if delete_in_namesrv {
                         let namesrv_targets = self
                             .inner
@@ -576,7 +576,7 @@ impl ConsumerAdmin for AdminSession {
                         self.inner
                             .delete_topic_in_name_server(namesrv_targets, None, CheetahString::from(topic.as_str()))
                             .await
-                            .map_err(|error| backend_error("delete_topic_in_name_server", error))?;
+                            .map_err(|source| promote_to_admin_error("delete_topic_in_name_server", source))?;
                     }
                 }
             }
@@ -606,7 +606,7 @@ impl ConsumerAdmin for AdminSession {
                     request.clean_offset,
                 )
                 .await
-                .map_err(|error| backend_error("delete_subscription_group_list", error))?;
+                .map_err(|source| promote_to_admin_error("delete_subscription_group_list", source))?;
             Ok(ConsumerBatchMutationReport {
                 message: format!(
                     "deleted {} subscription groups through one broker batch request",
@@ -627,7 +627,7 @@ impl ConsumerAdmin for AdminSession {
                 .inner
                 .examine_topic_route_info(CheetahString::from(request.topic.as_str()))
                 .await
-                .map_err(|error| backend_error("examine_topic_route_info", error))?
+                .map_err(|source| promote_to_admin_error("examine_topic_route_info", source))?
                 .ok_or_else(|| AdminError::topic_route_not_found(request.topic.clone()))?;
             let mode = match request.mode {
                 consumer::ConsumerRequestMode::Pull => MessageRequestMode::Pull,
@@ -653,7 +653,7 @@ impl ConsumerAdmin for AdminSession {
                         request.timeout_millis,
                     )
                     .await
-                    .map_err(|error| backend_error("set_message_request_mode", error))?;
+                    .map_err(|source| promote_to_admin_error("set_message_request_mode", source))?;
             }
 
             Ok(consumer::SetConsumerRequestModeResult {
@@ -672,7 +672,7 @@ impl ConsumerDiagnosticAdmin for AdminSession {
             self.ensure_open()?;
             let running_info = ConsumerService::query_dashboard_consumer_running_info_with_admin(&self.inner, request)
                 .await
-                .map_err(|error| backend_error("get_consumer_running_info", error))?;
+                .map_err(|source| promote_to_admin_error("get_consumer_running_info", source))?;
             Ok(map_consumer_running_info(
                 request.consumer_group(),
                 request.client_id(),
@@ -834,7 +834,7 @@ impl ConsumerGroupSnapshotSource for rocketmq_client_rust::DefaultMQAdminExt {
             self.fetch_all_topic_list()
                 .await
                 .map(|topics| topics.topic_list)
-                .map_err(|error| backend_error("fetch_all_topic_list", error))
+                .map_err(|source| promote_to_admin_error("fetch_all_topic_list", source))
         })
     }
 
@@ -1092,8 +1092,8 @@ fn source_failure_from_client(
     AdminSourceFailure::new(source, code, retryable, logical_target)
 }
 
-fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
-    AdminError::from_error(operation, error.into_canonical_error())
+fn promote_to_admin_error(operation_name: &'static str, source: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation_name, source.into_canonical_error())
 }
 
 #[cfg(test)]

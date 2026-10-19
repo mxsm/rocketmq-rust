@@ -278,7 +278,7 @@ async fn preflight_topic_with_targets<A: MQAdminMutationExt + ?Sized>(
     let cluster_info = admin
         .mutation_cluster_info()
         .await
-        .map_err(|error| backend_error("mutation_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
     let mut targets = Vec::new();
     let mut failures = Vec::new();
     let master_targets = master_targets_by_cluster_name(&cluster_info, &cluster)?;
@@ -287,7 +287,7 @@ async fn preflight_topic_with_targets<A: MQAdminMutationExt + ?Sized>(
         let current = admin
             .mutation_order_topic_config(topic.clone().into())
             .await
-            .map_err(|error| backend_error("mutation_order_topic_config", error))?;
+            .map_err(|source| promote_to_admin_error("mutation_order_topic_config", source))?;
         let expected = parse_order_topic_config(current.as_deref())?;
         validate_targeted_order_state(
             &expected,
@@ -333,7 +333,7 @@ async fn execute_topic_checked<A: MQAdminMutationExt + ?Sized>(
         let current = admin
             .mutation_order_topic_config(plan.topic.as_str().into())
             .await
-            .map_err(|error| backend_error("mutation_order_topic_config", error))?;
+            .map_err(|source| promote_to_admin_error("mutation_order_topic_config", source))?;
         let current = parse_order_topic_config(current.as_deref())?;
         if current != guard.expected {
             return Ok(targeted_order_conflict(plan));
@@ -587,7 +587,7 @@ async fn preflight_subscription_group_with_targets<A: MQAdminMutationExt + ?Size
     let cluster_info = admin
         .mutation_cluster_info()
         .await
-        .map_err(|error| backend_error("mutation_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
     let mut targets = Vec::new();
     let mut failures = Vec::new();
     let master_targets = master_targets_by_cluster_name(&cluster_info, &cluster)?;
@@ -700,7 +700,7 @@ async fn preflight_request_mode_with_admin<A: MQAdminMutationExt + ?Sized>(
     let cluster_info = admin
         .mutation_cluster_info()
         .await
-        .map_err(|error| backend_error("mutation_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
     let mut targets = Vec::new();
     let mut failures = Vec::new();
     for (broker_name, broker_addr) in master_targets_by_cluster_name(&cluster_info, &cluster)? {
@@ -786,7 +786,7 @@ async fn preflight_broker_config_with_admin<A: MQAdminMutationExt + ?Sized>(
     let cluster_info = admin
         .mutation_cluster_info()
         .await
-        .map_err(|error| backend_error("mutation_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
     let mut targets = Vec::new();
     let mut failures = Vec::new();
     for (broker_name, broker_addr) in master_targets_by_cluster_name(&cluster_info, &cluster)? {
@@ -814,7 +814,7 @@ async fn preflight_broker_config_target_with_admin<A: MQAdminMutationExt + ?Size
     let cluster_info = admin
         .mutation_cluster_info()
         .await
-        .map_err(|error| backend_error("mutation_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
     let all_targets = master_targets_by_cluster_name(&cluster_info, &cluster)?;
     let selected = vec![broker_name];
     let selected_targets = select_metadata_targets(all_targets, Some(&selected))?;
@@ -1074,7 +1074,7 @@ async fn preview_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
     let cluster_info = admin
         .mutation_cluster_info()
         .await
-        .map_err(|error| backend_error("mutation_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
     let selected_masters = master_targets_by_cluster_name(&cluster_info, &cluster)?;
     let route = require_topic_route(admin, &topic).await?;
     let selected_names = selected_masters

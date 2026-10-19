@@ -280,7 +280,7 @@ impl ReadAdminBuilder {
         admin.set_use_tls(config.configured_use_tls());
         MQAdminReadExt::start(&mut admin)
             .await
-            .map_err(|error| backend_error("start_read_admin_session", error))?;
+            .map_err(|source| promote_to_admin_error("start_read_admin_session", source))?;
         Ok(ReadAdminSession {
             inner: admin,
             client_runtime,
@@ -404,7 +404,7 @@ impl ReadAdminSession {
             CheetahString::from(message_id),
         )
         .await
-        .map_err(|error| backend_error("query_message_metadata", error))?;
+        .map_err(|source| promote_to_admin_error("query_message_metadata", source))?;
         Ok(crate::core::message::MessageMetadata {
             topic: metadata.topic,
             message_id: metadata.message_id,
@@ -445,7 +445,7 @@ impl ProxyQueryAdmin for ReadAdminSession {
                 .inner
                 .proxy_drain_state(CheetahString::from(proxy_addr))
                 .await
-                .map_err(|error| backend_error("proxy_drain_state", error))?;
+                .map_err(|source| promote_to_admin_error("proxy_drain_state", source))?;
             map_proxy_drain_state(state)
         })
     }
@@ -496,7 +496,7 @@ impl BrokerQueryAdmin for ReadAdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
             let broker_names = cluster_info
                 .cluster_addr_table
                 .as_ref()
@@ -541,7 +541,7 @@ impl BrokerQueryAdmin for ReadAdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
             let broker_names = cluster_info
                 .cluster_addr_table
                 .as_ref()
@@ -612,7 +612,7 @@ impl BrokerQueryAdmin for ReadAdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
             let broker_names = cluster_info
                 .cluster_addr_table
                 .as_ref()
@@ -670,7 +670,7 @@ impl BrokerQueryAdmin for ReadAdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
             let broker_names = cluster_info
                 .cluster_addr_table
                 .as_ref()
@@ -710,7 +710,7 @@ impl BrokerQueryAdmin for ReadAdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
             let broker_names = cluster_info
                 .cluster_addr_table
                 .as_ref()
@@ -821,7 +821,7 @@ impl BrokerQueryAdmin for ReadAdminSession {
                 .get_broker_config_allowlisted(CheetahString::from(request.broker_addr.as_str()))
                 .await
                 .map(project_allowlisted_config)
-                .map_err(|error| backend_error("get_broker_config_allowlisted", error))
+                .map_err(|source| promote_to_admin_error("get_broker_config_allowlisted", source))
         })
     }
 
@@ -873,7 +873,7 @@ impl BrokerQueryAdmin for ReadAdminSession {
                 .inner
                 .fetch_broker_runtime_stats(CheetahString::from(request.broker_addr.as_str()))
                 .await
-                .map_err(|error| backend_error("fetch_broker_runtime_stats", error))?;
+                .map_err(|source| promote_to_admin_error("fetch_broker_runtime_stats", source))?;
             Ok(project_broker_log_filter_state(request.logger.clone(), &runtime))
         })
     }
@@ -1372,7 +1372,7 @@ impl TopicQueryAdmin for ReadAdminSession {
                 .inner
                 .fetch_all_topic_list()
                 .await
-                .map_err(|error| backend_error("fetch_all_topic_list", error))?;
+                .map_err(|source| promote_to_admin_error("fetch_all_topic_list", source))?;
             let Some(cluster_name) = request.cluster.as_deref() else {
                 return Ok(ListTopicsResult {
                     topics: topic_list
@@ -1390,7 +1390,7 @@ impl TopicQueryAdmin for ReadAdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
             let cluster_brokers = cluster_info
                 .cluster_addr_table
                 .as_ref()
@@ -1406,7 +1406,7 @@ impl TopicQueryAdmin for ReadAdminSession {
                     .inner
                     .examine_topic_route_info(topic.clone())
                     .await
-                    .map_err(|error| backend_error("examine_topic_route_info", error))?;
+                    .map_err(|source| promote_to_admin_error("examine_topic_route_info", source))?;
                 let Some(route) = route else {
                     continue;
                 };
@@ -1421,7 +1421,7 @@ impl TopicQueryAdmin for ReadAdminSession {
                     .inner
                     .query_topic_consume_by_who(topic.clone())
                     .await
-                    .map_err(|error| backend_error("query_topic_consume_by_who", error))?;
+                    .map_err(|source| promote_to_admin_error("query_topic_consume_by_who", source))?;
                 if group_list.get_group_list().is_empty() {
                     topics.push(TopicSummary {
                         topic: topic.to_string(),
@@ -1452,7 +1452,7 @@ impl TopicQueryAdmin for ReadAdminSession {
                 .examine_topic_route_info(CheetahString::from(request.topic.as_str()))
                 .await
                 .map(|route| route.map(map_topic_route))
-                .map_err(|error| backend_error("examine_topic_route_info", error))
+                .map_err(|source| promote_to_admin_error("examine_topic_route_info", source))
         })
     }
 
@@ -1511,7 +1511,7 @@ impl TopicQueryAdmin for ReadAdminSession {
                     CheetahString::from(request.topic.as_str()),
                 )
                 .await
-                .map_err(|error| backend_error("query_topic_config_cas_state", error))?;
+                .map_err(|source| promote_to_admin_error("query_topic_config_cas_state", source))?;
             Ok(TopicConfigCasState {
                 version: state.version,
                 read_queue_nums: state.config.read_queue_nums,
@@ -1555,7 +1555,7 @@ impl TopicInventoryAdmin for ReadAdminSession {
                 request.cluster.as_deref().map(CheetahString::from),
             )
             .await
-            .map_err(|error| backend_error("fetch_topic_inventory", error))?;
+            .map_err(|source| promote_to_admin_error("fetch_topic_inventory", source))?;
             Ok(normalize_topic_inventory(
                 topic_list.topic_list,
                 request.cluster.is_some(),
@@ -1593,7 +1593,7 @@ impl ConsumerQueryAdmin for ReadAdminSession {
                     CheetahString::from(request.group.as_str()),
                 )
                 .await
-                .map_err(|error| backend_error("query_subscription_group_config_cas_state", error))?;
+                .map_err(|source| promote_to_admin_error("query_subscription_group_config_cas_state", source))?;
             let config = snapshot.config;
             Ok(consumer::SubscriptionGroupConfigCasState {
                 version: snapshot.version,
@@ -1626,7 +1626,7 @@ impl ConsumerQueryAdmin for ReadAdminSession {
                 .inner
                 .fetch_all_topic_list()
                 .await
-                .map_err(|error| backend_error("fetch_all_topic_list", error))?;
+                .map_err(|source| promote_to_admin_error("fetch_all_topic_list", source))?;
             let mut groups = Vec::new();
             for retry_topic in topic_list
                 .topic_list
@@ -1684,7 +1684,7 @@ impl ConsumerQueryAdmin for ReadAdminSession {
                 .inner
                 .fetch_all_topic_list()
                 .await
-                .map_err(|error| backend_error("fetch_all_topic_list", error))?;
+                .map_err(|source| promote_to_admin_error("fetch_all_topic_list", source))?;
             let mut groups = Vec::new();
             let mut failures = Vec::new();
             // The inventory is itself a successful required source. It makes
@@ -1779,7 +1779,7 @@ impl ConsumerQueryAdmin for ReadAdminSession {
                     None,
                 )
                 .await
-                .map_err(|error| backend_error("examine_consume_stats", error))?;
+                .map_err(|source| promote_to_admin_error("examine_consume_stats", source))?;
             let mut queues = stats.get_offset_table().keys().cloned().collect::<Vec<_>>();
             queues.sort();
             let mut result = consumer::QueryConsumerLagResult {
@@ -1941,7 +1941,7 @@ async fn cluster_broker_targets(admin: &DefaultMQAdminExt, cluster: &str) -> Adm
     let cluster_info = admin
         .examine_broker_cluster_info()
         .await
-        .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
     let broker_names = cluster_info
         .cluster_addr_table
         .as_ref()
@@ -1982,7 +1982,7 @@ async fn exact_broker_targets(
     let cluster_info = admin
         .examine_broker_cluster_info()
         .await
-        .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
     crate::exact_broker::resolve_exact_broker_targets(cluster_info, cluster, broker_name, source)
 }
 
@@ -1998,7 +1998,7 @@ async fn cluster_broker_targets_with_evidence(
     let cluster_info = admin
         .examine_broker_cluster_info()
         .await
-        .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
     let broker_names = cluster_info
         .cluster_addr_table
         .as_ref()
@@ -2184,7 +2184,7 @@ impl ConsumerGroupSnapshotSource for DefaultMQAdminExt {
             self.fetch_all_topic_list()
                 .await
                 .map(|topics| topics.topic_list)
-                .map_err(|error| backend_error("fetch_all_topic_list", error))
+                .map_err(|source| promote_to_admin_error("fetch_all_topic_list", source))
         })
     }
 
@@ -2428,8 +2428,8 @@ fn runtime_f64(runtime: Option<&KVTable>, key: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
-fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
-    AdminError::from_error(operation, error.into_canonical_error())
+fn promote_to_admin_error(operation_name: &'static str, source: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation_name, source.into_canonical_error())
 }
 
 fn source_failure_from_error(

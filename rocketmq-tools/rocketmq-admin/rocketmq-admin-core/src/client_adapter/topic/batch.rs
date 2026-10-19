@@ -39,8 +39,8 @@ use crate::core::topic::UpsertTopicRequest;
 use crate::core::AdminFuture;
 use crate::core::AdminResult;
 
-use super::backend_error;
 use super::build_order_conf;
+use super::promote_to_admin_error;
 
 impl TopicBatchMutationAdmin for AdminSession {
     fn upsert_topic_batch<'a>(
@@ -86,7 +86,7 @@ impl TopicBatchDeleteExecutor for AdminSession {
                     CheetahString::from(topic),
                 )
                 .await
-                .map_err(|error| backend_error("delete_order_topic_config", error))
+                .map_err(|source| promote_to_admin_error("delete_order_topic_config", source))
         })
     }
 }
@@ -239,7 +239,7 @@ impl AdminSession {
                     true,
                 )
                 .await
-                .map_err(|error| backend_error("create_or_update_order_conf", error))
+                .map_err(|source| promote_to_admin_error("create_or_update_order_conf", source))
         } else {
             self.inner
                 .delete_kv_config(
@@ -247,7 +247,7 @@ impl AdminSession {
                     CheetahString::from(request.topic.as_str()),
                 )
                 .await
-                .map_err(|error| backend_error("delete_order_topic_config", error))
+                .map_err(|source| promote_to_admin_error("delete_order_topic_config", source))
         }
     }
 }

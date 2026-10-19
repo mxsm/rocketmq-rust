@@ -33,7 +33,7 @@ use crate::core::topic_observation::MAX_TOPIC_SUBSCRIBER_GROUPS;
 use crate::core::topic_observation::TOPIC_SUBSCRIBERS_TRUNCATED_WARNING;
 use crate::core::AdminError;
 use crate::core::AdminResult;
-use crate::topic_observation::backend_error;
+use crate::topic_observation::promote_to_admin_error;
 use crate::topic_observation::selected_cluster_route_masters;
 use crate::topic_observation::source_failure;
 
@@ -87,11 +87,11 @@ async fn query_topic_subscribers_from<S: TopicSubscriberSource>(
     let cluster_info = source
         .cluster_info()
         .await
-        .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
     let route = source
         .topic_route(&request.topic)
         .await
-        .map_err(|error| backend_error("examine_topic_route_info", error))?
+        .map_err(|source| promote_to_admin_error("examine_topic_route_info", source))?
         .ok_or_else(|| AdminError::topic_not_found(&request.topic))?;
     let (targets, mut failures) = selected_cluster_route_masters(&cluster_info, &route, &request.cluster, SOURCE)?;
 

@@ -64,11 +64,11 @@ pub(crate) async fn query_topic_producer_connections(
     let cluster_info = admin
         .examine_broker_cluster_info()
         .await
-        .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
     let route = admin
         .examine_topic_route_info(CheetahString::from(request.topic.as_str()))
         .await
-        .map_err(|error| backend_error("examine_topic_route_info", error))?
+        .map_err(|source| promote_to_admin_error("examine_topic_route_info", source))?
         .ok_or_else(|| AdminError::topic_not_found(request.topic.clone()))?;
     let (targets, mut failures) = topic_producer_targets(
         &cluster_info,
@@ -127,7 +127,7 @@ pub(crate) async fn query_message_metadata(
     let cluster_info = admin
         .examine_broker_cluster_info()
         .await
-        .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
     if !cluster_advertises_endpoint(&cluster_info, &request.cluster, endpoint)? {
         return Err(AdminError::invalid_argument(
             "message_id",
@@ -137,7 +137,7 @@ pub(crate) async fn query_message_metadata(
     let metadata = admin
         .query_message_metadata_by_id(CheetahString::from(request.message_id.as_str()))
         .await
-        .map_err(|error| backend_error("query_message_metadata", error))?;
+        .map_err(|source| promote_to_admin_error("query_message_metadata", source))?;
     Ok(MessageMetadata {
         topic: metadata.topic,
         message_id: metadata.message_id,
@@ -166,7 +166,7 @@ pub(crate) async fn query_topic_config_state(
     let cluster_info = admin
         .examine_broker_cluster_info()
         .await
-        .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
     let (targets, mut failures) = cluster_master_targets(
         &cluster_info,
         &request.cluster,
@@ -216,7 +216,7 @@ pub(crate) async fn query_consumer_group_config_state(
     let cluster_info = admin
         .examine_broker_cluster_info()
         .await
-        .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
     let (targets, mut failures) = cluster_master_targets(
         &cluster_info,
         &request.cluster,
@@ -458,8 +458,8 @@ fn source_failure(source: AdminQuerySource, broker_name: &str, error: &Canonical
     AdminSourceFailure::new(source, code, crate::canonical_is_retryable(error), broker_name)
 }
 
-fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
-    AdminError::from_error(operation, error.into_canonical_error())
+fn promote_to_admin_error(operation_name: &'static str, source: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation_name, source.into_canonical_error())
 }
 
 #[cfg(test)]

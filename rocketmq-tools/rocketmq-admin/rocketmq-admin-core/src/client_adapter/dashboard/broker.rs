@@ -20,7 +20,7 @@ pub(super) async fn broker_addresses(
     let cluster_info = admin
         .examine_broker_cluster_info()
         .await
-        .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
     Ok(broker_addresses_from_cluster(&cluster_info))
 }
 
@@ -57,7 +57,7 @@ pub(super) async fn resolve_broker_address(
     let cluster_info = admin
         .examine_broker_cluster_info()
         .await
-        .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
     cluster_info
         .broker_addr_table
         .as_ref()
