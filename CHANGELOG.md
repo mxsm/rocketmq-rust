@@ -88,6 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **refactor(client):** Remove the unused internal `TraceView`; Admin trace queries and client trace encoding remain unchanged ([#11725](https://github.com/mxsm/rocketmq-rust/issues/11725)).
 - **client:** Remove the no-op `AsyncTraceDispatcher::{register_shutdown_hook, register_shut_down_hook, remove_shutdown_hook}` and `DefaultMQProducerImpl::semaphore_processor` methods; remove calls to these methods.
 - **model:** Remove the ten deprecated `Message` constructors and `with_details_body`; use `Message::builder()` instead.
+- **refactor(client):** Remove the unused internal `ProducerConfigValidator`; active producer validation and accepted configuration values are unchanged ([#11761](https://github.com/mxsm/rocketmq-rust/issues/11761)).
 
 ### Fixed
 

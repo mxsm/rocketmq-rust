@@ -19,7 +19,6 @@ pub mod local_transaction_state;
 pub mod message_queue_selector;
 pub mod produce_accumulator;
 pub(crate) mod producer_backend;
-pub mod producer_config_validation;
 pub mod producer_impl;
 pub mod queue_selector;
 pub mod request_callback;
