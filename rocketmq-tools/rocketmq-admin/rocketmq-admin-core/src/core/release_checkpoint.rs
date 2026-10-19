@@ -239,7 +239,8 @@ pub fn decode_checkpoint_set(bytes: &[u8]) -> AdminResult<ReleaseCheckpointSetMa
 
 pub fn encode_checkpoint_set(manifest: &ReleaseCheckpointSetManifest) -> AdminResult<Vec<u8>> {
     verify_checkpoint_set(manifest)?;
-    serde_json::to_vec_pretty(manifest).map_err(|error| AdminError::backend_source("encode checkpoint set", error))
+    serde_json::to_vec_pretty(manifest)
+        .map_err(|error| AdminError::operation_failed_with_source("encode checkpoint set", error))
 }
 
 #[cfg(test)]

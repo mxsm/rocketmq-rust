@@ -857,7 +857,7 @@ fn authoritative_consumer_broker_targets(
     cluster_info: &ClusterInfo,
 ) -> crate::core::AdminResult<Vec<(String, CheetahString)>> {
     let Some(broker_table) = cluster_info.broker_addr_table.as_ref() else {
-        return Err(AdminError::backend(
+        return Err(AdminError::operation_failed(
             "examine_broker_cluster_info",
             "Broker cluster metadata is unavailable.",
         ));
@@ -872,7 +872,7 @@ fn authoritative_consumer_broker_targets(
         })
         .collect::<Vec<_>>();
     if targets.is_empty() {
-        return Err(AdminError::backend(
+        return Err(AdminError::operation_failed(
             "examine_broker_cluster_info",
             "No master broker targets are available.",
         ));

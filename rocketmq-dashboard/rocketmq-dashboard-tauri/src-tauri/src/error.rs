@@ -267,7 +267,7 @@ mod tests {
             Some("sensitive path")
         );
 
-        let admin_error = DashboardError::from(AdminError::backend("query", "sensitive broker detail"));
+        let admin_error = DashboardError::from(AdminError::operation_failed("query", "sensitive broker detail"));
         assert_eq!(
             admin_error.source().map(ToString::to_string).as_deref(),
             Some("tools.operation.failed: Administrative operation failed")

@@ -108,7 +108,7 @@ pub(crate) async fn send_normal_message(
     let send_result = send_result
         .map_err(|error| backend_error("send_topic_test_message", error))?
         .ok_or_else(|| {
-            AdminError::backend(
+            AdminError::operation_failed(
                 "send_topic_test_message",
                 "broker acknowledged send without returning a result",
             )
@@ -171,7 +171,7 @@ pub(crate) fn map_transaction_send_result(
     transaction_result: TransactionSendResult,
 ) -> Result<TopicSendResult, AdminError> {
     let send_result = transaction_result.send_result.ok_or_else(|| {
-        AdminError::backend(
+        AdminError::operation_failed(
             "send_topic_transaction_test_message",
             "transaction producer completed without returning a send result",
         )

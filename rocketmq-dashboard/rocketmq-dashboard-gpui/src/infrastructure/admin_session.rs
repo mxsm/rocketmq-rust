@@ -222,11 +222,14 @@ pub(crate) trait DashboardMutationSession: Send {
 }
 
 fn unsupported_topic_session(operation: &'static str) -> rocketmq_admin_core::core::AdminError {
-    rocketmq_admin_core::core::AdminError::backend(operation, "Topic capability is not implemented by this session")
+    rocketmq_admin_core::core::AdminError::operation_failed(
+        operation,
+        "Topic capability is not implemented by this session",
+    )
 }
 
 fn unsupported_consumer_session(operation: &'static str) -> rocketmq_admin_core::core::AdminError {
-    rocketmq_admin_core::core::AdminError::backend(
+    rocketmq_admin_core::core::AdminError::operation_failed(
         operation,
         "Consumer or Producer capability is not implemented by this session",
     )

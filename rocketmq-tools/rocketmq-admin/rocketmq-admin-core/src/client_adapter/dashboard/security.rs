@@ -31,7 +31,7 @@ pub(super) async fn resolve_acl_targets(
     let broker_table = cluster_info
         .broker_addr_table
         .as_ref()
-        .ok_or_else(|| AdminError::backend("resolve_acl_targets", "missing broker address data"))?;
+        .ok_or_else(|| AdminError::operation_failed("resolve_acl_targets", "missing broker address data"))?;
     let allowed = selector
         .cluster_name
         .as_deref()
