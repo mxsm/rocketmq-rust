@@ -189,6 +189,13 @@ let Some(store) = TieredStore::new(
 | Providers | `TieredStoreProvider`, `ProviderKind`, `PosixProvider`, `MemoryProvider` |
 | Services | `CommitLogRecoverService`, `TieredRecoverResult`, cleanup service set |
 
+FileSegment API 迁移：`FileSegment` trait 现在直接通过
+`#[trait_variant::make(Send)]` 声明，之前生成的源 trait
+`rocketmq_tieredstore::file::file_segment::FileSegmentInner` 已被移除。请将对
+`FileSegmentInner` 的 import、实现或泛型约束引用替换为规范的
+`rocketmq_tieredstore::FileSegment`。保留的 trait 要求实现类型及其异步 future 均为
+`Send`；依赖非 `Send` future 的实现需要相应调整，因为为旧名称提供别名无法保留该约定。
+
 ## 数据模型
 
 ### 写入路径
