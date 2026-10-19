@@ -15,8 +15,8 @@
 use rocketmq_model::common::message::message_ext::MessageExt;
 
 /// Trait defining the listener for transactional message checks.
-#[trait_variant::make(TransactionalMessageCheckListener: Send)]
-pub trait TransactionalMessageCheckListenerInner: std::any::Any {
+#[trait_variant::make(Send)]
+pub trait TransactionalMessageCheckListener: std::any::Any {
     /// Sends a check message to verify the state of a transactional message.
     ///
     /// # Arguments
