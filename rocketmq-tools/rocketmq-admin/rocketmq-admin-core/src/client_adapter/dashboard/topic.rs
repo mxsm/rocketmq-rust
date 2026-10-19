@@ -101,11 +101,11 @@ pub(super) fn master_targets_by_cluster_name(
     let cluster_table = cluster_info
         .cluster_addr_table
         .as_ref()
-        .ok_or_else(|| AdminError::backend("examine_broker_cluster_info", "missing cluster address data"))?;
+        .ok_or_else(|| AdminError::operation_failed("examine_broker_cluster_info", "missing cluster address data"))?;
     let broker_table = cluster_info
         .broker_addr_table
         .as_ref()
-        .ok_or_else(|| AdminError::backend("examine_broker_cluster_info", "missing broker address data"))?;
+        .ok_or_else(|| AdminError::operation_failed("examine_broker_cluster_info", "missing broker address data"))?;
     let broker_names = cluster_table.get(cluster_name).ok_or_else(|| {
         AdminError::invalid_argument("clusterName", format!("cluster `{cluster_name}` was not found"))
     })?;

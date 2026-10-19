@@ -1347,7 +1347,7 @@ mod tests {
                 Box::pin(async move {
                     self.upsert_calls.push(target.to_string());
                     if self.failing_upsert.as_deref() == Some(target) {
-                        return Err(AdminError::backend("upsert_target", "injected failure"));
+                        return Err(AdminError::operation_failed("upsert_target", "injected failure"));
                     }
                     Ok(())
                 })
@@ -1357,7 +1357,7 @@ mod tests {
                 Box::pin(async move {
                     self.delete_calls.push(target.to_string());
                     if self.failing_delete.as_deref() == Some(target) {
-                        return Err(AdminError::backend("delete_target", "injected failure"));
+                        return Err(AdminError::operation_failed("delete_target", "injected failure"));
                     }
                     Ok(())
                 })
@@ -1371,7 +1371,10 @@ mod tests {
                 Box::pin(async move {
                     self.cleanup_calls.push(target.to_string());
                     if self.failing_cleanup.as_deref() == Some(target) {
-                        return Err(AdminError::backend("cleanup_internal_topic", "injected failure"));
+                        return Err(AdminError::operation_failed(
+                            "cleanup_internal_topic",
+                            "injected failure",
+                        ));
                     }
                     Ok(())
                 })

@@ -1461,7 +1461,7 @@ impl TopicQueryAdmin for ReadAdminSession {
         _request: &'a crate::core::topic::TopicCatalogRequest,
     ) -> AdminFuture<'a, crate::core::topic::TopicCatalog> {
         Box::pin(async {
-            Err(AdminError::backend(
+            Err(AdminError::operation_failed(
                 "read_topic_catalog",
                 "query is not enabled by the Phase 00 read adapter",
             ))
@@ -1470,7 +1470,7 @@ impl TopicQueryAdmin for ReadAdminSession {
 
     fn get_topic_current_stats(&mut self) -> AdminFuture<'_, crate::core::topic::TopicCurrentStats> {
         Box::pin(async {
-            Err(AdminError::backend(
+            Err(AdminError::operation_failed(
                 "read_topic_current_stats",
                 "query is not enabled by the Phase 00 read adapter",
             ))
@@ -1479,7 +1479,7 @@ impl TopicQueryAdmin for ReadAdminSession {
 
     fn get_topic_stats<'a>(&'a mut self, _topic: &'a str) -> AdminFuture<'a, crate::core::topic::TopicStats> {
         Box::pin(async {
-            Err(AdminError::backend(
+            Err(AdminError::operation_failed(
                 "read_topic_stats",
                 "query is not enabled by the Phase 00 read adapter",
             ))
@@ -1491,7 +1491,7 @@ impl TopicQueryAdmin for ReadAdminSession {
         _request: &'a crate::core::topic::GetTopicConfigRequest,
     ) -> AdminFuture<'a, crate::core::topic::TopicConfigDetail> {
         Box::pin(async {
-            Err(AdminError::backend(
+            Err(AdminError::operation_failed(
                 "read_topic_config",
                 "query is not enabled by the Phase 00 read adapter",
             ))
@@ -1526,7 +1526,7 @@ impl TopicQueryAdmin for ReadAdminSession {
         _topic: &'a str,
     ) -> AdminFuture<'a, crate::core::topic::TopicConsumerGroups> {
         Box::pin(async {
-            Err(AdminError::backend(
+            Err(AdminError::operation_failed(
                 "read_topic_consumer_groups",
                 "query is not enabled by the Phase 00 read adapter",
             ))
@@ -1535,7 +1535,7 @@ impl TopicQueryAdmin for ReadAdminSession {
 
     fn get_topic_consumers<'a>(&'a mut self, _topic: &'a str) -> AdminFuture<'a, crate::core::topic::TopicConsumers> {
         Box::pin(async {
-            Err(AdminError::backend(
+            Err(AdminError::operation_failed(
                 "read_topic_consumers",
                 "query is not enabled by the Phase 00 read adapter",
             ))
@@ -1861,7 +1861,7 @@ impl ConsumerQueryAdmin for ReadAdminSession {
         _request: &'a consumer::DashboardConsumerGroupListRequest,
     ) -> AdminFuture<'a, consumer::DashboardConsumerGroupListResult> {
         Box::pin(async {
-            Err(AdminError::backend(
+            Err(AdminError::operation_failed(
                 "read_dashboard_consumer_groups",
                 "query is not enabled by the Phase 00 read adapter",
             ))
@@ -1873,7 +1873,7 @@ impl ConsumerQueryAdmin for ReadAdminSession {
         _request: &'a consumer::DashboardConsumerConnectionRequest,
     ) -> AdminFuture<'a, consumer::DashboardConsumerConnection> {
         Box::pin(async {
-            Err(AdminError::backend(
+            Err(AdminError::operation_failed(
                 "read_dashboard_consumer_connection",
                 "query is not enabled by the Phase 00 read adapter",
             ))
@@ -1885,7 +1885,7 @@ impl ConsumerQueryAdmin for ReadAdminSession {
         _request: &'a consumer::DashboardConsumerProgressRequest,
     ) -> AdminFuture<'a, consumer::DashboardConsumerProgress> {
         Box::pin(async {
-            Err(AdminError::backend(
+            Err(AdminError::operation_failed(
                 "read_dashboard_consumer_progress",
                 "query is not enabled by the Phase 00 read adapter",
             ))
@@ -1897,7 +1897,7 @@ impl ConsumerQueryAdmin for ReadAdminSession {
         _request: &'a consumer::DashboardConsumerConfigRequest,
     ) -> AdminFuture<'a, consumer::DashboardConsumerConfig> {
         Box::pin(async {
-            Err(AdminError::backend(
+            Err(AdminError::operation_failed(
                 "read_dashboard_consumer_config",
                 "query is not enabled by the Phase 00 read adapter",
             ))
@@ -2475,13 +2475,13 @@ fn query_failure_code(http_status: u16) -> AdminQueryFailureCode {
 
 fn bounded_subscription_group_value(field: &'static str, value: i32, maximum: u32) -> AdminResult<u32> {
     let value = u32::try_from(value).map_err(|_| {
-        AdminError::backend(
+        AdminError::operation_failed(
             "query_subscription_group_config_cas_state",
             format!("{field} is negative"),
         )
     })?;
     if !(1..=maximum).contains(&value) {
-        return Err(AdminError::backend(
+        return Err(AdminError::operation_failed(
             "query_subscription_group_config_cas_state",
             format!("{field} is outside the supervised range 1..={maximum}"),
         ));

@@ -40,15 +40,6 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::base::MqClientAdminInner",
-          "identity": "rocketmq-client/src/lib.rs:pub use crate::base::MqClientAdminInner",
-          "owner": "client",
-          "path": "rocketmq-client/src/lib.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
           "declaration": "pub use crate::base::query_result::QueryResult",
           "identity": "rocketmq-client/src/lib.rs:pub use crate::base::query_result::QueryResult",
           "owner": "client",

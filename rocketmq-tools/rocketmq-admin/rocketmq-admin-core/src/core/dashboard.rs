@@ -426,7 +426,7 @@ pub trait DashboardAdmin: Send + Sync {
 
     fn dashboard_consumer_brokers<'a>(&'a self, _group: &'a str) -> AdminFuture<'a, DashboardConsumerBrokerList> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "dashboard_consumer_brokers",
                 "Consumer broker discovery is not implemented by this adapter",
             ))
@@ -497,7 +497,7 @@ pub trait DashboardAdmin: Send + Sync {
     ) -> AdminFuture<'a, AdminMutationResult> {
         Box::pin(async move {
             request.validate()?;
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "delete_acl_entry",
                 "Typed ACL entry deletion is not supported by this adapter",
             ))

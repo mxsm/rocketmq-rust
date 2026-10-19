@@ -398,7 +398,7 @@ fn ensure_some_detailed_success(
     failures: &[TopicInspectionFailure],
 ) -> AdminResult<()> {
     if successful_target_count == 0 && !failures.is_empty() {
-        Err(AdminError::backend(
+        Err(AdminError::operation_failed(
             operation,
             "every authoritative Topic target failed",
         ))

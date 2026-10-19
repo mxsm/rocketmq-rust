@@ -320,7 +320,7 @@ mod tests {
 
         let down = source(&[]);
         let error = query_acl_users_from(&down, &request("cluster-a")).await.unwrap_err();
-        assert_eq!(error.failure(), AdminFailure::Backend);
+        assert_eq!(error.failure(), AdminFailure::OperationFailed);
 
         let error = query_acl_users_from(&source(&[]), &request("cluster-z"))
             .await

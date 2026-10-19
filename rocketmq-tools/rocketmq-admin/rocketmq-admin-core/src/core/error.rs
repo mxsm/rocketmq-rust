@@ -47,8 +47,8 @@ pub enum AdminFailure {
     InvalidArgument,
     /// A requested admin resource was not found.
     NotFound,
-    /// An admin dependency or operation failed.
-    Backend,
+    /// An administrative operation failed.
+    OperationFailed,
     /// The owning admin session is closed.
     SessionClosed,
 }
@@ -111,30 +111,41 @@ impl AdminError {
     }
 
     /// Creates a generic administrative operation failure.
+    ///
+    /// Uses [`rocketmq_error::TOOLS_OPERATION_FAILED`] and
+    /// [`AdminFailure::OperationFailed`]. The private detail is retained internally
+    /// and omitted from error formatting and public views.
     #[track_caller]
-    pub fn backend(operation: &'static str, reason: impl Into<String>) -> Self {
+    pub fn operation_failed(operation_name: &'static str, private_detail: impl Into<String>) -> Self {
         Self::source_free(
             &rocketmq_error::TOOLS_OPERATION_FAILED,
-            AdminFailure::Backend,
-            Some(operation),
+            AdminFailure::OperationFailed,
+            Some(operation_name),
             None,
             None,
-            Some(reason.into()),
-            ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, operation),
+            Some(private_detail.into()),
+            ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, operation_name),
         )
     }
 
     /// Creates a generic administrative operation failure with a typed source.
+    ///
+    /// Uses [`rocketmq_error::TOOLS_OPERATION_FAILED`] and
+    /// [`AdminFailure::OperationFailed`]. The source remains available through
+    /// [`StdError::source`] without being rendered in public error views.
     #[track_caller]
-    pub fn backend_source(operation: &'static str, source: impl StdError + Send + Sync + 'static) -> Self {
+    pub fn operation_failed_with_source(
+        operation_name: &'static str,
+        source: impl StdError + Send + Sync + 'static,
+    ) -> Self {
         Self::with_source(
             &rocketmq_error::TOOLS_OPERATION_FAILED,
-            AdminFailure::Backend,
-            Some(operation),
+            AdminFailure::OperationFailed,
+            Some(operation_name),
             None,
             None,
             None,
-            ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, operation),
+            ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, operation_name),
             source,
         )
     }
@@ -147,7 +158,7 @@ impl AdminError {
         let failure = match descriptor.condition() {
             CanonicalCondition::InvalidArgument => AdminFailure::InvalidArgument,
             CanonicalCondition::NotFound => AdminFailure::NotFound,
-            _ => AdminFailure::Backend,
+            _ => AdminFailure::OperationFailed,
         };
         Self::with_source(descriptor, failure, Some(operation), None, None, None, context, source)
     }
@@ -242,7 +253,7 @@ impl AdminError {
     pub fn target_drift(operation: &'static str, reason: impl Into<String>) -> Self {
         Self::source_free(
             &rocketmq_error::CLIENT_LIFECYCLE_INVALID_STATE,
-            AdminFailure::Backend,
+            AdminFailure::OperationFailed,
             Some(operation),
             None,
             None,
@@ -258,7 +269,7 @@ impl AdminError {
     pub fn unavailable(operation: &'static str, reason: impl Into<String>) -> Self {
         Self::source_free(
             &rocketmq_error::CLIENT_COMPONENT_UNAVAILABLE,
-            AdminFailure::Backend,
+            AdminFailure::OperationFailed,
             Some(operation),
             None,
             None,
@@ -521,14 +532,14 @@ mod tests {
 
     #[test]
     fn admin_error_is_catalog_backed_and_redaction_safe() {
-        let error = AdminError::backend_source(
+        let error = AdminError::operation_failed_with_source(
             "query_topic",
             std::io::Error::other("password=plain-text C:\\private\\admin"),
         );
 
         assert_eq!(error.descriptor(), &rocketmq_error::TOOLS_OPERATION_FAILED);
         assert_eq!(error.code().as_str(), "tools.operation.failed");
-        assert_eq!(error.failure(), AdminFailure::Backend);
+        assert_eq!(error.failure(), AdminFailure::OperationFailed);
         assert_eq!(error.operation(), Some("query_topic"));
         assert!(error.source().is_some_and(|source| source.is::<std::io::Error>()));
         assert_eq!(

@@ -627,7 +627,7 @@ pub trait SupervisedMutationAdmin: Send {
     ) -> AdminFuture<'a, TopicMutationPlan> {
         let _ = (request, broker_names);
         Box::pin(async move {
-            Err(AdminError::backend(
+            Err(AdminError::operation_failed(
                 "preflight_topic_targets",
                 "targeted supervised topic preflight is unavailable",
             ))
@@ -652,7 +652,7 @@ pub trait SupervisedMutationAdmin: Send {
     ) -> AdminFuture<'a, SubscriptionGroupMutationPlan> {
         let _ = (request, broker_names);
         Box::pin(async move {
-            Err(AdminError::backend(
+            Err(AdminError::operation_failed(
                 "preflight_subscription_group_targets",
                 "targeted supervised subscription-group preflight is unavailable",
             ))
@@ -682,7 +682,7 @@ pub trait SupervisedMutationAdmin: Send {
     ) -> AdminFuture<'a, BrokerMutationConfigPlan> {
         let _ = (cluster, broker_name);
         Box::pin(async move {
-            Err(AdminError::backend(
+            Err(AdminError::operation_failed(
                 "preflight_broker_config_target",
                 "targeted supervised Broker preflight is unavailable",
             ))
@@ -704,7 +704,7 @@ pub trait SupervisedMutationAdmin: Send {
     ) -> AdminFuture<'a, BrokerConfigMutationReport> {
         let _ = (plan, patch);
         Box::pin(async move {
-            Err(AdminError::backend(
+            Err(AdminError::operation_failed(
                 "execute_broker_config_patch_verified",
                 "verified supervised Broker patch is unavailable",
             ))
@@ -730,7 +730,7 @@ pub trait SupervisedMutationAdmin: Send {
     ) -> AdminFuture<'a, RequestModeMutationReport> {
         let _ = (plan, timeout_millis);
         Box::pin(async move {
-            Err(AdminError::backend(
+            Err(AdminError::operation_failed(
                 "execute_request_mode_with_timeout",
                 "timeout-aware supervised request-mode execution is unavailable",
             ))

@@ -1526,7 +1526,7 @@ fn map_admin_error(selected: NotFoundEntity) -> impl FnOnce(AdminError) -> ToolF
     move |error| match error.failure() {
         AdminFailure::InvalidArgument => ToolFailure::invalid_arguments(error),
         AdminFailure::NotFound => ToolFailure::not_found(named_entity(&error).unwrap_or(selected)),
-        AdminFailure::Backend | AdminFailure::SessionClosed => ToolFailure::backend(error),
+        AdminFailure::OperationFailed | AdminFailure::SessionClosed => ToolFailure::backend(error),
     }
 }
 
@@ -1650,7 +1650,7 @@ mod tests {
             "invalid_arguments"
         );
         assert_eq!(
-            map(AdminError::backend("query_consumer_lag", "connection reset")).code(),
+            map(AdminError::operation_failed("query_consumer_lag", "connection reset")).code(),
             "source_unavailable"
         );
         assert_eq!(map(AdminError::session_closed()).code(), "source_unavailable");

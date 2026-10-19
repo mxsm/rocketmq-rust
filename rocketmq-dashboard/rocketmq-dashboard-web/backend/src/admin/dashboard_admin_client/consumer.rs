@@ -609,7 +609,7 @@ mod tests {
             "orders-consumer",
             vec![ConsumerConfigTargetFetch {
                 broker_address: "broker-a:10911".to_string(),
-                result: Err(AdminError::backend(
+                result: Err(AdminError::operation_failed(
                     "consumer_config_failed",
                     "sensitive-rejection-detail",
                 )),

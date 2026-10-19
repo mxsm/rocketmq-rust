@@ -33,7 +33,7 @@ pub(crate) fn resolve_exact_broker_targets(
     source: AdminQuerySource,
 ) -> AdminResult<ExactBrokerTargetResolution> {
     let cluster_table = cluster_info.cluster_addr_table.as_ref().ok_or_else(|| {
-        AdminError::backend(
+        AdminError::operation_failed(
             "resolve_exact_broker_targets",
             "NameServer cluster metadata is unavailable",
         )
@@ -44,7 +44,7 @@ pub(crate) fn resolve_exact_broker_targets(
     }
 
     let broker_table = cluster_info.broker_addr_table.ok_or_else(|| {
-        AdminError::backend(
+        AdminError::operation_failed(
             "resolve_exact_broker_targets",
             "NameServer Broker metadata is unavailable",
         )
@@ -83,7 +83,7 @@ pub(crate) fn resolve_exact_broker_targets(
         ));
     }
     if broker.broker_addrs().len() > MAX_EXACT_BROKER_INSTANCES {
-        return Err(AdminError::backend(
+        return Err(AdminError::operation_failed(
             "resolve_exact_broker_targets",
             "logical Broker has too many physical instances",
         ));
@@ -172,7 +172,7 @@ mod tests {
         let missing =
             resolve_exact_broker_targets(ClusterInfo::default(), CLUSTER, BROKER, AdminQuerySource::BrokerRuntime)
                 .unwrap_err();
-        assert_eq!(missing.failure(), crate::core::AdminFailure::Backend);
+        assert_eq!(missing.failure(), crate::core::AdminFailure::OperationFailed);
 
         let not_found = resolve_exact_broker_targets(
             ClusterInfo::new(Some(HashMap::new()), Some(HashMap::new())),
@@ -247,7 +247,7 @@ mod tests {
             AdminQuerySource::BrokerRuntime,
         )
         .unwrap_err();
-        assert_eq!(overflow.failure(), crate::core::AdminFailure::Backend);
+        assert_eq!(overflow.failure(), crate::core::AdminFailure::OperationFailed);
 
         let (targets, failures) = resolve_exact_broker_targets(
             cluster_info([(0, "duplicate.internal:10911"), (1, "duplicate.internal:10911")]),

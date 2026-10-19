@@ -177,7 +177,7 @@ impl MessageAdmin for AdminSession {
                 };
                 for queue_id in 0..queue_data.read_queue_nums() {
                     let queue_id = i32::try_from(queue_id)
-                        .map_err(|_| AdminError::backend("message_queue_plan", "queue id exceeds i32"))?;
+                        .map_err(|_| AdminError::operation_failed("message_queue_plan", "queue id exceeds i32"))?;
                     let start = self
                         .inner
                         .search_offset(
@@ -446,7 +446,7 @@ pub(super) async fn find_raw_message(
             return messages
                 .into_iter()
                 .next()
-                .ok_or_else(|| AdminError::backend("query_message_by_unique_key", "message was not found"));
+                .ok_or_else(|| AdminError::operation_failed("query_message_by_unique_key", "message was not found"));
         }
         Ok(_) | Err(_) => {}
     }

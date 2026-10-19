@@ -124,6 +124,18 @@ this API, so no compatibility facade is retained.
 
 `tests/boundary_source_guard.rs` protects the source and feature boundaries.
 
+## Error Handling
+
+`AdminError::operation_failed(operation_name, private_detail)` creates a generic
+administrative operation failure. It uses the `TOOLS_OPERATION_FAILED` descriptor
+and `AdminFailure::OperationFailed` classification. Private detail is retained
+internally and omitted from formatting and public error views.
+
+Use `AdminError::operation_failed_with_source(operation_name, source)` to retain a
+typed cause through `std::error::Error::source`. For an existing canonical error,
+use `AdminError::from_error` to preserve its descriptor, context, protocol mappings,
+and typed source chain instead of assigning a generic operation-failure descriptor.
+
 ## Local Validation
 
 ```bash

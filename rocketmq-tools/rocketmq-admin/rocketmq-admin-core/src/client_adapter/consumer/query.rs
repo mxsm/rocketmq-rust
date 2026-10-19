@@ -111,7 +111,7 @@ pub(super) async fn collect_consumer_group_meta(
     if successful_brokers == 0 {
         return Err(last_error.map_or_else(
             || {
-                AdminError::backend(
+                AdminError::operation_failed(
                     "get_all_subscription_group",
                     "No broker subscription metadata could be loaded.",
                 )

@@ -46,8 +46,11 @@ use rocketmq_protocol::protocol::header::view_message_request_header::ViewMessag
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 
-#[trait_variant::make(MqClientAdmin: Send)]
-pub trait MqClientAdminInner: Sync {
+/// Administrative RPCs returning [`crate::ClientResult`].
+///
+/// Implementations are `Send + Sync`, and asynchronous methods return `Send` futures.
+#[trait_variant::make(Send)]
+pub trait MqClientAdmin: Sync {
     /// Queries messages based on the provided request header.
     ///
     /// # Arguments

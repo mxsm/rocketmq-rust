@@ -122,7 +122,7 @@ async fn query_consumer_client_runtime_from<S: ConsumerRuntimeSource>(
     // Whatever a Broker called its refusal, a relay that failed is a failed source: the caller
     // named a client from a list this adapter was given, not an argument of its own.
     Err(match last_error {
-        Some(error) => AdminError::backend_source("get_consumer_running_info", error),
+        Some(error) => AdminError::operation_failed_with_source("get_consumer_running_info", error),
         None => AdminError::unavailable(OPERATION, "No instance of the Broker could be asked"),
     })
 }
@@ -243,7 +243,7 @@ fn project(info: ConsumerRunningInfo) -> AdminResult<ConsumerClientRuntime> {
 /// the answer is not what it claims to be, so the read fails instead of passing it on.
 fn name(value: &str) -> AdminResult<String> {
     if value.is_empty() || value.len() > MAX_NAME_BYTES || has_control(value) {
-        return Err(AdminError::backend(
+        return Err(AdminError::operation_failed(
             OPERATION,
             "Consumer client reported an invalid name",
         ));
@@ -501,7 +501,7 @@ mod tests {
         let error = query_consumer_client_runtime_from(&unknown, &request())
             .await
             .unwrap_err();
-        assert_eq!(error.failure(), AdminFailure::Backend);
+        assert_eq!(error.failure(), AdminFailure::OperationFailed);
         assert_eq!(unknown.calls.lock().unwrap().len(), 2);
 
         let elsewhere = source(&[MASTER], reported());
