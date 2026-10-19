@@ -14,16 +14,22 @@
 
 use cheetah_string::CheetahString;
 
-/// Resolves logical broker names to endpoints for latency fault detection.
+/// Resolves logical Broker names to network endpoints for latency fault detection.
 ///
-/// Implementations must be `Send + Sync + 'static`. Asynchronous resolution returns
-/// a future that implements `Send`. The `'static` bound applies to the implementation
-/// type; the returned future may borrow from `self` and `name`.
+/// Implementations must be `Send + Sync + 'static`. Asynchronous resolution returns a
+/// `Send` future. The `'static` bound applies to the implementation type, while the
+/// returned future may borrow `self` and `name`.
 #[trait_variant::make(Send)]
 pub trait Resolver: Sync + 'static {
-    /// Resolves the given logical `name` to an endpoint.
+    /// Resolves the given logical Broker name to its network endpoint.
     ///
-    /// Returns `Some(endpoint)` with the resolved endpoint address if available,
-    /// or `None` if resolution yields no endpoint.
+    /// # Arguments
+    ///
+    /// * `name` - The logical Broker name to resolve.
+    ///
+    /// # Returns
+    ///
+    /// * `Some(endpoint)` - When an endpoint is available for the given name.
+    /// * `None` - When resolution yields no endpoint.
     async fn resolve(&self, name: &CheetahString) -> Option<CheetahString>;
 }
