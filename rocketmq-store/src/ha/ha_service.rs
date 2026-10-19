@@ -24,8 +24,8 @@ use crate::log_file::group_commit_request::GroupCommitRequest;
 use rocketmq_store_api::StoreError;
 pub(crate) use rocketmq_store_local::ha::replication::HAAckedReplicaSnapshot;
 
-#[trait_variant::make(HAService: Send)]
-pub trait RocketHAService: Sync {
+#[trait_variant::make(Send)]
+pub trait HAService: Sync {
     /// Starts the HA service.
     ///
     /// # Errors
