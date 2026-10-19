@@ -27,8 +27,8 @@ use crate::queue::ArcConsumeQueue;
 use crate::queue::ConsumeQueueTable;
 use crate::queue::CqUnit;
 
-#[trait_variant::make(ConsumeQueueStoreTrait: Send)]
-pub trait ConsumeQueueStoreInterface: Sync + Any {
+#[trait_variant::make(Send)]
+pub trait ConsumeQueueStoreTrait: Sync + Any {
     /// Start the consume queue store
     fn start(&self);
 
