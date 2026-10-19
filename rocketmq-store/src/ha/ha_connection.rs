@@ -21,8 +21,14 @@ use rocketmq_store_api::StoreError;
 
 use crate::ha::ha_connection_state::HAConnectionState;
 
-#[trait_variant::make(HAConnection: Send)]
-pub trait RocketmqHAConnection: Sync {
+/// Defines the lifecycle and state of a replication connection between a master
+/// and a slave broker.
+///
+/// This is the single interface implemented by every HA connection type. Its
+/// asynchronous methods return `Send` futures, so connections can be driven from
+/// multi-threaded Tokio tasks.
+#[trait_variant::make(Send)]
+pub trait HAConnection: Sync {
     /// Start the HA connection
     ///
     /// This initiates the connection threads and begins processing.
