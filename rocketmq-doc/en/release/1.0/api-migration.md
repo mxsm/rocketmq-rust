@@ -27,6 +27,19 @@ reviewed post-freeze approval.
 
 ## Direct source migrations
 
+### Administrative RPC trait consolidation (unreleased)
+
+The next source update removes `rocketmq_client_rust::MqClientAdminInner`
+without a compatibility alias. Use `rocketmq_client_rust::MqClientAdmin` in
+imports, generic bounds, and implementation headers (`impl MqClientAdmin for T`).
+
+This is a source-breaking migration: the retired trait required only `Sync`,
+whereas `MqClientAdmin` requires `Send + Sync` and `Send` futures from every
+asynchronous method. Downstream implementations with non-`Send` state or
+futures must adapt their state and async code; renaming the trait alone is
+insufficient. Method arguments, results, and the existing `admin-full`
+implementation gate for `MQClientAPIImpl` are unchanged.
+
 ### Operation task exit type names
 
 `OperationOutcome` was renamed to `OperationTaskExitReason`, and

@@ -22,7 +22,7 @@ use std::time::Instant;
 
 use crate::base::client_config::ClientConfig;
 #[cfg(feature = "admin-full")]
-use crate::base::mq_client_admin::MqClientAdminInner;
+use crate::base::mq_client_admin::MqClientAdmin;
 use crate::consumer::ack_callback::AckCallback;
 use crate::consumer::ack_result::AckResult;
 use crate::consumer::ack_status::AckStatus;
