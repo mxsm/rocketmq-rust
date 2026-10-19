@@ -200,7 +200,7 @@ async fn a_broker_that_does_not_answer_is_named_and_no_answer_at_all_is_an_error
 
     let down = source(&["orders"]);
     let error = find_messages_by_key_from(&down, &search()).await.unwrap_err();
-    assert_eq!(error.failure(), AdminFailure::Backend);
+    assert_eq!(error.failure(), AdminFailure::OperationFailed);
 
     let unknown = source(&[]);
     let error = find_messages_by_key_from(&unknown, &search()).await.unwrap_err();

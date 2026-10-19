@@ -288,7 +288,7 @@ mod tests {
         let error = query_topic_subscribers_from(&unreachable, &request())
             .await
             .unwrap_err();
-        assert_eq!(error.failure(), AdminFailure::Backend);
+        assert_eq!(error.failure(), AdminFailure::OperationFailed);
 
         // A Topic that nobody consumes has an authoritative empty answer.
         let unconsumed = source(&brokers, &[]);

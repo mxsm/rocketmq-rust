@@ -1722,11 +1722,11 @@ fn master_targets_by_cluster_name(
     let cluster_table = cluster_info
         .cluster_addr_table
         .as_ref()
-        .ok_or_else(|| AdminError::backend("mutation_cluster_info", "missing cluster address data"))?;
+        .ok_or_else(|| AdminError::operation_failed("mutation_cluster_info", "missing cluster address data"))?;
     let broker_table = cluster_info
         .broker_addr_table
         .as_ref()
-        .ok_or_else(|| AdminError::backend("mutation_cluster_info", "missing broker address data"))?;
+        .ok_or_else(|| AdminError::operation_failed("mutation_cluster_info", "missing broker address data"))?;
     let broker_names = cluster_table.get(cluster_name).ok_or_else(|| {
         AdminError::invalid_argument(
             "clusterName",
@@ -1734,7 +1734,7 @@ fn master_targets_by_cluster_name(
         )
     })?;
     if broker_names.is_empty() {
-        return Err(AdminError::backend(
+        return Err(AdminError::operation_failed(
             "mutation_cluster_info",
             "selected cluster has no broker members",
         ));
@@ -1743,23 +1743,22 @@ fn master_targets_by_cluster_name(
     let mut endpoints = HashSet::with_capacity(broker_names.len());
     for broker_name in broker_names {
         let broker = broker_table.get(broker_name).ok_or_else(|| {
-            AdminError::backend(
+            AdminError::operation_failed(
                 "mutation_cluster_info",
                 "selected cluster membership references a missing broker",
             )
         })?;
         if broker.broker_name() != broker_name || broker.cluster() != cluster_name {
-            return Err(AdminError::backend(
+            return Err(AdminError::operation_failed(
                 "mutation_cluster_info",
                 "selected cluster broker identity is inconsistent",
             ));
         }
-        let master_addr = broker
-            .broker_addrs()
-            .get(&MASTER_ID)
-            .ok_or_else(|| AdminError::backend("mutation_cluster_info", "selected cluster broker has no master"))?;
+        let master_addr = broker.broker_addrs().get(&MASTER_ID).ok_or_else(|| {
+            AdminError::operation_failed("mutation_cluster_info", "selected cluster broker has no master")
+        })?;
         if !endpoints.insert(master_addr.clone()) {
-            return Err(AdminError::backend(
+            return Err(AdminError::operation_failed(
                 "mutation_cluster_info",
                 "selected cluster has duplicate master endpoints",
             ));
@@ -1787,7 +1786,7 @@ pub fn create_mutation_client_runtime(
         ClientRuntimeConfig::default(),
         rocketmq_observability::TelemetryHandle::noop(),
     )
-    .map_err(|_| AdminError::backend("mutation_client_runtime", "client runtime initialization failed"))
+    .map_err(|_| AdminError::operation_failed("mutation_client_runtime", "client runtime initialization failed"))
 }
 
 fn select_metadata_targets(

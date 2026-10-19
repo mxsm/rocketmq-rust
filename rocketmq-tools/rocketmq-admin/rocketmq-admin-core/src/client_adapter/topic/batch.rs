@@ -460,7 +460,7 @@ mod tests {
                 self.fail_all || self.failing_target.as_deref() == request.broker_names.first().map(String::as_str);
             Box::pin(async move {
                 if should_fail {
-                    Err(AdminError::backend("local_topic_update", "unavailable"))
+                    Err(AdminError::operation_failed("local_topic_update", "unavailable"))
                 } else {
                     Ok(TopicMutationSummary {
                         message: "saved".to_string(),
@@ -499,7 +499,7 @@ mod tests {
             let should_fail = self.fail_all || self.failing_cluster.as_deref() == Some(cluster.as_str());
             Box::pin(async move {
                 if should_fail {
-                    Err(AdminError::backend("delete_topic", "unavailable"))
+                    Err(AdminError::operation_failed("delete_topic", "unavailable"))
                 } else {
                     Ok(TopicMutationSummary {
                         message: "deleted".to_string(),
@@ -514,7 +514,7 @@ mod tests {
             let fail = self.fail_order_cleanup;
             Box::pin(async move {
                 if fail {
-                    Err(AdminError::backend("delete_order_topic_config", "unavailable"))
+                    Err(AdminError::operation_failed("delete_order_topic_config", "unavailable"))
                 } else {
                     Ok(())
                 }

@@ -362,7 +362,7 @@ fn backend_error_body_is_redacted_and_cancellation_wins() {
     let provider = provider(
         &runtime,
         Arc::new(FakeControls::default()),
-        Err(AdminError::backend("list_topics", "access-value secret-value")),
+        Err(AdminError::operation_failed("list_topics", "access-value secret-value")),
         None,
         applied(),
     );
@@ -390,7 +390,7 @@ fn backend_error_body_is_redacted_and_cancellation_wins() {
 
 #[test]
 fn operational_provider_error_retains_admin_source_without_rendering_backend_text() {
-    let failure = map_admin_error(AdminError::backend(
+    let failure = map_admin_error(AdminError::operation_failed(
         "list_topics",
         "password=private-password token=private-token",
     ));

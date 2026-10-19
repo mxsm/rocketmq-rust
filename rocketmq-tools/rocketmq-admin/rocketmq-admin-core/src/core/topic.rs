@@ -944,7 +944,7 @@ pub trait TopicQueryAdmin: Send {
         _request: &'a QueryTopicConfigCasRequest,
     ) -> AdminFuture<'a, TopicConfigCasState> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "query_topic_config_cas_state",
                 "Topic config CAS state is not implemented by this adapter",
             ))
@@ -1043,7 +1043,7 @@ pub trait TopicMutationAdmin: Send {
         _request: &'a PatchTopicConfigRequest,
     ) -> AdminFuture<'a, TopicConfigPatchResult> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "patch_topic_config_if_version",
                 "Topic config CAS is not implemented by this adapter",
             ))

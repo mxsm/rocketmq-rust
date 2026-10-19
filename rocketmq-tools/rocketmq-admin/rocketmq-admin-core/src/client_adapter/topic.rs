@@ -318,7 +318,7 @@ impl TopicAdmin for AdminSession {
                 return Err(last_error
                     .map(|error| backend_error("examine_topic_stats", error))
                     .unwrap_or_else(|| {
-                        AdminError::backend(
+                        AdminError::operation_failed(
                             "examine_topic_stats",
                             format!("topic `{topic}` has no reachable master broker"),
                         )

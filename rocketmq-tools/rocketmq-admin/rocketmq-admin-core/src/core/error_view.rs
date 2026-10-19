@@ -97,7 +97,7 @@ mod tests {
 
     #[test]
     fn private_admin_detail_never_reaches_the_serializable_view() {
-        let error = AdminError::backend("query_topic", "password=plain-text\r\nC:\\private");
+        let error = AdminError::operation_failed("query_topic", "password=plain-text\r\nC:\\private");
         let serialized = serde_json::to_string(&AdminErrorView::from_error(&error)).expect("serialize view");
 
         assert!(!serialized.contains("plain-text"));

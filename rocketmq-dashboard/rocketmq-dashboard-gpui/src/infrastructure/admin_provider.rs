@@ -768,12 +768,14 @@ fn map_admin_error(error: AdminError) -> ProviderFailure {
             false,
             error,
         ),
-        AdminFailure::NotFound | AdminFailure::Backend | AdminFailure::SessionClosed => ProviderFailure::caused_by(
-            ProviderFailureCode::Unavailable,
-            "The RocketMQ Admin operation failed.",
-            retryable,
-            error,
-        ),
+        AdminFailure::NotFound | AdminFailure::OperationFailed | AdminFailure::SessionClosed => {
+            ProviderFailure::caused_by(
+                ProviderFailureCode::Unavailable,
+                "The RocketMQ Admin operation failed.",
+                retryable,
+                error,
+            )
+        }
     }
 }
 

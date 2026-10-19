@@ -199,10 +199,12 @@ fn provider_topic_mutation_result(
             message: result.message,
         });
     }
-    Err(DashboardError::Admin(rocketmq_admin_core::core::AdminError::backend(
-        "topic_mutation_partial",
-        "Topic mutation was not completed for every target",
-    )))
+    Err(DashboardError::Admin(
+        rocketmq_admin_core::core::AdminError::operation_failed(
+            "topic_mutation_partial",
+            "Topic mutation was not completed for every target",
+        ),
+    ))
 }
 
 #[cfg(test)]
@@ -230,7 +232,10 @@ mod tests {
         let DashboardError::Admin(error) = error else {
             panic!("partial mutation must retain the admin facade");
         };
-        assert_eq!(error.failure(), rocketmq_admin_core::core::AdminFailure::Backend);
+        assert_eq!(
+            error.failure(),
+            rocketmq_admin_core::core::AdminFailure::OperationFailed
+        );
         assert_eq!(error.operation(), Some("topic_mutation_partial"));
         assert!(!rendered.contains("sensitive-broker-detail"));
     }

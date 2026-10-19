@@ -256,7 +256,7 @@ mod tests {
                                     if sent.send_status.split(" (").next() != Some("SendOk")
                                         || sent.message_id.is_none()
                                     {
-                                        return Err(rocketmq_admin_core::core::AdminError::backend(
+                                        return Err(rocketmq_admin_core::core::AdminError::operation_failed(
                                             "acl_send_smoke",
                                             "expected a successful signed send receipt",
                                         ));

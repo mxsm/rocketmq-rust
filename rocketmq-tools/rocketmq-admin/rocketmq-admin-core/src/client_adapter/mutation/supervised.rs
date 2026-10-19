@@ -1087,15 +1087,14 @@ async fn preview_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
             continue;
         }
         if broker.cluster() != cluster || route_masters.contains_key(broker.broker_name().as_str()) {
-            return Err(AdminError::backend(
+            return Err(AdminError::operation_failed(
                 "mutation_topic_route",
                 "selected Topic route has inconsistent broker identity",
             ));
         }
-        let master = broker
-            .broker_addrs()
-            .get(&MASTER_ID)
-            .ok_or_else(|| AdminError::backend("mutation_topic_route", "selected Topic route broker has no master"))?;
+        let master = broker.broker_addrs().get(&MASTER_ID).ok_or_else(|| {
+            AdminError::operation_failed("mutation_topic_route", "selected Topic route broker has no master")
+        })?;
         route_masters.insert(broker.broker_name().to_string(), master.clone());
     }
     let mut queue_data = HashMap::with_capacity(selected_masters.len());
@@ -1105,7 +1104,7 @@ async fn preview_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
             continue;
         }
         if queue_data.insert(broker_name, queue.read_queue_nums()).is_some() {
-            return Err(AdminError::backend(
+            return Err(AdminError::operation_failed(
                 "mutation_topic_route",
                 "selected Topic route has duplicate queue ownership",
             ));
@@ -1113,13 +1112,13 @@ async fn preview_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
     }
     for (broker_name, master_addr) in &selected_masters {
         if route_masters.get(broker_name) != Some(master_addr) {
-            return Err(AdminError::backend(
+            return Err(AdminError::operation_failed(
                 "mutation_topic_route",
                 "selected Topic route does not match cluster topology",
             ));
         }
         queue_data.get(broker_name).ok_or_else(|| {
-            AdminError::backend("mutation_topic_route", "selected Topic route has no queue ownership")
+            AdminError::operation_failed("mutation_topic_route", "selected Topic route has no queue ownership")
         })?;
     }
     let target_budget = checked_offset_target_budget(queue_data.values().copied())?;
@@ -1150,7 +1149,7 @@ async fn preview_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
                         .enumerate()
                         .any(|(expected, actual)| *actual != expected as i32)
                 {
-                    return Err(AdminError::backend(
+                    return Err(AdminError::operation_failed(
                         "preview_consumer_offset_reset_on_broker",
                         "Broker returned rows outside the selected Topic queue range",
                     ));
