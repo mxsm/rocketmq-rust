@@ -22,14 +22,5 @@ use cheetah_string::CheetahString;
 #[trait_variant::make(Send)]
 pub trait Resolver: Sync + 'static {
     /// Resolves the given logical Broker name to its network endpoint.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - The logical Broker name to resolve.
-    ///
-    /// # Returns
-    ///
-    /// * `Some(endpoint)` - When an endpoint is available for the given name.
-    /// * `None` - When resolution yields no endpoint.
     async fn resolve(&self, name: &CheetahString) -> Option<CheetahString>;
 }
