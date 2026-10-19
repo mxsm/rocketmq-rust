@@ -59,11 +59,11 @@ change-planning = []
 security-admin  = []
 
 [dependencies]
-rocketmq-admin-core   = { version = "1.0.0", path = "../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", default-features = false, features = ["read-client-adapter"] }
-rocketmq-observability = { version = "1.0.0", path = "../../rocketmq-observability" }
-rocketmq-runtime      = { version = "1.0.0", path = "../../rocketmq-runtime" }
-rocketmq-security-api = { version = "1.0.0", path = "../../rocketmq-security-api" }
-rocketmq-transport    = { version = "1.0.0", path = "../../rocketmq-transport", default-features = false, features = ["tls"], optional = true }
+rocketmq-admin-core   = { version = "1.1.0", path = "../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", default-features = false, features = ["read-client-adapter"] }
+rocketmq-observability = { version = "1.1.0", path = "../../rocketmq-observability" }
+rocketmq-runtime      = { version = "1.1.0", path = "../../rocketmq-runtime" }
+rocketmq-security-api = { version = "1.1.0", path = "../../rocketmq-security-api" }
+rocketmq-transport    = { version = "1.1.0", path = "../../rocketmq-transport", default-features = false, features = ["tls"], optional = true }
 # JWKS retrieval and RS256 key selection shared with the control MCP.
 rocketmq-mcp-auth     = { version = "1.0.0", path = "../rocketmq-mcp-auth", optional = true }
 
