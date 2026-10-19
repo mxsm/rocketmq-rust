@@ -14,12 +14,7 @@
 
 /// Detects whether a remote service endpoint is healthy.
 ///
-/// Implementations are used by the latency-aware fault tolerance strategy to
-/// probe whether a remote endpoint is reachable before traffic is routed back
-/// to it. Implementations must be `Send + Sync + 'static` so detectors can be
-/// shared across threads and stored in long-lived client state, and
-/// [`detect`](Self::detect) returns a `Send` future so probing never pins the
-/// caller to a single thread.
+/// [`detect`](Self::detect) returns a `Send` future.
 #[trait_variant::make(Send)]
 pub trait ServiceDetector: Sync + 'static {
     /// Checks if the remote service at the given endpoint is reachable.
