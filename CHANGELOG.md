@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **chore(version):** Advance the shared Cargo workspace and internal dependency requirements to `1.1.0` for continued development ([#11780](https://github.com/mxsm/rocketmq-rust/issues/11780)).
 - **improve(namesrv):** Align the NameServer CLI metadata with the `rocketmq-namesrv-rust` binary: use the Cargo package author and version for `-V` instead of a hardcoded `0.1.0`, and clarify the short and long help descriptions; `--version` release output and argument parsing are unchanged.
 - **refactor(client):** Simplify `ServiceDetector` to a single `Send` trait, removing the unused `ServiceDetectorLocal` variant and expanding the trait Rustdoc; the public export, method signature and `Send`-future guarantee are unchanged ([#11756](https://github.com/mxsm/rocketmq-rust/issues/11756)).
 - **refactor(transport):** Consolidate duplicate internal `ChannelInner` constructors without changing task or pending-request ownership ([#11726](https://github.com/mxsm/rocketmq-rust/issues/11726)).

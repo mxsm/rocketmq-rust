@@ -3303,7 +3303,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-admin-core"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "bytes",
  "cheetah-string",
@@ -3325,7 +3325,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-auth"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "aes-gcm",
  "arc-swap",
@@ -3357,7 +3357,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-client-rust"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -3386,14 +3386,14 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-error"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "rocketmq-macros"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -3403,7 +3403,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-model"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "base64 0.23.1",
  "byteorder",
@@ -3428,7 +3428,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-observability"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "cheetah-string",
@@ -3456,7 +3456,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-protocol"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "bitvec",
  "bytemuck",
@@ -3481,7 +3481,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-runtime"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "chrono",
  "config",
@@ -3503,7 +3503,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-security-api"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "cheetah-string",
  "rocketmq-error",
@@ -3752,7 +3752,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-transport"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "arc-swap",

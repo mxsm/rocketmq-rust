@@ -695,14 +695,14 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-error"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "rocketmq-macros"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -712,7 +712,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-model"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "base64",
  "byteorder",
@@ -737,7 +737,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-protocol"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "bitvec",
  "bytemuck",
