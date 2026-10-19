@@ -219,7 +219,13 @@ rocketmq-mcp --config conf/mcp.example.toml --transport stdio
 rocketmq-mcp --config conf/mcp.example.toml --transport streamable-http --bind 127.0.0.1:8089 --endpoint /mcp
 ```
 
-The configuration path is mandatory through `--config` or `ROCKETMQ_MCP_CONFIG`. Relative permission, TLS, JWKS CA, and audit paths are resolved from the configuration file's directory, so startup does not depend on the caller's current working directory.
+The configuration path is optional for local stdio startup. With neither `--config` nor `ROCKETMQ_MCP_CONFIG`,
+the server uses embedded configuration and permissions: the `local-dev` cluster at `127.0.0.1:9876`, the
+`diagnose` profile, output sanitization, and enabled audit records through stderr logging. No configuration
+or audit files are required or created. RocketMQ queries still need a running local NameServer and Broker.
+HTTP requires explicit configuration. `--config` takes precedence over `ROCKETMQ_MCP_CONFIG`, and an invalid
+explicit configuration fails startup. Relative permission, TLS, JWKS CA, and audit paths are resolved from
+the configuration file's directory, so startup does not depend on the caller's current working directory.
 RocketMQ request-signing credentials are resolved from the configured reference at startup and again for each new
 read session, enabling mounted-secret rotation without placing a secret in the TOML, command line, logs, or debug
 output. The associated Broker user should remain a normal user with only Topic/Group/Cluster `GET`; MCP rejects
@@ -230,18 +236,17 @@ mutation capability at both its compile-time dependency boundary and Broker auth
 Use stdio for local desktop clients. Logs are written to stderr so stdout remains valid MCP JSON-RPC traffic.
 
 ```bash
-cargo run -- \
-  --config conf/mcp.example.toml \
-  --transport stdio
+cargo run --locked
 ```
 
 For a release binary:
 
 ```bash
-target/release/rocketmq-mcp \
-  --config conf/mcp.example.toml \
-  --transport stdio
+target/release/rocketmq-mcp-query
 ```
+
+The process waits for MCP JSON-RPC requests on stdin. Add `--config <path>` to use custom cluster,
+permissions, or audit settings.
 
 ## Streamable HTTPS Usage
 
