@@ -114,6 +114,17 @@ rocketmq-admin-core/
 
 `tests/boundary_source_guard.rs` 保护源码和 feature 边界。
 
+## 错误处理
+
+`AdminError::operation_failed(operation_name, private_detail)` 创建通用管理操作失败错误，
+使用 `TOOLS_OPERATION_FAILED` 描述符和 `AdminFailure::OperationFailed` 分类。
+私有详情仅在内部保留，不进入格式化输出或公共错误视图。
+
+需要通过 `std::error::Error::source` 保留类型化原因时，使用
+`AdminError::operation_failed_with_source(operation_name, source)`。对于已有的规范错误，
+使用 `AdminError::from_error` 保留其描述符、上下文、协议映射和类型化源错误链，
+避免将其替换成通用操作失败描述符。
+
 ## 本地验证
 
 ```bash

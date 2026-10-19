@@ -111,6 +111,10 @@ impl AdminError {
     }
 
     /// Creates a generic administrative operation failure.
+    ///
+    /// Uses [`rocketmq_error::TOOLS_OPERATION_FAILED`] and
+    /// [`AdminFailure::OperationFailed`]. The private detail is retained internally
+    /// and omitted from error formatting and public views.
     #[track_caller]
     pub fn operation_failed(operation_name: &'static str, private_detail: impl Into<String>) -> Self {
         Self::source_free(
@@ -125,6 +129,10 @@ impl AdminError {
     }
 
     /// Creates a generic administrative operation failure with a typed source.
+    ///
+    /// Uses [`rocketmq_error::TOOLS_OPERATION_FAILED`] and
+    /// [`AdminFailure::OperationFailed`]. The source remains available through
+    /// [`StdError::source`] without being rendered in public error views.
     #[track_caller]
     pub fn operation_failed_with_source(
         operation_name: &'static str,
