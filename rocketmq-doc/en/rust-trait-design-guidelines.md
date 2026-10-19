@@ -18,8 +18,10 @@ future implementation is not a public seam.
   contracts. Add `Send + Sync` supertraits when implementations, rather than
   the returned future itself, cross task boundaries. Scope any
   `async_fn_in_trait` lint allowance to the trait and document the contract.
-- Use `trait_variant` only when a public interface must guarantee a `Send`
-  future. The generated naming convention must identify the `Send` variant.
+- Use `trait_variant` when a public or crate-private static-dispatch interface
+  must guarantee `Send` futures; implementation `Send`/`Sync` bounds do not guarantee this.
+  Prefer `#[trait_variant::make(Send)]` unless both local and `Send` variants
+  are required; name the `Send` variant clearly.
 - If a real object-safe seam is required, use an explicit boxed future or
   redesign a narrower interface. Do not add `#[async_trait]`.
 - Existing `#[async_trait]` sites migrate only when their owning module is
