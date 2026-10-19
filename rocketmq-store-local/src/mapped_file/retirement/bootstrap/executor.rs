@@ -112,7 +112,7 @@ fn bootstrap_descriptor(error: &ManagedLifecycleBootstrapFailure) -> Option<&'st
         }
         ManagedLifecycleBootstrapFailure::Inventory(_) => Some(&rocketmq_error::STORAGE_READ_FAILED),
         ManagedLifecycleBootstrapFailure::Foundation(source) => Some(foundation_descriptor(source)),
-        ManagedLifecycleBootstrapFailure::Execution(InitialBootstrapExecutionFailure::Backend(source)) => {
+        ManagedLifecycleBootstrapFailure::Execution(InitialBootstrapExecutionFailure::Operation(source)) => {
             Some(foundation_descriptor(source))
         }
         ManagedLifecycleBootstrapFailure::Execution(InitialBootstrapExecutionFailure::NeedsRecovery(_)) => {
@@ -227,7 +227,7 @@ mod private {
 /// An operation error is always ambiguous: the implementation may have advanced durable state
 /// before reporting it. The executor therefore returns immediately and a retry starts from a new
 /// call to the corresponding `inspect_*` method.
-pub(super) trait InitialBootstrapBackend: private::Sealed {
+pub(super) trait InitialBootstrapOperations: private::Sealed {
     type Error: Error + Send + Sync + 'static;
 
     fn inspect_store_initialized(
@@ -267,8 +267,8 @@ where
 {
     #[error(transparent)]
     Plan(#[from] BootstrapPlanViolation),
-    #[error("bootstrap backend operation failed")]
-    Backend(#[source] E),
+    #[error("initial bootstrap operation failed")]
+    Operation(#[source] E),
     #[error("bootstrap state requires replay/recovery: {0:?}")]
     NeedsRecovery(NeedsRecovery),
     #[error("bootstrap action bound was exceeded without reaching a stable frontier")]
@@ -277,40 +277,40 @@ where
     InvalidPlanAction,
 }
 
-pub(super) fn execute_initial_bootstrap<B>(
+pub(super) fn execute_initial_bootstrap<O>(
     foundation: BootstrapFoundationEvidence,
-    backend: &mut B,
-) -> Result<FencedBootstrapEvidence, InitialBootstrapExecutionFailure<B::Error>>
+    bootstrap_operations: &mut O,
+) -> Result<FencedBootstrapEvidence, InitialBootstrapExecutionFailure<O::Error>>
 where
-    B: InitialBootstrapBackend,
+    O: InitialBootstrapOperations,
 {
     let initial = InitialBootstrapPlan::new(foundation)?;
-    let inventory_plan = execute_store_initialized(initial, backend)?;
-    execute_inventory_phase(&inventory_plan, backend)
+    let inventory_plan = execute_store_initialized(initial, bootstrap_operations)?;
+    execute_inventory_phase(&inventory_plan, bootstrap_operations)
 }
 
-fn execute_store_initialized<B>(
+fn execute_store_initialized<O>(
     plan: InitialBootstrapPlan,
-    backend: &mut B,
-) -> Result<InitialBootstrapInventoryPlan, InitialBootstrapExecutionFailure<B::Error>>
+    bootstrap_operations: &mut O,
+) -> Result<InitialBootstrapInventoryPlan, InitialBootstrapExecutionFailure<O::Error>>
 where
-    B: InitialBootstrapBackend,
+    O: InitialBootstrapOperations,
 {
     for _ in 0..MAX_BOOTSTRAP_ACTIONS {
-        let progress = backend
+        let progress = bootstrap_operations
             .inspect_store_initialized(&plan.store_initialized)
-            .map_err(InitialBootstrapExecutionFailure::Backend)?;
+            .map_err(InitialBootstrapExecutionFailure::Operation)?;
         match plan.decide_store_initialized(progress) {
             BootstrapDecision::Execute(BootstrapAction::AdvanceUnit {
                 record: BootstrapRecord::StoreInitialized,
                 step,
-            }) => backend
+            }) => bootstrap_operations
                 .advance_unit(BootstrapRecord::StoreInitialized, &plan.store_initialized, step)
-                .map_err(InitialBootstrapExecutionFailure::Backend)?,
+                .map_err(InitialBootstrapExecutionFailure::Operation)?,
             BootstrapDecision::RequireBootstrapInventory => {
-                let inventory = backend
+                let inventory = bootstrap_operations
                     .scan_inventory()
-                    .map_err(InitialBootstrapExecutionFailure::Backend)?;
+                    .map_err(InitialBootstrapExecutionFailure::Operation)?;
                 return plan.consume_inventory(progress, inventory).map_err(Into::into);
             }
             BootstrapDecision::NeedsRecovery(recovery) => {
@@ -322,19 +322,19 @@ where
     Err(InitialBootstrapExecutionFailure::ActionBoundExceeded)
 }
 
-fn execute_inventory_phase<B>(
+fn execute_inventory_phase<O>(
     plan: &InitialBootstrapInventoryPlan,
-    backend: &mut B,
-) -> Result<FencedBootstrapEvidence, InitialBootstrapExecutionFailure<B::Error>>
+    bootstrap_operations: &mut O,
+) -> Result<FencedBootstrapEvidence, InitialBootstrapExecutionFailure<O::Error>>
 where
-    B: InitialBootstrapBackend,
+    O: InitialBootstrapOperations,
 {
     for _ in 0..MAX_BOOTSTRAP_ACTIONS {
-        let progress = backend
+        let progress = bootstrap_operations
             .inspect_inventory_phase(plan)
-            .map_err(InitialBootstrapExecutionFailure::Backend)?;
+            .map_err(InitialBootstrapExecutionFailure::Operation)?;
         match plan.decide(progress) {
-            BootstrapDecision::Execute(action) => execute_inventory_action(plan, backend, action)?,
+            BootstrapDecision::Execute(action) => execute_inventory_action(plan, bootstrap_operations, action)?,
             BootstrapDecision::NeedsRecovery(recovery) => {
                 return Err(InitialBootstrapExecutionFailure::NeedsRecovery(recovery));
             }
@@ -347,34 +347,34 @@ where
     Err(InitialBootstrapExecutionFailure::ActionBoundExceeded)
 }
 
-fn execute_inventory_action<B>(
+fn execute_inventory_action<O>(
     plan: &InitialBootstrapInventoryPlan,
-    backend: &mut B,
+    bootstrap_operations: &mut O,
     action: BootstrapAction,
-) -> Result<(), InitialBootstrapExecutionFailure<B::Error>>
+) -> Result<(), InitialBootstrapExecutionFailure<O::Error>>
 where
-    B: InitialBootstrapBackend,
+    O: InitialBootstrapOperations,
 {
     match action {
-        BootstrapAction::AdvanceSnapshot { step } => backend
+        BootstrapAction::AdvanceSnapshot { step } => bootstrap_operations
             .advance_snapshot(&plan.snapshot, step)
-            .map_err(InitialBootstrapExecutionFailure::Backend),
-        BootstrapAction::AdvanceInitialMarker { step } => backend
+            .map_err(InitialBootstrapExecutionFailure::Operation),
+        BootstrapAction::AdvanceInitialMarker { step } => bootstrap_operations
             .advance_initial_marker(&plan.initial_marker, step)
-            .map_err(InitialBootstrapExecutionFailure::Backend),
+            .map_err(InitialBootstrapExecutionFailure::Operation),
         BootstrapAction::AdvanceUnit { record, step } => {
             let planned = match record {
                 BootstrapRecord::BootstrapInstalled => &plan.bootstrap_installed,
                 BootstrapRecord::MarkerCommitted => &plan.marker_committed,
                 _ => return Err(InitialBootstrapExecutionFailure::InvalidPlanAction),
             };
-            backend
+            bootstrap_operations
                 .advance_unit(record, planned, step)
-                .map_err(InitialBootstrapExecutionFailure::Backend)
+                .map_err(InitialBootstrapExecutionFailure::Operation)
         }
-        BootstrapAction::Reconcile { phase } => backend
+        BootstrapAction::Reconcile { phase } => bootstrap_operations
             .reconcile(phase)
-            .map_err(InitialBootstrapExecutionFailure::Backend),
+            .map_err(InitialBootstrapExecutionFailure::Operation),
         BootstrapAction::AdvanceMarker { .. } => Err(InitialBootstrapExecutionFailure::InvalidPlanAction),
     }
 }
@@ -391,7 +391,7 @@ enum ModelMarkerProgress {
 }
 
 #[cfg(test)]
-pub(super) struct ModelInitialBootstrapBackend {
+pub(super) struct ModelInitialBootstrapOperations {
     inventory_snapshot: super::super::sidecar::LifecycleSnapshot,
     store_initialized: DurableUnitProgress,
     snapshot: ImmutableArtifactProgress,
@@ -405,10 +405,10 @@ pub(super) struct ModelInitialBootstrapBackend {
 }
 
 #[cfg(test)]
-impl private::Sealed for ModelInitialBootstrapBackend {}
+impl private::Sealed for ModelInitialBootstrapOperations {}
 
 #[cfg(test)]
-impl ModelInitialBootstrapBackend {
+impl ModelInitialBootstrapOperations {
     pub(super) fn new(inventory: BootstrapInventoryEvidence) -> Self {
         Self {
             inventory_snapshot: inventory.snapshot,
@@ -503,7 +503,7 @@ impl ModelInitialBootstrapBackend {
 }
 
 #[cfg(test)]
-impl InitialBootstrapBackend for ModelInitialBootstrapBackend {
+impl InitialBootstrapOperations for ModelInitialBootstrapOperations {
     type Error = std::io::Error;
 
     fn inspect_store_initialized(
