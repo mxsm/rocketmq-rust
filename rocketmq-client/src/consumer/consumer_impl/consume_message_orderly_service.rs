@@ -57,7 +57,7 @@ use crate::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
 use crate::consumer::listener::consume_return_type::ConsumeReturnType;
 use crate::consumer::listener::message_listener_orderly::ArcMessageListenerOrderly;
 use crate::consumer::message_queue_lock::MessageQueueLock;
-use crate::consumer::mq_consumer_inner::MQConsumerInnerLocal;
+use crate::consumer::mq_consumer_inner::MQConsumerInner;
 use crate::hook::consume_message_context::ConsumeMessageContext;
 use crate::runtime::schedule_client_fixed_delay_task_with_context;
 use crate::runtime::spawn_client_blocking_io_with_context;
