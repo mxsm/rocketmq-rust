@@ -286,8 +286,12 @@ async fn run_proxy(config: ProxyConfig, context: ChildServiceContext) -> ProxyRe
 ```
 
 可以通过 `ProxyRuntime::builder` 注入自定义 `ServiceManager`、
-`ClientSessionRegistry`、`ProxyAuthRuntime`、请求 hook、metrics 或 remoting
-backend。
+`ClientSessionRegistry`、`ProxyAuthRuntime`、请求 hook、metrics，以及可选的
+broker remoting handler（`with_broker_remoting_handler`）。该 handler 负责路由到
+broker 的 remoting 请求码（`ForwardToBroker` 和队列锁相关路由）：local 模式注入内
+嵌 broker 适配器，cluster 模式注入集群转发适配器，缺省不注入时 proxy 保持自包含、
+不搭桥 broker。旧的 `with_remoting_backend` 是已废弃的别名，内部转发到
+`with_broker_remoting_handler`，迁移时重命名调用即可。
 
 ## Crate 结构
 

@@ -67,7 +67,7 @@ struct LifecycleReadiness {
 
 struct DefaultBackend {
     service_manager: Arc<dyn ServiceManager>,
-    remoting_backend:
+    broker_remoting_handler:
         Option<Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>>,
     context: Option<ChildServiceContext>,
 }
@@ -152,7 +152,7 @@ pub struct ProxyRuntimeBuilder {
     hooks: Option<ProxyHookChain>,
     metrics: Option<ProxyMetrics>,
     telemetry: rocketmq_observability::TelemetryHandle,
-    remoting_backend:
+    broker_remoting_handler:
         Option<Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>>,
     service_context: ChildServiceContext,
     diagnostics_sources: rocketmq_observability::RuntimeDiagnosticsSources,
@@ -182,7 +182,7 @@ impl ProxyRuntimeBuilder {
             hooks: None,
             metrics: None,
             telemetry,
-            remoting_backend: None,
+            broker_remoting_handler: None,
             service_context,
             diagnostics_sources: rocketmq_observability::RuntimeDiagnosticsSources::default(),
         }
@@ -222,12 +222,27 @@ impl ProxyRuntimeBuilder {
         self
     }
 
-    pub fn with_remoting_backend(
+    /// Injects the optional broker remoting handler used for broker-routed
+    /// remoting request codes (`ForwardToBroker` and the queue-lock routes).
+    pub fn with_broker_remoting_handler(
         mut self,
-        remoting_backend: Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
+        broker_remoting_handler: Arc<
+            dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>,
+        >,
     ) -> Self {
-        self.remoting_backend = Some(remoting_backend);
+        self.broker_remoting_handler = Some(broker_remoting_handler);
         self
+    }
+
+    /// Compatibility wrapper for [`Self::with_broker_remoting_handler`].
+    #[deprecated(since = "1.0.0", note = "use `with_broker_remoting_handler` instead")]
+    pub fn with_remoting_backend(
+        self,
+        broker_remoting_handler: Arc<
+            dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>,
+        >,
+    ) -> Self {
+        self.with_broker_remoting_handler(broker_remoting_handler)
     }
 
     pub fn build(self) -> ProxyResult<ProxyRuntime<DefaultMessagingProcessor>> {
@@ -253,7 +268,7 @@ impl ProxyRuntimeBuilder {
         let backend = match self.service_manager {
             Some(service_manager) => DefaultBackend {
                 service_manager,
-                remoting_backend: self.remoting_backend,
+                broker_remoting_handler: self.broker_remoting_handler,
                 context: None,
             },
             None => default_service_manager_and_backend(&self.config, &service_context, telemetry.clone())?,
@@ -299,7 +314,7 @@ impl ProxyRuntimeBuilder {
             metrics,
             transport_telemetry,
             grpc_guards,
-            backend.remoting_backend,
+            backend.broker_remoting_handler,
             backend.context,
             service_context,
         );
@@ -321,7 +336,7 @@ pub struct ProxyRuntime<P = DefaultMessagingProcessor> {
     auth_runtime: Option<ProxyAuthRuntime>,
     auth_metadata_service: Option<Arc<dyn MetadataService>>,
     transport_telemetry: rocketmq_transport::api::TransportTelemetry,
-    remoting_backend:
+    broker_remoting_handler:
         Option<Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>>,
     backend_context: Option<ChildServiceContext>,
     service_context: ChildServiceContext,
@@ -387,7 +402,7 @@ where
         hooks: ProxyHookChain,
         metrics: ProxyMetrics,
         transport_telemetry: rocketmq_transport::api::TransportTelemetry,
-        remoting_backend: Option<
+        broker_remoting_handler: Option<
             Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
         >,
         backend_context: Option<ChildServiceContext>,
@@ -406,7 +421,7 @@ where
             metrics,
             transport_telemetry,
             grpc_guards,
-            remoting_backend,
+            broker_remoting_handler,
             backend_context,
             service_context,
         ))
@@ -427,7 +442,7 @@ where
         metrics: ProxyMetrics,
         transport_telemetry: rocketmq_transport::api::TransportTelemetry,
         grpc_guards: crate::grpc::service::GrpcExecutionResources,
-        remoting_backend: Option<
+        broker_remoting_handler: Option<
             Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
         >,
         backend_context: Option<ChildServiceContext>,
@@ -454,7 +469,7 @@ where
             auth_runtime,
             auth_metadata_service,
             transport_telemetry,
-            remoting_backend,
+            broker_remoting_handler,
             backend_context,
             service_context,
         }
@@ -536,7 +551,7 @@ where
             auth_runtime,
             auth_metadata_service,
             transport_telemetry,
-            remoting_backend,
+            broker_remoting_handler,
             backend_context,
             service_context,
         } = self;
@@ -624,7 +639,7 @@ where
                         processor,
                         sessions,
                         remoting_auth_runtime,
-                        remoting_backend,
+                        broker_remoting_handler,
                         drain,
                         application_remoting_command_factory(),
                         remoting_shutdown,
@@ -778,7 +793,7 @@ fn default_service_manager_and_backend(
             let service_client: Arc<dyn ClusterClient> = client.clone();
             Ok(DefaultBackend {
                 service_manager: Arc::new(ClusterServiceManager::from_cluster_client(service_client)),
-                remoting_backend: Some(Arc::new(ClusterRemotingBackend::new(client))),
+                broker_remoting_handler: Some(Arc::new(ClusterRemotingBackend::new(client))),
                 context: Some(cluster_context),
             })
         }
@@ -797,7 +812,7 @@ fn default_service_manager_and_backend(
             )?;
             Ok(DefaultBackend {
                 service_manager: Arc::new(manager),
-                remoting_backend: Some(Arc::new(LocalRemotingBackend::new(client))),
+                broker_remoting_handler: Some(Arc::new(LocalRemotingBackend::new(client))),
                 context: Some(local_context),
             })
         }

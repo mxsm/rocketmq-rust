@@ -61,6 +61,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(proxy):** Rename the optional proxy runtime remoting handler wiring from `remoting_backend` to `broker_remoting_handler` across `ProxyRuntimeDependencies`, `ProxyRuntimeBuilder`, `ProxyRuntime`, the remoting dispatcher constructors and `serve_with_*` helpers, tests, and local bindings, since the handler only serves broker-routed remoting request codes (`ForwardToBroker` and the queue-lock routes); the injected adapters and behavior are unchanged ([#11812](https://github.com/mxsm/rocketmq-rust/issues/11812)).
+
 - **refactor(macros):** Rename the former `RequestHeaderCodecV3` derive to `RequestHeaderCodec` throughout the protocol headers, tests, and documentation. The explicit wire model and all registered header contracts remain unchanged. Former V3 consumers only rename the derive; historical V1/V2 consumers still need to migrate their attributes and review decode behavior.
 - **fix(namesrv):** Exclude shutdown deadlines from NameServer trace spans ([#10099](https://github.com/mxsm/rocketmq-rust/issues/10099)).
 - **fix(namesrv):** Default the legacy public-listener compatibility setting to enabled while preserving an
@@ -90,6 +92,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **refactor(remoting):** Replace `lazy_static!` with `std::sync::LazyLock` in `remoting_command.rs` and remove `lazy_static` dependency from `rocketmq-remoting` ([#5060](https://github.com/mxsm/rocketmq-rust/issues/5060))
 - **perf(ArcMut):** Add the `#[inline]` attribute to the `mut_from_ref`, `downgrade`, and `get_inner` methods for `ArcMut`, improving performance ([#2876](https://github.com/mxsm/rocketmq-rust/pull/2876))
 - **chore(controller):** Update default controller listen address to use port 60109 ([#5527](https://github.com/mxsm/rocketmq-rust/issues/5527))
+
+### Deprecated
+
+- **refactor(proxy):** Deprecate `ProxyRuntimeBuilder::with_remoting_backend` in favor of `with_broker_remoting_handler`; the deprecated method forwards to the new one, so migration is a rename ([#11812](https://github.com/mxsm/rocketmq-rust/issues/11812)).
 
 ### Removed
 
