@@ -43,8 +43,8 @@ pub enum FileSegmentStatus {
     Deleted,
 }
 
-#[trait_variant::make(FileSegment: Send)]
-pub trait FileSegmentInner: Sync {
+#[trait_variant::make(Send)]
+pub trait FileSegment: Sync {
     fn path(&self) -> &str;
 
     fn segment_type(&self) -> FileSegmentType;
