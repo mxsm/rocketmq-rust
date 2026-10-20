@@ -93,6 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(mcp):** Synchronize the standalone query lockfile with `jsonschema 0.59.0` to restore locked query and control CI boundary checks ([#11807](https://github.com/mxsm/rocketmq-rust/issues/11807)).
 - **fix(proxy-cluster):** Make cancellation lifecycle tests deterministic and assert the canonical transport descriptor across shutdown-notification and dropped-reply paths while retaining client and producer cleanup checks ([#11775](https://github.com/mxsm/rocketmq-rust/issues/11775)).
 - **docs(auth):** Describe the built-in in-memory metadata providers, optional JSON snapshots, and `ProviderBundle` extension interfaces, and align the ACL provider examples with the current public API ([#11645](https://github.com/mxsm/rocketmq-rust/issues/11645)).
 - **fix(controller):** Align the OpenRaft core, macros, and runtimes at `0.10.0-alpha.37`, adapt the snapshot and leadership APIs while preserving persisted snapshot identity, and refresh the standalone fuzz lockfile to restore locked builds for all four targets ([#11640](https://github.com/mxsm/rocketmq-rust/issues/11640)).
