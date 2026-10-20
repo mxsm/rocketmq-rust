@@ -196,6 +196,14 @@ FileSegment API 迁移：`FileSegment` trait 现在直接通过
 `rocketmq_tieredstore::FileSegment`。保留的 trait 要求实现类型及其异步 future 均为
 `Send`；依赖非 `Send` future 的实现需要相应调整，因为为旧名称提供别名无法保留该约定。
 
+### Provider API 迁移（尚未发布）
+
+移除 `rocketmq_tieredstore::provider::TieredStoreProviderInner`。
+请将导入、`impl` 声明和泛型约束中的旧名称替换为 `rocketmq_tieredstore::TieredStoreProvider`。
+这会破坏源码兼容性：保留的 trait 要求实现类型和返回的 future 满足 `Send`。
+依赖非 `Send` 类型或 future 的实现需要适配；保留旧名称的别名也无法维持原有契约。
+现有的 `Sync + Clone + 'static` 约束不变。
+
 ## 数据模型
 
 ### 写入路径
