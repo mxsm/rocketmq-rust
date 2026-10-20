@@ -222,6 +222,15 @@ implementing type and its asynchronous futures to be `Send`; an implementation t
 relied on a non-`Send` future must be adapted, because an alias for the old name would
 not preserve that contract.
 
+### Provider API migration (unreleased)
+
+`rocketmq_tieredstore::provider::TieredStoreProviderInner` is removed.
+Replace it in imports, `impl` headers, and generic bounds with
+`rocketmq_tieredstore::TieredStoreProvider`. This breaks source compatibility: the
+retained trait requires implementations and returned futures to be `Send`.
+Non-`Send` implementations or futures must be adapted; an alias would not preserve
+the old contract. The existing `Sync + Clone + 'static` bounds remain in place.
+
 ## Data Model
 
 ### Write Path
