@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(proxy):** Rename optional Broker Remoting handler wiring to `broker_remoting_handler` and add `ProxyRuntimeBuilder::with_broker_remoting_handler`; adapter selection, dispatch behavior, diagnostics, and shutdown ordering are unchanged ([#11812](https://github.com/mxsm/rocketmq-rust/issues/11812)).
+
 - **chore(version):** Advance the shared Cargo workspace and internal dependency requirements to `1.1.0` for continued development ([#11780](https://github.com/mxsm/rocketmq-rust/issues/11780)).
 - **improve(namesrv):** Align the NameServer CLI metadata with the `rocketmq-namesrv-rust` binary: use the Cargo package author and version for `-V` instead of a hardcoded `0.1.0`, and clarify the short and long help descriptions; `--version` release output and argument parsing are unchanged.
 - **refactor(client):** Simplify `ServiceDetector` to a single `Send` trait, removing the unused `ServiceDetectorLocal` variant and expanding the trait Rustdoc; the public export, method signature and `Send`-future guarantee are unchanged ([#11756](https://github.com/mxsm/rocketmq-rust/issues/11756)).
@@ -59,6 +61,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **refactor(runtime):** Rename `PermitRebindOutcome` to `PermitBudgetTransferStatus` (breaking), exported as `rocketmq_runtime::PermitBudgetTransferStatus` and `rocketmq_runtime::resource_budget::PermitBudgetTransferStatus`. External callers must update imports and type references; no compatibility alias is provided. Variants and `try_rebind` behavior are unchanged ([#11067](https://github.com/mxsm/rocketmq-rust/issues/11067)).
 - **refactor(store-local):** Rename `MappedFileDestroyOutcome` to `MappedFileRemovalStatus` (breaking), exported as `rocketmq_store_local::mapped_file::MappedFileRemovalStatus`. External callers must update imports and type references; no compatibility alias is provided. Variants, `try_destroy` and retry behavior are unchanged ([#11068](https://github.com/mxsm/rocketmq-rust/issues/11068)).
 - **refactor(store-local):** Rename `AppendAdmissionOutcome` to `AppendAdmissionResult`, `AcquireTransitionOutcome` to `LeaseAcquireTransitionResult`, `LifecycleAcquireOutcome` to `MappedFileAdmissionResult`, and `NamespaceTransitionOutcome` to `NamespaceOperationResult` (breaking) ([#11292](https://github.com/mxsm/rocketmq-rust/issues/11292), [#11303](https://github.com/mxsm/rocketmq-rust/issues/11303), [#11302](https://github.com/mxsm/rocketmq-rust/issues/11302), [#11307](https://github.com/mxsm/rocketmq-rust/issues/11307)).
+
+### Deprecated
+
+- **refactor(proxy):** Deprecate `ProxyRuntimeBuilder::with_remoting_backend` in favor of `with_broker_remoting_handler`; the compatibility wrapper preserves injection behavior ([#11812](https://github.com/mxsm/rocketmq-rust/issues/11812)).
 
 ### Removed
 
