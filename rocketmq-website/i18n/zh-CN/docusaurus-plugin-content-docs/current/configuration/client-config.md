@@ -123,6 +123,8 @@ let consumer = DefaultLitePullConsumer::builder(client.clone())
 
 ## TLS 与应用自定义设置
 
+证书准备、Secret 挂载、服务端策略和 Admin/CLI 边界参阅 [TLS 与 mTLS 指南](../deployment/tls.md#clients)。
+
 通过公共 builder 配置对端验证与可选客户端身份：
 
 ```rust

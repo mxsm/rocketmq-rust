@@ -1,0 +1,236 @@
+---
+source: src/tools/catalog.rs
+expression: contract
+---
+{
+  "annotations": {
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": true,
+    "readOnlyHint": true,
+    "title": "RocketMQ ACL users"
+  },
+  "description": "Lists the ACL users of one cluster: for each Broker, the user names it holds with their type and status, at most 500 rows. Use it to check who may sign requests to a cluster and whether every Broker holds the same users. It never returns a password or an access rule. It needs the rocketmq:security-admin scope.",
+  "inputSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "cluster": {
+        "description": "Logical cluster name configured on this server. It is a name, not a NameServer address.",
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "cluster"
+    ],
+    "type": "object"
+  },
+  "name": "rocketmq_list_acl_users",
+  "outputSchema": {
+    "$defs": {
+      "AclUserRow": {
+        "description": "One ACL user as one Broker holds it. It never carries a password.",
+        "properties": {
+          "broker_name": {
+            "description": "The Broker that holds the user. Each Broker keeps its own users.",
+            "type": "string"
+          },
+          "user_status": {
+            "description": "Whether the user may sign requests, `enable` or `disable`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_type": {
+            "description": "The kind of user, `Super` or `Normal`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "username": {
+            "description": "The name of the user, as the Broker holds it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "broker_name"
+        ],
+        "type": "object"
+      },
+      "CacheStatus": {
+        "enum": [
+          "bypass",
+          "hit",
+          "miss"
+        ],
+        "type": "string"
+      },
+      "ListAclUsersOutput": {
+        "properties": {
+          "cluster": {
+            "type": "string"
+          },
+          "generated_at": {
+            "type": "string"
+          },
+          "queried_broker_count": {
+            "description": "How many Brokers the cluster has, those in `unanswered_brokers` included.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "truncated": {
+            "description": "Whether rows beyond 500 were left out. `user_count` still covers them.",
+            "type": "boolean"
+          },
+          "unanswered_brokers": {
+            "description": "The Brokers that have no master to ask or did not answer. Their users are missing.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "user_count": {
+            "description": "How many distinct user names the Brokers listed.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "users": {
+            "description": "One row for each user on each Broker, in ascending order of user name and Broker, at most 500.",
+            "items": {
+              "$ref": "#/$defs/AclUserRow"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "cluster",
+          "user_count",
+          "users",
+          "truncated",
+          "queried_broker_count",
+          "unanswered_brokers",
+          "generated_at"
+        ],
+        "type": "object"
+      },
+      "QuerySource": {
+        "enum": [
+          "broker_runtime",
+          "broker_config",
+          "broker_log_filter",
+          "consumer_statistics",
+          "consumer_connection",
+          "producer_connection",
+          "topic_config",
+          "topic_stats",
+          "consumer_group_config",
+          "subscription_groups",
+          "topic_route",
+          "broker_ha_runtime",
+          "controller_sync_state",
+          "controller_metadata",
+          "nameserver_config"
+        ],
+        "type": "string"
+      },
+      "SourceFailure": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "$ref": "#/$defs/SourceFailureCode"
+          },
+          "logical_target": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "source": {
+            "$ref": "#/$defs/QuerySource"
+          }
+        },
+        "required": [
+          "source",
+          "code",
+          "retryable",
+          "logical_target"
+        ],
+        "type": "object"
+      },
+      "SourceFailureCode": {
+        "enum": [
+          "source_unavailable",
+          "timeout",
+          "permission_denied",
+          "not_found",
+          "rate_limited",
+          "invalid_response"
+        ],
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "cache_status": {
+        "$ref": "#/$defs/CacheStatus"
+      },
+      "cluster": {
+        "type": "string"
+      },
+      "data": {
+        "$ref": "#/$defs/ListAclUsersOutput"
+      },
+      "freshness_ms": {
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "observed_at": {
+        "type": "string"
+      },
+      "partial": {
+        "type": "boolean"
+      },
+      "request_id": {
+        "type": "string"
+      },
+      "schema_version": {
+        "type": "string"
+      },
+      "source_failures": {
+        "items": {
+          "$ref": "#/$defs/SourceFailure"
+        },
+        "type": [
+          "array",
+          "null"
+        ]
+      },
+      "warnings": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "schema_version",
+      "request_id",
+      "cluster",
+      "observed_at",
+      "freshness_ms",
+      "cache_status",
+      "partial",
+      "warnings",
+      "data"
+    ],
+    "type": "object"
+  },
+  "title": "RocketMQ ACL users"
+}

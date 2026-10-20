@@ -78,7 +78,7 @@ pub(crate) enum AcquireTransitionRejection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AcquireTransitionOutcome {
+pub(crate) enum LeaseAcquireTransitionResult {
     Acquired,
     Rejected(AcquireTransitionRejection),
 }
@@ -97,12 +97,12 @@ pub(crate) enum ReleaseTransition {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ReleaseOutcome {
+pub(crate) struct LeaseReleaseReport {
     transition: ReleaseTransition,
     writers_drained_after_rejection: bool,
 }
 
-impl ReleaseOutcome {
+impl LeaseReleaseReport {
     #[inline]
     pub(crate) const fn transition(self) -> ReleaseTransition {
         self.transition
@@ -260,40 +260,40 @@ impl<A: LifecycleAtomicUsize> LifecycleTransitionState<A> {
     }
 
     #[inline]
-    pub(crate) fn try_acquire(&self, operation: MappedFileOperation) -> AcquireTransitionOutcome {
+    pub(crate) fn try_acquire(&self, operation: MappedFileOperation) -> LeaseAcquireTransitionResult {
         let mut current = self.word.load_acquire();
         loop {
             let state = decode_state(current);
             if !state.allows(operation) {
-                return AcquireTransitionOutcome::Rejected(AcquireTransitionRejection::Unavailable(state));
+                return LeaseAcquireTransitionResult::Rejected(AcquireTransitionRejection::Unavailable(state));
             }
 
             let active_leases = current & ACTIVE_LEASE_MASK;
             if active_leases == ACTIVE_LEASE_MASK {
-                return AcquireTransitionOutcome::Rejected(AcquireTransitionRejection::LeaseCountOverflow);
+                return LeaseAcquireTransitionResult::Rejected(AcquireTransitionRejection::LeaseCountOverflow);
             }
 
             let active_writers = decode_active_writers(current);
             if operation == MappedFileOperation::Write && active_writers == ACTIVE_LEASE_MASK {
-                return AcquireTransitionOutcome::Rejected(AcquireTransitionRejection::LeaseCountOverflow);
+                return LeaseAcquireTransitionResult::Rejected(AcquireTransitionRejection::LeaseCountOverflow);
             }
 
             let next = current + 1 + usize::from(operation == MappedFileOperation::Write) * ACTIVE_WRITER_UNIT;
             match self.word.compare_exchange_weak_acquire(current, next) {
-                Ok(_) => return AcquireTransitionOutcome::Acquired,
+                Ok(_) => return LeaseAcquireTransitionResult::Acquired,
                 Err(observed) => current = observed,
             }
         }
     }
 
     #[inline]
-    pub(crate) fn release(&self, operation: MappedFileOperation) -> ReleaseOutcome {
+    pub(crate) fn release(&self, operation: MappedFileOperation) -> LeaseReleaseReport {
         let mut current = self.word.load_acquire();
         loop {
             let active_leases = current & ACTIVE_LEASE_MASK;
             let active_writers = decode_active_writers(current);
             if active_leases == 0 || (operation == MappedFileOperation::Write && active_writers == 0) {
-                return ReleaseOutcome {
+                return LeaseReleaseReport {
                     transition: ReleaseTransition::Underflow,
                     writers_drained_after_rejection: false,
                 };
@@ -303,7 +303,7 @@ impl<A: LifecycleAtomicUsize> LifecycleTransitionState<A> {
             let next = current - 1 - usize::from(operation == MappedFileOperation::Write) * ACTIVE_WRITER_UNIT;
             match self.word.compare_exchange_weak_acq_rel_relaxed(current, next) {
                 Ok(_) => {
-                    return ReleaseOutcome {
+                    return LeaseReleaseReport {
                         transition: if active_leases == 1 && state == MappedFileAdmissionState::Closing {
                             ReleaseTransition::Drained
                         } else {

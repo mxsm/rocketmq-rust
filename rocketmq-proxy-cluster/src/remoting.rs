@@ -25,28 +25,28 @@ use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_proxy_core::error::canonical;
 use rocketmq_proxy_core::ProxyError;
-use rocketmq_proxy_core::ProxyRemotingBackend;
+use rocketmq_proxy_core::ProxyRemotingRequestHandler;
 use rocketmq_proxy_core::ProxyServiceFuture;
-use rocketmq_transport::api::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::EmbeddedDispatchResult;
 use rocketmq_transport::api::RemotingResponse;
 
-use crate::cluster::RocketmqClusterClient;
+use crate::cluster::ClusterCommandGateway;
 
-/// Remoting operations that require direct access to the Client runtime.
-pub struct ClusterRemotingBackend {
-    client: Arc<RocketmqClusterClient>,
+/// Translates Proxy Remoting requests into cluster client operations.
+pub struct ClusterBrokerRemotingAdapter {
+    client: Arc<ClusterCommandGateway>,
 }
 
-impl ClusterRemotingBackend {
-    pub fn new(client: Arc<RocketmqClusterClient>) -> Self {
+impl ClusterBrokerRemotingAdapter {
+    pub fn new(client: Arc<ClusterCommandGateway>) -> Self {
         Self { client }
     }
 }
 
-impl ProxyRemotingBackend for ClusterRemotingBackend {
-    type Response = EmbeddedDispatchOutcome;
+impl ProxyRemotingRequestHandler for ClusterBrokerRemotingAdapter {
+    type Response = EmbeddedDispatchResult;
 
-    fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchOutcome> {
+    fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchResult> {
         Box::pin(async move {
             let opaque = request.opaque();
             let body = request
@@ -88,7 +88,7 @@ impl ProxyRemotingBackend for ClusterRemotingBackend {
             }?;
             let response = RemotingResponse::from_command(response)
                 .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
-            Ok(EmbeddedDispatchOutcome::Reply(response))
+            Ok(EmbeddedDispatchResult::Reply(response))
         })
     }
 }

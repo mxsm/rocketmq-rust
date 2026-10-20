@@ -130,7 +130,7 @@ fn immediate_leaf_mapper_turns_only_typed_header_failures_into_replies() {
         "ordinary leaf returned no response",
     )
     .expect("typed request-header failures should become a Broker reply");
-    let HandlerOutcome::Reply(response) = outcome else {
+    let ResponseAction::Reply(response) = outcome else {
         panic!("ordinary leaf error mapping must produce one reply")
     };
     assert_eq!(response.response_code(), expected_response_code);
@@ -228,10 +228,10 @@ fn empty_bytes_and_segments_normalize_to_an_empty_command_response() {
 fn handler_outcome_seam_exposes_reply_metadata() {
     let outcome = BrokerResponseParts::bytes(response_head(), Bytes::from_static(b"reply"))
         .expect("valid reply parts")
-        .into_handler_outcome()
+        .into_response_action()
         .expect("valid reply outcome");
 
-    let HandlerOutcome::Reply(response) = outcome else {
+    let ResponseAction::Reply(response) = outcome else {
         panic!("immediate Broker responses must become Reply outcomes");
     };
     assert_eq!(response.response_code(), ResponseCode::Success as i32);

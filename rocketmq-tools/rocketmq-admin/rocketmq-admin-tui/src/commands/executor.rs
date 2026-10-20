@@ -26,9 +26,12 @@ use crate::admin_facade::TuiAdminFacade;
 use crate::state::CommandFormState;
 use crate::view_model::CommandResultViewModel;
 
-type CommandExecutionFuture<'a> = Pin<Box<dyn Future<Output = CanonicalResult<CommandResultViewModel>> + 'a>>;
+type CommandExecutionFuture<'a> = Pin<Box<dyn Future<Output = CanonicalResult<CommandResultViewModel>> + Send + 'a>>;
 
 /// Dispatches a catalog command and reports progress through the supplied callback.
+///
+/// The returned future is `Send`: a runtime worker polls it, never the thread that
+/// draws the interface.
 ///
 /// # Errors
 ///
@@ -41,7 +44,7 @@ pub fn execute_command_with_progress<'a, F>(
     mut progress: F,
 ) -> CommandExecutionFuture<'a>
 where
-    F: FnMut(String) + 'a,
+    F: FnMut(String) + Send + 'a,
 {
     match spec.id {
         "topic.list" => Box::pin(async move {

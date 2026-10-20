@@ -1,0 +1,217 @@
+.section {
+  overflow: hidden;
+}
+
+.glow {
+  position: absolute;
+  top: -4%;
+  right: -20%;
+  width: min(72vw, 920px);
+  aspect-ratio: 1;
+  background: radial-gradient(closest-side, rgba(255, 122, 38, 0.12), transparent);
+  pointer-events: none;
+}
+
+/*
+ * Channel triplets, so a card and the illustration inside it (FeatureVisuals)
+ * can derive translucent variants of the accent.
+ */
+.orange {
+  --accent-rgb: 255, 122, 38;
+}
+
+.violet {
+  --accent-rgb: 152, 114, 255;
+}
+
+.cyan {
+  --accent-rgb: 66, 208, 240;
+}
+
+.green {
+  --accent-rgb: 52, 211, 153;
+}
+
+.rose {
+  --accent-rgb: 251, 113, 133;
+}
+
+.amber {
+  --accent-rgb: 255, 184, 107;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 1.1rem;
+  margin-top: clamp(2.4rem, 5vw, 4rem);
+}
+
+/* ---------- Card ---------- */
+
+/* The 1px padding is the border; ::before paints a glow into it that follows the pointer. */
+.card {
+  position: relative;
+  min-width: 0;
+  grid-column: span 2;
+  overflow: hidden;
+  padding: 1px;
+  border-radius: 22px;
+  background: var(--home-border);
+  isolation: isolate;
+}
+
+.cardWide {
+  grid-column: span 4;
+}
+
+.card::before {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    380px circle at var(--spot-x, 50%) var(--spot-y, 0%),
+    rgba(var(--accent-rgb), 0.85),
+    transparent 62%
+  );
+  content: '';
+  opacity: 0;
+  transition: opacity 360ms ease;
+}
+
+.grid:hover .card::before {
+  opacity: 1;
+}
+
+.cardInner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 21px;
+  background: linear-gradient(180deg, #0d1120 0%, #090b15 100%);
+}
+
+.cardInner::before {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    480px circle at var(--spot-x, 50%) var(--spot-y, 0%),
+    rgba(var(--accent-rgb), 0.11),
+    transparent 62%
+  );
+  content: '';
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 360ms ease;
+}
+
+.card:hover .cardInner::before {
+  opacity: 1;
+}
+
+.visual {
+  position: relative;
+  display: flex;
+  min-height: 176px;
+  align-items: center;
+  justify-content: center;
+  padding: 1.4rem 1.4rem 0;
+}
+
+.copy {
+  position: relative;
+  margin-top: auto;
+  padding: 1.25rem 1.4rem 1.5rem;
+}
+
+.icon {
+  display: inline-flex;
+  width: 38px;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(var(--accent-rgb), 0.36);
+  border-radius: 11px;
+  background: rgba(var(--accent-rgb), 0.1);
+  color: rgb(var(--accent-rgb));
+  font-size: 1.15rem;
+}
+
+.cardTitle {
+  margin: 0.9rem 0 0;
+  color: var(--home-text);
+  font-family: var(--home-font-display);
+  font-size: 1.14rem;
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: -0.015em;
+}
+
+.cardText {
+  margin: 0.5rem 0 0;
+  color: var(--home-muted);
+  font-size: 0.93rem;
+  line-height: 1.62;
+}
+
+/* The wide card lays its copy and illustration side by side. */
+@media (min-width: 1081px) {
+  .cardWide .cardInner {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .cardWide .copy {
+    flex: 0 0 39%;
+    order: -1;
+    margin-top: 0;
+    padding: 1.6rem 0.4rem 1.6rem 1.7rem;
+  }
+
+  .cardWide .visual {
+    min-width: 0;
+    flex: 1;
+    padding: 1.4rem;
+  }
+
+  .cardWide .cardTitle {
+    font-size: 1.42rem;
+  }
+}
+
+@media (max-width: 1080px) {
+  .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .card {
+    grid-column: span 1;
+  }
+
+  /* Seven regular cards leave one over; let it fill the last row. */
+  .cardWide,
+  .card:last-child {
+    grid-column: span 2;
+  }
+}
+
+@media (max-width: 700px) {
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .card,
+  .cardWide,
+  .card:last-child {
+    grid-column: span 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card::before,
+  .cardInner::before {
+    transition: none;
+  }
+}

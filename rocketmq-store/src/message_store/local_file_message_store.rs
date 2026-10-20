@@ -41,6 +41,8 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::config::store_runtime_config::StoreRuntimeConfig;
+use crate::utils::store_util;
+use crate::utils::store_util::ensure_dir_ok;
 use crate::StoreResult;
 use arc_swap::ArcSwap;
 use bytes::Buf;
@@ -74,8 +76,6 @@ use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_runtime::common::file_utils::string_to_file;
 use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::common::util_all;
-use rocketmq_runtime::common::util_all::ensure_dir_ok;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
@@ -112,14 +112,13 @@ use rocketmq_store_local::message_store::reput::ReputPolicy;
 use rocketmq_store_local::message_store::LocalStoreComposition;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
-use crate::base::backend_ops::canonical_health_snapshot;
-use crate::base::backend_ops::BackendHealthSnapshot;
+use crate::base::backend_ops::build_store_health_snapshot;
 use crate::base::backend_ops::BackendOps;
 use crate::base::backend_ops::MessageStoreShutdownReport;
 use crate::base::backend_ops::PutMessagePreflight;
 use crate::base::backend_ops::StateMachineVersionView;
+use crate::base::backend_ops::StoreHealthIndicators;
 use crate::base::backend_ops::StoreHealthRecorder;
-use crate::base::backend_read_ops::BackendReadOps;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::commit_log_dispatcher::MessageIndexRuntimeHandle;
 use crate::base::dispatch_request::DispatchRequest;
@@ -129,6 +128,7 @@ use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::message_status_enum::PutMessageStatus;
+use crate::base::message_store_reader::MessageStoreReader;
 use crate::base::query_message_request::QueryMessageRequest;
 use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferResult;
@@ -209,7 +209,7 @@ use crate::timer::timeline::ShadowTimelineMaterializer;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::timeline::TimelineAdmissionController;
 #[cfg(feature = "extended_timeline")]
-use crate::timer::timeline::TimelineAdmissionOutcome;
+use crate::timer::timeline::TimelineAdmissionDecision;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::timeline::TimelineCompletionReconciler;
 #[cfg(feature = "extended_timeline")]
@@ -298,7 +298,8 @@ enum PendingHAService {
 ///
 /// The handle deliberately excludes queue, index, dispatcher, and lifecycle
 /// mutation APIs while retaining replica append/read, confirm publication, and
-/// replication progress state shared by the owning Store.
+/// replication progress state shared by the owning Store. Its one queue operation
+/// rebuilds the queue offset table when the Store becomes master.
 #[derive(Clone)]
 pub(crate) struct HAReplicaStoreHandle {
     message_store_config: Arc<MessageStoreConfig>,
@@ -309,6 +310,7 @@ pub(crate) struct HAReplicaStoreHandle {
     state_machine_version: Arc<AtomicI64>,
     controller_epoch_start_offset: Arc<AtomicI64>,
     commit_log: CommitLogReplicaHandle,
+    consume_queue_store: ConsumeQueueStore,
 }
 
 impl HAReplicaStoreHandle {
@@ -381,6 +383,20 @@ impl HAReplicaStoreHandle {
     pub(crate) fn publish_controller_epoch_start_offset(&self, epoch_start_offset: i64) {
         self.controller_epoch_start_offset
             .store(epoch_start_offset, Ordering::SeqCst);
+    }
+
+    #[inline]
+    pub(crate) fn get_controller_epoch_start_offset(&self) -> i64 {
+        self.controller_epoch_start_offset.load(Ordering::SeqCst)
+    }
+
+    /// Rebuilds the next queue offsets that the write path assigns from.
+    ///
+    /// A replica appends and dispatches without assigning offsets, so its table goes stale. Java's
+    /// `AutoSwitchHAService#changeToMaster` rebuilds it before the Store accepts writes as master.
+    pub(crate) fn recover_topic_queue_table(&self) {
+        let mut consume_queue_store = self.consume_queue_store.clone();
+        consume_queue_store.recover_offset_table(self.get_min_phy_offset());
     }
 
     pub(crate) async fn append_replica_data(
@@ -951,7 +967,7 @@ impl BackendOps for LocalFileMessageStore {
 
             for cl_path in paths {
                 let cl_path = cl_path.trim();
-                let physic_ratio = if util_all::is_path_exists(cl_path) {
+                let physic_ratio = if store_util::is_path_exists(cl_path) {
                     store_path_disk_used_ratio(cl_path)
                 } else {
                     -1.0
@@ -1059,8 +1075,8 @@ impl BackendOps for LocalFileMessageStore {
             .to_string(),
         );
         result.insert(
-            "ioUringBackendStatus".to_string(),
-            crate::log_file::mapped_file::io_uring_backend_status()
+            "ioUringBuildSupport".to_string(),
+            crate::log_file::mapped_file::io_uring_build_support()
                 .as_str()
                 .to_string(),
         );
@@ -1825,8 +1841,8 @@ impl BackendOps for LocalFileMessageStore {
     }
 
     fn health_snapshot(&self) -> rocketmq_store_api::StoreHealthSnapshot {
-        canonical_health_snapshot(
-            self.store_health_snapshot(),
+        build_store_health_snapshot(
+            self.collect_health_indicators(),
             self.get_max_phy_offset(),
             self.get_flushed_where(),
         )

@@ -19,17 +19,17 @@ use tokio::sync::oneshot;
 
 use super::receiver_stop;
 use super::TerminalResult;
-use crate::dispatch::EmbeddedDispatchOutcome;
+use crate::dispatch::EmbeddedDispatchResult;
 use crate::dispatch::RequestControlView;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum TerminalPublishOutcome {
+pub(super) enum TerminalPublishStatus {
     Delivered,
     AlreadyCompleted,
     ReceiverDropped,
 }
 
-impl TerminalPublishOutcome {
+impl TerminalPublishStatus {
     pub(super) const fn receiver_dropped(self) -> bool {
         matches!(self, Self::ReceiverDropped)
     }
@@ -48,18 +48,18 @@ enum EmbeddedTerminalState {
 }
 
 impl EmbeddedTerminalSender {
-    pub(super) fn complete(&self, result: TerminalResult) -> TerminalPublishOutcome {
+    pub(super) fn complete(&self, result: TerminalResult) -> TerminalPublishStatus {
         let sender = {
             let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             match std::mem::replace(&mut *state, EmbeddedTerminalState::Sending) {
                 EmbeddedTerminalState::Open(sender) => sender,
                 EmbeddedTerminalState::Sending | EmbeddedTerminalState::Completed => {
                     *state = EmbeddedTerminalState::Completed;
-                    return TerminalPublishOutcome::AlreadyCompleted;
+                    return TerminalPublishStatus::AlreadyCompleted;
                 }
                 EmbeddedTerminalState::ReceiverDropped => {
                     *state = EmbeddedTerminalState::ReceiverDropped;
-                    return TerminalPublishOutcome::ReceiverDropped;
+                    return TerminalPublishStatus::ReceiverDropped;
                 }
             }
         };
@@ -71,9 +71,9 @@ impl EmbeddedTerminalSender {
             EmbeddedTerminalState::ReceiverDropped
         };
         if delivered {
-            TerminalPublishOutcome::Delivered
+            TerminalPublishStatus::Delivered
         } else {
-            TerminalPublishOutcome::ReceiverDropped
+            TerminalPublishStatus::ReceiverDropped
         }
     }
 
@@ -109,19 +109,19 @@ impl EmbeddedTerminalReceiver {
     pub(super) async fn receive(mut self) -> TerminalResult {
         match self.receiver.try_recv() {
             Ok(result) => return result,
-            Err(oneshot::error::TryRecvError::Closed) => return Ok(EmbeddedDispatchOutcome::CompletionClosed),
+            Err(oneshot::error::TryRecvError::Closed) => return Ok(EmbeddedDispatchResult::CompletionClosed),
             Err(oneshot::error::TryRecvError::Empty) => {}
         }
         let Some(control) = self.control.as_ref() else {
             return (&mut self.receiver)
                 .await
-                .unwrap_or(Ok(EmbeddedDispatchOutcome::CompletionClosed));
+                .unwrap_or(Ok(EmbeddedDispatchResult::CompletionClosed));
         };
         if let Some(outcome) = receiver_stop(control, self.original_one_way) {
             let _ = self.terminal.complete(Ok(outcome));
             return (&mut self.receiver)
                 .await
-                .unwrap_or(Ok(EmbeddedDispatchOutcome::CompletionClosed));
+                .unwrap_or(Ok(EmbeddedDispatchResult::CompletionClosed));
         }
         let external_stop = async {
             if self.original_one_way {
@@ -134,11 +134,11 @@ impl EmbeddedTerminalReceiver {
             biased;
             () = external_stop => {
                 let outcome = receiver_stop(control, self.original_one_way)
-                    .unwrap_or(EmbeddedDispatchOutcome::Cancelled);
+                    .unwrap_or(EmbeddedDispatchResult::Cancelled);
                 let _ = self.terminal.complete(Ok(outcome));
-                (&mut self.receiver).await.unwrap_or(Ok(EmbeddedDispatchOutcome::CompletionClosed))
+                (&mut self.receiver).await.unwrap_or(Ok(EmbeddedDispatchResult::CompletionClosed))
             },
-            result = &mut self.receiver => result.unwrap_or(Ok(EmbeddedDispatchOutcome::CompletionClosed)),
+            result = &mut self.receiver => result.unwrap_or(Ok(EmbeddedDispatchResult::CompletionClosed)),
         }
     }
 }

@@ -35,6 +35,7 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourceBudgetTree;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskControl;
 use rocketmq_runtime::ScheduledTaskGroup;
@@ -562,7 +563,6 @@ pub(crate) fn schedule_client_fixed_delay_task_with_context<F, Fut>(
     task_name: &'static str,
     initial_delay: Duration,
     period: Duration,
-    shutdown_timeout: Duration,
     task: F,
 ) -> io::Result<ClientScheduledTaskHandle>
 where
@@ -573,9 +573,8 @@ where
     let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
     let mut config = ScheduledTaskConfig::fixed_delay(task_name, period);
     config.initial_delay = initial_delay;
-    config.shutdown_timeout = shutdown_timeout;
     scheduled_tasks
-        .schedule_fixed_delay(config, task)
+        .schedule(config, ScheduledExecutionPolicy::default(), task)
         .map_err(io::Error::other)?;
 
     Ok(ClientScheduledTaskHandle {
@@ -589,7 +588,6 @@ pub(crate) fn schedule_client_fixed_delay_controlled_task_with_context<F, Fut>(
     task_name: &'static str,
     initial_delay: Duration,
     period: Duration,
-    shutdown_timeout: Duration,
     task: F,
 ) -> io::Result<ClientScheduledTaskHandle>
 where
@@ -600,9 +598,8 @@ where
     let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
     let mut config = ScheduledTaskConfig::fixed_delay(task_name, period);
     config.initial_delay = initial_delay;
-    config.shutdown_timeout = shutdown_timeout;
     scheduled_tasks
-        .schedule_fixed_delay_controlled(config, task)
+        .schedule_controlled(config, task)
         .map_err(io::Error::other)?;
 
     Ok(ClientScheduledTaskHandle {
@@ -787,8 +784,13 @@ mod tests {
         assert!(handle.wait_finished(Duration::from_secs(1)));
         assert_eq!(completed.load(Ordering::Acquire), 1);
         assert!(handle.is_finished());
+        assert!(
+            service_context
+                .task_group()
+                .wait_task(handle.task_id(), Duration::from_secs(1))
+                .await
+        );
         assert_eq!(handle.task_count(), 0);
-        let _ = handle.task_id();
         let report = service_context.task_group().shutdown(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{report:?}");
     }

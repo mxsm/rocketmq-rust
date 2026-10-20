@@ -140,7 +140,7 @@ fn expired_deadline_writes_no_frame_bytes() {
             )
             .await
             .expect_err("expired deadline must fail before the socket write");
-        assert!(error.to_string().contains("deadline"));
+        assert_eq!(error.code(), rocketmq_error::CORE_OPERATION_TIMED_OUT.code());
 
         let mut byte = [0_u8; 1];
         assert!(
@@ -312,6 +312,7 @@ fn cancellation_after_head_poison_closes_the_connection() {
             .send_command(RemotingCommand::create_remoting_command(327))
             .await
             .expect_err("a partial frame connection must never be reused");
-        assert!(retry.to_string().contains("closed"));
+        assert_eq!(retry.code(), rocketmq_error::TRANSPORT_CONNECTION_FAILED.code());
+        assert_eq!(sender.state(), ConnectionState::Closed);
     });
 }

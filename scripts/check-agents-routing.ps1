@@ -20,7 +20,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$script:RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
+# Resolve-Path preserves short-name and provider-qualified spellings, while
+# file enumeration returns native long paths. Compare the same path form.
+$script:RepoRoot = (Get-Item -LiteralPath $RepoRoot).FullName
 $script:Failures = New-Object System.Collections.Generic.List[string]
 $script:SkipDirectoryNames = @(".git", ".idea", "target", "node_modules", "build", "dist")
 
@@ -33,7 +35,7 @@ function Add-Failure {
 function Convert-ToRepoRelativePath {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $resolved = (Resolve-Path -LiteralPath $Path).Path
+    $resolved = (Get-Item -LiteralPath $Path).FullName
     $rootPrefix = $script:RepoRoot.TrimEnd([char[]]@("\", "/"))
     if ($resolved.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
         return $resolved.Substring($rootPrefix.Length).TrimStart([char[]]@("\", "/")) -replace "\\", "/"
@@ -113,6 +115,7 @@ $requiredRoutePaths = @(
     "fuzz/",
     "rocketmq-example/",
     "rocketmq-ai/rocketmq-mcp/",
+    "rocketmq-ai/rocketmq-mcp-query/",
     "rocketmq-ai/rocketmq-mcp-control/",
     "rocketmq-ai/rocketmq-sre/",
     "rocketmq-ai/rocketmq-sre/ui/",
@@ -127,7 +130,8 @@ $requiredRoutePaths = @(
     "rocketmq-website/"
 )
 
-# Check routing structure, not wording or complete command profiles.
+# Check routing structure, not wording or complete command profiles. Dependency/feature audits are
+# separate integration checks; do not invoke Cargo metadata here.
 foreach ($routePath in $requiredRoutePaths) {
     Assert-TextContains -Text $rootAgentsText -Needle $routePath -Context "Root AGENTS.md"
     $agentsFile = $routePath + "AGENTS.md"
@@ -178,16 +182,6 @@ $requiredWorkflows = @(
 foreach ($workflow in $requiredWorkflows) {
     if (-not (Test-Path -LiteralPath (Join-Path $script:RepoRoot $workflow) -PathType Leaf)) {
         Add-Failure "Missing required workflow: $workflow"
-    }
-}
-
-# Dependency/feature audits are separate integration checks; do not invoke Cargo metadata here.
-foreach ($document in @(
-    "rocketmq-doc/en/agents-routing-validation-adr.md",
-    "rocketmq-doc/en/agent-validation-reference.md"
-)) {
-    if (-not (Test-Path -LiteralPath (Join-Path $script:RepoRoot $document) -PathType Leaf)) {
-        Add-Failure "Missing validation reference: $document"
     }
 }
 

@@ -17,6 +17,7 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use rocketmq_runtime::OperationContext;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::TaskGroup;
@@ -25,8 +26,8 @@ use tokio::time::Duration;
 use tracing::warn;
 
 use crate::stats::moment_stats_item::MomentStatsItem;
+use rocketmq_runtime::common::time_utils::compute_next_minutes_time_millis;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::common::util_all::compute_next_minutes_time_millis;
 
 #[derive(Clone)]
 pub struct MomentStatsItemSet {
@@ -83,12 +84,14 @@ impl MomentStatsItemSet {
             ScheduledTaskConfig::fixed_rate_no_overlap("common.moment-stats-set.print", Duration::from_secs(300));
         config.initial_delay = initial_delay;
 
-        if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap_operation(&operation, config, move || {
-            let stats_item_table = stats_item_table.clone();
-            async move {
-                MomentStatsItemSet::print_at_minutes(&stats_item_table);
-            }
-        }) {
+        if let Err(error) =
+            scheduled_tasks.schedule_operation(&operation, config, ScheduledExecutionPolicy::default(), move || {
+                let stats_item_table = stats_item_table.clone();
+                async move {
+                    MomentStatsItemSet::print_at_minutes(&stats_item_table);
+                }
+            })
+        {
             warn!(
                 "[{}] failed to spawn MomentStatsItemSet task: {}",
                 self.stats_name, error

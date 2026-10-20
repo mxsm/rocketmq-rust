@@ -22,6 +22,7 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use rocketmq_model::common::broker::broker_identity::BrokerIdentity;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -70,8 +71,9 @@ impl StoreStatsService {
         let service_name = service.get_service_name();
         let worker_group = crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.stats");
         let scheduled_tasks = ScheduledTaskGroup::new(worker_group.clone());
-        if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+        if let Err(error) = scheduled_tasks.schedule(
             ScheduledTaskConfig::fixed_delay(service_name.clone(), Duration::from_millis(FREQUENCY_OF_SAMPLING)),
+            ScheduledExecutionPolicy::default(),
             move || {
                 let service = Arc::clone(&service);
                 async move {

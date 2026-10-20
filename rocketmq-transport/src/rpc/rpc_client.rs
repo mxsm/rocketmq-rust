@@ -19,14 +19,21 @@ use crate::rpc::rpc_response::RpcResponse;
 use rocketmq_protocol::protocol::command_custom_header::CommandCustomHeader;
 use rocketmq_protocol::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 
-#[trait_variant::make(RpcClient:Send)]
-pub trait RpcClientLocal {
+/// Asynchronous broker RPCs with `Send` implementations and response futures.
+#[trait_variant::make(Send)]
+pub trait RpcClient {
+    /// Invokes `request` with a timeout budget of `timeout_millis` milliseconds.
+    ///
+    /// May fail on broker resolution, unsupported requests, timeouts, or
+    /// request/response processing.
     async fn invoke<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
         request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse, rocketmq_error::SharedError>;
 
+    /// Invokes `request` using the broker resolved from `mq`, when available.
+    /// Shares [`Self::invoke`]'s millisecond timeout budget and error contract.
     async fn invoke_mq<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
         mq: MessageQueue,

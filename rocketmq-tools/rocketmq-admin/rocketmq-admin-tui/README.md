@@ -30,29 +30,46 @@ requests, validation, RPC orchestration, and structured results stay in
 
 ## Preview
 
-![rocketmq-admin-tui preview](../../../resources/rocketmq-cli-ui.png)
+![rocketmq-admin-tui preview](../../../resources/rocketmq-admin-tui.png)
 
 ## Capabilities
 
-- Searchable command tree with grouped RocketMQ admin domains.
-- Five focus areas: NameServer, Search, Commands, Parameters, and Result.
-- Keyboard-first workflow with contextual key hints and an in-app help overlay.
+- Searchable command tree grouped by RocketMQ admin domain, with a risk marker on
+  every command and groups that fold.
+- Five focus areas: NameServer, Search, Commands, Parameters, and Result. A key bar
+  lists the keys of the focused area, and `F1` opens the full reference.
+- Keyboard and mouse: every action has a key; a click focuses a pane, selects a
+  command, picks a choice, or presses Run, and the wheel scrolls whatever is under
+  the pointer. `F2` hands the mouse back to the terminal for text selection.
 - Typed argument model for strings, optional strings, numbers, booleans, enums,
-  key/value maps, and millisecond timestamps.
-- Form-level validation before a command can run.
+  key/value maps, and millisecond timestamps. Text fields edit at the cursor,
+  choices switch with the arrows or `Space`, credentials are masked, and every
+  command remembers its form.
+- Form-level validation before a command can run; the first invalid field takes
+  the focus.
 - Risk-aware execution model:
   - safe commands run directly;
   - mutating commands require typing `confirm`;
   - dangerous commands require typing the target value when available.
-- Command futures run on the application's Tokio `LocalSet`, alongside the UI event loop.
-  The process owns a `RuntimeOwner`; each command uses a separate client runtime beneath
-  the application's client scope. Cancelling a command stops its operation while the TUI
-  joins it and closes its connections and background tasks. Exiting waits for this cleanup.
-  Cancellation does not undo requests already accepted by a broker or NameServer.
+- The main thread only draws the interface and reads input. Each command runs as a
+  task of the process-owned runtime (`RuntimeOwner`), on a worker thread whose stack
+  is sized for the admin call graph, and uses a separate client runtime beneath the
+  application's client scope. Cancelling a command stops its operation; its task then
+  closes the command's connections and background tasks before it reports. Exiting
+  waits for this cleanup. Cancellation does not undo requests already accepted by a
+  broker or NameServer.
 - Progress updates for long-running workflows such as monitoring and message
   pull operations.
-- Structured result rendering as tables, key/value rows, JSON, text, or
-  operation summaries with vertical and horizontal scrolling.
+- Structured result rendering as tables, key/value rows, JSON, text, or operation
+  summaries. Tables keep a row cursor, scroll by column, right-align numbers, and
+  open any row in a detail view; documents wrap or pan, and JSON and debug output
+  are syntax-colored. `z` zooms the result pane.
+- Motion that explains state: focus, command, and result changes are animated, a
+  running command carries a travelling highlight, and outcomes flash in their color.
+  Decorative effects fade out when the application is idle, an idle screen is not
+  redrawn at all, and `F3` switches motion off.
+- Adapts to the terminal: 24-bit color with a 256-color fallback, one pane at a time
+  below 96 columns, and a readable notice below 48x12.
 - Boundary tests that enforce `rocketmq-admin-tui -> rocketmq-admin-core` and
   reject dependencies on the CLI adapter.
 
@@ -67,22 +84,25 @@ cargo run -p rocketmq-admin-tui
 The TUI starts without requiring a NameServer address. Set one from the
 NameServer focus area before executing cluster-backed commands.
 
-Common keys:
+Common keys (single letters act outside text fields, where they are typed instead):
 
 | Key | Action |
 |---|---|
 | `Tab` / `Shift+Tab` | Move focus through NameServer, Search, Commands, Parameters, and Result. |
-| `n` | Focus the NameServer input when not editing parameters. |
-| `/` or `s` | Focus command search when not editing parameters. |
-| `j` / `k` or arrows | Move through commands, parameters, or result rows. |
-| `Left` / `Right` | Collapse command groups, cycle enum parameters, or scroll result columns. |
-| `Space` | Toggle a boolean parameter. |
-| `Enter` | Submit input, select a command, execute, or confirm. |
-| `Ctrl+R` | Re-run the selected command. |
+| `/` or `Ctrl+F` | Search commands. `Ctrl+F` also works while typing in a field. |
+| `n` / `p` / `r` | Jump to the NameServer field, the parameter form, or the result. |
+| Arrows or `j` / `k` | Move through commands, fields, or result rows. `PgUp`, `PgDn`, `Home`, and `End` move further. |
+| `Left` / `Right` | Fold command groups, switch a choice, or scroll result columns. |
+| `Space` | Switch a boolean or enum parameter. |
+| `Enter` | Open a command, run it from the form, confirm, or show a result row in full. |
+| `Ctrl+R` or `F5` | Run the selected command from anywhere. |
+| `Esc` | Cancel a running command, otherwise step back one level. At the command list a second press quits. |
+| `Ctrl+C` | Cancel a running command, or quit when none is running. |
 | `Ctrl+L` | Clear the current result. |
-| `?` | Toggle help. |
-| `Esc` | Close help, cancel the local wait for a running task, or quit. |
-| `q` | Quit or close help. |
+| `z` / `w` | Zoom the result pane; wrap or unwrap long lines. |
+| `F1` or `?` | Toggle help. |
+| `F2` / `F3` | Switch mouse capture or animations on and off. |
+| `q` or `Ctrl+Q` | Quit. |
 
 ## Command Coverage
 
@@ -111,20 +131,33 @@ tests. Current coverage:
 
 ## Runtime Model
 
-`RocketmqTuiApp` owns the event loop. It ticks at 30 FPS, reads crossterm
-events, applies internal actions, and renders the current `AppState`.
+`RocketmqTuiApp` owns the event loop on the main thread. It ticks 30 times a
+second, reads crossterm events, applies internal actions, and draws the current
+`AppState`. A frame is drawn only when it is due: on every tick during a
+transition, on every other tick while only ambient effects or a running command
+are on screen, and not at all on an idle screen, which therefore writes nothing
+to the terminal.
 
 Command execution is separated from UI handling:
 
 1. The selected `CommandSpec` defines arguments, result view kind, and risk
    level.
 2. `CommandFormState` validates the typed form values.
-3. `execute_command_with_progress` dispatches by command ID.
-4. `TuiAdminFacade` converts form values into `rocketmq-admin-core` request DTOs.
-5. Core services execute the admin operation.
-6. `CommandResultViewModel` converts structured results into TUI-friendly
+3. `execute_command_with_progress` dispatches by command ID and returns a `Send`
+   future.
+4. The future runs as a `TaskGroup` task of the application's client scope, on a
+   runtime worker thread. The main thread never polls it.
+5. `TuiAdminFacade` converts form values into `rocketmq-admin-core` request DTOs.
+6. Core services execute the admin operation.
+7. `CommandResultViewModel` converts structured results into TUI-friendly
    tables, JSON, text, key/value rows, or summaries.
-7. Late results from cancelled local tasks are ignored by execution ID.
+8. Late results from cancelled tasks are ignored by execution ID.
+
+Runtime threads are created with a 16 MiB stack. The admin, client, and transport
+call graph that a command awaits needs about 1.3 MiB in an unoptimized Windows
+build, which is more than the 1 MiB main-thread stack of that platform. Keeping
+commands off the main thread is what makes their stack budget a runtime setting
+instead of a platform default.
 
 ## Boundary Contract
 
@@ -145,10 +178,17 @@ These rules are enforced by `tests/no_cli_dependency.rs`.
 ```text
 rocketmq-admin-tui/
 ├── src/
-│   ├── main.rs                 # Terminal initialization and app startup
-│   ├── rocketmq_tui_app.rs     # Event loop, action handling, background tasks
-│   ├── state.rs                # App state, form state, validation, focus model
-│   ├── ui.rs                   # Ratatui layout and rendering
+│   ├── main.rs                 # Runtime ownership and app startup
+│   ├── rocketmq_tui_app.rs     # Event loop, action handling, command tasks, frame pacing
+│   ├── rocketmq_tui_app/       # Keyboard, mouse, and paste handling
+│   ├── state.rs                # App state, form state, validation, focus model, motion clock
+│   ├── motion.rs               # Tick-driven animation primitives
+│   ├── result_view.rs          # Prepared results: grids, documents, viewports, wrapping
+│   ├── terminal.rs             # Terminal modes and synchronized frame output
+│   ├── text.rs                 # Display width, truncation, and wrapping
+│   ├── text_input.rs           # Line editing for text inputs
+│   ├── ui.rs                   # Frame layout, hit map, and render entry point
+│   ├── ui/                     # Pane painters, theme, effects, and widgets
 │   ├── action.rs               # Internal action messages
 │   ├── event.rs                # Keyboard helpers
 │   ├── admin_facade.rs         # TUI-to-admin-core facade

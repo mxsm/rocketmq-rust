@@ -6,7 +6,7 @@
 
 `rocketmq-namesrv` 为 RocketMQ broker、client 和 admin tool 提供轻量级服务发现与路由能力。它负责 broker 存活状态、
 topic route metadata、broker member group、写权限、KV 配置、运行时配置以及可选的内嵌 controller 集成。规范路由管理器
-基于 DashMap 并发表和 segmented lock 实现。
+基于 DashMap 并发表和串行化变更协调器实现。
 
 该 crate 既可以作为 `rocketmq-namesrv-rust` 二进制运行，也可以通过 `bootstrap::Builder` API 嵌入测试或上层服务。
 
@@ -16,7 +16,7 @@ topic route metadata、broker member group、写权限、KV 配置、运行时�
 | ---- | -------- |
 | 服务发现 | Broker 注册、注销、heartbeat 跟踪、inactive broker 扫描和 channel destroy 清理。 |
 | Topic 路由 | Topic route 查询、standard/legacy JSON route 编码、zone-aware route filtering、filter-server metadata 和 order-topic config 查询。 |
-| 路由存储 | `RouteInfoManager` 统一管理 DashMap 并发表及跨表 segmented lock。 |
+| 路由存储 | `RouteInfoManager` 统一管理 DashMap 并发表及跨表变更协调。 |
 | Broker 与 topic 管理 | Cluster info、broker member group、topic 注册/删除、按 cluster 查询 topic list、unit-topic list 和写权限更新。 |
 | KV 配置 | 通过 `KVConfigManager` 支持 KV namespace 的 put/get/delete/list 和磁盘持久化。 |
 | 运行时配置 | `GetNamesrvConfig` 和 `UpdateNamesrvConfig` 支持 Java-properties payload，并对敏感路径和 home 设置保留固定黑名单。 |
@@ -26,7 +26,7 @@ topic route metadata、broker member group、写权限、KV 配置、运行时�
 
 ## 架构
 
-![rocketmq-namesrv 架构](../resources/namesrv-architecture.svg)
+![rocketmq-namesrv 架构](../resources/rocketmq-namesrv-architecture.svg)
 
 `KVConfigManager` 负责 namespace config 持久化，`BrokerHousekeepingService` 响应 channel event，定时任务扫描 inactive
 broker；只有同时启用 `embedded-controller` Cargo feature 和 `enableControllerInNamesrv` 运行时配置时，
@@ -144,6 +144,33 @@ cargo run -p rocketmq-namesrv --bin rocketmq-namesrv-rust -- \
 配置模型支持 Java 风格的 camelCase key；存在 serde alias 的字段也可使用
 Rust 风格字段名。
 
+### 仅启动时生效的 Tokio 运行时配置
+
+通过 `--configFile` 指定的文件可以包含可选的 `[runtime]` 配置节：
+
+```toml
+[runtime]
+workerThreads = 2
+maxBlockingThreads = 8
+```
+
+| 配置项 | 默认值 | 合法值 |
+| --- | --- | --- |
+| `workerThreads`（`worker_threads`） | 可用 CPU 并行度，获取失败时使用 4 | 正整数 |
+| `maxBlockingThreads`（`max_blocking_threads`） | 可用 CPU 并行度乘以 4，并限制在 3..=512 范围内；获取失败时使用 16 | 3 到 512 之间的整数，含两端 |
+
+未指定配置文件、未包含此配置节或省略某个配置项时，对应配置项保留默认值。
+仅覆盖 `workerThreads` 不会重新计算默认的阻塞线程上限。`[runtime]` 中存在未知配置项、
+同一字段同时使用 camelCase 名称和 snake_case 别名、TOML 格式错误或线程数无效时，
+启动会在构建运行时之前失败。
+
+这些配置控制进程运行时，独立于 `clientRequestThreadPoolNums` 等 NameServer 请求线程池配置。
+阻塞线程上限约束受管阻塞通道，Tokio 阻塞线程池仍保留运行时所需的额外线程余量。
+线程名称保持为 `rocketmq-namesrv`，I/O 驱动和时间驱动均保持启用。
+这些运行时配置仅在进程启动时生效，不能通过 `UpdateNamesrvConfig` 修改。
+
+### NameServer 配置项
+
 | Key | 默认值 | 作用 |
 | --- | ------ | ---- |
 | `rocketmqHome` | `ROCKETMQ_HOME` / `ROCKETMQ_HOME_PROPERTY` | Runtime 使用的 RocketMQ home 目录。 |
@@ -209,12 +236,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | [`src/processor/default_request_processor.rs`](src/processor/default_request_processor.rs) | Broker、topic、KV、permission 和 runtime config 请求处理。 |
 | [`src/processor/client_request_processor.rs`](src/processor/client_request_processor.rs) | Client topic-route 查询路径。 |
 | [`src/processor/cluster_test_request_processor.rs`](src/processor/cluster_test_request_processor.rs) | 带 product environment fallback 的 cluster-test route 查询。 |
-| [`src/route`](src/route) | Route manager、segmented lock、route table、unregister service 和 zone route hook。 |
+| [`src/route`](src/route) | Route manager、route table、unregister service 和 zone route hook。 |
 | [`src/route/tables`](src/route/tables) | Topic queue、broker、cluster、live broker、filter server 和 topic queue mapping 的并发表。 |
 | [`src/kvconfig`](src/kvconfig) | KV config manager 和持久化。 |
 | [`../rocketmq-observability/src/metrics/namesrv.rs`](../rocketmq-observability/src/metrics/namesrv.rs) | OpenTelemetry 与 Prometheus 导出器共用的低基数 NameServer 指标。 |
 | [`tests`](tests) | 网络级和 route-table integration 覆盖。 |
-| [`benches`](benches) | Route manager、concurrency、lock 和 topic-table 热路径 benchmark。 |
+| [`benches`](benches) | Route manager、concurrency 和 topic-table 热路径 benchmark。 |
 
 ## Feature Flags
 
@@ -258,7 +285,6 @@ cargo clippy -p rocketmq-namesrv --no-deps -- -D warnings
 ```bash
 cargo bench -p rocketmq-namesrv --bench route_manager_benchmark
 cargo bench -p rocketmq-namesrv --bench route_concurrency_bench
-cargo bench -p rocketmq-namesrv --bench async_segmented_lock_bench
 cargo bench -p rocketmq-namesrv --bench topic_table_hot_path_bench
 ```
 

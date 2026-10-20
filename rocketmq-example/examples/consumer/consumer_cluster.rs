@@ -58,7 +58,7 @@ const USE_CLOSURE: bool = false;
 /// 1. Start multiple instances of this consumer (with the same consumer group)
 /// 2. Send messages to the topic using a producer
 /// 3. Observe that messages are distributed among the consumer instances
-#[path = "../support/mod.rs"]
+#[path = "../support.rs"]
 mod support;
 
 pub fn main() -> ClientResult<()> {

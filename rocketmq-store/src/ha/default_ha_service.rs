@@ -41,11 +41,14 @@ use tracing::warn;
 
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::ha::auto_switch::auto_switch_ha_connection::AutoSwitchHAConnection;
+use crate::ha::auto_switch::auto_switch_ha_service::sync_state_set_admission_offset;
 use crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService;
+use crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchReplication;
 use crate::ha::default_ha_client::DefaultHAClient;
 use crate::ha::default_ha_client::HAClientError;
 use crate::ha::default_ha_connection::DefaultHAConnection;
 use crate::ha::default_ha_connection::HAConnectionRuntimeHandle;
+use crate::ha::default_ha_connection::LastTransfer;
 use crate::ha::general_ha_client::GeneralHAClient;
 use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::general_ha_service::GeneralHAServiceReference;
@@ -63,6 +66,7 @@ use crate::ha::transfer_metrics::HaTransferMetrics;
 use crate::ha::HAError;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::message_store::local_file_message_store::HAReplicaStoreHandle;
+use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_store_local::ha::replication::ReplicationProgress;
 
 type AutoSwitchReplicationState = rocketmq_store_local::ha::replication::ReplicationStateRoot;
@@ -95,7 +99,7 @@ struct DefaultHAConnectionContextInner {
     replication_progress: Arc<ReplicationProgress>,
     group_transfer_service: OnceLock<Weak<GroupTransferService>>,
     state_notification_service: OnceLock<Weak<HAConnectionStateNotificationService>>,
-    auto_switch_replication: OnceLock<Arc<AutoSwitchReplicationState>>,
+    auto_switch_replication: OnceLock<AutoSwitchReplication>,
     ha_transfer_metrics: Arc<HaTransferMetrics>,
 }
 
@@ -140,7 +144,7 @@ impl DefaultHAConnectionContext {
             .map_err(|_| HAError::invalid_state("HAConnectionStateNotificationService already installed"))
     }
 
-    fn install_auto_switch_replication(&self, replication: Arc<AutoSwitchReplicationState>) -> Result<(), HAError> {
+    fn install_auto_switch_replication(&self, replication: AutoSwitchReplication) -> Result<(), HAError> {
         self.inner
             .auto_switch_replication
             .set(replication)
@@ -177,6 +181,7 @@ impl DefaultHAConnectionContext {
     pub(crate) async fn add_connection(&self, connection: GeneralHAConnection) {
         let slave_broker_id = DefaultHAService::auto_switch_slave_broker_id(&connection);
         let slave_ack_offset = connection.get_slave_ack_offset();
+        let last_transfer = connection.runtime_handle().last_transfer();
 
         let Some(connections) = self.inner.connections.upgrade() else {
             return;
@@ -186,7 +191,7 @@ impl DefaultHAConnectionContext {
         drop(connections);
 
         if let Some(replication) = self.inner.auto_switch_replication.get() {
-            self.handle_auto_switch_connection_added(replication, slave_broker_id, slave_ack_offset);
+            self.handle_auto_switch_connection_added(replication, slave_broker_id, slave_ack_offset, last_transfer);
         }
         if let Some(service) = self.inner.group_transfer_service.get().and_then(Weak::upgrade) {
             service.notify_transfer_progress();
@@ -194,6 +199,11 @@ impl DefaultHAConnectionContext {
     }
 
     pub(crate) async fn remove_runtime_connection(&self, connection: &HAConnectionRuntimeHandle) {
+        if let Some(connections) = self.inner.connections.upgrade() {
+            connections.lock().await.remove(connection.connection_id());
+        }
+        connection.release_connection_count(self.get_connection_count());
+
         self.handle_runtime_connection_removed(connection);
         if let Some(service) = self.inner.group_transfer_service.get().and_then(Weak::upgrade) {
             service.notify_transfer_progress();
@@ -205,15 +215,16 @@ impl DefaultHAConnectionContext {
                 .check_connection_state_and_notify(connection.remote_address(), connection_state)
                 .await;
         }
-
-        if let Some(connections) = self.inner.connections.upgrade() {
-            connections.lock().await.remove(connection.connection_id());
-        }
     }
 
     pub(crate) fn handle_runtime_connection_ack(&self, connection: &HAConnectionRuntimeHandle, slave_ack_offset: i64) {
         if let Some(replication) = self.inner.auto_switch_replication.get() {
-            self.handle_auto_switch_connection_ack(replication, connection.slave_broker_id(), slave_ack_offset);
+            self.handle_auto_switch_connection_ack(
+                replication,
+                connection.slave_broker_id(),
+                connection.last_transfer(),
+                slave_ack_offset,
+            );
         }
     }
 
@@ -222,6 +233,7 @@ impl DefaultHAConnectionContext {
             self.handle_auto_switch_connection_ack(
                 replication,
                 DefaultHAService::auto_switch_slave_broker_id(connection),
+                connection.runtime_handle().last_transfer(),
                 slave_ack_offset,
             );
         }
@@ -230,7 +242,7 @@ impl DefaultHAConnectionContext {
     fn handle_connection_caught_up(&self, connection: &GeneralHAConnection) {
         if let Some(replication) = self.inner.auto_switch_replication.get() {
             DefaultHAService::handle_auto_switch_connection_caught_up(
-                replication,
+                &replication.state,
                 DefaultHAService::auto_switch_slave_broker_id(connection),
             );
         }
@@ -247,7 +259,7 @@ impl DefaultHAConnectionContext {
 
     pub(crate) fn handle_runtime_connection_caught_up(&self, connection: &HAConnectionRuntimeHandle) {
         if let Some(replication) = self.inner.auto_switch_replication.get() {
-            DefaultHAService::handle_auto_switch_connection_caught_up(replication, connection.slave_broker_id());
+            DefaultHAService::handle_auto_switch_connection_caught_up(&replication.state, connection.slave_broker_id());
         }
     }
 
@@ -259,43 +271,62 @@ impl DefaultHAConnectionContext {
 
     fn handle_auto_switch_connection_added(
         &self,
-        replication: &AutoSwitchReplicationState,
+        replication: &AutoSwitchReplication,
         slave_broker_id: Option<i64>,
         slave_ack_offset: i64,
+        last_transfer: LastTransfer,
     ) {
         let Some(slave_broker_id) = slave_broker_id else {
             return;
         };
 
-        replication.record_caught_up(slave_broker_id, rocketmq_runtime::common::time_utils::current_millis());
+        replication
+            .state
+            .record_caught_up(slave_broker_id, rocketmq_runtime::common::time_utils::current_millis());
         if slave_ack_offset >= 0 {
-            self.handle_auto_switch_connection_ack(replication, Some(slave_broker_id), slave_ack_offset);
+            self.handle_auto_switch_connection_ack(replication, Some(slave_broker_id), last_transfer, slave_ack_offset);
         }
     }
 
+    /// Applies a replica acknowledgement like Java `AutoSwitchHAConnection#maybeExpandInSyncStateSet`.
+    ///
+    /// The replica caught up only when it acknowledged the master log end observed by the latest
+    /// transfer; the catch-up time is that transfer time, or now when the replica reached the
+    /// current log end. Only a caught-up replica may join the sync state set, and a changed
+    /// proposal wakes the Broker to report it to the Controller.
     fn handle_auto_switch_connection_ack(
         &self,
-        replication: &AutoSwitchReplicationState,
+        replication: &AutoSwitchReplication,
         slave_broker_id: Option<i64>,
+        last_transfer: LastTransfer,
         slave_ack_offset: i64,
     ) {
         let Some(slave_broker_id) = slave_broker_id else {
             return;
         };
 
-        replication.record_caught_up(slave_broker_id, rocketmq_runtime::common::time_utils::current_millis());
-        let current_confirm_offset = self.inner.replica_store.get_confirm_offset_directly();
-        let _ = replication.maybe_expand_sync_state_set(slave_broker_id, slave_ack_offset, current_confirm_offset);
-        if replication.local_sync_state_set().contains(&slave_broker_id) {
-            self.publish_auto_switch_confirm_offset(replication);
+        if slave_ack_offset >= last_transfer.master_max_offset {
+            let caught_up_at = if slave_ack_offset == self.inner.replica_store.get_max_phy_offset() {
+                rocketmq_runtime::common::time_utils::current_millis()
+            } else {
+                last_transfer.transfer_time_ms
+            };
+            replication.state.record_caught_up(slave_broker_id, caught_up_at);
+            let admission_offset = sync_state_set_admission_offset(&self.inner.replica_store);
+            if replication
+                .state
+                .maybe_expand_sync_state_set(slave_broker_id, slave_ack_offset, admission_offset)
+                .is_some()
+            {
+                replication.changes.publish();
+            }
+        }
+        if replication.state.local_sync_state_set().contains(&slave_broker_id) {
+            self.publish_auto_switch_confirm_offset(&replication.state);
         }
     }
 
-    fn handle_auto_switch_connection_removed(
-        &self,
-        replication: &AutoSwitchReplicationState,
-        slave_broker_id: Option<i64>,
-    ) {
+    fn handle_auto_switch_connection_removed(&self, replication: &AutoSwitchReplication, slave_broker_id: Option<i64>) {
         if self.inner.replica_store.is_shutdown() {
             return;
         }
@@ -304,8 +335,9 @@ impl DefaultHAConnectionContext {
             return;
         };
 
-        if replication.remove_replica(slave_broker_id) {
-            self.publish_auto_switch_confirm_offset(replication);
+        if replication.state.remove_replica(slave_broker_id) {
+            self.publish_auto_switch_confirm_offset(&replication.state);
+            replication.changes.publish();
         }
     }
 
@@ -447,6 +479,10 @@ impl DefaultHAService {
         &self.replica_store
     }
 
+    pub(crate) fn runtime_scope(&self) -> &crate::runtime::StoreRuntimeScope {
+        &self.runtime_scope
+    }
+
     pub fn ha_transfer_metrics(&self) -> Arc<HaTransferMetrics> {
         self.ha_transfer_metrics.clone()
     }
@@ -490,7 +526,7 @@ impl DefaultHAService {
     pub(crate) fn init(
         &mut self,
         service_reference: GeneralHAServiceReference,
-        auto_switch_replication: Option<Arc<AutoSwitchReplicationState>>,
+        auto_switch_replication: Option<AutoSwitchReplication>,
     ) -> Result<(), HAError> {
         // Initialize the DefaultHAService with the provided message store.
         let config = self.replica_store.message_store_config();
@@ -499,7 +535,10 @@ impl DefaultHAService {
             self.connection_context.install_auto_switch_replication(replication)?;
         }
 
-        let group_transfer_service = Arc::new(GroupTransferService::try_new(service_reference.clone())?);
+        let group_transfer_service = Arc::new(GroupTransferService::try_new(
+            service_reference.clone(),
+            crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.ha.group-transfer"),
+        )?);
         self.connection_context
             .install_group_transfer_service(&group_transfer_service)?;
         self.group_transfer_service = Some(group_transfer_service);
@@ -511,6 +550,7 @@ impl DefaultHAService {
         let state_notification_service = Arc::new(HAConnectionStateNotificationService::new(
             service_reference,
             Arc::clone(&config),
+            crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.ha.connection-state-notification"),
         ));
         self.connection_context
             .install_state_notification_service(&state_notification_service)?;
@@ -629,25 +669,18 @@ impl HAService for DefaultHAService {
             warn!("Timed out destroying HA connections");
         }
 
+        // The services bound their own wait and abort a loop still running at
+        // the deadline, so no outer timeout drops a shutdown half-way.
         if let Some(ref group_transfer_service) = self.group_transfer_service {
-            if timeout(Duration::from_secs(3), group_transfer_service.shutdown())
-                .await
-                .is_err()
-            {
-                warn!("Timed out shutting down HA group transfer service");
-            }
+            group_transfer_service
+                .shutdown_until(ShutdownDeadline::after(Duration::from_secs(3)))
+                .await;
         }
 
         if let Some(ref ha_connection_state_notification_service) = self.ha_connection_state_notification_service {
-            if timeout(
-                Duration::from_secs(3),
-                ha_connection_state_notification_service.shutdown(),
-            )
-            .await
-            .is_err()
-            {
-                warn!("Timed out shutting down HA connection state notification service");
-            }
+            ha_connection_state_notification_service
+                .shutdown_until(ShutdownDeadline::after(Duration::from_secs(3)))
+                .await;
         }
     }
 
@@ -938,6 +971,7 @@ mod tests {
     use tokio::io::AsyncWriteExt;
 
     use super::*;
+    use crate::base::backend_ops::BackendOps;
     use crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService;
     use crate::ha::general_ha_service::GeneralHAService;
     use crate::ha::test_support::new_test_message_store;
@@ -1125,8 +1159,8 @@ mod tests {
 
     #[tokio::test]
     async fn build_connection_wraps_auto_switch_connections_when_enabled() {
-        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-build-{}", current_millis()));
-        let store = new_test_message_store(&temp_root, true);
+        let temp_root = tempfile::tempdir().expect("create temp root dir");
+        let store = new_test_message_store(temp_root.path(), true);
         let service = new_default_ha_service(&store);
         let (server_stream, remote_addr, _client) = new_server_stream().await;
 
@@ -1152,14 +1186,12 @@ mod tests {
         assert_eq!(runtime_handle.slave_broker_id(), Some(9));
 
         connection.shutdown().await;
-
-        let _ = std::fs::remove_dir_all(temp_root);
     }
 
     #[tokio::test]
     async fn build_connection_uses_default_variant_when_auto_switch_is_disabled() {
-        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-build-{}", current_millis()));
-        let store = new_test_message_store(&temp_root, false);
+        let temp_root = tempfile::tempdir().expect("create temp root dir");
+        let store = new_test_message_store(temp_root.path(), false);
         let service = new_default_ha_service(&store);
         let (server_stream, remote_addr, _client) = new_server_stream().await;
 
@@ -1185,8 +1217,6 @@ mod tests {
         assert_eq!(runtime_handle.slave_broker_id(), None);
 
         connection.shutdown().await;
-
-        let _ = std::fs::remove_dir_all(temp_root);
     }
 
     #[tokio::test]
@@ -1250,6 +1280,151 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn caught_up_replica_ack_publishes_sync_state_set_proposal() {
+        let temp_root = tempfile::tempdir().expect("create temp root dir");
+        let mut store = new_test_message_store(temp_root.path(), true);
+        store.init().await.expect("init message store");
+        store
+            .get_commit_log_mut()
+            .append_data(0, &[1, 2, 3, 4], 0, 4)
+            .await
+            .expect("append data");
+        let mut general_service =
+            GeneralHAService::new_with_auto_switch_ha_service(AutoSwitchHAService::new(new_default_ha_service(&store)));
+        general_service.init().expect("init auto switch ha service");
+        let auto_switch_service = general_service.auto_switch_service().expect("auto switch service");
+        auto_switch_service.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
+        assert!(auto_switch_service.change_to_master(1).await.expect("change to master"));
+        let mut changes = general_service
+            .subscribe_sync_state_set_changes()
+            .expect("controller mode publishes sync state set changes");
+
+        let service = auto_switch_service.default_delegate();
+        let (server_stream, remote_addr, mut client) = new_server_stream().await;
+        let mut connection = AcceptSocketService::build_connection(
+            service.runtime_scope.clone(),
+            service.connection_context(),
+            service.replica_store().message_store_config(),
+            server_stream,
+            remote_addr,
+            true,
+        )
+        .await
+        .expect("build auto-switch connection");
+        connection.start().await.expect("start connection");
+        service.add_connection(connection).await;
+
+        // A controller-mode replica reports its max offset followed by its Controller broker id.
+        let mut report = 4_i64.to_be_bytes().to_vec();
+        report.extend_from_slice(&9_i64.to_be_bytes());
+        client.write_all(&report).await.expect("write replica offset report");
+
+        tokio::time::timeout(Duration::from_secs(5), changes.changed())
+            .await
+            .expect("a caught-up replica should publish a sync state set proposal")
+            .expect("the HA service should keep the publisher alive");
+        assert_eq!(auto_switch_service.get_local_sync_state_set(), HashSet::from([7_i64]));
+        assert_eq!(auto_switch_service.get_sync_state_set(), HashSet::from([7_i64, 9_i64]));
+        assert!(auto_switch_service.is_synchronizing_sync_state_set());
+
+        service.destroy_connections().await;
+    }
+
+    #[tokio::test]
+    async fn closed_replica_socket_removes_its_connection() {
+        let temp_root = tempfile::tempdir().expect("create temp root dir");
+        let mut store = new_test_message_store(temp_root.path(), true);
+        store.init().await.expect("init message store");
+        store
+            .get_commit_log_mut()
+            .append_data(0, &[1, 2, 3, 4], 0, 4)
+            .await
+            .expect("append data");
+        let mut general_service =
+            GeneralHAService::new_with_auto_switch_ha_service(AutoSwitchHAService::new(new_default_ha_service(&store)));
+        general_service.init().expect("init auto switch ha service");
+        let auto_switch_service = general_service.auto_switch_service().expect("auto switch service");
+        auto_switch_service.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
+        assert!(auto_switch_service.change_to_master(1).await.expect("change to master"));
+        let mut changes = general_service
+            .subscribe_sync_state_set_changes()
+            .expect("controller mode publishes sync state set changes");
+
+        let service = auto_switch_service.default_delegate();
+        let (server_stream, remote_addr, mut client) = new_server_stream().await;
+        let mut connection = AcceptSocketService::build_connection(
+            service.runtime_scope.clone(),
+            service.connection_context(),
+            service.replica_store().message_store_config(),
+            server_stream,
+            remote_addr,
+            true,
+        )
+        .await
+        .expect("build auto-switch connection");
+        connection.start().await.expect("start connection");
+        service.add_connection(connection).await;
+        let mut report = 4_i64.to_be_bytes().to_vec();
+        report.extend_from_slice(&9_i64.to_be_bytes());
+        client.write_all(&report).await.expect("write replica offset report");
+        // The proposal to add the replica proves that its acknowledgement was read.
+        tokio::time::timeout(Duration::from_secs(5), changes.changed())
+            .await
+            .expect("a caught-up replica should publish a sync state set proposal")
+            .expect("the HA service should keep the publisher alive");
+        changes.mark_unchanged();
+        assert_eq!(service.get_connection_count().load(Ordering::SeqCst), 1);
+
+        drop(client);
+
+        tokio::time::timeout(Duration::from_secs(5), changes.changed())
+            .await
+            .expect("a closed replica socket should remove its connection")
+            .expect("the HA service should keep the publisher alive");
+        assert!(service.connections.lock().await.is_empty());
+        assert_eq!(service.get_connection_count().load(Ordering::SeqCst), 0);
+        assert_eq!(auto_switch_service.get_sync_state_set(), HashSet::from([7_i64]));
+    }
+
+    #[tokio::test]
+    async fn lagging_replica_ack_does_not_count_as_caught_up() {
+        let temp_root = tempfile::tempdir().expect("create temp root dir");
+        let general_service = new_auto_switch_service(temp_root.path());
+        let auto_switch_service = general_service.auto_switch_service().expect("auto switch service");
+        let service = auto_switch_service.default_delegate();
+        auto_switch_service.sync_controller_sync_state_set(7, &HashSet::from([7_i64, 9_i64]));
+
+        let (server_stream, remote_addr, _client) = new_server_stream().await;
+        let mut connection = AcceptSocketService::build_connection(
+            service.runtime_scope.clone(),
+            service.connection_context(),
+            service.replica_store().message_store_config(),
+            server_stream,
+            remote_addr,
+            true,
+        )
+        .await
+        .expect("build auto-switch connection");
+        connection.set_slave_broker_id(Some(9));
+        connection.runtime_handle().record_transfer(128, current_millis());
+
+        service.handle_connection_ack(&connection, 64);
+        assert_eq!(
+            auto_switch_service.maybe_shrink_sync_state_set(),
+            HashSet::from([7_i64])
+        );
+
+        service.handle_connection_ack(&connection, 128);
+        assert_eq!(
+            auto_switch_service.maybe_shrink_sync_state_set(),
+            HashSet::from([7_i64, 9_i64])
+        );
+        assert!(!auto_switch_service.is_synchronizing_sync_state_set());
+
+        connection.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn connection_caught_up_callback_keeps_sync_state_member_alive() {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-caught-up-{}", current_millis()));
         let general_service = new_auto_switch_service(&temp_root);
@@ -1301,10 +1476,18 @@ mod tests {
         .await
         .expect("build auto-switch connection");
         connection.set_slave_broker_id(Some(9));
+        let mut changes = auto_switch_service.subscribe_sync_state_set_changes();
 
         service.handle_connection_removed(&connection);
 
         assert_eq!(auto_switch_service.get_local_sync_state_set(), HashSet::from([7_i64]));
+        assert!(
+            changes.has_changed().expect("publisher alive"),
+            "a removed member must wake the Broker to report the shrink"
+        );
+        changes.mark_unchanged();
+        service.handle_connection_removed(&connection);
+        assert!(!changes.has_changed().expect("publisher alive"));
 
         connection.shutdown().await;
         let _ = std::fs::remove_dir_all(temp_root);

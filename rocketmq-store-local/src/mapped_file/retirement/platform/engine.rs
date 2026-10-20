@@ -18,11 +18,11 @@ use super::types::NamespaceFailure;
 use super::types::NamespaceFailureClass;
 use super::types::NamespaceMutationAuthorization;
 use super::types::NamespaceOperation;
+use super::types::NamespaceOperationResult;
 use super::types::NamespacePolicyViolation;
 use super::types::NamespaceRetirementRequest;
 use super::types::NamespaceTombstoneProof;
 use super::types::NamespaceTransition;
-use super::types::NamespaceTransitionOutcome;
 use crate::mapped_file::retirement::identity::PhysicalFileKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,19 +70,19 @@ impl BackendFailure {
         }
     }
 
-    pub(super) fn into_outcome(self) -> NamespaceTransitionOutcome {
+    pub(super) fn into_result(self) -> NamespaceOperationResult {
         if self.retryable {
-            NamespaceTransitionOutcome::Retryable(self.failure)
+            NamespaceOperationResult::Retryable(self.failure)
         } else {
-            NamespaceTransitionOutcome::Failed(self.failure)
+            NamespaceOperationResult::Failed(self.failure)
         }
     }
 
-    pub(super) fn into_verification_error(self) -> NamespaceTransitionOutcome {
+    pub(super) fn into_verification_error(self) -> NamespaceOperationResult {
         if self.retryable {
-            NamespaceTransitionOutcome::Retryable(self.failure)
+            NamespaceOperationResult::Retryable(self.failure)
         } else {
-            NamespaceTransitionOutcome::Failed(self.failure)
+            NamespaceOperationResult::Failed(self.failure)
         }
     }
 }
@@ -109,12 +109,12 @@ enum Decision {
     MutateUnlink(NamespaceEntry),
     Tombstoned,
     Absent,
-    Outcome(Box<NamespaceTransitionOutcome>),
+    Return(Box<NamespaceOperationResult>),
 }
 
 impl Decision {
-    fn outcome(outcome: NamespaceTransitionOutcome) -> Self {
-        Self::Outcome(Box::new(outcome))
+    fn return_result(result: NamespaceOperationResult) -> Self {
+        Self::Return(Box::new(result))
     }
 }
 
@@ -127,27 +127,27 @@ pub(super) fn advance<I: NamespaceIo>(
     transition: NamespaceTransition,
     io: &mut I,
     authorization: NamespaceMutationAuthorization,
-) -> NamespaceTransitionOutcome {
+) -> NamespaceOperationResult {
     if !authorization.authorizes(request, transition) {
-        return NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::AuthorizationMismatch);
+        return NamespaceOperationResult::Rejected(NamespacePolicyViolation::AuthorizationMismatch);
     }
     let initial = match io.snapshot(request.physical_key(), request.ticket().expected_length()) {
         Ok(snapshot) => snapshot,
-        Err(failure) => return failure.into_outcome(),
+        Err(failure) => return failure.into_result(),
     };
     match decide(request, transition, initial) {
-        Decision::Outcome(outcome) => *outcome,
+        Decision::Return(result) => *result,
         Decision::Tombstoned => settle_without_mutation(request, transition, io, Decision::Tombstoned),
         Decision::Absent => settle_without_mutation(request, transition, io, Decision::Absent),
         Decision::MutateRename => {
             if let Err(failure) = io.rename_to_tombstone() {
-                return failure.into_outcome();
+                return failure.into_result();
             }
             finish_mutation(request, transition, io, Decision::Tombstoned)
         }
         Decision::MutateUnlink(entry) => {
             if let Err(failure) = io.unlink(entry) {
-                return failure.into_outcome();
+                return failure.into_result();
             }
             finish_mutation(request, transition, io, Decision::Absent)
         }
@@ -159,9 +159,9 @@ fn settle_without_mutation<I: NamespaceIo>(
     transition: NamespaceTransition,
     io: &mut I,
     expected: Decision,
-) -> NamespaceTransitionOutcome {
+) -> NamespaceOperationResult {
     if let Err(failure) = io.sync_after_namespace(transition) {
-        return failure.into_outcome();
+        return failure.into_result();
     }
     io.release_for_reverification();
     verify_converged(request, io, expected)
@@ -172,9 +172,9 @@ fn finish_mutation<I: NamespaceIo>(
     transition: NamespaceTransition,
     io: &mut I,
     expected: Decision,
-) -> NamespaceTransitionOutcome {
+) -> NamespaceOperationResult {
     if let Err(failure) = io.sync_after_namespace(transition) {
-        return failure.into_outcome();
+        return failure.into_result();
     }
     io.release_for_reverification();
     verify_converged(request, io, expected)
@@ -184,10 +184,10 @@ fn verify_converged<I: NamespaceIo>(
     request: &NamespaceRetirementRequest,
     io: &mut I,
     expected: Decision,
-) -> NamespaceTransitionOutcome {
+) -> NamespaceOperationResult {
     let snapshot = match io.snapshot(request.physical_key(), request.ticket().expected_length()) {
         Ok(snapshot) => snapshot,
-        Err(failure) => return failure.into_outcome(),
+        Err(failure) => return failure.into_result(),
     };
     if let Some(outcome) = static_rejection(request, snapshot) {
         return outcome;
@@ -199,21 +199,21 @@ fn verify_converged<I: NamespaceIo>(
         | EntryObservation::ExpectedFileWrongLength(_)
         | EntryObservation::Directory
         | EntryObservation::ReparsePoint => {
-            return NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::NamespaceChangedDuringVerification);
+            return NamespaceOperationResult::Rejected(NamespacePolicyViolation::NamespaceChangedDuringVerification);
         }
     };
     match expected {
         Decision::Tombstoned if snapshot.tombstone == EntryObservation::ExpectedFile => {
-            NamespaceTransitionOutcome::Tombstoned(NamespaceTombstoneProof::new(request, replacement_key))
+            NamespaceOperationResult::Tombstoned(NamespaceTombstoneProof::new(request, replacement_key))
         }
         Decision::Absent if snapshot.tombstone == EntryObservation::Missing => {
-            NamespaceTransitionOutcome::NamespaceAbsentVerified(NamespaceAbsenceProof::new(request, replacement_key))
+            NamespaceOperationResult::NamespaceAbsentVerified(NamespaceAbsenceProof::new(request, replacement_key))
         }
-        Decision::MutateRename | Decision::MutateUnlink(_) | Decision::Outcome(_) => {
-            NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::NamespaceChangedDuringVerification)
+        Decision::MutateRename | Decision::MutateUnlink(_) | Decision::Return(_) => {
+            NamespaceOperationResult::Rejected(NamespacePolicyViolation::NamespaceChangedDuringVerification)
         }
         Decision::Tombstoned | Decision::Absent => {
-            NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::NamespaceChangedDuringVerification)
+            NamespaceOperationResult::Rejected(NamespacePolicyViolation::NamespaceChangedDuringVerification)
         }
     }
 }
@@ -224,7 +224,7 @@ fn decide(
     snapshot: NamespaceSnapshot,
 ) -> Decision {
     if let Some(outcome) = static_rejection(request, snapshot) {
-        return Decision::outcome(outcome);
+        return Decision::return_result(outcome);
     }
 
     match transition {
@@ -232,7 +232,7 @@ fn decide(
             if matches!(snapshot.canonical, EntryObservation::OtherFile(_))
                 && !replacement_was_recorded(request, snapshot.canonical) =>
         {
-            Decision::outcome(superseded(request, snapshot.canonical))
+            Decision::return_result(superseded(request, snapshot.canonical))
         }
         NamespaceTransition::MoveToTombstone => match (snapshot.canonical, snapshot.tombstone) {
             (EntryObservation::ExpectedFile, EntryObservation::Missing) => Decision::MutateRename,
@@ -240,29 +240,29 @@ fn decide(
             (EntryObservation::Missing, EntryObservation::Missing) => Decision::Absent,
             (EntryObservation::OtherFile(_), EntryObservation::ExpectedFile) => Decision::Tombstoned,
             (EntryObservation::OtherFile(_), EntryObservation::Missing) => Decision::Absent,
-            (EntryObservation::ExpectedFile, EntryObservation::ExpectedFile) => Decision::outcome(
-                NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::TombstoneCollision {
+            (EntryObservation::ExpectedFile, EntryObservation::ExpectedFile) => Decision::return_result(
+                NamespaceOperationResult::Rejected(NamespacePolicyViolation::TombstoneCollision {
                     observed_key: Some(request.physical_key()),
                 }),
             ),
-            _ => Decision::outcome(NamespaceTransitionOutcome::Rejected(
+            _ => Decision::return_result(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::NamespaceChangedDuringVerification,
             )),
         },
         NamespaceTransition::DirectUnlink if matches!(snapshot.canonical, EntryObservation::OtherFile(_)) => {
-            Decision::outcome(superseded(request, snapshot.canonical))
+            Decision::return_result(superseded(request, snapshot.canonical))
         }
         NamespaceTransition::DirectUnlink => match (snapshot.canonical, snapshot.tombstone) {
             (EntryObservation::ExpectedFile, EntryObservation::Missing) => {
                 Decision::MutateUnlink(NamespaceEntry::Canonical)
             }
             (EntryObservation::Missing, EntryObservation::Missing) => Decision::Absent,
-            (_, EntryObservation::ExpectedFile) => Decision::outcome(NamespaceTransitionOutcome::Rejected(
+            (_, EntryObservation::ExpectedFile) => Decision::return_result(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::TombstoneCollision {
                     observed_key: Some(request.physical_key()),
                 },
             )),
-            _ => Decision::outcome(NamespaceTransitionOutcome::Rejected(
+            _ => Decision::return_result(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::NamespaceChangedDuringVerification,
             )),
         },
@@ -275,10 +275,10 @@ fn decide(
                 Decision::MutateUnlink(NamespaceEntry::Tombstone)
             }
             (EntryObservation::OtherFile(_), EntryObservation::Missing) => Decision::Absent,
-            (EntryObservation::ExpectedFile, _) => Decision::outcome(NamespaceTransitionOutcome::Rejected(
+            (EntryObservation::ExpectedFile, _) => Decision::return_result(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::CanonicalRestored,
             )),
-            _ => Decision::outcome(NamespaceTransitionOutcome::Rejected(
+            _ => Decision::return_result(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::NamespaceChangedDuringVerification,
             )),
         },
@@ -295,10 +295,10 @@ fn replacement_was_recorded(request: &NamespaceRetirementRequest, canonical: Ent
 fn static_rejection(
     request: &NamespaceRetirementRequest,
     snapshot: NamespaceSnapshot,
-) -> Option<NamespaceTransitionOutcome> {
+) -> Option<NamespaceOperationResult> {
     match snapshot.canonical {
         EntryObservation::ExpectedFileWrongLength(actual) => {
-            return Some(NamespaceTransitionOutcome::Rejected(
+            return Some(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::ExpectedLengthMismatch {
                     entry: NamespaceEntry::Canonical,
                     expected: request.ticket().expected_length(),
@@ -307,7 +307,7 @@ fn static_rejection(
             ));
         }
         EntryObservation::Directory | EntryObservation::ReparsePoint => {
-            return Some(NamespaceTransitionOutcome::Rejected(
+            return Some(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::UnexpectedEntryType {
                     entry: NamespaceEntry::Canonical,
                 },
@@ -317,19 +317,19 @@ fn static_rejection(
     }
 
     match snapshot.tombstone {
-        EntryObservation::ExpectedFileWrongLength(actual) => Some(NamespaceTransitionOutcome::Rejected(
+        EntryObservation::ExpectedFileWrongLength(actual) => Some(NamespaceOperationResult::Rejected(
             NamespacePolicyViolation::ExpectedLengthMismatch {
                 entry: NamespaceEntry::Tombstone,
                 expected: request.ticket().expected_length(),
                 actual,
             },
         )),
-        EntryObservation::OtherFile(observed_key) => Some(NamespaceTransitionOutcome::Rejected(
+        EntryObservation::OtherFile(observed_key) => Some(NamespaceOperationResult::Rejected(
             NamespacePolicyViolation::TombstoneCollision {
                 observed_key: Some(observed_key),
             },
         )),
-        EntryObservation::Directory | EntryObservation::ReparsePoint => Some(NamespaceTransitionOutcome::Rejected(
+        EntryObservation::Directory | EntryObservation::ReparsePoint => Some(NamespaceOperationResult::Rejected(
             NamespacePolicyViolation::UnexpectedEntryType {
                 entry: NamespaceEntry::Tombstone,
             },
@@ -338,11 +338,11 @@ fn static_rejection(
     }
 }
 
-fn superseded(request: &NamespaceRetirementRequest, canonical: EntryObservation) -> NamespaceTransitionOutcome {
+fn superseded(request: &NamespaceRetirementRequest, canonical: EntryObservation) -> NamespaceOperationResult {
     let EntryObservation::OtherFile(observed_key) = canonical else {
-        return NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::NamespaceChangedDuringVerification);
+        return NamespaceOperationResult::Rejected(NamespacePolicyViolation::NamespaceChangedDuringVerification);
     };
-    NamespaceTransitionOutcome::Superseded {
+    NamespaceOperationResult::Superseded {
         expected_key: request.physical_key(),
         observed_key,
     }

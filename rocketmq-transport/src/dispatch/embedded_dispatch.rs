@@ -32,16 +32,16 @@ use crate::contract::TransportContractViolation;
 /// be completed through more than one path.
 ///
 /// ```compile_fail
-/// use rocketmq_transport::api::EmbeddedDispatchOutcome;
+/// use rocketmq_transport::api::EmbeddedDispatchResult;
 ///
-/// fn outcomes_are_affine(outcome: &EmbeddedDispatchOutcome) {
-///     let _: EmbeddedDispatchOutcome = outcome.clone();
+/// fn outcomes_are_affine(outcome: &EmbeddedDispatchResult) {
+///     let _: EmbeddedDispatchResult = outcome.clone();
 /// }
 /// ```
 #[must_use]
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum EmbeddedDispatchOutcome {
+pub enum EmbeddedDispatchResult {
     /// An owned remoting response was accepted by the in-process response boundary.
     Reply(RemotingResponse),
     /// The original request was one-way and every produced response was discarded.

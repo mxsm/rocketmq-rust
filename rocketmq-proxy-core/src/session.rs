@@ -827,7 +827,7 @@ impl<C> ClientSessionRegistry<C> {
         let retained_bytes = estimated_protobuf_retained_bytes(&command);
         if !matches!(
             link.queue.try_push_control(command, retained_bytes),
-            rocketmq_runtime::QueuePushOutcome::Rejected { .. }
+            rocketmq_runtime::QueueEnqueueStatus::Rejected { .. }
         ) {
             true
         } else {

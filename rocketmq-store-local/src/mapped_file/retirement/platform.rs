@@ -56,6 +56,7 @@ pub(crate) use types::NamespaceFailureClass;
 pub(crate) use types::NamespaceMutationAuthorization;
 #[allow(unused_imports, reason = "M3 proof types are staged for the future reaper boundary")]
 pub(crate) use types::NamespaceOperation;
+pub(crate) use types::NamespaceOperationResult;
 #[allow(unused_imports, reason = "M3 proof types are staged for the future reaper boundary")]
 pub(crate) use types::NamespacePolicyViolation;
 #[allow(
@@ -72,7 +73,6 @@ pub(crate) use types::NamespaceTicketBinding;
 #[allow(unused_imports, reason = "M3 proof types are staged for the future reaper boundary")]
 pub(crate) use types::NamespaceTombstoneProof;
 pub(crate) use types::NamespaceTransition;
-pub(crate) use types::NamespaceTransitionOutcome;
 
 pub(in crate::mapped_file::retirement) use creation::IncarnationCreationFailure;
 #[cfg(test)]
@@ -89,7 +89,7 @@ const _: fn(
     &StoreRelativePath,
     PhysicalFileKey,
     u64,
-) -> Result<File, NamespaceTransitionOutcome> = unsupported_contract::NamespaceRoot::open_active_segment;
+) -> Result<File, NamespaceOperationResult> = unsupported_contract::NamespaceRoot::open_active_segment;
 
 /// Exact namespace mutation authority derived from one durable `LogicalRemoved` stage.
 ///
@@ -126,11 +126,11 @@ impl<C> AuthorizedNamespaceTransition<C> {
 #[derive(Debug)]
 pub(crate) struct NamespaceReservationFailure<C> {
     authorization: Box<AuthorizedNamespaceTransition<C>>,
-    error: NamespaceTransitionOutcome,
+    error: NamespaceOperationResult,
 }
 
 impl<C> NamespaceReservationFailure<C> {
-    pub(crate) fn into_parts(self) -> (AuthorizedNamespaceTransition<C>, NamespaceTransitionOutcome) {
+    pub(crate) fn into_parts(self) -> (AuthorizedNamespaceTransition<C>, NamespaceOperationResult) {
         (*self.authorization, self.error)
     }
 }
@@ -145,16 +145,16 @@ pub(crate) struct VerifiedAuthorizedNamespaceTransition<C> {
 #[derive(Debug)]
 pub(crate) struct AuthorizedNamespaceTransitionResult<C> {
     capability: C,
-    outcome: NamespaceTransitionOutcome,
+    outcome: NamespaceOperationResult,
 }
 
 impl<C> AuthorizedNamespaceTransitionResult<C> {
-    pub(crate) fn into_parts(self) -> (C, NamespaceTransitionOutcome) {
+    pub(crate) fn into_parts(self) -> (C, NamespaceOperationResult) {
         (self.capability, self.outcome)
     }
 
     #[cfg(test)]
-    pub(in crate::mapped_file::retirement) fn for_test(capability: C, outcome: NamespaceTransitionOutcome) -> Self {
+    pub(in crate::mapped_file::retirement) fn for_test(capability: C, outcome: NamespaceOperationResult) -> Self {
         Self { capability, outcome }
     }
 }
@@ -255,7 +255,7 @@ impl VerifiedNamespaceRoot {
     /// Production construction remains unavailable until Wave-B can consume the retained Store
     /// lock, root-identity, activation-fence, and replay-inventory proofs as one opaque capability.
     #[cfg(test)]
-    pub(crate) fn open(file: File, store_uuid: StoreUuid) -> Result<Self, NamespaceTransitionOutcome> {
+    pub(crate) fn open(file: File, store_uuid: StoreUuid) -> Result<Self, NamespaceOperationResult> {
         let native = native::NamespaceRoot::open(file)?;
         Ok(Self { store_uuid, native })
     }
@@ -268,9 +268,9 @@ impl VerifiedNamespaceRoot {
     )]
     pub(in crate::mapped_file::retirement) fn from_reconciled_session(
         session: &super::state::reconciliation::ReconciledLifecycleSession,
-    ) -> Result<Self, NamespaceTransitionOutcome> {
+    ) -> Result<Self, NamespaceOperationResult> {
         let file = session.retained_root().try_clone().map_err(|error| {
-            NamespaceTransitionOutcome::Failed(types::NamespaceFailure::new(
+            NamespaceOperationResult::Failed(types::NamespaceFailure::new(
                 types::NamespaceOperation::VerifyRoot,
                 types::NamespaceFailureClass::OtherIo,
                 error.raw_os_error(),
@@ -296,7 +296,7 @@ impl VerifiedNamespaceRoot {
         path: &StoreRelativePath,
         physical_key: PhysicalFileKey,
         expected_length: u64,
-    ) -> Result<File, NamespaceTransitionOutcome> {
+    ) -> Result<File, NamespaceOperationResult> {
         self.native.open_active_segment(path, physical_key, expected_length)
     }
 
@@ -308,10 +308,10 @@ impl VerifiedNamespaceRoot {
         &self,
         request: NamespaceRetirementRequest,
         transition: NamespaceTransition,
-    ) -> Result<VerifiedPathReservation, NamespaceTransitionOutcome> {
+    ) -> Result<VerifiedPathReservation, NamespaceOperationResult> {
         let incarnation_uuid = request.ticket().incarnation().store_uuid();
         if incarnation_uuid != self.store_uuid {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::StoreUuidMismatch {
                     root: self.store_uuid,
                     incarnation: incarnation_uuid,
@@ -369,7 +369,7 @@ pub(crate) struct VerifiedPathReservation {
 pub(crate) fn apply_namespace_transition(
     reservation: VerifiedPathReservation,
     authorization: NamespaceMutationAuthorization,
-) -> NamespaceTransitionOutcome {
+) -> NamespaceOperationResult {
     let VerifiedPathReservation {
         request,
         transition,
@@ -400,7 +400,7 @@ pub(crate) fn apply_authorized_namespace_transition<C>(
     let outcome = if request == reserved_request && transition == reserved_transition {
         engine::advance(&request, transition, &mut native, authorization)
     } else {
-        NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::AuthorizationMismatch)
+        NamespaceOperationResult::Rejected(NamespacePolicyViolation::AuthorizationMismatch)
     };
     AuthorizedNamespaceTransitionResult { capability, outcome }
 }

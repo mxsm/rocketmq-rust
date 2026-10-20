@@ -32,7 +32,7 @@ use rocketmq_controller::LogId;
 use rocketmq_controller::Node;
 use rocketmq_controller::RaftNodeManager;
 use rocketmq_controller::StateMachine;
-use rocketmq_controller::StorageBackendType;
+use rocketmq_controller::StorageEngineType;
 use rocketmq_controller::Vote;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::sync_state_set_body::SyncStateSet;
@@ -51,7 +51,7 @@ fn test_config(port: u16) -> ControllerConfigReader {
             .with_node_info(1, format!("127.0.0.1:{port}").parse().expect("valid socket addr"))
             .with_election_timeout_ms(1000)
             .with_heartbeat_interval_ms(300)
-            .with_storage_backend(StorageBackendType::Memory),
+            .with_storage_engine_type(StorageEngineType::Memory),
     )
 }
 

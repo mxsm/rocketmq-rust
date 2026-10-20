@@ -215,10 +215,10 @@ async fn sendfile_transfer_engine_retries_interrupted_and_would_block_without_ad
     let mut engine = SendfileTransferEngine::with_operation(
         RecordingWriter::default(),
         ScriptedSendfile::new(vec![
-            SendfileOutcome::Error(io::ErrorKind::Interrupted),
-            SendfileOutcome::Error(io::ErrorKind::WouldBlock),
-            SendfileOutcome::Write(2),
-            SendfileOutcome::Write(4),
+            ScriptedSendfileStep::Error(io::ErrorKind::Interrupted),
+            ScriptedSendfileStep::Error(io::ErrorKind::WouldBlock),
+            ScriptedSendfileStep::Write(2),
+            ScriptedSendfileStep::Write(4),
         ]),
     );
 
@@ -264,7 +264,7 @@ async fn sendfile_transfer_engine_reports_write_zero_when_connection_closes() {
     };
     let mut engine = SendfileTransferEngine::with_operation(
         RecordingWriter::default(),
-        ScriptedSendfile::new(vec![SendfileOutcome::Zero]),
+        ScriptedSendfile::new(vec![ScriptedSendfileStep::Zero]),
     );
 
     let error = engine
@@ -373,21 +373,21 @@ impl SendfileOperation for RecordingSendfile {
     }
 }
 
-enum SendfileOutcome {
+enum ScriptedSendfileStep {
     Write(usize),
     Error(io::ErrorKind),
     Zero,
 }
 
 struct ScriptedSendfile {
-    outcomes: VecDeque<SendfileOutcome>,
+    steps: VecDeque<ScriptedSendfileStep>,
     calls: Vec<SendfileCall>,
 }
 
 impl ScriptedSendfile {
-    fn new(outcomes: Vec<SendfileOutcome>) -> Self {
+    fn new(steps: Vec<ScriptedSendfileStep>) -> Self {
         Self {
-            outcomes: VecDeque::from(outcomes),
+            steps: VecDeque::from(steps),
             calls: Vec::new(),
         }
     }
@@ -396,10 +396,10 @@ impl ScriptedSendfile {
 impl SendfileOperation for ScriptedSendfile {
     fn sendfile(&mut self, _out_fd: RawFd, _in_fd: RawFd, offset: u64, len: usize) -> io::Result<usize> {
         self.calls.push(SendfileCall { offset, len });
-        match self.outcomes.pop_front().unwrap_or(SendfileOutcome::Write(len)) {
-            SendfileOutcome::Write(written) => Ok(written.min(len)),
-            SendfileOutcome::Error(kind) => Err(io::Error::new(kind, "scripted sendfile error")),
-            SendfileOutcome::Zero => Ok(0),
+        match self.steps.pop_front().unwrap_or(ScriptedSendfileStep::Write(len)) {
+            ScriptedSendfileStep::Write(written) => Ok(written.min(len)),
+            ScriptedSendfileStep::Error(kind) => Err(io::Error::new(kind, "scripted sendfile error")),
+            ScriptedSendfileStep::Zero => Ok(0),
         }
     }
 }

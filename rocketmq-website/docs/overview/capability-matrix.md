@@ -8,7 +8,7 @@ Use this page to decide which component and configuration belong in your system.
 
 “Implemented” means a concrete source path exists. “Enabled” additionally requires the right build features, runtime settings, credentials, and backend. “Exercised” describes a particular test or deployment scenario. “Released” means a published artifact contains it. These are different claims.
 
-The repository's `v1-capability-manifest.json` records the 1.0.0 core scope, with profile-specific implementation and evidence fields. Its `component` or `interop` state applies to the referenced scenario and profile; it does not establish the same behavior for a different deployment. The manifest is not the complete capability catalog for Dashboard and AI products.
+The 1.0.0 core scope follows `scripts/core-release-scope.json`. A test or interoperability result applies to the scenario and profile it exercised; it does not establish the same behavior for a different deployment. This page is not the complete capability catalog for Dashboard and AI products.
 
 ## Core services and clients
 
@@ -60,6 +60,6 @@ Record the source/release you use, product, build feature set, storage and ingre
 
 ## Sources and next steps
 
-- [Core capability manifest](https://github.com/mxsm/rocketmq-rust/blob/main/scripts/v1-capability-manifest.json) and [core release scope](https://github.com/mxsm/rocketmq-rust/blob/main/scripts/core-release-scope.json).
+- [Core release scope](https://github.com/mxsm/rocketmq-rust/blob/main/scripts/core-release-scope.json).
 - [Broker](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-broker/README.md), [Client](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md), [Controller](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-controller/README.md), [Proxy](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-proxy/README.md).
 - [Local setup](../getting-started/local-source.md) and [delivery and retry](../guides/delivery-and-retry.md).

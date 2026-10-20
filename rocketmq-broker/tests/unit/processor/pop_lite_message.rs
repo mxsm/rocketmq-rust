@@ -19,8 +19,8 @@ use std::sync::Arc;
 use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
 use rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader;
+use rocketmq_store::MessageStore;
 use rocketmq_store::MessageStoreConfig;
-use rocketmq_store::StorePorts;
 
 use crate::broker::broker_runtime_config_state::BrokerPermissionState;
 use crate::broker_runtime::BrokerMessageStore;
@@ -35,10 +35,7 @@ pub(super) fn pop_lite_processor_for_test(
     let subscription_group_lookup = inner.subscription_group_manager().config_lookup();
     let lite_event_dispatcher = inner.lite_event_dispatcher().clone();
     let service_context = inner.broker_service_context();
-    let queue_lock_manager = service_context
-        .clone()
-        .map(QueueLockManager::new_with_service_context)
-        .unwrap_or_else(QueueLockManager::new);
+    let queue_lock_manager = QueueLockManager::new_with_service_context(service_context.clone());
     let consumer_offset_manager = inner.consumer_offset_manager_handle();
     let escape_bridge = inner.escape_bridge();
 
@@ -55,7 +52,7 @@ pub(super) fn pop_lite_processor_for_test(
 
 #[test]
 fn transform_order_count_info_drops_queue_level_suffix_when_offset_entries_exist() {
-    let result = PopLiteMessageProcessor::<StorePorts>::transform_order_count_info("0 qo0%100 1;0 0 1", 1);
+    let result = PopLiteMessageProcessor::<MessageStore>::transform_order_count_info("0 qo0%100 1;0 0 1", 1);
 
     assert_eq!(result, "0 qo0%100 1");
 }

@@ -8,19 +8,54 @@ This file applies to `rocketmq-ai/rocketmq-mcp-control/`.
 
 - This directory is a standalone Rust 2021 Cargo workspace excluded from the root workspace.
 - HTTPS Streamable MCP with RS256 OAuth/JWKS is the only transport and authentication mode.
+- The server answers the MCP protocol revisions that `../rocketmq-mcp-auth/` states and no other. Keep
+  `initialize`, `supported_protocol_versions()`, and the `MCP-Protocol-Version` header check on that set, and the
+  header check after OAuth. Answering another revision, or negotiating one in `initialize`, is a decision to
+  take together with the query server and the SRE Connector.
+- JWKS retrieval, caching, and key selection come from `../rocketmq-mcp-auth/`. This service states its own
+  limits in `JWKS_POLICY` (`src/auth.rs`): keys are never used past their five-minute lifetime, and the JWKS
+  endpoint is reached only at public addresses. The boundary check scans that crate as production source.
+- The network defaults are a specific bind address, a public canonical origin, and a public issuer and JWKS
+  address. Only the deployment switches `server.allow_wildcard_bind`, `server.allow_internal_base_url`, and
+  `oauth.allow_private_network` replace them: each is off by default, admits only what its name says, and is
+  named in a startup warning when on. Do not relax a default any other way, never accept an address literal or
+  a loopback name as a host, and keep the `Host` and `Origin` checks against the configured origin.
 - The default feature set must not depend on RocketMQ Admin or client mutation adapters.
 - `write-tools` may enable only `rocketmq-admin-core/mutation-client-adapter`; it must never enable a read or full adapter.
+- These dependency restrictions apply to this standalone build. A combined entrypoint build may unify the
+  query crate's read feature through another dependency path; control source still uses only the reviewed
+  mutation interface and keeps its own transport, authorization, and audit policy.
 - The reviewed production tools are `rocketmq_upsert_topic`,
   `rocketmq_upsert_consumer_group`, `rocketmq_reset_consumer_offset`,
-  `rocketmq_patch_broker_config`, and `rocketmq_set_consumer_request_mode`.
+  `rocketmq_patch_broker_config`, `rocketmq_set_consumer_request_mode`,
+  `rocketmq_begin_proxy_drain`, `rocketmq_cancel_proxy_drain`,
+  `rocketmq_set_broker_log_filter_ttl`, and `rocketmq_restore_broker_log_filter`,
+  plus the read-only `rocketmq_get_mutation_result`.
   Keep delete, skip, resend, and any free-form mutation outside this project
   until separately reviewed.
+- The Proxy drain and Broker log filter tools are operation-bound and have exactly one target. A Proxy is named
+  only by an alias from `[[clusters.proxies]]`: refuse an alias the cluster does not list before the `started`
+  record, and give no tool argument that could carry an address. Read the target before every write. Never
+  replace or end a state that another `operation_id` holds; report it as a conflict and expose a holder only as
+  `none`, `this_operation`, or `other_operation`. Never return, log, or store an `operation_id`; only the
+  requested digest covers it. A log filter override stays within one lower-case `rocketmq_broker::` logger
+  outside the protected modules, the levels `INFO` and `DEBUG`, and 60--900 seconds.
+- `rocketmq_get_mutation_result` reads only what the audit trail remembers about the caller's own invocations on
+  the authorized cluster. It opens no session, sends no RPC, writes no durable audit record, and never returns the
+  operator, the reason, or a request key. It needs the write scope and cluster authorization before its arguments
+  are read, and no operation: it is registered whenever `write-tools` is compiled and stays available when
+  `mutations_enabled` is false. Its annotations are read-only; do not register it through the mutation path.
 - OAuth and closed operation/cluster authorization must complete before mutation argument parsing. A durable
   `started` audit record must then complete before session creation or RPC.
 - Do not add stdio, CLI, shell, subprocess, free-form RPC, arbitrary Admin commands, or stdout protocol output.
-- Durable audit v2 records may contain only the validated OAuth subject and optional safe bounded request reason
-  as operator evidence. Responses, errors, tracing, ordinary logs, and all other public data must exclude both;
-  every surface must also exclude credentials, tokens, network addresses, raw backend errors, and message bodies.
+- Durable audit v3 records may contain only: the validated OAuth subject and optional safe bounded request reason
+  as operator evidence; the validated logical names of the mutation target (Topic, Consumer Group, Broker names,
+  a configured Proxy alias);
+  SHA-256 digests of the requested state, the request key, the pre-change state, and the selected Broker set; and
+  closed outcome values (whether a target changed, per-target result counts). Never store the requested values, a
+  request key, or a name that fails argument validation. Responses, errors, tracing, ordinary logs, and all other
+  public data must exclude the operator and reason; every surface must also exclude credentials, tokens, network
+  addresses, raw backend errors, and message bodies.
 - An audit operator is 1--128 ASCII bytes: the first byte is alphanumeric and every remaining byte is
   alphanumeric or one of `._@-`. Without `@`, it must not be endpoint-shaped. With exactly one `@`, the local
   side starts/ends alphanumeric and has no consecutive dots; the domain is a non-IP, non-rooted, valid
@@ -38,15 +73,30 @@ This file applies to `rocketmq-ai/rocketmq-mcp-control/`.
   explicit hash-number or uppercase-tag ticket references and decimal version tokens immediately following
   `release` or `version`.
   Apply both rules at OAuth,
-  request context, and v2 recovery boundaries; v1 recovery retains its legacy shape rules.
-- Normalize every reliable audit sink read, recovery, append, or timeout failure to `audit_unavailable`; never
-  expose a sink-provided code or message. A failed durable `started` append must precede and prevent session/RPC.
+  request context, and v2/v3 recovery boundaries; v1 recovery retains its legacy shape rules.
+- Normalize every reliable audit sink read, recovery, append, rotation, or timeout failure to `audit_unavailable`;
+  never expose a sink-provided code or message. A failed durable `started` append must precede and prevent
+  session/RPC. Never delete or rewrite a sealed audit segment.
+- Admission control runs after authorization and argument validation and before the `started` record. A call it
+  refuses gets `rate_limited`, writes no durable audit record, and reaches no session.
+- The emergency stop (`mutations.emergency_stop_file`) is looked up for every mutation call, after authorization
+  and before an argument is read. While the file exists, or cannot be looked up, the call gets
+  `mutation_disabled`, writes no durable audit record, and reaches no session. It only tightens: it never
+  enables what the configuration disables, the server never creates or removes the file, and nothing about it
+  is cached. `rocketmq_get_mutation_result` stays available, and discovery keeps reporting the configuration.
 - Each upsert accepts only 1--64 explicit broker names. All operations validate the full selected-cluster topology
   before target state RPC, keep plans sealed to one Admin session, and preserve exact-target post-read verification.
 - Targeted Topic upserts must treat the complete order-Topic KV as a sealed no-write guard. Never merge, put,
   or delete that global KV from the targeted path; reject any selected entry that is not already exact.
-- Request-key reuse is bounded and process-local; every invocation, including followers and cache hits, keeps
-  its own durable audit pair.
+- Request-key reuse is bounded and process-local; every mutation invocation, including followers and cache
+  hits, keeps its own durable audit pair. A mutation response carries the `invocation_id` of the call that
+  returns it, so a replayed response is never sent under the invocation of the call that produced it.
+- A dry run reports `plan_digest`, and an execution may name it with `expected_plan_digest`. Both sides compute
+  it with `plan_digest` in `src/tool_runtime/plan_binding.rs`, from the response a dry run returns and the
+  requested digest. Every execution path calls `PlanBinding::admit` after its preflight and before its first
+  write; a mismatch is `precondition_conflict` and writes nothing. Keep the digest out of durable audit records
+  and logs, keep values that move while a target only serves out of the plan, and leave
+  `mutations.require_plan_digest` off by default. It is a comparison, never an approval.
 - Prefer native async trait methods where object safety is not required; do not add `async_trait`.
 
 ## Development validation

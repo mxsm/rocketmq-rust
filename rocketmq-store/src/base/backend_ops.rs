@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base::backend_read_ops::BackendReadOps;
+use crate::base::message_store_reader::MessageStoreReader;
 use std::any::Any;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -164,7 +164,7 @@ impl PutMessagePreflight {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct BackendHealthSnapshot {
+pub(crate) struct StoreHealthIndicators {
     pub writeable: bool,
     pub last_flush_error: Option<&'static rocketmq_error::ErrorDescriptor>,
     pub os_page_cache_busy: bool,
@@ -176,7 +176,7 @@ pub(crate) struct BackendHealthSnapshot {
     pub ha_pending_oldest_wait_millis: u64,
 }
 
-impl Default for BackendHealthSnapshot {
+impl Default for StoreHealthIndicators {
     fn default() -> Self {
         Self {
             writeable: true,
@@ -192,24 +192,24 @@ impl Default for BackendHealthSnapshot {
     }
 }
 
-pub(crate) fn canonical_health_snapshot(
-    backend: BackendHealthSnapshot,
+pub(crate) fn build_store_health_snapshot(
+    health_indicators: StoreHealthIndicators,
     appended_watermark: i64,
     durable_watermark: i64,
 ) -> StoreHealthSnapshot {
     StoreHealthSnapshot {
-        writable: backend.writeable,
-        last_error: backend.last_flush_error,
-        page_cache_busy: backend.os_page_cache_busy,
-        transient_pool_deficient: backend.transient_store_pool_deficient,
+        writable: health_indicators.writeable,
+        last_error: health_indicators.last_flush_error,
+        page_cache_busy: health_indicators.os_page_cache_busy,
+        transient_pool_deficient: health_indicators.transient_store_pool_deficient,
         flush_backlog: FlushBacklog {
-            queue_depth: backend.sync_flush.queue_depth,
-            oldest_wait_millis: backend.sync_flush.oldest_wait_millis,
+            queue_depth: health_indicators.sync_flush.queue_depth,
+            oldest_wait_millis: health_indicators.sync_flush.oldest_wait_millis,
         },
-        dispatch_behind_bytes: backend.dispatch_behind_bytes,
-        shutdown: backend.shutdown,
-        replication_pending_count: backend.ha_pending_request_count,
-        replication_oldest_wait_millis: backend.ha_pending_oldest_wait_millis,
+        dispatch_behind_bytes: health_indicators.dispatch_behind_bytes,
+        shutdown: health_indicators.shutdown,
+        replication_pending_count: health_indicators.ha_pending_request_count,
+        replication_oldest_wait_millis: health_indicators.ha_pending_oldest_wait_millis,
         appended_watermark,
         durable_watermark,
     }
@@ -276,7 +276,7 @@ pub struct MessageStoreShutdownReport {
 /// Broker consumers must use the narrow capability ports. This adapter is
 /// crate-private and exists only to share concrete backend implementation.
 #[trait_variant::make(Send)]
-pub trait BackendOps: BackendReadOps + Send + Sync + 'static {
+pub trait BackendOps: MessageStoreReader + Send + Sync + 'static {
     /// Load previously stored messages.
     ///
     /// Returns true if successful, false otherwise.
@@ -493,7 +493,7 @@ pub trait BackendOps: BackendReadOps + Send + Sync + 'static {
     /// Get a compact send-path health snapshot for broker backpressure decisions.
     fn health_snapshot(&self) -> StoreHealthSnapshot {
         let ha_runtime_info = self.get_ha_runtime_info();
-        let backend = BackendHealthSnapshot {
+        let health_indicators = StoreHealthIndicators {
             writeable: self.get_running_flags().is_writeable(),
             last_flush_error: None,
             os_page_cache_busy: self.is_os_page_cache_busy(),
@@ -508,7 +508,7 @@ pub trait BackendOps: BackendReadOps + Send + Sync + 'static {
                 .as_ref()
                 .map_or(0, |info| info.pending_group_transfer_oldest_wait_millis),
         };
-        canonical_health_snapshot(backend, self.get_max_phy_offset(), self.get_flushed_where())
+        build_store_health_snapshot(health_indicators, self.get_max_phy_offset(), self.get_flushed_where())
     }
 
     /// Get lock time in milliseconds of the store.

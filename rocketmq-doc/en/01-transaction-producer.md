@@ -96,7 +96,11 @@ pub async fn main() -> ClientResult<()> {
     producer.start().await?;
 
     for _ in 0..10 {
-        let message = Message::with_tags(TOPIC, TAG, "Hello RocketMQ".as_bytes());
+        let message = Message::builder()
+            .topic(TOPIC)
+            .tags(TAG)
+            .body_slice(b"Hello RocketMQ")
+            .build()?;
         let send_result = producer
             .send_message_in_transaction::<()>(message, None)
             .await?;

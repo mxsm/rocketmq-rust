@@ -31,6 +31,7 @@ fn new_lifecycle(name: &str) -> ServiceLifecycle {
         probe_bind_addr: None,
         shutdown_timeout: Duration::from_secs(5),
         liveness_stale_after: Duration::from_secs(60),
+        drain_request_methods: rocketmq_runtime::DrainRequestMethods::PostOnly,
     })
 }
 

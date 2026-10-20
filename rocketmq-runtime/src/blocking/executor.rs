@@ -22,12 +22,17 @@ use std::time::Duration;
 use std::time::Instant;
 
 use dashmap::DashMap;
+use parking_lot::Mutex;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::task_tracker::TaskTrackerToken;
+use tokio_util::task::TaskTracker;
 
 use super::admission::GlobalBlockingBudget;
 use super::admission::GlobalBlockingPermit;
 use super::diagnostics::BlockingTaskMeta;
+use super::diagnostics::BlockingTaskTable;
 use super::BlockingExecutorSnapshot;
 use super::BlockingKind;
 use super::BlockingLane;
@@ -59,10 +64,32 @@ pub struct BlockingExecutor {
     lane: BlockingLane,
     budget: GlobalBlockingBudget,
     queue_permits: Arc<Semaphore>,
-    tasks: Arc<DashMap<BlockingTaskId, BlockingTaskMeta>>,
+    tasks: Arc<BlockingTaskTable>,
     next_task_id: Arc<AtomicU64>,
     rejected: Arc<AtomicU64>,
     admission: BlockingAdmission,
+    isolated: Option<Arc<IsolatedLifecycle>>,
+}
+
+#[derive(Debug, Default)]
+struct IsolatedLifecycle {
+    gate: Mutex<()>,
+    closed: CancellationToken,
+    tracker: TaskTracker,
+}
+
+/// Completion evidence for one isolated executor and all of its clones.
+///
+/// Running closures cannot be interrupted. An incomplete report can be
+/// followed by another [`BlockingExecutor::shutdown_until`] call.
+#[derive(Debug, Clone)]
+pub struct BlockingExecutorShutdownReport {
+    /// Whether every accepted submission and closure has released its ownership.
+    pub completed: bool,
+    /// Submissions or closures still owned at the observation time.
+    pub pending_operations: usize,
+    /// Queued and running blocking work at the observation time.
+    pub snapshot: BlockingExecutorSnapshot,
 }
 
 #[derive(Debug, Clone)]
@@ -177,7 +204,7 @@ enum AdmissionFailure {
 impl AdmissionFailure {
     fn into_error(self) -> RuntimeError {
         match self {
-            Self::ScopeClosed => RuntimeError::context_unavailable(crate::RuntimeOperation::BlockingQueueAdmission),
+            Self::ScopeClosed => RuntimeError::closed(crate::RuntimeOperation::BlockingQueueAdmission),
             Self::LeaseExpired | Self::QueueDeadlineExpired => {
                 RuntimeError::timed_out(crate::RuntimeOperation::BlockingQueueAdmission)
             }
@@ -288,6 +315,12 @@ where
     }
 }
 
+// A queued submission drops user captures before its lifecycle registration.
+struct BlockingSubmission<F> {
+    operation: F,
+    registration: Option<TaskTrackerToken>,
+}
+
 // Field order also governs cancellation before Tokio invokes the closure:
 // destroy user captures, return execution capacity, then remove diagnostics.
 struct BlockingWork<F> {
@@ -319,6 +352,7 @@ impl<F> BlockingWork<F> {
 struct BlockingCompletionGuard {
     tasks: Arc<DashMap<BlockingTaskId, BlockingTaskMeta>>,
     task_id: BlockingTaskId,
+    _isolated_registration: Option<TaskTrackerToken>,
 }
 
 impl Drop for BlockingCompletionGuard {
@@ -328,21 +362,41 @@ impl Drop for BlockingCompletionGuard {
 }
 
 impl BlockingExecutor {
-    /// Creates an isolated compatibility executor.
+    /// Creates an isolated executor through [`Self::new_isolated`].
     ///
-    /// Runtime composition roots use one shared budget through
-    /// `new_managed`; this constructor preserves the existing public test and
-    /// adapter surface by assigning the executor its own exact capacity.
+    /// # Errors
+    ///
+    /// Returns a contract violation when `policy` is invalid.
     pub fn new(policy: BlockingPoolPolicy, owner_group: TaskGroup) -> Result<Self, RuntimeContractViolation> {
+        Self::new_isolated(policy, owner_group)
+    }
+
+    /// Creates an isolated executor for tests and adapters.
+    ///
+    /// Production components use the managed lanes of a
+    /// [`ChildServiceContext`](crate::ChildServiceContext), which share one
+    /// global budget. This executor instead has its own exact capacity and task
+    /// table, outside the managed lanes and their diagnostics. `owner_group`
+    /// supplies its runtime and admission scope, and the executor is registered
+    /// with that group's tree: a closure still running when the tree's owner
+    /// assembles a shutdown report is counted in `blocking_still_running`, so
+    /// the report is not healthy while that work can still have side effects.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract violation when `policy` is invalid.
+    pub fn new_isolated(policy: BlockingPoolPolicy, owner_group: TaskGroup) -> Result<Self, RuntimeContractViolation> {
         policy.validate()?;
         let capacity = policy.max_concurrency;
-        Ok(Self::new_with_budget(
+        let mut executor = Self::new_with_budget(
             policy,
             BlockingLane::StorageIo,
             GlobalBlockingBudget::isolated(capacity),
             owner_group.runtime().clone(),
-        )
-        .scoped_to(owner_group))
+        );
+        executor.isolated = Some(Arc::new(IsolatedLifecycle::default()));
+        owner_group.register_isolated_blocking(&executor.tasks);
+        Ok(executor.scoped_to(owner_group))
     }
 
     pub(crate) fn new_managed(
@@ -367,10 +421,63 @@ impl BlockingExecutor {
             policy: Arc::new(policy),
             lane,
             budget,
-            tasks: Arc::new(DashMap::new()),
+            // Admission bounds the table to the lane's running and queued work.
+            tasks: Arc::new(DashMap::with_shard_amount(8)),
             next_task_id: Arc::new(AtomicU64::new(1)),
             rejected: Arc::new(AtomicU64::new(0)),
             admission: BlockingAdmission::Unscoped,
+            isolated: None,
+        }
+    }
+
+    /// Stops admission to this isolated executor and wakes its queued submissions.
+    ///
+    /// All clones share this gate. The supplied task group and other executors
+    /// remain open. Already admitted closures continue to own their permits.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unsupported-operation error for a managed lane; its service
+    /// context owns admission and shutdown.
+    pub fn stop_admission(&self) -> RuntimeResult<()> {
+        let lifecycle = self
+            .isolated
+            .as_ref()
+            .ok_or_else(|| RuntimeError::unsupported(crate::RuntimeOperation::ShutdownBlockingExecutor))?;
+        let _gate = lifecycle.gate.lock();
+        lifecycle.closed.cancel();
+        lifecycle.tracker.close();
+        Ok(())
+    }
+
+    /// Stops this isolated executor and asynchronously waits for owned work.
+    ///
+    /// The caller's deadline bounds waiting, not execution of already-running
+    /// closures. An incomplete report retains their counts. This method does
+    /// not block the calling thread or close the supplied task group.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unsupported-operation error for a managed lane.
+    pub async fn shutdown_until(&self, deadline: ShutdownDeadline) -> RuntimeResult<BlockingExecutorShutdownReport> {
+        self.stop_admission()?;
+        let lifecycle = self
+            .isolated
+            .as_ref()
+            .expect("stop_admission validates an isolated executor");
+        let _ = tokio::time::timeout_at(deadline.instant().into(), lifecycle.tracker.wait()).await;
+        let pending_operations = lifecycle.tracker.len();
+        Ok(BlockingExecutorShutdownReport {
+            completed: pending_operations == 0,
+            pending_operations,
+            snapshot: self.snapshot(),
+        })
+    }
+
+    async fn isolated_closed(&self) {
+        match &self.isolated {
+            Some(lifecycle) => lifecycle.closed.cancelled().await,
+            None => std::future::pending().await,
         }
     }
 
@@ -600,7 +707,28 @@ impl BlockingExecutor {
         );
         let queue_deadline = phase_deadline(submitted_at, self.policy.queue_timeout, operation_deadline);
 
-        let queue_permit = self.acquire_queue_permit(queue_deadline).await.map_err(|failure| {
+        let isolated_registration = if let Some(lifecycle) = &self.isolated {
+            let _gate = lifecycle.gate.lock();
+            if lifecycle.closed.is_cancelled() {
+                self.rejected.fetch_add(1, Ordering::Relaxed);
+                return Err(AdmissionFailure::ScopeClosed.into_error());
+            }
+            Some(lifecycle.tracker.token())
+        } else {
+            None
+        };
+
+        let submission = BlockingSubmission {
+            operation,
+            registration: isolated_registration,
+        };
+
+        let queue_permit = tokio::select! {
+            biased;
+            _ = self.isolated_closed() => Err(AdmissionFailure::ScopeClosed),
+            result = self.acquire_queue_permit(queue_deadline) => result,
+        }
+        .map_err(|failure| {
             self.rejected.fetch_add(1, Ordering::Relaxed);
             failure.into_error()
         })?;
@@ -618,11 +746,28 @@ impl BlockingExecutor {
         );
         let queued_task_guard = QueuedBlockingTaskGuard::new(self.tasks.clone(), task_id);
 
-        let permit = self.admit(queue_deadline).await.map_err(|failure| {
+        let permit = tokio::select! {
+            biased;
+            _ = self.isolated_closed() => Err(AdmissionFailure::ScopeClosed),
+            result = self.admit(queue_deadline) => result,
+        }
+        .map_err(|failure| {
             self.rejected.fetch_add(1, Ordering::Relaxed);
             failure.into_error()
         })?;
         drop(queue_permit);
+
+        // Serialize the final handoff with independent executor shutdown.
+        // No asynchronous wait occurs while this gate is held.
+        let _isolated_gate = self.isolated.as_ref().map(|lifecycle| lifecycle.gate.lock());
+        if self
+            .isolated
+            .as_ref()
+            .is_some_and(|lifecycle| lifecycle.closed.is_cancelled())
+        {
+            self.rejected.fetch_add(1, Ordering::Relaxed);
+            return Err(AdmissionFailure::ScopeClosed.into_error());
+        }
 
         let execution_deadline = self.admission.effective_deadline(caller_deadline);
         let current_operation_deadline = execution_deadline.map_or(operation_deadline, ShutdownDeadline::instant);
@@ -648,12 +793,17 @@ impl BlockingExecutor {
         }
         queued_task_guard.disarm();
 
+        let BlockingSubmission {
+            operation,
+            registration,
+        } = submission;
         let work = BlockingWork {
             operation,
             permit,
             completion: BlockingCompletionGuard {
                 tasks: self.tasks.clone(),
                 task_id,
+                _isolated_registration: registration,
             },
             execution_deadline,
         };

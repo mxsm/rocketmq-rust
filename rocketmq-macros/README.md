@@ -12,7 +12,6 @@ or remoting crates instead of depending on it directly.
 | Macro | Status | Purpose |
 | --- | --- | --- |
 | `RequestHeaderCodec` | Recommended | Generates typed map/source codecs, wire schema, validation, key resolution, compatibility adapters, and optional reviewed direct encoding. |
-| `RemotingSerializable` | Legacy utility | Emits an implementation for the old crate-local serialization trait; incompatible with the current protocol trait. See [Serialization](#serialization). |
 
 `RequestHeaderCodec` is the only supported request-header derive. It is the former V3 implementation under its
 permanent name and generates `HeaderCodec`, `CommandCustomHeader`, and `FromMap` implementations over one explicit
@@ -166,6 +165,11 @@ is present; otherwise it returns `None`. A present nested field still triggers a
 Non-optional flattened fields always decode and cannot use `presence = "any"`. Flattening cannot be combined
 with scalar keys, aliases, missing/default policies, `alias_conflict`, `java_type`, or `range`.
 
+A header without generic parameters decodes itself and every generated flattened child from one pass over the
+field source: each layer still sees every field, so results do not depend on the number of passes. A header
+with generic parameters, and any hand-written `HeaderCodec` used as a flattened child, reads the source once
+per layer instead.
+
 ### Validation and errors
 
 Prefer `HeaderCodec::encode_into`, `HeaderCodec::decode_from_map` / `decode_from_source`, or
@@ -247,11 +251,6 @@ dependency-name resolution.
 
 ## Serialization
 
-The exported `RemotingSerializable` derive still emits the historical form
-`impl crate::protocol::RemotingSerializable for Type { type Output = Self; }`. It does not preserve generics,
-resolve a protocol dependency, or generate Serde implementations. The current protocol serialization trait has
-no `Output` associated type and requires serialization methods, so this expansion is incompatible with it.
-
 For current protocol types, derive `serde::Serialize` and import
 `rocketmq_protocol::protocol::RemotingSerializable` to use `encode`, `serialize_json`, and
 `serialize_json_pretty`. The protocol crate supplies a blanket implementation for serializable types.
@@ -263,7 +262,6 @@ Likewise, owned deserializable types receive `RemotingDeserializable` through it
 | --- | --- |
 | [`src/lib.rs`](src/lib.rs) | Public derive entry points and shared parsing helpers. |
 | [`src/request_header_codec/`](src/request_header_codec/) | Canonical metadata, semantic model, validation, and code generation. |
-| [`src/remoting_serializable.rs`](src/remoting_serializable.rs) | Historical crate-local serialization expansion. |
 
 No Java checkout is accessed during Cargo builds. Java schemas, golden frames, header registry data, and
 benchmark inputs are owned by the protocol crate's

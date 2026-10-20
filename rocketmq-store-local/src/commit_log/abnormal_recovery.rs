@@ -67,9 +67,9 @@ pub enum AbnormalRecoveryObservation {
     },
 }
 
-/// Terminal outcome of driving one abnormal recovery segment.
+/// Terminal result of driving one abnormal recovery segment.
 #[derive(Debug, PartialEq, Eq)]
-pub enum AbnormalRecoverySegmentOutcome<E> {
+pub enum AbnormalRecoverySegmentResult<E> {
     /// Continue abnormal recovery at the next segment.
     ContinueNextSegment,
     /// Stop abnormal recovery at the current watermarks.
@@ -95,7 +95,7 @@ impl AbnormalRecoveryState {
         mut next_record: Next,
         on_segment_started: Started,
         mut observe: Observe,
-    ) -> AbnormalRecoverySegmentOutcome<E>
+    ) -> AbnormalRecoverySegmentResult<E>
     where
         Next: FnMut() -> Result<AbnormalRecoveryRecord<R>, E>,
         Started: FnOnce(),
@@ -106,20 +106,20 @@ impl AbnormalRecoveryState {
         }) {
             Some(AbnormalRecoveryAction::ContinueRecord) => {}
             Some(AbnormalRecoveryAction::ContinueNextSegment) => {
-                return AbnormalRecoverySegmentOutcome::ContinueNextSegment;
+                return AbnormalRecoverySegmentResult::ContinueNextSegment;
             }
             Some(AbnormalRecoveryAction::StopRecovery) => {
-                return AbnormalRecoverySegmentOutcome::StopRecovery;
+                return AbnormalRecoverySegmentResult::StopRecovery;
             }
-            Some(action) => return AbnormalRecoverySegmentOutcome::UnexpectedAction(action),
-            None => return AbnormalRecoverySegmentOutcome::StateFailed,
+            Some(action) => return AbnormalRecoverySegmentResult::UnexpectedAction(action),
+            None => return AbnormalRecoverySegmentResult::StateFailed,
         }
         on_segment_started();
 
         loop {
             let record = match next_record() {
                 Ok(record) => record,
-                Err(error) => return AbnormalRecoverySegmentOutcome::AdapterFailed(error),
+                Err(error) => return AbnormalRecoverySegmentResult::AdapterFailed(error),
             };
             match record {
                 AbnormalRecoveryRecord::Message {
@@ -137,7 +137,7 @@ impl AbnormalRecoveryState {
                         dispatch_gate,
                     }) {
                         Some(action) => action,
-                        None => return AbnormalRecoverySegmentOutcome::StateFailed,
+                        None => return AbnormalRecoverySegmentResult::StateFailed,
                     };
                     match action {
                         AbnormalRecoveryAction::DispatchMessage => {
@@ -146,16 +146,16 @@ impl AbnormalRecoveryState {
                         AbnormalRecoveryAction::SkipMessageDispatch => {
                             observe(AbnormalRecoveryObservation::SkipMessageDispatch, &mut record);
                         }
-                        action => return AbnormalRecoverySegmentOutcome::UnexpectedAction(action),
+                        action => return AbnormalRecoverySegmentResult::UnexpectedAction(action),
                     }
                 }
                 AbnormalRecoveryRecord::Blank { mut record } => match self.apply(AbnormalRecoveryEvent::Blank) {
                     Some(AbnormalRecoveryAction::NotifyFileEndAndContinueNextSegment) => {
                         observe(AbnormalRecoveryObservation::Blank, &mut record);
-                        return AbnormalRecoverySegmentOutcome::ContinueNextSegment;
+                        return AbnormalRecoverySegmentResult::ContinueNextSegment;
                     }
-                    Some(action) => return AbnormalRecoverySegmentOutcome::UnexpectedAction(action),
-                    None => return AbnormalRecoverySegmentOutcome::StateFailed,
+                    Some(action) => return AbnormalRecoverySegmentResult::UnexpectedAction(action),
+                    None => return AbnormalRecoverySegmentResult::StateFailed,
                 },
                 AbnormalRecoveryRecord::Invalid {
                     relative_start,
@@ -164,24 +164,24 @@ impl AbnormalRecoveryState {
                     observe(AbnormalRecoveryObservation::Invalid { relative_start }, &mut record);
                     match self.apply(AbnormalRecoveryEvent::InvalidRecord) {
                         Some(AbnormalRecoveryAction::ContinueNextSegment) => {
-                            return AbnormalRecoverySegmentOutcome::ContinueNextSegment;
+                            return AbnormalRecoverySegmentResult::ContinueNextSegment;
                         }
                         Some(AbnormalRecoveryAction::StopRecovery) => {
-                            return AbnormalRecoverySegmentOutcome::StopRecovery;
+                            return AbnormalRecoverySegmentResult::StopRecovery;
                         }
-                        Some(action) => return AbnormalRecoverySegmentOutcome::UnexpectedAction(action),
-                        None => return AbnormalRecoverySegmentOutcome::StateFailed,
+                        Some(action) => return AbnormalRecoverySegmentResult::UnexpectedAction(action),
+                        None => return AbnormalRecoverySegmentResult::StateFailed,
                     }
                 }
                 AbnormalRecoveryRecord::SourceEnded => match self.apply(AbnormalRecoveryEvent::SourceEnded) {
                     Some(AbnormalRecoveryAction::ContinueNextSegment) => {
-                        return AbnormalRecoverySegmentOutcome::ContinueNextSegment;
+                        return AbnormalRecoverySegmentResult::ContinueNextSegment;
                     }
                     Some(AbnormalRecoveryAction::StopRecovery) => {
-                        return AbnormalRecoverySegmentOutcome::StopRecovery;
+                        return AbnormalRecoverySegmentResult::StopRecovery;
                     }
-                    Some(action) => return AbnormalRecoverySegmentOutcome::UnexpectedAction(action),
-                    None => return AbnormalRecoverySegmentOutcome::StateFailed,
+                    Some(action) => return AbnormalRecoverySegmentResult::UnexpectedAction(action),
+                    None => return AbnormalRecoverySegmentResult::StateFailed,
                 },
             }
         }

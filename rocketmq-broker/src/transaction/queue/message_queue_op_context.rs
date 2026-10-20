@@ -132,7 +132,7 @@ impl MessageQueueOpContext {
         let length = msg.len();
         let mut state = self.state.lock();
         match self.pending_operations.try_push_data(msg, retained_bytes) {
-            rocketmq_runtime::QueuePushOutcome::Rejected { .. } => Err(crate::broker_error::broker_operation_failed(
+            rocketmq_runtime::QueueEnqueueStatus::Rejected { .. } => Err(crate::broker_error::broker_operation_failed(
                 "message_queue_push",
                 ResponseCode::SystemBusy as i32,
                 "transaction operation queue is full",

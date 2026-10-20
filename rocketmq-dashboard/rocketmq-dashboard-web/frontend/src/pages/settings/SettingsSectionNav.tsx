@@ -17,7 +17,7 @@ const sections = [
 
 export default function SettingsSectionNav({ activeSection, onSelect }: SettingsSectionNavProps) {
   return (
-    <nav className="settings-section-nav" aria-label="OPS settings sections">
+    <nav className="settings-section-nav" data-surface="panel" aria-label="OPS settings sections">
       {sections.map((section) => {
         const Icon = section.icon;
         const isActive = activeSection === section.id;

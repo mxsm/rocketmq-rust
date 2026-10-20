@@ -24,10 +24,10 @@ use rocketmq_protocol::protocol::header::polling_info_response_header::PollingIn
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use tracing::error;
 use tracing::warn;
 
@@ -107,7 +107,7 @@ impl Clone for PollingInfoProcessor {
 }
 
 impl RequestProcessor for PollingInfoProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.process_shared(request).await
     }
 }
@@ -116,7 +116,7 @@ impl PollingInfoProcessor {
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let original_opaque = request.original_identity().original_opaque();
         let command_factory = self.command_factory;
         let peer_label = request_peer_label(request.origin());
@@ -281,7 +281,7 @@ mod tests {
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
-    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::ResponseBodyKind;
     use rocketmq_transport::api::ServerConfig;
     use rocketmq_transport::api::TransportSecurity;
@@ -430,7 +430,7 @@ mod tests {
             .dispatch(None, request)
             .await
             .expect("embedded PollingInfo header-error response");
-        let EmbeddedDispatchOutcome::Reply(response) = outcome else {
+        let EmbeddedDispatchResult::Reply(response) = outcome else {
             panic!("PollingInfo header error must return a reply response");
         };
 

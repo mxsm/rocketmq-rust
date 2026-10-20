@@ -38,18 +38,18 @@ use rocketmq_security_api::AuthenticatedRequestContext;
 use rocketmq_security_api::AuthorizationDecision;
 use rocketmq_security_api::Principal;
 use rocketmq_security_api::RequestPolicy;
+use rocketmq_store::MessageStore;
 use rocketmq_store::MessageStoreConfig;
-use rocketmq_store::StorePorts;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
-use rocketmq_transport::api::EmbeddedDispatchOutcome;
-use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::EmbeddedDispatchResult;
 use rocketmq_transport::api::IngressRequestView;
 use rocketmq_transport::api::RejectRequestDecision;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrdering;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::ResponseObservation;
 use rocketmq_transport::api::TransportSecurity;
 use rocketmq_transport::test_support::EmbeddedRequestHarness;
@@ -61,7 +61,7 @@ use crate::config::broker_config::BrokerConfig;
 use crate::processor::dispatcher::BrokerProcessorType;
 use crate::transaction::queue::default_transactional_message_service::DefaultTransactionalMessageService;
 
-type TestAdminLeaf = BrokerProcessorType<StorePorts, DefaultTransactionalMessageService<StorePorts>>;
+type TestAdminLeaf = BrokerProcessorType<MessageStore, DefaultTransactionalMessageService<MessageStore>>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ObservedAdminOperation {
@@ -80,7 +80,7 @@ struct ObservedAdminProcessor {
 }
 
 impl RequestProcessor for ObservedAdminProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         if let Some(code) = self.mutate_command_code {
             request.command_mut().set_code_mut(code);
         }
@@ -93,8 +93,8 @@ impl RequestProcessor for ObservedAdminProcessor {
             .map(ToString::to_string);
         let outcome = RequestProcessor::process(&mut self.inner, request).await?;
         let response_code = match &outcome {
-            HandlerOutcome::Reply(plan) => Some(plan.response_code()),
-            HandlerOutcome::Deferred(_) | HandlerOutcome::NoReply(_) => None,
+            ResponseAction::Reply(plan) => Some(plan.response_code()),
+            ResponseAction::Deferred(_) | ResponseAction::NoReply(_) => None,
         };
         self.operations.lock().push(ObservedAdminOperation {
             original_code: original.original_code(),
@@ -259,8 +259,8 @@ fn create_user_request(username: &'static str, opaque: i32) -> RemotingCommand {
     request
 }
 
-fn expect_success_reply(outcome: EmbeddedDispatchOutcome, expected_body: bool) {
-    let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+fn expect_success_reply(outcome: EmbeddedDispatchResult, expected_body: bool) {
+    let EmbeddedDispatchResult::Reply(plan) = outcome else {
         panic!("Admin operation must produce one immediate response")
     };
     assert_eq!(ResponseCode::from(plan.response_code()), ResponseCode::Success);

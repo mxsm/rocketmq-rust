@@ -217,15 +217,6 @@ impl ClientMetadata {
 
         Some(mq_end_points_of_broker)
     }
-
-    /// Returns the shared mutable broker table for legacy integrations.
-    ///
-    /// New code should use [`Self::broker_addr_snapshot`], [`Self::broker_addresses`], and the
-    /// controlled update methods instead. This compatibility API will be removed in 2.0.0.
-    #[deprecated(note = "use broker_addr_snapshot, broker_addresses, or controlled update methods; removal in 2.0.0")]
-    pub fn broker_addr_table(&self) -> Arc<RwLock<BrokerAddressSnapshot>> {
-        self.broker_addr_table.clone()
-    }
 }
 
 #[cfg(test)]

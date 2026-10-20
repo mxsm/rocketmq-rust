@@ -14,6 +14,7 @@
 
 //! Loom model for ResourceBudgetTree permit acquisition and Drop recovery.
 
+use loom::sync::atomic::Ordering;
 use loom::sync::Arc;
 use loom::sync::Condvar;
 use loom::sync::Mutex;
@@ -155,6 +156,105 @@ fn task_completion_and_cancellation_release_every_permit() {
         assert_eq!(state.current_count, 0);
         assert_eq!(state.current_bytes, 0);
         assert_eq!(state.acquired_count, state.released_count);
+    });
+}
+
+/// One budget level with the atomic count and byte reservation used by
+/// `ResourceBudget`: each dimension is reserved with a read-modify-write and a
+/// failure rolls back what the request reserved.
+struct AtomicNode {
+    count: loom::sync::atomic::AtomicUsize,
+    bytes: loom::sync::atomic::AtomicUsize,
+    max_count: usize,
+    max_bytes: usize,
+}
+
+impl AtomicNode {
+    fn new(max_count: usize, max_bytes: usize) -> Self {
+        Self {
+            count: loom::sync::atomic::AtomicUsize::new(0),
+            bytes: loom::sync::atomic::AtomicUsize::new(0),
+            max_count,
+            max_bytes,
+        }
+    }
+
+    fn try_reserve(&self, bytes: usize) -> bool {
+        if !reserve_within(&self.count, 1, self.max_count) {
+            return false;
+        }
+        if !reserve_within(&self.bytes, bytes, self.max_bytes) {
+            self.count.fetch_sub(1, Ordering::AcqRel);
+            return false;
+        }
+        assert!(self.count.load(Ordering::Acquire) <= self.max_count);
+        assert!(self.bytes.load(Ordering::Acquire) <= self.max_bytes);
+        true
+    }
+
+    fn release(&self, bytes: usize) {
+        self.bytes.fetch_sub(bytes, Ordering::AcqRel);
+        self.count.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn reserve_within(counter: &loom::sync::atomic::AtomicUsize, amount: usize, limit: usize) -> bool {
+    let mut current = counter.load(Ordering::Acquire);
+    loop {
+        let Some(total) = current.checked_add(amount).filter(|total| *total <= limit) else {
+            return false;
+        };
+        match counter.compare_exchange_weak(current, total, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return true,
+            Err(actual) => current = actual,
+        }
+    }
+}
+
+/// Reserves the chain root first; a later level's failure rolls back the
+/// levels already reserved, as `ResourceBudget::try_acquire` does.
+fn try_reserve_chain(chain: &[&AtomicNode], bytes: usize) -> bool {
+    for (reserved, node) in chain.iter().enumerate() {
+        if !node.try_reserve(bytes) {
+            for earlier in &chain[..reserved] {
+                earlier.release(bytes);
+            }
+            return false;
+        }
+    }
+    true
+}
+
+#[test]
+fn atomic_chain_reservation_never_exceeds_a_level_and_conserves_capacity() {
+    loom::model(|| {
+        // Two connection budgets share a root that fits one permit's bytes.
+        let root = Arc::new(AtomicNode::new(2, 8));
+        let admitted = Arc::new(loom::sync::atomic::AtomicUsize::new(0));
+        let mut connections = Vec::with_capacity(2);
+        for _ in 0..2 {
+            let root = Arc::clone(&root);
+            let admitted = Arc::clone(&admitted);
+            connections.push(thread::spawn(move || {
+                let connection = AtomicNode::new(1, 8);
+                if try_reserve_chain(&[&root, &connection], 8) {
+                    admitted.fetch_add(1, Ordering::AcqRel);
+                    thread::yield_now();
+                    connection.release(8);
+                    root.release(8);
+                }
+            }));
+        }
+        for connection in connections {
+            connection.join().expect("connection permit owner");
+        }
+
+        assert!(
+            admitted.load(Ordering::Acquire) >= 1,
+            "an idle root admits the first request"
+        );
+        assert_eq!(root.count.load(Ordering::Acquire), 0);
+        assert_eq!(root.bytes.load(Ordering::Acquire), 0);
     });
 }
 

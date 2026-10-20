@@ -27,7 +27,7 @@ use tracing::warn;
 
 use crate::mapped_file::DefaultMappedFile;
 use crate::mapped_file::MappedFile;
-use crate::mapped_file::MappedFileDestroyOutcome;
+use crate::mapped_file::MappedFileRemovalStatus;
 
 /// Returns whether `modified` is at least `retention` older than `now`.
 ///
@@ -481,8 +481,8 @@ pub fn destroy_mapped_file_queue(files: &[Arc<DefaultMappedFile>], store_path: &
     let mut deleted_files = Vec::new();
     for mapped_file in files {
         match mapped_file.try_destroy(1000 * 3) {
-            MappedFileDestroyOutcome::NamespaceRemoved => deleted_files.push(mapped_file.clone()),
-            MappedFileDestroyOutcome::CleanupPending { ref_count } => {
+            MappedFileRemovalStatus::NamespaceRemoved => deleted_files.push(mapped_file.clone()),
+            MappedFileRemovalStatus::CleanupPending { ref_count } => {
                 warn!(
                     file_name = %mapped_file.get_file_name(),
                     ref_count,
@@ -490,7 +490,7 @@ pub fn destroy_mapped_file_queue(files: &[Arc<DefaultMappedFile>], store_path: &
                 );
                 break;
             }
-            MappedFileDestroyOutcome::DeleteFailed { kind, raw_os_error } => {
+            MappedFileRemovalStatus::DeleteFailed { kind, raw_os_error } => {
                 warn!(
                     file_name = %mapped_file.get_file_name(),
                     ?kind,

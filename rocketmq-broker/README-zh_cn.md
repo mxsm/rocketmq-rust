@@ -21,13 +21,13 @@
 
 ## 架构
 
-![Broker 配置、生命周期、请求分发与存储架构](../resources/broker-runtime-architecture.png)
+![Broker 配置、生命周期、请求分发与存储架构](../resources/rocketmq-broker-architecture.svg)
 
 二进制程序将配置解析为 `ValidatedBrokerConfig`，并将运行时和遥测句柄交给 `Builder`。
 `BrokerBootstrap` 按 `Configured`、`Initialized`、`Running` 顺序推进状态；启动失败时回滚已完成的启动工作。
 二进制程序通过 `boot_with_lifecycle` 发布就绪状态，并在进程共享的截止时间内关闭服务。
 
-普通和快速远程监听器与内嵌的 `ProxyBrokerFacade` 使用同一分发器。分发器执行已配置的安全检查，
+普通和快速远程监听器与 `EmbeddedBroker` 使用同一分发器。分发器执行已配置的安全检查，
 将请求路由到使用存储和元数据服务的处理器。NameServer 注册和可选的 Controller 协调独立于客户端请求分发。
 
 | 公共 API | 契约 |
@@ -36,7 +36,7 @@
 | `BrokerBootstrap::initialize` / `start` | 消费前一阶段的状态，返回下一阶段的状态或 `BrokerStartupError`。 |
 | `BrokerBootstrap<Running>` | 提供 `readiness()` 和消费自身的异步 `shutdown()`。 |
 | `BrokerBootstrap::boot_with_lifecycle` | 在 `ServiceLifecycle` 管理下运行，将生命周期和启动错误返回调用方。 |
-| `ProxyBrokerFacade` | 为内嵌代理提供 Broker 请求处理入口。 |
+| `EmbeddedBroker` | 管理内嵌 Broker 的生命周期并分发进程内请求。 |
 | `config` | 公开原始配置加载、Java properties 转换、类型化分区和校验后配置的 API。 |
 
 便捷方法 `boot()` 会记录启动错误并返回 `()`；需要处理错误的调用方应使用分阶段方法或 `boot_with_lifecycle`。
@@ -247,6 +247,8 @@ path = "/metrics"
 将 `ROCKETMQ_HEALTH_BIND_ADDR` 设为 `127.0.0.1:5558` 等地址，可启用共享生命周期 HTTP 监听器。
 `/readyz` 报告就绪状态，`/livez` 报告存活状态，返回 HTTP `200` 或 `503`。
 未设置该变量时不会启动探针监听器。该监听器还暴露可触发关闭的 `/drainz` 路由，需要限制其访问范围。
+`/drainz` 默认只接受 `POST`，对 `GET` 返回 `405`。由 Kubernetes `preStop.httpGet` 钩子调用时，需设置
+`ROCKETMQ_HEALTH_DRAIN_METHODS=GET,POST`；仓库提供的 chart 和清单已经设置。
 
 Broker 就绪检查涵盖普通和快速监听器、存储就绪状态、处理器安装情况、安全状态及注册就绪状态。
 存储就绪字段不保证当前角色或 Controller 租约允许生产者写入。
@@ -254,6 +256,24 @@ Broker 就绪检查涵盖普通和快速监听器、存储就绪状态、处理�
 信号处理和生命周期关闭共享截止时间，由 `ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS` 配置，
 默认 `45` 秒，允许范围为 `1..=300`。启动回滚和关闭报告跟踪所管理服务的完成情况；
 关闭结果不健康时，二进制程序返回非零退出码。
+
+### 事务维护
+
+事务检查和操作批处理使用注入的父任务组。
+取消会停止新操作的准入，即使批处理任务在首次轮询前就被中止。
+协作式关闭会关闭现有队列，等待活跃批次结束，并在 Store 仍可用时写入剩余的不满批次。
+队列退役对该服务实例永久生效。兼容构造函数仍然可用；生产组装路径提供所有者。
+参见[事务服务](src/transaction/queue/default_transactional_message_service.rs)。
+
+追加写入失败时，保留其消息体和资源预留。Broker 关闭报告保持不健康状态，
+并保留服务供检查或重试。共享的 Broker 截止时间限制排空过程；
+在截止时间中止不能证明数据已经持久化。
+[生命周期协调器](src/broker_runtime/lifecycle.rs) 在释放 Store 前保证上述顺序。
+
+事务指标持久化使用有界串行调度器，并显式配置 `MissedTickPolicy::Skip`：
+延迟的刷新不会补跑错过的触发，也不会与另一次刷新重叠。
+关闭时还会最终持久化一次已变更的指标。
+该使用方策略不改变运行时旧版调度器的默认行为。
 
 ## Feature Flags
 

@@ -20,8 +20,8 @@ use super::read_u16;
 use super::read_u32;
 use super::read_u64;
 use super::CodecViolation;
-use super::DecodeOutcome;
 use super::DecodedFrame;
+use super::LedgerFrameDecodeResult;
 use super::ACKNOWLEDGEMENT_FILE_LENGTH;
 use super::ACKNOWLEDGEMENT_SLOT_LENGTH;
 use super::COMMIT_SEAL_LENGTH;
@@ -372,7 +372,8 @@ pub(crate) fn validate_acknowledged_frame(
             field: "encoded_frame_length",
         });
     }
-    let DecodeOutcome::Frame(decoded) = decode_next_frame(encoded_frame, frame.sequence(), frame.log_generation())?
+    let LedgerFrameDecodeResult::Frame(decoded) =
+        decode_next_frame(encoded_frame, frame.sequence(), frame.log_generation())?
     else {
         return Err(CodecViolation::AcknowledgedFrameBindingMismatch {
             field: "encoded_frame_completeness",

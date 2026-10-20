@@ -37,7 +37,7 @@ use rocketmq_store_local::consume_queue::batch::INVALID_COMPACTED_OFFSET as INVA
 use rocketmq_store_local::consume_queue::root::drive_consume_queue_dispatch;
 use rocketmq_store_local::consume_queue::root::ConsumeQueueDispatchMetadata;
 use rocketmq_store_local::consume_queue::root::ConsumeQueueDispatchMode;
-use rocketmq_store_local::consume_queue::root::ConsumeQueueDispatchOutcome;
+use rocketmq_store_local::consume_queue::root::ConsumeQueueDispatchResult;
 use rocketmq_store_local::consume_queue::single::ConsumeQueueTimeBoundary;
 use rocketmq_store_local::mapped_file::ManagedLifecycleRuntime;
 use rocketmq_store_local::mapped_file::ManagedMappedFileQueueGeneration;
@@ -705,15 +705,15 @@ impl ConsumeQueueTrait for BatchConsumeQueue {
             },
         );
         match outcome {
-            ConsumeQueueDispatchOutcome::Appended { .. } => return,
-            ConsumeQueueDispatchOutcome::InvalidBatch => {
+            ConsumeQueueDispatchResult::Appended { .. } => return,
+            ConsumeQueueDispatchResult::InvalidBatch => {
                 warn!(
                     "unexpected dispatch request in batch consume queue topic={} queue={} commit_log_offset={}",
                     self.topic, self.queue_id, request.commit_log_offset
                 );
                 return;
             }
-            ConsumeQueueDispatchOutcome::NotWriteable | ConsumeQueueDispatchOutcome::Exhausted { .. } => {}
+            ConsumeQueueDispatchResult::NotWriteable | ConsumeQueueDispatchResult::Exhausted { .. } => {}
         }
 
         warn!(

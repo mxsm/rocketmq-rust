@@ -1013,7 +1013,6 @@ data:
     queue_capacity = 1024
     max_record_bytes = 16384
     queue_max_bytes = 1048576
-    history_limit = 100
 
     [cache]
     enabled = true
@@ -1498,6 +1497,7 @@ spec:
           args: ["--config", "/etc/rocketmq/proxy.toml"]
           env:
             - {name: ROCKETMQ_HEALTH_BIND_ADDR, value: "0.0.0.0:8088"}
+            - {name: ROCKETMQ_HEALTH_DRAIN_METHODS, value: "GET,POST"}
             - {name: ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS, value: "45"}
             - {name: ROCKETMQ_LIVENESS_STALE_SECONDS, value: "30"}
             - {name: ROCKETMQ_SECURITY_PROFILE, value: "secure-enforced"}
@@ -1641,6 +1641,7 @@ spec:
           args: ["--config", "/etc/rocketmq/mcp.toml", "--transport", "streamable-http"]
           env:
             - {name: ROCKETMQ_HEALTH_BIND_ADDR, value: "0.0.0.0:8088"}
+            - {name: ROCKETMQ_HEALTH_DRAIN_METHODS, value: "GET,POST"}
             - {name: ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS, value: "45"}
             - {name: ROCKETMQ_LIVENESS_STALE_SECONDS, value: "30"}
             - {name: ROCKETMQ_SECURITY_PROFILE, value: "secure-enforced"}
@@ -1808,6 +1809,7 @@ spec:
           args: ["--configFile", "/etc/rocketmq/broker.toml"]
           env:
             - {name: ROCKETMQ_HEALTH_BIND_ADDR, value: "0.0.0.0:8088"}
+            - {name: ROCKETMQ_HEALTH_DRAIN_METHODS, value: "GET,POST"}
             - {name: ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS, value: "45"}
             - {name: ROCKETMQ_LIVENESS_STALE_SECONDS, value: "30"}
             - {name: ROCKETMQ_SECURITY_PROFILE, value: "secure-enforced"}
@@ -2006,6 +2008,7 @@ spec:
           args: ["--configFile", "/etc/rocketmq/namesrv.toml"]
           env:
             - {name: ROCKETMQ_HEALTH_BIND_ADDR, value: "0.0.0.0:8088"}
+            - {name: ROCKETMQ_HEALTH_DRAIN_METHODS, value: "GET,POST"}
             - {name: ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS, value: "45"}
             - {name: ROCKETMQ_LIVENESS_STALE_SECONDS, value: "30"}
             - {name: ROCKETMQ_SECURITY_PROFILE, value: "secure-enforced"}
@@ -2194,6 +2197,7 @@ spec:
           args: ["--config-file", "/etc/rocketmq/controller-config/$(POD_NAME).toml"]
           env:
             - {name: ROCKETMQ_HEALTH_BIND_ADDR, value: "0.0.0.0:8088"}
+            - {name: ROCKETMQ_HEALTH_DRAIN_METHODS, value: "GET,POST"}
             - {name: ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS, value: "45"}
             - {name: ROCKETMQ_LIVENESS_STALE_SECONDS, value: "30"}
             - {name: ROCKETMQ_SECURITY_PROFILE, value: "secure-enforced"}

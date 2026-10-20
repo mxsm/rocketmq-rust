@@ -22,7 +22,6 @@ use rocketmq_model::common::mix_all::MASTER_ID;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::header::namesrv::brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_runtime::tokio_lock::RocketMQTokioRwLock;
 use rocketmq_store::BrokerAdminStore;
 use tracing::error;
 use tracing::info;
@@ -32,7 +31,7 @@ use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 
 #[derive(Clone)]
 pub struct NotifyMinBrokerChangeIdHandler {
-    lock: Arc<RocketMQTokioRwLock<MinBrokerIngroup>>,
+    lock: Arc<tokio::sync::RwLock<MinBrokerIngroup>>,
 }
 
 #[derive(Clone)]
@@ -53,7 +52,7 @@ impl MinBrokerIngroup {
 impl NotifyMinBrokerChangeIdHandler {
     pub fn new() -> Self {
         Self {
-            lock: Arc::new(RocketMQTokioRwLock::new(MinBrokerIngroup::new())),
+            lock: Arc::new(tokio::sync::RwLock::new(MinBrokerIngroup::new())),
         }
     }
 
@@ -91,7 +90,10 @@ impl NotifyMinBrokerChangeIdHandler {
         let broker_config = broker_runtime_inner.broker_config();
 
         if broker_config.enable_slave_acting_master && broker_config.broker_identity.broker_id != MASTER_ID {
-            if self.lock.try_write_timeout(Duration::from_millis(3000)).await.is_some() {
+            if tokio::time::timeout(Duration::from_millis(3000), self.lock.write())
+                .await
+                .is_ok()
+            {
                 if let Some(min_broker_id) = change_header.min_broker_id {
                     if min_broker_id != broker_runtime_inner.get_min_broker_id_in_group() {
                         // on min broker change

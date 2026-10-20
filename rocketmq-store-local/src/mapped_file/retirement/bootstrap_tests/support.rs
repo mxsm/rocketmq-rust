@@ -17,7 +17,7 @@ use crate::mapped_file::retirement::codec::decode_acknowledgement_slot;
 use crate::mapped_file::retirement::codec::decode_commit_seal;
 use crate::mapped_file::retirement::codec::decode_next_frame;
 use crate::mapped_file::retirement::codec::AcknowledgementSlotState;
-use crate::mapped_file::retirement::codec::DecodeOutcome;
+use crate::mapped_file::retirement::codec::LedgerFrameDecodeResult;
 use crate::mapped_file::retirement::codec::LedgerRecord;
 use crate::mapped_file::retirement::identity::StoreUuid;
 use crate::mapped_file::retirement::sidecar::LifecycleSnapshot;
@@ -101,7 +101,8 @@ pub(super) fn switch_plan() -> GenerationSwitchPlan {
 }
 
 pub(super) fn decode_record(unit: &PlannedAcknowledgedUnit, generation: u64) -> LedgerRecord {
-    let DecodeOutcome::Frame(frame) = decode_next_frame(&unit.frame, unit.sequence, generation).expect("frame decodes")
+    let LedgerFrameDecodeResult::Frame(frame) =
+        decode_next_frame(&unit.frame, unit.sequence, generation).expect("frame decodes")
     else {
         panic!("planned frame must be complete");
     };

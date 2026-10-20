@@ -8,7 +8,7 @@ Consumers import processor and transport types directly from `rocketmq_transport
 
 ```rust
 use rocketmq_transport::api::{
-    HandlerOutcome, RemotingRequest, RequestProcessor, RemotingResponse,
+    ResponseAction, RemotingRequest, RequestProcessor, RemotingResponse,
 };
 ```
 
@@ -22,8 +22,8 @@ impl RequestProcessor for Processor {
     async fn process(
         &mut self,
         _request: &mut RemotingRequest,
-    ) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
-        Ok(HandlerOutcome::Reply(RemotingResponse::empty_response(0)))
+    ) -> Result<ResponseAction, rocketmq_error::SharedError> {
+        Ok(ResponseAction::Reply(RemotingResponse::empty_response(0)))
     }
 }
 ```
@@ -32,16 +32,16 @@ The transport captures immutable ingress identity, applies admission and securit
 
 ## Response and deferred ownership
 
-- `HandlerOutcome::Reply` transfers one affine `RemotingResponse` to the transport.
-- `HandlerOutcome::Deferred` transfers a registered deferred response owner.
-- `HandlerOutcome::NoReply` records an explicit protocol-level non-response reason.
+- `ResponseAction::Reply` transfers one affine `RemotingResponse` to the transport.
+- `ResponseAction::Deferred` transfers a registered deferred response owner.
+- `ResponseAction::NoReply` records an explicit protocol-level non-response reason.
 - One-way requests never gain response-write authority.
 - `RemotingResponse` retains byte segments and file leases until writer completion.
 - Session shutdown cancels and awaits owned request, deferred, and writer work.
 
 ## Embedded dispatch
 
-Broker/Proxy in-process calls use `AuthorizedCommandDispatcher::dispatch_embedded` or `dispatch_embedded_wait_response`. Embedded callers receive `EmbeddedDispatchOutcome` and never reconstruct a network channel or materialize a compatibility command facade.
+Broker/Proxy in-process calls use `AuthorizedCommandDispatcher::dispatch_embedded` or `dispatch_embedded_wait_response`. Embedded callers receive `EmbeddedDispatchResult` and never reconstruct a network channel or materialize a compatibility command facade.
 
 ## Naming policy
 

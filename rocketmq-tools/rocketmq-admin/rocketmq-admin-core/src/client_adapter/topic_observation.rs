@@ -46,7 +46,7 @@ use crate::core::topic_observation::TOPIC_STATS_TRUNCATED_WARNING;
 use crate::core::AdminError;
 use crate::core::AdminResult;
 
-type BrokerTarget = (String, CheetahString);
+pub(crate) type BrokerTarget = (String, CheetahString);
 
 #[allow(async_fn_in_trait)]
 trait TopicObservationSource: Send {
@@ -208,16 +208,16 @@ async fn resolve_topic_targets<S: TopicObservationSource>(
     let cluster_info = source
         .cluster_info()
         .await
-        .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
     let route = source
         .topic_route(topic)
         .await
-        .map_err(|error| backend_error("examine_topic_route_info", error))?
+        .map_err(|source| promote_to_admin_error("examine_topic_route_info", source))?
         .ok_or_else(|| AdminError::topic_not_found(topic))?;
     selected_cluster_route_masters(&cluster_info, &route, cluster, failure_source)
 }
 
-fn selected_cluster_route_masters(
+pub(crate) fn selected_cluster_route_masters(
     cluster_info: &ClusterInfo,
     route: &TopicRouteData,
     cluster: &str,
@@ -385,7 +385,11 @@ fn invalid_response_failure(source: AdminQuerySource, broker_name: &str) -> Admi
     AdminSourceFailure::new(source, AdminQueryFailureCode::InvalidResponse, false, broker_name)
 }
 
-fn source_failure(source: AdminQuerySource, broker_name: &str, error: &CanonicalError) -> AdminSourceFailure {
+pub(crate) fn source_failure(
+    source: AdminQuerySource,
+    broker_name: &str,
+    error: &CanonicalError,
+) -> AdminSourceFailure {
     let code = match crate::canonical_http_status(error) {
         401 | 403 => AdminQueryFailureCode::PermissionDenied,
         404 => AdminQueryFailureCode::NotFound,
@@ -397,8 +401,14 @@ fn source_failure(source: AdminQuerySource, broker_name: &str, error: &Canonical
     AdminSourceFailure::new(source, code, crate::canonical_is_retryable(error), broker_name)
 }
 
-fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
-    AdminError::from_error(operation, error.into_canonical_error())
+/// Promotes a failure while preserving canonical metadata and typed sources.
+///
+/// The operation name labels the Admin error without replacing canonical context.
+pub(crate) fn promote_to_admin_error(
+    operation_name: &'static str,
+    source: impl crate::IntoCanonicalError,
+) -> AdminError {
+    AdminError::from_error(operation_name, source.into_canonical_error())
 }
 
 #[cfg(test)]

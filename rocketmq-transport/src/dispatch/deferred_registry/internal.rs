@@ -40,8 +40,8 @@ use super::DeferredExpiry;
 use super::DeferredId;
 use super::DeferredParts;
 use super::DeferredRegistry;
-use super::DeferredRegistryShutdownOutcome;
 use super::DeferredRegistryShutdownStats;
+use super::DeferredRegistryShutdownStatus;
 use super::DeferredRequest;
 use super::DeferredResponder;
 use super::DeferredRetainedSizeParts;
@@ -58,8 +58,8 @@ use crate::dispatch::deferred_response::DeferredSystemCloseReason;
 use crate::dispatch::deferred_session_cleanup::CleanupEnrollment;
 use crate::dispatch::deferred_session_cleanup::RegistryCleanupTarget;
 use crate::dispatch::deferred_session_cleanup::TargetRecord;
-use crate::dispatch::ResponseStateOutcome;
 use crate::dispatch::ResponseStateSnapshot;
+use crate::dispatch::ResponseTransitionResult;
 
 const FIRST_DEFERRED_ID: u64 = 1;
 const EXHAUSTED_DEFERRED_ID: u64 = u64::MAX;
@@ -108,8 +108,8 @@ where
             return Err(DeferredCommitError::lifecycle(kind));
         }
         match transaction.request().register_response() {
-            Ok(ResponseStateOutcome::Applied(())) => {}
-            Ok(ResponseStateOutcome::AlreadyCompleted { .. }) => {
+            Ok(ResponseTransitionResult::Applied(())) => {}
+            Ok(ResponseTransitionResult::AlreadyCompleted { .. }) => {
                 return Err(commit_race_error(&control, expiry, &response_state)
                     .unwrap_or_else(DeferredCommitError::response_state));
             }
@@ -598,13 +598,13 @@ where
         removed_waiters
     }
 
-    pub(super) fn shutdown(&self) -> DeferredRegistryShutdownOutcome {
+    pub(super) fn shutdown(&self) -> DeferredRegistryShutdownStatus {
         let batch = {
             let mut state = self.state.lock();
             match state.lifecycle {
                 RegistryLifecycle::Open => state.lifecycle = RegistryLifecycle::Closing,
-                RegistryLifecycle::Closing => return DeferredRegistryShutdownOutcome::InProgress,
-                RegistryLifecycle::Closed => return DeferredRegistryShutdownOutcome::AlreadyClosed,
+                RegistryLifecycle::Closing => return DeferredRegistryShutdownStatus::InProgress,
+                RegistryLifecycle::Closed => return DeferredRegistryShutdownStatus::AlreadyClosed,
             }
             let mut batch = DetachedBatch::default();
             for (_, entry) in std::mem::take(&mut state.primary) {
@@ -624,7 +624,7 @@ where
         let completion = RegistryShutdownCompletion::new(self);
         let stats = batch.finish();
         completion.complete();
-        DeferredRegistryShutdownOutcome::Completed(stats)
+        DeferredRegistryShutdownStatus::Completed(stats)
     }
 
     pub(super) fn start_claim(
@@ -697,10 +697,10 @@ where
                         }
                     };
                     match claim_result {
-                        Ok(ResponseStateOutcome::Applied(())) => {
+                        Ok(ResponseTransitionResult::Applied(())) => {
                             ClaimStart::Claimed(take_claim_locked(self, &mut state, id, reason))
                         }
-                        Ok(ResponseStateOutcome::AlreadyCompleted { .. }) => {
+                        Ok(ResponseTransitionResult::AlreadyCompleted { .. }) => {
                             removed = remove_entry(&mut state, id);
                             ClaimStart::Rejected(DeferredClaimRejection::AlreadyCompleted)
                         }
@@ -918,6 +918,16 @@ where
     markers: Vec<(Arc<ClaimMarker<R>>, CleanupCause)>,
 }
 
+struct DetachedTicketNotifications(Vec<(Arc<ClaimTicket>, TicketResolution)>);
+
+impl Drop for DetachedTicketNotifications {
+    fn drop(&mut self) {
+        for (ticket, resolution) in self.0.drain(..) {
+            ticket.publish(resolution);
+        }
+    }
+}
+
 impl<R> Default for DetachedBatch<R>
 where
     R: Send + 'static,
@@ -961,8 +971,9 @@ where
 
     pub(super) fn finish(mut self) -> DeferredRegistryShutdownStats {
         let mut stats = DeferredRegistryShutdownStats::default();
-        for (ticket, resolution) in self.tickets.drain(..) {
-            ticket.publish(resolution);
+        // Publish after cleanup, even if a retained payload panics on drop.
+        let notifications = DetachedTicketNotifications(std::mem::take(&mut self.tickets));
+        for _ in &notifications.0 {
             stats.record_ticket();
         }
         for (entry, entry_cause) in &mut self.entries {
@@ -980,6 +991,7 @@ where
         }
         drop(self.markers);
         drop(self.entries);
+        drop(notifications);
         stats
     }
 }
@@ -988,7 +1000,7 @@ impl<R> Entry<R> {
     fn terminalize_response(
         &mut self,
         cause: &CleanupCause,
-    ) -> Result<ResponseStateOutcome, crate::contract::TransportContractViolation> {
+    ) -> Result<ResponseTransitionResult, crate::contract::TransportContractViolation> {
         match &mut self.phase {
             EntryPhase::Prepared(request) | EntryPhase::Active(request) => match cause {
                 CleanupCause::SessionClosed => request
@@ -1021,12 +1033,12 @@ impl<R> Entry<R> {
 
 fn record_terminalization(
     stats: &mut DeferredRegistryShutdownStats,
-    result: Result<ResponseStateOutcome, crate::contract::TransportContractViolation>,
+    result: Result<ResponseTransitionResult, crate::contract::TransportContractViolation>,
     snapshot: ResponseStateSnapshot,
 ) {
     match result {
-        Ok(ResponseStateOutcome::Applied(())) => stats.record_terminalized(),
-        Ok(ResponseStateOutcome::AlreadyCompleted { .. }) => {}
+        Ok(ResponseTransitionResult::Applied(())) => stats.record_terminalized(),
+        Ok(ResponseTransitionResult::AlreadyCompleted { .. }) => {}
         Err(_) if snapshot == ResponseStateSnapshot::Sending => stats.record_in_progress(),
         Err(_) => stats.record_invariant_failure(),
     }
@@ -1034,12 +1046,12 @@ fn record_terminalization(
 
 fn record_state_terminalization(
     stats: &mut DeferredRegistryShutdownStats,
-    result: Result<ResponseStateOutcome, crate::contract::TransportContractViolation>,
+    result: Result<ResponseTransitionResult, crate::contract::TransportContractViolation>,
     snapshot: ResponseStateSnapshot,
 ) {
     match result {
-        Ok(ResponseStateOutcome::Applied(())) => stats.record_terminalized(),
-        Ok(ResponseStateOutcome::AlreadyCompleted { .. }) => {}
+        Ok(ResponseTransitionResult::Applied(())) => stats.record_terminalized(),
+        Ok(ResponseTransitionResult::AlreadyCompleted { .. }) => {}
         Err(_) if snapshot == ResponseStateSnapshot::Sending => stats.record_in_progress(),
         Err(_) => stats.record_invariant_failure(),
     }

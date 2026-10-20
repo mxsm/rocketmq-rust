@@ -48,7 +48,7 @@ pub use bootstrap::ProxyRuntimeBuilder;
 #[cfg(feature = "cluster-mode")]
 pub use cluster::ClusterClient;
 #[cfg(feature = "cluster-mode")]
-pub use cluster::RocketmqClusterClient;
+pub use cluster::ClusterCommandGateway;
 #[cfg(feature = "cluster-mode")]
 pub use config::ClusterConfig;
 pub use config::GrpcConfig;
@@ -81,14 +81,14 @@ pub use grpc::server::ProxyGrpcServerShutdownReport;
 pub use grpc::service::ProxyHousekeepingRunReport;
 pub use grpc::ProxyGrpcService;
 #[cfg(feature = "local-mode")]
-pub use local::LocalBrokerFacadeClient;
+pub use local::LocalBrokerCommandGateway;
 #[cfg(feature = "local-mode")]
-pub use local::LocalRemotingBackend;
+pub use local::LocalBrokerRemotingAdapter;
 pub use observability::ProxyHook;
 pub use observability::ProxyHookChain;
 pub use observability::ProxyMetrics;
 pub use observability::ProxyMetricsSnapshot;
-pub use observability::ProxyRequestOutcome;
+pub use observability::ProxyRequestCompletion;
 pub use observability::ProxyRpcMetricsSnapshot;
 pub use processor::AckMessagePlan;
 pub use processor::AckMessageRequest;

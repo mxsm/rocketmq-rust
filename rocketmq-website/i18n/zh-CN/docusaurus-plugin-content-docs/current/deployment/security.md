@@ -4,6 +4,8 @@ title: "配置部署安全"
 
 把每条连接分别作为部署边界：客户端到 NameServer、客户端到 Broker、客户端到 Proxy、Proxy 到 Broker，以及 Controller 的管理连接与 peer 连接。为每条暴露路径选择加密方式、认证身份和操作权限。权限计算与提供者语义见[安全设计](../architecture/security.md)。
 
+证书准备、各组件 TLS 配置、Kubernetes Secret 创建和轮换参阅 [TLS 与 mTLS 指南](tls.md)。指南也列出了当前可执行程序未启用出站 TLS 的路径。
+
 ## 盘点实际监听入口
 
 | 路径 | 配置责任 | 观察结果 |

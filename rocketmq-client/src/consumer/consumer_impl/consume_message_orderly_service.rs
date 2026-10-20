@@ -40,7 +40,6 @@ use rocketmq_protocol::protocol::body::cm_result::CMResult;
 use rocketmq_protocol::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
-use rocketmq_runtime::tokio_lock::RocketMQTokioMutex;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use serde::Serialize;
 use std::sync::LazyLock;
@@ -58,7 +57,7 @@ use crate::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
 use crate::consumer::listener::consume_return_type::ConsumeReturnType;
 use crate::consumer::listener::message_listener_orderly::ArcMessageListenerOrderly;
 use crate::consumer::message_queue_lock::MessageQueueLock;
-use crate::consumer::mq_consumer_inner::MQConsumerInnerLocal;
+use crate::consumer::mq_consumer_inner::MQConsumerInner;
 use crate::hook::consume_message_context::ConsumeMessageContext;
 use crate::runtime::schedule_client_fixed_delay_task_with_context;
 use crate::runtime::spawn_client_blocking_io_with_context;
@@ -83,7 +82,7 @@ pub struct ConsumeMessageOrderlyService {
     pub(crate) consumer_group: CheetahString,
     pub(crate) message_listener: ArcMessageListenerOrderly,
     pub(crate) stopped: Arc<AtomicBool>,
-    pub(crate) global_lock: Arc<RocketMQTokioMutex<()>>,
+    pub(crate) global_lock: Arc<tokio::sync::Mutex<()>>,
     pub(crate) message_queue_lock: MessageQueueLock,
     pub(crate) lock_periodic_task_handle: Arc<Mutex<Option<OrderlyTaskHandle>>>,
     pub(crate) active_tasks: Arc<AtomicUsize>,
@@ -252,7 +251,6 @@ impl ConsumeMessageOrderlyService {
             "rocketmq-client-orderly-lock-periodic",
             initial_delay,
             period,
-            Duration::from_secs(5),
             move || {
                 let service = this.clone();
                 let stopped = stopped.clone();
@@ -1491,21 +1489,6 @@ mod tests {
 
         service.update_core_pool_size(0);
         assert_eq!(service.get_core_pool_size(), 4);
-    }
-
-    #[test]
-    fn inc_and_dec_core_pool_size_are_noops_like_java() {
-        let config = ConsumerConfig {
-            consume_thread_min: 2,
-            consume_thread_max: 5,
-            ..Default::default()
-        };
-        let service = new_service_with_config(config);
-
-        service.inc_core_pool_size();
-        service.dec_core_pool_size();
-
-        assert_eq!(service.get_core_pool_size(), 2);
     }
 
     #[test]

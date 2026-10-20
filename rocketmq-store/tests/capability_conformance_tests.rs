@@ -22,13 +22,13 @@ use rocketmq_store::AppendMessageStatus;
 use rocketmq_store::BrokerStorePort;
 use rocketmq_store::MessageReadRequest;
 use rocketmq_store::MessageReadResult;
+use rocketmq_store::MessageStore;
 use rocketmq_store::MessageStoreHealthCapability;
 use rocketmq_store::MessageStoreReadCapability;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::StoreComponent;
 use rocketmq_store::StoreHealthSnapshot;
-use rocketmq_store::StorePorts;
 use rocketmq_store_api::AppendStatus;
 use rocketmq_store_api::Durability;
 use rocketmq_store_api::GetStatus;
@@ -209,7 +209,7 @@ fn every_backend_append_status_maps_exhaustively_without_collapsing() {
 fn canonical_store_descriptors_have_unique_codes() {
     let descriptors = [
         &rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED,
-        &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+        &rocketmq_error::STORAGE_UNAVAILABLE,
         &rocketmq_error::STORAGE_REQUEST_INVALID,
         &rocketmq_error::STORAGE_MAPPED_FILE_NOT_FOUND,
         &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
@@ -265,17 +265,17 @@ fn store_health_error_preserves_canonical_code_and_component() {
             "storage.read.failed",
         ),
         (
-            &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+            &rocketmq_error::STORAGE_UNAVAILABLE,
             StoreComponent::TieredStore,
             "storage.backend.unavailable",
         ),
         (
-            &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+            &rocketmq_error::STORAGE_UNAVAILABLE,
             StoreComponent::HighAvailability,
             "storage.backend.unavailable",
         ),
         (
-            &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+            &rocketmq_error::STORAGE_UNAVAILABLE,
             StoreComponent::DLedger,
             "storage.backend.unavailable",
         ),
@@ -306,17 +306,14 @@ fn store_health_error_preserves_canonical_code_and_component() {
 fn store_health_exposes_a_backend_neutral_canonical_projection() {
     let snapshot = StoreHealthSnapshot {
         writable: false,
-        last_error: Some(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE),
+        last_error: Some(&rocketmq_error::STORAGE_UNAVAILABLE),
         appended_watermark: 80,
         durable_watermark: 48,
         ..StoreHealthSnapshot::default()
     };
 
     assert!(!snapshot.writable());
-    assert_eq!(
-        Some(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE),
-        snapshot.last_error()
-    );
+    assert_eq!(Some(&rocketmq_error::STORAGE_UNAVAILABLE), snapshot.last_error());
     assert_eq!(80, snapshot.appended_watermark());
     assert_eq!(48, snapshot.durable_watermark());
 }
@@ -333,7 +330,7 @@ where
 
 #[test]
 fn canonical_capability_compile_fixture_is_monomorphized() {
-    assert_capability_contract::<StorePorts>();
+    assert_capability_contract::<MessageStore>();
 }
 
 #[tokio::test]

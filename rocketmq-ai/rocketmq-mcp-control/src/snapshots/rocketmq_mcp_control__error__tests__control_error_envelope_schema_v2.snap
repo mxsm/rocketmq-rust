@@ -18,6 +18,14 @@ expression: "schemars::schema_for!(ControlErrorEnvelope)"
     },
     "schema_version": {
       "$ref": "#/$defs/ControlErrorSchemaVersion"
+    },
+    "violations": {
+      "description": "Arguments of an `invalid_argument` call that break the Tool input schema; omitted when none is located.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ArgumentViolation"
+      },
+      "maxItems": 3
     }
   },
   "additionalProperties": false,
@@ -28,6 +36,24 @@ expression: "schemars::schema_for!(ControlErrorEnvelope)"
     "retryable"
   ],
   "$defs": {
+    "ArgumentViolation": {
+      "description": "One argument that broke the Tool input schema: where it is and which kind of rule it broke.\n\nIt never repeats a value that was sent, and its path uses only names the input schema declares.",
+      "type": "object",
+      "properties": {
+        "constraint": {
+          "$ref": "#/$defs/ViolationConstraint"
+        },
+        "path": {
+          "description": "JSON Pointer to the argument; `*` stands for a property the input schema does not declare.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "constraint"
+      ]
+    },
     "ControlErrorCode": {
       "type": "string",
       "enum": [
@@ -39,6 +65,7 @@ expression: "schemars::schema_for!(ControlErrorEnvelope)"
         "operation_not_allowed",
         "mutation_disabled",
         "operation_unavailable",
+        "rate_limited",
         "confirmation_required",
         "invalid_argument",
         "audit_unavailable",
@@ -54,6 +81,22 @@ expression: "schemars::schema_for!(ControlErrorEnvelope)"
     "ControlErrorSchemaVersion": {
       "type": "string",
       "const": "rocketmq-mcp-control.error.v2"
+    },
+    "ViolationConstraint": {
+      "description": "The closed set of rule kinds that an argument violation reports.",
+      "type": "string",
+      "enum": [
+        "required",
+        "type",
+        "min_length",
+        "max_length",
+        "minimum",
+        "maximum",
+        "enum",
+        "pattern",
+        "additional_property",
+        "other"
+      ]
     }
   }
 }

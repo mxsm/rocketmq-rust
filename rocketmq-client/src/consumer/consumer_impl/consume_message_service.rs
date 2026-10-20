@@ -84,26 +84,6 @@ where
         }
     }
 
-    pub fn inc_core_pool_size(&self) {
-        if let Some(consume_message_concurrently_service) = &self.consume_message_concurrently_service {
-            consume_message_concurrently_service.inc_core_pool_size();
-        }
-
-        if let Some(consume_message_orderly_service) = &self.consume_message_orderly_service {
-            consume_message_orderly_service.inc_core_pool_size();
-        }
-    }
-
-    pub fn dec_core_pool_size(&self) {
-        if let Some(consume_message_concurrently_service) = &self.consume_message_concurrently_service {
-            consume_message_concurrently_service.dec_core_pool_size();
-        }
-
-        if let Some(consume_message_orderly_service) = &self.consume_message_orderly_service {
-            consume_message_orderly_service.dec_core_pool_size();
-        }
-    }
-
     pub fn get_core_pool_size(&self) -> usize {
         if let Some(consume_message_concurrently_service) = &self.consume_message_concurrently_service {
             return consume_message_concurrently_service.get_core_pool_size();
@@ -232,26 +212,6 @@ where
         }
     }
 
-    pub fn inc_core_pool_size(&self) {
-        if let Some(consume_message_pop_concurrently_service) = &self.consume_message_pop_concurrently_service {
-            consume_message_pop_concurrently_service.inc_core_pool_size();
-        }
-
-        if let Some(consume_message_pop_orderly_service) = &self.consume_message_pop_orderly_service {
-            consume_message_pop_orderly_service.inc_core_pool_size();
-        }
-    }
-
-    pub fn dec_core_pool_size(&self) {
-        if let Some(consume_message_pop_concurrently_service) = &self.consume_message_pop_concurrently_service {
-            consume_message_pop_concurrently_service.dec_core_pool_size();
-        }
-
-        if let Some(consume_message_pop_orderly_service) = &self.consume_message_pop_orderly_service {
-            consume_message_pop_orderly_service.dec_core_pool_size();
-        }
-    }
-
     pub fn get_core_pool_size(&self) -> usize {
         if let Some(consume_message_pop_concurrently_service) = &self.consume_message_pop_concurrently_service {
             return consume_message_pop_concurrently_service.get_core_pool_size();
@@ -342,12 +302,6 @@ pub trait ConsumeMessageServiceTrait {
     /// * `core_pool_size` - The new core pool size.
     fn update_core_pool_size(&self, _core_pool_size: usize) {}
 
-    /// Increases the core pool size of the service by one.
-    fn inc_core_pool_size(&self) {}
-
-    /// Decreases the core pool size of the service by one.
-    fn dec_core_pool_size(&self) {}
-
     /// Gets the current core pool size of the service.
     ///
     /// # Returns
@@ -405,60 +359,4 @@ pub trait ConsumeMessageServiceTrait {
         process_queue: &PopProcessQueue,
         message_queue: &MessageQueue,
     );
-}
-
-/// Java-compatible public name for message consumption services.
-///
-/// Java exposes this contract as `ConsumeMessageService`. The original Rust
-/// implementation used `ConsumeMessageServiceTrait`; this blanket trait keeps
-/// existing implementors working while exposing the Java-equivalent API name.
-pub trait ConsumeMessageService: ConsumeMessageServiceTrait {}
-
-impl<T> ConsumeMessageService for T where T: ConsumeMessageServiceTrait + ?Sized {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    struct NoopConsumeMessageService;
-
-    impl ConsumeMessageServiceTrait for NoopConsumeMessageService {
-        fn start(&self, _this: Arc<Self>) {}
-
-        async fn shutdown(&self, _await_terminate_millis: u64) {}
-
-        async fn consume_message_directly(
-            &self,
-            _msg: MessageExt,
-            _broker_name: Option<CheetahString>,
-        ) -> ConsumeMessageDirectlyResult {
-            ConsumeMessageDirectlyResult::default()
-        }
-
-        async fn submit_consume_request(
-            &self,
-            _this: Arc<Self>,
-            _msgs: Vec<Arc<MessageExt>>,
-            _process_queue: Arc<ProcessQueue>,
-            _message_queue: MessageQueue,
-            _dispatch_to_consume: bool,
-        ) {
-        }
-
-        async fn submit_pop_consume_request(
-            &self,
-            _this: Arc<Self>,
-            _msgs: Vec<MessageExt>,
-            _process_queue: &PopProcessQueue,
-            _message_queue: &MessageQueue,
-        ) {
-        }
-    }
-
-    fn assert_consume_message_service<T: ConsumeMessageService>() {}
-
-    #[test]
-    fn consume_message_service_java_name_is_blanket_implemented() {
-        assert_consume_message_service::<NoopConsumeMessageService>();
-    }
 }

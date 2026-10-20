@@ -18,31 +18,46 @@ persistence, and shutdown diagnostics.
 
 Production entrypoints own a `RuntimeOwner`. Libraries receive a
 `ChildServiceContext` or a narrower capability such as `TaskSpawner`; they do
-not discover or construct an independent runtime. The task ownership tree
-tracks work through shutdown. The resource-budget tree accounts for explicitly
-reserved resources; it is separate from the task tree.
+not discover or construct an independent runtime. Tasks submitted through these
+capabilities belong to a task ownership tree that is tracked through shutdown.
+The resource-budget tree accounts for explicitly reserved resources separately.
+
+![rocketmq-runtime architecture](../resources/rocketmq-runtime-architecture.svg)
+
+The animated diagram shows what one `RuntimeOwner` holds and how work reaches
+it; the flowchart below details the task ownership tree.
 
 ```mermaid
 flowchart TD
     Entry["Application entrypoint"] --> Owner["RuntimeOwner"]
-    Owner --> Root["RootServiceContext"]
-    Root --> Service["ChildServiceContext"]
-    Service --> Group["Component TaskGroup"]
-    Group --> Tasks["Service and operation tasks"]
-    Service --> Scheduled["ScheduledTaskGroup"]
-    Scheduled --> Jobs["Tracked drivers and runs"]
-    Root --> Blocking["Shared blocking lanes and global admission budget"]
-    Service -.-> Blocking
-    Owner --> Resources["RuntimeResources / process budget"]
-    Resources --> Budgets["Component resource budgets and permits"]
-    Group --> Report["ShutdownReport"]
-    Blocking --> Report
-    Service --> Diagnostics["Diagnostics snapshot / sanitized V1 view"]
+    Owner --> Root["RootServiceContext<br/>root TaskGroup"]
+    Root --> A["ChildServiceContext A<br/>component TaskGroup A"]
+    Root --> B["ChildServiceContext B<br/>sibling TaskGroup B"]
+    A --> A1["ChildServiceContext A.1<br/>child component TaskGroup"]
+    A1 --> A2["ChildServiceContext A.1.1<br/>another child component TaskGroup"]
+    A1 --> Tasks["Service and worker tasks<br/>TaskKind labels each task"]
+    A1 --> Operations["Operation tasks<br/>same component TaskGroup"]
+    A1 --> Scheduled["ScheduledTaskGroup<br/>child TaskGroup"]
+    Scheduled --> Driver["ScheduledDriver task"]
+    Scheduled --> Runs["ScheduledRun tasks"]
+    Root -.-> Blocking["Shared blocking lanes<br/>separate task registry"]
+    A1 -.->|scoped admission| Blocking
+    Owner -.-> Resources["RuntimeResources<br/>separate resource-budget tree"]
 ```
 
-This is the production composition path. `RuntimeContext` is a migration and
-test harness for an existing Tokio runtime. Compatibility executors and
-dedicated thread helpers retain their own explicit ownership boundaries.
+Solid arrows show the context and task-group ownership path; dotted arrows show
+shared capabilities outside the task-group tree.
+
+Each `component(...)` call creates a child `TaskGroup` and returns a
+`ChildServiceContext` that can create further child components of the same kind;
+A, A.1, and A.1.1 illustrate that recursive relationship. A group may own both
+child groups and tasks. `TaskKind` classifies tasks rather than defining another
+tree level. `OperationContext` adds cancellation and a deadline to tasks in their
+existing component group; `scheduled_tasks(...)` creates a child group for its
+tracked driver and runs. Blocking lanes share a process-wide capacity and have
+their own task registry, while component scopes govern admission. Shutdown and
+diagnostics account for the owned subtree. `RuntimeContext` is a migration and
+test harness for an existing Tokio runtime.
 
 ## Core Architecture
 
@@ -51,12 +66,13 @@ for the state owner of admission, settlement, probes and metadata persistence.
 
 | Type | Responsibility |
 | --- | --- |
-| `RuntimeConfig` | Worker threads, blocking-thread limit, thread name and stack size, keep-alive, shutdown timeout, IO/time drivers, and per-lane blocking policies. |
+| `RuntimeConfig` | Worker threads, managed blocking capacity, thread name and stack size, keep-alive, fallback shutdown timeout, IO/time drivers, and per-lane blocking policies. |
 | `RuntimeOwner` / `RuntimeOwnerPlan` | Validate configuration, build and own a Tokio multi-thread runtime, expose the root context, and coordinate shutdown. |
 | `RootServiceContext` | Non-cloneable root with no public constructor; derives component contexts and exposes shared resources and diagnostics. |
 | `ChildServiceContext` / `TaskSpawner` | Component capabilities for owned work. A spawner exposes task submission and cancellation access without raw runtime access. |
 | `TaskGroup` / `OperationContext` | Track component tasks and provide operation-local cancellation, deadlines, and bounded waits. An operation does not create a new task group. |
-| `ScheduledTaskGroup` | Run periodic jobs with explicit overlap behavior and schedule metrics. |
+| `ScheduledTaskGroup` | Run periodic jobs with explicit overlap behavior and schedule metrics. It is the only scheduler. |
+| `ServiceManager` / `ServiceTask` | Run a wakeup-driven service loop as a service task of an owned group, with deadline-bounded shutdown. |
 | `BlockingExecutor` | Admit short blocking work through a bounded lane and retain its capacity until the closure actually exits. |
 | `RuntimeResources` / `ResourceBudget` | Share the process budget and derive component limits for count, retained bytes, and optional rate control. |
 | `ResourcePermit` / `BudgetedQueue` | Carry RAII reservations through queued or in-flight work and apply explicit overload policies. |
@@ -75,12 +91,6 @@ derive one component context from the sealed root, register services, register
 bounded periodic work instead of driving a raw loop, then drain final I/O inside
 the shutdown budget and read the shutdown report. `RuntimeContext` is the
 migration and test harness rather than a production entry point.
-
-Older entry points are grouped in `rocketmq_runtime::compat` so a migrating
-consumer sees them as one set with a stated direction: `RocketMQRuntime`, the
-retained executor services, and the legacy scheduler types. The module is
-additive. Nothing is newly deprecated there, and `ActorRuntime` stays out of it
-because it owns a dedicated thread rather than adapting the ownership API.
 
 ## Runtime Ownership And Quick Start
 
@@ -121,9 +131,18 @@ The error channels are intentional:
 - `RuntimeContractViolation` identifies invalid caller configuration or an
   invariant violation, including failures from `plan()`.
 - `RuntimeResult<T>` contains `RuntimeError` for operational failures such as
-  runtime construction, I/O, capacity, or timeout failures.
-- Normal outcomes such as `ScheduledTaskRegistrationOutcome::AlreadyPresent`,
+  runtime construction, I/O, capacity, or timeout failures. Branch on
+  `RuntimeError::kind()` rather than on the operation label: a submission to a
+  closing owner reports `RuntimeErrorKind::Closed`, and one to a poisoned group
+  reports `RuntimeErrorKind::Poisoned`.
+- Normal outcomes such as `ScheduledTaskRegistrationStatus::AlreadyPresent`,
   `BudgetRejection`, and metadata target conflicts have their own types.
+
+`RuntimeOperation` names what failed. Its named variants are operations this
+crate performs; a crate built on the runtime labels its own failures with a
+constant such as `RuntimeOperation::external("initialize-broker")` instead of
+adding variants here. `RuntimeOperation` and `RuntimeContractPolicy` are
+non-exhaustive, so a `match` outside this crate needs a wildcard arm.
 
 There is no automatic conversion from `RuntimeContractViolation` to
 `RuntimeError`. The example's application-level error type accepts both;
@@ -144,8 +163,10 @@ budget, not the production memory-discovery path.
 Create long-lived component scopes through `component(...)`. Use
 `ChildServiceContext::try_component(...)` to receive a creation error during
 shutdown or poisoning; `component(...)` returns a closed scope if the parent
-no longer accepts children. Validate dynamic names with `ScopeId::try_new`;
-string literals have a static-name conversion.
+no longer accepts children. The first closed answer per owner is logged, and
+every one is counted in `TaskGroup::event_counts()` and noted in the owner's
+shutdown report when it is still being assembled. Validate dynamic names with
+`ScopeId::try_new`; string literals have a static-name conversion.
 
 Cloning a context or task group shares the same owner and cancellation token.
 Creating a child gives it independent cancellation: parent cancellation
@@ -163,9 +184,26 @@ active tasks can keep their group alive.
 
 For bounded requests or restartable work, use `OperationContext` instead of
 creating a component group for every operation. `close_admission()` stops new
-operation tasks; `wait()` drains registered tasks; `cancel_and_wait()` also
-requests cancellation. The waits require the operation's original component
-owner and abort unfinished work at their deadline.
+operation tasks; `wait()` waits until no operation task is active and the
+owner has settled them;
+`cancel_and_wait()` also requests cancellation. The waits require the
+operation's original component owner and abort unfinished work at their
+deadline. `wait(timeout)` and `cancel_and_wait(timeout)` then allow up to one
+second to confirm that the aborted futures were dropped, so they can return up
+to one second after `timeout`. `wait_until(deadline)` and
+`cancel_and_wait_until(deadline)` add no wait allowance beyond `ShutdownDeadline`:
+they request aborts and return, and the owner's shutdown report accounts for any
+task still being dropped. An operation only counts its active tasks: the tasks
+themselves are tagged in the owner's registry, so an idle operation costs a few
+hundred bytes.
+
+Use `wait_with_policy(owner, OperationWaitPolicy::new(graceful, confirmation))`
+to close admission and distinguish `Completed`, `AbortConfirmed`, and
+`Unconfirmed { remaining_tasks }`. Both deadlines are absolute; confirmation
+also caps the grace period. Call `cancel()` first to request cooperative
+cancellation. Legacy boolean `false` does not confirm destruction. Runtime
+starvation or blocking destructors can delay timer polling; these APIs do not
+promise a hard wall-clock bound.
 
 `TaskGroup::cancel()` only broadcasts cancellation. Use `shutdown(...)` or
 `shutdown_until(...)` to close task admission and wait for shutdown evidence.
@@ -175,65 +213,73 @@ owner and abort unfinished work at their deadline.
 | State | Meaning |
 | --- | --- |
 | `Open` | New tasks and child groups can be registered. |
-| `Closing` | Shutdown has started; new registration is rejected. |
-| `Closed` | The tracker is closed and cancellation has been broadcast. |
+| `Closing` | Shutdown sealed admission; cancellation has not yet reached every task. |
+| `Closed` | Admission is closed and cancellation has been broadcast; owned work is draining. |
 | `ShutdownCompleted` | The shutdown report is cached for repeated calls; it need not be healthy. |
 | `Poisoned` | A tracked task panicked while the group was open; new registration is rejected. |
 
-Task metadata is registered before submission to Tokio. A spawn gate
-serializes registration with shutdown transitions. The
+A shutdown moves a group through `Closing`, `Closed`, and `ShutdownCompleted`
+in that order. A closing group reports `Closed` as soon as its cancellation
+token is cancelled, so a task woken by the shutdown already observes `Closed`,
+even on another worker thread.
+Poisoning is fail-stop: the transition is logged once with the group path and
+counted in `TaskGroup::event_counts()`.
+
+Task metadata is registered under a spawn gate that serializes registration
+with shutdown transitions; the task is handed to Tokio after the gate is
+released. The tracker token taken under the gate keeps a shutdown waiting for
+the task, and an abort requested before its handle is installed is honored.
+Task names are `TaskName` values: a `&'static str` is stored without
+allocating, and `String` or `Arc<str>` names are kept as they are. The
 [child registry](src/task_group/registry.rs) uses weak references keyed by
 `TaskGroupId`; dropping the last group reference unregisters the child.
-Names are labels, so multiple groups can share a name without sharing identity.
+Group ids are unique within the process, including across owners. Names are
+labels, so multiple groups can share a name without sharing identity.
 
 ## Scheduled Tasks
 
-Choose the entrypoint by its timing and ownership contract:
+`ScheduledTaskGroup` is the only scheduler. Derive one with
+`context.scheduled_tasks("maintenance")`, or wrap an owned group with
+`ScheduledTaskGroup::new(group)`, and register work:
 
-| Work | Recommended entrypoint | Timing and ownership |
+| Work | Entry point | Ownership |
 | --- | --- | --- |
-| Periodic serial maintenance | `schedule_bounded` with fixed-delay configuration and a serial policy | First run follows `initial_delay`; the next delay begins after completion. A zero period is rejected. |
-| Overlapping periodic work | `schedule_bounded` with fixed-rate configuration and an explicit bounded policy | Acquires a run slot before spawning; choose Skip, CoalesceLatest or BoundedCatchUp for missed ticks. |
-| Mutable callback or explicit stop result | `schedule_fixed_delay_controlled` | Serial `FnMut`; a normal Stop result ends the driver and counts as one completed run. |
-| Operation-bound mutable maintenance | `schedule_fixed_delay_controlled_operation` | Shares fixed-delay execution and settlement, with the operation's additional cancellation/deadline boundary. |
-| Calendar or trigger-based jobs | Compatibility `TaskScheduler` with Cron/Trigger | Retains its separate calendar and trigger semantics; it does not inherit bounded-driver timing. |
-| Dedicated operating-system thread | `ActorRuntime` | The owner must signal stop and join the thread; async cancellation alone is insufficient. |
+| Periodic maintenance | `schedule(config, policy, task)` | `task` is an `FnMut` returning a future. The driver and its runs belong to the group. |
+| Operation-bound maintenance | `schedule_operation(&operation, config, policy, task)` | As `schedule`; it also stops at the operation's cancellation or deadline. |
+| Fixed-delay work that can end itself | `schedule_controlled(config, task)` | A run that returns `ScheduledTaskControl::Stop` ends the schedule and counts as one completed run. |
 
-The legacy fixed-rate overlap API retains its unbounded overlap behavior.
-Moving a caller to bounded scheduling is an explicit overload-policy choice.
-`ScheduledTaskConfig::shutdown_timeout` is retained for source compatibility
-and is not read; pass the shutdown budget to the group's shutdown API.
+The configuration alone decides the timing mode, and the policy must agree
+with it:
 
-Derive a scheduler with `context.scheduled_tasks("maintenance")` and select
-the registration method matching the desired overlap behavior:
+| Configuration | Timing | Policy |
+| --- | --- | --- |
+| `ScheduledTaskConfig::fixed_delay(name, period)` | Run, then wait `period` after the run completes. | `ScheduledExecutionPolicy::serial(..)` |
+| `ScheduledTaskConfig::fixed_rate_no_overlap(name, period)` | Tick every `period`; runs never overlap. | `ScheduledExecutionPolicy::serial(..)` |
+| `ScheduledTaskConfig::fixed_rate(name, period)` | Tick every `period`; up to `n` runs overlap. | `ScheduledExecutionPolicy::bounded(n, ..)` |
 
-| Mode | Behavior |
-| --- | --- |
-| `FixedDelay` | Run the callback, then wait `period` after completion. |
-| `FixedRateNoOverlap` | Attempt a run each driver cycle; skip when the previous run is still active. |
-| `FixedRateAllowOverlap` | Start a run each driver cycle without waiting for previous runs. There is no separate concurrent-run limit. |
+A zero period or a policy that contradicts the configuration is rejected with
+an unsupported error. `ScheduledExecutionPolicy::default()` allows one run at a
+time and skips a tick that arrives while it runs.
 
-The fixed-rate drivers currently sleep for `period` between submission
-attempts. Their expected tick measures drift; it does not schedule an
-absolute-time catch-up loop. Do not rely on strict wall-clock alignment or
-missed-tick compensation.
+Fixed-rate schedules keep absolute ticks. When a tick finds every run slot
+busy, the missed-tick policy decides what happens to it: `Skip` discards it,
+`CoalesceLatest` keeps one pending run, and `BoundedCatchUp(n)` keeps up to `n`
+pending runs. The drift metric records how late each tick fired.
 
-- `initial_delay` defaults to zero, allowing the first run immediately.
-- `max_run_time` bounds an individual callback by dropping its future on
-  timeout. External side effects still need an appropriate cancellation contract.
-- Controlled fixed-delay callbacks return `ScheduledTaskControl::Stop` to end
-  their driver.
+- `with_initial_delay(delay)` sets the delay before the first run; it defaults
+  to zero, allowing the first run immediately.
+- `max_run_time` bounds an individual run by dropping its future on timeout.
+  External side effects still need an appropriate cancellation contract.
 - Duplicate names return `AlreadyPresent` without replacing the driver or
   metrics. `clear_completed()` clears registrations only when the scheduler's
   group has no active tasks.
 - Drivers and runs belong to the scheduler's task group. Ordinary runs may
-  finish during shutdown; operation-aware registrations also observe their
+  finish during shutdown; operation-bound registrations also observe their
   operation's cancellation and deadline.
 
 Snapshots record active runs, run completions, skips, overlaps, failures,
-drift, and elapsed time. Close the scheduler through `shutdown(timeout)` or
-its owning group. `ScheduledTaskConfig::shutdown_timeout` is not currently
-read by the scheduler; the actual shutdown call supplies the budget.
+drift, and elapsed time. Close the scheduler through `shutdown(timeout)`,
+`shutdown_until(deadline)`, or its owning group.
 
 ## Blocking Work
 
@@ -251,6 +297,14 @@ ceiling and queue bound. Idle capacity can be borrowed; a waiting lane's
 reservation is protected from new borrowers. Cloning an executor or deriving
 a context shares this capacity rather than creating another pool.
 
+Waiters of one lane are admitted in arrival order, and a new submission never
+passes a queued waiter of its own lane. A released slot is handed directly to
+the waiter that can use it, which wakes only that waiter; a lane still below
+its reservation is served first. The Tokio blocking pool holds
+`RuntimeConfig::tokio_blocking_threads()` threads: the managed capacity plus
+`max(2, capacity / 8)` threads of headroom, so direct `spawn_blocking` calls,
+DNS resolution, and `tokio::fs` do not take the threads admitted work relies on.
+
 `max_queue_depth` rejects submissions when the admission queue is full.
 `queue_timeout` bounds waiting for execution capacity; `task_timeout` bounds
 the caller's wait after admission. `spawn_until` and `spawn_io_until` also cap
@@ -266,9 +320,19 @@ completion. See the [executor implementation](src/blocking/executor.rs).
 
 `BlockingKind::LongRunning` is rejected. Long-running blocking loops need a
 dedicated OS-thread or domain-service owner with a stop and join protocol.
-`BlockingExecutor::new(policy, owner_group)` remains an isolated compatibility
-constructor: it creates an independent budget, and the group argument does
-not enroll it in the managed root lanes.
+`BlockingExecutor::new(policy, owner_group)` creates an isolated executor for
+tests and adapters: it has an independent budget and task table outside the
+managed root lanes and their diagnostics. It is registered with the group's
+tree, so a closure it is still running counts in the `blocking_still_running`
+of that tree owner's shutdown report.
+
+Prefer the explicit `new_isolated` constructor; `new` delegates to it for
+compatibility. Call `stop_admission()` and `shutdown_until(deadline)` to close
+and await just that executor and its clones. Queued submissions wake with a
+closed error. The report distinguishes completed shutdown from still-owned
+submissions or closures; an incomplete wait can be retried. It does not close
+the supplied group or sibling executors. Managed lanes reject these methods:
+their service context owns shutdown.
 
 ## Resource Budgets And Queues
 
@@ -291,10 +355,20 @@ not automatically limit every process allocation or resident-memory usage, and
 a constraint the process cannot see is not discovered.
 
 `ResourceBudget` checks count, retained bytes, and optional rate limits along
-the ancestor chain. A `ResourcePermit` retains count and byte reservations
-until dropped. `BudgetClass::Control` can use configured control reserves;
+the ancestor chain. Count and byte capacity is reserved with atomic operations;
+a request that fails at a later level rolls back the levels it reserved, so no
+level ever exceeds its limit, and only a level with a rate limit takes a lock.
+A request racing such a rollback near capacity can be rejected even though the
+capacity is about to return. A `ResourcePermit` retains count and byte
+reservations until dropped. `BudgetClass::Control` can use configured control reserves;
 data work cannot consume that reserved capacity. Same-tree permit rebinding
 keeps common-ancestor accounting while moving ownership between components.
+
+`ResourcePermit::try_resize(bytes)` changes only the byte reservation. Growth
+reserves the delta at each ancestor and rolls back on rejection without taking
+another count or rate token. Shrinking remains allowed after dynamic closure;
+release the removed payload before shrinking its charge. Growth observes the
+current budget's dynamic admission gates, including after a rebind.
 
 `BudgetedQueue` supports `Reject`, `WaitUntilDeadline`, `CoalesceLatest`,
 `DropStale`, and `CloseSlowConsumer`. Select a policy matching whether work
@@ -320,8 +394,27 @@ blocking lane. Configure actor admission with `max_pending_operations` and
 `RuntimeConfig::blocking_lane_policies.metadata_io`. The actor's compatibility
 `blocking_*` settings do not replace that shared lane policy.
 
+By default an actor writes one resource at a time, so a slow write delays its
+other resources. `MetadataIoPlan::with_max_concurrent_writes(n)` lets
+independent resources proceed while one write is slow, up to the metadata
+lane's concurrency; generations of one resource are still written one at a
+time and in order. `effective_profile()` reports the value in force. Every
+queued or in-flight snapshot is also charged to the owner's process budget
+until its write completes, including after its observer times out, so the
+actors of one owner share that budget. A snapshot the process budget cannot
+take is refused like one above `max_pending_bytes`.
+
+The actual blocking closure owns its snapshot and permit together, including
+after cancellation destroys the actor or coordinator. The actor's local
+pending counters settle afterwards and may briefly lag the shared ledger.
+Coalescing reserves only a positive size delta; failed growth retains the old
+request and charge, and equal-size replacement works at the process limit.
+Shrinking drops the old payload before releasing excess bytes. Caller-owned
+allocations before admission, and caller-retained snapshot clones, are outside
+this actor-owned accounting.
+
 `submit` and `submit_next` accept immutable snapshots without waiting for
-durability. Match `MetadataIoAdmissionOutcome`: `Accepted` provides a receipt;
+durability. Match `MetadataWriteSubmissionStatus`: `Accepted` provides a receipt;
 `TargetConflict` returns the request when a resource already has pending work
 for a different target. Wait for persistence through the receipt's
 `wait_until`, or use `submit_durable` / `submit_next_durable` and match the
@@ -363,17 +456,45 @@ With `ServiceLifecycle::from_env`, `ROCKETMQ_HEALTH_BIND_ADDR` enables the
 optional probe server with `/readyz`, `/livez`, and `/drainz`.
 `ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS` and `ROCKETMQ_LIVENESS_STALE_SECONDS`
 configure its shutdown and progress windows. Without a probe bind address,
-shutdown coordination still works. The lifecycle shutdown timeout defaults
-to 45 seconds; `RuntimeConfig` independently defaults to 30 seconds.
+shutdown coordination still works.
+
+`/readyz` and `/livez` accept `GET` and `POST`. `/drainz` starts a shutdown,
+so by default it accepts only `POST` and answers `GET` with `405` and
+`Allow: POST`. A Kubernetes `preStop.httpGet` hook can only send `GET`; set
+`ROCKETMQ_HEALTH_DRAIN_METHODS=GET,POST` for such a hook, as the repository's
+charts do. Any other value is a configuration error. Each connection is served
+by its own task of the lifecycle group, at most 64 at a time, so an idle or slow
+client does not delay other probes. The server reads until the end of the
+request headers, which may arrive in pieces. An `accept` failure caused by
+resource exhaustion, such as too many open files, is retried with backoff;
+only a listener that stays unusable marks the service failed.
 
 The first shutdown request freezes a `ShutdownDeadline`; repeated pre-stop or
 signal requests cannot extend it. Pass that deadline through component
 shutdown and `owner.shutdown_runtime_blocking_until(deadline)`.
 
+The shutdown timeouts relate as follows:
+
+| Timeout | Default | Applies to |
+| --- | --- | --- |
+| `ServiceLifecycleConfig::shutdown_timeout` (`ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS`) | 45 s | The process deadline frozen by the first shutdown request. Entrypoints pass it to every component and to the owner. It is the single source for a process that runs a lifecycle. |
+| `RuntimeConfig::shutdown_timeout` | 30 s | Owner shutdown calls without an explicit deadline, for owners that do not run a lifecycle. |
+| `ServiceManager` shutdown | 30 s | Used only when neither the call nor the parent group supplies a deadline; otherwise the earliest of the two applies. |
+| Component budgets | Per component | Cap one component's share of the process deadline; they never extend it. |
+
 Task-group shutdown closes registration and broadcasts cancellation, then
 starts child shutdowns concurrently with waiting for the group's own tasks.
 Unfinished tracked tasks are aborted when the deadline expires. Reports are
-cached at group level; the owner additionally merges its blocking-lane snapshots.
+cached at group level; the owner additionally merges the blocking work of its
+managed lanes and of the isolated executors bound to its tree.
+
+An API that takes a `ShutdownDeadline` never waits past it:
+`TaskGroup::shutdown_until`, `OperationContext::wait_until`, and
+`BlockingExecutor::spawn_until` report unconfirmed work instead. Two relative
+APIs confirm aborts for at most one second past their deadline:
+`OperationContext::wait` / `cancel_and_wait`, and an interrupting
+`ServiceManager` shutdown with less than a second left. Budget nested shutdown
+steps accordingly, or use the `_until` forms.
 
 | API | Scope and guarantee |
 | --- | --- |
@@ -384,16 +505,30 @@ cached at group level; the owner additionally merges its blocking-lane snapshots
 | `RuntimeOwner::drop` | Emergency cleanup if explicit shutdown was omitted; not a graceful-shutdown protocol. |
 
 `ShutdownReport::is_healthy()` requires zero `leaked`, `failed`, `panicked`,
-`timed_out`, `blocking_still_running`, and `detached_still_running` counts,
-and healthy child reports. An `aborted` count alone does not make the report
-unhealthy. An immediate-shutdown report is not proof that all futures completed
+`timed_out`, and `blocking_still_running` counts, and healthy child reports.
+`timed_out` counts the tasks this shutdown aborted after its deadline plus the
+tasks still registered; an abort requested earlier through `abort_task` is not
+a timeout. An `aborted` count alone does not make the report unhealthy.
+`remaining_tasks` lists at most `ShutdownReport::REMAINING_TASKS_LIMIT` (64)
+tasks; `remaining_tasks_omitted` counts the rest, which `leaked` still
+includes. An immediate-shutdown report is not proof that all futures completed
 their cleanup. Blocking snapshots are point-in-time evidence and do not
 terminate closures that outlive a deadline.
+
+A `ServiceManager` runs a `ServiceTask` loop as a service task of the group
+passed to `new_with_task_group`. Its state (`ServiceTaskState`) is one atomic
+value, and `shutdown_until(deadline)` waits no later than the earliest of the
+requested deadline and the deadline installed on the parent group. An
+interrupting shutdown gives the aborted loop up to one second past that
+deadline to confirm its destruction.
 
 ## Diagnostics
 
 `diagnostics_snapshot()` exposes internal details such as runtime/group
-identity and blocking task names. For authenticated operational APIs, prefer
+identity and blocking task names. Its `events` field, like
+`TaskGroup::event_counts()`, counts failures a tree absorbs without an error:
+groups poisoned by a panicking task, and component requests answered with a
+closed group. For authenticated operational APIs, prefer
 `diagnostics_view_v1(RuntimeComponent::...)`: its versioned view aggregates
 bounded task-kind and lane summaries without raw IDs, names, arguments, or
 configuration objects. Authentication remains the caller's responsibility.
@@ -410,22 +545,31 @@ absent rather than empty, and scheduled work, retained metadata, and shutdown
 results are reported as bounded aggregates. `RuntimeDiagnosticsViewOptionsV2`
 also carries the scan and output budgets for an on-demand task detail list, so a
 partially scanned list reports how many tasks it examined instead of presenting
-a partial sum as the whole runtime. V1 keeps its fields and meanings.
+a partial sum as the whole runtime. The scan budget bounds both the tasks
+examined and the descendant groups visited. V1 keeps its fields and meanings.
+
+For a detail-only request use `TaskGroup::diagnostics_task_details(scan, output)`.
+It skips the full-tree aggregates and returns `RuntimeTaskDetails`, including
+`tasks_scanned`, `group_entries_scanned`, and `truncated`. Ordered registries
+bound enumeration and temporary storage even after churn leaves sparse task
+tables or in a tree of empty groups. Names and payloads are omitted. Maintaining
+the sanitized task index adds registration/settlement work; the convergence
+benchmark measures that tradeoff. V1/V2 aggregate collection still visits every
+active task and group, regardless of the detail budget.
 
 ## Compatibility And Workspace Integration
 
-`RocketMQRuntime` remains deprecated but available in 1.x. Migrate construction
-to `RuntimeOwner::plan(config)?.build()?`, inject `ChildServiceContext`, select
-an explicit scheduling overlap policy, and inspect shutdown reports. Future
-removal belongs to a 2.0 compatibility boundary and remains subject to the
-release and owner-approval requirements in the
-[API migration guide](../rocketmq-doc/en/release/1.0/api-migration.md).
+`RocketMQRuntime` has been removed, including its root and `compat` exports.
+Migrate construction to `RuntimeOwner::plan(config)?.build()?`, inject
+`ChildServiceContext`, select an explicit scheduling overlap policy, and inspect
+shutdown reports. See the
+[API migration guide](../rocketmq-doc/en/release/1.0/api-migration.md) for replacements.
 
-`RuntimeContext` is a migration/test harness. Other retained helpers include
-`TokioExecutorService`, `ScheduledExecutorService`, `FuturesExecutorService`,
-`TaskScheduler`, and `ActorRuntime`; they have separate adapter or dedicated
-thread responsibilities and are not all deprecated. New services should use
-the ownership and capability APIs described above.
+`RuntimeContext` is a migration/test harness. The executor services
+(`TokioExecutorService`, `ScheduledExecutorService`, `FuturesExecutorService`),
+`TaskScheduler`, `ScheduledTaskManager`, `ActorRuntime`, the `compat` module,
+and the legacy `ServiceManager` constructors have been removed; see
+[MIGRATION.md](MIGRATION.md) for their replacements.
 
 The [broker](../rocketmq-broker/src/bin/broker_bootstrap_server.rs),
 [NameServer](../rocketmq-namesrv/src/bin/namesrv_bootstrap_server.rs),
@@ -442,9 +586,9 @@ Standalone applications follow their local host-runtime and validation guides.
 ## Features And Validation
 
 The crate inherits its edition and minimum Rust version from the
-[workspace manifest](../Cargo.toml). Default crate features are empty;
-`async_fs` enables the Tokio filesystem helpers in `common::file_utils`.
-The core ownership, blocking, budget, and metadata APIs do not require it.
+[workspace manifest](../Cargo.toml). It has no optional features. The
+filesystem helpers in `common::file_utils` block; asynchronous code runs them
+through a blocking lane or persists through `MetadataIoActor`.
 
 For task-lifecycle changes, start with package-scoped checks:
 
@@ -465,7 +609,7 @@ every suite for every edit:
 | Public scope restrictions | `cargo test -p rocketmq-runtime --test service_context_scope_compile_fail` |
 | Shutdown or budget interleavings | `task_group_shutdown_loom` or `resource_budget_loom` via `cargo test -p rocketmq-runtime --test <target>` |
 | Migration or large-future submission | `runtime_migration_fixture` or `task_submission_stack` via the same test command |
-| Optional filesystem helpers | `cargo test -p rocketmq-runtime --features async_fs common::file_utils` |
+| Filesystem helpers | `cargo test -p rocketmq-runtime --lib common::file_utils` |
 
 When useful, run `cargo clippy -p rocketmq-runtime --no-deps -- -D warnings`
 with the affected targets/features. Validate directly affected consumers when
@@ -482,13 +626,80 @@ belong to changes that need that evidence or the relevant CI/integration task.
 Benchmarks provide measurements for a specific run, not hard-coded performance
 guarantees. See [repository validation guidance](../AGENTS.md).
 
+### Platform and scale experiments
+
+These checks provide platform and workload evidence when a change calls for it;
+they are not routine gates. Run
+`cargo test -p rocketmq-runtime --no-default-features` on Windows and Linux to
+cover the feature-absent path.
+The metadata actor suite exercises real filesystem replacement and cleanup as
+well as injected failures and gates. It does not prove power-loss recovery or
+coordination between independent processes.
+
+`cargo test -p rocketmq-runtime --test runtime_scale -- --nocapture` checks
+5,000 nested-scope/dynamic-key generations and 1,024 retired metadata
+histories. The latter uses an injected successful filesystem; use the metadata
+actor suite and metadata benchmark for real persistence evidence. Retained old
+receipts and escaped budgets must not revive a retired identity.
+
+The Linux cgroup test is ignored by default. Compile it outside the constrained
+unit, then run its executable under a real limit:
+
+```bash
+cargo test -p rocketmq-runtime --no-default-features --test runtime_scale \
+  --no-run --message-format=json > /tmp/runtime-scale-build.json
+test_bin=$(python3 -c 'import json; rows=[json.loads(x) for x in open("/tmp/runtime-scale-build.json")]; print(next(x["executable"] for x in rows if x.get("executable") and x.get("target", {}).get("name") == "runtime_scale"))')
+sudo systemd-run --wait --pipe --collect \
+  --property=MemoryMax=536870912 --property=MemorySwapMax=0 \
+  --setenv=ROCKETMQ_TEST_CGROUP_BYTES=536870912 \
+  "$test_bin" --ignored --exact \
+  detects_actual_cgroup_limit_and_uses_it_in_owner_planning --nocapture
+```
+
+This requires Linux cgroup v2 and systemd. The test verifies the detected
+source and byte limit and the owner's resulting memory budget. File-view tests
+provide separate parser evidence. An ignored test does not count as a pass.
+
+### Benchmark measurement boundaries
+
+Set `CARGO_TARGET_DIR` to the intended build disk before running benchmarks.
+Run a benchmark with `cargo bench -p rocketmq-runtime --bench <name>`.
+
+| Benchmark | Population and measured region |
+| --- | --- |
+| `runtime_diagnostics_bench` | Stable 1k/10k/100k populations with eight child groups; separate group-count and fixed-32-group depth 1/4/16 cases. Setup and shutdown excluded; Criterion includes return-value destruction. |
+| `budgeted_queue_bench` | Reused queues; fill/reject/drain, wait/release, or replacement-at-capacity operations. Queue and Tokio runtime construction excluded; wait cases include producer spawning and joining. |
+| `blocking_executor_bench` | Submission through completion of 8/32 jobs with four lane slots and 1 ms simulated blocking work. Runtime creation and shutdown excluded; timeout evidence retains the blocked closure until release. |
+| `metadata_io_bench` | First real filesystem write held at a gate; queued submissions through release and settled receipts timed. Coalesced writes and hot/cold ordering asserted; first gate arrival, setup, and shutdown excluded. |
+| `runtime_convergence_bench` | Draining-operation submission from 1/4/8 threads into one shared group or one group per thread; permit acquire/release under a shared root; allocations of an idle group, operation, and child context; start order of contended blocking work. Every call is timed for percentiles; the JSON is named by `ROCKETMQ_BENCH_LABEL`. |
+| `runtime_boundaries_bench` | Mixed blocking lanes, actor budget saturation and RSS, injected slow-target isolation, bounded detail allocations versus full aggregates, and shutdown settlement. Run with `cargo bench -p rocketmq-runtime --bench runtime_boundaries_bench`; JSON is written under `target/runtime-measurements` (or `CARGO_TARGET_DIR`). Injected delays do not measure disk performance; use `metadata_io_bench` for real filesystem writes. |
+
+Criterion reports batch-derived estimates and confidence intervals, not an
+individual request P99. Reject scenarios intentionally reject one extra item
+per full batch; wait/churn scenarios assert successful admission and resource
+release. Do not compare older results after changing the timed region as if
+they measured a code speedup.
+
+Set `ROCKETMQ_MEASURE_SAMPLING=1` for independent allocation samples and
+per-submission observations in the diagnostics benchmark. Its
+`sampling-costs.json` artifact stores 101 samples per population/detail case
+and three pairs of 5,000 submit/completion observations at a 10 ms sampler
+delay. Allocation counters cover successful allocation/reallocation requests
+on the sampling thread only, not live or peak process memory. These independent
+timers exclude setup, teardown, and return-value destruction.
+
+Artifacts are written under `CARGO_TARGET_DIR/runtime-measurements`; Criterion
+retains its own raw samples. Record the OS, CPU, toolchain, background load,
+actual sampler count, warmup/repetitions, and quantile algorithm with results.
+No timing number here is a release SLO; source fingerprints and file hashes
+are unnecessary.
+
 ## Crate Layout
 
 ```text
 rocketmq-runtime/
   src/public_api.rs        deliberate ownership and diagnostics exports
   src/prelude.rs           recommended entry path and common ownership imports
-  src/compat.rs            compatibility facade for older entry points
   src/config.rs            runtime and blocking-lane configuration
   src/owner.rs             validated construction and owned runtime lifecycle
   src/context.rs           borrowed runtime migration/test harness
@@ -506,11 +717,9 @@ rocketmq-runtime/
   src/service_lifecycle.rs readiness, liveness, and shutdown requests
   src/shutdown_deadline.rs shared absolute shutdown deadline
   src/shutdown_report.rs   serializable shutdown evidence
-  src/diagnostics.rs       raw snapshots and sanitized V1 views
-  src/legacy.rs            deprecated RocketMQRuntime wrapper
-  src/executor_service.rs  retained executor adapters
-  src/schedule/            retained scheduler APIs
-  src/common/              common filesystem, time, and thread helpers
+  src/diagnostics.rs       raw snapshots and sanitized views
+  src/task/                service loops run by ServiceManager
+  src/common/              filesystem, time, and configuration-file helpers
 ```
 
 ## License

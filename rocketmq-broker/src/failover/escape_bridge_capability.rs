@@ -37,6 +37,7 @@ use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::HAConnectionStateNotificationRequest;
 use rocketmq_store::HAService;
+use rocketmq_store::MessageStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::MessageStoreHealthCapability;
 use rocketmq_store::PutMessageResult;
@@ -44,9 +45,7 @@ use rocketmq_store::QueryMessageRequest;
 use rocketmq_store::QueryMessageResult;
 use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_store::StoreAppendReceipt;
-use rocketmq_store::StoreError as BackendStoreError;
 use rocketmq_store::StoreHealthSnapshot;
-use rocketmq_store::StorePorts;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreHealth;
 use rocketmq_store_api::StoreOperation;
@@ -194,7 +193,7 @@ impl EscapeBridgePolicyState {
     }
 }
 
-struct SharedAppendOutcome {
+struct SharedStoreAppendReport {
     result: PutMessageResult,
     appended_watermark: i64,
     durable_watermark: i64,
@@ -202,37 +201,37 @@ struct SharedAppendOutcome {
 
 #[derive(Clone)]
 struct SharedStoreAppendPort {
-    store: Weak<StorePorts>,
+    store: Weak<MessageStore>,
 }
 
 impl SharedStoreAppendPort {
-    fn new(store: &Arc<StorePorts>) -> Self {
+    fn new(store: &Arc<MessageStore>) -> Self {
         Self {
             store: Arc::downgrade(store),
         }
     }
 
-    fn store(&self) -> Result<Arc<StorePorts>, MessageStoreUnavailable> {
+    fn store(&self) -> Result<Arc<MessageStore>, MessageStoreUnavailable> {
         self.store.upgrade().ok_or(MessageStoreUnavailable)
     }
 
     async fn put_message(
         &self,
         message: MessageExtBrokerInner,
-    ) -> Result<SharedAppendOutcome, MessageStoreUnavailable> {
+    ) -> Result<SharedStoreAppendReport, MessageStoreUnavailable> {
         let store = self.store()?;
         let result = store.put_message_shared(message).await;
-        Ok(SharedAppendOutcome {
+        Ok(SharedStoreAppendReport {
             result,
             appended_watermark: store.get_max_phy_offset(),
             durable_watermark: store.get_flushed_where(),
         })
     }
 
-    async fn put_messages(&self, batch: MessageExtBatch) -> Result<SharedAppendOutcome, MessageStoreUnavailable> {
+    async fn put_messages(&self, batch: MessageExtBatch) -> Result<SharedStoreAppendReport, MessageStoreUnavailable> {
         let store = self.store()?;
         let result = store.put_messages_shared(batch).await;
-        Ok(SharedAppendOutcome {
+        Ok(SharedStoreAppendReport {
             result,
             appended_watermark: store.get_max_phy_offset(),
             durable_watermark: store.get_flushed_where(),
@@ -427,6 +426,32 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
         self.with_store(|store| store.sync_controller_sync_state_set(local_broker_id, sync_state_set))
     }
 
+    /// Returns the sync state set the HA service proposes, or `None` outside controller mode.
+    pub(crate) fn sync_state_set_proposal(&self) -> Result<Option<HashSet<i64>>, MessageStoreUnavailable>
+    where
+        MS: BrokerReplicationStore,
+    {
+        self.with_store(|store| {
+            store
+                .get_ha_service()
+                .and_then(|ha_service| ha_service.maybe_shrink_sync_state_set())
+        })
+    }
+
+    /// Subscribes to HA sync-state-set proposal changes, or `None` outside controller mode.
+    pub(crate) fn subscribe_sync_state_set_changes(&self) -> Option<tokio::sync::watch::Receiver<u64>>
+    where
+        MS: BrokerReplicationStore,
+    {
+        self.with_store(|store| {
+            store
+                .get_ha_service()
+                .and_then(|ha_service| ha_service.subscribe_sync_state_set_changes())
+        })
+        .ok()
+        .flatten()
+    }
+
     pub(crate) async fn apply_controller_role(
         &self,
         previous_store_role: BrokerRole,
@@ -559,13 +584,13 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
     pub(crate) fn set_commitlog_read_mode(
         &self,
         read_ahead_mode: rocketmq_store::CommitLogReadMode,
-    ) -> Result<(), BackendStoreError>
+    ) -> Result<(), StoreError>
     where
         MS: BrokerAdminStore,
     {
-        let store = self.store().map_err(|_| {
-            BackendStoreError::new(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, StoreOperation::Admin)
-        })?;
+        let store = self
+            .store()
+            .map_err(|_| StoreError::new(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, StoreOperation::Admin))?;
         store.set_commitlog_read_mode(read_ahead_mode)
     }
 
@@ -685,8 +710,8 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
     }
 }
 
-impl EscapeBridgeStoreCapability<StorePorts> {
-    pub(crate) fn bind_owned(&self, store: &Arc<StorePorts>) {
+impl EscapeBridgeStoreCapability<MessageStore> {
+    pub(crate) fn bind_owned(&self, store: &Arc<MessageStore>) {
         self.bind(store);
         *self.shared_append.write() = Some(SharedStoreAppendPort::new(store));
     }
@@ -697,8 +722,8 @@ mod tests {
     use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
     use rocketmq_model::common::broker::broker_role::BrokerRole;
+    use rocketmq_store::MessageStore;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_store::StorePorts;
 
     use super::EscapeBridgePolicyState;
     use super::EscapeBridgeStoreCapability;
@@ -774,7 +799,7 @@ mod tests {
 
     #[tokio::test]
     async fn controller_role_change_is_a_noop_before_store_binding() {
-        let store = EscapeBridgeStoreCapability::<StorePorts>::default();
+        let store = EscapeBridgeStoreCapability::<MessageStore>::default();
 
         assert!(matches!(
             store
@@ -786,7 +811,7 @@ mod tests {
 
     #[test]
     fn controller_observations_fail_closed_before_store_binding() {
-        let store = EscapeBridgeStoreCapability::<StorePorts>::default();
+        let store = EscapeBridgeStoreCapability::<MessageStore>::default();
 
         assert_eq!(store.controller_heartbeat_state(), (None, None, None));
         assert!(!store.is_local_writeable());

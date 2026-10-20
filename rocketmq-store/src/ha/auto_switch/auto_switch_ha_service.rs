@@ -21,6 +21,7 @@ use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store_api::MasterEpoch;
 use rocketmq_store_api::WriteAuthority;
+use tokio::sync::watch;
 use tokio::sync::Notify;
 
 use crate::ha::auto_switch::auto_switch_ha_client::AutoSwitchHAClient;
@@ -35,14 +36,58 @@ use crate::ha::ha_service::HAAckedReplicaSnapshot;
 use crate::ha::ha_service::HAService;
 use crate::ha::HAError;
 use crate::log_file::group_commit_request::GroupCommitRequest;
+use crate::message_store::local_file_message_store::HAReplicaStoreHandle;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_local::ha::replication::EpochTransition;
 use rocketmq_store_local::ha::replication::HAReplicaRuntimeSnapshot;
 use rocketmq_store_local::ha::replication::ReplicationStateRoot;
 
+/// Wakes the Broker when the sync-state-set proposal changes and must be reported to the
+/// Controller, like the listener of Java `AutoSwitchHAService#notifySyncStateSetChanged`.
+///
+/// Receivers observe a generation counter, so changes published while the Broker is busy
+/// coalesce into one wake-up.
+#[derive(Clone)]
+pub(crate) struct SyncStateSetChangePublisher {
+    generation: Arc<watch::Sender<u64>>,
+}
+
+impl SyncStateSetChangePublisher {
+    fn new() -> Self {
+        Self {
+            generation: Arc::new(watch::Sender::new(0)),
+        }
+    }
+
+    pub(crate) fn publish(&self) {
+        self.generation
+            .send_modify(|generation| *generation = generation.wrapping_add(1));
+    }
+
+    fn subscribe(&self) -> watch::Receiver<u64> {
+        self.generation.subscribe()
+    }
+}
+
+/// Replica state and change publisher that an auto-switch service shares with its connections.
+#[derive(Clone)]
+pub(crate) struct AutoSwitchReplication {
+    pub(crate) state: Arc<ReplicationStateRoot>,
+    pub(crate) changes: SyncStateSetChangePublisher,
+}
+
+/// Offset a replica must reach before it may join the sync state set: the confirm offset and
+/// the start of the current master epoch (Java `AutoSwitchHAService#maybeExpandInSyncStateSet`).
+pub(crate) fn sync_state_set_admission_offset(replica_store: &HAReplicaStoreHandle) -> i64 {
+    replica_store
+        .get_confirm_offset_directly()
+        .max(replica_store.get_controller_epoch_start_offset())
+}
+
 pub struct AutoSwitchHAService {
     delegate: Box<DefaultHAService>,
     replication: Arc<ReplicationStateRoot>,
+    sync_state_set_changes: SyncStateSetChangePublisher,
 }
 
 impl AutoSwitchHAService {
@@ -52,6 +97,7 @@ impl AutoSwitchHAService {
         Self {
             delegate: Box::new(delegate),
             replication: Arc::new(ReplicationStateRoot::new(is_master)),
+            sync_state_set_changes: SyncStateSetChangePublisher::new(),
         }
     }
 
@@ -64,7 +110,10 @@ impl AutoSwitchHAService {
     }
 
     pub(crate) fn init(&mut self, service_reference: GeneralHAServiceReference) -> Result<(), HAError> {
-        let replication = self.replication_state();
+        let replication = AutoSwitchReplication {
+            state: self.replication_state(),
+            changes: self.sync_state_set_changes.clone(),
+        };
         self.delegate.init(service_reference, Some(replication))?;
         let client = self
             .delegate
@@ -133,11 +182,18 @@ impl AutoSwitchHAService {
         self.replication.is_synchronizing_sync_state_set()
     }
 
+    /// Subscribes to sync-state-set proposals that the Broker must report to the Controller.
+    pub fn subscribe_sync_state_set_changes(&self) -> watch::Receiver<u64> {
+        self.sync_state_set_changes.subscribe()
+    }
+
     pub fn update_connection_last_caught_up_time(&self, slave_broker_id: i64, last_caught_up_time_ms: u64) {
         self.replication
             .record_caught_up(slave_broker_id, last_caught_up_time_ms);
     }
 
+    /// Returns the membership to propose to the Controller: committed members and pending
+    /// additions that caught up within `haMaxTimeSlaveNotCatchup`, plus the local broker.
     pub fn maybe_shrink_sync_state_set(&self) -> HashSet<i64> {
         let now = current_millis();
         let timeout_millis = self
@@ -149,9 +205,12 @@ impl AutoSwitchHAService {
     }
 
     pub fn maybe_expand_in_sync_state_set(&self, slave_broker_id: i64, slave_max_offset: i64) -> Option<HashSet<i64>> {
-        let confirm_offset = self.delegate.replica_store().get_confirm_offset_directly();
-        self.replication
-            .maybe_expand_sync_state_set(slave_broker_id, slave_max_offset, confirm_offset)
+        let admission_offset = sync_state_set_admission_offset(self.delegate.replica_store());
+        let proposal =
+            self.replication
+                .maybe_expand_sync_state_set(slave_broker_id, slave_max_offset, admission_offset)?;
+        self.sync_state_set_changes.publish();
+        Some(proposal)
     }
 
     pub fn update_confirm_offset_when_slave_ack(&self, slave_broker_id: i64) {
@@ -237,6 +296,19 @@ impl AutoSwitchHAService {
         true
     }
 
+    async fn assume_master_role(&self, master_epoch: i32) -> bool {
+        if !self.apply_epoch_transition(master_epoch) {
+            return false;
+        }
+        self.replication.set_master(true);
+        self.clear_pending_sync_state_tracking();
+        self.replication.ensure_local_member();
+        self.clear_master_target().await;
+        self.refresh_confirm_offset_after_role_change();
+        self.delegate.notify_transfer_progress();
+        true
+    }
+
     fn refresh_confirm_offset_after_role_change(&self) {
         let replica_store = self.delegate.replica_store();
         let min_phy_offset = replica_store.get_min_phy_offset();
@@ -271,20 +343,23 @@ impl HAService for AutoSwitchHAService {
     }
 
     async fn change_to_master(&self, master_epoch: i32) -> Result<bool, StoreError> {
-        if !self.apply_epoch_transition(master_epoch) {
+        if !self.assume_master_role(master_epoch).await {
             return Ok(false);
         }
-        self.replication.set_master(true);
-        self.clear_pending_sync_state_tracking();
-        self.replication.ensure_local_member();
-        self.clear_master_target().await;
-        self.refresh_confirm_offset_after_role_change();
-        self.delegate.notify_transfer_progress();
+        // A replica never assigns queue offsets. Rebuild them before the Broker grants write access.
+        let replica_store = self.delegate.replica_store().clone();
+        self.delegate
+            .runtime_scope()
+            .spawn_io("ha-recover-topic-queue-table", move || {
+                replica_store.recover_topic_queue_table()
+            })
+            .await?;
         Ok(true)
     }
 
     async fn change_to_master_when_last_role_is_master(&self, master_epoch: i32) -> Result<bool, StoreError> {
-        self.change_to_master(master_epoch).await
+        // A Store that stayed master kept assigning queue offsets, so its table is current.
+        Ok(self.assume_master_role(master_epoch).await)
     }
 
     async fn change_to_slave(
@@ -413,7 +488,9 @@ mod tests {
     use crate::base::backend_ops::BackendOps;
     use crate::ha::general_ha_service::GeneralHAService;
     use crate::ha::ha_client::HAClient;
+    use crate::ha::test_support::append_replicated_messages;
     use crate::ha::test_support::new_test_message_store;
+    use crate::ha::test_support::next_queue_offset;
 
     fn new_default_ha_service(
         store: &crate::message_store::local_file_message_store::LocalFileMessageStore,
@@ -734,6 +811,34 @@ mod tests {
         assert_eq!(store.get_confirm_offset(), 4);
 
         let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn restart_recovery_continues_queues_after_undispatched_messages() {
+        let temp_root = tempfile::tempdir().expect("create temp root dir");
+        let mut store = new_test_message_store(temp_root.path(), true);
+        store.init().await.expect("init message store");
+        append_replicated_messages(&mut store, &[("TopicA", 0, 7), ("TopicA", 0, 8), ("TopicB", 1, 3)]).await;
+
+        store.recover_topic_queue_table();
+
+        assert_eq!(next_queue_offset(&store, "TopicA", 0), Some(9));
+        assert_eq!(next_queue_offset(&store, "TopicB", 1), Some(4));
+    }
+
+    #[tokio::test]
+    async fn change_to_master_rebuilds_queue_offsets_left_stale_by_replication() {
+        let temp_root = tempfile::tempdir().expect("create temp root dir");
+        let mut store = new_test_message_store(temp_root.path(), true);
+        store.init().await.expect("init message store");
+        append_replicated_messages(&mut store, &[("TopicA", 0, 7), ("TopicA", 0, 8)]).await;
+        let general_service = new_initialized_auto_switch_service(&store);
+        let service = general_service.auto_switch_service().expect("auto switch service");
+        assert_eq!(next_queue_offset(&store, "TopicA", 0), None);
+
+        assert!(service.change_to_master(1).await.expect("change to master"));
+
+        assert_eq!(next_queue_offset(&store, "TopicA", 0), Some(9));
     }
 
     #[tokio::test]

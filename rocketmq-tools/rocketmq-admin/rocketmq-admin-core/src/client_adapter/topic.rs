@@ -51,7 +51,7 @@ use crate::core::topic::TopicConsumers;
 use crate::core::topic::TopicCurrentStats;
 use crate::core::topic::TopicCurrentStatsFailure;
 use crate::core::topic::TopicCurrentStatsItem;
-use crate::core::topic::TopicMutationOutcome;
+use crate::core::topic::TopicMutationSummary;
 use crate::core::topic::TopicQueue;
 use crate::core::topic::TopicQueueOffset;
 use crate::core::topic::TopicRoute;
@@ -102,7 +102,7 @@ impl TopicAdmin for AdminSession {
                 .inner
                 .fetch_all_topic_list()
                 .await
-                .map_err(|error| backend_error("fetch_all_topic_list", error))?;
+                .map_err(|source| promote_to_admin_error("fetch_all_topic_list", source))?;
 
             let Some(cluster_name) = request.cluster.as_deref() else {
                 return Ok(ListTopicsResult {
@@ -122,7 +122,7 @@ impl TopicAdmin for AdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
             let cluster_brokers = cluster_info
                 .cluster_addr_table
                 .as_ref()
@@ -139,7 +139,7 @@ impl TopicAdmin for AdminSession {
                     .inner
                     .examine_topic_route_info(topic.clone())
                     .await
-                    .map_err(|error| backend_error("examine_topic_route_info", error))?;
+                    .map_err(|source| promote_to_admin_error("examine_topic_route_info", source))?;
                 let Some(route) = route else {
                     continue;
                 };
@@ -155,7 +155,7 @@ impl TopicAdmin for AdminSession {
                     .inner
                     .query_topic_consume_by_who(topic.clone())
                     .await
-                    .map_err(|error| backend_error("query_topic_consume_by_who", error))?;
+                    .map_err(|source| promote_to_admin_error("query_topic_consume_by_who", source))?;
                 if group_list.get_group_list().is_empty() {
                     topics.push(TopicSummary {
                         topic: topic.to_string(),
@@ -186,7 +186,7 @@ impl TopicAdmin for AdminSession {
                 .inner
                 .examine_topic_route_info(CheetahString::from(request.topic.as_str()))
                 .await
-                .map_err(|error| backend_error("examine_topic_route_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_topic_route_info", source))?;
             Ok(route.map(map_topic_route))
         })
     }
@@ -198,12 +198,12 @@ impl TopicAdmin for AdminSession {
                 .inner
                 .fetch_all_topic_list()
                 .await
-                .map_err(|error| backend_error("fetch_all_topic_list", error))?;
+                .map_err(|source| promote_to_admin_error("fetch_all_topic_list", source))?;
             let cluster_info = self
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
             let targets = cluster_targets_from_cluster_info(&cluster_info);
             let topic_configs = collect_topic_configs(&mut self.inner, &cluster_info).await?;
 
@@ -229,7 +229,7 @@ impl TopicAdmin for AdminSession {
                     .inner
                     .examine_topic_route_info(CheetahString::from(topic.as_str()))
                     .await
-                    .map_err(|error| backend_error("examine_topic_route_info", error))?
+                    .map_err(|source| promote_to_admin_error("examine_topic_route_info", source))?
                     .unwrap_or_default();
                 let (clusters, brokers, read_queue_count, write_queue_count, perm) = summarize_route(&route);
                 items.push(TopicCatalogItem {
@@ -257,7 +257,7 @@ impl TopicAdmin for AdminSession {
                 .inner
                 .fetch_all_topic_list()
                 .await
-                .map_err(|error| backend_error("fetch_all_topic_list", error))?;
+                .map_err(|source| promote_to_admin_error("fetch_all_topic_list", source))?;
             let mut rows = Vec::new();
             let mut failures = Vec::new();
 
@@ -316,9 +316,9 @@ impl TopicAdmin for AdminSession {
 
             if successful_brokers == 0 {
                 return Err(last_error
-                    .map(|error| backend_error("examine_topic_stats", error))
+                    .map(|source| promote_to_admin_error("examine_topic_stats", source))
                     .unwrap_or_else(|| {
-                        AdminError::backend(
+                        AdminError::operation_failed(
                             "examine_topic_stats",
                             format!("topic `{topic}` has no reachable master broker"),
                         )
@@ -341,7 +341,7 @@ impl TopicAdmin for AdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
             let route = require_topic_route(&self.inner, &request.topic).await?;
             let configs = collect_route_topic_configs(&mut self.inner, &route, &request.topic).await?;
             let selected = match request.broker_name.as_deref() {
@@ -364,11 +364,11 @@ impl TopicAdmin for AdminSession {
         })
     }
 
-    fn upsert_topic<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationOutcome> {
+    fn upsert_topic<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationSummary> {
         Box::pin(async move { self.upsert_topic_config(request, true).await })
     }
 
-    fn delete_topic<'a>(&'a mut self, request: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationOutcome> {
+    fn delete_topic<'a>(&'a mut self, request: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationSummary> {
         Box::pin(async move {
             self.ensure_open()?;
             let topic = request.topic.trim();
@@ -381,7 +381,7 @@ impl TopicAdmin for AdminSession {
                     .inner
                     .examine_broker_cluster_info()
                     .await
-                    .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+                    .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
                 let broker_addr = find_master_addr_by_broker_name(&cluster_info, broker_name).ok_or_else(|| {
                     AdminError::invalid_argument(
                         "brokerName",
@@ -391,8 +391,8 @@ impl TopicAdmin for AdminSession {
                 self.inner
                     .delete_topic_in_broker(HashSet::from([broker_addr]), CheetahString::from(topic))
                     .await
-                    .map_err(|error| backend_error("delete_topic_in_broker", error))?;
-                return Ok(TopicMutationOutcome {
+                    .map_err(|source| promote_to_admin_error("delete_topic_in_broker", source))?;
+                return Ok(TopicMutationSummary {
                     message: format!("Topic `{topic}` was deleted from broker `{broker_name}`."),
                     target_count: 1,
                 });
@@ -422,9 +422,9 @@ impl TopicAdmin for AdminSession {
                 self.inner
                     .delete_topic(CheetahString::from(topic), CheetahString::from(cluster_name.as_str()))
                     .await
-                    .map_err(|error| backend_error("delete_topic", error))?;
+                    .map_err(|source| promote_to_admin_error("delete_topic", source))?;
             }
-            Ok(TopicMutationOutcome {
+            Ok(TopicMutationSummary {
                 message: format!("Topic `{topic}` was deleted from {} cluster(s).", clusters.len()),
                 target_count: clusters.len(),
             })
@@ -434,7 +434,7 @@ impl TopicAdmin for AdminSession {
     fn delete_topics_in_broker<'a>(
         &'a mut self,
         request: &'a DeleteTopicsInBrokerRequest,
-    ) -> AdminFuture<'a, TopicMutationOutcome> {
+    ) -> AdminFuture<'a, TopicMutationSummary> {
         Box::pin(async move {
             self.ensure_open()?;
             self.client_mut()
@@ -447,8 +447,8 @@ impl TopicAdmin for AdminSession {
                         .collect(),
                 )
                 .await
-                .map_err(|error| backend_error("delete_topic_in_broker_list", error))?;
-            Ok(TopicMutationOutcome {
+                .map_err(|source| promote_to_admin_error("delete_topic_in_broker_list", source))?;
+            Ok(TopicMutationSummary {
                 message: format!(
                     "deleted {} topics through one broker batch request",
                     request.topics.len()
@@ -465,7 +465,7 @@ impl TopicAdmin for AdminSession {
                 .inner
                 .query_topic_consume_by_who(CheetahString::from(topic))
                 .await
-                .map_err(|error| backend_error("query_topic_consume_by_who", error))?;
+                .map_err(|source| promote_to_admin_error("query_topic_consume_by_who", source))?;
             let mut groups = groups
                 .group_list
                 .into_iter()
@@ -483,7 +483,7 @@ impl TopicAdmin for AdminSession {
                 .inner
                 .query_topic_consume_by_who(CheetahString::from(topic))
                 .await
-                .map_err(|error| backend_error("query_topic_consume_by_who", error))?;
+                .map_err(|source| promote_to_admin_error("query_topic_consume_by_who", source))?;
             let mut group_names = groups
                 .group_list
                 .into_iter()
@@ -503,7 +503,7 @@ impl TopicAdmin for AdminSession {
                         None,
                     )
                     .await
-                    .map_err(|error| backend_error("examine_consume_stats", error))?;
+                    .map_err(|source| promote_to_admin_error("examine_consume_stats", source))?;
                 items.push(TopicConsumerInfo {
                     consumer_group,
                     total_diff: stats.compute_total_diff(),
@@ -518,7 +518,7 @@ impl TopicAdmin for AdminSession {
     fn reset_topic_consumer_offset<'a>(
         &'a mut self,
         request: &'a ResetTopicConsumerOffsetRequest,
-    ) -> AdminFuture<'a, TopicMutationOutcome> {
+    ) -> AdminFuture<'a, TopicMutationSummary> {
         Box::pin(async move {
             self.ensure_open()?;
             let offsets = self
@@ -543,11 +543,11 @@ impl TopicAdmin for AdminSession {
                         request.force,
                     )
                     .await
-                    .map_err(|error| backend_error("reset_offset_by_timestamp_old", error))?
+                    .map_err(|source| promote_to_admin_error("reset_offset_by_timestamp_old", source))?
                     .len(),
-                Err(error) => return Err(backend_error("reset_offset_by_timestamp", error)),
+                Err(source) => return Err(promote_to_admin_error("reset_offset_by_timestamp", source)),
             };
-            Ok(TopicMutationOutcome {
+            Ok(TopicMutationSummary {
                 message: format!(
                     "Consumer group `{}` offset was reset for {affected_queues} queue(s).",
                     request.consumer_group
@@ -604,7 +604,7 @@ impl AdminSession {
         &mut self,
         request: &UpsertTopicRequest,
         reconcile_order_config: bool,
-    ) -> AdminResult<TopicMutationOutcome> {
+    ) -> AdminResult<TopicMutationSummary> {
         self.ensure_open()?;
         let topic = request.topic.trim();
         if topic.is_empty() {
@@ -621,7 +621,7 @@ impl AdminSession {
             .inner
             .examine_broker_cluster_info()
             .await
-            .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+            .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
         let mut target_addrs = HashSet::new();
         let mut target_broker_names = HashSet::new();
         for cluster_name in &request.cluster_names {
@@ -665,25 +665,28 @@ impl AdminSession {
             self.inner
                 .create_and_update_topic_config(broker_addr.clone(), topic_config.clone())
                 .await
-                .map_err(|error| backend_error("create_and_update_topic_config", error))?;
+                .map_err(|source| promote_to_admin_error("create_and_update_topic_config", source))?;
         }
         if reconcile_order_config && request.order {
             let order_conf = build_order_conf(&target_broker_names, topic_config.write_queue_nums);
             self.inner
                 .create_or_update_order_conf(CheetahString::from(topic), CheetahString::from(order_conf), true)
                 .await
-                .map_err(|error| backend_error("create_or_update_order_conf", error))?;
+                .map_err(|source| promote_to_admin_error("create_or_update_order_conf", source))?;
         }
 
-        Ok(TopicMutationOutcome {
+        Ok(TopicMutationSummary {
             message: format!("Topic `{topic}` was saved successfully."),
             target_count: target_addrs.len(),
         })
     }
 }
 
-fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
-    AdminError::from_error(operation, error.into_canonical_error())
+/// Promotes a failure while preserving canonical metadata and typed sources.
+///
+/// The operation name labels the Admin error without replacing canonical context.
+fn promote_to_admin_error(operation_name: &'static str, source: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation_name, source.into_canonical_error())
 }
 
 mod batch;
@@ -696,7 +699,7 @@ impl crate::core::topic::TopicSkipMutationAdmin for AdminSession {
     fn skip_accumulated<'a>(
         &'a mut self,
         request: &'a crate::core::topic::SkipTopicAccumulatedRequest,
-    ) -> AdminFuture<'a, TopicMutationOutcome> {
+    ) -> AdminFuture<'a, TopicMutationSummary> {
         Box::pin(async move {
             self.ensure_open()?;
             let affected_queues = rocketmq_client_rust::MQAdminMutationExt::skip_accumulated_message(
@@ -707,8 +710,8 @@ impl crate::core::topic::TopicSkipMutationAdmin for AdminSession {
                 request.force(),
             )
             .await
-            .map_err(|error| backend_error("skip_accumulated_message", error))?;
-            Ok(TopicMutationOutcome {
+            .map_err(|source| promote_to_admin_error("skip_accumulated_message", source))?;
+            Ok(TopicMutationSummary {
                 message: "Accumulated messages were skipped to the latest offsets.".into(),
                 target_count: affected_queues,
             })

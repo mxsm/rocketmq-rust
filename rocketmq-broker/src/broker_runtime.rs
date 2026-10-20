@@ -51,9 +51,8 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_runtime::common::time_utils::compute_next_morning_time_millis;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::common::util_all::compute_next_morning_time_millis;
-use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::MetadataDeadline;
@@ -69,13 +68,13 @@ use rocketmq_store::BrokerStats;
 use rocketmq_store::BrokerStatsManager;
 use rocketmq_store::BrokerStorePort;
 use rocketmq_store::CommitLogDispatcher;
+use rocketmq_store::MessageStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::MessageStoreShutdownReport;
 use rocketmq_store::StoreError;
 use rocketmq_store::StoreFactory;
 use rocketmq_store::StoreFactoryConfig;
 use rocketmq_store::StoreOperation;
-use rocketmq_store::StorePorts;
 #[cfg(all(test, feature = "rocksdb_store"))]
 use rocketmq_store::StoreType;
 use rocketmq_store::TimerMessageStore;
@@ -237,7 +236,7 @@ use crate::slave::slave_synchronize::SlaveTimerStoreCapability;
 use crate::subscription::lite_subscription_registry::LiteSubscriptionRegistry;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManagerConfig;
-use crate::topic::manager::topic_config_coordinator::outcome_result;
+use crate::topic::manager::topic_config_coordinator::topic_config_command_result;
 use crate::topic::manager::topic_config_coordinator::TopicConfigCoordinator;
 use crate::topic::manager::topic_config_coordinator::TopicConfigCoordinatorShutdownReport;
 use crate::topic::manager::topic_config_coordinator::TopicRegistrationAction;
@@ -280,15 +279,13 @@ pub(crate) use shutdown_report::BrokerRemotingServerShutdownReport;
 pub(crate) use shutdown_report::BrokerShutdownComponentReport;
 use shutdown_report::BrokerShutdownProgress;
 
-pub(crate) type BrokerMessageStore = StorePorts;
+pub(crate) type BrokerMessageStore = MessageStore;
 
 pub(crate) type DefaultServerProcessor = BrokerRequestProcessor<
     BrokerProcessorType<BrokerMessageStore, DefaultTransactionalMessageService<BrokerMessageStore>>,
 >;
 
 pub(crate) type DefaultBrokerDispatcher = rocketmq_transport::api::AuthorizedCommandDispatcher<DefaultServerProcessor>;
-
-type BrokerScheduledTasks = ScheduledTaskManager;
 
 pub(crate) async fn complete_topic_config_creation<F, Fut>(
     coordinator: Arc<TopicConfigCoordinator>,
@@ -323,8 +320,11 @@ where
             (false, Some(registration)) => coordinator
                 .persist_and_register_wait(registration)
                 .await
-                .and_then(outcome_result),
-            (false, None) => coordinator.persist_and_wait().await.and_then(outcome_result),
+                .and_then(topic_config_command_result),
+            (false, None) => coordinator
+                .persist_and_wait()
+                .await
+                .and_then(topic_config_command_result),
         };
         if let Err(error) = result {
             warn!(?error, "failed to coordinate topic create persistence and registration");
@@ -354,7 +354,6 @@ where
 
 #[derive(Debug)]
 enum BrokerBlockingShutdownError {
-    MissingServiceContext,
     Spawn(rocketmq_runtime::RuntimeError),
     Execution(rocketmq_runtime::RuntimeError),
     ResultChannelClosed,
@@ -368,7 +367,6 @@ impl BrokerBlockingShutdownError {
 
     fn detail(&self) -> String {
         match self {
-            Self::MissingServiceContext => "missing shutdown service context".to_string(),
             Self::Spawn(error) => format!("failed to spawn owned shutdown task: {error}"),
             Self::Execution(error) => format!("blocking shutdown operation failed: {error}"),
             Self::ResultChannelClosed => "owned shutdown task closed without a result".to_string(),
@@ -447,7 +445,7 @@ where
         .map_err(|error| crate::broker_error::io(std::io::Error::other(error)))?
 }
 
-enum MessageStoreShutdownOutcome {
+enum MessageStoreShutdownStatus {
     Absent,
     Completed(MessageStoreShutdownReport),
     Failed(StoreError),
@@ -793,24 +791,22 @@ pub(crate) struct BrokerRuntimeState<MS: BrokerStorePort> {
     slave_synchronize: Option<Arc<SlaveSynchronize<MS>>>,
     slave_master_addr: Arc<SlaveMasterAddress>,
     broker_pre_online_service: Option<BrokerPreOnlineService<MS>>,
-    service_context: Option<ChildServiceContext>,
+    service_context: ChildServiceContext,
     lock: Mutex<()>,
 }
 
-pub(crate) fn broker_task_group_or_current(
-    service_context: Option<&ChildServiceContext>,
+/// Returns the task group of the Broker component `name` under `service_context`.
+///
+/// # Panics
+///
+/// Panics when `name` is blank. Every caller passes a fixed, nonblank lifecycle label.
+pub(crate) fn broker_component_task_group(
+    service_context: &ChildServiceContext,
     name: impl Into<Arc<str>>,
-    no_runtime_warning: &'static str,
-) -> Option<TaskGroup> {
-    let name = name.into();
-    let scope = rocketmq_runtime::ScopeId::try_new(name)
+) -> TaskGroup {
+    let scope = rocketmq_runtime::ScopeId::try_new(name.into())
         .expect("broker task-group callers use fixed nonblank lifecycle labels");
-    service_context
-        .map(|service_context| service_context.component(scope).task_group().clone())
-        .or_else(|| {
-            warn!("{no_runtime_warning}");
-            None
-        })
+    service_context.component(scope).task_group().clone()
 }
 
 #[cfg(test)]

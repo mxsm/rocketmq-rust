@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use tracing::debug;
 use tracing::info;
-use tracing::warn;
 
 use super::TransportClient;
 
@@ -37,14 +35,6 @@ pub enum CachedConnectionState {
 impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
     pub(super) fn reconcile_cached_connection_inner(&self, addr: &CheetahString) -> CachedConnectionState {
         self.connection_registry.reconcile_direct_session(addr)
-    }
-
-    pub(super) fn is_address_reachable_inner(&self, addr: &CheetahString) {
-        match self.reconcile_cached_connection_inner(addr) {
-            CachedConnectionState::Healthy => {}
-            CachedConnectionState::UnhealthyRetired => warn!("Removed unhealthy connection"),
-            CachedConnectionState::Absent => debug!("No connection found"),
-        }
     }
 
     pub(super) fn close_clients_inner(&self, addrs: Vec<String>) {
@@ -89,7 +79,7 @@ mod tests {
         let target = CheetahString::from_string(addr.to_string());
 
         assert_eq!(
-            client.reconcile_cached_connection_inner(&target),
+            client.reconcile_cached_connection(&target),
             CachedConnectionState::Absent
         );
         let session = client
@@ -97,54 +87,17 @@ mod tests {
             .await
             .expect("create cached direct session");
         assert_eq!(
-            client.reconcile_cached_connection_inner(&target),
+            client.reconcile_cached_connection(&target),
             CachedConnectionState::Healthy
         );
 
         session.retire_after_timeout().await;
         assert_eq!(
-            client.reconcile_cached_connection_inner(&target),
+            client.reconcile_cached_connection(&target),
             CachedConnectionState::UnhealthyRetired
         );
         assert_eq!(
-            client.reconcile_cached_connection_inner(&target),
-            CachedConnectionState::Absent
-        );
-
-        let _ = client.shutdown_now();
-        let _ = release_tx.send(());
-        server.await.expect("server task");
-    }
-
-    #[tokio::test]
-    async fn legacy_reachability_facade_keeps_unhealthy_cache_cleanup() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
-        let addr = listener.local_addr().expect("listener address");
-        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
-        let server = tokio::spawn(async move {
-            let (socket, _) = listener.accept().await.expect("accept client connection");
-            let _socket = socket;
-            let _ = release_rx.await;
-        });
-        let runtime = RuntimeContext::from_current("legacy-reachability-cleanup");
-        let client = Arc::new(TransportClient::build_for_test(
-            Arc::new(TransportClientConfig::default()),
-            DefaultRequestProcessor,
-            runtime.service_context("client"),
-        ));
-        client.start().await.expect("start client");
-        let target = CheetahString::from_string(addr.to_string());
-        let session = client
-            .create_client(&target, Duration::from_secs(1))
-            .await
-            .expect("create cached direct session");
-        session.retire_after_timeout().await;
-
-        // This validates the retained compatibility call site while keeping its deprecation scoped to this test.
-        #[allow(deprecated)]
-        client.is_address_reachable(&target);
-        assert_eq!(
-            client.reconcile_cached_connection_inner(&target),
+            client.reconcile_cached_connection(&target),
             CachedConnectionState::Absent
         );
 

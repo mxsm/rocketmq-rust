@@ -49,7 +49,7 @@ mod tests {
     use super::storage_status_reason;
     use crate::config::SqlPoolConfig;
     use crate::config::StorageConfig;
-    use crate::model::StorageBackend;
+    use crate::model::StorageEngine;
     use crate::model::StorageStatusReason;
     use crate::persistence::DashboardPersistence;
     use crate::persistence::StorageStatus;
@@ -67,7 +67,7 @@ mod tests {
         let persistence = owner.block_on(async {
             DashboardPersistence::initialize(
                 &StorageConfig {
-                    backend: StorageBackend::File,
+                    backend: StorageEngine::File,
                     data_path: directory.path().join("operator-private-directory"),
                     database_url: None,
                     pool: SqlPoolConfig::default(),

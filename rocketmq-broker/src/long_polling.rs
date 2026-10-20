@@ -15,7 +15,6 @@
 pub(crate) mod notification_deferred;
 pub(crate) mod notify_message_arriving_listener;
 pub(crate) mod pending_arrival_latch;
-pub(crate) mod polling_header;
 pub(crate) mod pop_deferred;
 pub(crate) mod pop_lite_deferred;
 pub(crate) mod pull_deferred;

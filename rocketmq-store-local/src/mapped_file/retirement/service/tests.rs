@@ -25,8 +25,8 @@ use crate::mapped_file::retirement::identity::StoreUuid;
 use crate::mapped_file::retirement::platform::authorize_namespace_transition;
 use crate::mapped_file::retirement::platform::AuthorizedNamespaceTransitionResult;
 use crate::mapped_file::retirement::platform::NamespaceAbsenceProof;
+use crate::mapped_file::retirement::platform::NamespaceOperationResult;
 use crate::mapped_file::retirement::platform::NamespaceTransition;
-use crate::mapped_file::retirement::platform::NamespaceTransitionOutcome;
 use crate::mapped_file::retirement::registry::reaper::commit_logical_namespace_outcome;
 use crate::mapped_file::retirement::registry::reaper::LogicalNamespaceProgress;
 use crate::mapped_file::retirement::registry::reaper::NamespacePending;
@@ -158,7 +158,7 @@ impl NamespaceDriver<ModelLedgerIo, TestOwner> for ImmediateAbsence {
             writer,
             AuthorizedNamespaceTransitionResult::for_test(
                 capability,
-                NamespaceTransitionOutcome::NamespaceAbsentVerified(proof),
+                NamespaceOperationResult::NamespaceAbsentVerified(proof),
             ),
             observation_time_ns,
         )

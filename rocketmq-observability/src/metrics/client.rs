@@ -231,65 +231,67 @@ impl ClientMetrics {
     }
 
     #[inline]
-    pub fn record_send_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_send_total(&self, count: u64, attributes: &crate::MetricAttributes) {
         if self.is_enabled() {
             if let Some(instruments) = &self.instruments {
-                instruments.send_total.add(count, attributes);
+                instruments.send_total.add(count, attributes.as_key_values());
             }
         }
     }
 
     #[inline]
-    pub fn record_send_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_send_latency(&self, latency_ms: u64, attributes: &crate::MetricAttributes) {
         if self.is_enabled() {
             if let Some(instruments) = &self.instruments {
-                instruments.send_latency.record(latency_ms, attributes);
+                instruments.send_latency.record(latency_ms, attributes.as_key_values());
             }
         }
     }
 
     #[inline]
-    pub fn record_consume_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_consume_total(&self, count: u64, attributes: &crate::MetricAttributes) {
         if self.is_enabled() {
             if let Some(instruments) = &self.instruments {
-                instruments.consume_total.add(count, attributes);
+                instruments.consume_total.add(count, attributes.as_key_values());
             }
         }
     }
 
     #[inline]
-    pub fn record_consume_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_consume_latency(&self, latency_ms: u64, attributes: &crate::MetricAttributes) {
         if self.is_enabled() {
             if let Some(instruments) = &self.instruments {
-                instruments.consume_latency.record(latency_ms, attributes);
+                instruments
+                    .consume_latency
+                    .record(latency_ms, attributes.as_key_values());
             }
         }
     }
 
     #[inline]
-    pub fn record_rebalance_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_rebalance_total(&self, count: u64, attributes: &crate::MetricAttributes) {
         if self.is_enabled() {
             if let Some(instruments) = &self.instruments {
-                instruments.rebalance_total.add(count, attributes);
+                instruments.rebalance_total.add(count, attributes.as_key_values());
             }
         }
     }
 
     #[inline]
     pub fn record_send(&self, elapsed: Duration) {
-        self.record_send_total(1, &[]);
-        self.record_send_latency(duration_millis_u64(elapsed), &[]);
+        self.record_send_total(1, &crate::MetricAttributes::new());
+        self.record_send_latency(duration_millis_u64(elapsed), &crate::MetricAttributes::new());
     }
 
     #[inline]
     pub fn record_consume(&self, message_count: usize, latency_ms: u64) {
-        self.record_consume_total(message_count as u64, &[]);
-        self.record_consume_latency(latency_ms, &[]);
+        self.record_consume_total(message_count as u64, &crate::MetricAttributes::new());
+        self.record_consume_latency(latency_ms, &crate::MetricAttributes::new());
     }
 
     #[inline]
     pub fn record_rebalance(&self) {
-        self.record_rebalance_total(1, &[]);
+        self.record_rebalance_total(1, &crate::MetricAttributes::new());
     }
 
     #[inline]
@@ -500,7 +502,7 @@ mod tests {
         let provider = SdkMeterProvider::builder().build();
         let meter = provider.meter("client-metrics-test");
         let metrics = ClientMetrics::new(&meter);
-        let attrs = [opentelemetry::KeyValue::new("client_id", "client-a")];
+        let attrs = crate::MetricAttributes::new().with("client_id", "client-a");
 
         metrics.record_send_total(1, &attrs);
         metrics.record_send_latency(10, &attrs);

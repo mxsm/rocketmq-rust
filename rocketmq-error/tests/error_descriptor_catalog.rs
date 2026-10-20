@@ -22,7 +22,6 @@ use rocketmq_error::ErrorClass;
 use rocketmq_error::ErrorCode;
 use rocketmq_error::ErrorDescriptor;
 use rocketmq_error::ALL_DESCRIPTORS;
-use rocketmq_error::STORAGE_BACKEND_UNAVAILABLE;
 use rocketmq_error::STORAGE_CAPACITY_EXHAUSTED;
 use rocketmq_error::STORAGE_INTERNAL_FAILURE;
 use rocketmq_error::STORAGE_IO_FAILED;
@@ -33,6 +32,7 @@ use rocketmq_error::STORAGE_OPERATION_UNSUPPORTED;
 use rocketmq_error::STORAGE_READ_FAILED;
 use rocketmq_error::STORAGE_REQUEST_INVALID;
 use rocketmq_error::STORAGE_STATE_CORRUPTED;
+use rocketmq_error::STORAGE_UNAVAILABLE;
 use rocketmq_error::STORAGE_WRITE_FAILED;
 
 const EXPECTED_DESCRIPTOR_SNAPSHOTS: &[&str] = &[
@@ -314,7 +314,7 @@ fn public_messages_and_protocol_values_are_boundary_safe() {
 fn every_storage_descriptor_has_the_exact_allowed_fields() {
     let storage_descriptors = [
         STORAGE_LIFECYCLE_NOT_STARTED,
-        STORAGE_BACKEND_UNAVAILABLE,
+        STORAGE_UNAVAILABLE,
         STORAGE_REQUEST_INVALID,
         STORAGE_MAPPED_FILE_NOT_FOUND,
         STORAGE_CAPACITY_EXHAUSTED,

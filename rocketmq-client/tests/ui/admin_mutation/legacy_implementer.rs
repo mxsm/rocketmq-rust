@@ -16,12 +16,12 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::BrokerConfigPatchOutcome;
+use rocketmq_client_rust::BrokerConfigPatchResult;
 use rocketmq_client_rust::MQAdminMutationExt;
 use rocketmq_client_rust::SubscriptionGroupConfigPatch;
-use rocketmq_client_rust::SubscriptionGroupConfigPatchOutcome;
+use rocketmq_client_rust::SubscriptionGroupConfigPatchResult;
 use rocketmq_client_rust::TopicConfigPatch;
-use rocketmq_client_rust::TopicConfigPatchOutcome;
+use rocketmq_client_rust::TopicConfigPatchResult;
 use rocketmq_client_rust::ClientResult;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_enum::MessageRequestMode;
@@ -66,7 +66,7 @@ impl MQAdminMutationExt for LegacyAdmin {
         _broker_addr: CheetahString,
         _expected_generation: u64,
         _properties: HashMap<CheetahString, CheetahString>,
-    ) -> ClientResult<BrokerConfigPatchOutcome> {
+    ) -> ClientResult<BrokerConfigPatchResult> {
         unsupported()
     }
 
@@ -76,7 +76,7 @@ impl MQAdminMutationExt for LegacyAdmin {
         _topic: CheetahString,
         _expected_version: u64,
         _patch: TopicConfigPatch,
-    ) -> ClientResult<TopicConfigPatchOutcome> {
+    ) -> ClientResult<TopicConfigPatchResult> {
         unsupported()
     }
 
@@ -86,7 +86,7 @@ impl MQAdminMutationExt for LegacyAdmin {
         _group: CheetahString,
         _expected_version: u64,
         _patch: SubscriptionGroupConfigPatch,
-    ) -> ClientResult<SubscriptionGroupConfigPatchOutcome> {
+    ) -> ClientResult<SubscriptionGroupConfigPatchResult> {
         unsupported()
     }
 

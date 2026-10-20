@@ -170,7 +170,7 @@ impl<'a> DecodedFrame<'a> {
 
 /// Result of reading at most one frame from a log suffix.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DecodeOutcome<'a> {
+pub(crate) enum LedgerFrameDecodeResult<'a> {
     EndOfInput,
     TrailingPartial(TrailingPartial),
     Frame(DecodedFrame<'a>),
@@ -467,9 +467,9 @@ pub(crate) fn decode_next_frame(
     input: &[u8],
     expected_sequence: u64,
     expected_log_generation: u64,
-) -> Result<DecodeOutcome<'_>, CodecViolation> {
+) -> Result<LedgerFrameDecodeResult<'_>, CodecViolation> {
     if input.is_empty() {
-        return Ok(DecodeOutcome::EndOfInput);
+        return Ok(LedgerFrameDecodeResult::EndOfInput);
     }
     if expected_sequence == 0 {
         return Err(CodecViolation::ZeroExpectedSequence);
@@ -659,7 +659,7 @@ pub(crate) fn decode_next_frame(
         });
     }
 
-    Ok(DecodeOutcome::Frame(DecodedFrame {
+    Ok(LedgerFrameDecodeResult::Frame(DecodedFrame {
         record_type,
         sequence,
         log_generation,
@@ -726,8 +726,8 @@ fn validate_available_field_prefix(
     Ok(())
 }
 
-const fn partial(available: usize, required: usize) -> DecodeOutcome<'static> {
-    DecodeOutcome::TrailingPartial(TrailingPartial { available, required })
+const fn partial(available: usize, required: usize) -> LedgerFrameDecodeResult<'static> {
+    LedgerFrameDecodeResult::TrailingPartial(TrailingPartial { available, required })
 }
 
 fn read_array<const N: usize>(input: &[u8], offset: usize) -> Option<[u8; N]> {

@@ -35,8 +35,8 @@ use uuid::Uuid;
 use crate::admission::AdmissionClass;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScopeHandle;
-use crate::backend::ReadBackend;
-use crate::backend::WriteBackend;
+use crate::backend::TransportReadHalf;
+use crate::backend::TransportWriteHalf;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::codec::remoting_command_codec::RemotingCommandCodec;
 use crate::codec::remoting_command_codec::SessionCommandDecoder;
@@ -44,9 +44,9 @@ use crate::codec::PreparedResponse;
 use crate::deadline::RequestDeadline;
 use crate::dispatch::DeferredTransportDropHandle;
 use crate::dispatch::RequestControlView;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseOperationalFailure;
-use crate::dispatch::ResponseSendOutcome;
+use crate::dispatch::ResponseSendResult;
 use crate::dispatch::ResponseTransportDropHandle;
 use crate::dispatch::WriteProgress;
 use crate::error_helpers::admission_queue_saturated;
@@ -148,9 +148,9 @@ pub trait ConnectionTransport: AsyncRead + AsyncWrite + Send + Unpin {}
 impl<T> ConnectionTransport for T where T: AsyncRead + AsyncWrite + Send + Unpin {}
 
 pub type BoxedConnectionTransport = Box<dyn ConnectionTransport>;
-type ConnectionReadHalf = FramedRead<ReadBackend, RemotingCommandCodec>;
-pub(crate) type SessionConnectionReadHalf = FramedRead<ReadBackend, SessionCommandDecoder>;
-pub(crate) type ConnectionFrameWriter = FrameWriter<WriteBackend>;
+type ConnectionReadHalf = FramedRead<TransportReadHalf, RemotingCommandCodec>;
+pub(crate) type SessionConnectionReadHalf = FramedRead<TransportReadHalf, SessionCommandDecoder>;
+pub(crate) type ConnectionFrameWriter = FrameWriter<TransportWriteHalf>;
 
 enum ConnectionWriter {
     Direct(ConnectionFrameWriter),
@@ -179,7 +179,7 @@ enum SendFailure {
 /// This keeps normal admission and lifecycle outcomes distinct from a
 /// canonical operational failure without exporting writer progress through a
 /// public compatibility surface.
-pub(crate) enum CommandSendOutcome {
+pub(crate) enum CommandWriteResult {
     Written,
     DeadlineExpired,
     SessionClosed,
@@ -202,25 +202,25 @@ impl SendFailure {
         }
     }
 
-    fn into_response(self) -> ResponseSendOutcome {
+    fn into_response(self) -> ResponseSendResult {
         match self {
-            Self::DeadlineExceeded { .. } => ResponseSendOutcome::Rejected(ResponseCompletionOutcome::DeadlineExpired),
-            Self::SessionClosed => ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed),
-            Self::Cancelled => ResponseSendOutcome::Rejected(ResponseCompletionOutcome::Cancelled),
-            Self::QueueSaturated { .. } => ResponseSendOutcome::Rejected(ResponseCompletionOutcome::QueueSaturated),
+            Self::DeadlineExceeded { .. } => ResponseSendResult::Rejected(ResponseCompletionResult::DeadlineExpired),
+            Self::SessionClosed => ResponseSendResult::Rejected(ResponseCompletionResult::SessionClosed),
+            Self::Cancelled => ResponseSendResult::Rejected(ResponseCompletionResult::Cancelled),
+            Self::QueueSaturated { .. } => ResponseSendResult::Rejected(ResponseCompletionResult::QueueSaturated),
             Self::Writer { progress, error } => {
-                ResponseSendOutcome::OperationalFailure(ResponseOperationalFailure::transport(progress, error))
+                ResponseSendResult::OperationalFailure(ResponseOperationalFailure::transport(progress, error))
             }
         }
     }
 
-    fn into_command_outcome(self) -> CommandSendOutcome {
+    fn into_command_outcome(self) -> CommandWriteResult {
         match self {
-            Self::DeadlineExceeded { .. } => CommandSendOutcome::DeadlineExpired,
-            Self::SessionClosed => CommandSendOutcome::SessionClosed,
-            Self::Cancelled => CommandSendOutcome::Cancelled,
-            Self::QueueSaturated { .. } => CommandSendOutcome::QueueSaturated,
-            Self::Writer { progress, error } => CommandSendOutcome::OperationalFailure { progress, error },
+            Self::DeadlineExceeded { .. } => CommandWriteResult::DeadlineExpired,
+            Self::SessionClosed => CommandWriteResult::SessionClosed,
+            Self::Cancelled => CommandWriteResult::Cancelled,
+            Self::QueueSaturated { .. } => CommandWriteResult::QueueSaturated,
+            Self::Writer { progress, error } => CommandWriteResult::OperationalFailure { progress, error },
         }
     }
 }
@@ -701,10 +701,10 @@ impl Connection {
     }
 
     pub fn new_with_limits(tcp_stream: TcpStream, limits: FrameLimits) -> Connection {
-        let (read_half, write_half) = tcp_stream.into_split();
-        Self::new_with_backends(
-            ReadBackend::Tcp(read_half),
-            WriteBackend::Tcp(write_half),
+        let (tcp_read_half, tcp_write_half) = tcp_stream.into_split();
+        Self::new_with_io_halves(
+            TransportReadHalf::Tcp(tcp_read_half),
+            TransportWriteHalf::Tcp(tcp_write_half),
             limits,
             FrameWriteMode::PlainVectored,
         )
@@ -759,27 +759,27 @@ impl Connection {
         S: ConnectionTransport + 'static,
     {
         let transport = Box::new(stream) as BoxedConnectionTransport;
-        let (read_half, write_half) = tokio::io::split(transport);
-        Self::new_with_backends(
-            ReadBackend::Compat(read_half),
-            WriteBackend::Compat(write_half),
+        let (stream_read_half, stream_write_half) = tokio::io::split(transport);
+        Self::new_with_io_halves(
+            TransportReadHalf::Compat(stream_read_half),
+            TransportWriteHalf::Compat(stream_write_half),
             limits,
             write_mode,
         )
     }
 
-    fn new_with_backends(
-        read_half: ReadBackend,
-        write_half: WriteBackend,
+    fn new_with_io_halves(
+        transport_read_half: TransportReadHalf,
+        transport_write_half: TransportWriteHalf,
         limits: FrameLimits,
         write_mode: FrameWriteMode,
     ) -> Connection {
         let inbound = FramedRead::with_capacity(
-            read_half,
+            transport_read_half,
             RemotingCommandCodec::with_limits(limits),
             limits.safe_initial_read_bytes(),
         );
-        let outbound = FrameWriter::new(write_half, write_mode)
+        let outbound = FrameWriter::new(transport_write_half, write_mode)
             .expect("constructing a frame writer does not perform fallible I/O");
         // Initialize watch channel with Healthy state
         let (state_tx, state_rx) = watch::channel(ConnectionState::Healthy);
@@ -1082,22 +1082,22 @@ impl Connection {
                 )
                 .with_response_queue_wait_observation(response_queue_wait_observation),
             ) {
-                crate::writer_runtime::WriterEnqueueOutcome::Enqueued => {
+                crate::writer_runtime::WriterEnqueueResult::Enqueued => {
                     queued.writer_diagnostics.record_accepted();
                     self.telemetry.record_outbound_accepted_plaintext_bytes(encoded_len);
                 }
                 rejection => {
                     queued.writer_diagnostics.record_rejected(Some(encoded_len));
                     return Err(match rejection {
-                        crate::writer_runtime::WriterEnqueueOutcome::Full(write) => {
+                        crate::writer_runtime::WriterEnqueueResult::Full(write) => {
                             drop(write);
                             SendFailure::QueueSaturated { target: target.clone() }
                         }
-                        crate::writer_runtime::WriterEnqueueOutcome::Closed(write) => {
+                        crate::writer_runtime::WriterEnqueueResult::Closed(write) => {
                             drop(write);
                             SendFailure::SessionClosed
                         }
-                        crate::writer_runtime::WriterEnqueueOutcome::Enqueued => unreachable!(),
+                        crate::writer_runtime::WriterEnqueueResult::Enqueued => unreachable!(),
                     });
                 }
             }
@@ -1233,12 +1233,12 @@ impl Connection {
         &mut self,
         prepared: PreparedResponse,
         control: &RequestControlView,
-    ) -> ResponseSendOutcome {
+    ) -> ResponseSendResult {
         if self.queued_writer().is_none() {
-            return ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed);
+            return ResponseSendResult::Rejected(ResponseCompletionResult::SessionClosed);
         }
         let Some(class) = self.response_class() else {
-            return ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed);
+            return ResponseSendResult::Rejected(ResponseCompletionResult::SessionClosed);
         };
         let (_, payload) = prepared.into_parts();
         self.send_payload_inner_with_response_observation(
@@ -1253,7 +1253,7 @@ impl Connection {
             "transport-session-writer".to_string(),
         )
         .await
-        .map_or_else(SendFailure::into_response, |_| ResponseSendOutcome::Written)
+        .map_or_else(SendFailure::into_response, |_| ResponseSendResult::Written)
     }
 
     pub(crate) async fn send_prepared_deferred_response(
@@ -1261,15 +1261,15 @@ impl Connection {
         prepared: PreparedResponse,
         control: &RequestControlView,
         deferred_drop: DeferredTransportDropHandle,
-    ) -> ResponseSendOutcome {
+    ) -> ResponseSendResult {
         if self.queued_writer().is_none() {
-            return ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed);
+            return ResponseSendResult::Rejected(ResponseCompletionResult::SessionClosed);
         }
         if self.response_drop.is_none() {
-            return ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed);
+            return ResponseSendResult::Rejected(ResponseCompletionResult::SessionClosed);
         }
         let Some(class) = self.response_class() else {
-            return ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed);
+            return ResponseSendResult::Rejected(ResponseCompletionResult::SessionClosed);
         };
         let (_, payload) = prepared.into_parts();
         self.send_payload_inner_with_response_observation(
@@ -1284,19 +1284,19 @@ impl Connection {
             "transport-session-writer".to_string(),
         )
         .await
-        .map_or_else(SendFailure::into_response, |_| ResponseSendOutcome::Written)
+        .map_or_else(SendFailure::into_response, |_| ResponseSendResult::Written)
     }
 
     /// Sends a server response through the canonical writer with a stage-aware
     /// completion error. This is intentionally crate-private while the public
     /// response receipt/context API is introduced separately.
-    pub(crate) async fn send_response(&mut self, command: RemotingCommand) -> ResponseSendOutcome {
+    pub(crate) async fn send_response(&mut self, command: RemotingCommand) -> ResponseSendResult {
         let class = self
             .response_class()
             .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
         let frame = match self.limits.encode_command(command) {
             Ok(frame) => frame,
-            Err(source) => return ResponseSendOutcome::OperationalFailure(ResponseOperationalFailure::encode(source)),
+            Err(source) => return ResponseSendResult::OperationalFailure(ResponseOperationalFailure::encode(source)),
         };
         self.send_payload_inner_with_response_observation(
             OutboundPayload::Frame(frame),
@@ -1310,7 +1310,7 @@ impl Connection {
             "transport-session-writer".to_string(),
         )
         .await
-        .map_or_else(SendFailure::into_response, |_| ResponseSendOutcome::Written)
+        .map_or_else(SendFailure::into_response, |_| ResponseSendResult::Written)
     }
 
     /// Sends a `RemotingCommand` to the peer (consumes command).
@@ -1395,20 +1395,20 @@ impl Connection {
         command: RemotingCommand,
         deadline: RequestDeadline,
         target: impl Into<String>,
-    ) -> CommandSendOutcome {
+    ) -> CommandWriteResult {
         let target = target.into();
         if deadline.is_expired() {
-            return CommandSendOutcome::DeadlineExpired;
+            return CommandWriteResult::DeadlineExpired;
         }
         let class = self
             .response_class()
             .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
         let frame = match self.limits.encode_command(command) {
             Ok(frame) => frame,
-            Err(source) => return CommandSendOutcome::EncodingFailed(source),
+            Err(source) => return CommandWriteResult::EncodingFailed(source),
         };
         if deadline.is_expired() {
-            return CommandSendOutcome::DeadlineExpired;
+            return CommandWriteResult::DeadlineExpired;
         }
 
         self.send_payload_inner(
@@ -1422,7 +1422,7 @@ impl Connection {
             target,
         )
         .await
-        .map_or_else(SendFailure::into_command_outcome, |_| CommandSendOutcome::Written)
+        .map_or_else(SendFailure::into_command_outcome, |_| CommandWriteResult::Written)
     }
 
     /// Sends a RocketMQ command whose body is a validated, leased file region.
@@ -1840,17 +1840,6 @@ impl Connection {
         };
         self.mark_closed();
         result
-    }
-
-    /// Legacy alias for backward compatibility.
-    ///
-    /// # Deprecated
-    ///
-    /// Use `is_healthy()` or `state()` instead for clearer semantics.
-    #[inline]
-    #[deprecated(since = "0.7.0", note = "Use `is_healthy()` or `state()` instead")]
-    pub fn connection_is_ok(&self) -> bool {
-        self.is_healthy()
     }
 }
 

@@ -57,7 +57,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .build();
         let result: ClientResult<()> = async {
             producer.start().await?;
-            let message = Message::new("TopicTest", b"Hello RocketMQ");
+            let message = Message::builder()
+                .topic("TopicTest")
+                .body_slice(b"Hello RocketMQ")
+                .build()?;
             let result = producer.send_with_timeout(message, 2000).await?;
             println!("send result: {result:?}");
             Ok(())

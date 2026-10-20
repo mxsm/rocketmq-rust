@@ -16,14 +16,14 @@ use std::io;
 
 use super::MappedFileAdmissionState;
 
-/// Result of one mapped-file namespace deletion attempt.
+/// Status of one attempt to remove a mapped-file path from the filesystem namespace.
 ///
-/// This type deliberately separates a live-reference deferral from a filesystem failure. A
-/// successful namespace deletion does not claim that mmap or file owners have been physically
+/// This type deliberately separates a live-reference deferral from a filesystem failure.
+/// `NamespaceRemoved` does not claim that mmap or file owners have been physically
 /// dropped; that remains owner-lifetime driven.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[must_use]
-pub enum MappedFileDestroyOutcome {
+pub enum MappedFileRemovalStatus {
     /// The mapped-file path was removed from the filesystem namespace.
     NamespaceRemoved,
     /// Logical cleanup is waiting for outstanding compatibility references.
@@ -40,7 +40,7 @@ pub enum MappedFileDestroyOutcome {
     },
 }
 
-impl MappedFileDestroyOutcome {
+impl MappedFileRemovalStatus {
     /// Returns whether this attempt verified namespace removal.
     #[inline]
     pub fn is_namespace_removed(&self) -> bool {
@@ -55,7 +55,7 @@ impl MappedFileDestroyOutcome {
 /// unmap/last-close, or that the path was removed from the filesystem namespace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
-pub enum MappedFileDetachOutcome {
+pub enum MappedFileDetachResult {
     /// This call detached both owner slots.
     Detached {
         /// Published mapping generation removed from the slot, when one existed.
@@ -76,7 +76,7 @@ pub enum MappedFileDetachOutcome {
     },
 }
 
-impl MappedFileDetachOutcome {
+impl MappedFileDetachResult {
     /// Returns whether both physical owner slots are detached after this result.
     #[inline]
     pub fn is_detached(self) -> bool {

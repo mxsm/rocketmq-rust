@@ -68,7 +68,6 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_runtime::common::time_utils;
-use rocketmq_runtime::common::util_all;
 use rocketmq_store::store_append_receipt;
 use rocketmq_store::BrokerMasterAddressStore;
 use rocketmq_store::BrokerStatsManager;
@@ -82,12 +81,12 @@ use rocketmq_store::SyncFlushRuntimeInfo;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreHealth;
 use rocketmq_transport::api::error_response as remoting_error_response;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestId;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::ResponseObservation;
 use tracing::debug;
 use tracing::info;
@@ -242,7 +241,7 @@ where
     MS: BrokerWriteStore + BrokerMasterAddressStore + 'static,
     TS: TransactionalMessageService + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.process_shared(request).await
     }
 
@@ -277,7 +276,7 @@ where
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let original = request.original_identity();
         let origin = request.origin().clone();
         let control = request.control().clone();
@@ -308,7 +307,7 @@ where
                         opaque: original.original_opaque(),
                     },
                 ))?
-                .into_handler_outcome()
+                .into_response_action()
             }
             Err(error) => Err(error),
         }
@@ -324,7 +323,7 @@ where
         original_oneway: bool,
         request: &mut RemotingCommand,
         parsed_request: Option<ParsedSendRequest>,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let request_code = RequestCode::from(original_code);
         debug!("SendMessageProcessor received request code: {:?}", request_code);
         match request_code {
@@ -357,7 +356,7 @@ where
                     opaque: original_opaque,
                 },
             ))?
-            .into_handler_outcome(),
+            .into_response_action(),
         }
     }
 
@@ -370,7 +369,7 @@ where
         request_code: RequestCode,
         request: &mut RemotingCommand,
         parsed_request: Option<ParsedSendRequest>,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         // One immutable generation follows the request through completion. Permission
         // remains live so a configuration snapshot cannot preserve revoked access.
         let policy = self.inner.context.policy.snapshot();
@@ -395,7 +394,7 @@ where
             &mut request_header,
             &mapping_context,
         ) {
-            return BrokerResponseParts::from_command(response)?.into_handler_outcome();
+            return BrokerResponseParts::from_command(response)?.into_response_action();
         }
 
         let (send_message_context, mut request_properties) =
@@ -523,10 +522,10 @@ where
         request_header: SendMessageRequestHeader,
         request_properties: HashMap<CheetahString, CheetahString>,
         mut mapping_context: TopicQueueMappingContext,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let mut response = self.pre_send_at(&policy, inbound_peer, request, &request_header).await;
         if response.code() != -1 {
-            return BrokerResponseParts::from_command(response)?.into_handler_outcome();
+            return BrokerResponseParts::from_command(response)?.into_response_action();
         }
 
         let mut topic_config = self
@@ -559,7 +558,7 @@ where
             )
             .await
         {
-            return BrokerResponseParts::from_command(response)?.into_handler_outcome();
+            return BrokerResponseParts::from_command(response)?.into_response_action();
         }
         apply_topic_delivery_properties(&topic_config, request_header.topic(), &mut properties, &mut queue_id);
         message_ext.message_ext_inner.queue_id = queue_id;
@@ -583,7 +582,7 @@ where
                     .set_code(ResponseCode::MessageIllegal)
                     .set_remark("Required message key is missing"),
             )?
-            .into_handler_outcome();
+            .into_response_action();
         }
         message_ext.tags_code = MessageExtBrokerInner::tags_string2tags_code(
             &topic_config.topic_filter_type,
@@ -615,7 +614,7 @@ where
                         policy.broker_ip
                     ),
                 ))?
-                .into_handler_outcome();
+                .into_response_action();
             }
             true
         } else {
@@ -628,7 +627,7 @@ where
         let transaction_id = MessageClientIDSetter::get_uniq_id(&message_ext.message_ext_inner.message);
         let recall_handle = self.build_recall_handle(&policy, &message_ext);
         if !self.inner.check_broker_permission(&policy, &mut response) {
-            return BrokerResponseParts::from_command(response)?.into_handler_outcome();
+            return BrokerResponseParts::from_command(response)?.into_response_action();
         }
         let completion_facts = SendCompletionFacts::capture(request, policy);
         if transactional {
@@ -640,7 +639,7 @@ where
                 Ok(result) => result,
                 Err(error) => {
                     let response = map_store_api_error(error).apply_to(response);
-                    return BrokerResponseParts::from_command(response)?.into_handler_outcome();
+                    return BrokerResponseParts::from_command(response)?.into_response_action();
                 }
             };
             let (max_phy_offset, flushed_where) = self
@@ -730,10 +729,10 @@ where
         request_header: SendMessageRequestHeader,
         request_properties: HashMap<CheetahString, CheetahString>,
         mut mapping_context: TopicQueueMappingContext,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let mut response = self.pre_send_at(&policy, inbound_peer, request, &request_header).await;
         if response.code() != -1 {
-            return BrokerResponseParts::from_command(response)?.into_handler_outcome();
+            return BrokerResponseParts::from_command(response)?.into_response_action();
         }
         let topic_config = self
             .inner
@@ -749,13 +748,13 @@ where
             return BrokerResponseParts::from_command(response.set_code(ResponseCode::MessageIllegal).set_remark(
                 format!("message topic length too long {}", request_header.topic().len()),
             ))?
-            .into_handler_outcome();
+            .into_response_action();
         }
         if !request_header.topic.is_empty() && request_header.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
             return BrokerResponseParts::from_command(response.set_code(ResponseCode::MessageIllegal).set_remark(
                 format!("batch request does not support retry group  {}", request_header.topic()),
             ))?
-            .into_handler_outcome();
+            .into_response_action();
         }
 
         let mut message_ext = MessageExtBrokerInner::default();
@@ -828,7 +827,7 @@ where
         let topic = batch_message.message_ext_broker_inner.message_ext_inner.topic().clone();
         let topic_message_type = crate::metrics::broker_metrics_manager::get_message_type(&request_header);
         if !self.inner.check_broker_permission(&policy, &mut response) {
-            return BrokerResponseParts::from_command(response)?.into_handler_outcome();
+            return BrokerResponseParts::from_command(response)?.into_response_action();
         }
         let completion_facts = SendCompletionFacts::capture(request, policy);
         let processor = self;
@@ -924,7 +923,7 @@ where
         result: (Option<RemotingCommand>, bool),
         response: RemotingCommand,
         mut send_message_context: SendMessageContext,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let (mut response, after_canonical_write) = match result {
             (Some(response), _) => (response, false),
             (None, after_canonical_write) => (response, after_canonical_write),
@@ -937,7 +936,7 @@ where
             self.inner
                 .execute_send_message_hook_after(Some(&mut response), &mut send_message_context);
         }
-        BrokerResponseParts::from_command(response)?.into_handler_outcome()
+        BrokerResponseParts::from_command(response)?.into_response_action()
     }
 
     fn prepare_send_store_reply(
@@ -1309,7 +1308,7 @@ where
                 .set_code(RemotingSysResponseCode::SystemError)
                 .set_remark(format!(
                     "broker unable to service, until {}",
-                    util_all::time_millis_to_human_string2(start_timestamp)
+                    time_utils::time_millis_to_human_string2(start_timestamp)
                 ));
             return response;
         }
@@ -1594,14 +1593,14 @@ impl StoreApiErrorProjection {
 }
 
 fn map_store_api_error(error: rocketmq_store_api::StoreError) -> StoreApiErrorProjection {
-    use rocketmq_error::STORAGE_BACKEND_UNAVAILABLE;
     use rocketmq_error::STORAGE_MAPPED_FILE_NOT_FOUND;
     use rocketmq_error::STORAGE_OPERATION_TIMED_OUT;
     use rocketmq_error::STORAGE_OPERATION_UNSUPPORTED;
+    use rocketmq_error::STORAGE_UNAVAILABLE;
     use rocketmq_store_api::StoreOperation;
 
     let descriptor = error.descriptor();
-    let retry = if (descriptor == &STORAGE_BACKEND_UNAVAILABLE && error.operation() == StoreOperation::Append)
+    let retry = if (descriptor == &STORAGE_UNAVAILABLE && error.operation() == StoreOperation::Append)
         || (descriptor == &STORAGE_MAPPED_FILE_NOT_FOUND && error.operation() == StoreOperation::Append)
         || descriptor == &STORAGE_OPERATION_UNSUPPORTED
     {
@@ -2269,11 +2268,11 @@ mod tests {
     use rocketmq_protocol::protocol::SerializeType;
     use rocketmq_store::store_append_receipt;
     use rocketmq_store::FlushBacklog;
+    use rocketmq_store::MessageStore;
     use rocketmq_store::PutMessageResult;
     use rocketmq_store::PutMessageStatus;
     use rocketmq_store::StoreAppendReceipt;
     use rocketmq_store::StoreHealthSnapshot;
-    use rocketmq_store::StorePorts;
     use rocketmq_store::SyncFlushRuntimeInfo;
 
     use crate::mqtrace::send_message_context::SendMessageContext;
@@ -2300,13 +2299,13 @@ mod tests {
     fn send_shared_seam_accepts_an_arc_held_leaf() {
         type TransactionService =
             crate::transaction::queue::default_transactional_message_service::DefaultTransactionalMessageService<
-                StorePorts,
+                MessageStore,
             >;
 
         fn call_shared<'a>(
-            leaf: &'a Arc<super::SendMessageProcessor<StorePorts, TransactionService>>,
+            leaf: &'a Arc<super::SendMessageProcessor<MessageStore, TransactionService>>,
             request: &'a mut super::RemotingRequest,
-        ) -> impl Future<Output = crate::broker_error::BrokerResult<super::HandlerOutcome>> + 'a {
+        ) -> impl Future<Output = crate::broker_error::BrokerResult<super::ResponseAction>> + 'a {
             leaf.process_shared(request)
         }
 
@@ -2424,7 +2423,7 @@ mod tests {
         ) -> impl Future<Output = Result<Self::Receipt, rocketmq_store_api::StoreError>> + Send {
             let result = self.receipt.take().ok_or_else(|| {
                 rocketmq_store_api::StoreError::new(
-                    &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                    &rocketmq_error::STORAGE_UNAVAILABLE,
                     rocketmq_store_api::StoreOperation::Append,
                 )
             });
@@ -2591,7 +2590,7 @@ mod tests {
                 StoreApiRetryDisposition::Never,
             ),
             (
-                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                &rocketmq_error::STORAGE_UNAVAILABLE,
                 RemotingResponseCode::SystemError,
                 "Storage backend is unavailable",
                 StoreApiRetryDisposition::SwitchBroker,
@@ -2691,12 +2690,12 @@ mod tests {
 
         let cases = [
             (
-                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                &rocketmq_error::STORAGE_UNAVAILABLE,
                 StoreOperation::Append,
                 StoreApiRetryDisposition::SwitchBroker,
             ),
             (
-                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                &rocketmq_error::STORAGE_UNAVAILABLE,
                 StoreOperation::Read,
                 StoreApiRetryDisposition::Never,
             ),

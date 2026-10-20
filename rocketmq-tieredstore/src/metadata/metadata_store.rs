@@ -19,6 +19,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreOperation;
 use tokio::fs;
@@ -31,6 +32,7 @@ use crate::metadata::TopicMetadata;
 use crate::metadata::TopicQueueMetadata;
 use crate::provider::TieredProviderDescriptor;
 use crate::provider::TieredProviderPersistence;
+use crate::runtime::PersistenceOperation;
 
 #[cfg(feature = "serde")]
 const METADATA_FORMAT: &str = "rocketmq-tiered-metadata";
@@ -143,10 +145,20 @@ impl Default for MetadataState {
 
 pub struct JsonMetadataStore {
     path: PathBuf,
-    state: RwLock<MetadataState>,
+    state: Arc<RwLock<MetadataState>>,
     expected_provider: Option<PersistedProviderContract>,
-    persist_lock: tokio::sync::Mutex<()>,
-    successful_persists: AtomicU64,
+    persist_lock: Arc<tokio::sync::Mutex<()>>,
+    successful_persists: Arc<AtomicU64>,
+    persistence: Option<PersistenceOperation>,
+    #[cfg(all(test, feature = "serde"))]
+    commit_gate: Option<Arc<CommitGate>>,
+}
+
+#[cfg(all(test, feature = "serde"))]
+#[derive(Default)]
+struct CommitGate {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
 }
 
 impl JsonMetadataStore {
@@ -164,11 +176,26 @@ impl JsonMetadataStore {
                 .store_path_root_dir
                 .join("config")
                 .join("tieredStoreMetadata.json"),
-            state: RwLock::new(MetadataState::new(expected_provider.clone())),
+            state: Arc::new(RwLock::new(MetadataState::new(expected_provider.clone()))),
             expected_provider,
-            persist_lock: tokio::sync::Mutex::new(()),
-            successful_persists: AtomicU64::new(0),
+            persist_lock: Arc::new(tokio::sync::Mutex::new(())),
+            successful_persists: Arc::new(AtomicU64::new(0)),
+            persistence: None,
+            #[cfg(all(test, feature = "serde"))]
+            commit_gate: None,
         }
+    }
+
+    pub(crate) fn with_task_group(mut self, task_group: TaskGroup) -> Self {
+        self.persistence = Some(PersistenceOperation::new(task_group));
+        self
+    }
+
+    pub(crate) async fn drain_pending_writes(&self) -> Result<(), StoreError> {
+        if let Some(persistence) = &self.persistence {
+            persistence.drain().await?;
+        }
+        Ok(())
     }
 
     /// Returns metadata snapshots this store instance successfully replaced on disk.
@@ -219,38 +246,57 @@ impl TieredMetadataStore for JsonMetadataStore {
     }
 
     async fn persist(&self) -> Result<(), StoreError> {
-        let _persist_guard = self.persist_lock.lock().await;
-        let Some(parent) = self.path.parent() else {
-            return Err(error::internal_failure(StoreOperation::AppendDerived));
-        };
-        fs::create_dir_all(parent)
-            .await
-            .map_err(|source| error::io_failed(StoreOperation::AppendDerived, source))?;
-
+        let path = self.path.clone();
+        let persist_lock = self.persist_lock.clone();
         #[cfg(feature = "serde")]
-        {
-            let snapshot = self.state.read().clone();
-            let data = serde_json::to_vec_pretty(&snapshot)
-                .map_err(|source| error::write_failed(StoreOperation::AppendDerived, source))?;
-            let tmp_path = self.path.with_extension("json.tmp");
-            fs::write(&tmp_path, data)
+        let state = self.state.clone();
+        #[cfg(feature = "serde")]
+        let successful_persists = self.successful_persists.clone();
+        #[cfg(all(test, feature = "serde"))]
+        let commit_gate = self.commit_gate.clone();
+        let write = async move {
+            let _persist_guard = persist_lock.lock().await;
+            let Some(parent) = path.parent() else {
+                return Err(error::internal_failure(StoreOperation::AppendDerived));
+            };
+            fs::create_dir_all(parent)
                 .await
                 .map_err(|source| error::io_failed(StoreOperation::AppendDerived, source))?;
-            fs::OpenOptions::new()
-                .write(true)
-                .open(&tmp_path)
-                .await
-                .map_err(|source| error::io_failed(StoreOperation::AppendDerived, source))?
-                .sync_all()
-                .await
-                .map_err(|source| error::io_failed(StoreOperation::AppendDerived, source))?;
-            fs::rename(&tmp_path, &self.path)
-                .await
-                .map_err(|source| error::io_failed(StoreOperation::AppendDerived, source))?;
-            self.successful_persists.fetch_add(1, Ordering::Relaxed);
-        }
 
-        Ok(())
+            #[cfg(feature = "serde")]
+            {
+                let snapshot = state.read().clone();
+                let data = serde_json::to_vec_pretty(&snapshot)
+                    .map_err(|source| error::write_failed(StoreOperation::AppendDerived, source))?;
+                let tmp_path = path.with_extension("json.tmp");
+                fs::write(&tmp_path, data)
+                    .await
+                    .map_err(|source| error::io_failed(StoreOperation::AppendDerived, source))?;
+                fs::OpenOptions::new()
+                    .write(true)
+                    .open(&tmp_path)
+                    .await
+                    .map_err(|source| error::io_failed(StoreOperation::AppendDerived, source))?
+                    .sync_all()
+                    .await
+                    .map_err(|source| error::io_failed(StoreOperation::AppendDerived, source))?;
+                #[cfg(all(test, feature = "serde"))]
+                if let Some(gate) = commit_gate {
+                    gate.entered.notify_one();
+                    gate.release.notified().await;
+                }
+                fs::rename(&tmp_path, &path)
+                    .await
+                    .map_err(|source| error::io_failed(StoreOperation::AppendDerived, source))?;
+                successful_persists.fetch_add(1, Ordering::Relaxed);
+            }
+
+            Ok(())
+        };
+        match &self.persistence {
+            Some(persistence) => persistence.run(write).await,
+            None => write.await,
+        }
     }
 
     async fn destroy(&self) -> Result<(), StoreError> {
@@ -392,6 +438,8 @@ fn metadata_exists(result: std::io::Result<std::fs::Metadata>) -> Result<bool, S
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "serde")]
+    use std::future::Future;
     use std::sync::Arc;
 
     use rocketmq_store_api::StoreError;
@@ -412,6 +460,58 @@ mod tests {
     fn assert_redacted(error: &StoreError, sentinel: &str) {
         assert!(!error.to_string().contains(sentinel));
         assert!(!format!("{error:?}").contains(sentinel));
+    }
+
+    #[cfg(feature = "serde")]
+    #[tokio::test]
+    async fn cancelled_metadata_write_finishes_before_restart() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().expect("metadata cancellation temp dir");
+        let config = Arc::new(TieredStoreConfig {
+            store_path_root_dir: temp_dir.path().to_path_buf(),
+            ..TieredStoreConfig::default()
+        });
+        let context = rocketmq_runtime::RuntimeContext::from_current("metadata-cancellation-test");
+        let mut store = JsonMetadataStore::new(config.clone()).with_task_group(context.root_group().clone());
+        let gate = Arc::new(super::CommitGate::default());
+        store.commit_gate = Some(gate.clone());
+        let topic = TopicMetadata {
+            topic_id: 1,
+            topic: "TopicA".to_owned(),
+            reserve_time_millis: 10_000,
+            status: 0,
+            update_timestamp: 100,
+        };
+        let mut write = Box::pin(store.upsert_topic(topic.clone()));
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::select! {
+                result = &mut write => panic!("write completed before the commit gate: {result:?}"),
+                _ = gate.entered.notified() => {}
+            }
+        })
+        .await
+        .expect("write should reach the commit gate");
+
+        drop(write);
+        context.root_group().cancel();
+        let mut drain = Box::pin(store.drain_pending_writes());
+        std::future::poll_fn(|cx| {
+            assert!(
+                drain.as_mut().poll(cx).is_pending(),
+                "shutdown must wait for the file replacement"
+            );
+            std::task::Poll::Ready(())
+        })
+        .await;
+        gate.release.notify_one();
+        drain.await?;
+
+        let reloaded = JsonMetadataStore::new(config);
+        reloaded.load().await?;
+        assert_eq!(reloaded.get_topic("TopicA").await?, Some(topic));
+        assert_eq!(store.successful_persist_count(), 1);
+        assert!(!store.path.with_extension("json.tmp").exists());
+        assert_eq!(context.root_group().task_count(), 0);
+        Ok(())
     }
 
     #[test]

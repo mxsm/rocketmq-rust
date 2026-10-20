@@ -21,7 +21,7 @@
 pub use super::span_names::MCP_RESOURCE;
 pub use super::span_names::MCP_TOOL;
 
-use crate::metrics::mcp::McpOperationOutcome;
+use crate::metrics::mcp::McpOperationStatus;
 
 /// Creates a Tool execution span containing only bounded fields.
 pub fn tool_span(operation: &'static str) -> tracing::Span {
@@ -52,11 +52,11 @@ pub fn resource_span(operation: &'static str) -> tracing::Span {
 }
 
 /// Records one stable terminal outcome on an MCP span.
-pub fn record_outcome(span: &tracing::Span, outcome: McpOperationOutcome) {
+pub fn record_status(span: &tracing::Span, outcome: McpOperationStatus) {
     let result = match outcome {
-        McpOperationOutcome::Success => "success",
-        McpOperationOutcome::Failure => "failure",
-        McpOperationOutcome::Denied => "denied",
+        McpOperationStatus::Success => "success",
+        McpOperationStatus::Failure => "failure",
+        McpOperationStatus::Denied => "denied",
     };
     span.record(crate::semantic::labels::RESULT, result);
 }

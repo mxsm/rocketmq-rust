@@ -61,6 +61,7 @@ use crate::audit::AuditResult;
 use crate::audit::AuditSchemaVersion;
 use crate::error::ControlErrorCode;
 use crate::model::ControlOperation;
+use crate::tools::GET_MUTATION_RESULT_TOOL;
 use crate::tools::PATCH_BROKER_CONFIG_TOOL;
 use crate::tools::RESET_CONSUMER_OFFSET_TOOL;
 use crate::tools::SET_CONSUMER_REQUEST_MODE_TOOL;
@@ -141,6 +142,8 @@ pub(super) struct E2eHarness {
     request_mode_restoration: RestorationState,
     topic_created: bool,
     group_created: bool,
+    /// The invocation of the Topic execution, read back before and after the Control restart.
+    topic_invocation: Option<u64>,
     cleanup_outcome: Option<Result<CleanupEvidence, String>>,
 }
 
@@ -216,6 +219,7 @@ impl E2eHarness {
             request_mode_restoration: RestorationState::default(),
             topic_created: false,
             group_created: false,
+            topic_invocation: None,
             cleanup_outcome: None,
         })
     }
@@ -283,6 +287,40 @@ impl E2eHarness {
         ensure(
             applied["after"][BROKER]["value"] == applied["requested"],
             "Topic execute did not verify the exact requested post-state",
+        )?;
+
+        // The response names its invocation, and the result can be read back by it or by the key.
+        let invocation = applied["invocation_id"]
+            .as_u64()
+            .ok_or_else(|| E2eError::new("Topic execute response carried no invocation_id"))?;
+        self.topic_invocation = Some(invocation);
+        for selector in [
+            serde_json::json!({"invocation_id": invocation}),
+            serde_json::json!({"request_key": "topic-exec-0001"}),
+        ] {
+            let found = self.look_up(selector).await?;
+            ensure(
+                found["state"] == "finished" && found["status"] == "applied",
+                format!(
+                    "Topic result lookup state={} status={}",
+                    found["state"], found["status"]
+                ),
+            )?;
+            ensure(
+                found["invocation_id"] == invocation && found["operation"] == "topic_upsert",
+                "Topic result lookup found another invocation",
+            )?;
+            ensure(
+                found["target"]["topic"] == self.topic.as_str(),
+                "Topic result lookup did not name the Topic",
+            )?;
+        }
+        let missing = self
+            .look_up(serde_json::json!({"request_key": "topic-never-sent"}))
+            .await?;
+        ensure(
+            missing["state"] == "not_found" && missing["invocation_id"].is_null(),
+            "Result lookup found a call that was never made",
         )?;
 
         let repeat = self
@@ -738,7 +776,33 @@ impl E2eHarness {
         ensure(
             recovered["status"] == "planned",
             "Control restart did not recover the audit file",
+        )?;
+        // The restarted process still answers for a call the stopped process finished.
+        let invocation = self
+            .topic_invocation
+            .ok_or_else(|| E2eError::new("Topic invocation was not recorded"))?;
+        let found = self.look_up(serde_json::json!({"invocation_id": invocation})).await?;
+        ensure(
+            found["state"] == "finished" && found["status"] == "applied",
+            "Control restart lost the result of the Topic execution",
         )
+    }
+
+    /// Asks how one of this run's calls ended.
+    ///
+    /// A lookup is not a mutation and must leave no audit record: it is not added to the expected
+    /// audit pairs, so the final cardinality check fails if one is written.
+    async fn look_up(&mut self, selector: Value) -> E2eResult<Value> {
+        let id = self.next_id();
+        let mut arguments = serde_json::json!({"schema_version": ARGUMENT_SCHEMA, "cluster": CLUSTER});
+        if let (Some(arguments), Some(selector)) = (arguments.as_object_mut(), selector.as_object()) {
+            arguments.extend(selector.clone());
+        }
+        self.mcp
+            .as_mut()
+            .ok_or_else(|| E2eError::new("MCP client is unavailable"))?
+            .call(id, GET_MUTATION_RESULT_TOOL, arguments)
+            .await
     }
 
     async fn invoke(
@@ -1435,8 +1499,24 @@ fn verify_audit(path: &Path, expected: &[ExpectedAudit]) -> E2eResult<()> {
         let started = &pair[0];
         let terminal = &pair[1];
         ensure(
-            started.schema_version == AuditSchemaVersion::V2,
-            "audit start was not schema v2",
+            started.schema_version == AuditSchemaVersion::V3 && terminal.schema_version == AuditSchemaVersion::V3,
+            "audit pair was not schema v3",
+        )?;
+        ensure(
+            started.target.is_some() && started.target == terminal.target,
+            "audit target was absent or changed within its pair",
+        )?;
+        ensure(
+            started.requested_digest.is_some() && started.requested_digest == terminal.requested_digest,
+            "audit requested digest was absent or changed within its pair",
+        )?;
+        ensure(
+            started.request_key_digest.is_some() && started.request_key_digest == terminal.request_key_digest,
+            "audit request key digest was absent or changed within its pair",
+        )?;
+        ensure(
+            started.changed.is_none() && started.target_results.is_none() && started.before_digest.is_none(),
+            "audit start claimed to know the outcome",
         )?;
         ensure(
             started.event == AuditEvent::Started,
@@ -1540,14 +1620,14 @@ fn unique_id() -> E2eResult<String> {
 }
 
 fn safe_admin_error(error: &AdminError) -> String {
-    let failure = match error.failure() {
+    let failure_label = match error.failure() {
         AdminFailure::InvalidArgument => "invalid_argument",
         AdminFailure::NotFound => "not_found",
-        AdminFailure::Backend => "backend",
+        AdminFailure::OperationFailed => "operation_failed",
         AdminFailure::SessionClosed => "session_closed",
     };
     format!(
-        "{failure}:code={}:http={}:retryable={}",
+        "{failure_label}:code={}:http={}:retryable={}",
         error.code(),
         error.http_status().as_u16(),
         error.is_retryable()

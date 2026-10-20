@@ -18,7 +18,7 @@ use chrono::Local;
 use chrono::TimeZone;
 use clap::Parser;
 use rocketmq_error::Result as CanonicalResult;
-use rocketmq_runtime::common::util_all::YYYY_MM_DD_HH_MM_SS_SSS;
+use rocketmq_runtime::common::time_utils::YYYY_MM_DD_HH_MM_SS_SSS;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;

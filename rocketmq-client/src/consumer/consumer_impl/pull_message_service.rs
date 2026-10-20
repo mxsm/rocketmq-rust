@@ -34,11 +34,10 @@ use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetedItem;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::FullPolicy;
-use rocketmq_runtime::QueuePushOutcome;
+use rocketmq_runtime::QueueEnqueueStatus;
 use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourcePermit;
-use rocketmq_runtime::Shutdown;
 use serde::Serialize;
 use tokio::sync::Mutex;
 use tokio::time::Instant as TokioInstant;
@@ -229,7 +228,7 @@ impl PullRequestDispatcher {
         let shard = &self.shards[shard_index];
         shard.metrics.record_submitted();
         let retained_bytes = request.retained_bytes();
-        if let QueuePushOutcome::Rejected { rejection, .. } = shard.queue.try_push_data(request, retained_bytes) {
+        if let QueueEnqueueStatus::Rejected { rejection, .. } = shard.queue.try_push_data(request, retained_bytes) {
             shard.metrics.record_rejected();
             warn!(
                 shard_index = shard.index,
@@ -353,10 +352,10 @@ impl DelayedSchedulePayload {
                 if let Some(tx) = tx {
                     let retained_bytes = request.retained_bytes();
                     match tx.try_push_data(Box::new(request), retained_bytes) {
-                        QueuePushOutcome::Enqueued
-                        | QueuePushOutcome::Coalesced { .. }
-                        | QueuePushOutcome::DroppedStale { .. } => None,
-                        QueuePushOutcome::Rejected { item, rejection } => {
+                        QueueEnqueueStatus::Enqueued
+                        | QueueEnqueueStatus::Coalesced { .. }
+                        | QueueEnqueueStatus::DroppedStale { .. } => None,
+                        QueueEnqueueStatus::Rejected { item, rejection } => {
                             warn!(
                                 "POP request queue rejected a delayed request; retrying: {:?}",
                                 rejection
@@ -698,7 +697,8 @@ impl PullMessageService {
         let shard_queues = (0..self.shard_count)
             .map(|index| self.build_request_queue(format!("pull-worker-shard-{index}"), FullPolicy::Reject))
             .collect::<Result<Vec<BudgetedQueue<PullRequest>>, ClientError>>()?;
-        let (mut shutdown, tx_shutdown) = Shutdown::new(1);
+        // The main loop and every shard worker subscribe to one shutdown signal.
+        let (tx_shutdown, mut shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
         let pop_instance = instance.clone();
         let service_context = instance.service_context().component("pull-message-service");
         *self
@@ -714,7 +714,7 @@ impl PullMessageService {
 
                 loop {
                     tokio::select! {
-                        _ = shutdown.recv() => {
+                        _ = shutdown_rx.recv() => {
                             info!("{} received shutdown signal", "PullMessageService");
                             break;
                         }
@@ -855,11 +855,11 @@ impl PullMessageService {
         };
         let retained_bytes = command.retained_bytes();
         match queue.try_push_data(command, retained_bytes) {
-            QueuePushOutcome::DroppedStale { dropped } => {
+            QueueEnqueueStatus::DroppedStale { dropped } => {
                 self.delayed_scheduler_metrics.record_cancelled(dropped);
             }
-            QueuePushOutcome::Enqueued | QueuePushOutcome::Coalesced { .. } => {}
-            QueuePushOutcome::Rejected { .. } => self.delayed_scheduler_metrics.record_cancelled(1),
+            QueueEnqueueStatus::Enqueued | QueueEnqueueStatus::Coalesced { .. } => {}
+            QueueEnqueueStatus::Rejected { .. } => self.delayed_scheduler_metrics.record_cancelled(1),
         }
     }
 
@@ -1056,7 +1056,7 @@ impl PullMessageService {
         let tx = self.tx.read().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
         if let Some(tx) = tx {
             let retained_bytes = pop_request.retained_bytes();
-            if let QueuePushOutcome::Rejected { item, rejection } =
+            if let QueueEnqueueStatus::Rejected { item, rejection } =
                 tx.try_push_data(Box::new(pop_request), retained_bytes)
             {
                 warn!(
@@ -1334,7 +1334,7 @@ mod tests {
         let first = test_pop_request(0);
         assert!(matches!(
             queue.try_push_data(Box::new(first), std::mem::size_of::<PopRequest>()),
-            rocketmq_runtime::QueuePushOutcome::Enqueued
+            rocketmq_runtime::QueueEnqueueStatus::Enqueued
         ));
 
         let retry = DelayedSchedulePayload::Pop {
@@ -1361,19 +1361,19 @@ mod tests {
 
         assert!(matches!(
             queue.try_push_data(1, 1),
-            rocketmq_runtime::QueuePushOutcome::Enqueued
+            rocketmq_runtime::QueueEnqueueStatus::Enqueued
         ));
         assert!(matches!(
             queue.try_push_data(2, 1),
-            rocketmq_runtime::QueuePushOutcome::Enqueued
+            rocketmq_runtime::QueueEnqueueStatus::Enqueued
         ));
         assert!(matches!(
             queue.try_push_data(3, 1),
-            rocketmq_runtime::QueuePushOutcome::Rejected { .. }
+            rocketmq_runtime::QueueEnqueueStatus::Rejected { .. }
         ));
         assert!(matches!(
             queue.try_push_data(4, 1),
-            rocketmq_runtime::QueuePushOutcome::Rejected { .. }
+            rocketmq_runtime::QueueEnqueueStatus::Rejected { .. }
         ));
 
         let snapshot = queue.snapshot();

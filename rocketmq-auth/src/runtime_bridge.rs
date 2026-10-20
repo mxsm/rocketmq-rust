@@ -19,6 +19,8 @@ use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::RuntimeOperation;
 use rocketmq_runtime::RuntimeResult;
 
+const AUTH_METADATA_IO_LANE: RuntimeOperation = RuntimeOperation::external("auth-metadata-io-lane");
+
 /// Narrow access to the root-owned metadata blocking lane.
 ///
 /// The executor is never discovered or created by the Auth crate. Production
@@ -42,7 +44,7 @@ impl AuthBlockingExecutor {
     {
         self.executor
             .as_ref()
-            .ok_or_else(|| RuntimeError::context_unavailable(RuntimeOperation::AuthMetadataIoLane))?
+            .ok_or_else(|| RuntimeError::context_unavailable(AUTH_METADATA_IO_LANE))?
             .spawn_io(name, operation)
             .await
     }
@@ -83,7 +85,8 @@ mod tests {
             .await
             .expect_err("missing metadata lane must fail closed");
         assert_eq!(error.descriptor(), &rocketmq_error::RUNTIME_CONTEXT_UNAVAILABLE);
-        assert_eq!(error.operation(), RuntimeOperation::AuthMetadataIoLane);
+        assert_eq!(error.operation(), AUTH_METADATA_IO_LANE);
+        assert_eq!(error.operation().to_string(), "auth-metadata-io-lane");
         assert_eq!(error.component(), "runtime");
         assert!(std::error::Error::source(&error).is_none());
         assert!(error.public_view().is_ok());

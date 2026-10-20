@@ -46,14 +46,14 @@ struct OpaqueRegistrationProcessor {
 }
 
 impl RequestProcessor for OpaqueRegistrationProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let opaque = request.command().opaque();
         let prepared = prepared_or_test_error(self.service.prepare(request, PopLiteRetainedEstimate::default()))?;
         let registration = registration_or_test_error(self.service.register(prepared, request))?;
         self.registrations
             .send((opaque, registration.deferred_id()))
             .map_err(|_| crate::broker_error::invalid_argument("opaque registration observer closed"))?;
-        Ok(HandlerOutcome::Deferred(registration))
+        Ok(ResponseAction::Deferred(registration))
     }
 
     fn request_ordering(&self, _ingress: rocketmq_transport::api::IngressRequestView<'_>) -> RequestOrdering {
@@ -157,7 +157,7 @@ async fn pop_lite_deferred_different_clients_resume_and_write_in_parallel() {
                 .await
                 .expect("parallel receipt")
                 .expect("parallel canonical write"),
-            rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+            rocketmq_transport::api::DeferredResumeResult::Completed(_)
         ));
     }
     let mut opaqueness = HashSet::new();
@@ -244,7 +244,7 @@ async fn pop_lite_deferred_same_client_timeout_is_not_serialized_by_event_gate()
     event_started.notified().await;
     assert_eq!(service.resource_snapshot().active_client_gates, 1);
 
-    let DeferredClaimOutcome::Claimed(mut timeout_claim) = service
+    let DeferredClaimResult::Claimed(mut timeout_claim) = service
         .registry
         .claim(timeout_id, DeferredWakeReason::Timeout)
         .await
@@ -268,7 +268,7 @@ async fn pop_lite_deferred_same_client_timeout_is_not_serialized_by_event_gate()
             )
             .await
             .expect("same-client timeout writes while event remains active"),
-        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        rocketmq_transport::api::DeferredResumeResult::Completed(_)
     ));
 
     let timeout_response = client
@@ -288,7 +288,7 @@ async fn pop_lite_deferred_same_client_timeout_is_not_serialized_by_event_gate()
             .await
             .expect("event receipt observer")
             .expect("event response writes after release"),
-        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        rocketmq_transport::api::DeferredResumeResult::Completed(_)
     ));
     let event_response = client
         .receive_command()
@@ -309,7 +309,7 @@ struct CommitWindowProcessor {
 }
 
 impl RequestProcessor for CommitWindowProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let prepared = prepared_or_test_error(self.service.prepare(request, PopLiteRetainedEstimate::default()))?;
         let registration = registration_or_test_error(self.service.register(prepared, request))?;
         self.registrations
@@ -320,7 +320,7 @@ impl RequestProcessor for CommitWindowProcessor {
             .await
             .map_err(|_| crate::broker_error::invalid_argument("commit-window release closed"))?
             .forget();
-        Ok(HandlerOutcome::Deferred(registration))
+        Ok(ResponseAction::Deferred(registration))
     }
 }
 
@@ -358,7 +358,7 @@ async fn pop_lite_deferred_registration_commit_window_blocks_claim_until_activat
     tokio::task::yield_now().await;
     assert!(
         !claim_task.is_finished(),
-        "claim waits for HandlerOutcome::Deferred commit"
+        "claim waits for ResponseAction::Deferred commit"
     );
 
     release.add_permits(1);

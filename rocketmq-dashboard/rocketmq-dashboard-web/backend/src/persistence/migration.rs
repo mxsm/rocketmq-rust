@@ -19,17 +19,8 @@ use sqlx::SqlitePool;
 use sqlx::{MySqlConnection, PgConnection, SqliteConnection};
 
 const SQLITE_INITIAL: &str = include_str!("../../migrations/sqlite/0001_initial.sql");
-const SQLITE_PHASE_TWO: &str = include_str!("../../migrations/sqlite/0002_environment_endpoint_constraints.sql");
-const SQLITE_PHASE_THREE: &str = include_str!("../../migrations/sqlite/0003_history_retention.sql");
-const SQLITE_PHASE_FOUR: &str = include_str!("../../migrations/sqlite/0004_session_audit.sql");
 const MYSQL_INITIAL: &str = include_str!("../../migrations/mysql/0001_initial.sql");
-const MYSQL_PHASE_TWO: &str = include_str!("../../migrations/mysql/0002_environment_endpoint_constraints.sql");
-const MYSQL_PHASE_THREE: &str = include_str!("../../migrations/mysql/0003_history_retention.sql");
-const MYSQL_PHASE_FOUR: &str = include_str!("../../migrations/mysql/0004_session_audit.sql");
 const POSTGRES_INITIAL: &str = include_str!("../../migrations/postgres/0001_initial.sql");
-const POSTGRES_PHASE_TWO: &str = include_str!("../../migrations/postgres/0002_environment_endpoint_constraints.sql");
-const POSTGRES_PHASE_THREE: &str = include_str!("../../migrations/postgres/0003_history_retention.sql");
-const POSTGRES_PHASE_FOUR: &str = include_str!("../../migrations/postgres/0004_session_audit.sql");
 const MYSQL_MIGRATION_LOCK: &str = "rocketmq_dashboard_schema_migration";
 const POSTGRES_MIGRATION_LOCK: i64 = 7_246_920_002;
 
@@ -89,7 +80,7 @@ pub async fn migrate_postgres(pool: &PgPool) -> Result<i64, PersistenceError> {
 }
 
 async fn migrate_sqlite_locked(connection: &mut SqliteConnection) -> Result<i64, PersistenceError> {
-    for statement in statements(SQLITE_INITIAL) {
+    for statement in statements(migration_section(SQLITE_INITIAL, 1)?) {
         sqlx::query(statement)
             .execute(&mut *connection)
             .await
@@ -103,7 +94,7 @@ async fn migrate_sqlite_locked(connection: &mut SqliteConnection) -> Result<i64,
         migrate_sqlite_phase_two(connection).await?;
     }
     if version < 3 {
-        for statement in statements(SQLITE_PHASE_THREE) {
+        for statement in statements(migration_section(SQLITE_INITIAL, 3)?) {
             sqlx::query(statement)
                 .execute(&mut *connection)
                 .await
@@ -112,7 +103,7 @@ async fn migrate_sqlite_locked(connection: &mut SqliteConnection) -> Result<i64,
     }
     if version < 4 {
         ensure_session_audit_empty_sqlite(connection).await?;
-        for statement in statements(SQLITE_PHASE_FOUR) {
+        for statement in statements(migration_section(SQLITE_INITIAL, 4)?) {
             sqlx::query(statement)
                 .execute(&mut *connection)
                 .await
@@ -123,8 +114,9 @@ async fn migrate_sqlite_locked(connection: &mut SqliteConnection) -> Result<i64,
 }
 
 async fn migrate_sqlite_phase_two(connection: &mut SqliteConnection) -> Result<(), PersistenceError> {
+    let script = migration_section(SQLITE_INITIAL, 2)?;
     if !sqlite_column_exists(connection, "role").await? {
-        sqlx::query(migration_statement(SQLITE_PHASE_TWO, 0)?)
+        sqlx::query(migration_statement(script, 0)?)
             .execute(&mut *connection)
             .await
             .map_err(|_| PersistenceError::MigrationFailed)?;
@@ -132,21 +124,21 @@ async fn migrate_sqlite_phase_two(connection: &mut SqliteConnection) -> Result<(
     // Existing active endpoints predate endpoint roles. Preserve the active
     // selection while backfilling the new role column before its constraints
     // are published.
-    sqlx::query(migration_statement(SQLITE_PHASE_TWO, 1)?)
+    sqlx::query(migration_statement(script, 1)?)
         .execute(&mut *connection)
         .await
         .map_err(|_| PersistenceError::MigrationFailed)?;
     if !sqlite_column_exists(connection, "is_enabled").await? {
-        sqlx::query(migration_statement(SQLITE_PHASE_TWO, 2)?)
+        sqlx::query(migration_statement(script, 2)?)
             .execute(&mut *connection)
             .await
             .map_err(|_| PersistenceError::MigrationFailed)?;
     }
-    sqlx::query(migration_statement(SQLITE_PHASE_TWO, 3)?)
+    sqlx::query(migration_statement(script, 3)?)
         .execute(&mut *connection)
         .await
         .map_err(|_| PersistenceError::MigrationFailed)?;
-    sqlx::query(migration_statement(SQLITE_PHASE_TWO, 4)?)
+    sqlx::query(migration_statement(script, 4)?)
         .execute(&mut *connection)
         .await
         .map_err(|_| PersistenceError::MigrationFailed)?;
@@ -154,7 +146,7 @@ async fn migrate_sqlite_phase_two(connection: &mut SqliteConnection) -> Result<(
 }
 
 async fn migrate_mysql_locked(connection: &mut MySqlConnection) -> Result<i64, PersistenceError> {
-    for statement in statements(MYSQL_INITIAL) {
+    for statement in statements(migration_section(MYSQL_INITIAL, 1)?) {
         sqlx::query(statement)
             .execute(&mut *connection)
             .await
@@ -165,41 +157,42 @@ async fn migrate_mysql_locked(connection: &mut MySqlConnection) -> Result<i64, P
         .await
         .map_err(map_query_error)?;
     if version < 2 {
+        let script = migration_section(MYSQL_INITIAL, 2)?;
         if !mysql_column_exists(connection, "role").await? {
-            sqlx::query(migration_statement(MYSQL_PHASE_TWO, 0)?)
+            sqlx::query(migration_statement(script, 0)?)
                 .execute(&mut *connection)
                 .await
                 .map_err(|_| PersistenceError::MigrationFailed)?;
         }
-        sqlx::query(migration_statement(MYSQL_PHASE_TWO, 1)?)
+        sqlx::query(migration_statement(script, 1)?)
             .execute(&mut *connection)
             .await
             .map_err(|_| PersistenceError::MigrationFailed)?;
         if !mysql_column_exists(connection, "is_enabled").await? {
-            sqlx::query(migration_statement(MYSQL_PHASE_TWO, 2)?)
+            sqlx::query(migration_statement(script, 2)?)
                 .execute(&mut *connection)
                 .await
                 .map_err(|_| PersistenceError::MigrationFailed)?;
         }
         if !mysql_column_exists(connection, "active_endpoint_type").await? {
-            sqlx::query(migration_statement(MYSQL_PHASE_TWO, 3)?)
+            sqlx::query(migration_statement(script, 3)?)
                 .execute(&mut *connection)
                 .await
                 .map_err(|_| PersistenceError::MigrationFailed)?;
         }
         if !mysql_index_exists(connection, "dashboard_endpoint_one_active_per_type_uq").await? {
-            sqlx::query(migration_statement(MYSQL_PHASE_TWO, 4)?)
+            sqlx::query(migration_statement(script, 4)?)
                 .execute(&mut *connection)
                 .await
                 .map_err(|_| PersistenceError::MigrationFailed)?;
         }
-        sqlx::query(migration_statement(MYSQL_PHASE_TWO, 5)?)
+        sqlx::query(migration_statement(script, 5)?)
             .execute(&mut *connection)
             .await
             .map_err(|_| PersistenceError::MigrationFailed)?;
     }
     if version < 3 {
-        for statement in statements(MYSQL_PHASE_THREE) {
+        for statement in statements(migration_section(MYSQL_INITIAL, 3)?) {
             sqlx::query(statement)
                 .execute(&mut *connection)
                 .await
@@ -208,7 +201,7 @@ async fn migrate_mysql_locked(connection: &mut MySqlConnection) -> Result<i64, P
     }
     if version < 4 {
         ensure_session_audit_empty_mysql(connection).await?;
-        for statement in statements(MYSQL_PHASE_FOUR) {
+        for statement in statements(migration_section(MYSQL_INITIAL, 4)?) {
             sqlx::query(statement)
                 .execute(&mut *connection)
                 .await
@@ -220,7 +213,7 @@ async fn migrate_mysql_locked(connection: &mut MySqlConnection) -> Result<i64, P
 
 async fn migrate_postgres_locked(connection: &mut PgConnection) -> Result<i64, PersistenceError> {
     let mut transaction = connection.begin().await.map_err(map_query_error)?;
-    for statement in statements(POSTGRES_INITIAL) {
+    for statement in statements(migration_section(POSTGRES_INITIAL, 1)?) {
         sqlx::query(statement)
             .execute(&mut *transaction)
             .await
@@ -231,29 +224,30 @@ async fn migrate_postgres_locked(connection: &mut PgConnection) -> Result<i64, P
         .await
         .map_err(map_query_error)?;
     if version < 2 {
-        sqlx::query(migration_statement(POSTGRES_PHASE_TWO, 0)?)
+        let script = migration_section(POSTGRES_INITIAL, 2)?;
+        sqlx::query(migration_statement(script, 0)?)
             .execute(&mut *transaction)
             .await
             .map_err(|_| PersistenceError::MigrationFailed)?;
-        sqlx::query(migration_statement(POSTGRES_PHASE_TWO, 1)?)
+        sqlx::query(migration_statement(script, 1)?)
             .execute(&mut *transaction)
             .await
             .map_err(|_| PersistenceError::MigrationFailed)?;
-        sqlx::query(migration_statement(POSTGRES_PHASE_TWO, 2)?)
+        sqlx::query(migration_statement(script, 2)?)
             .execute(&mut *transaction)
             .await
             .map_err(|_| PersistenceError::MigrationFailed)?;
-        sqlx::query(migration_statement(POSTGRES_PHASE_TWO, 3)?)
+        sqlx::query(migration_statement(script, 3)?)
             .execute(&mut *transaction)
             .await
             .map_err(|_| PersistenceError::MigrationFailed)?;
-        sqlx::query(migration_statement(POSTGRES_PHASE_TWO, 4)?)
+        sqlx::query(migration_statement(script, 4)?)
             .execute(&mut *transaction)
             .await
             .map_err(|_| PersistenceError::MigrationFailed)?;
     }
     if version < 3 {
-        for statement in statements(POSTGRES_PHASE_THREE) {
+        for statement in statements(migration_section(POSTGRES_INITIAL, 3)?) {
             sqlx::query(statement)
                 .execute(&mut *transaction)
                 .await
@@ -262,7 +256,7 @@ async fn migrate_postgres_locked(connection: &mut PgConnection) -> Result<i64, P
     }
     if version < 4 {
         ensure_session_audit_empty_postgres(&mut transaction).await?;
-        for statement in statements(POSTGRES_PHASE_FOUR) {
+        for statement in statements(migration_section(POSTGRES_INITIAL, 4)?) {
             sqlx::query(statement)
                 .execute(&mut *transaction)
                 .await
@@ -391,6 +385,16 @@ pub async fn schema_version_postgres(pool: &PgPool) -> Result<i64, PersistenceEr
         .map_err(map_query_error)
 }
 
+// Keep the original version boundaries inside the consolidated SQL so old
+// databases only run pending upgrades and retain their migration history.
+fn migration_section(script: &str, version: i64) -> Result<&str, PersistenceError> {
+    script
+        .split("-- migration: ")
+        .filter_map(|section| section.split_once('\n'))
+        .find_map(|(header, sql)| (header.trim().parse::<i64>().ok() == Some(version)).then_some(sql))
+        .ok_or(PersistenceError::MigrationFailed)
+}
+
 fn statements(script: &str) -> impl Iterator<Item = &str> {
     script
         .split(';')
@@ -412,7 +416,11 @@ fn map_query_error(error: sqlx::Error) -> PersistenceError {
 
 #[cfg(test)]
 mod tests {
-    use super::{MYSQL_MIGRATION_LOCK, SQLITE_INITIAL, migrate_mysql, migrate_postgres, migrate_sqlite, statements};
+    use super::{
+        MYSQL_MIGRATION_LOCK, SQLITE_INITIAL, migrate_mysql, migrate_postgres, migrate_sqlite, migration_section,
+        statements,
+    };
+    use crate::persistence::error::PersistenceError;
     use sqlx::SqlitePool;
     use sqlx::mysql::MySqlPoolOptions;
     use sqlx::postgres::PgPoolOptions;
@@ -432,7 +440,7 @@ mod tests {
     }
 
     async fn apply_sqlite_initial(pool: &SqlitePool) {
-        for statement in statements(SQLITE_INITIAL) {
+        for statement in statements(migration_section(SQLITE_INITIAL, 1).expect("initial SQLite migration section")) {
             sqlx::query(statement)
                 .execute(pool)
                 .await
@@ -448,6 +456,152 @@ mod tests {
             statements,
             vec!["CREATE TABLE example (id INTEGER)", "INSERT INTO example VALUES (1)"]
         );
+    }
+
+    #[test]
+    fn migration_sections_select_only_the_requested_version() {
+        let script = "-- consolidated schema\r\n\
+                      -- migration: 1\r\nCREATE TABLE example (id INTEGER);\r\n\
+                      -- migration: 2\r\nALTER TABLE example ADD COLUMN name TEXT;\r\n";
+        assert_eq!(
+            statements(migration_section(script, 1).expect("first migration")).collect::<Vec<_>>(),
+            vec!["CREATE TABLE example (id INTEGER)"]
+        );
+        assert_eq!(
+            statements(migration_section(script, 2).expect("second migration")).collect::<Vec<_>>(),
+            vec!["ALTER TABLE example ADD COLUMN name TEXT"]
+        );
+        assert!(matches!(
+            migration_section(script, 3),
+            Err(PersistenceError::MigrationFailed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn sqlite_consolidated_migrations_preserve_data_and_applied_versions() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        for applied_version in 1..=4 {
+            let pool = sqlite_pool(&directory.path().join(format!("version-{applied_version}.db"))).await;
+            for version in 1..=applied_version {
+                for statement in statements(migration_section(SQLITE_INITIAL, version).expect("migration section")) {
+                    sqlx::query(statement).execute(&pool).await.expect("apply old schema");
+                }
+            }
+            sqlx::query("UPDATE dashboard_schema_migration SET applied_at_ms = version * 100")
+                .execute(&pool)
+                .await
+                .expect("seed existing migration timestamps");
+            sqlx::query(
+                "INSERT INTO dashboard_environment \
+                 (environment_id, name, use_vip_channel, use_tls, revision, created_at_ms, updated_at_ms) \
+                 VALUES ('existing-env', 'Existing environment', 0, 0, 7, 10, 20)",
+            )
+            .execute(&pool)
+            .await
+            .expect("seed existing environment");
+            if applied_version >= 3 {
+                sqlx::query(
+                    "INSERT INTO dashboard_history_sample \
+                     (environment_id, metric_name, bucket_ms, dimensions_json, value) \
+                     VALUES ('existing-env', 'messages', 10, '{}', 42)",
+                )
+                .execute(&pool)
+                .await
+                .expect("seed existing history");
+            }
+            if applied_version == 4 {
+                sqlx::query(
+                    "INSERT INTO dashboard_session \
+                     (session_id, token_hash, username, created_at_ms, expires_at_ms, last_seen_at_ms) \
+                     VALUES ('existing-session', ?, 'existing-user', 10, 100, 20)",
+                )
+                .bind([7_u8; 32].as_slice())
+                .execute(&pool)
+                .await
+                .expect("seed existing session");
+                sqlx::query(
+                    "INSERT INTO dashboard_audit_event \
+                     (event_id, request_id, actor_kind, action, resource_type, outcome, created_at_ms) \
+                     VALUES ('existing-event', 'existing-request', 'operator', 'login', 'session', 'success', 20)",
+                )
+                .execute(&pool)
+                .await
+                .expect("seed existing audit event");
+            }
+
+            assert_eq!(migrate_sqlite(&pool).await.expect("upgrade existing database"), 4);
+            assert_eq!(migrate_sqlite(&pool).await.expect("restart existing database"), 4);
+            let environment: (String, i64, i64, i64) = sqlx::query_as(
+                "SELECT name, revision, created_at_ms, updated_at_ms \
+                 FROM dashboard_environment WHERE environment_id = 'existing-env'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("read existing environment");
+            assert_eq!(environment, ("Existing environment".to_owned(), 7, 10, 20));
+            let timestamps: Vec<(i64, i64)> = sqlx::query_as(
+                "SELECT version, applied_at_ms FROM dashboard_schema_migration WHERE version <= ? ORDER BY version",
+            )
+            .bind(applied_version)
+            .fetch_all(&pool)
+            .await
+            .expect("read existing migration timestamps");
+            assert_eq!(
+                timestamps,
+                (1..=applied_version)
+                    .map(|version| (version, version * 100))
+                    .collect::<Vec<_>>()
+            );
+            if applied_version >= 3 {
+                let history: f64 = sqlx::query_scalar("SELECT value FROM dashboard_history_sample")
+                    .fetch_one(&pool)
+                    .await
+                    .expect("read existing history");
+                assert_eq!(history, 42.0);
+            }
+            if applied_version == 4 {
+                let username: String = sqlx::query_scalar("SELECT username FROM dashboard_session")
+                    .fetch_one(&pool)
+                    .await
+                    .expect("read existing session");
+                let event_id: String = sqlx::query_scalar("SELECT event_id FROM dashboard_audit_event")
+                    .fetch_one(&pool)
+                    .await
+                    .expect("read existing audit event");
+                assert_eq!(username, "existing-user");
+                assert_eq!(event_id, "existing-event");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn sqlite_consolidated_migrations_reject_destructive_legacy_session_upgrade() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let pool = sqlite_pool(&directory.path().join("legacy-session.db")).await;
+        apply_sqlite_initial(&pool).await;
+        sqlx::query(
+            "INSERT INTO dashboard_session \
+             (session_id_hash, username, created_at_ms, expires_at_ms, last_seen_at_ms) \
+             VALUES ('legacy-token', 'legacy-user', 10, 100, 20)",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed legacy session");
+
+        assert!(matches!(
+            migrate_sqlite(&pool).await,
+            Err(PersistenceError::UnsupportedLayout)
+        ));
+        let session: (String, String) = sqlx::query_as("SELECT session_id_hash, username FROM dashboard_session")
+            .fetch_one(&pool)
+            .await
+            .expect("read preserved legacy session");
+        assert_eq!(session, ("legacy-token".to_owned(), "legacy-user".to_owned()));
+        let version: i64 = sqlx::query_scalar("SELECT MAX(version) FROM dashboard_schema_migration")
+            .fetch_one(&pool)
+            .await
+            .expect("read rolled-back schema version");
+        assert_eq!(version, 1);
     }
 
     #[tokio::test]

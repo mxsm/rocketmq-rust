@@ -30,7 +30,7 @@ use crate::core::AdminError;
 use crate::core::AdminFuture;
 use crate::core::AdminResult;
 
-use super::backend_error;
+use super::promote_to_admin_error;
 
 struct AdminSessionBatchExecutor<'a> {
     session: &'a mut AdminSession,
@@ -103,7 +103,7 @@ impl ConsumerBatchExecutor for AdminSessionBatchExecutor<'_> {
                 .inner
                 .create_and_update_subscription_group_config(broker_addr, config)
                 .await
-                .map_err(|error| backend_error("create_and_update_subscription_group_config", error))
+                .map_err(|source| promote_to_admin_error("create_and_update_subscription_group_config", source))
         })
     }
 
@@ -119,7 +119,7 @@ impl ConsumerBatchExecutor for AdminSessionBatchExecutor<'_> {
                 .inner
                 .delete_subscription_group(broker_addr, CheetahString::from(group), Some(true))
                 .await
-                .map_err(|error| backend_error("delete_subscription_group", error))
+                .map_err(|source| promote_to_admin_error("delete_subscription_group", source))
         })
     }
 
@@ -139,7 +139,7 @@ impl ConsumerBatchExecutor for AdminSessionBatchExecutor<'_> {
                 .inner
                 .delete_topic_in_broker(broker_addresses, CheetahString::from(target))
                 .await
-                .map_err(|error| backend_error("delete_topic_in_broker", error))?;
+                .map_err(|source| promote_to_admin_error("delete_topic_in_broker", source))?;
             let namesrv_targets = self
                 .session
                 .inner
@@ -151,7 +151,7 @@ impl ConsumerBatchExecutor for AdminSessionBatchExecutor<'_> {
                 .inner
                 .delete_topic_in_name_server(namesrv_targets, None, CheetahString::from(target))
                 .await
-                .map_err(|error| backend_error("delete_topic_in_name_server", error))
+                .map_err(|source| promote_to_admin_error("delete_topic_in_name_server", source))
         })
     }
 }
@@ -168,7 +168,7 @@ impl ConsumerBatchMutationAdmin for AdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
             let mut executor = AdminSessionBatchExecutor {
                 session: self,
                 cluster_info,
@@ -192,7 +192,7 @@ impl ConsumerBatchMutationAdmin for AdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
             let mut executor = AdminSessionBatchExecutor {
                 session: self,
                 cluster_info,
@@ -310,15 +310,15 @@ fn target_outcome(
     kind: &str,
     success_message: &str,
     result: AdminResult<()>,
-) -> consumer::DashboardConsumerTargetOutcome {
+) -> consumer::DashboardConsumerTargetResult {
     match result {
-        Ok(()) => consumer::DashboardConsumerTargetOutcome {
+        Ok(()) => consumer::DashboardConsumerTargetResult {
             target,
             kind: kind.to_string(),
             success: true,
             message: success_message.to_string(),
         },
-        Err(error) => consumer::DashboardConsumerTargetOutcome {
+        Err(error) => consumer::DashboardConsumerTargetResult {
             target,
             kind: kind.to_string(),
             success: false,

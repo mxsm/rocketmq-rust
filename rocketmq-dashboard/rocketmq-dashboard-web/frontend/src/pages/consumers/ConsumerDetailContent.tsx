@@ -280,11 +280,11 @@ export default function ConsumerDetailContent({
         <TabsContent value="overview">
           <div className="metric-grid entity-detail-metrics">
             <MetricCard label="Topics" value={progress?.topicCount ?? 0} detail="Tracked by queue progress" icon={<ListChecks size={18} />} />
-            <MetricCard label="Total lag" value={progress?.totalDiff ?? summary?.diffTotal ?? 0} detail="Aggregate offset difference" icon={<RotateCcw size={18} />} />
-            <MetricCard label="Connections" value={summary?.connectionCount ?? 0} detail="Consumer group summary" icon={<Users size={18} />} />
-            <MetricCard label="TPS" value={summary?.consumeTps ?? 0} detail="Reported consume throughput" icon={<RadioTower size={18} />} />
+            <MetricCard label="Total lag" value={progress?.totalDiff ?? summary?.diffTotal ?? 0} detail="Aggregate offset difference" icon={<RotateCcw size={18} />} accent="amber" />
+            <MetricCard label="Connections" value={summary?.connectionCount ?? 0} detail="Consumer group summary" icon={<Users size={18} />} accent="blue" />
+            <MetricCard label="TPS" value={summary?.consumeTps ?? 0} detail="Reported consume throughput" icon={<RadioTower size={18} />} accent="cyan" />
           </div>
-          <dl className="entity-description-grid">
+          <dl className="entity-description-grid" data-surface="panel">
             <div><dt>Consumer group</dt><dd className="mono">{summary?.group ?? group}</dd></div>
             <div><dt>Category</dt><dd>{summary?.category ?? '-'}</dd></div>
             <div><dt>Consume type</dt><dd>{normalizeConsumerValue(summary?.consumeType ?? '')}</dd></div>
@@ -299,7 +299,7 @@ export default function ConsumerDetailContent({
           {clientsError ? <ErrorState message={clientsError} onRetry={() => void loadClients()} /> : null}
           {connections ? (
             <>
-              <dl className="entity-description-grid">
+              <dl className="entity-description-grid" data-surface="panel">
                 <div><dt>Consume type</dt><dd>{normalizeConsumerValue(connections.consumeType)}</dd></div>
                 <div><dt>Message model</dt><dd>{normalizeConsumerValue(connections.messageModel)}</dd></div>
                 <div><dt>Consume from</dt><dd>{connections.consumeFromWhere}</dd></div>
@@ -382,7 +382,7 @@ export default function ConsumerDetailContent({
                   </div>
                   <span className="consumer-configuration-count">{config.targets.length} broker{config.targets.length === 1 ? '' : 's'}</span>
                 </header>
-                <dl className="entity-description-grid">
+                <dl className="entity-description-grid" data-surface="panel">
                   <div><dt>Effective retry queues</dt><dd>{config.effective?.retryQueueNums ?? '-'}</dd></div>
                   <div><dt>Effective max retries</dt><dd>{config.effective?.retryMaxTimes ?? '-'}</dd></div>
                   <div><dt>Consume timeout</dt><dd>{config.effective?.consumeTimeoutMinute ?? '-'}</dd></div>
@@ -493,7 +493,7 @@ function ConsumerConfigurationTargetCard({ target }: ConsumerConfigurationTarget
   const retryPolicy = describeRetryPolicy(target.config?.groupRetryPolicyJson);
 
   return (
-    <article className="consumer-configuration-target">
+    <article className="consumer-configuration-target" data-surface="panel">
       <header className="consumer-configuration-target-header">
         <div>
           <h4>{target.brokerName}</h4>

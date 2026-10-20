@@ -20,6 +20,7 @@ use std::time::Instant;
 use rocketmq_error::SharedError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeError;
+use rocketmq_runtime::RuntimeOperation;
 use rocketmq_security_api::Action;
 use rocketmq_security_api::AuthorizationDecision;
 use rocketmq_security_api::Resource;
@@ -30,7 +31,7 @@ use super::admission_response;
 use super::authorization_denied_response;
 use super::deadline_response;
 use super::AuthorizedDispatchSession;
-use super::DispatchOutcome;
+use super::DispatchSubmissionResult;
 use crate::admission::AdmissionClass;
 use crate::admission::FullPolicy;
 use crate::admission::PartialFramePermit;
@@ -45,17 +46,18 @@ use crate::dispatch::DispatchProcessor;
 use crate::dispatch::DispatchProcessorError;
 use crate::dispatch::ExplicitProcessor;
 use crate::dispatch::InternalProcessorCandidate;
-use crate::dispatch::InternalProcessorOutcome;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RemotingResponse;
 use crate::dispatch::RequestContext;
 use crate::dispatch::RequestTransport;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseOperationalFailure;
 use crate::dispatch::ResponseSink;
 use crate::dispatch::WriteProgress;
 use crate::hook_registry::HookRegistry;
 use crate::runtime::processor::RequestProcessor;
+
+const SESSION_EXECUTOR: RuntimeOperation = RuntimeOperation::external("session-executor");
 use crate::runtime::RPCHook;
 use crate::server::SessionHandle;
 use crate::session_executor::SessionDispatchAttempt;
@@ -204,7 +206,7 @@ where
         retained_bytes: usize,
         partial_frame_permit: Option<PartialFramePermit>,
         session_cleanup: Option<crate::dispatch::DeferredSessionCleanupRegistration>,
-    ) -> Result<DispatchOutcome, AuthorizedDispatchError> {
+    ) -> Result<DispatchSubmissionResult, AuthorizedDispatchError> {
         if context.transport() != RequestTransport::Network {
             return Err(AuthorizedDispatchError::InvalidNetworkContext);
         }
@@ -331,7 +333,7 @@ where
                     }
                 },
             ) {
-                Ok(SessionDispatchAttempt::Accepted(task_id)) => Ok(DispatchOutcome::Accepted(task_id)),
+                Ok(SessionDispatchAttempt::Accepted(task_id)) => Ok(DispatchSubmissionResult::Accepted(task_id)),
                 Ok(SessionDispatchAttempt::AdmissionRejected {
                     rejection,
                     retained_partial,
@@ -355,11 +357,11 @@ where
                     retained_partial,
                 }) => {
                     drop(retained_partial);
-                    Ok(DispatchOutcome::CloseSession)
+                    Ok(DispatchSubmissionResult::CloseSession)
                 }
                 Ok(SessionDispatchAttempt::SessionClosed { retained_partial }) => {
                     drop(retained_partial);
-                    Ok(DispatchOutcome::SessionClosed)
+                    Ok(DispatchSubmissionResult::SessionClosed)
                 }
                 Err(error) => Err(AuthorizedDispatchError::Closing(error)),
             }
@@ -394,9 +396,7 @@ where
         let observation = Some(metrics.observation().clone());
         let mut observer_owner = AdmittedProcessorObserver::new(processor, observation);
         let Some(processor) = observer_owner.processor_mut() else {
-            return Err(AuthorizedDispatchError::Closing(RuntimeError::context_unavailable(
-                rocketmq_runtime::RuntimeOperation::SessionExecutor,
-            )));
+            return Err(AuthorizedDispatchError::Closing(RuntimeError::closed(SESSION_EXECUTOR)));
         };
         let result = async {
             let sink = ResponseSink::network(session.clone(), class, builder.control().clone());
@@ -458,14 +458,14 @@ where
                     &sink,
                 )
                 .await?;
-            let InternalProcessorCandidate { outcome, failure } = candidate;
-            let outcome = processor.resolve_outcome(&mut request, outcome)?;
+            let InternalProcessorCandidate { action, failure } = candidate;
+            let action = processor.resolve_response_action(&mut request, action)?;
             self.finish_candidate(
                 processor,
                 sink,
                 original,
                 request_started,
-                InternalProcessorCandidate { outcome, failure },
+                InternalProcessorCandidate { action, failure },
                 retained_bytes,
                 &mut metrics,
             )
@@ -487,9 +487,9 @@ where
         retained_bytes: usize,
         metrics: &mut crate::dispatch::DispatchMetricsGuard,
     ) -> Result<(), AuthorizedDispatchError> {
-        let InternalProcessorCandidate { outcome, failure } = candidate;
-        match outcome {
-            InternalProcessorOutcome::Handled(crate::dispatch::HandlerOutcome::Reply(response)) => {
+        let InternalProcessorCandidate { action, failure } = candidate;
+        match action {
+            crate::dispatch::ResponseAction::Reply(response) => {
                 let response_code = response.response_code();
                 if failure.is_some() {
                     metrics.complete_process_request_failed(response_code);
@@ -506,7 +506,7 @@ where
                 }
                 deliver_and_observe(sink, original, response, failure.is_some(), metrics).await
             }
-            InternalProcessorOutcome::Handled(crate::dispatch::HandlerOutcome::Deferred(registration)) => {
+            crate::dispatch::ResponseAction::Deferred(registration) => {
                 if original.is_one_way() {
                     drop(registration);
                     return Err(AuthorizedDispatchError::OneWayOutcome { outcome: "deferred" });
@@ -527,7 +527,7 @@ where
                     },
                 }
             }
-            InternalProcessorOutcome::Handled(crate::dispatch::HandlerOutcome::NoReply(marker)) => {
+            crate::dispatch::ResponseAction::NoReply(marker) => {
                 if original.is_one_way() {
                     drop(marker);
                     return Err(AuthorizedDispatchError::OneWayOutcome { outcome: "no_reply" });
@@ -589,7 +589,7 @@ where
         command: RemotingCommand,
         retained_bytes: usize,
         partial_frame_permit: Option<PartialFramePermit>,
-    ) -> Result<DispatchOutcome, AuthorizedDispatchError> {
+    ) -> Result<DispatchSubmissionResult, AuthorizedDispatchError> {
         self.dispatch_network(
             authorized_session,
             self.open_network_session(),
@@ -651,7 +651,7 @@ async fn deliver_and_observe(
     let write_started = Instant::now();
     let result = sink.send_response(bound).await;
     let write_elapsed = write_started.elapsed();
-    let failed = !matches!(result, Ok(ResponseCompletionOutcome::Completed(_)));
+    let failed = !matches!(result, Ok(ResponseCompletionResult::Completed(_)));
     if !failure_recorded {
         if failed {
             metrics.complete_write_channel_failed(response_code);
@@ -665,7 +665,7 @@ async fn deliver_and_observe(
         body_kind,
         write_elapsed,
         match result.as_ref() {
-            Ok(ResponseCompletionOutcome::Completed(receipt)) => Ok(*receipt),
+            Ok(ResponseCompletionResult::Completed(receipt)) => Ok(*receipt),
             Ok(outcome) => Err((Some(*outcome), response_outcome_progress(*outcome))),
             Err(error) => Err((None, Some(error.write_progress()))),
         },
@@ -681,11 +681,11 @@ enum BoundaryResponseAttempt {
 }
 
 impl BoundaryResponseAttempt {
-    const fn dispatch_outcome(self) -> DispatchOutcome {
+    const fn dispatch_outcome(self) -> DispatchSubmissionResult {
         match self {
-            Self::Delivered => DispatchOutcome::Rejected,
-            Self::CloseSession => DispatchOutcome::CloseSession,
-            Self::SessionClosed => DispatchOutcome::SessionClosed,
+            Self::Delivered => DispatchSubmissionResult::Rejected,
+            Self::CloseSession => DispatchSubmissionResult::CloseSession,
+            Self::SessionClosed => DispatchSubmissionResult::SessionClosed,
         }
     }
 }
@@ -706,7 +706,7 @@ async fn send_boundary_response(
                 None,
                 None,
                 None,
-                crate::runtime::processor::ResponseObservationOutcome::Failed {
+                crate::runtime::processor::ResponseLifecycleEvent::Failed {
                     completion: None,
                     progress: Some(WriteProgress::NotStarted),
                 },
@@ -733,14 +733,14 @@ async fn send_boundary_response(
             Some(body_kind),
             Some(write_elapsed),
             match result.as_ref() {
-                Ok(ResponseCompletionOutcome::Completed(receipt)) => {
-                    crate::runtime::processor::ResponseObservationOutcome::Written(*receipt)
+                Ok(ResponseCompletionResult::Completed(receipt)) => {
+                    crate::runtime::processor::ResponseLifecycleEvent::DeliveryCompleted(*receipt)
                 }
-                Ok(outcome) => crate::runtime::processor::ResponseObservationOutcome::Failed {
+                Ok(outcome) => crate::runtime::processor::ResponseLifecycleEvent::Failed {
                     completion: Some(*outcome),
                     progress: response_outcome_progress(*outcome),
                 },
-                Err(error) => crate::runtime::processor::ResponseObservationOutcome::Failed {
+                Err(error) => crate::runtime::processor::ResponseLifecycleEvent::Failed {
                     completion: None,
                     progress: Some(error.write_progress()),
                 },
@@ -748,12 +748,12 @@ async fn send_boundary_response(
         );
         return result
             .map(|outcome| match outcome {
-                ResponseCompletionOutcome::Completed(_) => BoundaryResponseAttempt::Delivered,
-                ResponseCompletionOutcome::SessionClosed => BoundaryResponseAttempt::SessionClosed,
-                ResponseCompletionOutcome::AlreadyCompleted(_)
-                | ResponseCompletionOutcome::DeadlineExpired
-                | ResponseCompletionOutcome::Cancelled
-                | ResponseCompletionOutcome::QueueSaturated => BoundaryResponseAttempt::CloseSession,
+                ResponseCompletionResult::Completed(_) => BoundaryResponseAttempt::Delivered,
+                ResponseCompletionResult::SessionClosed => BoundaryResponseAttempt::SessionClosed,
+                ResponseCompletionResult::AlreadyCompleted(_)
+                | ResponseCompletionResult::DeadlineExpired
+                | ResponseCompletionResult::Cancelled
+                | ResponseCompletionResult::QueueSaturated => BoundaryResponseAttempt::CloseSession,
             })
             .map_err(AuthorizedDispatchError::Response);
     }
@@ -767,13 +767,13 @@ async fn send_boundary_response(
         .map_err(AuthorizedDispatchError::BoundaryResponse)
 }
 
-const fn response_outcome_progress(outcome: ResponseCompletionOutcome) -> Option<WriteProgress> {
+const fn response_outcome_progress(outcome: ResponseCompletionResult) -> Option<WriteProgress> {
     match outcome {
-        ResponseCompletionOutcome::Completed(_) | ResponseCompletionOutcome::AlreadyCompleted(_) => None,
-        ResponseCompletionOutcome::DeadlineExpired
-        | ResponseCompletionOutcome::Cancelled
-        | ResponseCompletionOutcome::SessionClosed
-        | ResponseCompletionOutcome::QueueSaturated => Some(WriteProgress::NotStarted),
+        ResponseCompletionResult::Completed(_) | ResponseCompletionResult::AlreadyCompleted(_) => None,
+        ResponseCompletionResult::DeadlineExpired
+        | ResponseCompletionResult::Cancelled
+        | ResponseCompletionResult::SessionClosed
+        | ResponseCompletionResult::QueueSaturated => Some(WriteProgress::NotStarted),
     }
 }
 

@@ -11,7 +11,7 @@ The [`public API`](src/public_api.rs) includes:
 - `TransportClientConfig`, `ServerConfig`, `FrameLimits`, socket/TLS configuration, and NameServer endpoint types.
 - `AdmissionController` and resource limits for bounded request/connection work.
 - `RequestDeadline`, request outcomes, and send/response receipts. Local write completion does not establish remote application processing.
-- `RequestProcessor`, `RemotingRequest`, `RemotingResponse`, and `HandlerOutcome`, including deferred responses and explicit no-response outcomes.
+- `RequestProcessor`, `RemotingRequest`, `RemotingResponse`, and `ResponseAction`, including deferred responses and explicit no-response outcomes.
 - `SessionRegistry` and server push/request capabilities.
 - `TransportSecurity`, `RPCHook`, and security contracts supplied by higher-level services.
 

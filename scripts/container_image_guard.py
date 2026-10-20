@@ -356,8 +356,8 @@ def audit_foundation(
         "namesrv": "rocketmq-namesrv/src/bootstrap.rs",
         "controller": "rocketmq-controller/src/bin/controller_bootstrap.rs",
         "proxy": "rocketmq-proxy/src/bootstrap.rs",
-        "mcp_stdio": "rocketmq-ai/rocketmq-mcp/src/main.rs",
-        "mcp_http": "rocketmq-ai/rocketmq-mcp/src/transport/streamable_http.rs",
+        "mcp_stdio": "rocketmq-ai/rocketmq-mcp-query/src/entrypoint.rs",
+        "mcp_http": "rocketmq-ai/rocketmq-mcp-query/src/transport/streamable_http.rs",
     }
     if policy.get("signal_sources") != expected_signal_sources:
         findings.append("service signal source registry drifted")
@@ -515,8 +515,6 @@ def audit_foundation(
 
     publication_fragments = [
         "workflow_dispatch:",
-        "release:",
-        "types: [published]",
         "contents: read",
         "packages: write",
         "id-token: write",
@@ -543,6 +541,8 @@ def audit_foundation(
             findings.append(f"service image publication workflow missing: {fragment}")
     if "pull_request:" in publication_workflow:
         findings.append("service image publication workflow must never run for pull requests")
+    if re.search(r"^  release:\s*$", publication_workflow, re.MULTILINE):
+        findings.append("five-service qualification must be manual; formal releases use the shared image catalog")
     for mutable_tag in (":latest", ":main", ":master"):
         if mutable_tag in publication_workflow:
             findings.append(f"service image publication workflow contains mutable tag: {mutable_tag}")
@@ -583,6 +583,19 @@ def audit_foundation(
     for fragment in trusted_source_fragments:
         if fragment not in publication_workflow:
             findings.append(f"service image publication source trust boundary missing: {fragment}")
+    version_tag_fragments = (
+        'f"refs/tags/v{version}^{{commit}}"',
+        "tagged.returncode == 0 and tagged.stdout.strip() == commit",
+        "VERSION_TAG: ${{ steps.source.outputs.version_tag }}",
+        'promotion_tags=("$IMMUTABLE_TAG")',
+        'promotion_tags+=("$VERSION_TAG")',
+        'immutable_ref="${repository}:${promotion_tag}"',
+        '"promotion/${service}.version.manifest.raw.json"',
+    )
+    if any(fragment not in publication_workflow for fragment in version_tag_fragments):
+        findings.append("service image version tags must match the release source and use verified digest promotion")
+    if publication_workflow.count('for promotion_tag in "${promotion_tags[@]}"') != 2:
+        findings.append("service image version and commit tags must both pass preflight and promotion checks")
     if re.search(r"(?m)^\s+ref:\s*\$\{\{[^\n]*source_ref", publication_workflow):
         findings.append("manual source_ref must never flow directly into actions/checkout")
     if re.search(r"(?m)^\s+default:\s*(?:main|master)\s*$", publication_workflow):
@@ -616,7 +629,9 @@ def audit_foundation(
         "base64.b64decode(padded, validate=True)",
         'record.get("payloadType") != "application/vnd.in-toto+json"',
         'set(statement) != {',
-        'statement.get("_type") == "https://in-toto.io/Statement/v1"',
+        'statement.get("_type") in (',
+        '"https://in-toto.io/Statement/v0.1",',
+        '"https://in-toto.io/Statement/v1",',
         'statement.get("predicateType") == predicate_type',
         "len(subjects) == 1",
         'subjects[0].get("name") == repository',
@@ -633,7 +648,7 @@ def audit_foundation(
         "attestation_bundle_sha256",
         "vulnerability_report_sha256",
         "source_commit: $source_commit",
-        "digest_reference: $digest_reference",
+        "digest: $digest,\n                  digest_reference: $digest_reference\n                },",
         "schema_version: 1",
         "candidate_commit: $source_commit",
         "category: \"five_image_supply_chain\"",
@@ -657,8 +672,14 @@ def audit_foundation(
             findings.append(f"service image publication evidence boundary missing: {fragment}")
     if "--ignore-unfixed" in publication_workflow:
         findings.append("service image publication must scan unfixed CRITICAL vulnerabilities")
-    if publication_workflow.count("--config /dev/null") < 2:
-        findings.append("service image publication scanners must both use explicit empty configuration")
+    scanner_config_fragments = (
+        'scan_config="$scan_workdir/scanners.yaml"',
+        "printf '{}\\n' > \"$scan_config\"",
+    )
+    if publication_workflow.count('--config "$scan_config"') < 2 or any(
+        fragment not in publication_workflow for fragment in scanner_config_fragments
+    ):
+        findings.append("service image publication scanners must both use explicit empty configuration in a YAML file")
     for annotation in (
         '-a "org.opencontainers.image.revision=$SOURCE_COMMIT"',
         '-a "io.rocketmq.service=$service"',

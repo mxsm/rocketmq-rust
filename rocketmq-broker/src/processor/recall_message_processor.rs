@@ -48,11 +48,11 @@ use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
 use rocketmq_store_api::TimerStoreMode;
 use rocketmq_transport::api::error_response;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use tracing::info;
 use tracing::warn;
 
@@ -217,7 +217,7 @@ impl<MS> RequestProcessor for RecallMessageProcessor<MS>
 where
     MS: BrokerWriteStore + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.process_shared(request).await
     }
 }
@@ -226,7 +226,7 @@ impl<MS: BrokerWriteStore> RecallMessageProcessor<MS> {
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let original_opaque = request.original_identity().original_opaque();
         let command_factory = self.context.command_factory;
         let remote_address = recall_remote_address(request.origin())?;
@@ -655,14 +655,14 @@ mod tests {
     use rocketmq_security_api::AuthorizationDecision;
     use rocketmq_security_api::Principal;
     use rocketmq_security_api::RequestPolicy;
+    use rocketmq_store::MessageStore;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_store::StorePorts;
     use rocketmq_store::StoreRuntimeConfig;
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
     use rocketmq_transport::api::EmbeddedCaller;
-    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::ResponseBodyKind;
     use rocketmq_transport::api::TransportSecurity;
     use rocketmq_transport::test_support::EmbeddedRequestHarness;
@@ -675,7 +675,7 @@ mod tests {
         }
     }
 
-    fn test_processor() -> RecallMessageProcessor<StorePorts> {
+    fn test_processor() -> RecallMessageProcessor<MessageStore> {
         let broker_config = BrokerConfig::default();
         let message_store_config = MessageStoreConfig::default();
         let topic_config_manager = Arc::new(TopicConfigManager::new(
@@ -793,7 +793,7 @@ mod tests {
 
     #[tokio::test]
     async fn recall_put_capability_fails_closed_after_provider_shutdown() {
-        let capability = RecallMessageStoreCapability::<StorePorts> {
+        let capability = RecallMessageStoreCapability::<MessageStore> {
             escape_bridge: Weak::new(),
         };
 
@@ -830,7 +830,7 @@ mod tests {
             .dispatch(None, RemotingCommand::create_remoting_command(-98_454).set_opaque(321))
             .await
             .expect("embedded RecallMessage rejection must produce a typed remoting response");
-        let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+        let EmbeddedDispatchResult::Reply(plan) = outcome else {
             panic!("embedded RecallMessage request must fail closed with a reply plan");
         };
         assert_eq!(plan.response_code(), ResponseCode::InvalidParameter as i32);

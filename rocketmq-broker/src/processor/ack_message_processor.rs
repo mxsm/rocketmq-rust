@@ -49,11 +49,11 @@ use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_transport::api::error_response;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -61,8 +61,8 @@ use tracing::warn;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
 use crate::long_polling::pop_deferred::index::PopFanoutCursor;
+use crate::long_polling::pop_deferred::service::PopArrivalLatchStatus;
 use crate::long_polling::pop_deferred::service::PopDeferredService;
-use crate::long_polling::pop_deferred::service::PopPendingArrivalOutcome;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
 use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
@@ -242,7 +242,7 @@ impl<MS: BrokerReadWriteStore> AckMessagePopCapability<MS> {
                 None,
                 PopFanoutCursor::new(),
             ),
-            Ok(PopPendingArrivalOutcome::Latched)
+            Ok(PopArrivalLatchStatus::Latched)
         )
     }
 }
@@ -301,7 +301,7 @@ impl<MS> RequestProcessor for AckMessageProcessor<MS>
 where
     MS: BrokerReadWriteStore + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.process_shared(request).await
     }
 }
@@ -310,7 +310,7 @@ impl<MS: BrokerReadWriteStore> AckMessageProcessor<MS> {
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let original_opaque = request.original_identity().original_opaque();
         let command_factory = self.context.command_factory;
         let request_source = request_origin_label(request.origin());
@@ -874,12 +874,12 @@ mod tests {
     use rocketmq_security_api::AuthorizationDecision;
     use rocketmq_security_api::Principal;
     use rocketmq_security_api::RequestPolicy;
+    use rocketmq_store::MessageStore;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_store::StorePorts;
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
-    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::ResponseBodyKind;
     use rocketmq_transport::api::TransportError;
     use rocketmq_transport::api::TransportSecurity;
@@ -909,7 +909,7 @@ mod tests {
     where
         P: RequestProcessor + Send,
     {
-        async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome> {
+        async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction> {
             Box::pin(self.processor.lock().await.process(request)).await
         }
     }
@@ -925,7 +925,7 @@ mod tests {
     async fn dispatch_embedded<P>(
         processor: P,
         command: RemotingCommand,
-    ) -> std::result::Result<EmbeddedDispatchOutcome, TransportError>
+    ) -> std::result::Result<EmbeddedDispatchResult, TransportError>
     where
         P: RequestProcessor + Send + 'static,
     {
@@ -957,7 +957,7 @@ mod tests {
         outcome
     }
 
-    fn test_processor() -> AckMessageProcessor<StorePorts> {
+    fn test_processor() -> AckMessageProcessor<MessageStore> {
         let broker_config = Arc::new(BrokerConfig::default());
         let message_store_config = MessageStoreConfig::default();
         let topic_config_manager = Arc::new(TopicConfigManager::new(
@@ -1003,12 +1003,12 @@ mod tests {
 
     #[tokio::test]
     async fn ack_message_weak_capabilities_fail_closed_after_provider_shutdown() {
-        let store = AckMessageStoreCapability::<StorePorts> {
+        let store = AckMessageStoreCapability::<MessageStore> {
             escape_bridge: Weak::new(),
         };
         let order = AckMessageOrderCapability { manager: Weak::new() };
-        let offset = AckMessageOffsetCapability::<StorePorts> { manager: Weak::new() };
-        let pop = AckMessagePopCapability::<StorePorts> {
+        let offset = AckMessageOffsetCapability::<MessageStore> { manager: Weak::new() };
+        let pop = AckMessagePopCapability::<MessageStore> {
             merge_service: Weak::new(),
             notification_service: Weak::new(),
             queue_lock_manager: QueueLockManager::new(),
@@ -1035,7 +1035,7 @@ mod tests {
         )
         .await
         .expect("embedded AckMessage response");
-        let EmbeddedDispatchOutcome::Reply(response) = outcome else {
+        let EmbeddedDispatchResult::Reply(response) = outcome else {
             panic!("AckMessage unknown request must return a reply response");
         };
 

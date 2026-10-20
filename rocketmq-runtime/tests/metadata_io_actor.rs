@@ -14,6 +14,7 @@
 
 use std::error::Error;
 use std::io;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
@@ -30,16 +31,22 @@ use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataFileSystem;
 use rocketmq_runtime::MetadataGeneration;
 use rocketmq_runtime::MetadataIoActor;
-use rocketmq_runtime::MetadataIoAdmissionOutcome;
-use rocketmq_runtime::MetadataIoCommitAdmissionOutcome;
-use rocketmq_runtime::MetadataIoCommitOutcome;
 use rocketmq_runtime::MetadataIoConfig;
 use rocketmq_runtime::MetadataIoOperation;
+use rocketmq_runtime::MetadataIoPlan;
 use rocketmq_runtime::MetadataLimitSource;
-use rocketmq_runtime::MetadataTargetRetirementOutcome;
+use rocketmq_runtime::MetadataTargetRetirementStatus;
+use rocketmq_runtime::MetadataWriteCompletionStatus;
+use rocketmq_runtime::MetadataWritePersistenceStatus;
 use rocketmq_runtime::MetadataWriteRequest;
+use rocketmq_runtime::MetadataWriteSubmissionStatus;
+use rocketmq_runtime::ProcessMemoryLimit;
+use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::RuntimeError;
+use rocketmq_runtime::RuntimeErrorKind;
+use rocketmq_runtime::RuntimeOperation;
+use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::ShutdownDeadline;
 use tempfile::TempDir;
@@ -89,6 +96,62 @@ struct RecordingFileSystem {
 impl MetadataFileSystem for RecordingFileSystem {
     fn persist_atomic(&self, _target: &Path, bytes: &[u8]) -> RuntimeResult<()> {
         self.writes.lock().unwrap().push(bytes.to_vec());
+        Ok(())
+    }
+}
+
+/// Holds the writes selected by `holds` until the gate opens, and records how
+/// many writes ran at the same time.
+#[derive(Debug)]
+struct HeldWriteFileSystem {
+    holds: fn(&Path) -> bool,
+    gate: Arc<Gate>,
+    active: AtomicUsize,
+    max_active: AtomicUsize,
+    writes: Mutex<Vec<(PathBuf, Vec<u8>)>>,
+}
+
+impl HeldWriteFileSystem {
+    fn holding(holds: fn(&Path) -> bool) -> Self {
+        Self {
+            holds,
+            gate: Arc::default(),
+            active: AtomicUsize::new(0),
+            max_active: AtomicUsize::new(0),
+            writes: Mutex::default(),
+        }
+    }
+
+    fn writes_to(&self, target: &str) -> Vec<Vec<u8>> {
+        self.writes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(path, _)| path == Path::new(target))
+            .map(|(_, bytes)| bytes.clone())
+            .collect()
+    }
+
+    async fn wait_for_active_writes(&self, count: usize) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while self.active.load(Ordering::Acquire) < count {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the held writes should start");
+    }
+}
+
+impl MetadataFileSystem for HeldWriteFileSystem {
+    fn persist_atomic(&self, target: &Path, bytes: &[u8]) -> RuntimeResult<()> {
+        let active = self.active.fetch_add(1, Ordering::AcqRel) + 1;
+        self.max_active.fetch_max(active, Ordering::AcqRel);
+        if (self.holds)(target) {
+            self.gate.wait();
+        }
+        self.writes.lock().unwrap().push((target.to_path_buf(), bytes.to_vec()));
+        self.active.fetch_sub(1, Ordering::AcqRel);
         Ok(())
     }
 }
@@ -158,10 +221,10 @@ fn request(resource: &str, generation: u64, bytes: &[u8]) -> MetadataWriteReques
     )
 }
 
-fn accepted(outcome: MetadataIoAdmissionOutcome) -> rocketmq_runtime::MetadataIoReceipt {
+fn accepted(outcome: MetadataWriteSubmissionStatus) -> rocketmq_runtime::MetadataIoReceipt {
     match outcome {
-        MetadataIoAdmissionOutcome::Accepted(receipt) => receipt,
-        MetadataIoAdmissionOutcome::TargetConflict(_) => {
+        MetadataWriteSubmissionStatus::Accepted(receipt) => receipt,
+        MetadataWriteSubmissionStatus::TargetConflict(_) => {
             panic!("test request unexpectedly conflicted with another target")
         }
     }
@@ -224,7 +287,7 @@ fn small_target_capacity_supports_explicit_retirement_and_read_only_old_receipts
                 actor
                     .retire_target_for_new_identity(&format!("resource-{generation}"))
                     .unwrap(),
-                MetadataTargetRetirementOutcome::AdmissionOpen
+                MetadataTargetRetirementStatus::AdmissionOpen
             );
             let report = actor.shutdown_until(deadline).await;
             assert!(!report.timed_out);
@@ -236,7 +299,7 @@ fn small_target_capacity_supports_explicit_retirement_and_read_only_old_receipts
                 actor
                     .retire_target_for_new_identity(&format!("resource-{generation}"))
                     .unwrap(),
-                MetadataTargetRetirementOutcome::Retired
+                MetadataTargetRetirementStatus::Retired
             );
             assert_eq!(owner.resources().metadata_target_stats().retained_targets, 0);
             assert_eq!(std::fs::read(&target).unwrap(), generation.to_string().into_bytes());
@@ -268,7 +331,7 @@ async fn retirement_rejects_queued_work_and_actual_blocking_authority() {
     actor.stop_admission();
     assert_eq!(
         actor.retire_target_for_new_identity("held").unwrap(),
-        MetadataTargetRetirementOutcome::WorkInProgress
+        MetadataTargetRetirementStatus::WorkInProgress
     );
     file_system.gate.release();
     first.wait_until(deadline).await.unwrap();
@@ -276,7 +339,7 @@ async fn retirement_rejects_queued_work_and_actual_blocking_authority() {
     assert!(!actor.shutdown_until(deadline).await.timed_out);
     assert_eq!(
         actor.retire_target_for_new_identity("held").unwrap(),
-        MetadataTargetRetirementOutcome::Retired
+        MetadataTargetRetirementStatus::Retired
     );
     assert!(context.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
 }
@@ -312,7 +375,7 @@ fn retirement_churn_cannot_grow_an_open_actors_history_cache() {
         assert!(!replacement.shutdown_until(deadline).await.timed_out);
         assert_eq!(
             replacement.retire_target_for_new_identity("shared").unwrap(),
-            MetadataTargetRetirementOutcome::Retired
+            MetadataTargetRetirementStatus::Retired
         );
         assert_eq!(owner.resources().metadata_target_stats().retained_targets, 0);
         assert_eq!(
@@ -343,12 +406,12 @@ async fn retirement_keeps_unknown_outcome_fenced_and_old_actor_cannot_rebind_a_r
     let receipt = accepted(failed.submit(request("fenced", 1, b"one"), deadline).unwrap());
     assert!(matches!(
         receipt.wait_until_outcome(deadline).await.unwrap(),
-        MetadataIoCommitOutcome::CommitOutcomeUnknown(_)
+        MetadataWritePersistenceStatus::CommitOutcomeUnknown(_)
     ));
     assert!(!failed.shutdown_until(deadline).await.timed_out);
     assert_eq!(
         failed.retire_target_for_new_identity("fenced").unwrap(),
-        MetadataTargetRetirementOutcome::ReconciliationRequired
+        MetadataTargetRetirementStatus::ReconciliationRequired
     );
     assert_eq!(
         context
@@ -384,7 +447,7 @@ async fn retirement_keeps_unknown_outcome_fenced_and_old_actor_cannot_rebind_a_r
     assert!(!replacement.shutdown_until(deadline).await.timed_out);
     assert_eq!(
         replacement.retire_target_for_new_identity("shared").unwrap(),
-        MetadataTargetRetirementOutcome::Retired
+        MetadataTargetRetirementStatus::Retired
     );
     assert!(old.submit(request("shared", 3, b"stale"), deadline).is_err());
     assert!(context.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
@@ -497,8 +560,8 @@ async fn pending_resource_target_conflict_returns_the_original_request() {
     let conflicting_request =
         MetadataWriteRequest::new("routes", 2, PathBuf::from("alternate-routes.json"), b"two".to_vec());
     let rejected_request = match actor.submit(conflicting_request, deadline).unwrap() {
-        MetadataIoAdmissionOutcome::Accepted(_) => panic!("different pending target must not be accepted"),
-        MetadataIoAdmissionOutcome::TargetConflict(request) => request,
+        MetadataWriteSubmissionStatus::Accepted(_) => panic!("different pending target must not be accepted"),
+        MetadataWriteSubmissionStatus::TargetConflict(request) => request,
     };
     assert_eq!(rejected_request.resource(), "routes");
     assert_eq!(rejected_request.generation(), MetadataGeneration::new(2));
@@ -682,10 +745,10 @@ async fn target_binding_is_process_local_and_rejects_a_second_resource() {
 
     let conflicting = MetadataWriteRequest::new("second", 1, PathBuf::from("first.json"), b"two");
     match actor.submit(conflicting, deadline).unwrap() {
-        MetadataIoAdmissionOutcome::TargetConflict(request) => {
+        MetadataWriteSubmissionStatus::TargetConflict(request) => {
             assert_eq!(request.resource(), "second");
         }
-        MetadataIoAdmissionOutcome::Accepted(_) => {
+        MetadataWriteSubmissionStatus::Accepted(_) => {
             panic!("a second resource must not bind the same target")
         }
     }
@@ -717,7 +780,7 @@ async fn cancelled_actor_retains_target_until_the_real_closure_exits() {
         replacement_actor
             .submit(request("shared", 1, b"two"), deadline)
             .unwrap(),
-        MetadataIoAdmissionOutcome::TargetConflict(_)
+        MetadataWriteSubmissionStatus::TargetConflict(_)
     ));
 
     gated_file_system.gate.release();
@@ -727,8 +790,8 @@ async fn cancelled_actor_retains_target_until_the_real_closure_exits() {
                 .submit(request("shared", 1, b"two"), deadline)
                 .unwrap()
             {
-                MetadataIoAdmissionOutcome::Accepted(receipt) => break receipt,
-                MetadataIoAdmissionOutcome::TargetConflict(_) => tokio::task::yield_now().await,
+                MetadataWriteSubmissionStatus::Accepted(receipt) => break receipt,
+                MetadataWriteSubmissionStatus::TargetConflict(_) => tokio::task::yield_now().await,
             }
         }
     })
@@ -748,7 +811,7 @@ async fn cancelled_actor_retains_target_until_the_real_closure_exits() {
         .await
         .unwrap();
     match newer {
-        MetadataIoCommitAdmissionOutcome::Completed(MetadataIoCommitOutcome::Durable(generation)) => {
+        MetadataWriteCompletionStatus::Completed(MetadataWritePersistenceStatus::Durable(generation)) => {
             assert_eq!(generation, MetadataGeneration::new(2));
         }
         outcome => panic!("replacement write must become durable: {outcome:?}"),
@@ -786,7 +849,7 @@ async fn commit_outcome_distinguishes_unknown_durability() {
         .unwrap();
     assert!(matches!(
         unknown,
-        MetadataIoCommitAdmissionOutcome::Completed(MetadataIoCommitOutcome::CommitOutcomeUnknown(_))
+        MetadataWriteCompletionStatus::Completed(MetadataWritePersistenceStatus::CommitOutcomeUnknown(_))
     ));
     let blocked = unknown_actor
         .submit_next_commit("unknown-resource", PathBuf::from("unknown.json"), b"retry", deadline)
@@ -800,7 +863,7 @@ async fn commit_outcome_distinguishes_unknown_durability() {
         .unwrap();
     assert!(matches!(
         failed,
-        MetadataIoCommitAdmissionOutcome::Completed(MetadataIoCommitOutcome::FailedBeforeCommit(_))
+        MetadataWriteCompletionStatus::Completed(MetadataWritePersistenceStatus::FailedBeforeCommit(_))
     ));
     assert!(context.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
 }
@@ -824,7 +887,7 @@ fn local_filesystem_atomically_replaces_target_and_cleans_temporary_file() {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum FirstWriteOutcome {
+enum FirstWriteBehavior {
     Success,
     Failure,
     Panic,
@@ -833,7 +896,7 @@ enum FirstWriteOutcome {
 #[derive(Debug)]
 struct LateCompletionFileSystem {
     gate: Arc<Gate>,
-    outcome: FirstWriteOutcome,
+    outcome: FirstWriteBehavior,
     writes: Mutex<Vec<Vec<u8>>>,
 }
 
@@ -842,14 +905,14 @@ impl MetadataFileSystem for LateCompletionFileSystem {
         if bytes == b"one" {
             self.gate.wait();
             match self.outcome {
-                FirstWriteOutcome::Success => {}
-                FirstWriteOutcome::Failure => {
+                FirstWriteBehavior::Success => {}
+                FirstWriteBehavior::Failure => {
                     return Err(RuntimeError::io(
                         MetadataIoOperation::WriteTemporary.runtime_operation(),
                         io::Error::other("late write failure"),
                     ));
                 }
-                FirstWriteOutcome::Panic => panic!("late write panic"),
+                FirstWriteBehavior::Panic => panic!("late write panic"),
             }
         }
         self.writes.lock().unwrap().push(bytes.to_vec());
@@ -865,7 +928,7 @@ impl Drop for ReleaseGateOnDrop {
     }
 }
 
-async fn verify_late_write_order(outcome: FirstWriteOutcome) {
+async fn verify_late_write_order(outcome: FirstWriteBehavior) {
     let file_system = Arc::new(LateCompletionFileSystem {
         gate: Arc::new(Gate::default()),
         outcome,
@@ -923,12 +986,12 @@ async fn verify_late_write_order(outcome: FirstWriteOutcome) {
 
     file_system.gate.release();
     match outcome {
-        FirstWriteOutcome::Success => assert_eq!(late_result.await.unwrap(), 1.into()),
-        FirstWriteOutcome::Failure => assert_eq!(
+        FirstWriteBehavior::Success => assert_eq!(late_result.await.unwrap(), 1.into()),
+        FirstWriteBehavior::Failure => assert_eq!(
             late_result.await.unwrap_err().operation(),
             MetadataIoOperation::WriteTemporary.runtime_operation()
         ),
-        FirstWriteOutcome::Panic => assert_eq!(
+        FirstWriteBehavior::Panic => assert_eq!(
             late_result.await.unwrap_err().operation(),
             rocketmq_runtime::RuntimeOperation::RunBlockingTask
         ),
@@ -940,25 +1003,25 @@ async fn verify_late_write_order(outcome: FirstWriteOutcome) {
     assert_eq!(drained.pending_bytes, 0);
     assert_eq!(actor.snapshot().resources[0].durable_generation, Some(2.into()));
     let expected = match outcome {
-        FirstWriteOutcome::Success => vec![b"one".to_vec(), b"two".to_vec()],
-        FirstWriteOutcome::Failure | FirstWriteOutcome::Panic => vec![b"two".to_vec()],
+        FirstWriteBehavior::Success => vec![b"one".to_vec(), b"two".to_vec()],
+        FirstWriteBehavior::Failure | FirstWriteBehavior::Panic => vec![b"two".to_vec()],
     };
     assert_eq!(*file_system.writes.lock().unwrap(), expected);
 }
 
 #[tokio::test(start_paused = true)]
 async fn late_success_preserves_write_order_after_observer_and_lane_deadlines() {
-    verify_late_write_order(FirstWriteOutcome::Success).await;
+    verify_late_write_order(FirstWriteBehavior::Success).await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn late_failure_preserves_write_order_after_observer_and_lane_deadlines() {
-    verify_late_write_order(FirstWriteOutcome::Failure).await;
+    verify_late_write_order(FirstWriteBehavior::Failure).await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn late_panic_preserves_write_order_after_observer_and_lane_deadlines() {
-    verify_late_write_order(FirstWriteOutcome::Panic).await;
+    verify_late_write_order(FirstWriteBehavior::Panic).await;
 }
 
 /// Waits until one generation occupies the actor's single in-flight slot.
@@ -1040,7 +1103,7 @@ async fn observation_timeout_reports_the_unobserved_generation_and_late_success_
 async fn observation_timeout_does_not_publish_a_generation_for_a_late_failure() {
     let file_system = Arc::new(LateCompletionFileSystem {
         gate: Arc::new(Gate::default()),
-        outcome: FirstWriteOutcome::Failure,
+        outcome: FirstWriteBehavior::Failure,
         writes: Mutex::new(Vec::new()),
     });
     let _release_on_failure = ReleaseGateOnDrop(file_system.gate.clone());
@@ -1091,7 +1154,7 @@ async fn observed_submission_classifies_every_settled_conclusion() {
     assert!(!observed.requires_reconciliation());
     assert!(matches!(
         observed.settled(),
-        Some(MetadataIoCommitOutcome::Durable(generation)) if generation == MetadataGeneration::new(1)
+        Some(MetadataWritePersistenceStatus::Durable(generation)) if generation == MetadataGeneration::new(1)
     ));
 
     // A second resource cannot bind the same target; the conflict is reported
@@ -1123,7 +1186,7 @@ async fn observed_submission_classifies_every_settled_conclusion() {
     );
     assert!(matches!(
         observed.settled(),
-        Some(MetadataIoCommitOutcome::FailedBeforeCommit(_))
+        Some(MetadataWritePersistenceStatus::FailedBeforeCommit(_))
     ));
     assert!(failed.confirmed_durable_generation("failed-resource").is_none());
 
@@ -1147,7 +1210,7 @@ async fn observed_submission_classifies_every_settled_conclusion() {
     assert_eq!(observed.unobserved_generation(), None);
     assert!(matches!(
         observed.settled(),
-        Some(MetadataIoCommitOutcome::CommitOutcomeUnknown(_))
+        Some(MetadataWritePersistenceStatus::CommitOutcomeUnknown(_))
     ));
 }
 
@@ -1251,7 +1314,7 @@ async fn a_published_generation_releases_the_target_for_the_next_write() {
             .expect("the follow-up write should be admitted for this resource");
 
         assert!(
-            matches!(follow_up, MetadataIoAdmissionOutcome::Accepted(_)),
+            matches!(follow_up, MetadataWriteSubmissionStatus::Accepted(_)),
             "round {round}: a write that follows a confirmed generation was refused as a target conflict"
         );
     }
@@ -1309,7 +1372,7 @@ async fn unconfirmed_commit_fences_a_target_that_still_has_queued_work() {
     assert!(
         matches!(
             first.wait_until_outcome(deadline).await.unwrap(),
-            MetadataIoCommitOutcome::CommitOutcomeUnknown(_)
+            MetadataWritePersistenceStatus::CommitOutcomeUnknown(_)
         ),
         "generation 1 must be reported as an unconfirmed replacement"
     );
@@ -1373,6 +1436,10 @@ async fn effective_profile_reports_the_lane_as_the_owner_of_blocking_limits() {
     assert_eq!(profile.actor_limits.max_pending_operations, 8);
     assert_eq!(profile.actor_limits.max_pending_bytes, 64);
     assert_eq!(profile.actor_limits.max_waiters, 32);
+    assert_eq!(
+        profile.actor_limits.max_concurrent_writes, 1,
+        "an actor writes one resource at a time unless its plan allows more"
+    );
 
     let field = |name: &str| {
         profile
@@ -1463,7 +1530,7 @@ async fn a_request_lane_deadline_tightens_the_shared_lane_budget() {
     assert!(
         matches!(
             observation.settled(),
-            Some(MetadataIoCommitOutcome::FailedBeforeCommit(_))
+            Some(MetadataWritePersistenceStatus::FailedBeforeCommit(_))
         ),
         "the tightened deadline must settle as a failure before replacement"
     );
@@ -1518,7 +1585,7 @@ async fn a_request_lane_deadline_cannot_widen_the_lane_budget() {
     assert!(
         matches!(
             observation.settled(),
-            Some(MetadataIoCommitOutcome::FailedBeforeCommit(_))
+            Some(MetadataWritePersistenceStatus::FailedBeforeCommit(_))
         ),
         "the lane budget must settle the request as a failure before replacement"
     );
@@ -1534,4 +1601,318 @@ async fn a_request_lane_deadline_cannot_widen_the_lane_budget() {
     let _ = actor
         .shutdown_until(MetadataDeadline::after(Duration::from_secs(10)))
         .await;
+}
+
+fn concurrent_plan(max_pending_bytes: usize, writes: usize) -> MetadataIoPlan {
+    config(8, max_pending_bytes)
+        .into_plan()
+        .unwrap()
+        .with_max_concurrent_writes(NonZeroUsize::new(writes).unwrap())
+}
+
+#[test]
+fn queued_snapshots_replace_at_the_process_limit_and_roll_back_failed_growth() {
+    let owner = RuntimeOwner::plan(RuntimeConfig::for_parallelism("metadata-replace", 2))
+        .unwrap()
+        .with_memory_limit(ProcessMemoryLimit::configured(100).unwrap())
+        .build()
+        .unwrap();
+    let service = owner.root_context().component("metadata");
+    let filesystem = Arc::new(HeldWriteFileSystem::holding(|_| true));
+    let actor = config(8, 1024)
+        .into_plan()
+        .unwrap()
+        .start_with_file_system(&service, filesystem.clone())
+        .unwrap();
+    let _release = ReleaseGateOnDrop(filesystem.gate.clone());
+    owner.block_on(async {
+        let deadline = MetadataDeadline::after(Duration::from_secs(10));
+        let first = accepted(actor.submit(request("routes", 1, &[1; 40]), deadline).unwrap());
+        filesystem.wait_for_active_writes(1).await;
+        let second = accepted(actor.submit(request("routes", 2, &[2; 60]), deadline).unwrap());
+        let third = accepted(actor.submit(request("routes", 3, &[3; 60]), deadline).unwrap());
+        assert_eq!(service.process_budget().snapshot().current_bytes, 100);
+        let fourth = accepted(actor.submit(request("routes", 4, &[4; 20]), deadline).unwrap());
+        assert_eq!(service.process_budget().snapshot().current_bytes, 60);
+        assert_eq!(
+            actor
+                .submit(request("routes", 5, &[5; 80]), deadline)
+                .unwrap_err()
+                .kind(),
+            RuntimeErrorKind::CapacityExhausted
+        );
+        assert_eq!(service.process_budget().snapshot().current_bytes, 60);
+        assert_eq!(
+            actor.snapshot().resources[0].queued_generation,
+            Some(MetadataGeneration::new(4))
+        );
+        let sixth = accepted(actor.submit(request("routes", 6, &[6; 60]), deadline).unwrap());
+        assert_eq!(service.process_budget().snapshot().current_bytes, 100);
+        assert_eq!(service.process_budget().snapshot().current_count, 2);
+        filesystem.gate.release();
+        assert_eq!(first.wait_until(deadline).await.unwrap(), MetadataGeneration::new(1));
+        for receipt in [second, third, fourth, sixth] {
+            assert_eq!(receipt.wait_until(deadline).await.unwrap(), MetadataGeneration::new(6));
+        }
+        assert!(!actor.shutdown_until(deadline).await.timed_out);
+        assert_eq!(service.process_budget().snapshot().current_bytes, 0);
+        assert_eq!(filesystem.writes_to("routes.json"), vec![vec![1; 40], vec![6; 60]]);
+    });
+    assert!(owner.shutdown_runtime_blocking().unwrap().is_healthy());
+}
+
+#[tokio::test]
+async fn a_running_snapshot_keeps_its_charge_after_the_actor_and_coordinator_are_dropped() {
+    let context = RuntimeContext::try_from_current("metadata-closure-charge").unwrap();
+    let service = context.service_context("metadata");
+    let filesystem = Arc::new(HeldWriteFileSystem::holding(|_| true));
+    let actor = config(8, 1024)
+        .into_plan()
+        .unwrap()
+        .start_with_file_system(&service, filesystem.clone())
+        .unwrap();
+    let _release = ReleaseGateOnDrop(filesystem.gate.clone());
+    let observer = actor.observer();
+    let receipt = accepted(
+        actor
+            .submit(
+                request("routes", 1, &[1; 64]),
+                MetadataDeadline::after(Duration::from_secs(10)),
+            )
+            .unwrap(),
+    );
+    filesystem.wait_for_active_writes(1).await;
+    let _ = context.shutdown_tasks(Duration::ZERO).await;
+    drop((actor, receipt));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while observer.snapshot().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(service.process_budget().snapshot().current_bytes, 64);
+    filesystem.gate.release();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while service.process_budget().snapshot().current_bytes != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(service.process_budget().snapshot().current_count, 0);
+}
+
+#[tokio::test]
+async fn concurrent_writes_let_other_resources_pass_a_slow_write() {
+    let file_system = Arc::new(HeldWriteFileSystem::holding(|target| target == Path::new("slow.json")));
+    let context = RuntimeContext::try_from_current("metadata-io-concurrent").unwrap();
+    let actor = concurrent_plan(1024, 2)
+        .start_with_file_system(&context.service_context("concurrent"), file_system.clone())
+        .unwrap();
+    let deadline = MetadataDeadline::after(Duration::from_secs(5));
+
+    let slow = accepted(actor.submit(request("slow", 1, b"slow-1"), deadline).unwrap());
+    file_system.wait_for_active_writes(1).await;
+    let replaced = accepted(actor.submit(request("slow", 2, b"slow-2"), deadline).unwrap());
+    let newest = accepted(actor.submit(request("slow", 3, b"slow-3"), deadline).unwrap());
+
+    // Another resource becomes durable while the slow write is still held.
+    let fast = accepted(actor.submit(request("fast", 1, b"fast-1"), deadline).unwrap());
+    assert_eq!(fast.wait_until(deadline).await.unwrap(), MetadataGeneration::new(1));
+    let slow_state = actor
+        .snapshot()
+        .resources
+        .into_iter()
+        .find(|resource| resource.resource.as_ref() == "slow")
+        .unwrap();
+    assert_eq!(slow_state.in_flight_generation, Some(MetadataGeneration::new(1)));
+    assert_eq!(slow_state.queued_generation, Some(MetadataGeneration::new(3)));
+
+    file_system.gate.release();
+    assert_eq!(slow.wait_until(deadline).await.unwrap(), MetadataGeneration::new(1));
+    assert_eq!(replaced.wait_until(deadline).await.unwrap(), MetadataGeneration::new(3));
+    assert_eq!(newest.wait_until(deadline).await.unwrap(), MetadataGeneration::new(3));
+    // Generations of one resource still run one at a time, in order, and coalesce.
+    assert_eq!(
+        file_system.writes_to("slow.json"),
+        vec![b"slow-1".to_vec(), b"slow-3".to_vec()]
+    );
+    assert_eq!(file_system.max_active.load(Ordering::Acquire), 2);
+    assert!(!actor.shutdown_until(deadline).await.timed_out);
+}
+
+#[tokio::test]
+async fn concurrent_writes_are_bounded_by_the_plan() {
+    let file_system = Arc::new(HeldWriteFileSystem::holding(|_| true));
+    let context = RuntimeContext::try_from_current("metadata-io-bounded").unwrap();
+    let actor = concurrent_plan(1024, 3)
+        .start_with_file_system(&context.service_context("bounded"), file_system.clone())
+        .unwrap();
+    assert_eq!(actor.effective_profile().actor_limits.max_concurrent_writes, 3);
+    let deadline = MetadataDeadline::after(Duration::from_secs(5));
+
+    let receipts = (0..5)
+        .map(|index| {
+            accepted(
+                actor
+                    .submit(request(&format!("resource-{index}"), 1, b"held"), deadline)
+                    .unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    file_system.wait_for_active_writes(3).await;
+    let snapshot = actor.snapshot();
+    let in_flight = snapshot
+        .resources
+        .iter()
+        .filter(|resource| resource.in_flight_generation.is_some())
+        .count();
+    let queued = snapshot
+        .resources
+        .iter()
+        .filter(|resource| resource.queued_generation.is_some())
+        .count();
+    assert_eq!((in_flight, queued), (3, 2));
+
+    file_system.gate.release();
+    for receipt in receipts {
+        assert_eq!(receipt.wait_until(deadline).await.unwrap(), MetadataGeneration::new(1));
+    }
+    assert_eq!(file_system.max_active.load(Ordering::Acquire), 3);
+    assert!(!actor.shutdown_until(deadline).await.timed_out);
+}
+
+#[tokio::test]
+async fn planned_write_concurrency_is_capped_by_the_metadata_lane() {
+    let lane_policy = BlockingPoolPolicy {
+        max_concurrency: 2,
+        ..BlockingPoolPolicy::default()
+    };
+    let context = RuntimeContext::try_from_current_with_blocking_policy("metadata-io-lane-cap", lane_policy)
+        .expect("test runtime context should start");
+    let actor = concurrent_plan(64, 8)
+        .start_with_file_system(
+            &context.service_context("capped"),
+            Arc::new(RecordingFileSystem::default()),
+        )
+        .unwrap();
+
+    assert_eq!(actor.effective_profile().actor_limits.max_concurrent_writes, 2);
+    assert!(
+        !actor
+            .shutdown_until(MetadataDeadline::after(Duration::from_secs(5)))
+            .await
+            .timed_out
+    );
+}
+
+#[tokio::test]
+async fn retained_snapshots_are_charged_to_the_process_budget_until_they_finish() {
+    let file_system = Arc::new(HeldWriteFileSystem::holding(|target| {
+        target == Path::new("routes.json")
+    }));
+    let context = RuntimeContext::try_from_current("metadata-io-process-budget").unwrap();
+    let service = context.service_context("charged");
+    let process_budget = service.process_budget();
+    let actor = config(8, 1024)
+        .into_plan()
+        .unwrap()
+        .start_with_file_system(&service, file_system.clone())
+        .unwrap();
+    let deadline = MetadataDeadline::after(Duration::from_secs(5));
+
+    let first = accepted(actor.submit(request("routes", 1, b"12345"), deadline).unwrap());
+    file_system.wait_for_active_writes(1).await;
+    let replaced = accepted(actor.submit(request("routes", 2, b"123"), deadline).unwrap());
+    assert_eq!(process_budget.snapshot().current_bytes, 5 + 3);
+    let newest = accepted(actor.submit(request("routes", 3, b"1234567"), deadline).unwrap());
+    assert_eq!(
+        process_budget.snapshot().current_bytes,
+        5 + 7,
+        "a replaced queued snapshot releases its charge"
+    );
+
+    // Queued behind the held write, this observation expires. The snapshot
+    // stays charged because the actor still owns it.
+    let observation = actor
+        .submit_observed(
+            request("offsets", 1, b"12"),
+            MetadataDeadline::after(Duration::from_millis(50)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(observation.unobserved_generation(), Some(MetadataGeneration::new(1)));
+    assert_eq!(process_budget.snapshot().current_bytes, 5 + 7 + 2);
+    assert_eq!(actor.snapshot().pending_bytes, 5 + 7 + 2);
+
+    file_system.gate.release();
+    assert_eq!(first.wait_until(deadline).await.unwrap(), MetadataGeneration::new(1));
+    assert_eq!(replaced.wait_until(deadline).await.unwrap(), MetadataGeneration::new(3));
+    assert_eq!(newest.wait_until(deadline).await.unwrap(), MetadataGeneration::new(3));
+    assert!(!actor.shutdown_until(deadline).await.timed_out);
+    assert_eq!(
+        actor.confirmed_durable_generation("offsets"),
+        Some(MetadataGeneration::new(1))
+    );
+    assert_eq!(actor.snapshot().pending_bytes, 0);
+    assert_eq!(process_budget.snapshot().current_bytes, 0);
+}
+
+#[test]
+fn metadata_actors_of_one_owner_share_the_process_budget() {
+    let owner = RuntimeOwner::plan(RuntimeConfig::for_parallelism("metadata-io-shared-budget", 2))
+        .unwrap()
+        .with_memory_limit(ProcessMemoryLimit::configured(1024).unwrap())
+        .build()
+        .unwrap();
+    let held = Arc::new(HeldWriteFileSystem::holding(|_| true));
+    let first_actor = config(8, 64 * 1024)
+        .into_plan()
+        .unwrap()
+        .start_with_file_system(&owner.root_context().component("first"), held.clone())
+        .unwrap();
+    let second_actor = config(8, 64 * 1024)
+        .into_plan()
+        .unwrap()
+        .start_with_file_system(
+            &owner.root_context().component("second"),
+            Arc::new(RecordingFileSystem::default()),
+        )
+        .unwrap();
+    let process_budget = owner.resources().process_budget();
+
+    owner.block_on(async {
+        let deadline = MetadataDeadline::after(Duration::from_secs(5));
+        // The actor's own bound admits this snapshot; the owner's budget does not.
+        let oversized = first_actor
+            .submit(request("oversized", 1, &[0; 2048]), deadline)
+            .unwrap_err();
+        assert_eq!(oversized.kind(), RuntimeErrorKind::CapacityExhausted);
+        assert_eq!(oversized.operation(), RuntimeOperation::AdmitMetadataBytes);
+        assert_eq!(first_actor.snapshot().pending_bytes, 0);
+
+        let held_receipt = accepted(first_actor.submit(request("held", 1, &[1; 800]), deadline).unwrap());
+        held.wait_for_active_writes(1).await;
+        assert_eq!(process_budget.snapshot().current_bytes, 800);
+
+        // Another actor of the same owner cannot take the remaining bytes.
+        let refused = second_actor
+            .submit(request("second", 1, &[2; 400]), deadline)
+            .unwrap_err();
+        assert_eq!(refused.kind(), RuntimeErrorKind::CapacityExhausted);
+        assert_eq!(second_actor.snapshot().pending_operations, 0);
+
+        held.gate.release();
+        assert_eq!(
+            held_receipt.wait_until(deadline).await.unwrap(),
+            MetadataGeneration::new(1)
+        );
+        let admitted = accepted(second_actor.submit(request("second", 1, &[2; 400]), deadline).unwrap());
+        assert_eq!(admitted.wait_until(deadline).await.unwrap(), MetadataGeneration::new(1));
+        assert!(!first_actor.shutdown_until(deadline).await.timed_out);
+        assert!(!second_actor.shutdown_until(deadline).await.timed_out);
+    });
+    assert_eq!(process_budget.snapshot().current_bytes, 0);
+    assert!(owner.shutdown_runtime_blocking().unwrap().is_healthy());
 }

@@ -17,11 +17,11 @@ use crate::config::SqlPoolConfig;
 use crate::config::StorageConfig;
 use crate::model::EnvironmentId;
 use crate::model::MetricSample;
-use crate::model::StorageBackend;
-use crate::persistence::file_store::FilePersistence;
+use crate::model::StorageEngine;
+use crate::persistence::file_store::FileDashboardStore;
 use crate::persistence::history_repository::HistoryQuery;
 use crate::persistence::history_repository::page_samples;
-use crate::persistence::sql_store::SqlPersistence;
+use crate::persistence::sql_store::SqlDashboardStore;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ScopeId;
 use sqlx::Row;
@@ -53,9 +53,9 @@ fn docker_file_history_capacity_baseline() {
         .expect("ROCKETMQ_DASHBOARD_STORAGE_TEST_FILE_PATH must be set by the storage test runner");
     let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
-        let store = FilePersistence::initialize(
+        let store = FileDashboardStore::initialize(
             &StorageConfig {
-                backend: StorageBackend::File,
+                backend: StorageEngine::File,
                 data_path: data_path.into(),
                 database_url: None,
                 pool: SqlPoolConfig::default(),
@@ -74,7 +74,7 @@ fn docker_file_history_capacity_baseline() {
 fn docker_sqlite_history_capacity_baseline() {
     let data_path = std::env::var("ROCKETMQ_DASHBOARD_STORAGE_TEST_SQLITE_PATH")
         .expect("ROCKETMQ_DASHBOARD_STORAGE_TEST_SQLITE_PATH must be set by the storage test runner");
-    run_sql_capacity(StorageBackend::Sqlite, None, data_path.into());
+    run_sql_capacity(StorageEngine::Sqlite, None, data_path.into());
 }
 
 #[test]
@@ -82,7 +82,7 @@ fn docker_sqlite_history_capacity_baseline() {
 fn docker_mysql_history_capacity_baseline() {
     let database_url = std::env::var("ROCKETMQ_DASHBOARD_STORAGE_TEST_MYSQL_URL")
         .expect("ROCKETMQ_DASHBOARD_STORAGE_TEST_MYSQL_URL must be set by the storage test runner");
-    run_sql_capacity(StorageBackend::MySql, Some(database_url), "unused".into());
+    run_sql_capacity(StorageEngine::MySql, Some(database_url), "unused".into());
 }
 
 #[test]
@@ -90,7 +90,7 @@ fn docker_mysql_history_capacity_baseline() {
 fn docker_postgres_history_capacity_baseline() {
     let database_url = std::env::var("ROCKETMQ_DASHBOARD_STORAGE_TEST_POSTGRES_URL")
         .expect("ROCKETMQ_DASHBOARD_STORAGE_TEST_POSTGRES_URL must be set by the storage test runner");
-    run_sql_capacity(StorageBackend::Postgres, Some(database_url), "unused".into());
+    run_sql_capacity(StorageEngine::Postgres, Some(database_url), "unused".into());
 }
 
 fn query(environment_id: EnvironmentId, cursor: Option<String>) -> HistoryQuery {
@@ -122,7 +122,7 @@ fn samples(environment_id: &EnvironmentId, batch: usize) -> Vec<MetricSample> {
         .collect()
 }
 
-async fn run_file_capacity(store: &FilePersistence) {
+async fn run_file_capacity(store: &FileDashboardStore) {
     let environment_id = EnvironmentId::new();
     let first = samples(&environment_id, 0);
     let started = Instant::now();
@@ -180,10 +180,10 @@ async fn run_file_capacity(store: &FilePersistence) {
     );
 }
 
-fn run_sql_capacity(backend: StorageBackend, database_url: Option<String>, data_path: std::path::PathBuf) {
+fn run_sql_capacity(backend: StorageEngine, database_url: Option<String>, data_path: std::path::PathBuf) {
     let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
-        let store = SqlPersistence::initialize(
+        let store = SqlDashboardStore::initialize(
             &StorageConfig {
                 backend,
                 data_path,
@@ -256,10 +256,10 @@ fn run_sql_capacity(backend: StorageBackend, database_url: Option<String>, data_
     owner.shutdown_runtime_blocking().expect("runtime shutdown");
 }
 
-async fn assert_query_index(store: &SqlPersistence, backend: StorageBackend, environment_id: &EnvironmentId) {
+async fn assert_query_index(store: &SqlDashboardStore, backend: StorageEngine, environment_id: &EnvironmentId) {
     let environment_id = &environment_id.0;
     match backend {
-        StorageBackend::Sqlite => {
+        StorageEngine::Sqlite => {
             let rows = sqlx::query(
                 "EXPLAIN QUERY PLAN SELECT bucket_ms FROM dashboard_history_sample \
                  WHERE environment_id = ? AND metric_name = ? AND dimensions_json = ? \
@@ -281,7 +281,7 @@ async fn assert_query_index(store: &SqlPersistence, backend: StorageBackend, env
                 "SQLite query plan must use dashboard_history_sample_query_idx"
             );
         }
-        StorageBackend::MySql => {
+        StorageEngine::MySql => {
             let plan = sqlx::query_scalar::<_, String>(
                 "EXPLAIN FORMAT=JSON SELECT bucket_ms FROM dashboard_history_sample \
                  WHERE environment_id = ? AND metric_name = ? AND dimensions_json = ? \
@@ -305,7 +305,7 @@ async fn assert_query_index(store: &SqlPersistence, backend: StorageBackend, env
                 "MySQL query plan must use a dashboard history index without an ALL scan: {plan}"
             );
         }
-        StorageBackend::Postgres => {
+        StorageEngine::Postgres => {
             let rows = sqlx::query_scalar::<_, String>(
                 "EXPLAIN (COSTS OFF) SELECT bucket_ms FROM dashboard_history_sample \
                  WHERE environment_id = $1 AND metric_name = $2 AND dimensions_json = $3 \
@@ -332,6 +332,6 @@ async fn assert_query_index(store: &SqlPersistence, backend: StorageBackend, env
                 "PostgreSQL query plan must use a dashboard history index: {rows:?}"
             );
         }
-        StorageBackend::File => unreachable!("File does not have a SQL EXPLAIN plan"),
+        StorageEngine::File => unreachable!("File does not have a SQL EXPLAIN plan"),
     }
 }

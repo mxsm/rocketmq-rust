@@ -26,10 +26,10 @@ use rocketmq_store_api::StoreContractViolation;
 use rocketmq_store_api::SyncStateSetEpoch;
 use rocketmq_store_api::WriteAuthority;
 
+pub(crate) use actor::BrokerRoleNotificationSubmissionStatus;
 pub(crate) use actor::BrokerRoleNotifier;
 #[cfg(test)]
 pub(crate) use actor::NotifySnapshot;
-pub(crate) use actor::SubmitOutcome;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct NotifyKey {

@@ -260,7 +260,7 @@ pub(super) fn catalog_clusters_match(item: &DetailedTopicCatalogItem, confirmed:
 pub(super) fn sanitize_batch_outcome(
     topic: TopicIdentity,
     kind: TopicMutationKind,
-    response: TopicBatchMutationOutcome,
+    response: TopicBatchMutationReport,
 ) -> TopicPartialOutcome {
     let mut targets = response
         .targets
@@ -295,12 +295,12 @@ pub(super) fn sanitize_batch_outcome(
 
 pub(super) fn sanitize_delete_outcome(
     topic: TopicIdentity,
-    response: rocketmq_admin_core::core::topic::TopicBatchDeleteOutcome,
+    response: rocketmq_admin_core::core::topic::TopicBatchDeleteReport,
 ) -> TopicPartialOutcome {
     sanitize_batch_outcome(
         topic,
         TopicMutationKind::DeleteTopic,
-        TopicBatchMutationOutcome {
+        TopicBatchMutationReport {
             targets: response.targets,
             order_config: response.order_config,
         },
@@ -352,7 +352,7 @@ pub(super) fn single_mutation_outcome(
     topic: TopicIdentity,
     kind: TopicMutationKind,
     target: String,
-    _response: TopicMutationOutcome,
+    _response: TopicMutationSummary,
 ) -> TopicPartialOutcome {
     TopicPartialOutcome {
         topic,
@@ -372,7 +372,7 @@ pub(super) fn single_mutation_outcome(
 pub(super) fn sanitize_offset_outcome(
     topic: TopicIdentity,
     kind: TopicMutationKind,
-    response: TopicOffsetMutationOutcome,
+    response: TopicOffsetMutationReport,
 ) -> TopicPartialOutcome {
     TopicPartialOutcome {
         topic,
@@ -419,16 +419,16 @@ mod tests {
         let outcome = sanitize_offset_outcome(
             TopicIdentity::parse("orders").expect("topic"),
             TopicMutationKind::ResetOffset,
-            TopicOffsetMutationOutcome {
+            TopicOffsetMutationReport {
                 targets: vec![
-                    rocketmq_admin_core::core::topic::TopicOffsetTargetOutcome {
+                    rocketmq_admin_core::core::topic::TopicOffsetTargetResult {
                         broker_name: "broker-a".into(),
                         queue_id: Some(0),
                         applied: true,
                         failure: None,
                         retryable: false,
                     },
-                    rocketmq_admin_core::core::topic::TopicOffsetTargetOutcome {
+                    rocketmq_admin_core::core::topic::TopicOffsetTargetResult {
                         broker_name: "broker-a".into(),
                         queue_id: Some(1),
                         applied: false,

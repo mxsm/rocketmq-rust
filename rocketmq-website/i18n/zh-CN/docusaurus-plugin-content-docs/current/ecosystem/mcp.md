@@ -4,6 +4,8 @@ title: "只读 MCP 诊断服务"
 
 # 只读 MCP 诊断服务
 
+证书与 Secret 准备、HTTPS/JWKS 信任及出站 TLS 限制参阅 [TLS 指南](../deployment/tls.md#mcp)。
+
 `rocketmq-mcp` 是用于 RocketMQ 查询、诊断和运行手册提示词的独立 Model Context Protocol 服务。它运行在 Broker、NameServer、Dashboard 进程之外，使用 Admin Core 的 `read-client-adapter`。默认工具不打开变更会话；可选规划 feature 生成建议，不执行建议。
 
 ## 请求路径与所有权
@@ -38,7 +40,7 @@ cargo build --locked --release
 cargo build --locked --release --features streamable-http
 ```
 
-`streamable-http` 包含认证 feature，不是无认证 HTTP 模式。`observability` 启用进程内信号，`otlp` 选择已实现的 OTLP gRPC 支持。`change-planning` 增加五个受运行时策略约束的规划工具。这些 feature 都不会将 Query MCP 变为 MCP Control。
+`streamable-http` 包含认证 feature，不是无认证 HTTP 模式。`observability` 启用进程内信号，`otlp` 选择已实现的 OTLP gRPC 支持。`change-planning` 增加五个受运行时策略约束的规划工具；该 feature 已弃用并将被移除，变更规划改用 [MCP Control](./mcp-control.md) 的 dry-run。`security-admin` 增加一个只读工具 `rocketmq_list_acl_users`，用于列出集群的 ACL 用户且不返回密码；调用时还需要 scope `rocketmq:security-admin` 以及授予该工具的角色。这些 feature 都不会将 Query MCP 变为 MCP Control。
 
 二进制位于 `target/release/rocketmq-mcp`，Windows 为 `rocketmq-mcp.exe`。根工作区的 `cargo build` 不构建该独立包。原生依赖来自所选依赖图，参见 [features/平台](../reference/features-platforms.md)。
 
@@ -61,14 +63,20 @@ default = true
 | 设置 | 仓库示例 / 行为 |
 | --- | --- |
 | `security.profile` | `diagnose`，用于本地诊断权限范围 |
-| `security.allow_change_planning` | `false`，仅编译不能允许规划调用 |
+| `security.allow_change_planning` | `false`，仅编译不能允许规划调用。随 `change-planning` feature 一并弃用 |
 | `security.permissions_file` | `permissions.example.toml`，相对配置文件加载 |
 | `security.sanitize_output` | `true` |
 | `security.max_concurrent_requests_per_cluster` | 8 |
-| `security.rate_limit_per_minute` | 按主体/集群/操作策略每分钟 60 次 |
-| `audit.enabled` / `sink` | `true` / `file`，应选择可写审计路径 |
+| `security.rate_limit_per_minute` | 按主体/集群/操作每分钟 60 次；额度匀速恢复，每 `60 / 限额` 秒恢复一次调用 |
+| `security.http_rate_limit_per_minute` | 默认不设置；每个主体的 HTTP 请求额度，单独计数，默认为 `rate_limit_per_minute` 的十倍。超出的请求返回 HTTP 429 并带 `Retry-After` |
+| `security.pseudonym_key_env` | 默认不设置；指定一个环境变量名，其值为 32–1024 字节的密钥，使重启前后和多个副本返回相同的客户端与消息化名 |
+| `audit.enabled` / `sink` | `true` / `file`，应选择可写审计路径。审计记录包含调用所查询的 Topic、消费组和 Broker 名称，不包含消息标识 |
+| `audit.max_file_bytes` | 67108864（64 MiB）；文件型审计达到该大小后封存为 `<path>.000001`、`<path>.000002` 等并新建文件，服务不会删除已封存的文件。`0` 表示始终只写一个文件 |
 | `cache.enabled` / `max_entries` | `true` / 256，按查询类型的 TTL 决定新鲜度 |
+| `server.request_timeout_ms` | 25000；一次请求可用于访问 RocketMQ 来源的时间，由它执行的所有查询共用，取值不小于 1000 且小于 30000 |
 | `server.stdio.log_to_stderr` | `true`，stdout 保留给 MCP 协议帧 |
+
+配置文件或权限文件中出现未知键时，服务拒绝启动。错误信息给出该键及其所在的表，不包含任何配置值；只有 `[logging]` 表仍会忽略未知键。
 
 编辑 `conf/mcp.local.toml` 后，从 MCP 目录启动：
 
@@ -94,6 +102,8 @@ HTTPS 需要编译传输支持、可读证书/私钥对、允许的 Origin 策�
 
 生产 OAuth 没有静态 `jwt_key_env` 回退。密钥刷新失败时，在配置的陈旧窗口内保留已验证代际。受保护资源元数据端点有意允许无 Bearer 令牌访问以支持发现，MCP 端点本身仍要求认证。
 
+JWKS 中的一个条目满足以下条件时才会被使用：它是 2048 到 8192 位、指数为 65537 的 RSA 密钥，`use` 缺省或为 `sig`，`alg` 缺省或为 `RS256`。其他条目（例如加密密钥）以及 `x5c` 等成员会被忽略，因此常见身份提供方发布的文档可以直接使用。令牌指向未知 `kid` 时触发一次 JWKS 获取；该密钥仍然缺失期间，下一次获取要等待 5 秒。超过 16 KiB 的 Bearer 令牌在解析之前即被拒绝。
+
 配置材料后，从 MCP 目录启动：
 
 ```bash
@@ -106,16 +116,21 @@ RocketMQ 签名凭据必须与 HTTP 身份分离。配置的 YAML 凭据文件�
 
 ## 发现并调用工具
 
-仓库协议版本为 `2025-11-25`，初始化拒绝其他版本。初始化后使用 `tools/list` 获取调用方可见目录。源码默认目录包含 24 个工具，但策略可以缩小发现结果。
+仓库协议版本为 `2025-11-25`，初始化拒绝其他版本；使用 Streamable HTTP 时，请求头 `MCP-Protocol-Version` 携带其他版本的请求会得到 HTTP 400 `unsupported_protocol_version`。初始化后使用 `tools/list` 获取调用方可见目录。源码默认目录包含 36 个工具，但策略可以缩小发现结果。
 
 | 查询类型 | 默认工具名称 |
 | --- | --- |
-| 集群 / 清单 | `rocketmq_get_cluster_overview`、`rocketmq_list_topics`、`rocketmq_list_consumer_groups` |
-| 主题 | `rocketmq_describe_topic`、`rocketmq_get_topic_route`、`rocketmq_get_topic_config_state`、`rocketmq_get_topic_stats`、`rocketmq_get_topic_config` |
-| 消费者 / 连接 | `rocketmq_get_consumer_lag`、`rocketmq_list_consumer_connections`、`rocketmq_list_producer_connections`、`rocketmq_get_consumer_group_config_state`、`rocketmq_get_consumer_group_details`、`rocketmq_get_consumer_progress` |
-| Broker | `rocketmq_describe_broker`、`rocketmq_get_broker_diagnostics`、`rocketmq_get_broker_config_summary`、`rocketmq_get_broker_log_filter_state` |
+| 集群 / 清单 | `rocketmq_list_clusters`、`rocketmq_list_brokers`、`rocketmq_get_cluster_overview`、`rocketmq_list_topics`、`rocketmq_list_consumer_groups` |
+| 主题 | `rocketmq_describe_topic`、`rocketmq_get_topic_route`、`rocketmq_get_topic_config_state`、`rocketmq_get_topic_stats`、`rocketmq_get_topic_config`、`rocketmq_list_topic_consumers` |
+| 消费者 / 连接 | `rocketmq_get_consumer_lag`、`rocketmq_list_consumer_connections`、`rocketmq_list_producer_connections`、`rocketmq_get_consumer_group_config_state`、`rocketmq_get_consumer_group_details`、`rocketmq_get_consumer_progress`、`rocketmq_get_consumer_running_info`、`rocketmq_get_dlq_summary` |
+| Broker | `rocketmq_describe_broker`、`rocketmq_get_broker_diagnostics`、`rocketmq_get_broker_config_summary`、`rocketmq_get_broker_log_filter_state`、`rocketmq_get_lite_broker_info` |
 | 基础设施 | `rocketmq_get_proxy_drain_state`、`rocketmq_get_ha_status`、`rocketmq_get_controller_metadata`、`rocketmq_get_nameserver_config_summary` |
-| 消息 / 诊断 | `rocketmq_get_message_metadata`、`rocketmq_diagnose_consumer_lag` |
+| 消息 | `rocketmq_get_message_metadata`、`rocketmq_query_message_trace`、`rocketmq_find_messages_by_key` |
+| 诊断 | `rocketmq_diagnose_consumer_lag`、`rocketmq_diagnose_consumer_group`、`rocketmq_diagnose_message_delivery`、`rocketmq_diagnose_broker_health`、`rocketmq_get_cluster_health` |
+
+`rocketmq_diagnose_consumer_lag` 在一个 admin 会话内完成取证：每个队列的 lag、消费组的连接与配置、主题的路由与权限、lag 最多的 Broker，以及该消费组的重试主题和死信主题。它按积压量和消费延迟时长给积压定级，因此同样数量的待消费消息，在高流量主题上是 `low`，在低流量主题上可能是 `critical`。每个根因都带有稳定的 `rule_id`（例如 `no_online_consumer`、`consumption_disabled`、`read_permission_missing`、`retry_queue_growing`），并指明它依据的证据。某一路取证失败时，报告以部分结果返回并标明缺失的证据，诊断本身不会失败。阈值是 `[diagnosis]` 下由服务端持有的配置，`[[diagnosis.overrides]]` 可按主题或消费组覆盖。
+
+另有四个诊断工具返回同样结构的报告。`rocketmq_get_cluster_health` 对集群做一次概览检查，并指出应先查看的 Broker；`rocketmq_diagnose_broker_health` 检查一个 Broker 的主节点和副本；`rocketmq_diagnose_consumer_group` 解释一个消费组在其消费的全部主题上的积压；`rocketmq_diagnose_message_delivery` 检查从一个主题到一个消费组的投递路径，给出消息标识时还会说明该消费组是已消费这条消息、仍在等待、正在重试，还是已进入死信。健康类报告的严重级别取其中最严重的一条发现。指定消息时还需要 `rocketmq_get_message_metadata` 的权限；报告只用别名指代消息，不包含消息体。
 
 先使用明确指定集群的简单查询。下列 `tools/call` 请求用于已初始化 MCP 会话，不是独立 HTTP 命令：
 
@@ -131,28 +146,37 @@ RocketMQ 签名凭据必须与 HTTP 身份分离。配置的 YAML 凭据文件�
 }
 ```
 
-`limit` 范围 1–200，默认 50。`has_more` 为 true 时使用不透明的 `data.next_cursor` 继续，不自行构造游标，也不将其当作队列偏移量。提供相同逻辑目标和对应查询参数。精确模式和逐工具输出见[完整工具参考](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp/docs/tool-reference.md)。
+`limit` 范围 1–200，默认 50。`has_more` 为 true 时使用不透明的 `data.next_cursor` 继续，不自行构造游标，也不将其当作队列偏移量。提供相同逻辑目标、对应查询参数和 `limit`。游标延续的是服务端保留的同一份结果（默认保留 60 秒），因此每一页都来自同一次观察。精确模式和逐工具输出见[完整工具参考](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp-query/docs/tool-reference.md)。
 
-发现阶段检查 scope 和工具允许/拒绝策略，不代表某个集群/租户调用一定获准。两个清单工具允许省略集群并使用默认/唯一集群回退；当前实现对该省略路径不执行与显式路径相同的逐集群/租户检查。运维客户端应显式提供集群，并在部署策略中考虑此限制，不把省略参数表述为更强隔离保证。
+发现阶段检查 scope 和工具允许/拒绝策略，不代表某个集群/租户调用一定获准。两个清单工具允许省略集群，此时使用默认集群，或唯一配置的集群。该集群与显式指定的集群一样，要通过逐集群检查、租户检查、限流和并发限制；空字符串或只含空白的集群名会被所有工具以 `invalid_arguments` 拒绝。运维客户端建议显式提供集群，使调用不依赖哪个集群是默认集群。
+
+服务端还响应 `completion/complete`，为 Prompt 参数和 Resource 模板变量补全集群、Topic、消费组或 Broker 名称。候选按前缀匹配，最多 100 个，并且需要对应清单工具的权限；Topic、消费组和 Broker 只在补全上下文中已给出的集群内补全。无权限或无法应答的补全返回空列表。
 
 ## 理解观察、部分结果和故障
 
-成功调用携带 `rocketmq-mcp.v2` 封装，包括请求 ID、逻辑集群、观察时间、新鲜度、缓存状态、部分结果标志、警告及类型化数据。`hit`、`miss`、`bypass` 区分查询复用，失败不会缓存。查询状态和继续游标按 `standard`、`sensitive` 可见性类别隔离，不跨类别共享。
+成功调用携带 `rocketmq-mcp.v2` 封装，包括请求 ID、逻辑集群、观察时间、新鲜度、缓存状态、部分结果标志、警告及类型化数据。列表类 Tool 接受 `response_format`：`detailed`（默认）返回每个条目的全部字段，`concise` 只返回标识条目的字段，适合先查名称。`hit`、`miss`、`bypass` 区分查询复用。等待同一次读取的请求共享它的结果或失败；`source_unavailable` 失败最多在一秒内直接应答相同请求，其他失败不会保留。配置 `cache.stale_if_error_ms` 后，数据源不可用时会返回已过 TTL 的结果，并带有 `stale_cache_value` 警告和真实的数据年龄。查询状态和继续游标按 `standard`、`sensitive` 可见性类别隔离，不跨类别共享。
 
-输出数组限制为 1,000 行，结构化输出限制为 1 MiB。截断和来源失败可能产生部分结果，将观察描述为完整前应检查 warnings 和 `partial`。消息元数据工具不返回消息体，连接身份使用化名；敏感字段缺失不一定是后端故障。
+输出数组限制为 1,000 行，结构化输出限制为 1 MiB。截断和来源失败可能产生部分结果，将观察描述为完整前应检查 warnings 和 `partial`。消息元数据工具不返回消息体，连接身份使用化名；敏感字段缺失不一定是后端故障。化名是标识符的带密钥哈希：在同一个服务进程内保持稳定；只有通过 `security.pseudonym_key_env` 提供共享密钥时，才在重启前后和多个副本之间保持一致。
 
 | 现象/错误码 | 后续操作 |
 | --- | --- |
 | 工具缺失 | 检查编译 feature、主体 scope 和工具策略；规划还需在调用时满足运行时权限。 |
 | `unauthorized_scope` / `cluster_not_allowed` / `tenant_mismatch` | 检查已验证身份和配置策略，修改查询别名不能授予权限。 |
+| `invalid_arguments` | 存在 `violations` 时先读取它：最多三项，每项包含指向参数的 JSON Pointer `path` 和一个 `constraint`，例如 `required`、`maximum` 或 `additional_property`。对照工具的输入模式修正这些参数；响应不会回显已发送的值。 |
+| `not_found` | 请求合法，但 `entity` 指明的目标在所选集群中不存在。不要重试，用对应的清单工具确认名称。 |
 | `source_unavailable` | 检查 MCP 进程到配置 NameServer/Broker/Proxy/Controller 的网络路径及出站读取凭据。 |
-| `rate_limited` | 降低查询速率并采用有界重试，避免 AI 客户端与 MCP 层叠加重试。 |
+| `backend_timeout` | 请求用完了 `server.request_timeout_ms`。缩小查询后重试，并排查是哪个来源响应慢。 |
+| `rate_limited` | 等待错误中 `retry_after_ms` 给出的时间后再重试，避免 AI 客户端与 MCP 层叠加重试。 |
+| `concurrency_limited` | 该集群正在处理的请求数已达 `security.max_concurrent_requests_per_cluster`。稍后重试，并减少同时在该集群上运行的查询。 |
+| `cursor_expired` | 服务端保留的结果已不存在。去掉 `cursor`，重新请求第一页。 |
+| `cursor_invalid` | 原样重发收到的游标，并使用返回该游标的那次请求的参数和 `limit`。 |
+| `result_too_large` | 结果超过了为分页保留的 10,000 行或 4 MiB 上限。缩小请求，例如使用 `filter`。 |
 | `output_too_large` 或部分结果警告 | 缩小查询，支持时分页，并在诊断中保留警告。 |
 | 观察过旧 | 检查观察时间、TTL/缓存状态和所选集群，再推断当前故障。 |
 | stdio 解析失败 | 确认协议版本和纯净 stdout，在 stderr 查看脱敏启动/传输诊断。 |
 
-启用规划工具后，可以生成创建主题、更新主题配置、更新主题权限、更新 Broker 配置和重置偏移量方案。工具没有 Apply 模式，也不调用变更 API。执行属于独立设计的运维/控制流程，不属于这个诊断进程。
+启用规划工具后，可以生成创建主题、更新主题配置、更新主题权限、更新 Broker 配置和重置偏移量方案。工具没有 Apply 模式，也不调用变更 API。执行属于独立设计的运维/控制流程，不属于这个诊断进程。这些规划工具已弃用：[MCP Control](./mcp-control.md) 的 dry-run 针对变更将要作用的状态规划同样的变更，每个规划工具的描述都给出了替代它的控制工具。
 
 本文核对了配置、注册和协议源码，并完成 TOML/JSON 及网站渲染检查；不宣称编写文档时测试过真实 MCP 客户端会话、OAuth/JWKS 部署或外部集群诊断。
 
-来源：[配置解析器](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp/src/config.rs)、[入口](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp/src/main.rs)、[工具目录](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp/src/tools/catalog.rs)、[协议服务](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp/src/protocol/server.rs)、[权限示例](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp/conf/permissions.example.toml)、[只读边界](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp/AGENTS.md)。
+来源：[配置解析器](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp-query/src/config.rs)、[入口](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp-query/src/entrypoint.rs)、[工具目录](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp-query/src/tools/catalog.rs)、[协议服务](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp-query/src/protocol/server.rs)、[权限示例](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp/conf/permissions.example.toml)、[只读边界](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp-query/AGENTS.md)。

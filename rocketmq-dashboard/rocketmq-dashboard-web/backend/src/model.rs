@@ -25,6 +25,7 @@ pub mod monitor_model;
 pub mod ops_model;
 pub mod producer_model;
 pub mod topic_model;
+pub mod topology_model;
 
 pub use acl_model::*;
 pub use api_response::*;
@@ -40,3 +41,4 @@ pub use monitor_model::*;
 pub use ops_model::*;
 pub use producer_model::*;
 pub use topic_model::*;
+pub use topology_model::*;

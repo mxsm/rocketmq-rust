@@ -8,7 +8,7 @@ title: "能力与实现边界"
 
 “已实现”表示存在具体源码路径；“已启用”还需要正确的编译 feature、运行设置、凭据和后端；“已演练”针对某个测试或部署场景；“已发布”表示发行物中包含该能力。这些结论不能互相替代。
 
-仓库 `v1-capability-manifest.json` 记录 1.0.0 核心范围，包含按 profile 划分的实现和证据字段。`component` 或 `interop` 状态适用于其引用的场景与 profile，不能证明其他部署具有相同行为。该文件也不是 Dashboard 和 AI 产品的完整能力目录。
+1.0.0 核心范围以 `scripts/core-release-scope.json` 为准。测试或互操作结果只适用于其实际覆盖的场景与 profile，不能证明其他部署具有相同行为。本页也不是 Dashboard 和 AI 产品的完整能力目录。
 
 ## 核心服务与客户端
 
@@ -60,6 +60,6 @@ Client crate 自身没有 `tls` feature。需要 TLS 的应用必须在依赖图
 
 ## 来源与下一步
 
-- [核心能力清单](https://github.com/mxsm/rocketmq-rust/blob/main/scripts/v1-capability-manifest.json)与[核心发行范围](https://github.com/mxsm/rocketmq-rust/blob/main/scripts/core-release-scope.json)。
+- [核心发行范围](https://github.com/mxsm/rocketmq-rust/blob/main/scripts/core-release-scope.json)。
 - [Broker](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-broker/README.md)、[Client](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md)、[Controller](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-controller/README.md)、[Proxy](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-proxy/README.md)。
 - [本地搭建](../getting-started/local-source.md)与[投递和重试](../guides/delivery-and-retry.md)。

@@ -42,6 +42,7 @@ class CoreHelmRuntimeTests(unittest.TestCase):
                     for probe, path in [("readinessProbe", "/readyz"), ("livenessProbe", "/livez")]:
                         self.assertEqual({"path": path, "port": "health"}, container[probe]["httpGet"])
                     self.assertEqual("/drainz", container["lifecycle"]["preStop"]["httpGet"]["path"])
+                    self.assertEqual("GET,POST", env["ROCKETMQ_HEALTH_DRAIN_METHODS"]["value"])
                     self.assertGreater(pod["terminationGracePeriodSeconds"], int(env["ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS"]["value"]))
 
     def test_production_enables_auth_and_mounts_inner_client_secrets(self):

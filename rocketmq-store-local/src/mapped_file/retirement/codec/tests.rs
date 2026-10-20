@@ -40,7 +40,7 @@ fn crc32_matches_iso_hdlc_check_vector() {
 #[test]
 fn completed_golden_frame_decodes_byte_exactly() {
     let outcome = decode_next_frame(&COMPLETED_FRAME, 100, 2).expect("golden frame must decode");
-    let DecodeOutcome::Frame(frame) = outcome else {
+    let LedgerFrameDecodeResult::Frame(frame) = outcome else {
         panic!("complete input must produce a frame");
     };
 
@@ -73,7 +73,8 @@ fn typed_completed_record_matches_complete_golden_frame() {
         encode_ledger_frame(&record, 100, 2).expect("golden typed record must encode"),
         COMPLETED_FRAME
     );
-    let DecodeOutcome::Frame(frame) = decode_next_frame(&COMPLETED_FRAME, 100, 2).expect("golden frame must decode")
+    let LedgerFrameDecodeResult::Frame(frame) =
+        decode_next_frame(&COMPLETED_FRAME, 100, 2).expect("golden frame must decode")
     else {
         panic!("complete input must produce a frame");
     };
@@ -91,7 +92,7 @@ fn every_assigned_v1_record_round_trips_with_exact_payload_length() {
             record.record_type()
         );
 
-        let DecodeOutcome::Frame(frame) =
+        let LedgerFrameDecodeResult::Frame(frame) =
             decode_next_frame(&encoded, sequence, generation).expect("encoded frame must decode")
         else {
             panic!("complete input must produce a frame");
@@ -128,7 +129,8 @@ fn optional_quarantine_and_namespace_fields_round_trip_when_absent() {
     for (index, record) in records.into_iter().enumerate() {
         let sequence = 200 + index as u64;
         let encoded = encode_ledger_frame(&record, sequence, 3).expect("optional record must encode");
-        let DecodeOutcome::Frame(frame) = decode_next_frame(&encoded, sequence, 3).expect("optional frame must decode")
+        let LedgerFrameDecodeResult::Frame(frame) =
+            decode_next_frame(&encoded, sequence, 3).expect("optional frame must decode")
         else {
             panic!("complete input must produce a frame");
         };
@@ -302,12 +304,12 @@ fn tail_repair_suffix_length_is_strictly_bounded_by_one_sealed_record_unit() {
 
 #[test]
 fn decoder_distinguishes_eof_from_valid_trailing_partial() {
-    assert_eq!(decode_next_frame(&[], 100, 2), Ok(DecodeOutcome::EndOfInput));
+    assert_eq!(decode_next_frame(&[], 100, 2), Ok(LedgerFrameDecodeResult::EndOfInput));
 
     for length in [1, 4, 8, 16, 39, 40, 41, 95, 99] {
         assert!(matches!(
             decode_next_frame(&COMPLETED_FRAME[..length], 100, 2),
-            Ok(DecodeOutcome::TrailingPartial(_))
+            Ok(LedgerFrameDecodeResult::TrailingPartial(_))
         ));
     }
 }
@@ -383,7 +385,7 @@ fn decoder_skips_only_valid_unknown_noncritical_records() {
     noncritical[12..14].copy_from_slice(&0_u16.to_le_bytes());
     rewrite_header_crc(&mut noncritical);
 
-    let DecodeOutcome::Frame(frame) =
+    let LedgerFrameDecodeResult::Frame(frame) =
         decode_next_frame(&noncritical, 100, 2).expect("unknown noncritical record is skippable")
     else {
         panic!("complete input must produce a frame");
@@ -719,7 +721,7 @@ fn mutate_payload(frame: &mut [u8], payload_offset: usize, replacement: &[u8]) {
 }
 
 fn decode_typed(frame: &[u8], sequence: u64, generation: u64) -> Result<LedgerRecord, CodecViolation> {
-    let DecodeOutcome::Frame(frame) = decode_next_frame(frame, sequence, generation)? else {
+    let LedgerFrameDecodeResult::Frame(frame) = decode_next_frame(frame, sequence, generation)? else {
         return Err(CodecViolation::InvalidEnvelopeRelationship {
             detail: "test expected a complete frame",
         });

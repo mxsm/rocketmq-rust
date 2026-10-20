@@ -20,8 +20,8 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use super::deferred_expiry::DeferredExpiry;
+use super::deferred_expiry::DeferredExpiryAttachmentStatus;
 use super::deferred_expiry::DeferredExpiryMargins;
-use super::deferred_expiry::DeferredExpiryOutcome;
 use super::deferred_expiry::ExpiryRejection;
 use super::deferred_responder::DeferredResumeContext;
 use super::deferred_response::DeferredSystemCancellationReason;
@@ -46,14 +46,14 @@ use claim::ClaimTicket;
 use claim::ClaimWaiter;
 pub use claim::ClaimedDeferred;
 use claim::DeferredClaimOperationalFailure;
-pub use claim::DeferredClaimOutcome;
 use claim::DeferredClaimRejection;
-pub use claim::DeferredResumeOutcome;
+pub use claim::DeferredClaimResult;
+pub use claim::DeferredResumeResult;
 pub use claim::DeferredResumeRetainedSize;
-pub use claim::DeferredResumeSubmitOutcome;
+pub use claim::DeferredResumeSubmissionStatus;
 pub use claim::DeferredWakeReason;
 use claim::TicketResolution;
-pub use errors::DeferredRegistryOutcome;
+pub use errors::DeferredRegistrationResult;
 pub use errors::DeferredRegistryRecovery;
 pub(in crate::dispatch) use errors::RegistryFailure;
 pub use expiry::DeferredExpiryBatch;
@@ -130,19 +130,21 @@ impl DeferredParts {
         &mut self,
         protocol_at: tokio::time::Instant,
         margins: DeferredExpiryMargins,
-    ) -> Result<DeferredExpiryOutcome, crate::contract::TransportContractViolation> {
+    ) -> Result<DeferredExpiryAttachmentStatus, crate::contract::TransportContractViolation> {
         if self.expiry.is_some() {
-            return Ok(DeferredExpiryOutcome::AlreadyAttached);
+            return Ok(DeferredExpiryAttachmentStatus::AlreadyAttached);
         }
         margins.validate()?;
         match DeferredExpiry::try_from_control(self.control(), protocol_at, margins) {
             Ok(expiry) => {
                 self.expiry = Some(expiry);
-                Ok(DeferredExpiryOutcome::Attached)
+                Ok(DeferredExpiryAttachmentStatus::Attached)
             }
-            Err(ExpiryRejection::OwnerBudgetInsufficient) => Ok(DeferredExpiryOutcome::OwnerBudgetInsufficient),
-            Err(ExpiryRejection::ProtocolAlreadyExpired) => Ok(DeferredExpiryOutcome::ProtocolAlreadyExpired),
-            Err(ExpiryRejection::OwnerAlreadyExpired) => Ok(DeferredExpiryOutcome::OwnerAlreadyExpired),
+            Err(ExpiryRejection::OwnerBudgetInsufficient) => {
+                Ok(DeferredExpiryAttachmentStatus::OwnerBudgetInsufficient)
+            }
+            Err(ExpiryRejection::ProtocolAlreadyExpired) => Ok(DeferredExpiryAttachmentStatus::ProtocolAlreadyExpired),
+            Err(ExpiryRejection::OwnerAlreadyExpired) => Ok(DeferredExpiryAttachmentStatus::OwnerAlreadyExpired),
         }
     }
 
@@ -293,7 +295,9 @@ impl<R> DeferredRequest<R> {
         self.parts.expiry()
     }
 
-    fn register_response(&self) -> Result<super::ResponseStateOutcome, crate::contract::TransportContractViolation> {
+    fn register_response(
+        &self,
+    ) -> Result<super::ResponseTransitionResult, crate::contract::TransportContractViolation> {
         self.parts.responder.register()
     }
 }
@@ -320,7 +324,7 @@ where
 /// Result of sealing a deferred registry and releasing registry-owned state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub enum DeferredRegistryShutdownOutcome {
+pub enum DeferredRegistryShutdownStatus {
     /// This caller won shutdown and completed the detached registry-owned batch.
     Completed(DeferredRegistryShutdownStats),
     /// Another or reentrant caller is currently completing shutdown.
@@ -450,7 +454,7 @@ where
     /// Registers an already-built resume request provisionally.
     ///
     /// The returned sealed guard must be returned through
-    /// [`super::HandlerOutcome::Deferred`] before the dispatcher commits it.
+    /// [`super::ResponseAction::Deferred`] before the dispatcher commits it.
     /// Lifecycle checkpoints resolve simultaneous stops in parent-cancellation,
     /// session-close, then deadline order. A stop published after the final
     /// registry publication checkpoint is handled by deferred-session cleanup.
@@ -459,10 +463,10 @@ where
     /// returned as source-free outcomes. Deterministic retained-size violations
     /// and operational registry failures retain the original request in their
     /// typed carrier branches.
-    pub fn register(&self, mut request: DeferredRequest<R>) -> DeferredRegistryOutcome<R> {
+    pub fn register(&self, mut request: DeferredRequest<R>) -> DeferredRegistrationResult<R> {
         let request_id = request.request_id();
         if let Err(violation) = validate_retained_floor::<R>(request.retained_bytes()) {
-            return DeferredRegistryOutcome::ContractViolation {
+            return DeferredRegistrationResult::ContractViolation {
                 violation,
                 recovery: DeferredRegistryRecovery::Request(request),
             };
@@ -506,7 +510,7 @@ where
                 DeferredRegistryRecovery::Request(*request),
             );
         }
-        DeferredRegistryOutcome::Registered(DeferredRegistration::new(
+        DeferredRegistrationResult::Registered(DeferredRegistration::new(
             id,
             request_id,
             Box::new(RegistrationOwnerImpl {
@@ -535,14 +539,14 @@ where
     /// deferred parts. A builder rejection returns its error with the same
     /// parts. If lifecycle cancellation wins after the builder returns, the
     /// builder result and deferred parts are consumed and released.
-    pub fn register_with<E, F>(&self, mut parts: DeferredParts, builder: F) -> DeferredRegistryOutcome<R, E, F>
+    pub fn register_with<E, F>(&self, mut parts: DeferredParts, builder: F) -> DeferredRegistrationResult<R, E, F>
     where
         E: Error + Send + Sync + 'static,
         F: FnOnce(DeferredId) -> Result<R, E>,
     {
         let request_id = parts.request_id();
         if let Err(violation) = validate_retained_floor::<R>(parts.retained_bytes()) {
-            return DeferredRegistryOutcome::ContractViolation {
+            return DeferredRegistrationResult::ContractViolation {
                 violation,
                 recovery: DeferredRegistryRecovery::Builder { builder, parts },
             };
@@ -626,10 +630,10 @@ where
                     return registry_lifecycle_outcome(kind);
                 }
                 let parts = transaction.rollback();
-                return DeferredRegistryOutcome::BuilderRejected { error: source, parts };
+                return DeferredRegistrationResult::BuilderRejected { error: source, parts };
             }
         }
-        DeferredRegistryOutcome::Registered(DeferredRegistration::new(
+        DeferredRegistrationResult::Registered(DeferredRegistration::new(
             id,
             request_id,
             Box::new(RegistrationOwnerImpl {
@@ -654,20 +658,20 @@ where
     ///
     /// Returns an operational transport error only when an internal registry
     /// invariant cannot be preserved. Missing, already-claimed, terminal, and
-    /// lifecycle states are source-free [`DeferredClaimOutcome`] variants.
+    /// lifecycle states are source-free [`DeferredClaimResult`] variants.
     pub async fn claim(
         &self,
         id: DeferredId,
         reason: DeferredWakeReason,
-    ) -> Result<DeferredClaimOutcome<R>, crate::error::TransportError> {
+    ) -> Result<DeferredClaimResult<R>, crate::error::TransportError> {
         let rejection = match self.inner.start_claim(id, reason, None) {
-            ClaimStart::Claimed(claimed) => return Ok(DeferredClaimOutcome::Claimed(claimed)),
+            ClaimStart::Claimed(claimed) => return Ok(DeferredClaimResult::Claimed(claimed)),
             ClaimStart::Rejected(rejection) => return converge_claim_rejection(rejection),
             ClaimStart::Wait(waiter) => {
                 let resolution = waiter.wait().await;
                 match resolution {
                     TicketResolution::Published => match self.inner.start_claim(id, reason, Some(&waiter)) {
-                        ClaimStart::Claimed(claimed) => return Ok(DeferredClaimOutcome::Claimed(claimed)),
+                        ClaimStart::Claimed(claimed) => return Ok(DeferredClaimResult::Claimed(claimed)),
                         ClaimStart::Rejected(rejection) => return converge_claim_rejection(rejection),
                         ClaimStart::Wait(_) => {
                             DeferredClaimRejection::Operational(DeferredClaimOperationalFailure::invariant())
@@ -719,7 +723,7 @@ where
     /// user state still seals the registry, so a later call reports
     /// `AlreadyClosed`.
     #[must_use]
-    pub fn shutdown(&self) -> DeferredRegistryShutdownOutcome {
+    pub fn shutdown(&self) -> DeferredRegistryShutdownStatus {
         self.inner.shutdown()
     }
 
@@ -817,7 +821,7 @@ where
 /// Sealed proof that one provisional registration matches a handler request.
 ///
 /// The registry remains generic, but this affine proof is deliberately
-/// non-generic so [`super::HandlerOutcome`] stays a closed public enum.
+/// non-generic so [`super::ResponseAction`] stays a closed public enum.
 ///
 /// ```compile_fail
 /// use rocketmq_transport::api::{DeferredId, DeferredRegistration, RequestId};
@@ -933,26 +937,26 @@ impl Drop for DeferredRegistration {
 
 fn converge_claim_rejection<R>(
     rejection: DeferredClaimRejection,
-) -> Result<DeferredClaimOutcome<R>, crate::error::TransportError>
+) -> Result<DeferredClaimResult<R>, crate::error::TransportError>
 where
     R: Send + 'static,
 {
     match rejection {
-        DeferredClaimRejection::NotFound => Ok(DeferredClaimOutcome::NotFound),
-        DeferredClaimRejection::AlreadyClaimed => Ok(DeferredClaimOutcome::AlreadyClaimed),
-        DeferredClaimRejection::AlreadyCompleted => Ok(DeferredClaimOutcome::AlreadyCompleted),
-        DeferredClaimRejection::ParentCancelled => Ok(DeferredClaimOutcome::ParentCancelled),
-        DeferredClaimRejection::SessionClosed => Ok(DeferredClaimOutcome::SessionClosed),
-        DeferredClaimRejection::DeadlineExpired => Ok(DeferredClaimOutcome::DeadlineExpired),
+        DeferredClaimRejection::NotFound => Ok(DeferredClaimResult::NotFound),
+        DeferredClaimRejection::AlreadyClaimed => Ok(DeferredClaimResult::AlreadyClaimed),
+        DeferredClaimRejection::AlreadyCompleted => Ok(DeferredClaimResult::AlreadyCompleted),
+        DeferredClaimRejection::ParentCancelled => Ok(DeferredClaimResult::ParentCancelled),
+        DeferredClaimRejection::SessionClosed => Ok(DeferredClaimResult::SessionClosed),
+        DeferredClaimRejection::DeadlineExpired => Ok(DeferredClaimResult::DeadlineExpired),
         DeferredClaimRejection::Operational(error) => Err(crate::error::TransportError::dispatch(error)),
     }
 }
 
-fn registry_lifecycle_outcome<R, E, F>(kind: RegistryFailure) -> DeferredRegistryOutcome<R, E, F> {
+fn registry_lifecycle_outcome<R, E, F>(kind: RegistryFailure) -> DeferredRegistrationResult<R, E, F> {
     match kind {
-        RegistryFailure::ParentCancelled => DeferredRegistryOutcome::ParentCancelled,
-        RegistryFailure::SessionClosed => DeferredRegistryOutcome::SessionClosed,
-        RegistryFailure::DeadlineExpired => DeferredRegistryOutcome::DeadlineExpired,
+        RegistryFailure::ParentCancelled => DeferredRegistrationResult::ParentCancelled,
+        RegistryFailure::SessionClosed => DeferredRegistrationResult::SessionClosed,
+        RegistryFailure::DeadlineExpired => DeferredRegistrationResult::DeadlineExpired,
         _ => registry_failure_outcome(kind, DeferredRegistryRecovery::None),
     }
 }
@@ -960,12 +964,12 @@ fn registry_lifecycle_outcome<R, E, F>(kind: RegistryFailure) -> DeferredRegistr
 fn registry_failure_outcome<R, E, F>(
     kind: RegistryFailure,
     recovery: DeferredRegistryRecovery<R, F>,
-) -> DeferredRegistryOutcome<R, E, F> {
+) -> DeferredRegistrationResult<R, E, F> {
     if kind == RegistryFailure::DuplicateRequest {
-        return DeferredRegistryOutcome::DuplicateRequest(recovery);
+        return DeferredRegistrationResult::DuplicateRequest(recovery);
     }
     if kind == RegistryFailure::IdentityExhausted {
-        return DeferredRegistryOutcome::IdentityExhausted(recovery);
+        return DeferredRegistrationResult::IdentityExhausted(recovery);
     }
     let source = match kind {
         RegistryFailure::RegistryInvariant => RegistryOperationalFailure::Invariant,
@@ -976,7 +980,7 @@ fn registry_failure_outcome<R, E, F>(
         | RegistryFailure::DeadlineExpired
         | RegistryFailure::CleanupInstallerRejected => RegistryOperationalFailure::Invariant,
     };
-    DeferredRegistryOutcome::OperationalFailure {
+    DeferredRegistrationResult::OperationalFailure {
         error: crate::error::TransportError::dispatch(source),
         recovery,
     }

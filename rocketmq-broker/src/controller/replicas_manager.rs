@@ -48,8 +48,9 @@ pub enum RegisterState {
     Registered,
 }
 
+/// When `role` is `None`, the report still contains the installed master and sync-state-set state.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RoleChangeOutcome {
+pub struct BrokerRoleChangeReport {
     pub role: Option<BrokerReplicaRole>,
     pub sync_state_set_changed: bool,
     pub master_broker_id: Option<u64>,
@@ -96,7 +97,17 @@ pub struct ControllerHeartbeatState {
     pub epoch: Option<i32>,
 }
 
-impl RoleChangeOutcome {
+/// Fields of an AlterSyncStateSet request from the Controller-assigned master.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SyncStateSetReportTarget {
+    pub(crate) controller_leader_address: CheetahString,
+    pub(crate) master_broker_id: i64,
+    pub(crate) master_epoch: i32,
+    pub(crate) sync_state_set: HashSet<i64>,
+    pub(crate) sync_state_set_epoch: i32,
+}
+
+impl BrokerRoleChangeReport {
     pub fn target_broker_role(&self) -> Option<BrokerRole> {
         match self.role {
             Some(BrokerReplicaRole::Master) => Some(BrokerRole::SyncMaster),
@@ -306,6 +317,72 @@ impl ReplicasManager {
             broker_id: self.broker_controller_id as i64,
             epoch: self.write_authority.map(|authority| authority.master_epoch().get()),
         }
+    }
+
+    /// Returns the AlterSyncStateSet fields while this broker is the Controller-assigned master.
+    ///
+    /// `None` on a slave, or before the Controller leader, the master authority, and the
+    /// sync-state-set epoch are known.
+    pub(crate) fn sync_state_set_report_target(&self) -> Option<SyncStateSetReportTarget> {
+        let authority = self.write_authority?;
+        if self.master_broker_id != Some(self.broker_controller_id) {
+            return None;
+        }
+        Some(SyncStateSetReportTarget {
+            controller_leader_address: self.controller_leader_address.clone()?,
+            master_broker_id: authority.broker_id(),
+            master_epoch: authority.master_epoch().get(),
+            sync_state_set: self.sync_state_set.clone(),
+            sync_state_set_epoch: self.sync_state_set_epoch?.get(),
+        })
+    }
+
+    /// Installs the sync state set the Controller committed for this master's report.
+    ///
+    /// Like Java `ReplicasManager#changeSyncStateSet`, only an advancing sync-state-set epoch
+    /// applies. Returns `Ok(false)` when the epoch does not advance or the master epoch changed
+    /// after the report was sent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error when the Controller answer carries a non-positive epoch
+    /// or a membership without this master.
+    pub(crate) fn apply_reported_sync_state_set(
+        &mut self,
+        master_epoch: i32,
+        sync_state_set: HashSet<i64>,
+        sync_state_set_epoch: i32,
+    ) -> Result<bool> {
+        let Some(authority) = self.write_authority else {
+            return Ok(false);
+        };
+        if authority.master_epoch().get() != master_epoch {
+            return Ok(false);
+        }
+        let next_epoch = SyncStateSetEpoch::try_from(sync_state_set_epoch).map_err(|_| {
+            crate::broker_error::invalid_argument("alter sync state set response carries an invalid epoch")
+        })?;
+        if self.sync_state_set_epoch.is_some_and(|current| next_epoch <= current) {
+            return Ok(false);
+        }
+        let members = HaSyncStateSet::try_new(sync_state_set.iter().copied()).map_err(|_| {
+            crate::broker_error::invalid_argument("alter sync state set response carries an invalid sync-state set")
+        })?;
+        if !members.contains(authority.broker_id()) {
+            return Err(crate::broker_error::invalid_argument(
+                "alter sync state set response does not contain the authorized master",
+            ));
+        }
+        info!(
+            "Apply controller sync state set change, broker_controller_id={}, sync_state_set={:?}, \
+             sync_state_set_epoch={}",
+            self.broker_controller_id,
+            sync_state_set,
+            next_epoch.get()
+        );
+        self.sync_state_set_epoch = Some(next_epoch);
+        self.sync_state_set = sync_state_set;
+        Ok(true)
     }
 
     pub fn needs_broker_id_application(&self) -> bool {
@@ -572,7 +649,7 @@ impl ReplicasManager {
         new_master_epoch: Option<i32>,
         sync_state_set_epoch: Option<i32>,
         sync_state_set: Option<&HashSet<i64>>,
-    ) -> Result<RoleChangeOutcome> {
+    ) -> Result<BrokerRoleChangeReport> {
         if let Some(controller_leader_address) = controller_leader_address {
             self.set_controller_leader_address(controller_leader_address);
         }
@@ -596,7 +673,7 @@ impl ReplicasManager {
 
         if let Some(current_authority) = self.write_authority {
             if requested_authority.master_epoch() < current_authority.master_epoch() {
-                return Ok(self.outcome(None, false));
+                return Ok(self.role_change_report(None, false));
             }
             if requested_authority.master_epoch() == current_authority.master_epoch()
                 && requested_authority != current_authority
@@ -649,7 +726,7 @@ impl ReplicasManager {
                 self.sync_state_set_epoch = next_sync_state_set_epoch;
                 self.sync_state_set = next_sync_state_set;
             }
-            return Ok(self.outcome(None, sync_state_set_changed));
+            return Ok(self.role_change_report(None, sync_state_set_changed));
         }
 
         let (role, master_address) = if master_broker_id == self.broker_controller_id {
@@ -682,12 +759,16 @@ impl ReplicasManager {
             self.sync_state_set_epoch()
         );
 
-        Ok(self.outcome(Some(role), sync_state_set_changed))
+        Ok(self.role_change_report(Some(role), sync_state_set_changed))
     }
 
-    fn outcome(&self, role: Option<BrokerReplicaRole>, sync_state_set_changed: bool) -> RoleChangeOutcome {
+    fn role_change_report(
+        &self,
+        role: Option<BrokerReplicaRole>,
+        sync_state_set_changed: bool,
+    ) -> BrokerRoleChangeReport {
         let should_start_special_service = self.master_broker_id == Some(self.broker_controller_id);
-        RoleChangeOutcome {
+        BrokerRoleChangeReport {
             role,
             sync_state_set_changed,
             master_broker_id: self.master_broker_id,
@@ -1122,6 +1203,81 @@ mod tests {
         assert_eq!(manager.write_authority(), None);
         assert_eq!(manager.master_broker_id(), None);
         assert!(manager.sync_state_set().is_empty());
+    }
+
+    #[test]
+    fn sync_state_set_report_target_is_limited_to_the_master_with_a_known_leader() {
+        let config = broker_config_with_controller_addr("127.0.0.1:9878", 2);
+        let message_store_config = message_store_config_with_identity_path("report-target");
+        let mut master = ReplicasManager::new(&config, &message_store_config, "127.0.0.1:10911".into());
+        master
+            .change_broker_role(None, Some(2), None, Some(3), Some(4), Some(&HashSet::from([2_i64])))
+            .expect("promote to master");
+        assert_eq!(master.sync_state_set_report_target(), None);
+
+        master.set_controller_leader_address("127.0.0.2:9878".into());
+        assert_eq!(
+            master.sync_state_set_report_target(),
+            Some(SyncStateSetReportTarget {
+                controller_leader_address: "127.0.0.2:9878".into(),
+                master_broker_id: 2,
+                master_epoch: 3,
+                sync_state_set: HashSet::from([2_i64]),
+                sync_state_set_epoch: 4,
+            })
+        );
+
+        let mut slave = ReplicasManager::new(
+            &config,
+            &message_store_config_with_identity_path("report-target-slave"),
+            "127.0.0.1:10911".into(),
+        );
+        slave
+            .change_broker_role(
+                Some("127.0.0.2:9878".into()),
+                Some(1),
+                Some("127.0.0.9:10911".into()),
+                Some(3),
+                Some(4),
+                Some(&HashSet::from([1_i64])),
+            )
+            .expect("demote to slave");
+        assert_eq!(slave.sync_state_set_report_target(), None);
+    }
+
+    #[test]
+    fn apply_reported_sync_state_set_requires_an_advancing_epoch_and_the_master() {
+        let config = broker_config_with_controller_addr("127.0.0.1:9878", 2);
+        let message_store_config = message_store_config_with_identity_path("apply-reported");
+        let mut manager = ReplicasManager::new(&config, &message_store_config, "127.0.0.1:10911".into());
+        manager
+            .change_broker_role(None, Some(2), None, Some(3), Some(4), Some(&HashSet::from([2_i64])))
+            .expect("promote to master");
+
+        assert!(manager
+            .apply_reported_sync_state_set(3, HashSet::from([2_i64, 5_i64]), 5)
+            .expect("advancing epoch applies"));
+        assert_eq!(manager.sync_state_set(), &HashSet::from([2_i64, 5_i64]));
+        assert_eq!(manager.sync_state_set_epoch(), 5);
+
+        assert!(!manager
+            .apply_reported_sync_state_set(3, HashSet::from([2_i64]), 5)
+            .expect("same epoch is ignored"));
+        assert!(!manager
+            .apply_reported_sync_state_set(2, HashSet::from([2_i64]), 6)
+            .expect("an answer for an older master epoch is ignored"));
+        assert_eq!(
+            manager
+                .apply_reported_sync_state_set(3, HashSet::from([5_i64]), 6)
+                .expect_err("the committed set must keep the master")
+                .descriptor(),
+            &rocketmq_error::CORE_ARGUMENT_INVALID
+        );
+        manager
+            .apply_reported_sync_state_set(3, HashSet::from([2_i64]), 0)
+            .expect_err("non-positive epoch must fail closed");
+        assert_eq!(manager.sync_state_set(), &HashSet::from([2_i64, 5_i64]));
+        assert_eq!(manager.sync_state_set_epoch(), 5);
     }
 
     #[test]

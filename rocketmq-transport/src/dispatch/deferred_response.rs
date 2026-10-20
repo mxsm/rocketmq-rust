@@ -220,7 +220,7 @@ pub(crate) enum ResponseTransition {
 
 /// Result of one deferred response state transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ResponseStateOutcome<T = ()> {
+pub(crate) enum ResponseTransitionResult<T = ()> {
     /// The requested transition acquired its new state or affine capability.
     Applied(T),
     /// A previous operation already selected the terminal state.
@@ -325,19 +325,19 @@ impl ResponseState {
     }
 
     /// Activates registry ownership of an open deferred response.
-    pub(crate) fn register(&self) -> Result<ResponseStateOutcome, TransportContractViolation> {
+    pub(crate) fn register(&self) -> Result<ResponseTransitionResult, TransportContractViolation> {
         self.transition_exact(OPEN, REGISTERED, ResponseTransition::Register)
     }
 
     /// Claims one registered response for resume execution.
-    pub(crate) fn claim(&self) -> Result<ResponseStateOutcome, TransportContractViolation> {
+    pub(crate) fn claim(&self) -> Result<ResponseTransitionResult, TransportContractViolation> {
         self.transition_exact(REGISTERED, CLAIMED, ResponseTransition::Claim)
     }
 
     /// Acquires affine ownership of response delivery.
     pub(crate) fn begin_sending(
         self: &Arc<Self>,
-    ) -> Result<ResponseStateOutcome<ResponseSendClaim>, TransportContractViolation> {
+    ) -> Result<ResponseTransitionResult<ResponseSendClaim>, TransportContractViolation> {
         let mut observed = self.state.load(Ordering::Acquire);
         loop {
             match observed {
@@ -347,7 +347,7 @@ impl ResponseState {
                         .compare_exchange(observed, SENDING, Ordering::AcqRel, Ordering::Acquire)
                     {
                         Ok(_) => {
-                            return Ok(ResponseStateOutcome::Applied(ResponseSendClaim {
+                            return Ok(ResponseTransitionResult::Applied(ResponseSendClaim {
                                 state: Arc::clone(self),
                                 drop_progress: WriteProgress::NotStarted,
                                 delegated: None,
@@ -363,31 +363,31 @@ impl ResponseState {
     }
 
     /// Cancels a response that has not begun delivery.
-    pub(crate) fn cancel(&self) -> Result<ResponseStateOutcome, TransportContractViolation> {
+    pub(crate) fn cancel(&self) -> Result<ResponseTransitionResult, TransportContractViolation> {
         self.stop_with_reason(DeferredTerminalReason::Explicit, ResponseTransition::Cancel, |_| {})
     }
 
     /// Closes a response that has not begun delivery.
     #[cfg(test)]
-    pub(crate) fn close(&self) -> Result<ResponseStateOutcome, TransportContractViolation> {
+    pub(crate) fn close(&self) -> Result<ResponseTransitionResult, TransportContractViolation> {
         self.stop_with_reason(DeferredTerminalReason::SessionClosed, ResponseTransition::Close, |_| {})
     }
 
     pub(crate) fn cancel_with_reason(
         &self,
         reason: DeferredSystemCancellationReason,
-    ) -> Result<ResponseStateOutcome, TransportContractViolation> {
+    ) -> Result<ResponseTransitionResult, TransportContractViolation> {
         self.stop_with_reason(reason.0, ResponseTransition::Cancel, |_| {})
     }
 
     pub(crate) fn close_with_reason(
         &self,
         reason: DeferredSystemCloseReason,
-    ) -> Result<ResponseStateOutcome, TransportContractViolation> {
+    ) -> Result<ResponseTransitionResult, TransportContractViolation> {
         self.stop_with_reason(reason.0, ResponseTransition::Close, |_| {})
     }
 
-    pub(super) fn cancel_receiver_dropped(&self) -> Result<ResponseStateOutcome, TransportContractViolation> {
+    pub(super) fn cancel_receiver_dropped(&self) -> Result<ResponseTransitionResult, TransportContractViolation> {
         self.stop_with_reason(
             DeferredTerminalReason::ReceiverDropped,
             ResponseTransition::Close,
@@ -395,7 +395,7 @@ impl ResponseState {
         )
     }
 
-    pub(super) fn cancel_abandoned(&self) -> Result<ResponseStateOutcome, TransportContractViolation> {
+    pub(super) fn cancel_abandoned(&self) -> Result<ResponseTransitionResult, TransportContractViolation> {
         self.stop_with_reason(DeferredTerminalReason::Abandoned, ResponseTransition::Cancel, |_| {})
     }
 
@@ -404,7 +404,7 @@ impl ResponseState {
         reason: DeferredTerminalReason,
         transition: ResponseTransition,
         mut before_compare: impl FnMut(u8),
-    ) -> Result<ResponseStateOutcome, TransportContractViolation> {
+    ) -> Result<ResponseTransitionResult, TransportContractViolation> {
         let terminal = encode_terminal_reason(reason);
         let mut observed = self.state.load(Ordering::Acquire);
         loop {
@@ -417,7 +417,7 @@ impl ResponseState {
                     {
                         Ok(_) => {
                             self.observer.record(reason);
-                            return Ok(ResponseStateOutcome::Applied(()));
+                            return Ok(ResponseTransitionResult::Applied(()));
                         }
                         Err(actual) => observed = actual,
                     }
@@ -432,12 +432,12 @@ impl ResponseState {
         expected: u8,
         target: u8,
         transition: ResponseTransition,
-    ) -> Result<ResponseStateOutcome, TransportContractViolation> {
+    ) -> Result<ResponseTransitionResult, TransportContractViolation> {
         match self
             .state
             .compare_exchange(expected, target, Ordering::AcqRel, Ordering::Acquire)
         {
-            Ok(_) => Ok(ResponseStateOutcome::Applied(())),
+            Ok(_) => Ok(ResponseTransitionResult::Applied(())),
             Err(actual) => transition_rejection(transition, actual),
         }
     }
@@ -445,7 +445,7 @@ impl ResponseState {
     fn finish_sending(
         &self,
         terminal: ResponseTerminalState,
-    ) -> Result<ResponseStateOutcome, TransportContractViolation> {
+    ) -> Result<ResponseTransitionResult, TransportContractViolation> {
         let transition = match terminal {
             ResponseTerminalState::Completed => ResponseTransition::Complete,
             ResponseTerminalState::Failed { .. } => ResponseTransition::Fail,
@@ -475,14 +475,17 @@ impl ResponseSendClaim {
     }
 
     /// Records successful canonical response delivery.
-    pub(crate) fn complete(mut self) -> Result<ResponseStateOutcome, TransportContractViolation> {
+    pub(crate) fn complete(mut self) -> Result<ResponseTransitionResult, TransportContractViolation> {
         let result = self.state.finish_sending(ResponseTerminalState::Completed);
         self.active = false;
         result
     }
 
     /// Records failed canonical response delivery without losing prior progress.
-    pub(crate) fn fail(mut self, progress: WriteProgress) -> Result<ResponseStateOutcome, TransportContractViolation> {
+    pub(crate) fn fail(
+        mut self,
+        progress: WriteProgress,
+    ) -> Result<ResponseTransitionResult, TransportContractViolation> {
         let progress = match (self.drop_progress, progress) {
             (WriteProgress::PossiblyPartial, _) | (_, WriteProgress::PossiblyPartial) => WriteProgress::PossiblyPartial,
             (WriteProgress::NotStarted, WriteProgress::NotStarted) => WriteProgress::NotStarted,
@@ -515,9 +518,9 @@ impl Drop for ResponseSendClaim {
 fn transition_rejection<T>(
     transition: ResponseTransition,
     actual: u8,
-) -> Result<ResponseStateOutcome<T>, TransportContractViolation> {
+) -> Result<ResponseTransitionResult<T>, TransportContractViolation> {
     match snapshot(actual) {
-        ResponseStateSnapshot::Terminal(state) => Ok(ResponseStateOutcome::AlreadyCompleted {
+        ResponseStateSnapshot::Terminal(state) => Ok(ResponseTransitionResult::AlreadyCompleted {
             state,
             reason: decode_terminal_reason(actual),
         }),

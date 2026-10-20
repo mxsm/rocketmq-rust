@@ -15,7 +15,7 @@
 use crate::commit_log::append::AppendMessageResult;
 use crate::commit_log::append::AppendMessageStatus;
 
-/// Successful completion of a bounded CommitLog append attempt.
+/// Completion of a bounded CommitLog append attempt, including a rejected retry.
 pub enum CommitLogAppendCompleted<S> {
     /// The initial append or its single EOF retry completed successfully.
     PutOk {
@@ -52,7 +52,7 @@ pub enum CommitLogAppendAborted<S, E> {
 }
 
 /// Outcome of one initial CommitLog append and at most one EOF retry.
-pub enum CommitLogAppendOutcome<S, E> {
+pub enum CommitLogAppendAttemptResult<S, E> {
     Completed(CommitLogAppendCompleted<S>),
     Aborted(CommitLogAppendAborted<S, E>),
 }
@@ -105,7 +105,7 @@ pub enum CommitLogAppendResolution<S, E> {
     },
 }
 
-impl<S, E> CommitLogAppendOutcome<S, E> {
+impl<S, E> CommitLogAppendAttemptResult<S, E> {
     /// Resolves every low-level append outcome into one Store-neutral terminal decision.
     pub fn resolve(self) -> CommitLogAppendResolution<S, E> {
         match self {
@@ -182,7 +182,7 @@ impl CommitLogAppendAttempt {
         mut acquire: Acquire,
         mut lock_active: LockActive,
         mut append: Append,
-    ) -> CommitLogAppendOutcome<S, E>
+    ) -> CommitLogAppendAttemptResult<S, E>
     where
         IsFull: FnMut(&S) -> bool,
         Acquire: FnMut() -> Option<S>,
@@ -199,7 +199,9 @@ impl CommitLogAppendAttempt {
                         }
                         None => {
                             drop(segment);
-                            return CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialSegmentUnavailable);
+                            return CommitLogAppendAttemptResult::Aborted(
+                                CommitLogAppendAborted::InitialSegmentUnavailable,
+                            );
                         }
                     }
                 } else {
@@ -209,37 +211,37 @@ impl CommitLogAppendAttempt {
             None => match acquire() {
                 Some(segment) => segment,
                 None => {
-                    return CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialSegmentUnavailable);
+                    return CommitLogAppendAttemptResult::Aborted(CommitLogAppendAborted::InitialSegmentUnavailable);
                 }
             },
         };
 
         if let Err(error) = lock_active(&segment) {
-            return CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialActiveLockFailed { error });
+            return CommitLogAppendAttemptResult::Aborted(CommitLogAppendAborted::InitialActiveLockFailed { error });
         }
 
         let first = append(&segment);
         match first.status {
-            AppendMessageStatus::PutOk => CommitLogAppendOutcome::Completed(CommitLogAppendCompleted::PutOk {
+            AppendMessageStatus::PutOk => CommitLogAppendAttemptResult::Completed(CommitLogAppendCompleted::PutOk {
                 result: first,
                 rolled_segment: None,
             }),
             AppendMessageStatus::MessageSizeExceeded | AppendMessageStatus::PropertiesSizeExceeded => {
-                CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialMessageIllegal { result: first })
+                CommitLogAppendAttemptResult::Aborted(CommitLogAppendAborted::InitialMessageIllegal { result: first })
             }
             AppendMessageStatus::UnknownError => {
-                CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialUnknown { result: first })
+                CommitLogAppendAttemptResult::Aborted(CommitLogAppendAborted::InitialUnknown { result: first })
             }
             AppendMessageStatus::EndOfFile => {
                 let old = segment;
                 let Some(rolled) = acquire() else {
-                    return CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::RolledSegmentUnavailable {
+                    return CommitLogAppendAttemptResult::Aborted(CommitLogAppendAborted::RolledSegmentUnavailable {
                         first_eof: first,
                         old,
                     });
                 };
                 if let Err(error) = lock_active(&rolled) {
-                    return CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::RolledActiveLockFailed {
+                    return CommitLogAppendAttemptResult::Aborted(CommitLogAppendAborted::RolledActiveLockFailed {
                         first_eof: first,
                         old,
                         error,
@@ -248,15 +250,17 @@ impl CommitLogAppendAttempt {
 
                 let retry = append(&rolled);
                 match retry.status {
-                    AppendMessageStatus::PutOk => CommitLogAppendOutcome::Completed(CommitLogAppendCompleted::PutOk {
-                        result: retry,
-                        rolled_segment: Some(old),
-                    }),
+                    AppendMessageStatus::PutOk => {
+                        CommitLogAppendAttemptResult::Completed(CommitLogAppendCompleted::PutOk {
+                            result: retry,
+                            rolled_segment: Some(old),
+                        })
+                    }
                     AppendMessageStatus::EndOfFile
                     | AppendMessageStatus::MessageSizeExceeded
                     | AppendMessageStatus::PropertiesSizeExceeded
                     | AppendMessageStatus::UnknownError => {
-                        CommitLogAppendOutcome::Completed(CommitLogAppendCompleted::RetryRejected {
+                        CommitLogAppendAttemptResult::Completed(CommitLogAppendCompleted::RetryRejected {
                             result: retry,
                             rolled_segment: old,
                         })

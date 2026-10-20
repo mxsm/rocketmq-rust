@@ -102,20 +102,20 @@ where
         &self,
         client_id: CheetahString,
         registered_at: tokio::time::Instant,
-    ) -> Result<PopLiteIndexReserveOutcome<I>, PopLiteIndexOperationalError> {
+    ) -> Result<PopLiteIndexReservationStatus<I>, PopLiteIndexOperationalError> {
         let mut state = self.inner.state.lock();
         let occupied = state
             .live
             .checked_add(state.reserved)
             .ok_or(PopLiteIndexOperationalError::AccountingOverflow)?;
         if occupied >= self.inner.limits.max_entries.get() {
-            return Ok(PopLiteIndexReserveOutcome::Rejected(
+            return Ok(PopLiteIndexReservationStatus::Rejected(
                 PopLiteIndexReserveRejection::Global,
             ));
         }
         let bucket_missing = !state.clients.contains_key(&client_id);
         if bucket_missing && state.clients.len() >= self.inner.limits.max_clients.get() {
-            return Ok(PopLiteIndexReserveOutcome::Rejected(
+            return Ok(PopLiteIndexReservationStatus::Rejected(
                 PopLiteIndexReserveRejection::Client,
             ));
         }
@@ -129,7 +129,7 @@ where
             None => 0,
         };
         if client_occupied >= self.inner.limits.max_entries_per_client.get() {
-            return Ok(PopLiteIndexReserveOutcome::Rejected(
+            return Ok(PopLiteIndexReservationStatus::Rejected(
                 PopLiteIndexReserveRejection::PerClient,
             ));
         }
@@ -169,7 +169,7 @@ where
         state.reserved += 1;
         state.next_sequence = next_sequence;
         drop(state);
-        Ok(PopLiteIndexReserveOutcome::Reserved(PopLiteIndexReservation {
+        Ok(PopLiteIndexReservationStatus::Reserved(PopLiteIndexReservation {
             inner: Some(Arc::clone(&self.inner)),
             client_id: Some(client_id),
             sequence: next_sequence - 1,
@@ -449,7 +449,7 @@ pub(crate) enum PopLiteIndexReserveRejection {
 }
 
 #[must_use]
-pub(crate) enum PopLiteIndexReserveOutcome<I> {
+pub(crate) enum PopLiteIndexReservationStatus<I> {
     Reserved(PopLiteIndexReservation<I>),
     Rejected(PopLiteIndexReserveRejection),
 }

@@ -288,14 +288,14 @@ impl GpuiAdminProvider {
             let session = super::mutation_for_revision(&mut guard, revision)?;
             let outcome = select_admin(cancellation, session.patch_consumer_config(&request)).await?;
             Ok(match outcome {
-                rocketmq_admin_core::core::consumer::PatchSubscriptionGroupConfigOutcome::Applied {
+                rocketmq_admin_core::core::consumer::SubscriptionGroupConfigPatchResult::Applied {
                     previous_version,
                     version,
                 } => ConsumerConfigPatchOutcome::Applied {
                     previous_generation: previous_version,
                     generation: version,
                 },
-                rocketmq_admin_core::core::consumer::PatchSubscriptionGroupConfigOutcome::VersionConflict {
+                rocketmq_admin_core::core::consumer::SubscriptionGroupConfigPatchResult::VersionConflict {
                     expected_version,
                     actual_version,
                 } => ConsumerConfigPatchOutcome::GenerationConflict {

@@ -1,0 +1,338 @@
+.section {
+  overflow: hidden;
+}
+
+.glow {
+  position: absolute;
+  top: 10%;
+  left: 50%;
+  width: min(90vw, 1100px);
+  height: 70%;
+  background: radial-gradient(closest-side, rgba(124, 82, 255, 0.13), transparent);
+  pointer-events: none;
+  transform: translateX(-30%);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);
+  align-items: center;
+  gap: clamp(2rem, 5vw, 4.5rem);
+}
+
+.intro {
+  min-width: 0;
+}
+
+/* ---------- Callouts ---------- */
+
+.callouts {
+  display: grid;
+  gap: 0.35rem;
+  margin: 2rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.callout {
+  display: flex;
+  width: 100%;
+  gap: 0.9rem;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--home-muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 220ms ease,
+    border-color 220ms ease;
+}
+
+.callout:focus-visible,
+.tab:focus-visible,
+.panel:focus-visible {
+  outline: 2px solid var(--home-amber);
+  outline-offset: 2px;
+}
+
+.callout strong {
+  display: block;
+  color: #dfe4f1;
+  font-size: 1rem;
+  font-weight: 700;
+  transition: color 220ms ease;
+}
+
+.calloutText {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.calloutIndex {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--home-border-strong);
+  border-radius: 8px;
+  color: var(--home-faint);
+  font-family: var(--home-font-mono);
+  font-size: 0.74rem;
+  font-weight: 600;
+  transition:
+    border-color 220ms ease,
+    background-color 220ms ease,
+    color 220ms ease;
+}
+
+.calloutActive {
+  border-color: var(--home-border-strong);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.calloutActive strong {
+  color: #fff;
+}
+
+.calloutActive .calloutIndex {
+  border-color: rgba(255, 122, 38, 0.6);
+  background: rgba(255, 122, 38, 0.14);
+  color: var(--home-amber);
+}
+
+.links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1.6rem;
+  margin-top: 1.5rem;
+  padding-left: 0.95rem;
+}
+
+/* ---------- Code window ---------- */
+
+.windowWrap {
+  min-width: 0;
+}
+
+.window {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--home-border-strong);
+  border-radius: 20px;
+  background: linear-gradient(180deg, #0d101c 0%, #080a13 100%);
+  box-shadow:
+    0 40px 100px rgba(0, 0, 0, 0.5),
+    0 0 80px rgba(124, 82, 255, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+
+.windowBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding: 0.55rem 0.7rem 0 0.7rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.windowBar > button {
+  margin-bottom: 0.5rem;
+}
+
+.tabs {
+  display: flex;
+  min-width: 0;
+  gap: 0.15rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tab {
+  position: relative;
+  flex: 0 0 auto;
+  padding: 0.6rem 0.95rem 0.8rem;
+  border: 0;
+  background: none;
+  color: var(--home-faint);
+  font-family: var(--home-font-mono);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 200ms ease;
+}
+
+.tab::after {
+  position: absolute;
+  right: 0.7rem;
+  bottom: -1px;
+  left: 0.7rem;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: linear-gradient(90deg, var(--home-orange), var(--home-violet));
+  content: '';
+  opacity: 0;
+  transform: scaleX(0.3);
+  transition:
+    opacity 240ms ease,
+    transform 240ms ease;
+}
+
+.tab:hover {
+  color: #c9d1e4;
+}
+
+.tabActive,
+.tabActive:hover {
+  color: #fff;
+}
+
+.tabActive::after {
+  opacity: 1;
+  transform: scaleX(1);
+}
+
+.panel {
+  overflow-x: auto;
+  scrollbar-color: rgba(150, 166, 214, 0.3) transparent;
+  scrollbar-width: thin;
+}
+
+.code {
+  /* Wide enough that focus bars span the scroll width, not just the viewport. */
+  min-width: max-content;
+  margin: 0;
+  padding: 1.1rem 0 1.3rem;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  font-family: var(--home-font-mono);
+  font-size: 0.8rem;
+  line-height: 1.8;
+}
+
+.line {
+  position: relative;
+  display: flex;
+  padding: 0 1.2rem 0 0;
+  white-space: pre;
+  transition:
+    opacity 220ms ease,
+    background-color 220ms ease;
+}
+
+/*
+ * Lines wait for the window to scroll into view, then cascade in. Gated on the
+ * hydration attribute so server-rendered and no-JS output stays readable.
+ */
+:global([data-rmq-motion='on']) .window:not(.windowVisible) .line {
+  opacity: 0;
+}
+
+/* `backwards` only: a forwards fill would pin opacity and defeat the focus dimming below. */
+.windowVisible .line {
+  animation: lineIn 420ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+  animation-delay: calc(var(--line) * 26ms);
+}
+
+.lineNumber {
+  width: 3.1rem;
+  flex: 0 0 auto;
+  padding-right: 1rem;
+  color: #3d4558;
+  text-align: right;
+  user-select: none;
+}
+
+.lineContent {
+  flex: 1;
+}
+
+.codeFocused .line:not(.lineFocused) {
+  opacity: 0.32;
+}
+
+.lineFocused {
+  background: linear-gradient(90deg, rgba(255, 122, 38, 0.14), rgba(255, 122, 38, 0.03) 70%, transparent);
+}
+
+.lineFocused::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: var(--home-orange);
+  content: '';
+}
+
+.lineFocused .lineNumber {
+  color: var(--home-amber);
+}
+
+@media (max-width: 1080px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 620px) {
+  /* All three file tabs fit beside the copy button on a phone. */
+  .tab {
+    padding: 0.6rem 0.5rem 0.8rem;
+    font-size: 0.72rem;
+  }
+
+  .tab::after {
+    right: 0.4rem;
+    left: 0.4rem;
+  }
+
+  .code {
+    font-size: 0.72rem;
+  }
+
+  .lineNumber {
+    width: 2.5rem;
+    padding-right: 0.7rem;
+  }
+
+  .links {
+    padding-left: 0;
+  }
+}
+
+@keyframes lineIn {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .callout,
+  .line,
+  .tab::after {
+    transition: none;
+  }
+
+  :global([data-rmq-motion='on']) .window:not(.windowVisible) .line {
+    opacity: 1;
+  }
+
+  .windowVisible .line {
+    animation: none;
+  }
+}

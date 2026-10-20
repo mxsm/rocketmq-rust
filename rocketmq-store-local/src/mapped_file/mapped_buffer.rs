@@ -91,40 +91,6 @@ impl MappedBuffer {
         Self::from_shared_mmap(Arc::new(RwLock::new(mmap)), offset, len)
     }
 
-    /// Creates a new `MappedBuffer` over the specified region.
-    ///
-    /// # Arguments
-    ///
-    /// * `mmap` - Shared mmap reference
-    /// * `offset` - Starting offset within the mmap
-    /// * `len` - Length of the buffer region
-    ///
-    /// # Returns
-    ///
-    /// A new buffer or an error if the region is out of bounds
-    ///
-    /// # Errors
-    ///
-    /// Returns `MappedFileFailure::OutOfBounds` if `offset + len` exceeds mmap size
-    #[deprecated(note = "use from_mmap and region so mutable mapping ownership stays encapsulated; removal in 2.0.0")]
-    fn new_checked(mmap: Arc<RwLock<MmapMut>>, offset: usize, len: usize) -> Result<Self, MappedFileViolation> {
-        Self::from_shared_mmap(mmap, offset, len)
-    }
-
-    /// Creates a buffer over a shared mutable mapping.
-    ///
-    /// # Errors
-    ///
-    /// Returns a mapped-file request error when the requested region is outside the mapping.
-    #[deprecated(note = "use from_mmap and region so mutable mapping ownership stays encapsulated; removal in 2.0.0")]
-    pub fn new(mmap: Arc<RwLock<MmapMut>>, offset: usize, len: usize) -> Option<Self> {
-        #[allow(
-            deprecated,
-            reason = "compatibility constructor delegates to the deprecated checked constructor"
-        )]
-        Self::new_checked(mmap, offset, len).ok()
-    }
-
     fn from_shared_mmap(mmap: Arc<RwLock<MmapMut>>, offset: usize, len: usize) -> Result<Self, MappedFileViolation> {
         // Validate bounds
         let mmap_guard = mmap.read();
@@ -454,15 +420,6 @@ impl MappedBuffer {
         let start = self.offset + range.start;
         let end = self.offset + range.end;
         Ok(start..end)
-    }
-
-    /// Returns a clone of the underlying mmap Arc for legacy integrations.
-    ///
-    /// Direct access bypasses this buffer's region invariant. New code should use the scoped,
-    /// range-checked operations instead.
-    #[deprecated(note = "use read_copy, with_read_range, write, with_write_range, or flush_range; removal in 2.0.0")]
-    pub fn get_mmap(&self) -> Arc<RwLock<MmapMut>> {
-        Arc::clone(&self.mmap)
     }
 }
 

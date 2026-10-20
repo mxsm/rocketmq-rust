@@ -29,7 +29,7 @@ pub(super) trait TopicBatchDeleteExecutor {
     async fn delete_batch(
         &mut self,
         request: &TopicBatchDeleteRequest,
-    ) -> Result<topic::TopicBatchDeleteOutcome, AdminError>;
+    ) -> Result<topic::TopicBatchDeleteReport, AdminError>;
 }
 
 impl<T> TopicBatchDeleteExecutor for T
@@ -39,7 +39,7 @@ where
     async fn delete_batch(
         &mut self,
         request: &TopicBatchDeleteRequest,
-    ) -> Result<topic::TopicBatchDeleteOutcome, AdminError> {
+    ) -> Result<topic::TopicBatchDeleteReport, AdminError> {
         self.delete_topic_batch(request).await
     }
 }

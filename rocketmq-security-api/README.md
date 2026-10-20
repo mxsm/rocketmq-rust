@@ -20,7 +20,7 @@ Shared security contracts used by transport, authentication, storage, and deploy
 
 `ROCKETMQ_SECURITY_PROFILE` selects `development-insecure-loopback` or `secure-enforced`. The development profile requires supplied listeners to use loopback addresses. Secure bootstrap requires trust-anchor, TLS certificate/key, mounted-file secret-provider, admin-identity, and request-policy material. See [`secure_deployment.rs`](src/secure_deployment.rs) for the exported environment variable names and checks.
 
-With no profile and no bootstrap material, bootstrap returns the disabled outcome. Material without an explicit profile is rejected. Bootstrap validation does not install TLS or implement request authentication; applications must connect their transport and policy implementations. [rocketmq-auth](../rocketmq-auth/README.md) provides the broker/proxy auth runtime.
+With no profile and no bootstrap material, bootstrap returns `SecurityBootstrapValidation::Disabled` without checking listener addresses. Material without an explicit profile is rejected. Bootstrap validation does not cryptographically verify certificates, install TLS, or implement request authentication; applications must connect their transport and policy implementations. [rocketmq-auth](../rocketmq-auth/README.md) provides the broker/proxy auth runtime.
 
 ## Validation
 

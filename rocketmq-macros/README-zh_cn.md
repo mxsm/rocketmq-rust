@@ -11,7 +11,6 @@ RocketMQ-Rust 协议类型和 Remoting Header 使用的过程宏。
 | 宏 | 状态 | 用途 |
 | --- | --- | --- |
 | `RequestHeaderCodec` | 推荐 | 生成类型化 map/source codec、wire schema、校验、键解析、兼容适配器，以及经过审查的可选直接编码。 |
-| `RemotingSerializable` | 旧版工具 | 为旧版 crate 本地序列化 trait 生成实现；与当前协议 trait 不兼容。参见[序列化](#序列化)。 |
 
 `RequestHeaderCodec` 是唯一受支持的请求头 derive。它沿用原 V3 实现，只是采用正式名称；基于单一显式 wire model 生成 `HeaderCodec`、`CommandCustomHeader` 和 `FromMap` 实现。历史 V1 实现曾使用同名入口，已与 V2 一起在 1.0 前退役。当前 V3 使用方只需改名；V1/V2 使用方必须迁移 Header 元数据并审核下述行为差异。
 
@@ -132,6 +131,8 @@ canonical key 和别名必须非空、不包含 NUL，并满足 ROCKETMQ 的 `u1
 
 对于 `Option<Flattened>`，`presence = "always"` 始终尝试嵌套解码，成功后返回 `Some`。`presence = "any"` 仅在嵌套 schema（包括其子级）拥有的 canonical key 或别名存在时解码，否则返回 `None`。只要嵌套字段存在，仍会触发全部嵌套必填字段检查。非可选展平字段始终解码，不能使用 `presence = "any"`。展平不能与标量键、别名、缺失值/默认值策略、`alias_conflict`、`java_type` 或 `range` 组合。
 
+不带泛型参数的 Header 只遍历一次字段源，就能解码自身以及所有由 derive 生成的展平子 Header：每一层仍然能看到全部字段，因此结果与遍历次数无关。带泛型参数的 Header，以及作为展平子级的手写 `HeaderCodec`，仍按每层遍历一次的方式读取字段源。
+
 ### 校验与错误
 
 优先使用 `HeaderCodec::encode_into`、`HeaderCodec::decode_from_map` / `decode_from_source` 或 `CommandCustomHeader::try_encode_into_map`，以保留类型化的 `ProtocolContractViolation` 错误。生成的旧版 `to_map` 在失败时返回 `None`，`encode_into_map` 则丢弃错误。`FromMap` 将失败转换为 `rocketmq_error::Error`。
@@ -187,8 +188,6 @@ struct Header {
 
 ## 序列化
 
-导出的 `RemotingSerializable` derive 仍生成历史形式 `impl crate::protocol::RemotingSerializable for Type { type Output = Self; }`。它不保留泛型、不解析协议依赖，也不生成 Serde 实现。当前协议序列化 trait 不包含 `Output` 关联类型，并要求实现序列化方法，因此该展开结果与之不兼容。
-
 当前协议类型应派生 `serde::Serialize`，并导入 `rocketmq_protocol::protocol::RemotingSerializable`，以使用 `encode`、`serialize_json` 和 `serialize_json_pretty`。协议 crate 为可序列化类型提供了 blanket implementation（泛型覆盖实现）。同样，满足拥有所有权的反序列化约束的类型会通过泛型覆盖实现获得 `RemotingDeserializable`。
 
 ## Crate 结构
@@ -197,7 +196,6 @@ struct Header {
 | --- | --- |
 | [`src/lib.rs`](src/lib.rs) | 公开 derive 入口和共享解析辅助函数。 |
 | [`src/request_header_codec/`](src/request_header_codec/) | canonical 元数据、语义模型、校验和代码生成。 |
-| [`src/remoting_serializable.rs`](src/remoting_serializable.rs) | 历史 crate 本地序列化展开逻辑。 |
 
 Cargo 构建不会访问 Java checkout。Java schema、golden frame、请求头注册数据和基准测试输入保存在协议 crate 的[兼容性夹具目录](../rocketmq-protocol/tests/fixtures/request_header_codec/README.md)中。
 

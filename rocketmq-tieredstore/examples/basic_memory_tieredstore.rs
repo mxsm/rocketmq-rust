@@ -37,7 +37,7 @@ async fn main() -> Result<(), StoreError> {
     let Some(store) = TieredStore::new(
         TieredStoreConfig {
             storage_level: TieredStorageLevel::Force,
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             store_path_root_dir: temp_dir.path().join("tieredstore"),
             max_pending_tasks: 16,
             ..TieredStoreConfig::default()

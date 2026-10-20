@@ -251,7 +251,7 @@ impl DashboardCommonError {
             .with_text(fields::STORE_COMPONENT, "dashboard")
             .with_secret_presence(fields::STORE_DETAIL_PRESENT)
             .with_secret_presence(fields::SOURCE_PRESENT);
-        Self::caused_by(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, operation, context, source)
+        Self::caused_by(&rocketmq_error::STORAGE_UNAVAILABLE, operation, context, source)
     }
 
     /// Creates a dashboard runtime failure with its typed source.
@@ -418,7 +418,7 @@ mod tests {
         let cloned = error.clone();
 
         let projection = error.descriptor().projection();
-        assert_eq!(error.code(), rocketmq_error::STORAGE_BACKEND_UNAVAILABLE.code());
+        assert_eq!(error.code(), rocketmq_error::STORAGE_UNAVAILABLE.code());
         assert_eq!(projection.http().status, HttpStatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(projection.grpc().status, GrpcStatusCode::Unavailable);
         assert_eq!(projection.cli().exit_code, CliExitCode::UNAVAILABLE);

@@ -28,10 +28,10 @@ pub mod service;
 #[doc(hidden)]
 pub use cluster::bench_support;
 pub use cluster::ClusterClient;
-pub use cluster::RocketmqClusterClient;
+pub use cluster::ClusterCommandGateway;
 pub use config::ClusterConfig;
 pub use config::ClusterExecutionDiagnostics;
-pub use remoting::ClusterRemotingBackend;
+pub use remoting::ClusterBrokerRemotingAdapter;
 pub use service::ClusterAssignmentService;
 pub use service::ClusterConsumerService;
 pub use service::ClusterMessageService;

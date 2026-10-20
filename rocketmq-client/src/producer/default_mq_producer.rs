@@ -1485,14 +1485,6 @@ impl DefaultMQProducer {
         self.set_back_pressure_for_async_send_size(back_pressure_for_async_send_size);
     }
 
-    pub fn acquire_back_pressure_for_async_send_num_lock(&self) {}
-
-    pub fn release_back_pressure_for_async_send_num_lock(&self) {}
-
-    pub fn acquire_back_pressure_for_async_send_size_lock(&self) {}
-
-    pub fn release_back_pressure_for_async_send_size_lock(&self) {}
-
     fn batch<M>(&self, messages: Vec<M>) -> crate::ClientResult<MessageBatch>
     where
         M: MessageTrait + Send + Sync,
@@ -3244,10 +3236,6 @@ mod tests {
         producer.set_not_available_duration(vec![0, 100, 200]);
         producer.set_back_pressure_for_async_send_num_inside_adjust(1);
         producer.set_back_pressure_for_async_send_size_inside_adjust(128);
-        producer.acquire_back_pressure_for_async_send_num_lock();
-        producer.release_back_pressure_for_async_send_num_lock();
-        producer.acquire_back_pressure_for_async_send_size_lock();
-        producer.release_back_pressure_for_async_send_size_lock();
 
         assert_eq!(producer.latency_max(), &[10, 20, 30]);
         assert_eq!(producer.not_available_duration(), &[0, 100, 200]);

@@ -1,41 +1,174 @@
+/*
+ * Design tokens for the dark theme. Solid near-black cards on a black page with vivid chart
+ * colors, after the "Full charts components" kit; no translucent or blurred surfaces.
+ */
 :root {
   color-scheme: dark;
-  --font-ui: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
-  --background: #0b0f14;
-  --chrome: #0e141b;
-  --card: #121922;
-  --muted-surface: #18222d;
-  --border: #283442;
-  --border-strong: #364556;
-  --foreground: #f4f7fa;
-  --muted-foreground: #9ca8b7;
-  --primary: #14b8a6;
-  --primary-hover: #0d9488;
-  --primary-foreground: #041311;
-  --success: #22c55e;
-  --warning: #f59e0b;
-  --destructive: #ef4444;
-  --destructive-control-default: #b91c1c;
-  --destructive-control-hover: #991b1b;
-  --info: #3b82f6;
-  --ring: #2dd4bf;
-  --bg: var(--background);
-  --surface: var(--card);
-  --surface-2: var(--muted-surface);
-  --surface-3: #202c38;
-  --text: var(--foreground);
-  --muted: var(--muted-foreground);
-  --primary-strong: var(--primary-hover);
-  --accent: var(--warning);
-  --danger: var(--destructive);
-  --shadow: 0 16px 40px rgb(0 0 0 / 0.45);
-  --glass-surface: color-mix(in srgb, var(--card) 84%, transparent);
-  --glass-surface-strong: color-mix(in srgb, var(--muted-surface) 88%, transparent);
-  --glass-control: color-mix(in srgb, var(--foreground) 6%, transparent);
-  --glass-control-hover: color-mix(in srgb, var(--foreground) 11%, transparent);
-  --glass-border: color-mix(in srgb, var(--foreground) 14%, var(--border));
-  --glass-shadow: -24px 0 64px rgb(0 0 0 / 0.46);
-  --radius: 8px;
-  --radius-sm: 6px;
+
+  --font-ui: "Roboto Variable", Roboto, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+
+  /* Text styles, one `font` shorthand per style of the type scale */
+  --text-metric: 700 30px/36px var(--font-ui);
+  --text-hero: 700 28px/34px var(--font-ui);
+  --text-page-title: 700 26px/32px var(--font-ui);
+  --text-dialog-title: 500 20px/26px var(--font-ui);
+  --text-section-title: 500 18px/24px var(--font-ui);
+  --text-body: 400 14px/20px var(--font-ui);
+  --text-body-medium: 500 14px/20px var(--font-ui);
+  --text-small: 400 13px/18px var(--font-ui);
+  --text-small-medium: 500 13px/18px var(--font-ui);
+  --text-label: 500 13px/16px var(--font-ui);
+  --text-button: 700 13px/16px var(--font-ui);
+  --text-badge: 500 12px/16px var(--font-ui);
+  --text-caption: 400 12px/16px var(--font-ui);
+  --text-overline: 500 11px/16px var(--font-ui);
+  --text-mono: 400 13px/18px var(--font-mono);
+  --text-mono-small: 400 12px/16px var(--font-mono);
+  --text-mono-medium: 500 13px/18px var(--font-mono);
+  --tracking-display: 0;
+  --tracking-title: 0;
+  --tracking-dialog: 0;
+  --tracking-button: 0.08em;
+  --tracking-overline: 0.08em;
+
+  /* Surfaces */
+  --background: #000000;
+  --background-deep: #000000;
+  --card: #0a0d10;
+  --chrome: #0a0d10;
+  --surface: #0a0d10;
+  --surface-raised: #11151a;
+  --surface-inset: #0e1216;
+  --surface-overlay: #10141a;
+  --control: #151a20;
+  --control-hover: #1c232b;
+  --control-active: #252d37;
+  --overlay-scrim: rgb(0 0 0 / 0.72);
+
+  /* Primary */
+  --primary: #00b4d8;
+  --primary-hover: #1ec8ea;
+  --primary-soft: rgb(0 180 216 / 0.16);
+  --primary-border: rgb(0 180 216 / 0.5);
+  --primary-foreground: #000000;
+
+  /* Selected chips and tabs */
+  --selection: #7f00e2;
+  --selection-foreground: #ffffff;
+
+  /* Accents for metric cards and categories */
+  --accent-cyan: #00c4c9;
+  --accent-cyan-soft: rgb(0 196 201 / 0.14);
+  --accent-cyan-border: rgb(0 196 201 / 0.4);
+  --accent-blue: #00d5ff;
+  --accent-blue-soft: rgb(0 213 255 / 0.14);
+  --accent-blue-border: rgb(0 213 255 / 0.4);
+  --accent-indigo: #7209b7;
+  --accent-violet: #b15cff;
+  --accent-violet-border: rgb(177 92 255 / 0.45);
+  --accent-silver: #cfd8e6;
+  --accent-pink: #f72585;
+  --accent-pink-soft: rgb(247 37 133 / 0.16);
+  --accent-pink-border: rgb(247 37 133 / 0.45);
+
+  /* Status */
+  --success: #00e64d;
+  --success-soft: rgb(0 230 77 / 0.13);
+  --success-border: rgb(0 230 77 / 0.4);
+  --warning: #ffc300;
+  --warning-soft: rgb(255 195 0 / 0.14);
+  --warning-border: rgb(255 195 0 / 0.42);
+  --destructive: #ff2e6e;
+  --destructive-soft: rgb(255 46 110 / 0.15);
+  --destructive-border: rgb(255 46 110 / 0.45);
+  --destructive-control-default: #e80054;
+  --destructive-control-hover: #c4004a;
+  --destructive-foreground: #ffffff;
+  --info: #00d5ff;
+  --info-soft: rgb(0 213 255 / 0.14);
+  --info-border: rgb(0 213 255 / 0.4);
+
+  /* Text and icons */
+  --foreground: #ffffff;
+  --muted-foreground: #ced8e1;
+  --subtle-foreground: #8b98a5;
+  --link: #00d5ff;
+  --icon: #ffffff;
+  --icon-muted: #ced8e1;
+  --icon-subtle: #8b98a5;
+  --icon-on-primary: #000000;
+
+  /* Borders and focus */
+  --border-subtle: #141a1f;
+  --border: #1d242b;
+  --border-strong: #2b343e;
+  --ring: #00d5ff;
+
+  /* Shadow and glow colors */
+  --shadow-color: rgb(0 0 0 / 0.6);
+  --glow-primary: rgb(0 180 216 / 0.45);
+  --glow-success: rgb(0 230 77 / 0.45);
+  --glow-warning: rgb(255 195 0 / 0.45);
+  --glow-destructive: rgb(255 46 110 / 0.45);
+  --glow-info: rgb(0 213 255 / 0.45);
+  --glow-accent: rgb(0 196 201 / 0.45);
+
+  /* Charts */
+  --chart-grid: #1d242b;
+  --chart-1: #00b4d8;
+  --chart-1-fill: rgb(0 180 216 / 0.28);
+  --chart-1-fade: rgb(0 180 216 / 0);
+  --chart-2: #f72585;
+  --chart-2-fill: rgb(247 37 133 / 0.26);
+  --chart-2-fade: rgb(247 37 133 / 0);
+  --chart-3: #ffc300;
+
+  /* Spacing */
+  --space-2: 2px;
+  --space-4: 4px;
+  --space-6: 6px;
+  --space-8: 8px;
+  --space-10: 10px;
+  --space-12: 12px;
+  --space-16: 16px;
+  --space-20: 20px;
+  --space-24: 24px;
+  --space-32: 32px;
+  --space-40: 40px;
+  --space-48: 48px;
+
+  /* Radii */
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-full: 999px;
+
+  /* Layout */
+  --control-height: 36px;
+  --control-height-sm: 32px;
+  --sidebar-width: 236px;
+  --topbar-height: 56px;
+  --shell-gutter: 16px;
+
+  /* Motion */
+  --duration-instant: 90ms;
+  --duration-fast: 160ms;
+  --duration-base: 240ms;
+  --duration-slow: 420ms;
+  --duration-slower: 700ms;
+  --duration-stagger: 50ms;
+  --duration-shimmer: 1.4s;
+  --duration-halo: 1.6s;
+  --duration-ambient: 24s;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-in: cubic-bezier(0.5, 0, 0.75, 0);
+  /* CSS approximation of the design's spring with bounce 0.25. */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* Elevation. Cards are flat; only floating layers cast a shadow. */
+  --shadow-overlay: 0 24px 64px rgb(0 0 0 / 0.6), 0 0 0 1px rgb(0 0 0 / 0.4);
+  --focus-ring: 0 0 0 3px var(--primary-border);
 }

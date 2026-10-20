@@ -25,7 +25,7 @@ use rocketmq_store::inspect_commit_log_record;
 use rocketmq_store::CommitLogRecord;
 use rocketmq_store::CommitLogRecordBodyMode;
 use rocketmq_store::CommitLogRecordChecksum;
-use rocketmq_store::CommitLogRecordOutcome;
+use rocketmq_store::CommitLogRecordDecodeResult;
 use tabled::Table;
 use tabled::Tabled;
 
@@ -84,7 +84,7 @@ pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) 
         }
         current_pos += size;
         let msg_bytes = Bytes::from(message);
-        if let CommitLogRecordOutcome::Message(record) =
+        if let CommitLogRecordDecodeResult::Message(record) =
             inspect_commit_log_record(&msg_bytes, CommitLogRecordBodyMode::Skip, &InspectionChecksum)
         {
             table.push(message_print(&record));

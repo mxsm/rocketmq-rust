@@ -1,11 +1,11 @@
-import type { StorageBackend, StorageMode } from './config';
+import type { StorageEngine, StorageMode } from './config';
 
 export type StorageStatus = 'available' | 'degraded' | 'unavailable';
 export type StorageStatusReason = 'capacityBelowReserve' | 'probeFailed';
 
 /** Safe operator status; connection strings and filesystem locations are never included. */
 export interface StorageStatusView {
-  backend: StorageBackend;
+  backend: StorageEngine;
   mode: StorageMode;
   status: StorageStatus;
   reason?: StorageStatusReason;

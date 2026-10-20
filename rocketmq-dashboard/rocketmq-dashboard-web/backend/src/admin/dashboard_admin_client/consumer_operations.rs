@@ -207,7 +207,7 @@ mod tests {
             success: targets.iter().all(|(_, success)| *success),
             targets: targets
                 .into_iter()
-                .map(|(target, success)| core_consumer::DashboardConsumerTargetOutcome {
+                .map(|(target, success)| core_consumer::DashboardConsumerTargetResult {
                     target: target.to_string(),
                     kind: "BROKER".to_string(),
                     success,

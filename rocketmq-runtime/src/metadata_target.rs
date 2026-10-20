@@ -64,7 +64,7 @@ pub struct MetadataTargetRegistryStats {
 
 /// Result of explicitly ending a quiescent target's history.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MetadataTargetRetirementOutcome {
+pub enum MetadataTargetRetirementStatus {
     /// History was removed; future actors must acquire a new identity.
     Retired,
     /// This actor has no history for the requested resource.
@@ -125,7 +125,7 @@ struct RegistrationInner {
 }
 
 #[derive(Debug)]
-pub(crate) enum MetadataTargetRegistrationOutcome {
+pub(crate) enum MetadataTargetRegistrationStatus {
     Registered(MetadataTargetRegistration),
     Conflict,
     ReconciliationRequired,
@@ -187,7 +187,7 @@ impl MetadataTargetRegistry {
         &self,
         target: &Path,
         resource: Arc<str>,
-    ) -> RuntimeResult<MetadataTargetRegistrationOutcome> {
+    ) -> RuntimeResult<MetadataTargetRegistrationStatus> {
         self.register_with_identity(target, resource, None)
     }
 
@@ -196,7 +196,7 @@ impl MetadataTargetRegistry {
         target: &Path,
         resource: Arc<str>,
         expected: Option<&MetadataTargetIdentity>,
-    ) -> RuntimeResult<MetadataTargetRegistrationOutcome> {
+    ) -> RuntimeResult<MetadataTargetRegistrationStatus> {
         let target = normalize_target(target)?;
         let mut state = self.inner.state.lock();
         if expected.is_some_and(|identity| {
@@ -212,10 +212,10 @@ impl MetadataTargetRegistry {
 
         if let Some(entry) = state.targets.get(&target) {
             if entry.reconciliation_required {
-                return Ok(MetadataTargetRegistrationOutcome::ReconciliationRequired);
+                return Ok(MetadataTargetRegistrationStatus::ReconciliationRequired);
             }
             if entry.resource != resource || entry.owner.is_some() {
-                return Ok(MetadataTargetRegistrationOutcome::Conflict);
+                return Ok(MetadataTargetRegistrationStatus::Conflict);
             }
         } else if state.targets.len() >= self.inner.max_entries {
             return Err(RuntimeError::capacity(RuntimeOperation::AdmitMetadataOperation));
@@ -232,7 +232,7 @@ impl MetadataTargetRegistry {
         entry.owner = Some(owner);
         let durable_generation = entry.durable_generation;
 
-        Ok(MetadataTargetRegistrationOutcome::Registered(
+        Ok(MetadataTargetRegistrationStatus::Registered(
             MetadataTargetRegistration {
                 inner: Arc::new(RegistrationInner {
                     identity: entry.identity.clone(),
@@ -277,26 +277,26 @@ impl MetadataTargetRegistry {
         resource: &str,
         identity: &MetadataTargetIdentity,
         durable_generation: Option<MetadataGeneration>,
-    ) -> RuntimeResult<MetadataTargetRetirementOutcome> {
+    ) -> RuntimeResult<MetadataTargetRetirementStatus> {
         let target = normalize_target(target)?;
         let mut state = self.inner.state.lock();
         let Some(entry) = state.targets.get(&target) else {
-            return Ok(MetadataTargetRetirementOutcome::HistoryChanged);
+            return Ok(MetadataTargetRetirementStatus::HistoryChanged);
         };
         if &entry.identity != identity
             || entry.resource.as_ref() != resource
             || entry.durable_generation != durable_generation
         {
-            return Ok(MetadataTargetRetirementOutcome::HistoryChanged);
+            return Ok(MetadataTargetRetirementStatus::HistoryChanged);
         }
         if entry.reconciliation_required {
-            return Ok(MetadataTargetRetirementOutcome::ReconciliationRequired);
+            return Ok(MetadataTargetRetirementStatus::ReconciliationRequired);
         }
         if entry.owner.is_some() {
-            return Ok(MetadataTargetRetirementOutcome::WorkInProgress);
+            return Ok(MetadataTargetRetirementStatus::WorkInProgress);
         }
         state.targets.remove(&target);
-        Ok(MetadataTargetRetirementOutcome::Retired)
+        Ok(MetadataTargetRetirementStatus::Retired)
     }
 
     fn record_durable(
@@ -452,7 +452,7 @@ mod tests {
         let registry = MetadataTargetRegistry::new();
         let target = std::env::temp_dir().join("rocketmq-runtime-registration-fence");
         let outcome = registry.register(&target, Arc::<str>::from("resource")).unwrap();
-        let MetadataTargetRegistrationOutcome::Registered(registration) = outcome else {
+        let MetadataTargetRegistrationStatus::Registered(registration) = outcome else {
             panic!("a free target should register");
         };
 
@@ -470,10 +470,10 @@ mod tests {
         let target = std::env::temp_dir().join("rocketmq-runtime-target-registry");
 
         let first = registry.register(&target, Arc::<str>::from("first")).unwrap();
-        assert!(matches!(first, MetadataTargetRegistrationOutcome::Registered(_)));
+        assert!(matches!(first, MetadataTargetRegistrationStatus::Registered(_)));
         assert!(matches!(
             registry.register(&target, Arc::<str>::from("second")).unwrap(),
-            MetadataTargetRegistrationOutcome::Conflict
+            MetadataTargetRegistrationStatus::Conflict
         ));
     }
 
@@ -485,7 +485,7 @@ mod tests {
 
         assert!(matches!(
             registry.register(&first, Arc::<str>::from("first")).unwrap(),
-            MetadataTargetRegistrationOutcome::Registered(_)
+            MetadataTargetRegistrationStatus::Registered(_)
         ));
         let error = registry
             .register(&second, Arc::<str>::from("second"))
@@ -500,23 +500,23 @@ mod tests {
         let resource = Arc::<str>::from("resource");
 
         let first = match registry.register(&target, resource.clone()).unwrap() {
-            MetadataTargetRegistrationOutcome::Registered(registration) => registration,
-            MetadataTargetRegistrationOutcome::Conflict => panic!("first registration must succeed"),
-            MetadataTargetRegistrationOutcome::ReconciliationRequired => {
+            MetadataTargetRegistrationStatus::Registered(registration) => registration,
+            MetadataTargetRegistrationStatus::Conflict => panic!("first registration must succeed"),
+            MetadataTargetRegistrationStatus::ReconciliationRequired => {
                 panic!("first registration requires no reconciliation")
             }
         };
         assert!(first.record_durable(MetadataGeneration::new(7)));
         assert!(matches!(
             registry.register(&target, resource.clone()).unwrap(),
-            MetadataTargetRegistrationOutcome::Conflict
+            MetadataTargetRegistrationStatus::Conflict
         ));
 
         drop(first);
         let replacement = match registry.register(&target, resource).unwrap() {
-            MetadataTargetRegistrationOutcome::Registered(registration) => registration,
-            MetadataTargetRegistrationOutcome::Conflict => panic!("replacement registration must succeed"),
-            MetadataTargetRegistrationOutcome::ReconciliationRequired => {
+            MetadataTargetRegistrationStatus::Registered(registration) => registration,
+            MetadataTargetRegistrationStatus::Conflict => panic!("replacement registration must succeed"),
+            MetadataTargetRegistrationStatus::ReconciliationRequired => {
                 panic!("replacement registration requires no reconciliation")
             }
         };
@@ -530,9 +530,9 @@ mod tests {
         let resource = Arc::<str>::from("resource");
 
         let first = match registry.register(&target, resource.clone()).unwrap() {
-            MetadataTargetRegistrationOutcome::Registered(registration) => registration,
-            MetadataTargetRegistrationOutcome::Conflict => panic!("first registration must succeed"),
-            MetadataTargetRegistrationOutcome::ReconciliationRequired => {
+            MetadataTargetRegistrationStatus::Registered(registration) => registration,
+            MetadataTargetRegistrationStatus::Conflict => panic!("first registration must succeed"),
+            MetadataTargetRegistrationStatus::ReconciliationRequired => {
                 panic!("first registration requires no reconciliation")
             }
         };
@@ -540,13 +540,13 @@ mod tests {
         drop(first);
         assert!(matches!(
             registry.register(&target, resource.clone()).unwrap(),
-            MetadataTargetRegistrationOutcome::Conflict
+            MetadataTargetRegistrationStatus::Conflict
         ));
 
         drop(cloned);
         assert!(matches!(
             registry.register(&target, resource).unwrap(),
-            MetadataTargetRegistrationOutcome::Registered(_)
+            MetadataTargetRegistrationStatus::Registered(_)
         ));
     }
 
@@ -558,9 +558,9 @@ mod tests {
         let resource = Arc::<str>::from("resource");
 
         let first = match registry.register(&first_target, resource.clone()).unwrap() {
-            MetadataTargetRegistrationOutcome::Registered(registration) => registration,
-            MetadataTargetRegistrationOutcome::Conflict => panic!("first registration must succeed"),
-            MetadataTargetRegistrationOutcome::ReconciliationRequired => {
+            MetadataTargetRegistrationStatus::Registered(registration) => registration,
+            MetadataTargetRegistrationStatus::Conflict => panic!("first registration must succeed"),
+            MetadataTargetRegistrationStatus::ReconciliationRequired => {
                 panic!("first registration requires no reconciliation")
             }
         };
@@ -568,7 +568,7 @@ mod tests {
 
         assert!(matches!(
             registry.register(&second_target, resource).unwrap(),
-            MetadataTargetRegistrationOutcome::Registered(_)
+            MetadataTargetRegistrationStatus::Registered(_)
         ));
     }
 
@@ -579,9 +579,9 @@ mod tests {
         let resource = Arc::<str>::from("resource");
 
         let registration = match registry.register(&target, resource.clone()).unwrap() {
-            MetadataTargetRegistrationOutcome::Registered(registration) => registration,
-            MetadataTargetRegistrationOutcome::Conflict => panic!("registration must succeed"),
-            MetadataTargetRegistrationOutcome::ReconciliationRequired => {
+            MetadataTargetRegistrationStatus::Registered(registration) => registration,
+            MetadataTargetRegistrationStatus::Conflict => panic!("registration must succeed"),
+            MetadataTargetRegistrationStatus::ReconciliationRequired => {
                 panic!("a fresh target must not require reconciliation")
             }
         };
@@ -589,7 +589,7 @@ mod tests {
         drop(registration);
         assert!(matches!(
             registry.register(&target, resource).unwrap(),
-            MetadataTargetRegistrationOutcome::ReconciliationRequired
+            MetadataTargetRegistrationStatus::ReconciliationRequired
         ));
     }
 
@@ -598,7 +598,7 @@ mod tests {
         let registry = MetadataTargetRegistry::with_max_entries(1);
         let path = std::env::temp_dir().join("retirement-history");
         let resource = Arc::<str>::from("resource");
-        let MetadataTargetRegistrationOutcome::Registered(first) = registry.register(&path, resource.clone()).unwrap()
+        let MetadataTargetRegistrationStatus::Registered(first) = registry.register(&path, resource.clone()).unwrap()
         else {
             panic!("free target");
         };
@@ -610,22 +610,22 @@ mod tests {
         drop(first);
         assert_eq!(
             registry.retire(&path, &resource, &identity, None).unwrap(),
-            MetadataTargetRetirementOutcome::HistoryChanged
+            MetadataTargetRetirementStatus::HistoryChanged
         );
         assert_eq!(
             registry
                 .retire(&path, &resource, &identity, Some(MetadataGeneration::new(1)))
                 .unwrap(),
-            MetadataTargetRetirementOutcome::WorkInProgress
+            MetadataTargetRetirementStatus::WorkInProgress
         );
         drop(closure);
         assert_eq!(
             registry
                 .retire(&path, &resource, &identity, Some(MetadataGeneration::new(1)))
                 .unwrap(),
-            MetadataTargetRetirementOutcome::Retired
+            MetadataTargetRetirementStatus::Retired
         );
-        let MetadataTargetRegistrationOutcome::Registered(next) = registry.register(&path, resource.clone()).unwrap()
+        let MetadataTargetRegistrationStatus::Registered(next) = registry.register(&path, resource.clone()).unwrap()
         else {
             panic!("retired capacity");
         };
@@ -646,11 +646,11 @@ mod tests {
 
         assert!(matches!(
             registry.register(&lower, Arc::<str>::from("first")).unwrap(),
-            MetadataTargetRegistrationOutcome::Registered(_)
+            MetadataTargetRegistrationStatus::Registered(_)
         ));
         assert!(matches!(
             registry.register(&upper, Arc::<str>::from("second")).unwrap(),
-            MetadataTargetRegistrationOutcome::Conflict
+            MetadataTargetRegistrationStatus::Conflict
         ));
     }
 }

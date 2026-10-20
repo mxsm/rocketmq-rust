@@ -88,19 +88,6 @@ impl<MS: BrokerWriteStore + BrokerMasterAddressStore> ServiceTask for Transactio
 }
 
 impl<MS: BrokerWriteStore + BrokerMasterAddressStore> TransactionalMessageCheckService<MS> {
-    pub fn new(
-        broker_config: Arc<BrokerConfig>,
-        transactional_message_service: Arc<DefaultTransactionalMessageService<MS>>,
-        transactional_message_check_listener: DefaultTransactionalMessageCheckListener,
-    ) -> Self {
-        Self::with_owner(
-            broker_config,
-            transactional_message_service,
-            transactional_message_check_listener,
-            None,
-        )
-    }
-
     /// Owns transaction checks under the supplied broker task group.
     ///
     /// Parent cancellation prevents another scan and allows an active scan to
@@ -111,31 +98,15 @@ impl<MS: BrokerWriteStore + BrokerMasterAddressStore> TransactionalMessageCheckS
         transactional_message_check_listener: DefaultTransactionalMessageCheckListener,
         parent: TaskGroup,
     ) -> Self {
-        Self::with_owner(
-            broker_config,
-            transactional_message_service,
-            transactional_message_check_listener,
-            Some(parent),
-        )
-    }
-
-    fn with_owner(
-        broker_config: Arc<BrokerConfig>,
-        transactional_message_service: Arc<DefaultTransactionalMessageService<MS>>,
-        transactional_message_check_listener: DefaultTransactionalMessageCheckListener,
-        parent: Option<TaskGroup>,
-    ) -> Self {
         let inner = TransactionalMessageCheckServiceInner {
-            cancellation: parent.as_ref().map(TaskGroup::cancellation_token).unwrap_or_default(),
+            cancellation: parent.cancellation_token(),
             broker_config,
             transactional_message_service,
             transactional_message_check_listener,
         };
-        let task_impl = match parent {
-            Some(parent) => ServiceManager::new_with_task_group(inner, parent),
-            None => ServiceManager::new_legacy_compatibility(inner),
-        };
-        TransactionalMessageCheckService { task_impl }
+        TransactionalMessageCheckService {
+            task_impl: ServiceManager::new_with_task_group(inner, parent),
+        }
     }
 }
 
@@ -147,15 +118,16 @@ impl<MS: BrokerWriteStore + BrokerMasterAddressStore> TransactionalMessageCheckS
             .map_err(|source| crate::broker_error::broker_task_failed("TransactionalMessageCheckService", source))
     }
 
-    pub async fn shutdown(&self) {
-        if let Err(error) = self.task_impl.shutdown().await {
+    /// Stops checking, waiting no later than `deadline`, and returns the
+    /// report of the owned task group.
+    pub(crate) async fn shutdown_with_report_until(
+        &self,
+        deadline: rocketmq_runtime::ShutdownDeadline,
+    ) -> Option<rocketmq_runtime::ShutdownReport> {
+        if let Err(error) = self.task_impl.shutdown_until(deadline).await {
             warn!(error = %error, "TransactionalMessageCheckService shutdown failed");
         }
-    }
-
-    pub(crate) async fn shutdown_with_report(&self) -> Option<rocketmq_runtime::ShutdownReport> {
-        self.shutdown().await;
-        self.task_impl.last_task_group_shutdown_report().await
+        self.task_impl.last_task_group_shutdown_report()
     }
 
     pub async fn shutdown_interrupt(&self, interrupt: bool) {

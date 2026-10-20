@@ -14,7 +14,7 @@
 
 use parking_lot::Mutex;
 use rocketmq_protocol::protocol::header::pop_lite_message_response_header::PopLiteMessageResponseHeader;
-use rocketmq_transport::api::DeferredAdmissionAcquireOutcome;
+use rocketmq_transport::api::DeferredWaitAdmissionResult;
 
 use super::*;
 use crate::long_polling::pop_lite_deferred::index::PopLiteIndexReserveRejection;
@@ -35,19 +35,19 @@ enum CapacityFailure {
 fn capacity_failure(rejection: PopLiteDeferredPrepareRejection) -> CapacityFailure {
     match rejection {
         PopLiteDeferredPrepareRejection::IndexCapacity(rejection) => CapacityFailure::Index(rejection),
-        PopLiteDeferredPrepareRejection::Admission(DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)) => {
+        PopLiteDeferredPrepareRejection::Admission(DeferredWaitAdmissionResult::WaiterCapacityExhausted(_)) => {
             CapacityFailure::WaiterCapacity
         }
-        PopLiteDeferredPrepareRejection::Admission(DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(
-            _,
-        )) => CapacityFailure::RetainedByteCapacity,
-        PopLiteDeferredPrepareRejection::Admission(DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_)) => {
+        PopLiteDeferredPrepareRejection::Admission(DeferredWaitAdmissionResult::RetainedByteCapacityExhausted(_)) => {
+            CapacityFailure::RetainedByteCapacity
+        }
+        PopLiteDeferredPrepareRejection::Admission(DeferredWaitAdmissionResult::ParentCapacityExhausted(_)) => {
             CapacityFailure::ParentCapacity
         }
-        PopLiteDeferredPrepareRejection::Admission(DeferredAdmissionAcquireOutcome::Closed) => {
+        PopLiteDeferredPrepareRejection::Admission(DeferredWaitAdmissionResult::Closed) => {
             panic!("deferred admission unexpectedly closed")
         }
-        PopLiteDeferredPrepareRejection::Admission(DeferredAdmissionAcquireOutcome::Acquired(permit)) => {
+        PopLiteDeferredPrepareRejection::Admission(DeferredWaitAdmissionResult::Acquired(permit)) => {
             drop(permit);
             panic!("PopLite capacity preparation must not return an acquired permit as an error")
         }
@@ -55,7 +55,7 @@ fn capacity_failure(rejection: PopLiteDeferredPrepareRejection) -> CapacityFailu
     }
 }
 
-fn polling_full_reply(request: &RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+fn polling_full_reply(request: &RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
     let request_header = request
         .command()
         .decode_command_custom_header::<PopLiteMessageRequestHeader>()?;
@@ -69,14 +69,14 @@ fn polling_full_reply(request: &RemotingRequest) -> crate::broker_error::BrokerR
         },
         PopLiteResponseKind::PollingFull,
     )
-    .map(HandlerOutcome::Reply)
+    .map(ResponseAction::Reply)
 }
 
-fn held_reply() -> crate::broker_error::BrokerResult<HandlerOutcome> {
+fn held_reply() -> crate::broker_error::BrokerResult<ResponseAction> {
     RemotingResponse::command(RemotingCommand::create_response_command_with_code(
         ResponseCode::Success,
     ))
-    .map(HandlerOutcome::Reply)
+    .map(ResponseAction::Reply)
     .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
 }
 
@@ -88,13 +88,13 @@ struct CapacityWireProcessor {
 }
 
 impl RequestProcessor for CapacityWireProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         match self.service.prepare(request, PopLiteRetainedEstimate::default()) {
-            Ok(PopLiteDeferredPrepareOutcome::Prepared(prepared)) => {
+            Ok(PopLiteDeferredPreparationStatus::Prepared(prepared)) => {
                 self.held.lock().push(*prepared);
                 held_reply()
             }
-            Ok(PopLiteDeferredPrepareOutcome::Rejected(rejection)) => {
+            Ok(PopLiteDeferredPreparationStatus::Rejected(rejection)) => {
                 self.failures.lock().push(capacity_failure(rejection));
                 polling_full_reply(request)
             }

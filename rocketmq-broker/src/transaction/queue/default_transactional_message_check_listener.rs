@@ -47,7 +47,7 @@ pub struct DefaultTransactionalMessageCheckListener {
     broker_name: CheetahString,
     producer_sessions: ProducerSessionRegistry,
     broker_client: Arc<Broker2Client>,
-    task_owner: Option<Arc<TransactionCheckTaskOwner>>,
+    task_owner: Arc<TransactionCheckTaskOwner>,
 }
 
 impl DefaultTransactionalMessageCheckListener {
@@ -55,19 +55,18 @@ impl DefaultTransactionalMessageCheckListener {
         broker_name: CheetahString,
         producer_sessions: ProducerSessionRegistry,
         broker_client: Arc<Broker2Client>,
-        task_group: Option<TaskGroup>,
+        task_group: TaskGroup,
     ) -> Self {
         Self {
             broker_name,
             producer_sessions,
             broker_client,
-            task_owner: task_group.map(TransactionCheckTaskOwner::new).map(Arc::new),
+            task_owner: Arc::new(TransactionCheckTaskOwner::new(task_group)),
         }
     }
 
-    pub async fn shutdown(&self, timeout: Duration) -> Option<ShutdownReport> {
-        let task_owner = self.task_owner.as_ref()?;
-        Some(task_owner.group.shutdown(timeout).await)
+    pub async fn shutdown(&self, timeout: Duration) -> ShutdownReport {
+        self.task_owner.group.shutdown(timeout).await
     }
 }
 
@@ -113,13 +112,8 @@ impl TransactionalMessageCheckListener for DefaultTransactionalMessageCheckListe
     }
 
     async fn resolve_half_msg(&self, msg_ext: MessageExt) -> crate::broker_error::BrokerResult<()> {
-        let Some(task_owner) = self.task_owner.as_ref() else {
-            self.send_check_message(msg_ext).await?;
-            return Ok(());
-        };
-
         let this = self.clone();
-        task_owner
+        self.task_owner
             .group
             .spawn(
                 "broker.transaction-check.send-check-message",

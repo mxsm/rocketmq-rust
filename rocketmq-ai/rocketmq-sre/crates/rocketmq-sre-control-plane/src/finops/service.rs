@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use chrono::DateTime;
 use chrono::Datelike;
@@ -63,12 +64,21 @@ const MAX_CLOCK_SKEW_MINUTES: i64 = 5;
 #[derive(Clone)]
 pub(crate) struct FinOpsService {
     repository: FinOpsRepository,
+    clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
 }
 
 impl FinOpsService {
     pub(crate) fn new(repository: PostgresRepository) -> Self {
+        Self::new_with_clock(repository, Arc::new(Utc::now))
+    }
+
+    pub(super) fn new_with_clock(
+        repository: PostgresRepository,
+        clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
+    ) -> Self {
         Self {
             repository: FinOpsRepository::new(repository.pool),
+            clock,
         }
     }
 
@@ -79,8 +89,8 @@ impl FinOpsService {
     ) -> Result<FinOpsCostEntry, ControlPlaneRequestFailure> {
         require_finops_writer(auth)?;
         require_cluster(auth, request.cluster_id)?;
-        validate_cost_request(request)?;
-        let now = Utc::now();
+        let now = (self.clock)();
+        validate_cost_request(request, now)?;
         let entry = FinOpsCostEntry {
             id: FinOpsCostEntryId::new(),
             idempotency_key: request.idempotency_key.trim().to_owned(),
@@ -154,7 +164,7 @@ impl FinOpsService {
                 hard_limit_micros: request.hard_limit_micros,
                 owner: request.owner.trim().to_owned(),
                 active: true,
-                created_at: Utc::now(),
+                created_at: (self.clock)(),
             })
             .await
     }
@@ -188,7 +198,7 @@ impl FinOpsService {
             ));
         }
         validate_budget_cluster_scope(auth, &budget, request.cluster_id)?;
-        let now = Utc::now();
+        let now = (self.clock)();
         let (from, to) = period_window(budget.period, now)?;
         let (observed, _) = self.repository.budget_cost(&budget, from, to).await?;
         let projected = observed.saturating_add(request.requested_cost_micros);
@@ -238,7 +248,7 @@ impl FinOpsService {
                 organization_confirmed: request.organization_confirmed,
                 owner: request.owner.trim().to_owned(),
                 active: true,
-                created_at: Utc::now(),
+                created_at: (self.clock)(),
             })
             .await?;
         Ok(FinOpsAllocationPolicyView {
@@ -289,7 +299,7 @@ impl FinOpsService {
             )
             .await?
             .0;
-        let now = Utc::now();
+        let now = (self.clock)();
         let mut forecasts = Vec::with_capacity(budgets.len());
         for budget in budgets {
             forecasts.push(self.forecast(&budget, now).await?);
@@ -435,7 +445,10 @@ fn period_window(
     Ok((start, end))
 }
 
-fn validate_cost_request(request: &RecordFinOpsCostRequest) -> Result<(), ControlPlaneRequestFailure> {
+fn validate_cost_request(
+    request: &RecordFinOpsCostRequest,
+    now: DateTime<Utc>,
+) -> Result<(), ControlPlaneRequestFailure> {
     validate_text("FinOps idempotency key", &request.idempotency_key, 256)?;
     if request.source == FinOpsCostSource::ModelInvocation {
         return Err(ControlPlaneRequestFailure::validation(
@@ -455,7 +468,7 @@ fn validate_cost_request(request: &RecordFinOpsCostRequest) -> Result<(), Contro
             "FinOps error count cannot exceed request count",
         ));
     }
-    if request.occurred_at > Utc::now() + Duration::minutes(MAX_CLOCK_SKEW_MINUTES) {
+    if request.occurred_at > now + Duration::minutes(MAX_CLOCK_SKEW_MINUTES) {
         return Err(ControlPlaneRequestFailure::validation(
             "invalid_finops_cost",
             "FinOps occurrence time is too far in the future",

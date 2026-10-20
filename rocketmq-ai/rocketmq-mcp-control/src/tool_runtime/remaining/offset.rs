@@ -21,11 +21,14 @@ use super::status_from_failures;
 use crate::error::ControlError;
 use crate::tool_runtime::admin_session::SupervisedMutationBackend;
 use crate::tool_runtime::map_failure;
+use crate::tool_runtime::plan_binding::PlanBinding;
+use crate::tool_runtime::MutationToolResponse;
 use crate::tools;
 
 pub(crate) async fn run_offset<B: SupervisedMutationBackend>(
     backend: &mut B,
     args: tools::ResetConsumerOffsetArgs,
+    binding: &PlanBinding,
 ) -> Result<tools::OffsetMutationToolResponse, ControlError> {
     let timestamp_millis = args.validate(true, false)?;
     let request = admin::OffsetResetPreviewRequest {
@@ -41,6 +44,9 @@ pub(crate) async fn run_offset<B: SupervisedMutationBackend>(
     if args.dry_run {
         return Ok(offset_dry_run(&args, timestamp_millis, rows, failures));
     }
+    binding.admit(|| {
+        MutationToolResponse::ConsumerOffset(offset_dry_run(&args, timestamp_millis, rows.clone(), failures.clone()))
+    })?;
     let before = rows.clone();
     let outcome = backend.execute_offset(&plan).await?;
     Ok(offset_executed(&args, timestamp_millis, before, outcome))
@@ -78,7 +84,7 @@ fn offset_executed(
     args: &tools::ResetConsumerOffsetArgs,
     timestamp_millis: i64,
     before_rows: Vec<admin::OffsetResetPreviewRow>,
-    outcome: admin::OffsetResetOutcome,
+    outcome: admin::OffsetResetReport,
 ) -> tools::OffsetMutationToolResponse {
     let before = before_rows.iter().map(offset_before).collect::<Vec<_>>();
     let deltas = before_rows

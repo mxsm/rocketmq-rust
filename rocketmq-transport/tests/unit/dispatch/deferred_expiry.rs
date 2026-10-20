@@ -28,11 +28,11 @@ use crate::admission::AdmissionLimits;
 use crate::contract::TransportContractViolation;
 use crate::deadline::RequestDeadline;
 use crate::dispatch::DeferredAdmission;
-use crate::dispatch::DeferredClaimOutcome;
-use crate::dispatch::DeferredExpiryOutcome;
+use crate::dispatch::DeferredClaimResult;
+use crate::dispatch::DeferredExpiryAttachmentStatus;
 use crate::dispatch::DeferredParts;
+use crate::dispatch::DeferredRegistrationResult;
 use crate::dispatch::DeferredRegistry;
-use crate::dispatch::DeferredRegistryOutcome;
 use crate::dispatch::DeferredRequest;
 use crate::dispatch::DeferredRetainedSizeParts;
 use crate::dispatch::DeferredTerminalReason;
@@ -87,17 +87,17 @@ impl PartsFixture {
         let retained = DeferredRegistry::<()>::try_retained_size(DeferredRetainedSizeParts::new(0))
             .expect("expiry acceptance retained size");
         let permit = match admission.try_reserve(retained) {
-            crate::dispatch::DeferredAdmissionAcquireOutcome::Closed => {
+            crate::dispatch::DeferredWaitAdmissionResult::Closed => {
                 panic!("deferred admission unexpectedly closed")
             }
-            crate::dispatch::DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
-            crate::dispatch::DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_) => {
+            crate::dispatch::DeferredWaitAdmissionResult::Acquired(permit) => permit,
+            crate::dispatch::DeferredWaitAdmissionResult::WaiterCapacityExhausted(_) => {
                 panic!("expiry acceptance waiter capacity was unexpectedly exhausted")
             }
-            crate::dispatch::DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_) => {
+            crate::dispatch::DeferredWaitAdmissionResult::RetainedByteCapacityExhausted(_) => {
                 panic!("expiry acceptance retained-byte capacity was unexpectedly exhausted")
             }
-            crate::dispatch::DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
+            crate::dispatch::DeferredWaitAdmissionResult::ParentCapacityExhausted(_) => {
                 panic!("expiry acceptance parent capacity was unexpectedly exhausted")
             }
         };
@@ -128,7 +128,7 @@ fn assert_recovered(fixture: &PartsFixture, parts: DeferredParts) {
         responder
             .cancel()
             .expect("recovered responder remains affine and usable"),
-        crate::dispatch::DeferredResponseOutcome::Cancelled
+        crate::dispatch::DeferredResponseResult::Cancelled
     );
 }
 
@@ -139,7 +139,7 @@ async fn affine_expiry_attachment_outcomes_return_the_exact_live_parts() {
 
     enum ExpectedExpiry {
         Contract(TransportContractViolation),
-        Outcome(DeferredExpiryOutcome),
+        Outcome(DeferredExpiryAttachmentStatus),
     }
 
     let cases = [
@@ -156,19 +156,19 @@ async fn affine_expiry_attachment_outcomes_return_the_exact_live_parts() {
             DeferredExpiryMargins::new(Duration::from_secs(1), Duration::ZERO),
         ),
         (
-            ExpectedExpiry::Outcome(DeferredExpiryOutcome::ProtocolAlreadyExpired),
+            ExpectedExpiry::Outcome(DeferredExpiryAttachmentStatus::ProtocolAlreadyExpired),
             None,
             now,
             valid_margins,
         ),
         (
-            ExpectedExpiry::Outcome(DeferredExpiryOutcome::OwnerAlreadyExpired),
+            ExpectedExpiry::Outcome(DeferredExpiryAttachmentStatus::OwnerAlreadyExpired),
             Some(RequestDeadline::after(Duration::ZERO)),
             now + Duration::from_secs(20),
             valid_margins,
         ),
         (
-            ExpectedExpiry::Outcome(DeferredExpiryOutcome::OwnerBudgetInsufficient),
+            ExpectedExpiry::Outcome(DeferredExpiryAttachmentStatus::OwnerBudgetInsufficient),
             Some(RequestDeadline::after(Duration::from_secs(3))),
             now + Duration::from_secs(20),
             valid_margins,
@@ -190,7 +190,7 @@ async fn affine_expiry_attachment_outcomes_return_the_exact_live_parts() {
     let mut attached = fixture.take_parts();
     assert_eq!(
         attached.try_with_expiry(now + Duration::from_secs(20), valid_margins),
-        Ok(DeferredExpiryOutcome::Attached)
+        Ok(DeferredExpiryAttachmentStatus::Attached)
     );
     let first_expiry = attached.expiry().expect("first expiry remains attached");
     assert_eq!(
@@ -198,7 +198,7 @@ async fn affine_expiry_attachment_outcomes_return_the_exact_live_parts() {
             now + Duration::from_secs(21),
             DeferredExpiryMargins::new(Duration::ZERO, Duration::ZERO),
         ),
-        Ok(DeferredExpiryOutcome::AlreadyAttached)
+        Ok(DeferredExpiryAttachmentStatus::AlreadyAttached)
     );
     assert_eq!(attached.expiry(), Some(first_expiry));
     assert_recovered(&fixture, attached);
@@ -214,7 +214,7 @@ async fn equal_owner_and_protocol_boundaries_fail_closed_to_owner() {
             now + Duration::from_secs(5),
             DeferredExpiryMargins::new(Duration::from_secs(3), Duration::from_secs(2)),
         ),
-        Ok(DeferredExpiryOutcome::Attached)
+        Ok(DeferredExpiryAttachmentStatus::Attached)
     );
     let expiry = parts.expiry().expect("attached expiry");
     assert_eq!(expiry.resume_cutoff(), Some(expiry.protocol_at()));
@@ -224,7 +224,7 @@ async fn equal_owner_and_protocol_boundaries_fail_closed_to_owner() {
             .into_responder()
             .cancel()
             .expect("equal-boundary parts remain usable"),
-        crate::dispatch::DeferredResponseOutcome::Cancelled
+        crate::dispatch::DeferredResponseResult::Cancelled
     );
 }
 
@@ -233,29 +233,29 @@ async fn owner_only_deadline_rejects_claim_without_protocol_expiry_or_response()
     let mut fixture = PartsFixture::new(9_822, Some(RequestDeadline::after(Duration::from_secs(5))));
     let registry = DeferredRegistry::<()>::new();
     let registration = match registry.register(DeferredRequest::new((), fixture.take_parts())) {
-        DeferredRegistryOutcome::Registered(registration) => registration,
-        DeferredRegistryOutcome::DuplicateRequest(_) => {
+        DeferredRegistrationResult::Registered(registration) => registration,
+        DeferredRegistrationResult::DuplicateRequest(_) => {
             panic!("owner-only deferred registration was classified as a duplicate")
         }
-        DeferredRegistryOutcome::IdentityExhausted(_) => {
+        DeferredRegistrationResult::IdentityExhausted(_) => {
             panic!("owner-only deferred registration exhausted the identity space")
         }
-        DeferredRegistryOutcome::ParentCancelled => {
+        DeferredRegistrationResult::ParentCancelled => {
             panic!("owner-only deferred registration was unexpectedly parent-cancelled")
         }
-        DeferredRegistryOutcome::SessionClosed => {
+        DeferredRegistrationResult::SessionClosed => {
             panic!("owner-only deferred registration was unexpectedly session-closed")
         }
-        DeferredRegistryOutcome::DeadlineExpired => {
+        DeferredRegistrationResult::DeadlineExpired => {
             panic!("owner-only deferred registration was unexpectedly deadline-expired")
         }
-        DeferredRegistryOutcome::BuilderRejected { .. } => {
+        DeferredRegistrationResult::BuilderRejected { .. } => {
             panic!("owner-only deferred registration was unexpectedly builder-rejected")
         }
-        DeferredRegistryOutcome::ContractViolation { .. } => {
+        DeferredRegistrationResult::ContractViolation { .. } => {
             panic!("owner-only deferred registration violated a contract")
         }
-        DeferredRegistryOutcome::OperationalFailure { .. } => {
+        DeferredRegistrationResult::OperationalFailure { .. } => {
             panic!("owner-only deferred registration failed operationally")
         }
     };
@@ -268,7 +268,7 @@ async fn owner_only_deadline_rejects_claim_without_protocol_expiry_or_response()
         .claim(id, crate::dispatch::DeferredWakeReason::Timeout)
         .await
         .expect("expired owner-only request should converge to a normal outcome");
-    assert!(matches!(outcome, DeferredClaimOutcome::DeadlineExpired));
+    assert!(matches!(outcome, DeferredClaimResult::DeadlineExpired));
     assert_eq!(fixture.admission.snapshot().waiting_count(), 0);
     assert_eq!(
         fixture.terminals.lock().as_slice(),
@@ -279,7 +279,7 @@ async fn owner_only_deadline_rejects_claim_without_protocol_expiry_or_response()
 
 #[tokio::test(start_paused = true)]
 async fn lifecycle_priority_is_parent_then_session_then_owner_deadline() {
-    enum ExpectedLifecycleOutcome {
+    enum ExpectedLifecycleRejectionKind {
         ParentCancelled,
         SessionClosed,
         DeadlineExpired,
@@ -289,19 +289,19 @@ async fn lifecycle_priority_is_parent_then_session_then_owner_deadline() {
         (
             true,
             true,
-            ExpectedLifecycleOutcome::ParentCancelled,
+            ExpectedLifecycleRejectionKind::ParentCancelled,
             DeferredTerminalReason::ParentCancelled,
         ),
         (
             false,
             true,
-            ExpectedLifecycleOutcome::SessionClosed,
+            ExpectedLifecycleRejectionKind::SessionClosed,
             DeferredTerminalReason::SessionClosed,
         ),
         (
             false,
             false,
-            ExpectedLifecycleOutcome::DeadlineExpired,
+            ExpectedLifecycleRejectionKind::DeadlineExpired,
             DeferredTerminalReason::OwnerDeadline,
         ),
     ];
@@ -316,14 +316,14 @@ async fn lifecycle_priority_is_parent_then_session_then_owner_deadline() {
         }
         let outcome = DeferredRegistry::<()>::new().register(DeferredRequest::new((), fixture.take_parts()));
         match expected_kind {
-            ExpectedLifecycleOutcome::ParentCancelled => {
-                assert!(matches!(outcome, DeferredRegistryOutcome::ParentCancelled));
+            ExpectedLifecycleRejectionKind::ParentCancelled => {
+                assert!(matches!(outcome, DeferredRegistrationResult::ParentCancelled));
             }
-            ExpectedLifecycleOutcome::SessionClosed => {
-                assert!(matches!(outcome, DeferredRegistryOutcome::SessionClosed));
+            ExpectedLifecycleRejectionKind::SessionClosed => {
+                assert!(matches!(outcome, DeferredRegistrationResult::SessionClosed));
             }
-            ExpectedLifecycleOutcome::DeadlineExpired => {
-                assert!(matches!(outcome, DeferredRegistryOutcome::DeadlineExpired));
+            ExpectedLifecycleRejectionKind::DeadlineExpired => {
+                assert!(matches!(outcome, DeferredRegistrationResult::DeadlineExpired));
             }
         }
         assert_eq!(fixture.admission.snapshot().waiting_count(), 0);

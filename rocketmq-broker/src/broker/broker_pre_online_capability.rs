@@ -47,7 +47,7 @@ use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::plugin::broker_attached_plugin::BrokerAttachedPlugin;
 use crate::processor::ack_message_processor::AckMessageProcessor;
 use crate::schedule::schedule_message_service::ScheduleMessageService;
-use crate::topic::manager::topic_config_coordinator::outcome_result;
+use crate::topic::manager::topic_config_coordinator::topic_config_command_result;
 use crate::topic::manager::topic_config_coordinator::TopicConfigCoordinator;
 use crate::topic::manager::topic_config_coordinator::TopicRegistrationAction;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
@@ -406,7 +406,7 @@ impl BrokerRegistrationCapability {
         coordinator
             .persist_and_register_wait(registration)
             .await
-            .and_then(outcome_result)
+            .and_then(topic_config_command_result)
     }
 
     async fn register_snapshot(
@@ -584,7 +584,7 @@ pub(crate) struct BrokerPreOnlineContext<MS: BrokerReplicationStore> {
     plugins: Vec<Weak<dyn BrokerAttachedPlugin>>,
     transition: BrokerOnlineTransitionCapability<MS>,
     metadata_io: Option<MetadataIoActor>,
-    blocking: Option<BlockingExecutor>,
+    blocking: BlockingExecutor,
 }
 
 impl<MS: BrokerReplicationStore> BrokerPreOnlineContext<MS> {
@@ -603,7 +603,7 @@ impl<MS: BrokerReplicationStore> BrokerPreOnlineContext<MS> {
         plugins: &[Arc<dyn BrokerAttachedPlugin>],
         transition: BrokerOnlineTransitionCapability<MS>,
         metadata_io: Option<MetadataIoActor>,
-        blocking: Option<BlockingExecutor>,
+        blocking: BlockingExecutor,
     ) -> Self {
         Self {
             policy,
@@ -643,13 +643,10 @@ impl<MS: BrokerReplicationStore> BrokerPreOnlineContext<MS> {
                 return Ok(());
             }
         }
-        if let Some(blocking) = self.blocking.as_ref() {
-            return blocking
-                .spawn_io(resource, move || manager.persist())
-                .await
-                .map_err(|error| crate::broker_error::io(std::io::Error::other(error)))?;
-        }
-        manager.persist()
+        self.blocking
+            .spawn_io(resource, move || manager.persist())
+            .await
+            .map_err(|error| crate::broker_error::io(std::io::Error::other(error)))?
     }
 }
 

@@ -432,7 +432,6 @@ where
         "rocketmq-client-fault-detector",
         initial_delay,
         scan_interval,
-        DETECTOR_TASK_SHUTDOWN_TIMEOUT,
         move || {
             let detector = this.clone();
             async move {
@@ -858,7 +857,6 @@ mod tests {
             "latency-fault-detector-sync-shutdown-test",
             Duration::ZERO,
             Duration::from_secs(60),
-            Duration::from_millis(20),
             move || {
                 let started = started_in_task.clone();
                 let dropped = dropped_in_task.clone();
@@ -902,7 +900,6 @@ mod tests {
                 "latency-fault-detector-clean-shutdown-test",
                 Duration::ZERO,
                 Duration::from_secs(60),
-                Duration::from_secs(1),
                 move || {
                     let completed = completed_in_task.clone();
                     async move {
@@ -936,7 +933,6 @@ mod tests {
                 "latency-fault-detector-timeout-shutdown-test",
                 Duration::ZERO,
                 Duration::from_secs(60),
-                Duration::from_millis(20),
                 move || {
                     let dropped = dropped_in_task.clone();
                     let started = started_in_task.clone();

@@ -18,19 +18,19 @@ use rocketmq_security_api::AuthorizationDecision;
 use rocketmq_security_api::Principal;
 use rocketmq_security_api::RequestPolicy;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
-use rocketmq_transport::api::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::EmbeddedDispatchResult;
 use rocketmq_transport::api::TransportSecurity;
 use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
 use super::*;
-use crate::long_polling::notification_deferred::service::NotificationDeferredPrepareOutcome;
+use crate::long_polling::notification_deferred::service::NotificationDeferredPreparationStatus;
 use crate::long_polling::notification_deferred::service::NotificationDeferredPrepareRejectionKind;
-use crate::long_polling::notification_deferred::service::NotificationDeferredRegisterOutcome;
 use crate::long_polling::notification_deferred::service::NotificationDeferredRegisterRejectionKind;
+use crate::long_polling::notification_deferred::service::NotificationDeferredRegistrationStatus;
 use crate::long_polling::notification_deferred::service::NotificationRegisterFault;
 use crate::long_polling::notification_deferred::service::PreparedNotificationRegistration;
 
-fn success_reply(polling_full: bool) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+fn success_reply(polling_full: bool) -> crate::broker_error::BrokerResult<ResponseAction> {
     let header = NotificationResponseHeader {
         has_msg: false,
         polling_full,
@@ -38,7 +38,7 @@ fn success_reply(polling_full: bool) -> crate::broker_error::BrokerResult<Handle
     RemotingResponse::command(
         application_remoting_command_factory().create_success_response_command_with_header(header),
     )
-    .map(HandlerOutcome::Reply)
+    .map(ResponseAction::Reply)
     .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
 }
 
@@ -83,11 +83,11 @@ struct ProvenanceProcessor {
 }
 
 impl RequestProcessor for ProvenanceProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         if let Some(prepared) = self.state.lock().prepared.take() {
             let rejection = match self.service.register(prepared, request) {
-                Ok(NotificationDeferredRegisterOutcome::Rejected(rejection)) => rejection,
-                Ok(NotificationDeferredRegisterOutcome::Registered(_)) | Err(_) => {
+                Ok(NotificationDeferredRegistrationStatus::Rejected(rejection)) => rejection,
+                Ok(NotificationDeferredRegistrationStatus::Registered(_)) | Err(_) => {
                     panic!("a prepared Notification proof cannot move to another request")
                 }
             };
@@ -101,8 +101,8 @@ impl RequestProcessor for ProvenanceProcessor {
             .service
             .prepare(request, None, None, NotificationRetainedEstimate::default())
         {
-            Ok(NotificationDeferredPrepareOutcome::Prepared(prepared)) => *prepared,
-            Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => {
+            Ok(NotificationDeferredPreparationStatus::Prepared(prepared)) => *prepared,
+            Ok(NotificationDeferredPreparationStatus::Rejected(rejection)) => {
                 return Err(crate::broker_error::invalid_argument(format!("{:?}", rejection.kind())));
             }
             Err(error) => return Err(crate::broker_error::invalid_argument(error.to_string())),
@@ -119,13 +119,13 @@ struct EmbeddedOriginProcessor {
 }
 
 impl RequestProcessor for EmbeddedOriginProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let error = match self
             .service
             .prepare(request, None, None, NotificationRetainedEstimate::default())
         {
-            Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => rejection,
-            Ok(NotificationDeferredPrepareOutcome::Prepared(_)) | Err(_) => {
+            Ok(NotificationDeferredPreparationStatus::Rejected(rejection)) => rejection,
+            Ok(NotificationDeferredPreparationStatus::Prepared(_)) | Err(_) => {
                 panic!("embedded Notification must fail before allocating deferred resources")
             }
         };
@@ -150,16 +150,16 @@ struct CapacityProcessor {
 }
 
 impl RequestProcessor for CapacityProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let polling_full = match self
             .service
             .prepare(request, None, None, NotificationRetainedEstimate::default())
         {
-            Ok(NotificationDeferredPrepareOutcome::Prepared(prepared)) => {
+            Ok(NotificationDeferredPreparationStatus::Prepared(prepared)) => {
                 self.held.lock().push(*prepared);
                 false
             }
-            Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => {
+            Ok(NotificationDeferredPreparationStatus::Rejected(rejection)) => {
                 self.observed.lock().push(rejection.kind());
                 true
             }
@@ -183,21 +183,21 @@ struct PostTakeFaultProcessor {
 }
 
 impl RequestProcessor for PostTakeFaultProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let prepared = match self
             .service
             .prepare(request, None, None, NotificationRetainedEstimate::default())
         {
-            Ok(NotificationDeferredPrepareOutcome::Prepared(prepared)) => *prepared,
-            Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => {
+            Ok(NotificationDeferredPreparationStatus::Prepared(prepared)) => *prepared,
+            Ok(NotificationDeferredPreparationStatus::Rejected(rejection)) => {
                 return Err(crate::broker_error::invalid_argument(format!("{:?}", rejection.kind())));
             }
             Err(error) => return Err(crate::broker_error::invalid_argument(error.to_string())),
         };
         self.service.force_register_fault(self.fault);
         let rejection = match self.service.register(prepared, request) {
-            Ok(NotificationDeferredRegisterOutcome::Rejected(rejection)) => rejection,
-            Ok(NotificationDeferredRegisterOutcome::Registered(_)) | Err(_) => {
+            Ok(NotificationDeferredRegistrationStatus::Rejected(rejection)) => rejection,
+            Ok(NotificationDeferredRegistrationStatus::Registered(_)) | Err(_) => {
                 panic!("injected post-take Notification fault must fail registration")
             }
         };
@@ -213,13 +213,13 @@ impl RequestProcessor for PostTakeFaultProcessor {
 }
 
 impl RequestProcessor for OneWayProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let rejection = match self
             .service
             .prepare(request, None, None, NotificationRetainedEstimate::default())
         {
-            Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => rejection,
-            Ok(NotificationDeferredPrepareOutcome::Prepared(_)) | Err(_) => {
+            Ok(NotificationDeferredPreparationStatus::Rejected(rejection)) => rejection,
+            Ok(NotificationDeferredPreparationStatus::Prepared(_)) | Err(_) => {
                 panic!("one-way Notification must fail before deferred allocation")
             }
         };
@@ -317,7 +317,7 @@ async fn notification_deferred_embedded_origin_is_rejected_before_capacity_take(
         .dispatch(None, request_command_for("embedded-group", 10_103, 60_000))
         .await
         .expect("embedded Notification inline response");
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::Reply(_)));
+    assert!(matches!(outcome, EmbeddedDispatchResult::Reply(_)));
     assert_eq!(
         *observed.lock(),
         Some(NotificationDeferredPrepareRejectionKind::EmbeddedOrigin)

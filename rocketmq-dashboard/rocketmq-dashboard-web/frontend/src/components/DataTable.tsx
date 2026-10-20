@@ -44,7 +44,7 @@ export default function DataTable<T>({
   const visibleRows = filteredRows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
-    <section className="table-shell">
+    <section className="table-shell" data-surface="panel">
       <div className="table-toolbar">
         <label className="search-box">
           <Search size={16} aria-hidden="true" />

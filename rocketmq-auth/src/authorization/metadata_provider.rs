@@ -12,14 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Authorization metadata provider abstraction.
+//! Authorization metadata access and the built-in local ACL provider.
 //!
-//! This module provides the core trait for managing authorization metadata (ACLs)
-//! in RocketMQ. Implementations can store metadata in various backends such as:
-//! - Local files (YAML, JSON)
-//! - Embedded databases (RocksDB, SQLite)
-//! - Remote databases (MySQL, PostgreSQL)
-//! - Distributed configuration services (etcd, Consul)
+//! [`LocalAuthorizationMetadataProvider`] keeps ACLs in memory, with an optional `acls.json`
+//! snapshot selected by [`AuthConfig::auth_config_path`]. YAML ACL files are imported by the
+//! auth runtime; they are not the local provider's snapshot format. [`NoopMetadataProvider`]
+//! accepts mutations without retaining metadata and always returns empty query results.
+//!
+//! Custom runtime providers are supplied through [`crate::ProviderBundle`], using
+//! [`crate::AclMetadataPort`] and [`crate::UserMetadataPort`] for concurrent operations and
+//! [`crate::ProviderControl`] for initialization, flushing, and closure. ACL file imports and
+//! v1 migration additionally require [`crate::AclSnapshotImport`].
 
 // Sub-modules
 pub mod local;
@@ -34,18 +37,15 @@ use crate::authorization::model::acl::Acl;
 use crate::config::AuthConfig;
 use crate::AuthServiceResult;
 
-/// Authorization metadata provider trait.
+/// ACL metadata operations used by the local provider and compatibility adapters.
 ///
-/// This trait defines the interface for managing Access Control List (ACL) metadata
-/// in RocketMQ's authorization system. It provides CRUD operations for ACLs and
-/// supports querying and filtering metadata.
+/// ACL mutations and queries are asynchronous. [`initialize`](Self::initialize) and
+/// [`shutdown`](Self::shutdown) are synchronous lifecycle hooks; local initialization can block
+/// while reading a configured JSON snapshot. [`crate::AuthRuntimeBuilder`] loads the built-in
+/// providers on the service's bounded metadata I/O lane.
 ///
-/// # Design Principles
-///
-/// - **Async-first**: All I/O operations are async to support scalable implementations
-/// - **Flexible storage**: Implementations can use any backend (files, databases, remote services)
-/// - **Query support**: Built-in filtering capabilities for listing ACLs
-/// - **Error handling**: Comprehensive error reporting through `AuthServiceError`
+/// Runtime extension uses [`crate::ProviderBundle`] to separate metadata operations from
+/// lifecycle control. Implementing this trait alone does not supply a runtime provider bundle.
 ///
 /// # Thread Safety
 ///
@@ -54,83 +54,50 @@ use crate::AuthServiceResult;
 ///
 /// # Examples
 ///
-/// ```rust,ignore
-/// use rocketmq_auth::{AuthorizationMetadataProvider, AuthServiceResult};
-/// use rocketmq_auth::Acl;
-/// use rocketmq_auth::Subject;
-/// use rocketmq_auth::AuthConfig;
+/// ```
+/// use rocketmq_auth::{
+///     AuthConfig, AuthorizationMetadataProvider, LocalAuthorizationMetadataProvider, User,
+/// };
 ///
-/// struct MyMetadataProvider {
-///     // Storage implementation
-/// }
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() -> rocketmq_auth::AuthServiceResult<()> {
+/// let mut provider = LocalAuthorizationMetadataProvider::new();
+/// provider.initialize(AuthConfig::default(), None)?;
 ///
-/// impl AuthorizationMetadataProvider for MyMetadataProvider {
-///     fn initialize(
-///         &mut self,
-///         config: AuthConfig,
-///         metadata_service: Option<Box<dyn Any + Send + Sync>>,
-///     ) -> AuthServiceResult<()> {
-///         // Initialize storage backend
-///         Ok(())
-///     }
-///
-///     async fn create_acl(&self, acl: Acl) -> AuthServiceResult<()> {
-///         // Store ACL in backend
-///         Ok(())
-///     }
-///
-///     async fn get_acl<S: Subject>(&self, subject: &S) -> AuthServiceResult<Option<Acl>> {
-///         // Retrieve ACL from backend
-///         Ok(None)
-///     }
-///
-///     // ... implement other methods
-/// }
+/// let user = User::of("alice");
+/// assert!(provider.get_acl(&user).await?.is_none());
+/// provider.shutdown();
+/// # Ok(())
+/// # }
 /// ```
 #[allow(async_fn_in_trait)]
 pub trait AuthorizationMetadataProvider: Send + Sync {
-    /// Initialize the metadata provider with configuration.
+    /// Synchronously initialize the metadata provider with configuration.
     ///
-    /// This method is called once during provider setup. Implementations should:
-    /// - Initialize storage backend (open database, connect to remote service, etc.)
-    /// - Load initial configuration and validate parameters
-    /// - Set up caching layers if needed
-    /// - Establish connection pools or prepare resources
+    /// The local implementation applies the ACL cache settings and loads `acls.json` when
+    /// `auth_config_path` is set. An empty path selects in-memory storage. Snapshot loading
+    /// blocks the calling thread; service integrations use [`crate::AuthRuntimeBuilder`] to
+    /// perform that work on the bounded metadata I/O lane.
     ///
     /// # Arguments
     ///
     /// * `config` - Authorization configuration containing provider-specific settings
-    /// * `metadata_service` - Optional metadata service for advanced integration scenarios. Can be
-    ///   downcast to implementation-specific types if needed.
+    /// * `metadata_service` - Implementation-specific integration value. The local provider ignores it.
     ///
     /// # Errors
     ///
-    /// Returns `AuthFailureKind::InvalidConfiguration` if:
-    /// - Configuration parameters are invalid
-    /// - Storage backend cannot be initialized
-    /// - Required resources are unavailable
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let mut provider = MyMetadataProvider::new();
-    /// provider.initialize(auth_config, None)?;
-    /// ```
+    /// Returns an implementation-specific [`crate::AuthServiceError`] if initialization fails.
+    /// The local provider reports snapshot read or decode failures and synchronization errors.
     fn initialize(
         &mut self,
         config: AuthConfig,
         metadata_service: Option<Box<dyn Any + Send + Sync>>,
     ) -> AuthServiceResult<()>;
 
-    /// Shutdown the metadata provider and release resources.
+    /// Synchronously release the provider's resources.
     ///
-    /// This method should:
-    /// - Close database connections
-    /// - Flush pending writes
-    /// - Release file handles
-    /// - Cleanup temporary resources
-    ///
-    /// Implementations should be idempotent (safe to call multiple times).
+    /// The local implementation clears its in-memory ACLs and cache and marks itself uninitialized.
+    /// Repeated calls are safe. Runtime-managed flushing and closure use [`crate::ProviderControl`].
     fn shutdown(&mut self);
 
     /// Create a new ACL for a subject.
@@ -144,10 +111,9 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     ///
     /// # Errors
     ///
-    /// - `AuthFailureKind::InvalidInput` if ACL already exists
-    /// - `AuthFailureKind::Unavailable` if
-    ///   storage operation fails
-    /// - `AuthFailureKind::InvalidInput` if ACL data is malformed
+    /// Returns a provider-specific [`crate::AuthServiceError`]. The local provider reports an
+    /// uninitialized provider, a duplicate subject, synchronization errors, or snapshot persistence
+    /// failures.
     ///
     /// # Examples
     ///
@@ -168,21 +134,21 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     ///
     /// # Errors
     ///
-    /// - `AuthFailureKind::Unavailable` if
-    ///   storage operation fails
+    /// Returns a provider-specific [`crate::AuthServiceError`]. The local provider reports an
+    /// uninitialized provider, synchronization errors, or snapshot persistence failures.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let user = User::new("alice");
+    /// let user = User::of("alice");
     /// provider.delete_acl(&user).await?;
     /// ```
     async fn delete_acl<S: Subject + Send + Sync>(&self, subject: &S) -> AuthServiceResult<()>;
 
-    /// Update an existing ACL.
+    /// Write an ACL for a subject.
     ///
-    /// This operation completely replaces the existing ACL. To perform partial updates,
-    /// implementations should first retrieve the ACL, modify it, then call this method.
+    /// The local implementation inserts a missing ACL or completely replaces an existing one.
+    /// To perform partial updates, retrieve the ACL, modify it, then call this method.
     ///
     /// # Arguments
     ///
@@ -190,10 +156,8 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     ///
     /// # Errors
     ///
-    /// - `AuthFailureKind::NotFound` if ACL doesn't exist
-    /// - `AuthFailureKind::Unavailable` if
-    ///   storage operation fails
-    /// - `AuthFailureKind::InvalidInput` if ACL data is malformed
+    /// Returns a provider-specific [`crate::AuthServiceError`]. The local provider reports an
+    /// uninitialized provider, synchronization errors, or snapshot persistence failures.
     ///
     /// # Examples
     ///
@@ -220,13 +184,13 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     ///
     /// # Errors
     ///
-    /// - `AuthFailureKind::Unavailable` if
-    ///   storage operation fails
+    /// Propagates metadata lookup failures. The local provider reports initialization or
+    /// synchronization errors.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let user = User::new("alice");
+    /// let user = User::of("alice");
     /// if let Some(acl) = provider.get_acl(&user).await? {
     ///     println!("ACL found: {:?}", acl);
     /// }
@@ -252,8 +216,8 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     ///
     /// # Errors
     ///
-    /// - `AuthFailureKind::Unavailable` if
-    ///   storage operation fails
+    /// Propagates metadata listing failures. The local provider requires initialization and a
+    /// readable canonical ACL map.
     ///
     /// # Examples
     ///
@@ -277,12 +241,10 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     ) -> AuthServiceResult<Vec<Acl>>;
 }
 
-/// No-op authorization metadata provider for testing and disabled scenarios.
+/// Empty-state authorization metadata provider for tests.
 ///
-/// This provider accepts all operations but maintains no state. Useful for:
-/// - Testing authorization logic without persistence
-/// - Disabling authorization in development environments
-/// - Placeholder implementations during development
+/// Mutations succeed without retaining ACLs, lookups return `None`, and listings return an empty
+/// vector. This provider does not disable authorization or grant access to protected resources.
 #[derive(Debug, Default)]
 pub struct NoopMetadataProvider;
 

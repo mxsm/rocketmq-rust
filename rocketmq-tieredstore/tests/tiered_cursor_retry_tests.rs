@@ -172,7 +172,7 @@ fn test_config(root: std::path::PathBuf) -> TieredStoreConfig {
     TieredStoreConfig {
         storage_level: TieredStorageLevel::Force,
         store_path_root_dir: root,
-        backend_provider: "controlled-posix".to_owned(),
+        storage_provider_id: "controlled-posix".to_owned(),
         source_epoch: 7,
         max_pending_tasks: 4,
         max_pending_bytes: 1024,

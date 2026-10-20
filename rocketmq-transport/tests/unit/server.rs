@@ -39,32 +39,32 @@ use tokio::net::TcpStream;
 
 use super::*;
 use crate::dispatch::DeferredAdmission;
-use crate::dispatch::DeferredAdmissionAcquireOutcome;
-use crate::dispatch::DeferredClaimOutcome;
+use crate::dispatch::DeferredClaimResult;
 use crate::dispatch::DeferredParts;
+use crate::dispatch::DeferredRegistrationResult;
 use crate::dispatch::DeferredRegistry;
-use crate::dispatch::DeferredRegistryOutcome;
 use crate::dispatch::DeferredRequest;
-use crate::dispatch::DeferredResponderOutcome;
-use crate::dispatch::DeferredResumeOutcome;
+use crate::dispatch::DeferredResponderTakeResult;
+use crate::dispatch::DeferredResumeResult;
 use crate::dispatch::DeferredResumeRetainedSize;
 use crate::dispatch::DeferredRetainedSizeParts;
+use crate::dispatch::DeferredWaitAdmissionResult;
 use crate::dispatch::DeferredWaitLimits;
 use crate::dispatch::DeferredWakeReason;
-use crate::dispatch::HandlerOutcome;
 use crate::dispatch::ProtocolNoResponseReason;
 use crate::dispatch::RemotingRequest;
 use crate::dispatch::RemotingResponse;
+use crate::dispatch::ResponseAction;
 use crate::error::TransportError;
 use crate::runtime::processor::RejectRequestDecision;
 use crate::runtime::RPCHook;
 use crate::session_registry::ServerPushCommand;
 use crate::session_registry::ServerPushKind;
-use crate::session_registry::ServerPushOutcome;
+use crate::session_registry::ServerPushResult;
 use crate::session_registry::ServerRequestCommand;
-use crate::session_registry::ServerRequestOutcome;
-use crate::session_registry::SessionCloseOutcome;
+use crate::session_registry::ServerRequestResult;
 use crate::session_registry::SessionCloseReason;
+use crate::session_registry::SessionCloseStatus;
 use crate::session_registry::SessionEvent;
 use crate::session_registry::SessionRegistry;
 use crate::session_view::SessionId;
@@ -91,7 +91,7 @@ fn assert_transport_operation(error: &TransportError, expected_operation: &'stat
     );
 }
 
-fn expect_server_request_error(result: Result<ServerRequestOutcome, TransportError>, message: &str) -> TransportError {
+fn expect_server_request_error(result: Result<ServerRequestResult, TransportError>, message: &str) -> TransportError {
     match result {
         Err(error) => error,
         Ok(_) => panic!("{message}"),
@@ -124,7 +124,7 @@ impl Clone for TcpProcessor {
 }
 
 impl RequestProcessor for TcpProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         self.state.processes.fetch_add(1, Ordering::SeqCst);
         self.state
             .request_sequences
@@ -142,13 +142,13 @@ impl RequestProcessor for TcpProcessor {
         }
         *self.state.session.lock().expect("session capture lock") = Some(request.session().id());
         if request.command().code() == 39 {
-            return Ok(HandlerOutcome::NoReply(
+            return Ok(ResponseAction::NoReply(
                 request
                     .protocol_no_response(ProtocolNoResponseReason::CallbackHandled)
                     .map_err(|error| crate::error_helpers::internal_failure("create protocol no-response", error))?,
             ));
         }
-        Ok(HandlerOutcome::Reply(
+        Ok(ResponseAction::Reply(
             RemotingResponse::bytes(
                 RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_opaque(-9),
                 Bytes::from_static(b"tcp-response"),
@@ -194,8 +194,8 @@ impl Drop for DropTrackedProcessor {
 }
 
 impl RequestProcessor for DropTrackedProcessor {
-    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
-        Ok(HandlerOutcome::Reply(
+    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
+        Ok(ResponseAction::Reply(
             RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                 ResponseCode::Success,
             ))
@@ -211,17 +211,17 @@ struct DrainingProcessor {
 }
 
 impl RequestProcessor for DrainingProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         if request.command().code() == 39 {
             self.started.notify_one();
             self.release.notified().await;
-            return Ok(HandlerOutcome::NoReply(
+            return Ok(ResponseAction::NoReply(
                 request
                     .protocol_no_response(ProtocolNoResponseReason::CallbackHandled)
                     .map_err(|error| crate::error_helpers::internal_failure("create protocol no-response", error))?,
             ));
         }
-        Ok(HandlerOutcome::Reply(
+        Ok(ResponseAction::Reply(
             RemotingResponse::bytes(
                 RemotingCommand::create_response_command_with_code(ResponseCode::Success),
                 Bytes::from_static(b"drained-before-retire"),
@@ -333,9 +333,9 @@ struct NetworkDeferredRegistration {
 }
 
 impl RequestProcessor for NetworkDeferredCleanupProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         if request.command().code() == 706 {
-            return Ok(HandlerOutcome::Reply(
+            return Ok(ResponseAction::Reply(
                 RemotingResponse::bytes(
                     RemotingCommand::create_response_command_with_code(ResponseCode::Success),
                     Bytes::from_static(b"other-session-live"),
@@ -346,22 +346,22 @@ impl RequestProcessor for NetworkDeferredCleanupProcessor {
 
         let opaque = request.original_identity().original_opaque();
         let responder = match request.take_deferred_responder() {
-            DeferredResponderOutcome::Taken(responder) => responder,
-            DeferredResponderOutcome::OneWayRequest
-            | DeferredResponderOutcome::Unavailable
-            | DeferredResponderOutcome::AlreadyTaken
-            | DeferredResponderOutcome::OutcomeCompleted => {
+            DeferredResponderTakeResult::Taken(responder) => responder,
+            DeferredResponderTakeResult::OneWayRequest
+            | DeferredResponderTakeResult::Unavailable
+            | DeferredResponderTakeResult::AlreadyTaken
+            | DeferredResponderTakeResult::OutcomeCompleted => {
                 return Err(crate::error_helpers::argument_invalid());
             }
         };
         let retained = DeferredRegistry::<usize>::try_retained_size(DeferredRetainedSizeParts::new(0))
             .map_err(|error| crate::error_helpers::internal_failure("size network deferred registration", error))?;
         let permit = match self.admission.try_reserve(retained) {
-            DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
-            DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
-            DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)
-            | DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)
-            | DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
+            DeferredWaitAdmissionResult::Closed => panic!("deferred admission unexpectedly closed"),
+            DeferredWaitAdmissionResult::Acquired(permit) => permit,
+            DeferredWaitAdmissionResult::WaiterCapacityExhausted(_)
+            | DeferredWaitAdmissionResult::RetainedByteCapacityExhausted(_)
+            | DeferredWaitAdmissionResult::ParentCapacityExhausted(_) => {
                 return Err(crate::error_helpers::argument_invalid());
             }
         };
@@ -369,29 +369,29 @@ impl RequestProcessor for NetworkDeferredCleanupProcessor {
             opaque as usize,
             DeferredParts::new(responder, permit),
         )) {
-            DeferredRegistryOutcome::Registered(registration) => registration,
-            DeferredRegistryOutcome::DuplicateRequest(recovery)
-            | DeferredRegistryOutcome::IdentityExhausted(recovery) => {
+            DeferredRegistrationResult::Registered(registration) => registration,
+            DeferredRegistrationResult::DuplicateRequest(recovery)
+            | DeferredRegistrationResult::IdentityExhausted(recovery) => {
                 drop(recovery);
                 return Err(crate::error_helpers::argument_invalid());
             }
-            DeferredRegistryOutcome::ParentCancelled
-            | DeferredRegistryOutcome::SessionClosed
-            | DeferredRegistryOutcome::DeadlineExpired => {
+            DeferredRegistrationResult::ParentCancelled
+            | DeferredRegistrationResult::SessionClosed
+            | DeferredRegistrationResult::DeadlineExpired => {
                 return Err(crate::error_helpers::argument_invalid());
             }
-            DeferredRegistryOutcome::BuilderRejected { error, parts } => {
+            DeferredRegistrationResult::BuilderRejected { error, parts } => {
                 drop(parts);
                 match error {}
             }
-            DeferredRegistryOutcome::ContractViolation { violation, recovery } => {
+            DeferredRegistrationResult::ContractViolation { violation, recovery } => {
                 drop(recovery);
                 return Err(crate::error_helpers::internal_failure(
                     "register network deferred request",
                     violation,
                 ));
             }
-            DeferredRegistryOutcome::OperationalFailure { error, recovery } => {
+            DeferredRegistrationResult::OperationalFailure { error, recovery } => {
                 drop(recovery);
                 return Err(crate::error_helpers::internal_failure(
                     "register network deferred request",
@@ -409,7 +409,7 @@ impl RequestProcessor for NetworkDeferredCleanupProcessor {
         if opaque == self.precommit_opaque {
             self.release_precommit.notified().await;
         }
-        Ok(HandlerOutcome::Deferred(registration))
+        Ok(ResponseAction::Deferred(registration))
     }
 }
 
@@ -564,7 +564,7 @@ async fn registry_capabilities_write_typed_push_and_close_the_same_canonical_ses
         .capabilities(session_id)
         .expect("registered session capabilities");
 
-    let ServerPushOutcome::Sent(receipt) = push
+    let ServerPushResult::Sent(receipt) = push
         .send(
             ServerPushCommand::NotifyConsumerIdsChanged {
                 header: NotifyConsumerIdsChangedRequestHeader {
@@ -590,7 +590,7 @@ async fn registry_capabilities_write_typed_push_and_close_the_same_canonical_ses
     assert_eq!(pushed.opaque(), 9_858);
     assert!(pushed.is_oneway_rpc());
 
-    let ServerPushOutcome::Sent(transaction_receipt) = push
+    let ServerPushResult::Sent(transaction_receipt) = push
         .send(
             ServerPushCommand::CheckTransactionState {
                 header: CheckTransactionStateRequestHeader {
@@ -620,7 +620,7 @@ async fn registry_capabilities_write_typed_push_and_close_the_same_canonical_ses
     assert_eq!(transaction.body(), Some(&Bytes::from_static(b"transaction-message")));
     assert!(transaction.is_oneway_rpc());
 
-    let ServerPushOutcome::Sent(reset_receipt) = push
+    let ServerPushResult::Sent(reset_receipt) = push
         .send(
             ServerPushCommand::ResetConsumerClientOffset {
                 header: ResetOffsetRequestHeader {
@@ -659,8 +659,8 @@ async fn registry_capabilities_write_typed_push_and_close_the_same_canonical_ses
     assert!(
         matches!(
             (first_close, second_close),
-            (SessionCloseOutcome::Closed, SessionCloseOutcome::AlreadyClosed)
-                | (SessionCloseOutcome::AlreadyClosed, SessionCloseOutcome::Closed)
+            (SessionCloseStatus::Closed, SessionCloseStatus::AlreadyClosed)
+                | (SessionCloseStatus::AlreadyClosed, SessionCloseStatus::Closed)
         ),
         "concurrent closes must share full completion while exactly one caller initiates it"
     );
@@ -682,7 +682,7 @@ async fn registry_capabilities_write_typed_push_and_close_the_same_canonical_ses
             .close(SessionCloseReason::Administrative)
             .await
             .expect("repeated typed close should reuse completed shutdown"),
-        SessionCloseOutcome::AlreadyClosed
+        SessionCloseStatus::AlreadyClosed
     );
     let eof = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
         .await
@@ -827,13 +827,13 @@ async fn close_transition_rejects_retained_push_and_request_capabilities() {
         )
         .await
         .expect("retained push must not fail operationally"),
-        ServerPushOutcome::SessionClosed
+        ServerPushResult::SessionClosed
     ));
     let request_outcome = request
         .request(consumer_status_request(), Duration::from_secs(1))
         .await
         .expect("retained request must not fail operationally");
-    assert!(matches!(request_outcome, ServerRequestOutcome::SessionClosed));
+    assert!(matches!(request_outcome, ServerRequestResult::SessionClosed));
     assert_eq!(request.pending_usage().count, 0);
     assert!(
         tokio::time::timeout(Duration::from_millis(50), client.receive_command())
@@ -847,7 +847,7 @@ async fn close_transition_rejects_retained_push_and_request_capabilities() {
         .await
         .expect("close task join")
         .expect("ordered close after listener release");
-    assert_eq!(close_outcome, SessionCloseOutcome::Closed);
+    assert_eq!(close_outcome, SessionCloseStatus::Closed);
     assert!(client.receive_command().await.is_none());
     running.begin_shutdown();
     running.finish().await;
@@ -939,7 +939,7 @@ async fn typed_close_waits_for_deferred_cleanup_executor_drain_and_writer_comple
         .expect("send typed-close deferred request");
     let registered = receive_deferred_registration(&mut registered_rx, OPAQUE).await;
     tokio::time::timeout(Duration::from_secs(1), async {
-        while !deferred_registry.test_contains(registered.id) {
+        while !deferred_registry.test_is_active(registered.id) {
             tokio::task::yield_now().await;
         }
     })
@@ -959,8 +959,8 @@ async fn typed_close_waits_for_deferred_cleanup_executor_drain_and_writer_comple
     assert!(
         matches!(
             (first, second),
-            (SessionCloseOutcome::Closed, SessionCloseOutcome::AlreadyClosed)
-                | (SessionCloseOutcome::AlreadyClosed, SessionCloseOutcome::Closed)
+            (SessionCloseStatus::Closed, SessionCloseStatus::AlreadyClosed)
+                | (SessionCloseStatus::AlreadyClosed, SessionCloseStatus::Closed)
         ),
         "concurrent closes must share completion while exactly one caller initiates it"
     );
@@ -992,7 +992,7 @@ async fn typed_close_waits_for_deferred_cleanup_executor_drain_and_writer_comple
             .close(SessionCloseReason::Administrative)
             .await
             .expect("repeated typed close completion"),
-        SessionCloseOutcome::AlreadyClosed
+        SessionCloseStatus::AlreadyClosed
     );
     running.begin_shutdown();
     running.finish().await;
@@ -1129,7 +1129,7 @@ async fn registry_lookups_fail_closed_after_close_now_before_disconnect_cleanup(
     assert!(!registry.contains(session_id));
 
     running.begin_shutdown();
-    running.finish().await;
+    running.finish_after_forced_close().await;
 }
 
 #[tokio::test]
@@ -1192,7 +1192,7 @@ async fn server_requests_correlate_by_session_owner_and_fail_on_disconnect_and_d
         )
         .await
         .expect("send correctly owned response");
-    let ServerRequestOutcome::Responded(response) = first_response
+    let ServerRequestResult::Responded(response) = first_response
         .await
         .expect("correct session request must not fail operationally")
     else {
@@ -1214,7 +1214,7 @@ async fn server_requests_correlate_by_session_owner_and_fail_on_disconnect_and_d
     let disconnect_result = tokio::time::timeout(Duration::from_secs(1), &mut disconnected)
         .await
         .expect("disconnect must fail pending response promptly");
-    assert!(matches!(disconnect_result, Ok(ServerRequestOutcome::SessionClosed)));
+    assert!(matches!(disconnect_result, Ok(ServerRequestResult::SessionClosed)));
     assert_eq!(second_sender.pending_usage().count, 0);
     assert_eq!(second_sender.pending_usage().bytes, 0);
 
@@ -1234,16 +1234,24 @@ async fn server_requests_correlate_by_session_owner_and_fail_on_disconnect_and_d
             .expect("timeout client connection")
             .expect("timeout server-request frame"),
     };
-    std::future::poll_fn(|context| match timed_out.as_mut().poll(context) {
+    let completed = std::future::poll_fn(|context| match timed_out.as_mut().poll(context) {
         Poll::Pending if registry.capabilities(first_session).is_some() => Poll::Pending,
         Poll::Pending => {
             assert!(registry.server_request_sender(first_session).is_none());
-            Poll::Ready(())
+            Poll::Ready(None)
         }
-        Poll::Ready(_) => panic!("timeout request completed before its fail-closed transition was observed"),
+        Poll::Ready(result) => {
+            assert!(registry.capabilities(first_session).is_none());
+            assert!(registry.server_request_sender(first_session).is_none());
+            Poll::Ready(Some(result))
+        }
     })
     .await;
-    let timeout_error = expect_server_request_error(timed_out.await, "missing response must expire absolute deadline");
+    let timeout_result = match completed {
+        Some(result) => result,
+        None => timed_out.await,
+    };
+    let timeout_error = expect_server_request_error(timeout_result, "missing response must expire absolute deadline");
     assert_eq!(timeout_error.code(), TRANSPORT_SESSION_FAILED.code());
     assert_transport_operation(&timeout_error, "request_await_response");
     let timeout_stage = timeout_error
@@ -1265,7 +1273,7 @@ async fn server_requests_correlate_by_session_owner_and_fail_on_disconnect_and_d
     let interrupted_result = tokio::time::timeout(Duration::from_secs(1), &mut interrupted)
         .await
         .expect("same-session pending request must fail promptly");
-    assert!(matches!(interrupted_result, Ok(ServerRequestOutcome::SessionClosed)));
+    assert!(matches!(interrupted_result, Ok(ServerRequestResult::SessionClosed)));
 
     loop {
         let event = tokio::time::timeout(Duration::from_secs(1), events.recv())
@@ -1282,7 +1290,7 @@ async fn server_requests_correlate_by_session_owner_and_fail_on_disconnect_and_d
         .request(consumer_status_request(), Duration::from_secs(1))
         .await
         .expect("retained sender rejection must not fail operationally");
-    assert!(matches!(retired_outcome, ServerRequestOutcome::SessionClosed));
+    assert!(matches!(retired_outcome, ServerRequestResult::SessionClosed));
 
     let pending = first_sender.pending_usage();
     assert_eq!(pending.count, 0);
@@ -1327,13 +1335,13 @@ async fn typed_close_completes_healthily_with_a_written_pending_server_request()
             .close(SessionCloseReason::Administrative)
             .await
             .expect("pending server request must not make ordered close unhealthy"),
-        SessionCloseOutcome::Closed
+        SessionCloseStatus::Closed
     );
     let request_result = tokio::time::timeout(Duration::from_secs(1), request_task)
         .await
         .expect("pending request close completion deadline")
         .expect("pending request task join");
-    assert!(matches!(request_result, Ok(ServerRequestOutcome::SessionClosed)));
+    assert!(matches!(request_result, Ok(ServerRequestResult::SessionClosed)));
     let completion = close.completion_snapshot().await;
     assert!(completion.healthy);
     assert_eq!(completion.remaining_server_outbound_leases, 0);
@@ -1388,7 +1396,7 @@ async fn aborting_a_written_server_request_retires_its_owner_and_rejects_late_re
         .request(consumer_status_request(), Duration::from_secs(1))
         .await
         .expect("cancelled response owner rejection must not fail operationally");
-    assert!(matches!(retired, ServerRequestOutcome::SessionClosed));
+    assert!(matches!(retired, ServerRequestResult::SessionClosed));
 
     let _ = client
         .send_command(
@@ -1440,7 +1448,7 @@ async fn aborting_a_written_server_request_retires_its_owner_and_rejects_late_re
         )
         .await
         .expect("send replacement response");
-    let ServerRequestOutcome::Responded(response) = replacement_request
+    let ServerRequestResult::Responded(response) = replacement_request
         .await
         .expect("replacement owner request must not fail operationally")
     else {
@@ -1457,12 +1465,12 @@ async fn aborting_a_written_server_request_retires_its_owner_and_rejects_late_re
             .close(SessionCloseReason::Administrative)
             .await
             .expect("gracefully close replacement session"),
-        SessionCloseOutcome::Closed
+        SessionCloseStatus::Closed
     );
     assert!(replacement.receive_command().await.is_none());
 
     running.begin_shutdown();
-    running.finish().await;
+    running.finish_after_forced_close().await;
 }
 
 fn consumer_status_request() -> ServerRequestCommand {
@@ -1546,7 +1554,7 @@ async fn prewrite_deadline_cleanup_keeps_the_server_request_session_usable() {
         .expect("prewrite deadline completion")
         .expect("server request task")
         .expect("prewrite caller deadline is a normal outcome");
-    assert!(matches!(outcome, ServerRequestOutcome::DeadlineExpired));
+    assert!(matches!(outcome, ServerRequestResult::DeadlineExpired));
     assert_eq!(sender.pending_usage().count, 0);
     assert!(registry.contains(session_id));
     assert!(registry.server_request_sender(session_id).is_some());
@@ -1567,7 +1575,7 @@ async fn prewrite_deadline_cleanup_keeps_the_server_request_session_usable() {
         .expect("send healthy retry response");
     assert!(matches!(
         retry.await.expect("healthy retry result"),
-        ServerRequestOutcome::Responded(_)
+        ServerRequestResult::Responded(_)
     ));
 
     running.begin_shutdown();
@@ -1761,7 +1769,7 @@ async fn shutdown_drains_a_writer_claimed_deferred_resume_to_one_receipt_and_fra
         .claim(registered.id, DeferredWakeReason::MessageArrived)
         .await
         .expect("claim writer-drain deferred request operationally succeeds");
-    let DeferredClaimOutcome::Claimed(claim) = claim else {
+    let DeferredClaimResult::Claimed(claim) = claim else {
         panic!("writer-drain claim must transfer the deferred request");
     };
     let resume = claim.resume(
@@ -1795,7 +1803,7 @@ async fn shutdown_drains_a_writer_claimed_deferred_resume_to_one_receipt_and_fra
         resume
             .await
             .expect("writer-drain deferred response remains operationally healthy"),
-        DeferredResumeOutcome::Completed(_)
+        DeferredResumeResult::Completed(_)
     ));
 
     let response = tokio::time::timeout(Duration::from_secs(1), client.receive_command())
@@ -1871,7 +1879,7 @@ async fn real_tcp_disconnect_cleans_deferred_state_before_drain_and_preserves_ot
     .await
     .expect("running claim deadline")
     .expect("running claim operationally succeeds");
-    let DeferredClaimOutcome::Claimed(running_claim) = running_claim else {
+    let DeferredClaimResult::Claimed(running_claim) = running_claim else {
         panic!("running claim after commit must transfer the deferred request");
     };
 
@@ -1888,7 +1896,7 @@ async fn real_tcp_disconnect_cleans_deferred_state_before_drain_and_preserves_ot
     .await
     .expect("held claim deadline")
     .expect("held claim operationally succeeds");
-    let DeferredClaimOutcome::Claimed(held_claim) = held_claim else {
+    let DeferredClaimResult::Claimed(held_claim) = held_claim else {
         panic!("held claim after commit must transfer the deferred request");
     };
 
@@ -1930,7 +1938,7 @@ async fn real_tcp_disconnect_cleans_deferred_state_before_drain_and_preserves_ot
         .await
         .expect("disconnect cleanup precedes executor drain")
         .expect("disconnect cleanup remains operationally healthy");
-    assert!(matches!(ticket_outcome, DeferredClaimOutcome::SessionClosed));
+    assert!(matches!(ticket_outcome, DeferredClaimResult::SessionClosed));
     assert_eq!(registry.test_index_counts(), (1, 1, 1));
     assert_eq!(registry.test_session_member_count(running.session_id), 0);
     assert_eq!(registry.test_session_member_count(other.session_id), 1);
@@ -1940,7 +1948,7 @@ async fn real_tcp_disconnect_cleans_deferred_state_before_drain_and_preserves_ot
             .claim(precommit.id, DeferredWakeReason::Timeout)
             .await
             .expect("post-cleanup claim remains operationally healthy"),
-        DeferredClaimOutcome::NotFound
+        DeferredClaimResult::NotFound
     ));
 
     let held_handler_called = Arc::new(AtomicUsize::new(0));
@@ -1957,7 +1965,7 @@ async fn real_tcp_disconnect_cleans_deferred_state_before_drain_and_preserves_ot
         })
         .await
         .expect("new resume submission remains operationally healthy after begin-close");
-    assert_eq!(held_outcome, DeferredResumeOutcome::SessionClosed);
+    assert_eq!(held_outcome, DeferredResumeResult::SessionClosed);
     assert_eq!(held_handler_called.load(Ordering::SeqCst), 0);
     assert_eq!(deferred_admission.snapshot().waiting_count(), 1);
 
@@ -1967,7 +1975,7 @@ async fn real_tcp_disconnect_cleans_deferred_state_before_drain_and_preserves_ot
         .await
         .expect("accepted resume drains")
         .expect("accepted resume remains operationally healthy after close");
-    assert_eq!(running_outcome, DeferredResumeOutcome::SessionClosed);
+    assert_eq!(running_outcome, DeferredResumeResult::SessionClosed);
     let eof = tokio::time::timeout(Duration::from_secs(1), first_client.receive_command())
         .await
         .expect("first session retires after drain");

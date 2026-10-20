@@ -11,15 +11,20 @@ body,
 
 html {
   background: var(--background);
+  scrollbar-color: var(--border-strong) transparent;
 }
 
 body {
-  background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-ui);
-  font-size: 14px;
-  line-height: 1.45;
+  font: var(--text-body);
   text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background: var(--primary-border);
+  color: var(--foreground);
 }
 
 button,
@@ -36,7 +41,12 @@ input,
 select,
 textarea,
 [tabindex]:not([tabindex='-1']) {
-  transition: border-color 150ms ease, background-color 150ms ease, color 150ms ease, opacity 150ms ease;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out),
+    opacity var(--duration-fast) var(--ease-out);
 }
 
 :where(button, a, input, select, textarea, [tabindex]:not([tabindex='-1'])):focus-visible {
@@ -54,10 +64,15 @@ button {
   cursor: pointer;
 }
 
+a {
+  color: var(--link);
+}
+
 select {
   color-scheme: dark;
 }
 
+/* Native option lists are drawn by the browser; give them the card colors explicitly. */
 select option {
   background-color: var(--card);
   color: var(--foreground);
@@ -68,7 +83,7 @@ select option:checked {
 }
 
 select option:disabled {
-  background-color: var(--muted-surface);
+  background-color: color-mix(in srgb, var(--foreground) 8%, var(--card));
   color: var(--muted-foreground);
 }
 
@@ -89,6 +104,11 @@ code,
 pre,
 [data-mono='true'] {
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -96,6 +116,7 @@ pre,
   *::before,
   *::after {
     scroll-behavior: auto !important;
+    animation-delay: 0s !important;
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;

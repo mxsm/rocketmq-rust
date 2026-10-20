@@ -1,0 +1,468 @@
+.root {
+  position: relative;
+  /* --tilt-x / --tilt-y are published by the hero in the range -0.5..0.5. */
+  transform: rotateX(calc(3deg - var(--tilt-y, 0) * 7deg)) rotateY(calc(-7deg + var(--tilt-x, 0) * 10deg));
+  transform-style: preserve-3d;
+  transition: transform 520ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.glow {
+  position: absolute;
+  inset: 12% -6% -10%;
+  z-index: -1;
+  border-radius: 50%;
+  background:
+    radial-gradient(closest-side at 32% 46%, rgba(255, 112, 32, 0.42), transparent),
+    radial-gradient(closest-side at 72% 58%, rgba(138, 92, 246, 0.42), transparent);
+  filter: blur(46px);
+  opacity: 0.85;
+  transform: translateZ(-60px);
+  animation: glowBreathe 7s ease-in-out infinite alternate;
+}
+
+/* ---------- Window ---------- */
+
+.frame {
+  position: relative;
+  overflow: hidden;
+  padding: 1px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 44px 110px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+/* Beam travelling around the border. */
+.frame::before {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 160%;
+  aspect-ratio: 1;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0 58%,
+    rgba(255, 150, 70, 0.95) 70%,
+    rgba(255, 92, 140, 0.9) 78%,
+    rgba(150, 110, 255, 0.95) 86%,
+    transparent 94%
+  );
+  content: '';
+  transform: translate(-50%, -50%);
+  animation: beamSpin 6.5s linear infinite;
+}
+
+.window {
+  position: relative;
+  overflow: hidden;
+  border-radius: 17px;
+  background:
+    radial-gradient(120% 80% at 0% 0%, rgba(255, 122, 38, 0.07), transparent 60%),
+    linear-gradient(180deg, #0d101c 0%, #080a13 100%);
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.78rem 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.lights {
+  display: inline-flex;
+  gap: 0.42rem;
+}
+
+.lights i {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #ff5f57;
+}
+
+.lights i:nth-child(2) {
+  background: #febc2e;
+}
+
+.lights i:nth-child(3) {
+  background: #28c840;
+}
+
+.barTitle {
+  flex: 1;
+  overflow: hidden;
+  color: var(--home-faint);
+  font-family: var(--home-font-mono);
+  font-size: 0.74rem;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.barBadge {
+  padding: 0.16rem 0.5rem;
+  border: 1px solid rgba(255, 150, 70, 0.3);
+  border-radius: 999px;
+  background: rgba(255, 122, 38, 0.1);
+  color: var(--home-amber);
+  font-family: var(--home-font-mono);
+  font-size: 0.66rem;
+  font-weight: 600;
+}
+
+.body {
+  height: 21.5rem;
+  overflow: hidden;
+  padding: 1rem 1.15rem 1.1rem;
+  color: #aeb7cc;
+  font-family: var(--home-font-mono);
+  font-size: 0.8rem;
+  line-height: 1.78;
+  /* Soften lines as they scroll out under the title bar. */
+  mask-image: linear-gradient(to bottom, transparent 0.1rem, #000 1rem);
+}
+
+.line {
+  display: flex;
+  min-height: 1.78em;
+  align-items: baseline;
+  gap: 0.6rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.prompt {
+  flex: 0 0 auto;
+  color: var(--home-orange);
+  font-weight: 700;
+}
+
+.command {
+  color: #f1f4fb;
+}
+
+.output {
+  padding-left: 1.2rem;
+  animation: lineIn 260ms ease-out both;
+}
+
+.dim {
+  padding-left: 0;
+  color: #5d667d;
+}
+
+.ok {
+  color: #c9d2e6;
+}
+
+.mark {
+  flex: 0 0 auto;
+  color: var(--home-green);
+  font-weight: 700;
+}
+
+.send {
+  color: #94a0ba;
+}
+
+.tag {
+  flex: 0 0 auto;
+  padding: 0 0.42rem;
+  border-radius: 5px;
+  background: rgba(52, 211, 153, 0.13);
+  color: var(--home-green);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.caret {
+  display: inline-block;
+  width: 0.56em;
+  height: 1.1em;
+  margin-left: -0.35rem;
+  align-self: center;
+  border-radius: 1px;
+  background: var(--home-amber);
+  animation: caretBlink 1.05s steps(1, end) infinite;
+}
+
+/* ---------- Status chips ---------- */
+
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.62rem 0.8rem;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 14px;
+  background: rgba(13, 17, 30, 0.82);
+  box-shadow:
+    0 18px 44px rgba(0, 0, 0, 0.46),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(14px) saturate(140%);
+  transition:
+    border-color 420ms ease,
+    box-shadow 420ms ease;
+}
+
+.chipOnline {
+  border-color: rgba(52, 211, 153, 0.34);
+  box-shadow:
+    0 18px 44px rgba(0, 0, 0, 0.46),
+    0 0 26px rgba(52, 211, 153, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.chipDot {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #4b5468;
+  transition:
+    background-color 420ms ease,
+    box-shadow 420ms ease;
+}
+
+.chipOnline .chipDot {
+  background: var(--home-green);
+  box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.16);
+  animation: dotPulse 2.2s ease-in-out infinite;
+}
+
+.chipText {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.chipText strong {
+  color: #eef1f9;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.chipText small {
+  color: var(--home-faint);
+  font-family: var(--home-font-mono);
+  font-size: 0.68rem;
+}
+
+.chipState {
+  margin-left: 0.35rem;
+  color: var(--home-faint);
+  font-family: var(--home-font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  transition: color 420ms ease;
+}
+
+.chipOnline .chipState {
+  color: var(--home-green);
+}
+
+.chipCount {
+  min-width: 1.6em;
+  margin-left: 0.35rem;
+  color: var(--home-amber);
+  font-family: var(--home-font-mono);
+  font-size: 1.02rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  text-align: right;
+}
+
+.bars {
+  display: inline-flex;
+  height: 22px;
+  flex: 0 0 auto;
+  align-items: flex-end;
+  gap: 2.5px;
+}
+
+.bars i {
+  width: 3.5px;
+  height: 30%;
+  border-radius: 2px;
+  background: linear-gradient(to top, var(--home-orange), var(--home-amber));
+  opacity: 0.45;
+  transform-origin: 50% 100%;
+}
+
+.barsFlowing i {
+  opacity: 1;
+  animation: barBounce 640ms ease-in-out infinite alternate;
+}
+
+.barsFlowing i:nth-child(2) {
+  animation-delay: -180ms;
+}
+
+.barsFlowing i:nth-child(3) {
+  animation-delay: -420ms;
+}
+
+.barsFlowing i:nth-child(4) {
+  animation-delay: -90ms;
+}
+
+.barsFlowing i:nth-child(5) {
+  animation-delay: -310ms;
+}
+
+/* Desktop: chips float in front of the window and pick up parallax from the 3D tilt. */
+@media (min-width: 997px) {
+  .chip {
+    position: absolute;
+  }
+
+  /* Each chip hangs off an edge of the frame so it never covers terminal text. */
+  .chipNameServer {
+    top: -2.5rem;
+    right: -1.6rem;
+    transform: translateZ(70px);
+    animation: chipFloat 6.5s ease-in-out infinite;
+  }
+
+  .chipBroker {
+    right: -2rem;
+    bottom: -1.3rem;
+    transform: translateZ(100px);
+    animation: chipFloat 7.5s ease-in-out -2.4s infinite;
+  }
+
+  .chipTopic {
+    bottom: -2.1rem;
+    left: -2rem;
+    transform: translateZ(120px);
+    animation: chipFloat 8.5s ease-in-out -4.1s infinite;
+  }
+}
+
+@media (max-width: 996px) {
+  .root {
+    transform: none;
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin-top: 0.9rem;
+  }
+
+  .chip {
+    flex: 1 1 150px;
+  }
+}
+
+@media (max-width: 620px) {
+  .body {
+    height: 18.5rem;
+    padding: 0.85rem 0.85rem 0.95rem;
+    font-size: 0.7rem;
+  }
+
+  .output {
+    padding-left: 0.6rem;
+  }
+
+  .chipState {
+    display: none;
+  }
+}
+
+@keyframes beamSpin {
+  to {
+    transform: translate(-50%, -50%) rotate(1turn);
+  }
+}
+
+@keyframes glowBreathe {
+  from {
+    opacity: 0.6;
+  }
+
+  to {
+    opacity: 0.95;
+  }
+}
+
+@keyframes caretBlink {
+  0%,
+  55% {
+    opacity: 1;
+  }
+
+  56%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes lineIn {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes dotPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.2);
+  }
+
+  50% {
+    box-shadow: 0 0 0 7px rgba(52, 211, 153, 0);
+  }
+}
+
+@keyframes barBounce {
+  from {
+    transform: scaleY(1);
+  }
+
+  to {
+    transform: scaleY(3.1);
+  }
+}
+
+/* Animates the individual `translate` property so the float composes with each chip's translateZ. */
+@keyframes chipFloat {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+
+  50% {
+    translate: 0 -9px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .root {
+    transition: none;
+  }
+
+  .glow,
+  .frame::before,
+  .caret,
+  .output,
+  .chip,
+  .chipOnline .chipDot,
+  .barsFlowing i {
+    animation: none;
+  }
+}

@@ -63,24 +63,24 @@ impl TimelinePromotionGate {
         }
     }
 
-    pub(crate) fn mark_snapshot_installed(&self, manifest: TimerSnapshotManifest) -> TimelinePromotionOutcome {
+    pub(crate) fn mark_snapshot_installed(&self, manifest: TimerSnapshotManifest) -> TimelinePromotionDecision {
         if let Err(violation) = manifest.validate() {
-            return TimelinePromotionOutcome::Manifest(violation);
+            return TimelinePromotionDecision::Manifest(violation);
         }
         if manifest.activation_epoch != self.expected_activation_epoch
             || manifest.format_fingerprint != self.expected_format_fingerprint
         {
-            return TimelinePromotionOutcome::SnapshotCompatibility;
+            return TimelinePromotionDecision::SnapshotCompatibility;
         }
         let mut installed = self.installed_snapshot.write();
         if installed
             .as_ref()
             .is_some_and(|current| current.generation >= manifest.generation)
         {
-            return TimelinePromotionOutcome::StaleSnapshot;
+            return TimelinePromotionDecision::StaleSnapshot;
         }
         *installed = Some(manifest);
-        TimelinePromotionOutcome::Promotable
+        TimelinePromotionDecision::Promotable
     }
 
     pub(crate) fn snapshot_generation(&self) -> u64 {
@@ -90,26 +90,26 @@ impl TimelinePromotionGate {
             .map_or(0, |manifest| manifest.generation)
     }
 
-    pub(crate) fn evaluate(&self, observation: TimelinePromotionObservation) -> TimelinePromotionOutcome {
+    pub(crate) fn evaluate(&self, observation: TimelinePromotionObservation) -> TimelinePromotionDecision {
         if self.clock.state() == TimerClockState::Unsafe {
-            return TimelinePromotionOutcome::ClockUnsafe;
+            return TimelinePromotionDecision::ClockUnsafe;
         }
         let Some(snapshot) = self.installed_snapshot.read().clone() else {
-            return TimelinePromotionOutcome::SnapshotMissing;
+            return TimelinePromotionDecision::SnapshotMissing;
         };
         if observation.activation_epoch != self.expected_activation_epoch
             || observation.format_fingerprint != self.expected_format_fingerprint
             || observation.capability_version != self.expected_capability_version
             || observation.role_epoch < snapshot.role_epoch
         {
-            return TimelinePromotionOutcome::Compatibility;
+            return TimelinePromotionDecision::Compatibility;
         }
         if observation.source_replay_cursor < observation.source_retention_start
             || observation.completion_replay_cursor < observation.final_retention_start
             || observation.source_replay_cursor < snapshot.source_physical_cursor
             || observation.completion_replay_cursor < snapshot.completion_physical_cursor
         {
-            return TimelinePromotionOutcome::RetentionGap;
+            return TimelinePromotionDecision::RetentionGap;
         }
         if observation.source_replay_cursor < observation.replicated_source_end
             || observation.completion_replay_cursor < observation.replicated_final_end
@@ -117,19 +117,19 @@ impl TimelinePromotionGate {
             || observation.due_backlog != 0
             || observation.completion_backlog != 0
         {
-            return TimelinePromotionOutcome::NotCaughtUp;
+            return TimelinePromotionDecision::NotCaughtUp;
         }
-        TimelinePromotionOutcome::Promotable
+        TimelinePromotionDecision::Promotable
     }
 }
 
-/// Source-free result of evaluating an Extended Timeline role promotion.
+/// Source-free decision for Extended Timeline snapshot installation or role promotion.
 ///
-/// Every non-promotable variant is a deterministic rejection; operational promotion failures
-/// are returned separately as [`StoreError`](crate::StoreError).
+/// Accepting a snapshot does not evaluate promotion prerequisites. Deterministic rejections stay
+/// here; operational failures are returned separately as [`StoreError`](crate::StoreError).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TimelinePromotionOutcome {
-    /// Promotion prerequisites are satisfied.
+pub enum TimelinePromotionDecision {
+    /// Snapshot installation or evaluated promotion prerequisites are accepted.
     Promotable,
     /// The snapshot manifest violates its source-free contract.
     Manifest(rocketmq_store_api::StoreContractViolation),
@@ -169,6 +169,6 @@ mod tests {
             capability_version: 1,
             ..TimelinePromotionObservation::default()
         };
-        assert_eq!(gate.evaluate(observation), TimelinePromotionOutcome::SnapshotMissing);
+        assert_eq!(gate.evaluate(observation), TimelinePromotionDecision::SnapshotMissing);
     }
 }

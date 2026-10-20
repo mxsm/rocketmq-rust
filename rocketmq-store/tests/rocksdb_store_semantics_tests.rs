@@ -41,6 +41,7 @@ use rocketmq_store::FlushDiskType;
 use rocketmq_store::GetMessageStatus;
 use rocketmq_store::MessageIndexRuntimeSnapshot;
 use rocketmq_store::MessageIndexRuntimeSource;
+use rocketmq_store::MessageStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::QueryMessageRequest;
@@ -49,7 +50,6 @@ use rocketmq_store::RocksDbIndexBuildConfig;
 use rocketmq_store::RocksDbIndexBuildService;
 use rocketmq_store::StoreComponent;
 use rocketmq_store::StoreOperation;
-use rocketmq_store::StorePorts;
 use rocketmq_store::StoreRuntimeConfig;
 use rocketmq_store::StoreType;
 use tempfile::TempDir;
@@ -164,8 +164,8 @@ fn new_owned_test_store_with_config(config: MessageStoreConfig) -> RocksDBMessag
     .expect("test Timer Store configuration is valid")
 }
 
-fn new_test_store(store: RocksDBMessageStore) -> StorePorts {
-    StorePorts::rocksdb(store)
+fn new_test_store(store: RocksDBMessageStore) -> MessageStore {
+    MessageStore::rocksdb(store)
 }
 
 fn build_test_message(topic: &CheetahString, queue_id: i32, body: &'static [u8]) -> MessageExtBrokerInner {
@@ -939,7 +939,7 @@ fn rocksdb_flush_rejects_either_closed_backend_before_draining_pending_index() {
         }
 
         let error = store.try_flush().expect_err(closed_backend);
-        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
         assert_eq!(error.operation(), StoreOperation::Flush);
         assert_eq!(error.component(), StoreComponent::RocksDb);
         assert!(std::error::Error::source(&error).is_none());
@@ -976,14 +976,14 @@ fn rocksdb_time_lookup_and_closed_backend_mapping_preserve_owner_context() {
     let error = store
         .try_get_max_offset_in_queue(&topic, 0)
         .expect_err("closed RocksDB must expose a typed error");
-    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
     assert_eq!(error.operation(), StoreOperation::QueryOffset);
     assert_eq!(error.component(), StoreComponent::RocksDb);
     assert!(std::error::Error::source(&error).is_none());
     assert_eq!(store.get_max_offset_in_queue(&topic, 0), 0);
     assert_eq!(store.get_commit_log_offset_in_queue(&topic, 0, 0), -1);
     let flush_error = store.try_flush().expect_err("closed RocksDB flush must fail");
-    assert_eq!(flush_error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(flush_error.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
     assert_eq!(flush_error.operation(), StoreOperation::Flush);
     assert_eq!(flush_error.component(), StoreComponent::RocksDb);
     assert!(std::error::Error::source(&flush_error).is_none());
@@ -991,5 +991,5 @@ fn rocksdb_time_lookup_and_closed_backend_mapping_preserve_owner_context() {
         .health_snapshot()
         .last_error
         .expect("flush failure must be reflected in health");
-    assert_eq!(health_error, &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(health_error, &rocketmq_error::STORAGE_UNAVAILABLE);
 }

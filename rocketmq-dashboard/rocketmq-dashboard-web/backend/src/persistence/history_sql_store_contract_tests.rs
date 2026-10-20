@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::SqlPersistence;
+use super::SqlDashboardStore;
 use crate::config::SqlPoolConfig;
 use crate::config::StorageConfig;
 use crate::model::EnvironmentId;
 use crate::model::MetricDimension;
 use crate::model::MetricSample;
-use crate::model::StorageBackend;
+use crate::model::StorageEngine;
 use crate::persistence::TimeRange;
 use crate::persistence::error::PersistenceError;
 use crate::persistence::history_repository::HistoryQuery;
@@ -30,9 +30,9 @@ fn sqlite_history_cursor_multidimension_atomicity_and_cutoff_contract() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
-        let store = SqlPersistence::initialize(
+        let store = SqlDashboardStore::initialize(
             &StorageConfig {
-                backend: StorageBackend::Sqlite,
+                backend: StorageEngine::Sqlite,
                 data_path: directory.path().join("dashboard.db"),
                 database_url: None,
                 pool: SqlPoolConfig::default(),
@@ -189,7 +189,7 @@ fn sqlite_history_cursor_multidimension_atomicity_and_cutoff_contract() {
 fn docker_mysql_history_identity_cursor_and_retention_contract() {
     let database_url = std::env::var("ROCKETMQ_DASHBOARD_STORAGE_TEST_MYSQL_URL")
         .expect("ROCKETMQ_DASHBOARD_STORAGE_TEST_MYSQL_URL must be set by the storage test runner");
-    docker_history_identity_cursor_and_retention_contract(StorageBackend::MySql, database_url);
+    docker_history_identity_cursor_and_retention_contract(StorageEngine::MySql, database_url);
 }
 
 #[test]
@@ -197,7 +197,7 @@ fn docker_mysql_history_identity_cursor_and_retention_contract() {
 fn docker_postgres_history_identity_cursor_and_retention_contract() {
     let database_url = std::env::var("ROCKETMQ_DASHBOARD_STORAGE_TEST_POSTGRES_URL")
         .expect("ROCKETMQ_DASHBOARD_STORAGE_TEST_POSTGRES_URL must be set by the storage test runner");
-    docker_history_identity_cursor_and_retention_contract(StorageBackend::Postgres, database_url);
+    docker_history_identity_cursor_and_retention_contract(StorageEngine::Postgres, database_url);
 }
 
 fn sample(
@@ -238,10 +238,10 @@ fn query(
     query
 }
 
-fn docker_history_identity_cursor_and_retention_contract(backend: StorageBackend, database_url: String) {
+fn docker_history_identity_cursor_and_retention_contract(backend: StorageEngine, database_url: String) {
     let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
-        let store = SqlPersistence::initialize(
+        let store = SqlDashboardStore::initialize(
             &StorageConfig {
                 backend,
                 data_path: "unused".into(),
@@ -473,7 +473,11 @@ fn docker_history_identity_cursor_and_retention_contract(backend: StorageBackend
     owner.shutdown_runtime_blocking().expect("runtime shutdown");
 }
 
-async fn assert_invalid_time_boundaries(store: &SqlPersistence, environment_id: &EnvironmentId, lease: &HistoryLease) {
+async fn assert_invalid_time_boundaries(
+    store: &SqlDashboardStore,
+    environment_id: &EnvironmentId,
+    lease: &HistoryLease,
+) {
     assert!(matches!(
         store
             .query_history(HistoryQuery {

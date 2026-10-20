@@ -678,7 +678,7 @@ fn a_settled_shutdown_without_faults_reports_none() {
 
     let mut group = ShutdownReport::new("background-group", Duration::ZERO);
     group.leaked = 4;
-    group.detached_still_running = 2;
+    group.blocking_still_running = 2;
 
     let faults = super::shutdown_faults(&group);
 

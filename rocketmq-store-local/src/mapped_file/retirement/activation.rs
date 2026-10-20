@@ -25,7 +25,7 @@ use rocketmq_store_api::StoreOperation;
 use thiserror::Error;
 
 use super::io::FileLedgerIo;
-use super::platform::NamespaceTransitionOutcome;
+use super::platform::NamespaceOperationResult;
 use super::platform::VerifiedNamespaceRoot;
 use super::registry::ManagedMappedFileQueueGeneration;
 use super::registry::RecoveredRetirementWork;
@@ -57,7 +57,7 @@ pub(in crate::mapped_file::retirement) enum ManagedLifecycleActivationFailure {
     #[error(transparent)]
     Writer(#[from] ManagedLedgerWriterFailure),
     #[error("managed namespace transition was not authorized: {0:?}")]
-    Namespace(NamespaceTransitionOutcome),
+    Namespace(NamespaceOperationResult),
 }
 
 /// One replay-authorized mapped-file queue that must be staged before activation.
@@ -86,13 +86,13 @@ fn activation_store_error(error: ManagedLifecycleActivationFailure) -> Option<St
             &rocketmq_error::STORAGE_STATE_CORRUPTED
         }
         ManagedLifecycleActivationFailure::SegmentClaim(_) | ManagedLifecycleActivationFailure::QueueLoad(_) => {
-            &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE
+            &rocketmq_error::STORAGE_UNAVAILABLE
         }
         ManagedLifecycleActivationFailure::Writer(source) if source.is_pre_io_contract() => return None,
         ManagedLifecycleActivationFailure::Namespace(source)
             if !matches!(
                 source,
-                NamespaceTransitionOutcome::Retryable(_) | NamespaceTransitionOutcome::Failed(_)
+                NamespaceOperationResult::Retryable(_) | NamespaceOperationResult::Failed(_)
             ) =>
         {
             return None;
@@ -520,7 +520,7 @@ mod tests {
             ManagedSegmentClaimFault::Allocation(claim_source),
         ))
         .expect("segment-claim owner is operational");
-        assert_eq!(claim.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+        assert_eq!(claim.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
         assert!(source_chain_contains::<std::collections::TryReserveError>(&claim));
     }
 

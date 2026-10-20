@@ -103,6 +103,55 @@ pub trait SecurityAdmin: Send {
     fn list_users<'a>(&'a mut self, request: &'a ListUsersRequest) -> AdminFuture<'a, ListUsersResult>;
 }
 
+/// Maximum rows retained by one ACL user observation. A row is one user on one Broker.
+pub const MAX_ACL_USER_ROWS: usize = 500;
+/// Maximum Brokers one ACL user observation asks.
+pub const MAX_ACL_USER_BROKERS: usize = 64;
+
+/// Selects the cluster whose ACL users are listed. It carries no address.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AclUserQueryRequest {
+    pub cluster: String,
+}
+
+impl AclUserQueryRequest {
+    pub fn try_new(cluster: impl Into<String>) -> AdminResult<Self> {
+        Ok(Self {
+            cluster: required("cluster", cluster)?,
+        })
+    }
+}
+
+/// One ACL user as one Broker holds it. It carries neither a password nor an address.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AclUserObservation {
+    pub broker_name: String,
+    pub username: String,
+    pub user_type: Option<String>,
+    pub user_status: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AclUserQueryResult {
+    /// The rows in ascending order of user name and Broker, at most [`MAX_ACL_USER_ROWS`].
+    pub users: Vec<AclUserObservation>,
+    /// How many distinct user names the Brokers listed, before the retained-row cap.
+    pub user_count: usize,
+    /// Whether rows beyond the retained-row cap were left out.
+    pub truncated: bool,
+    pub queried_broker_count: usize,
+    /// Logical names of the Brokers that could not be asked or did not answer.
+    pub unanswered_brokers: Vec<String>,
+}
+
+/// Secret-free read of the ACL users the masters of one cluster hold.
+///
+/// A Broker returns the password of every user it lists. It never reaches a result of this
+/// trait: the read capability drops it before the adapter sees a user.
+pub trait AclUserQueryAdmin: Send {
+    fn query_acl_users<'a>(&'a mut self, request: &'a AclUserQueryRequest) -> AdminFuture<'a, AclUserQueryResult>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::AdminCredentials;

@@ -59,6 +59,7 @@ use crate::connection::Connection;
 use crate::connection::ConnectionId;
 use crate::connection::ConnectionState;
 use crate::connection::SessionLifecycle;
+use crate::connection::SessionSendLease;
 use crate::connection::SessionWriterDiagnostics;
 use crate::connection::SessionWriterSnapshot;
 use crate::dispatch::reserve_session_owner;
@@ -89,6 +90,8 @@ use crate::writer_runtime::WriterLanes;
 use crate::writer_runtime::WriterQueueConfig;
 
 const SESSION_RETIREMENT_TIMEOUT: Duration = Duration::from_secs(5);
+const TRANSPORT_LISTENER: rocketmq_runtime::RuntimeOperation =
+    rocketmq_runtime::RuntimeOperation::external("transport-listener");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SessionWriterCompletionHealth {
@@ -210,8 +213,10 @@ impl SessionCloseCause {
     }
 }
 
-pub(crate) struct ServerOutboundLease {
+pub(crate) struct ServerOutboundLease<'a> {
     admission: Arc<ServerOutboundAdmission>,
+    // Released after Drop decrements the outbound count, allowing writer retirement to proceed.
+    _send_lease: SessionSendLease<'a>,
 }
 
 impl ServerOutboundAdmission {
@@ -222,14 +227,16 @@ impl ServerOutboundAdmission {
         })
     }
 
-    fn acquire(self: &Arc<Self>) -> Option<ServerOutboundLease> {
+    fn acquire<'a>(self: &Arc<Self>, lifecycle: &'a SessionLifecycle) -> Option<ServerOutboundLease<'a>> {
         if self.close_cause.load(Ordering::Acquire) != 0 {
             return None;
         }
+        let send_lease = lifecycle.begin_send()?;
         self.active.fetch_add(1, Ordering::AcqRel);
         if self.close_cause.load(Ordering::Acquire) == 0 {
             Some(ServerOutboundLease {
                 admission: Arc::clone(self),
+                _send_lease: send_lease,
             })
         } else {
             self.active.fetch_sub(1, Ordering::AcqRel);
@@ -255,7 +262,7 @@ impl ServerOutboundAdmission {
     }
 }
 
-impl Drop for ServerOutboundLease {
+impl Drop for ServerOutboundLease<'_> {
     fn drop(&mut self) {
         self.admission.active.fetch_sub(1, Ordering::AcqRel);
     }
@@ -693,10 +700,10 @@ impl SessionHandle {
         outcome
     }
 
-    pub(crate) fn acquire_server_outbound(&self) -> Result<ServerOutboundLease, rocketmq_error::SharedError> {
+    pub(crate) fn acquire_server_outbound(&self) -> Result<ServerOutboundLease<'_>, rocketmq_error::SharedError> {
         self.send
             .server_outbound
-            .acquire()
+            .acquire(&self.send.lifecycle)
             .ok_or_else(|| connection_failed_without_source(TransportStage::Closed))
     }
 
@@ -761,9 +768,7 @@ impl SessionHandle {
             self.send.task_group.abort_task(self.send.writer_task_id);
             return Err(connection_failed(TransportStage::Closed, source));
         }
-        let close_result = result
-            .await
-            .unwrap_or_else(|source| Err(connection_failed(TransportStage::Closed, source)));
+        let close_result = self.send.writer.wait_for_close(result).await;
         let _ = self.send.session_closed_tx.send(true);
         let _ = self.send.state_tx.send(ConnectionState::Closed);
         self.send.reader_cancellation.cancel();
@@ -1174,7 +1179,7 @@ impl TransportListener {
                 return Err(connection_failed_without_source(TransportStage::Closed));
             };
             let scope = AdmissionScope::new(remote_addr.ip()).with_session(session_id);
-            let crate::admission::AdmissionOutcome::Acquired(connection_permit) = admission.try_acquire(
+            let crate::admission::AdmissionDecision::Acquired(connection_permit) = admission.try_acquire(
                 AdmissionResource::Connection,
                 scope,
                 crate::admission::estimated_connection_retained_bytes(),
@@ -1526,9 +1531,9 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
             executor: executor.drain_report_until(request_deadline).await,
             deferred_cleanup: DeferredSessionCleanupReport::empty_completed(),
             remaining_wait_permits: 0,
+            writer: SessionWriterCompletionReport::new(session.retire_writer_owned().await, session.writer_snapshot()),
             remaining_server_outbound_leases: session.send.server_outbound.active(),
             disconnected_panicked: false,
-            writer: SessionWriterCompletionReport::new(session.retire_writer_owned().await, session.writer_snapshot()),
         };
         report.log(session.session_id());
         close_completion.complete(&report);
@@ -2052,7 +2057,7 @@ impl SessionTransportServer {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
-            .ok_or_else(|| RuntimeError::context_unavailable(rocketmq_runtime::RuntimeOperation::TransportListener))?;
+            .ok_or_else(|| RuntimeError::context_unavailable(TRANSPORT_LISTENER))?;
         let server = self.clone();
         let cancellation = self.service_context.task_group().cancellation_token();
         self.service_context.spawn_service("transport.accept", async move {
@@ -2077,7 +2082,7 @@ impl SessionTransportServer {
                     break;
                 };
                 let scope = AdmissionScope::new(remote_addr.ip()).with_session(session_id);
-                let crate::admission::AdmissionOutcome::Acquired(connection_permit) =
+                let crate::admission::AdmissionDecision::Acquired(connection_permit) =
                     server.dispatch.admission_controller().try_acquire(
                         AdmissionResource::Connection,
                         scope,
@@ -2426,7 +2431,7 @@ mod retirement_tests {
                             RemotingCommand::create_response_command_with_code(0).set_opaque(command.opaque())
                         )
                         .await,
-                    crate::dispatch::ResponseSendOutcome::Written
+                    crate::dispatch::ResponseSendResult::Written
                 ));
             })
         }
@@ -3009,7 +3014,7 @@ mod retirement_tests {
             .expect("server result");
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn retirement_waits_for_a_checked_send_before_closing_the_writer() {
         let runtime = RuntimeContext::from_current("transport-retirement-interleaving-test");
         let service = runtime.service_context("transport-retirement-interleaving");
@@ -3032,6 +3037,7 @@ mod retirement_tests {
             handler,
         ));
         let session = session_rx.await.expect("session capture");
+        let outbound = session.acquire_server_outbound().expect("outbound admission");
         let checked = Arc::new(Notify::new());
         let resume_enqueue = Arc::new(Notify::new());
         let mut checked_connection = session.connection_with_enqueue_gate(checked.clone(), resume_enqueue.clone());
@@ -3056,6 +3062,13 @@ mod retirement_tests {
 
         resume_enqueue.notify_one();
         checked_send.await.unwrap().expect("checked send completes");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut retirement)
+                .await
+                .is_err(),
+            "retirement must wait for the outbound caller to release its lease"
+        );
+        drop(outbound);
         retirement.await.unwrap().expect("retirement completes");
 
         let mut post_retirement = session.connection();

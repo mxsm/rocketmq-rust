@@ -34,7 +34,7 @@ use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 
 use super::persistence::RaftLogRepository;
-use crate::storage::SharedStorageBackend;
+use crate::storage::SharedKeyValueStore;
 use crate::typ::LogEntry;
 use crate::typ::LogId;
 use crate::typ::TypeConfig;
@@ -105,7 +105,7 @@ impl LogStore {
         }
     }
 
-    pub async fn open(backend: SharedStorageBackend) -> Result<Self, std::io::Error> {
+    pub async fn open(backend: SharedKeyValueStore) -> Result<Self, std::io::Error> {
         let repository = RaftLogRepository::new(backend);
         let loaded = repository.load().await?;
         let store = Self {

@@ -14,6 +14,8 @@
 
 //! Deliberate stable Client entry points.
 
+#[cfg(feature = "admin-read")]
+pub use crate::admin::AclUserRead;
 #[cfg(feature = "admin-full")]
 pub use crate::admin::AuthAdmin;
 #[cfg(feature = "admin-full")]
@@ -21,13 +23,11 @@ pub use crate::admin::BrokerAdmin;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::BrokerConfigAllowlisted;
 #[cfg(feature = "admin-mutation")]
-pub use crate::admin::BrokerConfigPatchOutcome;
+pub use crate::admin::BrokerConfigPatchResult;
 #[cfg(feature = "admin-mutation")]
 pub use crate::admin::BrokerMutationConfigState;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::BrokerReadFailure;
-#[cfg(feature = "admin-mutation")]
-pub use crate::admin::ConditionalConsumerOffsetOutcome;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::ConsumeStatsReadResult;
 #[cfg(feature = "admin-full")]
@@ -36,6 +36,12 @@ pub use crate::admin::ConsumerAdmin;
 pub use crate::admin::ConsumerConnectionRead;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::ConsumerGroupConfigRead;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::ConsumerOffsetCasResult;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::ConsumerOffsetMutationReport;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::ConsumerOffsetTargetReport;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::ConsumerProgressRead;
 pub use crate::admin::DefaultMQAdminExt;
@@ -45,9 +51,17 @@ pub use crate::admin::InfrastructureObservationReadError;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::InfrastructureObservationReadErrorCode;
 #[cfg(feature = "admin-read")]
+pub use crate::admin::MQAdminAclReadExt;
+#[cfg(feature = "admin-read")]
 pub use crate::admin::MQAdminConsumerObservationReadExt;
 #[cfg(feature = "admin-read")]
+pub use crate::admin::MQAdminConsumerRuntimeReadExt;
+#[cfg(feature = "admin-read")]
 pub use crate::admin::MQAdminInfrastructureObservationReadExt;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::MQAdminLiteReadExt;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::MQAdminMessageIndexReadExt;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::MQAdminMessageReadExt;
 #[cfg(feature = "admin-mutation")]
@@ -59,7 +73,19 @@ pub use crate::admin::MQAdminTopicInventoryReadExt;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::MQAdminTopicStatsReadExt;
 #[cfg(feature = "admin-read")]
+pub use crate::admin::MQAdminTopicSubscriberReadExt;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::MessageIndexQuery;
+#[cfg(feature = "admin-read")]
 pub use crate::admin::MessageMetadataRead;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::MessageRequestModeCasReport;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::MessageTraceRead;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::MetadataCasReport;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::MutationBrokerLogFilterStatus;
 #[cfg(feature = "admin-mutation")]
 pub use crate::admin::MutationConsumerOffsetPreview;
 #[cfg(feature = "admin-mutation")]
@@ -69,11 +95,7 @@ pub use crate::admin::MutationExpectedState;
 #[cfg(feature = "admin-mutation")]
 pub use crate::admin::MutationMessageRequestMode;
 #[cfg(feature = "admin-mutation")]
-pub use crate::admin::MutationMessageRequestModeOutcome;
-#[cfg(feature = "admin-mutation")]
 pub use crate::admin::MutationPersistenceState;
-#[cfg(feature = "admin-mutation")]
-pub use crate::admin::MutationStateCasOutcome;
 #[cfg(feature = "admin-mutation")]
 pub use crate::admin::MutationSubscriptionGroupConfig;
 #[cfg(feature = "admin-mutation")]
@@ -95,7 +117,7 @@ pub use crate::admin::RouteAdmin;
 #[cfg(feature = "admin-mutation")]
 pub use crate::admin::SubscriptionGroupConfigPatch;
 #[cfg(feature = "admin-mutation")]
-pub use crate::admin::SubscriptionGroupConfigPatchOutcome;
+pub use crate::admin::SubscriptionGroupConfigPatchResult;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::SubscriptionGroupConfigVersioned;
 #[cfg(feature = "admin-full")]
@@ -103,15 +125,11 @@ pub use crate::admin::TopicAdmin;
 #[cfg(feature = "admin-mutation")]
 pub use crate::admin::TopicConfigPatch;
 #[cfg(feature = "admin-mutation")]
-pub use crate::admin::TopicConfigPatchOutcome;
+pub use crate::admin::TopicConfigPatchResult;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::TopicConfigVersioned;
 #[cfg(feature = "admin-mutation")]
 pub use crate::admin::TopicOffsetMutationFailureCode;
-#[cfg(feature = "admin-mutation")]
-pub use crate::admin::TopicOffsetMutationOutcome;
-#[cfg(feature = "admin-mutation")]
-pub use crate::admin::TopicOffsetMutationTargetOutcome;
 pub use crate::base::client_config::ClientConfig;
 pub use crate::base::client_options::ClientOptions;
 pub use crate::cluster_session::{

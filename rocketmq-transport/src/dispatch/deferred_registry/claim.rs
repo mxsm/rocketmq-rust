@@ -33,9 +33,9 @@ use crate::dispatch::RemotingResponse;
 use crate::dispatch::RequestControlView;
 use crate::dispatch::ResponseReceipt;
 use crate::dispatch::ResponseState;
-use crate::dispatch::ResponseStateOutcome;
 use crate::dispatch::ResponseStateSnapshot;
 use crate::dispatch::ResponseTerminalState;
+use crate::dispatch::ResponseTransitionResult;
 use crate::session_view::SessionId;
 
 /// Reason that caused a deferred request to become eligible for resume.
@@ -61,7 +61,7 @@ pub struct DeferredResumeRetainedSize {
 
 /// Result of claiming one deferred request.
 #[must_use]
-pub enum DeferredClaimOutcome<R>
+pub enum DeferredClaimResult<R>
 where
     R: Send + 'static,
 {
@@ -84,7 +84,7 @@ where
 /// Result of a deferred resume attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[must_use]
-pub enum DeferredResumeOutcome {
+pub enum DeferredResumeResult {
     /// Canonical response delivery completed.
     Completed(ResponseReceipt),
     /// The request lifecycle was cancelled.
@@ -101,7 +101,7 @@ pub enum DeferredResumeOutcome {
 /// Transport can complete it before returning this source-free projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[must_use]
-pub enum DeferredResumeSubmitOutcome {
+pub enum DeferredResumeSubmissionStatus {
     /// The original session executor accepted the resume cell.
     Submitted,
     /// The request lifecycle was cancelled before submission.
@@ -234,12 +234,12 @@ where
     /// Returns an operational transport error for retained-size contract
     /// violations, residual runtime failures, response construction, or
     /// response I/O. Lifecycle, bounded-admission, and known executor-closure
-    /// states are source-free [`DeferredResumeOutcome`] variants.
+    /// states are source-free [`DeferredResumeResult`] variants.
     pub async fn resume<F, Fut>(
         self,
         handler_retained: DeferredResumeRetainedSize,
         handler: F,
-    ) -> Result<DeferredResumeOutcome, crate::error::TransportError>
+    ) -> Result<DeferredResumeResult, crate::error::TransportError>
     where
         F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = Result<RemotingResponse, rocketmq_error::SharedError>> + Send + 'static,
@@ -259,17 +259,17 @@ where
     /// Returns an operational transport error for retained-size contract
     /// violations or residual runtime failures. Lifecycle, bounded-admission,
     /// and known executor-closure states are source-free
-    /// [`DeferredResumeSubmitOutcome`] variants.
+    /// [`DeferredResumeSubmissionStatus`] variants.
     pub fn submit<F, Fut, O>(
         self,
         handler_retained: DeferredResumeRetainedSize,
         handler: F,
         terminal_observer: O,
-    ) -> Result<DeferredResumeSubmitOutcome, crate::error::TransportError>
+    ) -> Result<DeferredResumeSubmissionStatus, crate::error::TransportError>
     where
         F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = Result<RemotingResponse, rocketmq_error::SharedError>> + Send + 'static,
-        O: FnOnce(&Result<DeferredResumeOutcome, crate::error::TransportError>) + Send + 'static,
+        O: FnOnce(&Result<DeferredResumeResult, crate::error::TransportError>) + Send + 'static,
     {
         crate::dispatch::deferred_resume::submit_claimed(self, handler_retained, handler, terminal_observer)
     }
@@ -459,20 +459,20 @@ where
 
     pub(super) fn close_session_response(
         &self,
-    ) -> Result<ResponseStateOutcome, crate::contract::TransportContractViolation> {
+    ) -> Result<ResponseTransitionResult, crate::contract::TransportContractViolation> {
         self.state.close_with_reason(DeferredSystemCloseReason::SESSION_CLOSED)
     }
 
     pub(super) fn cancel_parent_response(
         &self,
-    ) -> Result<ResponseStateOutcome, crate::contract::TransportContractViolation> {
+    ) -> Result<ResponseTransitionResult, crate::contract::TransportContractViolation> {
         self.state
             .cancel_with_reason(DeferredSystemCancellationReason::PARENT_CANCELLED)
     }
 
     pub(super) fn cancel_owner_response(
         &self,
-    ) -> Result<ResponseStateOutcome, crate::contract::TransportContractViolation> {
+    ) -> Result<ResponseTransitionResult, crate::contract::TransportContractViolation> {
         self.state
             .cancel_with_reason(DeferredSystemCancellationReason::OWNER_DEADLINE)
     }
@@ -485,7 +485,7 @@ where
         self.state.snapshot()
     }
 
-    fn terminalize_release(&self) -> Result<ResponseStateOutcome, crate::contract::TransportContractViolation> {
+    fn terminalize_release(&self) -> Result<ResponseTransitionResult, crate::contract::TransportContractViolation> {
         if self.control.parent_is_cancelled() {
             self.cancel_parent_response()
         } else if self.control.session_is_closed() {

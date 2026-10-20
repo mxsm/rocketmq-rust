@@ -20,8 +20,8 @@ use crate::mapped_file::retirement::codec::decode_acknowledgement_slot;
 use crate::mapped_file::retirement::codec::decode_commit_seal;
 use crate::mapped_file::retirement::codec::decode_next_frame;
 use crate::mapped_file::retirement::codec::AcknowledgementSlotState;
-use crate::mapped_file::retirement::codec::DecodeOutcome;
 use crate::mapped_file::retirement::codec::GenerationAbortReason;
+use crate::mapped_file::retirement::codec::LedgerFrameDecodeResult;
 use crate::mapped_file::retirement::codec::LedgerRecord;
 use crate::mapped_file::retirement::codec::QuarantineEntityKind;
 use crate::mapped_file::retirement::codec::QuarantineReason;
@@ -687,7 +687,7 @@ fn ample_space() -> CompactionSpace {
 }
 
 fn decode_unit_record(unit: &PlannedDurableUnit, generation: u64) -> LedgerRecord {
-    let DecodeOutcome::Frame(frame) =
+    let LedgerFrameDecodeResult::Frame(frame) =
         decode_next_frame(unit.frame(), unit.sequence(), generation).expect("planned frame decodes")
     else {
         panic!("planned unit contains one complete frame")

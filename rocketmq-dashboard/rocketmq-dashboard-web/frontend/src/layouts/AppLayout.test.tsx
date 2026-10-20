@@ -44,6 +44,7 @@ describe('AppLayout', () => {
     renderAtRoute(<AppLayout><h1>Dashboard content</h1></AppLayout>);
 
     expect(await screen.findByRole('link', { name: 'Dashboard' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Topology' })).toHaveAttribute('href', '/topology');
     expect(screen.getByRole('link', { name: 'Cluster' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'ACL Management' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Login' })).not.toBeInTheDocument();

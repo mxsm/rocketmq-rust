@@ -7,6 +7,7 @@ import ErrorState from '../components/ErrorState';
 import LoadingState from '../components/LoadingState';
 import PageHeader from '../components/PageHeader';
 import RefreshButton from '../components/RefreshButton';
+import StatusBadge from '../components/StatusBadge';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import type { AuditEventPage, AuditOutcome } from '../types/audit';
@@ -67,7 +68,7 @@ export default function AuditPage() {
   return (
     <>
       <PageHeader title="Audit" description="Append-only operational history. Read access is not audited." actions={<RefreshButton onRefresh={() => void load(undefined, true)} />} />
-      <section className="table-shell audit-admin-shell">
+      <section className="table-shell audit-admin-shell" data-surface="panel">
         <div className="audit-filter-row">
           <Input value={actor} placeholder="Actor" aria-label="Actor" onChange={(event) => setActor(event.target.value)} />
           <Input value={action} placeholder="Action code" aria-label="Action code" onChange={(event) => setAction(event.target.value)} />
@@ -88,7 +89,7 @@ export default function AuditPage() {
               <tbody>{page.events.map((event) => (
                 <tr key={event.eventId}>
                   <td>{formatTime(event.createdAtMs)}</td><td>{event.actor}</td><td><code>{event.action}</code></td>
-                  <td>{event.resourceName ?? event.resourceType}</td><td><span className={`audit-outcome audit-outcome-${event.outcome}`}>{event.outcome}</span></td>
+                  <td>{event.resourceName ?? event.resourceType}</td><td><StatusBadge status={event.outcome} tone={event.outcome === 'succeeded' ? 'success' : event.outcome === 'failed' ? 'danger' : 'warning'} /></td>
                   <td><code className="audit-detail">{safeJson(event.detail)}</code></td>
                 </tr>
               ))}</tbody>

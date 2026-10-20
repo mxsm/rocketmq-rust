@@ -23,7 +23,7 @@ repository.workspace   = true
 license.workspace      = true
 keywords               = ["filter", "rocketmq", "tag", "sql"]
 categories             = ["development-tools", "network-programming", "asynchronous"]
-readme.workspace       = true
+readme                 = "README.md"
 description            = "A filter for RocketMQ messages"
 rust-version.workspace = true
 

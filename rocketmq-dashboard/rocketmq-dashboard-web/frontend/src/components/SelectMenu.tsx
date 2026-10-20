@@ -77,7 +77,7 @@ export default function SelectMenu({ value, options, onChange, ariaLabel, classN
         <ChevronDown size={14} aria-hidden="true" />
       </button>
       {open ? (
-        <div className="select-menu-popover">
+        <div className="select-menu-popover" data-surface="overlay">
           {searchable ? (
             <label className="select-menu-search">
               <Search size={14} aria-hidden="true" />

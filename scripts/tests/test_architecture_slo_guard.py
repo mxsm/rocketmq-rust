@@ -49,7 +49,6 @@ class ArchitectureSloGuardTests(unittest.TestCase):
             "scripts/architecture_slo_guard.py",
             "scripts/verify_service_image_publication.py",
             "scripts/tests/test_architecture_slo_guard.py",
-            ".github/workflows/architecture-slo-evidence.yml",
         )
         for relative in paths:
             source = REPO_ROOT / relative
@@ -245,49 +244,6 @@ class ArchitectureSloGuardTests(unittest.TestCase):
             "--evidence", str(FIXTURE), "--allow-fixture", expect_success=False
         )
         self.assertIn("release artifact hash mismatch", result.stderr)
-
-    def test_hosted_six_hour_runner_regression_is_rejected(self) -> None:
-        workflow = self.root / ".github" / "workflows" / "architecture-slo-evidence.yml"
-        source = workflow.read_text(encoding="utf-8")
-        workflow.write_text(
-            source.replace(
-                "runs-on: [self-hosted, linux, x64, rocketmq-architecture-evidence]",
-                "runs-on: ubuntu-latest",
-                1,
-            ),
-            encoding="utf-8",
-        )
-        result = self.run_guard("--policy-only", expect_success=False)
-        self.assertIn("dedicated self-hosted evidence runner", result.stderr)
-
-    def test_workflow_artifact_uses_resolved_candidate_commit(self) -> None:
-        workflow = self.root / ".github" / "workflows" / "architecture-slo-evidence.yml"
-        source = workflow.read_text(encoding="utf-8")
-        workflow.write_text(
-            source.replace(
-                "m11-12-r24-${{ env.EVIDENCE_BACKEND }}-${{ steps.bind-candidate.outputs.candidate_commit }}",
-                "m11-12-r24-${{ env.EVIDENCE_BACKEND }}-${{ github.sha }}",
-                1,
-            ),
-            encoding="utf-8",
-        )
-        result = self.run_guard("--policy-only", expect_success=False)
-        self.assertIn("checked-out candidate commit", result.stderr)
-
-    def test_signed_publication_workflow_regressions_are_rejected(self) -> None:
-        workflow = self.root / ".github" / "workflows" / "architecture-slo-evidence.yml"
-        source = workflow.read_text(encoding="utf-8")
-        mutations = (
-            ("candidate_publication_json:", "candidate_images_json:", "signed candidate publication"),
-            ('--candidate "$CANDIDATE_COMMIT"', '--candidate "f"', "before deriving its image map"),
-            ("cosign-release: v3.1.2", "cosign-release: latest", "pinned Cosign v3.1.2"),
-        )
-        for old, new, finding in mutations:
-            with self.subTest(old=old):
-                self.assertIn(old, source)
-                workflow.write_text(source.replace(old, new, 1), encoding="utf-8")
-                result = self.run_guard("--policy-only", expect_success=False)
-                self.assertIn(finding, result.stderr)
 
     def test_attestation_verifier_regressions_are_rejected(self) -> None:
         verifier = self.root / "scripts" / "verify_service_image_publication.py"

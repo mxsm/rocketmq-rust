@@ -36,7 +36,7 @@ use super::default_mq_admin_ext::DefaultMQAdminExt;
 
 /// Result of one generation-checked broker configuration patch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BrokerConfigPatchOutcome {
+pub enum BrokerConfigPatchResult {
     /// The patch was committed as the generation immediately after precheck.
     Applied { previous_generation: u64, generation: u64 },
     /// The broker changed after precheck; callers must stop and re-plan.
@@ -63,7 +63,7 @@ impl TopicConfigPatch {
 
 /// Result of one version-checked Topic configuration patch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TopicConfigPatchOutcome {
+pub enum TopicConfigPatchResult {
     /// The patch was committed as the version immediately after precheck.
     Applied { previous_version: u64, version: u64 },
     /// Topic metadata changed after precheck; callers must stop and re-plan.
@@ -146,9 +146,11 @@ pub struct MutationSubscriptionGroupConfigState {
     pub config: Option<MutationSubscriptionGroupConfig>,
 }
 
-/// Result of one presence/version conditional replacement.
+/// Presence/version compare-and-set report for one Topic or Subscription
+/// Group. `applied`, `changed`, and `persistence` are reported independently:
+/// an accepted response can still retain failed or unconfirmed persistence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MutationStateCasOutcome {
+pub struct MetadataCasReport {
     pub applied: bool,
     pub changed: bool,
     pub state: MutationExpectedState,
@@ -179,9 +181,27 @@ pub struct BrokerMutationConfigState {
     pub trace_topic_enable: bool,
 }
 
+/// Broker log-filter control status allowed into mutation preflight.
+///
+/// The operation identifiers are whatever the callers of the Broker chose;
+/// a consumer must not publish one it did not issue itself.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MutationBrokerLogFilterStatus {
+    /// Whether the Broker reports the bounded log-filter control.
+    pub supported: bool,
+    /// Filter directives in effect, as the Broker reports them.
+    pub effective_filter: Option<String>,
+    /// Operation that owns the active override, when one is active.
+    pub active_operation_id: Option<String>,
+    /// Operation whose override ended last.
+    pub last_completed_operation_id: Option<String>,
+    /// When the active override expires on its own.
+    pub expires_at_millis: Option<u64>,
+}
+
 /// Exact conditional consumer-offset update result.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ConditionalConsumerOffsetOutcome {
+pub struct ConsumerOffsetCasResult {
     pub applied: bool,
     pub actual_offset: i64,
 }
@@ -209,9 +229,10 @@ pub enum MutationExpectedMessageRequestMode {
     Present(MutationMessageRequestMode),
 }
 
-/// Conditional request-mode result containing only the current typed value.
+/// Request-mode compare-and-set report. `current`, `applied`/`changed`, and
+/// `persistence` are reported independently of each other.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MutationMessageRequestModeOutcome {
+pub struct MessageRequestModeCasReport {
     pub applied: bool,
     pub changed: bool,
     pub current: Option<MutationMessageRequestMode>,
@@ -227,7 +248,7 @@ pub enum TopicOffsetMutationFailureCode {
 
 /// One broker or queue result from a detailed reset/skip workflow.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TopicOffsetMutationTargetOutcome {
+pub struct ConsumerOffsetTargetReport {
     pub broker_name: String,
     pub queue_id: Option<i32>,
     pub applied: bool,
@@ -238,8 +259,8 @@ pub struct TopicOffsetMutationTargetOutcome {
 
 /// Failure-aware results for all exact broker/queue targets reached by one offset mutation.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct TopicOffsetMutationOutcome {
-    pub targets: Vec<TopicOffsetMutationTargetOutcome>,
+pub struct ConsumerOffsetMutationReport {
+    pub targets: Vec<ConsumerOffsetTargetReport>,
 }
 
 /// Closed Subscription Group fields accepted by the supervised version-CAS
@@ -260,7 +281,7 @@ impl SubscriptionGroupConfigPatch {
 
 /// Result of one version-checked Subscription Group configuration patch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SubscriptionGroupConfigPatchOutcome {
+pub enum SubscriptionGroupConfigPatchResult {
     /// The patch was committed as the version immediately after precheck.
     Applied { previous_version: u64, version: u64 },
     /// Subscription Group metadata changed after precheck; callers must stop
@@ -288,6 +309,21 @@ pub trait MQAdminMutationExt: Send {
         operation_id: CheetahString,
     ) -> crate::ClientResult<ProxyDrainStateResponseBody>;
 
+    /// Reads one Proxy's drain state for a supervised precheck or
+    /// postcondition.
+    ///
+    /// The default deliberately fails closed so existing trait implementers
+    /// remain source compatible.
+    async fn mutation_proxy_drain_state(
+        &self,
+        proxy_addr: CheetahString,
+    ) -> crate::ClientResult<ProxyDrainStateResponseBody> {
+        let _ = proxy_addr;
+        Err(crate::ClientError::illegal_argument(
+            "Proxy drain state preflight is not implemented by this admin client",
+        ))
+    }
+
     /// Reads the broker configuration generation used by supervised prechecks.
     async fn broker_config_generation(&self, broker_addr: CheetahString) -> crate::ClientResult<u64>;
 
@@ -298,7 +334,7 @@ pub trait MQAdminMutationExt: Send {
         broker_addr: CheetahString,
         expected_generation: u64,
         properties: HashMap<CheetahString, CheetahString>,
-    ) -> crate::ClientResult<BrokerConfigPatchOutcome>;
+    ) -> crate::ClientResult<BrokerConfigPatchResult>;
 
     /// Changes only the three fields in [`TopicConfigPatch`] when the Broker's
     /// current Topic metadata version still matches `expected_version`.
@@ -308,7 +344,7 @@ pub trait MQAdminMutationExt: Send {
         topic: CheetahString,
         expected_version: u64,
         patch: TopicConfigPatch,
-    ) -> crate::ClientResult<TopicConfigPatchOutcome>;
+    ) -> crate::ClientResult<TopicConfigPatchResult>;
 
     /// Reads only the Topic fields and version needed to prepare a supervised
     /// queue-count compare-and-set mutation.
@@ -343,7 +379,7 @@ pub trait MQAdminMutationExt: Send {
         topic: CheetahString,
         expected_state: MutationExpectedState,
         replacement: MutationTopicConfig,
-    ) -> crate::ClientResult<MutationStateCasOutcome> {
+    ) -> crate::ClientResult<MetadataCasReport> {
         let _ = (broker_addr, topic, expected_state, replacement);
         Err(crate::ClientError::illegal_argument(
             "presence-aware Topic replacement is not implemented by this admin client",
@@ -359,7 +395,7 @@ pub trait MQAdminMutationExt: Send {
         group: CheetahString,
         expected_version: u64,
         patch: SubscriptionGroupConfigPatch,
-    ) -> crate::ClientResult<SubscriptionGroupConfigPatchOutcome>;
+    ) -> crate::ClientResult<SubscriptionGroupConfigPatchResult>;
 
     /// Reads presence-aware, allowlisted Subscription Group state from one exact Broker.
     async fn mutation_subscription_group_config_state(
@@ -380,7 +416,7 @@ pub trait MQAdminMutationExt: Send {
         group: CheetahString,
         expected_state: MutationExpectedState,
         replacement: MutationSubscriptionGroupConfig,
-    ) -> crate::ClientResult<MutationStateCasOutcome> {
+    ) -> crate::ClientResult<MetadataCasReport> {
         let _ = (broker_addr, group, expected_state, replacement);
         Err(crate::ClientError::illegal_argument(
             "presence-aware Subscription Group replacement is not implemented by this admin client",
@@ -407,7 +443,7 @@ pub trait MQAdminMutationExt: Send {
         queue_id: i32,
         expected_offset: i64,
         new_offset: i64,
-    ) -> crate::ClientResult<ConditionalConsumerOffsetOutcome> {
+    ) -> crate::ClientResult<ConsumerOffsetCasResult> {
         let _ = (
             broker_addr,
             consumer_group,
@@ -479,7 +515,7 @@ pub trait MQAdminMutationExt: Send {
         consumer_group: CheetahString,
         expected: MutationExpectedMessageRequestMode,
         replacement: MutationMessageRequestMode,
-    ) -> crate::ClientResult<MutationMessageRequestModeOutcome> {
+    ) -> crate::ClientResult<MessageRequestModeCasReport> {
         let _ = (broker_addr, topic, consumer_group, expected, replacement);
         Err(crate::ClientError::illegal_argument(
             "conditional request-mode mutation is not implemented by this admin client",
@@ -500,7 +536,7 @@ pub trait MQAdminMutationExt: Send {
         expected: MutationExpectedMessageRequestMode,
         replacement: MutationMessageRequestMode,
         timeout_millis: u64,
-    ) -> crate::ClientResult<MutationMessageRequestModeOutcome> {
+    ) -> crate::ClientResult<MessageRequestModeCasReport> {
         let _ = (
             broker_addr,
             topic,
@@ -546,6 +582,21 @@ pub trait MQAdminMutationExt: Send {
         ))
     }
 
+    /// Reads one Broker's log-filter control status for a supervised
+    /// precheck or postcondition.
+    ///
+    /// The default deliberately fails closed so existing trait implementers
+    /// remain source compatible.
+    async fn mutation_broker_log_filter_status(
+        &self,
+        broker_addr: CheetahString,
+    ) -> crate::ClientResult<MutationBrokerLogFilterStatus> {
+        let _ = broker_addr;
+        Err(crate::ClientError::illegal_argument(
+            "broker log-filter status preflight is not implemented by this admin client",
+        ))
+    }
+
     async fn upsert_topic_config(&self, broker_addr: CheetahString, config: TopicConfig) -> crate::ClientResult<()>;
 
     async fn remove_topic(&self, topic_name: CheetahString, cluster_name: CheetahString) -> crate::ClientResult<()>;
@@ -567,7 +618,7 @@ pub trait MQAdminMutationExt: Send {
         consumer_group: CheetahString,
         timestamp: u64,
         force: bool,
-    ) -> crate::ClientResult<TopicOffsetMutationOutcome> {
+    ) -> crate::ClientResult<ConsumerOffsetMutationReport> {
         let _ = (cluster_name, topic, consumer_group, timestamp, force);
         Err(crate::ClientError::illegal_argument(
             "detailed reset-offset mutation is not implemented by this admin client",
@@ -597,7 +648,7 @@ pub trait MQAdminMutationExt: Send {
         topic: CheetahString,
         consumer_group: CheetahString,
         force: bool,
-    ) -> crate::ClientResult<TopicOffsetMutationOutcome> {
+    ) -> crate::ClientResult<ConsumerOffsetMutationReport> {
         let _ = (cluster_name, topic, consumer_group, force);
         Err(crate::ClientError::illegal_argument(
             "detailed skip-accumulated mutation is not implemented by this admin client",
@@ -749,6 +800,13 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
         MQAdminMutationExt::cancel_proxy_drain(self.inner(), proxy_addr, operation_id).await
     }
 
+    async fn mutation_proxy_drain_state(
+        &self,
+        proxy_addr: CheetahString,
+    ) -> crate::ClientResult<ProxyDrainStateResponseBody> {
+        MQAdminMutationExt::mutation_proxy_drain_state(self.inner(), proxy_addr).await
+    }
+
     async fn broker_config_generation(&self, broker_addr: CheetahString) -> crate::ClientResult<u64> {
         MQAdminMutationExt::broker_config_generation(self.inner(), broker_addr).await
     }
@@ -758,7 +816,7 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
         broker_addr: CheetahString,
         expected_generation: u64,
         properties: HashMap<CheetahString, CheetahString>,
-    ) -> crate::ClientResult<BrokerConfigPatchOutcome> {
+    ) -> crate::ClientResult<BrokerConfigPatchResult> {
         MQAdminMutationExt::patch_broker_config_if_generation(
             self.inner(),
             broker_addr,
@@ -805,7 +863,7 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
         topic: CheetahString,
         expected_version: u64,
         patch: TopicConfigPatch,
-    ) -> crate::ClientResult<TopicConfigPatchOutcome> {
+    ) -> crate::ClientResult<TopicConfigPatchResult> {
         MQAdminMutationExt::patch_topic_config_if_version(self.inner(), broker_addr, topic, expected_version, patch)
             .await
     }
@@ -832,7 +890,7 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
         topic: CheetahString,
         expected_state: MutationExpectedState,
         replacement: MutationTopicConfig,
-    ) -> crate::ClientResult<MutationStateCasOutcome> {
+    ) -> crate::ClientResult<MetadataCasReport> {
         MQAdminMutationExt::replace_topic_config_if_state(self.inner(), broker_addr, topic, expected_state, replacement)
             .await
     }
@@ -843,7 +901,7 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
         group: CheetahString,
         expected_version: u64,
         patch: SubscriptionGroupConfigPatch,
-    ) -> crate::ClientResult<SubscriptionGroupConfigPatchOutcome> {
+    ) -> crate::ClientResult<SubscriptionGroupConfigPatchResult> {
         MQAdminMutationExt::patch_subscription_group_config_if_version(
             self.inner(),
             broker_addr,
@@ -868,7 +926,7 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
         group: CheetahString,
         expected_state: MutationExpectedState,
         replacement: MutationSubscriptionGroupConfig,
-    ) -> crate::ClientResult<MutationStateCasOutcome> {
+    ) -> crate::ClientResult<MetadataCasReport> {
         MQAdminMutationExt::replace_subscription_group_config_if_state(
             self.inner(),
             broker_addr,
@@ -894,7 +952,7 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
         queue_id: i32,
         expected_offset: i64,
         new_offset: i64,
-    ) -> crate::ClientResult<ConditionalConsumerOffsetOutcome> {
+    ) -> crate::ClientResult<ConsumerOffsetCasResult> {
         MQAdminMutationExt::reset_consumer_offset_if_current(
             self.inner(),
             broker_addr,
@@ -923,7 +981,7 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
         consumer_group: CheetahString,
         expected: MutationExpectedMessageRequestMode,
         replacement: MutationMessageRequestMode,
-    ) -> crate::ClientResult<MutationMessageRequestModeOutcome> {
+    ) -> crate::ClientResult<MessageRequestModeCasReport> {
         MQAdminMutationExt::replace_message_request_mode_if_current(
             self.inner(),
             broker_addr,
@@ -943,7 +1001,7 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
         expected: MutationExpectedMessageRequestMode,
         replacement: MutationMessageRequestMode,
         timeout_millis: u64,
-    ) -> crate::ClientResult<MutationMessageRequestModeOutcome> {
+    ) -> crate::ClientResult<MessageRequestModeCasReport> {
         MQAdminMutationExt::replace_message_request_mode_if_current_with_timeout(
             self.inner(),
             broker_addr,
@@ -983,6 +1041,13 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
         MQAdminMutationExt::restore_broker_log_filter(self.inner(), broker_addr, operation_id).await
     }
 
+    async fn mutation_broker_log_filter_status(
+        &self,
+        broker_addr: CheetahString,
+    ) -> crate::ClientResult<MutationBrokerLogFilterStatus> {
+        MQAdminMutationExt::mutation_broker_log_filter_status(self.inner(), broker_addr).await
+    }
+
     async fn upsert_topic_config(&self, broker_addr: CheetahString, config: TopicConfig) -> crate::ClientResult<()> {
         MQAdminMutationExt::upsert_topic_config(self.inner(), broker_addr, config).await
     }
@@ -1010,7 +1075,7 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
         consumer_group: CheetahString,
         timestamp: u64,
         force: bool,
-    ) -> crate::ClientResult<TopicOffsetMutationOutcome> {
+    ) -> crate::ClientResult<ConsumerOffsetMutationReport> {
         MQAdminMutationExt::reset_consumer_offset_detailed(
             self.inner(),
             cluster_name,
@@ -1038,7 +1103,7 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
         topic: CheetahString,
         consumer_group: CheetahString,
         force: bool,
-    ) -> crate::ClientResult<TopicOffsetMutationOutcome> {
+    ) -> crate::ClientResult<ConsumerOffsetMutationReport> {
         MQAdminMutationExt::skip_accumulated_message_detailed(self.inner(), cluster_name, topic, consumer_group, force)
             .await
     }

@@ -281,8 +281,8 @@ impl LocalFileMessageStore {
         if message_store_config.enable_mapped_file_lifecycle_wave_b
             && matches!(
                 initial_outcome,
-                rocketmq_store_local::mapped_file::ManagedLifecycleReadOutcome::LegacyAbsent
-                    | rocketmq_store_local::mapped_file::ManagedLifecycleReadOutcome::RecoveryWriteRequired(
+                rocketmq_store_local::mapped_file::ManagedLifecycleEvidenceStatus::LegacyAbsent
+                    | rocketmq_store_local::mapped_file::ManagedLifecycleEvidenceStatus::RecoveryWriteRequired(
                         rocketmq_store_local::mapped_file::ManagedLifecycleRecoveryReason::BootstrapResume
                     )
             )
@@ -493,7 +493,6 @@ impl LocalFileMessageStore {
             broker_config,
             put_message_hook_list: HookRegistry::new(),
             topic_config_table,
-            // message_store_runtime: Some(RocketMQRuntime::new_multi(10, "message-store-thread")),
             commit_log,
             compaction_service,
             store_checkpoint: Some(store_checkpoint.clone()),
@@ -702,6 +701,7 @@ impl LocalFileMessageStore {
             state_machine_version: self.state_machine_version.clone(),
             controller_epoch_start_offset: self.controller_epoch_start_offset.clone(),
             commit_log: self.commit_log.replica_handle(),
+            consume_queue_store: self.consume_queue_store.clone(),
         }
     }
 
@@ -1216,7 +1216,7 @@ impl LocalFileMessageStore {
             .min(self.commit_log.get_max_offset())
             .max(0);
         let prospective_epoch = self.extended_timeline_role.epoch().saturating_add(1).max(external_term);
-        let outcome = gate.evaluate(TimelinePromotionObservation {
+        let promotion_decision = gate.evaluate(TimelinePromotionObservation {
             source_retention_start: self.commit_log.get_min_offset().max(0),
             source_replay_cursor: source_physical_cursor,
             replicated_source_end: source_physical_cursor,
@@ -1234,8 +1234,8 @@ impl LocalFileMessageStore {
         });
         let _ = source_cq_cursor;
         Ok(matches!(
-            outcome,
-            crate::timer::timeline::TimelinePromotionOutcome::Promotable
+            promotion_decision,
+            crate::timer::timeline::TimelinePromotionDecision::Promotable
         ))
     }
 
@@ -1260,8 +1260,12 @@ impl LocalFileMessageStore {
         let Some(promotion_gate) = self.extended_timeline_promotion_gate.as_ref() else {
             return Ok(None);
         };
-        let outcome = promotion_gate.mark_snapshot_installed(manifest.clone());
-        Ok(matches!(outcome, crate::timer::timeline::TimelinePromotionOutcome::Promotable).then_some(manifest))
+        let promotion_decision = promotion_gate.mark_snapshot_installed(manifest.clone());
+        Ok(matches!(
+            promotion_decision,
+            crate::timer::timeline::TimelinePromotionDecision::Promotable
+        )
+        .then_some(manifest))
     }
 
     /// Releases snapshot GC pins after the artifact has been durably installed elsewhere.

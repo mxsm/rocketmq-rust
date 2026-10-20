@@ -40,19 +40,19 @@ use crate::admission::AdmissionScope;
 use crate::admission::ResourceLimit;
 use crate::contract::TransportContractViolation;
 use crate::dispatch::AuthenticationState;
-use crate::dispatch::DeferredResponderOutcome;
-use crate::dispatch::HandlerOutcome;
+use crate::dispatch::DeferredResponderTakeResult;
 use crate::dispatch::ProtocolNoResponseReason;
 use crate::dispatch::RemotingRequest;
 use crate::dispatch::RequestMeta;
 use crate::dispatch::RequestOrigin;
+use crate::dispatch::ResponseAction;
 use crate::dispatch::ResponseBody;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseDisposition;
 use crate::error::TransportError;
 use crate::runtime::processor::RejectRequestDecision;
+use crate::runtime::processor::ResponseDeliveryEvent;
 use crate::runtime::processor::ResponseWriteObservation;
-use crate::runtime::processor::ResponseWriteOutcome;
 use crate::security::TransportSecurity;
 
 fn assert_dispatch_error(error: TransportError) {
@@ -142,7 +142,7 @@ impl Clone for TestProcessor {
 }
 
 impl RequestProcessor for TestProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         self.state.processes.fetch_add(1, Ordering::SeqCst);
         *self.state.request_body_pointer.lock().expect("request pointer lock") =
             request.command().body().map(|body| body.as_ptr() as usize);
@@ -170,7 +170,7 @@ impl RequestProcessor for TestProcessor {
             Behavior::Reply | Behavior::Reject | Behavior::Wait => {
                 request.command_mut().set_code_ref(999_001);
                 request.command_mut().set_opaque_mut(-900);
-                Ok(HandlerOutcome::Reply(
+                Ok(ResponseAction::Reply(
                     RemotingResponse::bytes(
                         RemotingCommand::create_response_command_with_code(71).set_opaque(-777),
                         self.response.clone(),
@@ -179,7 +179,7 @@ impl RequestProcessor for TestProcessor {
                 ))
             }
             Behavior::Error => Err(crate::error_helpers::argument_invalid()),
-            Behavior::NoReply => Ok(HandlerOutcome::NoReply(
+            Behavior::NoReply => Ok(ResponseAction::NoReply(
                 request
                     .protocol_no_response(ProtocolNoResponseReason::CallbackHandled)
                     .map_err(|_| crate::error_helpers::argument_invalid())?,
@@ -187,9 +187,9 @@ impl RequestProcessor for TestProcessor {
             Behavior::Deferred => {
                 assert!(matches!(
                     request.take_deferred_responder(),
-                    DeferredResponderOutcome::Unavailable
+                    DeferredResponderTakeResult::Unavailable
                 ));
-                Ok(HandlerOutcome::Reply(
+                Ok(ResponseAction::Reply(
                     RemotingResponse::bytes(
                         RemotingCommand::create_response_command_with_code(71).set_opaque(-777),
                         self.response.clone(),
@@ -197,21 +197,21 @@ impl RequestProcessor for TestProcessor {
                     .expect("remoting response"),
                 ))
             }
-            Behavior::UnclaimedDeferred | Behavior::ForgedDeferred => Ok(HandlerOutcome::Deferred(
+            Behavior::UnclaimedDeferred | Behavior::ForgedDeferred => Ok(ResponseAction::Deferred(
                 crate::dispatch::DeferredRegistration::for_test(request.original_identity().request_id()),
             )),
-            Behavior::OneWayNoReply => Ok(HandlerOutcome::NoReply(crate::dispatch::ProtocolNoResponse::for_test(
+            Behavior::OneWayNoReply => Ok(ResponseAction::NoReply(crate::dispatch::ProtocolNoResponse::for_test(
                 request.original_identity().request_id(),
                 request.original_identity().original_code(),
                 ProtocolNoResponseReason::CallbackHandled,
             ))),
-            Behavior::CrossRequestDeferred => Ok(HandlerOutcome::Deferred(
+            Behavior::CrossRequestDeferred => Ok(ResponseAction::Deferred(
                 crate::dispatch::DeferredRegistration::for_test(
                     crate::dispatch::RequestId::real(9_999_991, 1).expect("foreign request id"),
                 ),
             )),
             Behavior::CrossRequestNoReply => {
-                Ok(HandlerOutcome::NoReply(crate::dispatch::ProtocolNoResponse::for_test(
+                Ok(ResponseAction::NoReply(crate::dispatch::ProtocolNoResponse::for_test(
                     crate::dispatch::RequestId::real(9_999_992, 1).expect("foreign request id"),
                     request.original_identity().original_code(),
                     ProtocolNoResponseReason::CallbackHandled,
@@ -328,7 +328,7 @@ async fn public_reply_is_channel_free_zero_copy_bound_and_observed_once_after_on
         .dispatch_embedded(&fixture.task_group, Principal::new("broker-proxy"), None, command)
         .await
         .expect("embedded reply");
-    let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+    let EmbeddedDispatchResult::Reply(plan) = outcome else {
         panic!("expected embedded reply")
     };
     let ResponseBody::Bytes(body) = plan.test_body() else {
@@ -353,7 +353,7 @@ async fn public_reply_is_channel_free_zero_copy_bound_and_observed_once_after_on
     {
         let observations = state.observations.lock().expect("observation lock");
         assert_eq!(observations.len(), 1);
-        let ResponseWriteOutcome::Written(receipt) = observations[0].outcome() else {
+        let ResponseDeliveryEvent::DeliveryCompleted(receipt) = observations[0].event() else {
             panic!("local remoting response must be accepted")
         };
         assert_eq!(receipt.disposition(), ResponseDisposition::InProcessAccepted);
@@ -380,7 +380,7 @@ async fn one_way_discards_processor_rejection_and_error_plans_before_binding_wit
             .dispatch_embedded(&fixture.task_group, Principal::new("broker-proxy"), None, command)
             .await
             .expect("one-way terminal outcome");
-        assert!(matches!(outcome, EmbeddedDispatchOutcome::OneWay { .. }));
+        assert!(matches!(outcome, EmbeddedDispatchResult::OneWay { .. }));
         assert!(state.observations.lock().expect("observation lock").is_empty());
         let failures = dispatcher.core.reported_failure_categories();
         if matches!(behavior, Behavior::Error) {
@@ -410,12 +410,15 @@ async fn non_oneway_processor_error_is_observed_without_terminal_failure_reporti
         )
         .await
         .expect("processor error response must use the local plan handoff");
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::Reply(_)));
+    assert!(matches!(outcome, EmbeddedDispatchResult::Reply(_)));
     assert!(dispatcher.core.reported_failure_categories().is_empty());
     {
         let observations = state.observations.lock().expect("observation lock");
         assert_eq!(observations.len(), 1);
-        assert!(matches!(observations[0].outcome(), ResponseWriteOutcome::Written(_)));
+        assert!(matches!(
+            observations[0].event(),
+            ResponseDeliveryEvent::DeliveryCompleted(_)
+        ));
     }
     fixture.shutdown().await;
 }
@@ -438,7 +441,7 @@ async fn one_way_discards_pre_admission_deadline_security_and_admission_plans_wi
         )
         .await
         .expect("one-way pre-admission deadline");
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::OneWay { .. }));
+    assert!(matches!(outcome, EmbeddedDispatchResult::OneWay { .. }));
     assert_eq!(deadline_state.clones.load(Ordering::SeqCst), 0);
     assert!(deadline_state.observations.lock().expect("observation lock").is_empty());
 
@@ -462,7 +465,7 @@ async fn one_way_discards_pre_admission_deadline_security_and_admission_plans_wi
         )
         .await
         .expect("one-way security denial");
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::OneWay { .. }));
+    assert!(matches!(outcome, EmbeddedDispatchResult::OneWay { .. }));
     assert_eq!(security_state.clones.load(Ordering::SeqCst), 0);
     assert!(security_state.observations.lock().expect("observation lock").is_empty());
 
@@ -490,7 +493,7 @@ async fn one_way_discards_pre_admission_deadline_security_and_admission_plans_wi
         )
         .await
         .expect("one-way admission rejection");
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::OneWay { .. }));
+    assert!(matches!(outcome, EmbeddedDispatchResult::OneWay { .. }));
     assert_eq!(admission_state.clones.load(Ordering::SeqCst), 0);
     assert!(admission_state
         .observations
@@ -518,14 +521,14 @@ async fn expired_reply_maps_once_to_deadline_with_one_failed_observation() {
         )
         .await
         .expect("expired reply handoff is a normal deadline outcome");
-    assert!(matches!(outcome, EmbeddedDispatchOutcome::DeadlineExceeded));
+    assert!(matches!(outcome, EmbeddedDispatchResult::DeadlineExceeded));
     {
         let observations = state.observations.lock().expect("observation lock");
         assert_eq!(observations.len(), 1);
         assert!(matches!(
-            observations[0].outcome(),
-            ResponseWriteOutcome::Failed {
-                completion: Some(ResponseCompletionOutcome::DeadlineExpired),
+            observations[0].event(),
+            ResponseDeliveryEvent::Failed {
+                completion: Some(ResponseCompletionResult::DeadlineExpired),
                 progress: Some(crate::dispatch::WriteProgress::NotStarted),
             }
         ));
@@ -548,10 +551,10 @@ async fn embedded_deferred_take_is_unavailable_while_protocol_no_reply_stays_obs
             .await
             .expect("affine embedded outcome");
         match behavior {
-            Behavior::Deferred => assert!(matches!(outcome, EmbeddedDispatchOutcome::Reply(_))),
+            Behavior::Deferred => assert!(matches!(outcome, EmbeddedDispatchResult::Reply(_))),
             Behavior::NoReply => assert!(matches!(
                 outcome,
-                EmbeddedDispatchOutcome::NoReply {
+                EmbeddedDispatchResult::NoReply {
                     reason: ProtocolNoResponseReason::CallbackHandled,
                     ..
                 }
@@ -698,7 +701,7 @@ async fn embedded_admission_rejection_uses_typed_caller_scope_without_processor_
         )
         .await
         .expect("reject policy returns a reply plan");
-    let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+    let EmbeddedDispatchResult::Reply(plan) = outcome else {
         panic!("admission rejection must return an embedded reply")
     };
     assert_eq!(
@@ -741,7 +744,7 @@ async fn embedded_caller_admission_isolated_from_the_loopback_network_scope() {
             )
             .await
             .expect("typed embedded capacity remains isolated"),
-        EmbeddedDispatchOutcome::Reply(_)
+        EmbeddedDispatchResult::Reply(_)
     ));
     assert_eq!(state.clones.load(Ordering::SeqCst), 1);
     drop(held_network);

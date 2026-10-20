@@ -435,8 +435,8 @@ define_error_catalog! {
             cli: CliExitCode::DATA,
         },
     }
-    /// Configured storage backend is unavailable.
-    STORAGE_BACKEND_UNAVAILABLE {
+    /// Storage is unavailable for the requested operation.
+    STORAGE_UNAVAILABLE {
         code: "storage.backend.unavailable",
         class: ErrorClass::UNAVAILABLE,
         condition: CanonicalCondition::Unavailable,
@@ -1015,7 +1015,7 @@ pub const ALL_DESCRIPTORS: &[ErrorDescriptor] = &[
     TRANSPORT_RESPONSE_FAILED,
     TRANSPORT_SESSION_FAILED,
     STORAGE_LIFECYCLE_NOT_STARTED,
-    STORAGE_BACKEND_UNAVAILABLE,
+    STORAGE_UNAVAILABLE,
     STORAGE_REQUEST_INVALID,
     STORAGE_MAPPED_FILE_NOT_FOUND,
     STORAGE_CAPACITY_EXHAUSTED,

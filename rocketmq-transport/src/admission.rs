@@ -192,7 +192,7 @@ pub struct AdmissionSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AdmissionEventOutcome {
+enum AdmissionEventKind {
     Acquired,
     Rejected,
     Released,
@@ -202,27 +202,27 @@ enum AdmissionEventOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdmissionEvent {
     pub resource: AdmissionResource,
-    outcome: AdmissionEventOutcome,
+    outcome: AdmissionEventKind,
     pub bytes: usize,
 }
 
 #[cfg(test)]
 impl AdmissionEvent {
     pub(crate) const fn is_release(self) -> bool {
-        matches!(self.outcome, AdmissionEventOutcome::Released)
+        matches!(self.outcome, AdmissionEventKind::Released)
     }
 }
 
 /// Result of a capacity-controlled Transport admission attempt.
 #[must_use]
-pub enum AdmissionOutcome<T> {
+pub enum AdmissionDecision<T> {
     /// Capacity was acquired and ownership is returned to the caller.
     Acquired(T),
     /// Capacity was unavailable under the configured policy.
     Rejected(AdmissionRejection),
 }
 
-impl<T> AdmissionOutcome<T> {
+impl<T> AdmissionDecision<T> {
     pub(crate) fn into_result(self) -> Result<T, AdmissionRejection> {
         match self {
             Self::Acquired(value) => Ok(value),
@@ -383,6 +383,11 @@ enum ScopeKey {
 /// RAII ownership of global and scoped admission capacity.
 pub struct AdmissionPermit {
     _permit: ResourcePermit,
+    // Field order returns capacity before publishing Released.
+    release: AdmissionRelease,
+}
+
+struct AdmissionRelease {
     observer: Option<tokio::sync::mpsc::Sender<AdmissionEvent>>,
     resource: AdmissionResource,
     bytes: usize,
@@ -417,25 +422,25 @@ impl PartialFramePermit {
             if let Some(observer) = &handle.observer {
                 let _ = observer.try_send(AdmissionEvent {
                     resource,
-                    outcome: AdmissionEventOutcome::Rejected,
-                    bytes: self.permit.bytes,
+                    outcome: AdmissionEventKind::Rejected,
+                    bytes: self.permit.release.bytes,
                 });
             }
             return Err((Box::new(self), error));
         }
-        if let Some(observer) = &self.permit.observer {
+        if let Some(observer) = &self.permit.release.observer {
             let _ = observer.try_send(AdmissionEvent {
-                resource: self.permit.resource,
-                outcome: AdmissionEventOutcome::Released,
-                bytes: self.permit.bytes,
+                resource: self.permit.release.resource,
+                outcome: AdmissionEventKind::Released,
+                bytes: self.permit.release.bytes,
             });
             let _ = observer.try_send(AdmissionEvent {
                 resource,
-                outcome: AdmissionEventOutcome::Acquired,
-                bytes: self.permit.bytes,
+                outcome: AdmissionEventKind::Acquired,
+                bytes: self.permit.release.bytes,
             });
         }
-        self.permit.resource = resource;
+        self.permit.release.resource = resource;
         Ok(self.permit)
     }
 }
@@ -486,18 +491,20 @@ impl AdmissionScopeHandle {
             AdmissionClass::Control => BudgetClass::Control,
         };
         let permit = budget.try_acquire(bytes, budget_class).map_err(|_| {
-            self.observe(resource, AdmissionEventOutcome::Rejected, bytes);
+            self.observe(resource, AdmissionEventKind::Rejected, bytes);
             AdmissionRejection {
                 resource,
                 policy: policy_for(resource),
             }
         })?;
-        self.observe(resource, AdmissionEventOutcome::Acquired, bytes);
+        self.observe(resource, AdmissionEventKind::Acquired, bytes);
         Ok(AdmissionPermit {
             _permit: permit,
-            observer: self.observer.clone(),
-            resource,
-            bytes,
+            release: AdmissionRelease {
+                observer: self.observer.clone(),
+                resource,
+                bytes,
+            },
         })
     }
 
@@ -508,23 +515,25 @@ impl AdmissionScopeHandle {
     ) -> Result<AdmissionPermit, AdmissionRejection> {
         let budget = self.budget(resource);
         permit.try_rebind(&budget).map_err(|_| {
-            self.observe(resource, AdmissionEventOutcome::Rejected, permit.bytes());
+            self.observe(resource, AdmissionEventKind::Rejected, permit.bytes());
             AdmissionRejection {
                 resource,
                 policy: policy_for(resource),
             }
         })?;
         let bytes = permit.bytes();
-        self.observe(resource, AdmissionEventOutcome::Acquired, bytes);
+        self.observe(resource, AdmissionEventKind::Acquired, bytes);
         Ok(AdmissionPermit {
             _permit: permit,
-            observer: self.observer.clone(),
-            resource,
-            bytes,
+            release: AdmissionRelease {
+                observer: self.observer.clone(),
+                resource,
+                bytes,
+            },
         })
     }
 
-    fn observe(&self, resource: AdmissionResource, outcome: AdmissionEventOutcome, bytes: usize) {
+    fn observe(&self, resource: AdmissionResource, outcome: AdmissionEventKind, bytes: usize) {
         if let Some(observer) = &self.observer {
             let _ = observer.try_send(AdmissionEvent {
                 resource,
@@ -539,18 +548,18 @@ impl fmt::Debug for AdmissionPermit {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("AdmissionPermit")
-            .field("resource", &self.resource)
-            .field("bytes", &self.bytes)
+            .field("resource", &self.release.resource)
+            .field("bytes", &self.release.bytes)
             .finish_non_exhaustive()
     }
 }
 
-impl Drop for AdmissionPermit {
+impl Drop for AdmissionRelease {
     fn drop(&mut self) {
         if let Some(observer) = &self.observer {
             let _ = observer.try_send(AdmissionEvent {
                 resource: self.resource,
-                outcome: AdmissionEventOutcome::Released,
+                outcome: AdmissionEventKind::Released,
                 bytes: self.bytes,
             });
         }
@@ -676,11 +685,11 @@ impl AdmissionController {
         scope: AdmissionScope,
         bytes: usize,
         class: AdmissionClass,
-    ) -> AdmissionOutcome<AdmissionPermit> {
+    ) -> AdmissionDecision<AdmissionPermit> {
         let policy = policy_for(resource);
         let budget = match self.scoped_budget(resource, scope) {
             Ok(budget) => budget,
-            Err(rejection) => return AdmissionOutcome::Rejected(rejection),
+            Err(rejection) => return AdmissionDecision::Rejected(rejection),
         };
         let class = match class {
             AdmissionClass::Data => BudgetClass::Data,
@@ -692,25 +701,27 @@ impl AdmissionController {
                 if let Some(observer) = &self.observer {
                     let _ = observer.try_send(AdmissionEvent {
                         resource,
-                        outcome: AdmissionEventOutcome::Rejected,
+                        outcome: AdmissionEventKind::Rejected,
                         bytes,
                     });
                 }
-                return AdmissionOutcome::Rejected(AdmissionRejection { resource, policy });
+                return AdmissionDecision::Rejected(AdmissionRejection { resource, policy });
             }
         };
         if let Some(observer) = &self.observer {
             let _ = observer.try_send(AdmissionEvent {
                 resource,
-                outcome: AdmissionEventOutcome::Acquired,
+                outcome: AdmissionEventKind::Acquired,
                 bytes,
             });
         }
-        AdmissionOutcome::Acquired(AdmissionPermit {
+        AdmissionDecision::Acquired(AdmissionPermit {
             _permit: permit,
-            observer: self.observer.clone(),
-            resource,
-            bytes,
+            release: AdmissionRelease {
+                observer: self.observer.clone(),
+                resource,
+                bytes,
+            },
         })
     }
 

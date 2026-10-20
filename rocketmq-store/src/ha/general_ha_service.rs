@@ -22,8 +22,10 @@ use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_store_api::MasterEpoch;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::WriteAuthority;
+use tokio::sync::watch;
 use tokio::sync::Notify;
 
+use crate::config::flush_disk_type::FlushDiskType;
 use crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService;
 use crate::ha::default_ha_service::DefaultHAService;
 use crate::ha::general_ha_client::GeneralHAClient;
@@ -146,12 +148,43 @@ impl GeneralHAService {
         }
     }
 
-    pub(crate) fn local_durable_watermark(&self) -> i64 {
+    /// Returns the sync state set this master should propose to the Controller.
+    ///
+    /// Stale members are dropped and caught-up replicas are added; `None` outside controller
+    /// mode, which has no sync state set.
+    pub fn maybe_shrink_sync_state_set(&self) -> Option<HashSet<i64>> {
         match self {
-            GeneralHAService::DefaultHAService(service) => service.replica_store().get_flushed_where(),
-            GeneralHAService::AutoSwitchHAService(service) => {
-                service.default_delegate().replica_store().get_flushed_where()
-            }
+            GeneralHAService::DefaultHAService(_) => None,
+            GeneralHAService::AutoSwitchHAService(service) => Some(service.maybe_shrink_sync_state_set()),
+        }
+    }
+
+    /// Subscribes to sync-state-set proposals that the Broker must report to the Controller.
+    ///
+    /// The value is a change generation; `None` outside controller mode.
+    pub fn subscribe_sync_state_set_changes(&self) -> Option<watch::Receiver<u64>> {
+        match self {
+            GeneralHAService::DefaultHAService(_) => None,
+            GeneralHAService::AutoSwitchHAService(service) => Some(service.subscribe_sync_state_set_changes()),
+        }
+    }
+
+    /// Returns how far the master's own copy satisfies the configured flush policy; replica-ack
+    /// decisions use it as the local term.
+    ///
+    /// SYNC_FLUSH reports the flushed offset: the put path waits for the same flush and wakes the
+    /// group-transfer service when it completes. ASYNC_FLUSH counts the master's copy once appended,
+    /// as Java's `GroupTransferService` does. The background flush leaves fewer than
+    /// `flushCommitLogLeastPages` dirty pages for up to `flushCommitLogThoroughInterval`, longer
+    /// than `slaveTimeout`, and wakes nothing.
+    pub(crate) fn local_durable_watermark(&self) -> i64 {
+        let replica_store = match self {
+            GeneralHAService::DefaultHAService(service) => service.replica_store(),
+            GeneralHAService::AutoSwitchHAService(service) => service.default_delegate().replica_store(),
+        };
+        match replica_store.message_store_config_ref().flush_disk_type {
+            FlushDiskType::SyncFlush => replica_store.get_flushed_where(),
+            FlushDiskType::AsyncFlush => replica_store.get_max_phy_offset(),
         }
     }
 

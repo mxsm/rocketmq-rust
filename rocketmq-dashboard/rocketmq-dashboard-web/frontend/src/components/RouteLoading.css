@@ -1,13 +1,41 @@
 .route-loading {
   display: grid;
-  min-block-size: 100dvh;
-  place-items: center;
-  padding: 1.5rem;
-  background: var(--background);
-  color: var(--foreground);
+  align-content: start;
+  gap: 16px;
 }
 
-.route-loading p {
-  margin: 0;
-  color: var(--muted-foreground);
+.route-loading-fullscreen {
+  min-block-size: 100dvh;
+  padding: 24px;
+  background: var(--background);
+}
+
+.route-loading-heading {
+  display: grid;
+  gap: 8px;
+}
+
+.route-loading-heading .ui-skeleton:first-child {
+  width: min(260px, 60%);
+  height: 28px;
+}
+
+.route-loading-heading .ui-skeleton:last-child {
+  width: min(520px, 90%);
+}
+
+.route-loading-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+}
+
+.route-loading-metrics .ui-skeleton {
+  height: 132px;
+  border-radius: var(--radius-md);
+}
+
+.route-loading-panel {
+  height: 320px;
+  border-radius: var(--radius-md);
 }

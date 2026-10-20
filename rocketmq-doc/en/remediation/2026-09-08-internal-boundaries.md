@@ -9,7 +9,7 @@ Core still generates the shared protobuf message types with Prost. Its optional
 `grpc-bindings` feature adds generated Tonic client/server bindings; the Proxy
 facade enables that feature. It does not put network orchestration back in Core.
 Local and Cluster adapters select their remoting response type through
-`ProxyRemotingBackend::Response` and own their Transport dependency directly.
+`ProxyRemotingRequestHandler::Response` and own their Transport dependency directly.
 
 ## Rust API migration
 
@@ -21,7 +21,7 @@ Local and Cluster adapters select their remoting response type through
 | Core context constructors taking a Tonic or Transport request | Import `rocketmq_proxy::ProxyContextExt`; neutral callers use `ProxyContextWithPrincipal::from_metadata` |
 | `ProxyStatusMapper::to_tonic_status` | Import `rocketmq_proxy::ProxyStatusMapperExt` alongside the mapper |
 | Core-generated gRPC client/server modules enabled implicitly | Enable `rocketmq-proxy-core/grpc-bindings`, or use the existing Proxy facade exports |
-| Core reexports of `EmbeddedDispatchOutcome` / `RemotingResponse` | `rocketmq_transport::api` |
+| Core reexports of `EmbeddedDispatchResult` / `RemotingResponse` | `rocketmq_transport::api` |
 
 Network metadata does not create an authenticated principal. The facade attaches
 the existing verified principal after authentication. Deadlines, request identity,
@@ -30,7 +30,7 @@ existing ownership and behavior.
 
 ## Store backend reads
 
-`BackendReadOps` contains logical message reads and queue metadata. `BackendOps`
+`MessageStoreReader` contains logical message reads and queue metadata. `BackendOps`
 composes this trait with the remaining write, lifecycle, and administration
 operations. The Broker capability delegates logical reads through that contract;
 it does not downcast a queue store or access CommitLog for timestamp/cold-area

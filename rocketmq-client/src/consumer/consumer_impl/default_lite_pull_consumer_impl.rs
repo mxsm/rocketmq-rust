@@ -51,8 +51,8 @@ use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
+use rocketmq_runtime::common::time_utils;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::common::util_all;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::FullPolicy;
@@ -643,12 +643,12 @@ impl DefaultLitePullConsumerImpl {
     fn enqueue_consume_request(&self, request: LitePullConsumeRequest) -> ClientResult<()> {
         let retained_bytes = request.retained_bytes();
         match self.consume_requests.try_push_data(request, retained_bytes) {
-            rocketmq_runtime::QueuePushOutcome::Rejected { .. } => {
+            rocketmq_runtime::QueueEnqueueStatus::Rejected { .. } => {
                 Err(crate::mq_client_err!("Lite pull consume request rejected"))
             }
-            rocketmq_runtime::QueuePushOutcome::Enqueued
-            | rocketmq_runtime::QueuePushOutcome::Coalesced { .. }
-            | rocketmq_runtime::QueuePushOutcome::DroppedStale { .. } => Ok(()),
+            rocketmq_runtime::QueueEnqueueStatus::Enqueued
+            | rocketmq_runtime::QueueEnqueueStatus::Coalesced { .. }
+            | rocketmq_runtime::QueueEnqueueStatus::DroppedStale { .. } => Ok(()),
         }
     }
 
@@ -2162,7 +2162,7 @@ impl DefaultLitePullConsumerImpl {
                 let timestamp = consumer_config
                     .consume_timestamp
                     .as_deref()
-                    .and_then(|value| util_all::parse_date(value, util_all::YYYYMMDDHHMMSS))
+                    .and_then(|value| time_utils::parse_date(value, time_utils::YYYYMMDDHHMMSS))
                     .ok_or_else(|| crate::mq_client_err!("consumeTimestamp is invalid"))?
                     .and_utc()
                     .timestamp_millis() as u64;
@@ -2826,14 +2826,6 @@ impl DefaultLitePullConsumerImpl {
         Ok(result)
     }
 
-    /// Returns the offset for the specified message queue at the given timestamp.
-    ///
-    /// This is an alias for `search_offset`.
-    #[allow(dead_code)]
-    pub async fn offset_for_timestamp(&self, mq: &MessageQueue, timestamp: u64) -> ClientResult<i64> {
-        self.search_offset(mq, timestamp).await
-    }
-
     /// Returns the earliest message store time for the specified message queue.
     #[allow(dead_code)]
     pub async fn earliest_msg_store_time(&self, mq: &MessageQueue) -> ClientResult<i64> {
@@ -2844,18 +2836,6 @@ impl DefaultLitePullConsumerImpl {
             .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?;
 
         client_instance.mq_admin_impl.earliest_msg_store_time(mq).await
-    }
-
-    /// Returns the maximum offset of the specified message queue.
-    #[allow(dead_code)]
-    pub async fn max_offset_public(&self, mq: &MessageQueue) -> ClientResult<i64> {
-        self.max_offset(mq).await
-    }
-
-    /// Returns the minimum offset of the specified message queue.
-    #[allow(dead_code)]
-    pub async fn min_offset_public(&self, mq: &MessageQueue) -> ClientResult<i64> {
-        self.min_offset(mq).await
     }
 
     /// Returns whether auto-commit is enabled.
@@ -3166,7 +3146,7 @@ impl DefaultLitePullConsumerImpl {
         self.update_consumer_config(|config| config.consume_max_span = consume_max_span);
     }
 
-    async fn max_offset(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
+    pub(crate) async fn max_offset(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
         self.make_sure_state_ok()?;
 
         let client_instance = self
@@ -3188,7 +3168,7 @@ impl DefaultLitePullConsumerImpl {
             .await
     }
 
-    async fn min_offset(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
+    pub(crate) async fn min_offset(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
         self.make_sure_state_ok()?;
 
         let client_instance = self

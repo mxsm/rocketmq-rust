@@ -1,0 +1,230 @@
+/* Element selector outranks the shared .section padding regardless of stylesheet order. */
+section.section {
+  padding-bottom: clamp(3rem, 5vw, 4.5rem);
+}
+
+/* 1px animated border: a conic beam rotates behind the panel. */
+.frame {
+  position: relative;
+  overflow: hidden;
+  padding: 1px;
+  border-radius: 32px;
+  background: var(--home-border-strong);
+  box-shadow: 0 50px 130px rgba(0, 0, 0, 0.5);
+}
+
+.frame::before {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 150%;
+  aspect-ratio: 1;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0 52%,
+    rgba(255, 184, 107, 0.95) 64%,
+    rgba(255, 106, 26, 0.95) 72%,
+    rgba(242, 70, 140, 0.9) 80%,
+    rgba(152, 114, 255, 0.95) 88%,
+    transparent 96%
+  );
+  content: '';
+  transform: translate(-50%, -50%);
+  animation: beam 9s linear infinite;
+}
+
+.panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow: hidden;
+  padding: clamp(2.6rem, 6vw, 5rem) clamp(1.4rem, 5vw, 4rem);
+  border-radius: 31px;
+  background: linear-gradient(180deg, #0d1020 0%, #07080f 100%);
+  text-align: center;
+}
+
+.backdrop {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.orb {
+  position: absolute;
+  width: 62%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  will-change: transform;
+}
+
+.orbOrange {
+  top: -52%;
+  left: -12%;
+  background: radial-gradient(closest-side, rgba(255, 106, 26, 0.34), transparent);
+  animation: orbDrift 14s ease-in-out infinite alternate;
+}
+
+.orbViolet {
+  right: -14%;
+  bottom: -62%;
+  background: radial-gradient(closest-side, rgba(124, 82, 255, 0.36), transparent);
+  animation: orbDrift 17s ease-in-out -5s infinite alternate-reverse;
+}
+
+.mesh {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(170, 186, 235, 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(170, 186, 235, 0.07) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(ellipse 70% 80% at 50% 50%, #000 10%, transparent 76%);
+}
+
+.rocket {
+  position: relative;
+  width: clamp(84px, 9vw, 112px);
+  animation: launch 6s ease-in-out infinite;
+}
+
+.rocket img {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: auto;
+  filter: drop-shadow(0 12px 28px rgba(255, 106, 26, 0.55));
+}
+
+.rocketGlow {
+  position: absolute;
+  inset: -30%;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(255, 122, 38, 0.42), transparent);
+  animation: glow 3s ease-in-out infinite alternate;
+}
+
+.title {
+  position: relative;
+  max-width: 780px;
+  margin: 1.4rem 0 0;
+  padding: 0;
+  border: 0;
+  background: linear-gradient(180deg, #fff 30%, #c9cfe2 100%);
+  background-clip: text;
+  color: transparent;
+  font-family: var(--home-font-display);
+  font-size: clamp(1.95rem, 4vw, 3.3rem);
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.04em;
+  text-wrap: balance;
+  -webkit-text-fill-color: transparent;
+}
+
+:global(html[lang='zh-CN']) .title {
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+.lead {
+  position: relative;
+  max-width: 620px;
+  margin: 1.1rem 0 0;
+  color: var(--home-muted);
+  font-size: clamp(1rem, 1.25vw, 1.14rem);
+  line-height: 1.7;
+  text-wrap: pretty;
+}
+
+.actions {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.85rem;
+  margin-top: 2.2rem;
+}
+
+/* On the solid orange button the default amber count would be unreadable. */
+.actions .count {
+  border-left-color: rgba(255, 255, 255, 0.38);
+  color: #fff;
+}
+
+.issues {
+  position: relative;
+  margin-top: 1.5rem;
+}
+
+.disclaimer {
+  max-width: 760px;
+  margin: 2rem auto 0;
+  color: var(--home-faint);
+  font-size: 0.8rem;
+  line-height: 1.6;
+  text-align: center;
+}
+
+@media (max-width: 620px) {
+  .frame {
+    border-radius: 24px;
+  }
+
+  .panel {
+    border-radius: 23px;
+  }
+
+  .actions > a {
+    flex: 1 1 100%;
+  }
+}
+
+@keyframes beam {
+  to {
+    transform: translate(-50%, -50%) rotate(1turn);
+  }
+}
+
+@keyframes orbDrift {
+  from {
+    transform: translate3d(-6%, 0, 0) scale(1);
+  }
+
+  to {
+    transform: translate3d(10%, 6%, 0) scale(1.14);
+  }
+}
+
+@keyframes launch {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+
+  50% {
+    transform: translateY(-10px) rotate(2deg);
+  }
+}
+
+@keyframes glow {
+  from {
+    opacity: 0.55;
+    transform: scale(0.92);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .frame::before,
+  .orb,
+  .rocket,
+  .rocketGlow {
+    animation: none;
+  }
+}

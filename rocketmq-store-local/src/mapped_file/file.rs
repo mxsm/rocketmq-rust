@@ -42,10 +42,10 @@ pub const PREALLOCATE_UNSUPPORTED_ERRNO: i32 = 95;
 /// Describes the result of an optional file preallocation attempt.
 ///
 /// The file length is established separately with [`File::set_len`] before preallocation. A
-/// non-successful outcome therefore reports degraded allocation behavior rather than an invalid
+/// non-successful result therefore reports degraded allocation behavior rather than an invalid
 /// file length.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FilePreallocateOutcome {
+pub enum FilePreallocationResult {
     /// The requested range was preallocated or no allocation was required.
     Allocated,
     /// The platform or filesystem does not support the requested preallocation operation.
@@ -60,8 +60,8 @@ pub enum FilePreallocateOutcome {
     },
 }
 
-impl FilePreallocateOutcome {
-    /// Returns whether the outcome represents an unsupported optimization.
+impl FilePreallocationResult {
+    /// Returns whether the result represents an unsupported optimization.
     ///
     /// A hard preallocation failure is not classified as degraded because callers preserve its
     /// distinct observability and logging path.
@@ -73,27 +73,27 @@ impl FilePreallocateOutcome {
 /// Classifies a native preallocation return value and error number.
 ///
 /// A zero return value is successful. Known unsupported error numbers map to
-/// [`FilePreallocateOutcome::Unsupported`]; all other nonzero results map to
-/// [`FilePreallocateOutcome::Failed`].
-pub fn classify_file_preallocate_result(result: i32, errno: i32) -> FilePreallocateOutcome {
+/// [`FilePreallocationResult::Unsupported`]; all other nonzero results map to
+/// [`FilePreallocationResult::Failed`].
+pub fn classify_file_preallocate_result(result: i32, errno: i32) -> FilePreallocationResult {
     if result == 0 {
-        FilePreallocateOutcome::Allocated
+        FilePreallocationResult::Allocated
     } else if is_unsupported_preallocate_errno(errno) {
-        FilePreallocateOutcome::Unsupported { errno }
+        FilePreallocationResult::Unsupported { errno }
     } else {
-        FilePreallocateOutcome::Failed { errno }
+        FilePreallocationResult::Failed { errno }
     }
 }
 
 /// Attempts to reserve physical storage for the first `len` bytes of `file`.
 ///
 /// On Linux this function invokes `fallocate`. Other platforms report
-/// [`FilePreallocateOutcome::Unsupported`]. A zero length is treated as already allocated. Native
+/// [`FilePreallocationResult::Unsupported`]. A zero length is treated as already allocated. Native
 /// failures are returned as values so callers can preserve file creation after [`File::set_len`]
 /// has succeeded.
-pub fn preallocate_file(file: &File, len: u64) -> FilePreallocateOutcome {
+pub fn preallocate_file(file: &File, len: u64) -> FilePreallocationResult {
     if len == 0 {
-        return FilePreallocateOutcome::Allocated;
+        return FilePreallocationResult::Allocated;
     }
 
     #[cfg(target_os = "linux")]
@@ -101,7 +101,7 @@ pub fn preallocate_file(file: &File, len: u64) -> FilePreallocateOutcome {
         use std::os::fd::AsRawFd;
 
         if len > i64::MAX as u64 {
-            return FilePreallocateOutcome::Failed { errno: libc::EINVAL };
+            return FilePreallocationResult::Failed { errno: libc::EINVAL };
         }
 
         // SAFETY: `file.as_raw_fd()` is valid for the duration of this call, the offset is zero,
@@ -114,7 +114,7 @@ pub fn preallocate_file(file: &File, len: u64) -> FilePreallocateOutcome {
     #[cfg(not(target_os = "linux"))]
     {
         let _ = file;
-        FilePreallocateOutcome::Unsupported {
+        FilePreallocationResult::Unsupported {
             errno: PREALLOCATE_UNSUPPORTED_ERRNO,
         }
     }
@@ -405,8 +405,8 @@ impl FileOwner {
     fn preallocate_with(
         &self,
         len: u64,
-        operation: impl FnOnce(&File, u64) -> FilePreallocateOutcome,
-    ) -> FilePreallocateOutcome {
+        operation: impl FnOnce(&File, u64) -> FilePreallocationResult,
+    ) -> FilePreallocationResult {
         operation(self.handle.as_file(), len)
     }
 
@@ -568,7 +568,7 @@ impl MappedFileStorage {
     ///
     /// Returns an error if the final path component is not a numeric offset, the file cannot be
     /// opened or created, its physical identity cannot be captured, or its length cannot be set.
-    pub fn open(path: PathBuf, file_size: u64) -> io::Result<(Self, Option<FilePreallocateOutcome>)> {
+    pub fn open(path: PathBuf, file_size: u64) -> io::Result<(Self, Option<FilePreallocationResult>)> {
         Self::open_with_metrics(path, file_size, Arc::new(MappedFileMetrics::new()))
     }
 
@@ -577,7 +577,7 @@ impl MappedFileStorage {
         path: PathBuf,
         file_size: u64,
         metrics: Arc<MappedFileMetrics>,
-    ) -> io::Result<(Self, Option<FilePreallocateOutcome>)> {
+    ) -> io::Result<(Self, Option<FilePreallocationResult>)> {
         Self::open_with_preallocator_and_metrics(
             path,
             file_size,
@@ -654,7 +654,7 @@ impl MappedFileStorage {
         file_size: u64,
         metrics: Arc<MappedFileMetrics>,
         _permit: ManagedStorageOpenPermit,
-    ) -> io::Result<(Self, Option<FilePreallocateOutcome>)> {
+    ) -> io::Result<(Self, Option<FilePreallocationResult>)> {
         Self::open_with_preallocator_and_metrics(path, file_size, preallocate_file, metrics, StorageMode::Managed)
     }
 
@@ -663,9 +663,9 @@ impl MappedFileStorage {
         path: PathBuf,
         file_size: u64,
         preallocator: P,
-    ) -> io::Result<(Self, Option<FilePreallocateOutcome>)>
+    ) -> io::Result<(Self, Option<FilePreallocationResult>)>
     where
-        P: FnOnce(&File, u64) -> FilePreallocateOutcome,
+        P: FnOnce(&File, u64) -> FilePreallocationResult,
     {
         Self::open_with_preallocator_and_metrics(
             path,
@@ -682,9 +682,9 @@ impl MappedFileStorage {
         preallocator: P,
         metrics: Arc<MappedFileMetrics>,
         mode: StorageMode,
-    ) -> io::Result<(Self, Option<FilePreallocateOutcome>)>
+    ) -> io::Result<(Self, Option<FilePreallocationResult>)>
     where
-        P: FnOnce(&File, u64) -> FilePreallocateOutcome,
+        P: FnOnce(&File, u64) -> FilePreallocationResult,
     {
         let file_from_offset = try_parse_file_from_offset(&path)?;
         let file = open_segment_path(&path, true)?;
@@ -872,7 +872,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::FileOwner;
-    use super::FilePreallocateOutcome;
+    use super::FilePreallocationResult;
     use super::ManagedStorageOpenPermit;
     use super::MappedFileStorage;
     use super::PhysicalFileKey;
@@ -970,15 +970,15 @@ mod tests {
         let (_, outcome) = MappedFileStorage::open_with_preallocator(path.clone(), 8, |_, len| {
             calls.set(calls.get() + 1);
             assert_eq!(len, 8);
-            FilePreallocateOutcome::Failed { errno: 28 }
+            FilePreallocationResult::Failed { errno: 28 }
         })
         .expect("open new storage");
         assert_eq!(calls.get(), 1);
-        assert_eq!(outcome, Some(FilePreallocateOutcome::Failed { errno: 28 }));
+        assert_eq!(outcome, Some(FilePreallocationResult::Failed { errno: 28 }));
 
         let (_, outcome) = MappedFileStorage::open_with_preallocator(path, 4, |_, _| {
             calls.set(calls.get() + 1);
-            FilePreallocateOutcome::Allocated
+            FilePreallocationResult::Allocated
         })
         .expect("shrink storage");
         assert_eq!(calls.get(), 1);

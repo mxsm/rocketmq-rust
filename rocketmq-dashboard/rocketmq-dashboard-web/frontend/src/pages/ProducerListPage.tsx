@@ -18,7 +18,7 @@ import { Button } from '../components/ui/Button';
 import type { ProducerConnectionInfo, ProducerConnectionView, ProducerInfo } from '../types/producer';
 import type { TopicInfo } from '../types/topic';
 import ProducerDetailContent from './producers/ProducerDetailContent';
-import { filterProducers, getProducerMetrics } from './producers/producer-model';
+import { filterProducers, getProducerMetrics, summarizeProducerBrokers } from './producers/producer-model';
 
 const PAGE_SIZE = 10;
 
@@ -143,8 +143,14 @@ export default function ProducerListPage() {
       cell: (producer) => <strong className="mono">{producer.producerGroup}</strong>
     },
     {
+      id: 'brokers',
+      header: 'Brokers',
+      width: '140px',
+      cell: (producer) => <span title={producer.brokerNames?.join(', ')}>{summarizeProducerBrokers(producer)}</span>
+    },
+    {
       id: 'connections',
-      header: 'Discovered connections',
+      header: 'Connections',
       width: '150px',
       cell: (producer) => (
         <StatusBadge
@@ -205,13 +211,13 @@ export default function ProducerListPage() {
 
       <div className="metric-grid entity-metrics">
         <MetricCard label="Producer groups" value={metrics.producerGroups} detail="Unique discovered groups" icon={<Users size={18} />} />
-        <MetricCard label="Available topics" value={availableTopics.length} detail="Selectable query targets" icon={<DatabaseZap size={18} />} />
-        <MetricCard label="Discovered connections" value={metrics.discoveredConnections} detail="Backend discovery count" icon={<RadioTower size={18} />} />
-        <MetricCard label="Connected groups" value={metrics.connectedGroups} detail="Groups reporting clients" icon={<Server size={18} />} />
+        <MetricCard label="Available topics" value={availableTopics.length} detail="Selectable query targets" icon={<DatabaseZap size={18} />} accent="blue" />
+        <MetricCard label="Discovered connections" value={metrics.discoveredConnections} detail="Backend discovery count" icon={<RadioTower size={18} />} accent="cyan" />
+        <MetricCard label="Connected groups" value={metrics.connectedGroups} detail="Groups reporting clients" icon={<Server size={18} />} accent="pink" />
       </div>
 
       <div className="producer-workspace-grid">
-        <section className="entity-table-card producer-inventory-card">
+        <section className="entity-table-card producer-inventory-card" data-surface="panel">
           <div className="entity-card-heading">
             <div>
               <h2>Producer inventory</h2>
@@ -246,7 +252,7 @@ export default function ProducerListPage() {
           />
         </section>
 
-        <section className="entity-table-card producer-connections-card" aria-labelledby="producer-connections-heading">
+        <section className="entity-table-card producer-connections-card" data-surface="panel" aria-labelledby="producer-connections-heading">
           <div className="entity-card-heading">
             <div>
               <h2 id="producer-connections-heading">Producer connections</h2>

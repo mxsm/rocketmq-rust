@@ -85,6 +85,25 @@ describe('ProducerListPage', () => {
     expect(screen.queryByRole('row', { name: /order-producer/ })).not.toBeInTheDocument();
   });
 
+  it('shows the brokers each group is registered with and filters by them', async () => {
+    const user = userEvent.setup();
+    vi.mocked(producerApi.list).mockResolvedValue([
+      { ...producers[0], brokerNames: ['broker-a', 'broker-b'] },
+      { ...producers[1], brokerNames: ['broker-a'] },
+      { ...producers[2], brokerNames: [] }
+    ]);
+    renderAtRoute(<ProducerListPage />, '/producers');
+
+    const orderRow = await screen.findByRole('row', { name: /order-producer/ });
+    expect(screen.getByRole('columnheader', { name: 'Brokers' })).toBeInTheDocument();
+    expect(within(orderRow).getByTitle('broker-a, broker-b')).toHaveTextContent('broker-a +1');
+    expect(within(screen.getByRole('row', { name: /audit-producer/ })).getByText('None')).toBeInTheDocument();
+
+    await user.type(screen.getByRole('searchbox', { name: 'Filter producers' }), 'broker-b');
+    expect(screen.getByRole('row', { name: /order-producer/ })).toBeInTheDocument();
+    expect(screen.queryByRole('row', { name: /payment-producer/ })).not.toBeInTheDocument();
+  });
+
   it('requires a real topic selection before querying a producer group and opens client detail', async () => {
     const user = userEvent.setup();
     let resolveConnections: (value: ProducerConnectionView) => void = () => undefined;

@@ -53,19 +53,19 @@ use rocketmq_admin_core::client_adapter::services::export_data::ExportPopRecordT
 use rocketmq_admin_core::client_adapter::services::export_data::ExportRocksDbConfigRpcResult;
 use rocketmq_admin_core::client_adapter::services::export_data::ExportRocksDbConfigRpcTargetResult;
 use rocketmq_admin_core::client_adapter::services::message::DecodeMessageIdEntry;
-use rocketmq_admin_core::client_adapter::services::message::DecodeMessageIdOutcome;
 use rocketmq_admin_core::client_adapter::services::message::DecodeMessageIdResult;
 use rocketmq_admin_core::client_adapter::services::message::DirectConsumeMessageResult;
 use rocketmq_admin_core::client_adapter::services::message::DirectConsumeMessageResultDetail;
 use rocketmq_admin_core::client_adapter::services::message::DirectConsumeMessageStatus;
+use rocketmq_admin_core::client_adapter::services::message::MessageIdDecodeStatus;
+use rocketmq_admin_core::client_adapter::services::message::MessageIdLookupStatus;
 use rocketmq_admin_core::client_adapter::services::message::MessagePullEvent;
 use rocketmq_admin_core::client_adapter::services::message::MessageTraceView;
 use rocketmq_admin_core::client_adapter::services::message::MessageTrackEntry;
-use rocketmq_admin_core::client_adapter::services::message::MessageTrackOutcome;
+use rocketmq_admin_core::client_adapter::services::message::MessageTrackLookupStatus;
 use rocketmq_admin_core::client_adapter::services::message::MessageTrackResult;
 use rocketmq_admin_core::client_adapter::services::message::MessageTrackRow;
 use rocketmq_admin_core::client_adapter::services::message::QueryMessageByIdEntry;
-use rocketmq_admin_core::client_adapter::services::message::QueryMessageByIdOutcome;
 use rocketmq_admin_core::client_adapter::services::message::QueryMessageByIdResult;
 use rocketmq_admin_core::client_adapter::services::message::QueryMessageByKeyResult;
 use rocketmq_admin_core::client_adapter::services::message::QueryMessageByKeyRow;
@@ -117,6 +117,46 @@ use super::KeyValueViewModel;
 use super::OperationSummaryViewModel;
 use super::TableViewModel;
 
+/// Flattens a result to plain text so assertions can look for content regardless of layout.
+trait TextBody {
+    fn text_body(&self) -> String;
+}
+
+impl TextBody for CommandResultViewModel {
+    fn text_body(&self) -> String {
+        match self {
+            Self::Table(table) => {
+                let mut lines = Vec::new();
+                lines.push(table.headers.join(" | "));
+                lines.extend(table.rows.iter().map(|row| row.join(" | ")));
+                lines.join("\n")
+            }
+            Self::KeyValue(key_values) => key_values
+                .rows
+                .iter()
+                .map(|(key, value)| format!("{key}: {value}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            Self::Json { body, .. } | Self::Text { body, .. } => body.clone(),
+            Self::OperationSummary(summary) => {
+                let mut lines = vec![
+                    format!("success: {}", summary.success_count),
+                    format!("failed: {}", summary.failure_count),
+                ];
+                if !summary.targets.is_empty() {
+                    lines.push("targets:".to_string());
+                    lines.extend(summary.targets.iter().map(|target| format!("  {target}")));
+                }
+                if !summary.errors.is_empty() {
+                    lines.push("errors:".to_string());
+                    lines.extend(summary.errors.iter().map(|error| format!("  {error}")));
+                }
+                lines.join("\n")
+            }
+        }
+    }
+}
+
 #[test]
 fn result_view_models_render_text_bodies() {
     let table = CommandResultViewModel::Table(TableViewModel {
@@ -140,49 +180,6 @@ fn result_view_models_render_text_bodies() {
         errors: vec!["failed".to_string()],
     });
     assert!(summary.text_body().contains("topic-a"));
-}
-
-#[test]
-fn table_viewport_slices_columns_by_horizontal_scroll() {
-    let table = TableViewModel {
-        title: "table".to_string(),
-        headers: vec![
-            "cluster".to_string(),
-            "broker".to_string(),
-            "addr".to_string(),
-            "status".to_string(),
-        ],
-        rows: vec![vec![
-            "cluster-a".to_string(),
-            "broker-a".to_string(),
-            "127.0.0.1:10911".to_string(),
-            "online".to_string(),
-        ]],
-    };
-
-    let viewport = table.viewport(1, 18);
-
-    assert!(viewport.hidden_left);
-    assert!(viewport.hidden_right);
-    assert_eq!(viewport.headers, vec!["broker"]);
-    assert_eq!(viewport.rows[0], vec!["broker-a"]);
-    assert_eq!(viewport.widths.len(), 1);
-}
-
-#[test]
-fn table_viewport_clamps_out_of_range_scroll_to_last_column() {
-    let table = TableViewModel {
-        title: "table".to_string(),
-        headers: vec!["a".to_string(), "b".to_string()],
-        rows: vec![vec!["1".to_string(), "2".to_string()]],
-    };
-
-    let viewport = table.viewport(99, 80);
-
-    assert!(viewport.hidden_left);
-    assert!(!viewport.hidden_right);
-    assert_eq!(viewport.headers, vec!["b"]);
-    assert_eq!(viewport.rows[0], vec!["2"]);
 }
 
 #[test]
@@ -390,7 +387,7 @@ fn phase_two_consumer_and_message_results_render_as_tables() {
             entries: vec![
                 DecodeMessageIdEntry {
                     message_id: "msg-1".into(),
-                    outcome: DecodeMessageIdOutcome::Decoded {
+                    outcome: MessageIdDecodeStatus::Decoded {
                         broker_ip: "127.0.0.1".to_string(),
                         broker_port: 10911,
                         commit_log_offset: 64,
@@ -399,7 +396,7 @@ fn phase_two_consumer_and_message_results_render_as_tables() {
                 },
                 DecodeMessageIdEntry {
                     message_id: "bad".into(),
-                    outcome: DecodeMessageIdOutcome::Invalid {
+                    outcome: MessageIdDecodeStatus::Invalid {
                         error: "invalid id".to_string(),
                     },
                 },
@@ -523,7 +520,7 @@ fn phase_two_message_detail_results_render_as_tables() {
             entries: vec![
                 QueryMessageByIdEntry {
                     message_id: "msg-1".into(),
-                    outcome: QueryMessageByIdOutcome::Found {
+                    outcome: MessageIdLookupStatus::Found {
                         message: Box::new(message.clone()),
                         broker_addr: "127.0.0.1:10911".to_string(),
                         query_time_ms: 7,
@@ -531,7 +528,7 @@ fn phase_two_message_detail_results_render_as_tables() {
                 },
                 QueryMessageByIdEntry {
                     message_id: "missing".into(),
-                    outcome: QueryMessageByIdOutcome::NotFound {
+                    outcome: MessageIdLookupStatus::NotFound {
                         reason: "not found".to_string(),
                         query_time_ms: 3,
                     },
@@ -1400,7 +1397,7 @@ fn phase_five_message_track_result_renders_as_table() {
         &MessageTrackResult {
             entries: vec![MessageTrackEntry {
                 message_id: "MSGID".into(),
-                outcome: MessageTrackOutcome::Found {
+                outcome: MessageTrackLookupStatus::Found {
                     broker_addr: "127.0.0.1:10911".to_string(),
                     query_time_ms: 7,
                     tracks: vec![MessageTrackRow {

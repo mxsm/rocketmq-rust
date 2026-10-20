@@ -27,7 +27,7 @@ use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
-use super::route_lookup::RouteLookupOutcome;
+use super::route_lookup::ClusterTestLookupStatus;
 use crate::config::NamesrvConfig;
 
 const CACHE_SHARDS: usize = 16;
@@ -167,14 +167,14 @@ impl ClusterTestLookupCache {
         &self,
         key: LookupCacheKey,
         resolve: F,
-    ) -> NameServerResult<RouteLookupOutcome<Option<TopicRouteData>>>
+    ) -> NameServerResult<ClusterTestLookupStatus<Option<TopicRouteData>>>
     where
         F: FnOnce() -> Fut,
-        Fut: Future<Output = NameServerResult<RouteLookupOutcome<ResolvedRoute>>>,
+        Fut: Future<Output = NameServerResult<ClusterTestLookupStatus<ResolvedRoute>>>,
     {
         if let Some(entry) = self.entries.get(&key) {
             if entry.expires_at > Instant::now() {
-                return Ok(RouteLookupOutcome::Resolved(entry.route.into_owned()));
+                return Ok(ClusterTestLookupStatus::Resolved(entry.route.into_owned()));
             }
             self.entries.invalidate(&key);
         }
@@ -194,7 +194,7 @@ impl ClusterTestLookupCache {
 
         let mut leader = FlightLeaderGuard::new(&self.flights, key.clone(), Arc::clone(&flight));
         match resolve().await {
-            Ok(RouteLookupOutcome::Resolved(resolved)) => {
+            Ok(ClusterTestLookupStatus::Resolved(resolved)) => {
                 let response_bytes = resolved.response_bytes;
                 let route = CachedRoute::from_route(resolved.route);
                 if response_bytes <= self.max_bytes {
@@ -213,15 +213,15 @@ impl ClusterTestLookupCache {
                     );
                 }
                 leader.complete(FlightState::Complete(Ok(route.clone())));
-                Ok(RouteLookupOutcome::Resolved(route.into_owned()))
+                Ok(ClusterTestLookupStatus::Resolved(route.into_owned()))
             }
-            Ok(RouteLookupOutcome::Unavailable) => {
+            Ok(ClusterTestLookupStatus::Unavailable) => {
                 leader.complete(FlightState::Unavailable);
-                Ok(RouteLookupOutcome::Unavailable)
+                Ok(ClusterTestLookupStatus::Unavailable)
             }
-            Ok(RouteLookupOutcome::Cancelled) => {
+            Ok(ClusterTestLookupStatus::Cancelled) => {
                 leader.complete(FlightState::Cancelled);
-                Ok(RouteLookupOutcome::Cancelled)
+                Ok(ClusterTestLookupStatus::Cancelled)
             }
             Err(error) => {
                 leader.complete(FlightState::Complete(Err(error.clone())));
@@ -241,18 +241,18 @@ impl ClusterTestLookupCache {
     }
 }
 
-async fn wait_for_flight(flight: &LookupFlight) -> NameServerResult<RouteLookupOutcome<Option<TopicRouteData>>> {
+async fn wait_for_flight(flight: &LookupFlight) -> NameServerResult<ClusterTestLookupStatus<Option<TopicRouteData>>> {
     let mut state = flight.state.subscribe();
     loop {
         match state.borrow_and_update().clone() {
             FlightState::Pending => {}
-            FlightState::Complete(Ok(route)) => return Ok(RouteLookupOutcome::Resolved(route.into_owned())),
+            FlightState::Complete(Ok(route)) => return Ok(ClusterTestLookupStatus::Resolved(route.into_owned())),
             FlightState::Complete(Err(error)) => return Err(error),
-            FlightState::Unavailable => return Ok(RouteLookupOutcome::Unavailable),
-            FlightState::Cancelled => return Ok(RouteLookupOutcome::Cancelled),
+            FlightState::Unavailable => return Ok(ClusterTestLookupStatus::Unavailable),
+            FlightState::Cancelled => return Ok(ClusterTestLookupStatus::Cancelled),
         }
         if state.changed().await.is_err() {
-            return Ok(RouteLookupOutcome::Cancelled);
+            return Ok(ClusterTestLookupStatus::Cancelled);
         }
     }
 }
@@ -329,7 +329,7 @@ mod tests {
                     .get_or_resolve(key("missing"), || async move {
                         calls.fetch_add(1, Ordering::SeqCst);
                         release.notified().await;
-                        Ok(RouteLookupOutcome::Resolved(ResolvedRoute {
+                        Ok(ClusterTestLookupStatus::Resolved(ResolvedRoute {
                             route: None,
                             response_bytes: 0,
                         }))
@@ -346,7 +346,7 @@ mod tests {
         for task in tasks {
             assert!(matches!(
                 task.await.unwrap().unwrap(),
-                RouteLookupOutcome::Resolved(None)
+                ClusterTestLookupStatus::Resolved(None)
             ));
         }
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -367,7 +367,7 @@ mod tests {
             cache
                 .get_or_resolve(key("negative"), || async {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(RouteLookupOutcome::Resolved(ResolvedRoute {
+                    Ok(ClusterTestLookupStatus::Resolved(ResolvedRoute {
                         route: None,
                         response_bytes: 0,
                     }))
@@ -380,7 +380,7 @@ mod tests {
         cache
             .get_or_resolve(key("negative"), || async {
                 calls.fetch_add(1, Ordering::SeqCst);
-                Ok(RouteLookupOutcome::Resolved(ResolvedRoute {
+                Ok(ClusterTestLookupStatus::Resolved(ResolvedRoute {
                     route: None,
                     response_bytes: 0,
                 }))
@@ -394,7 +394,7 @@ mod tests {
             cache
                 .get_or_resolve(key("positive"), || async {
                     positive_calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(RouteLookupOutcome::Resolved(ResolvedRoute {
+                    Ok(ClusterTestLookupStatus::Resolved(ResolvedRoute {
                         route: Some(TopicRouteData::default()),
                         response_bytes: 1,
                     }))
@@ -407,7 +407,7 @@ mod tests {
         cache
             .get_or_resolve(key("positive"), || async {
                 positive_calls.fetch_add(1, Ordering::SeqCst);
-                Ok(RouteLookupOutcome::Resolved(ResolvedRoute {
+                Ok(ClusterTestLookupStatus::Resolved(ResolvedRoute {
                     route: Some(TopicRouteData::default()),
                     response_bytes: 1,
                 }))
@@ -466,19 +466,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unavailable_and_cancelled_flights_are_normal_typed_outcomes() {
+    async fn unavailable_and_cancelled_flights_are_normal_typed_statuses() {
         let unavailable = LookupFlight::new();
         unavailable.state.send_replace(FlightState::Unavailable);
         assert!(matches!(
             wait_for_flight(&unavailable).await,
-            Ok(RouteLookupOutcome::Unavailable)
+            Ok(ClusterTestLookupStatus::Unavailable)
         ));
 
         let cancelled = LookupFlight::new();
         cancelled.state.send_replace(FlightState::Cancelled);
         assert!(matches!(
             wait_for_flight(&cancelled).await,
-            Ok(RouteLookupOutcome::Cancelled)
+            Ok(ClusterTestLookupStatus::Cancelled)
         ));
     }
 
@@ -488,14 +488,14 @@ mod tests {
         let calls = AtomicUsize::new(0);
 
         for _ in 0..2 {
-            let outcome = cache
+            let status = cache
                 .get_or_resolve(key("unavailable"), || async {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(RouteLookupOutcome::Unavailable)
+                    Ok(ClusterTestLookupStatus::Unavailable)
                 })
                 .await
                 .expect("endpoint absence is a normal lookup outcome");
-            assert!(matches!(outcome, RouteLookupOutcome::Unavailable));
+            assert!(matches!(status, ClusterTestLookupStatus::Unavailable));
         }
 
         assert_eq!(calls.load(Ordering::SeqCst), 2);
@@ -515,7 +515,7 @@ mod tests {
 
         assert!(matches!(
             wait_for_flight(&flight).await,
-            Ok(RouteLookupOutcome::Cancelled)
+            Ok(ClusterTestLookupStatus::Cancelled)
         ));
         assert_eq!(cache.stats(), (0, 0, 0));
     }
@@ -531,7 +531,7 @@ mod tests {
         for index in 0..3 {
             cache
                 .get_or_resolve(key(&format!("topic-{index}")), || async {
-                    Ok(RouteLookupOutcome::Resolved(ResolvedRoute {
+                    Ok(ClusterTestLookupStatus::Resolved(ResolvedRoute {
                         route: None,
                         response_bytes: 80,
                     }))
@@ -548,7 +548,7 @@ mod tests {
             cache
                 .get_or_resolve(key("oversize"), || async {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(RouteLookupOutcome::Resolved(ResolvedRoute {
+                    Ok(ClusterTestLookupStatus::Resolved(ResolvedRoute {
                         route: None,
                         response_bytes: 301,
                     }))

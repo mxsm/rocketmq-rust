@@ -49,7 +49,7 @@ use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_transport::api::DefaultRequestProcessor;
-use rocketmq_transport::api::OutboundRequestOutcome;
+use rocketmq_transport::api::OutboundRequestResult;
 use rocketmq_transport::api::ServerConfig;
 use rocketmq_transport::api::TransportClient;
 use rocketmq_transport::api::TransportClientConfig;
@@ -57,7 +57,10 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-const REQUEST_TIMEOUT_MILLIS: u64 = 3_000;
+// KV mutations await durability with a five-second server deadline. Allow that
+// deadline plus scheduling and transport time on busy CI runners.
+const REQUEST_TIMEOUT_MILLIS: u64 = 10_000;
+const READINESS_REQUEST_TIMEOUT_MILLIS: u64 = 3_000;
 const MASTER_ID: u64 = 0;
 const ORDER_TOPIC_NAMESPACE: &str = "ORDER_TOPIC_CONFIG";
 const STARTUP_RETRY_LIMIT: usize = 3;
@@ -145,17 +148,21 @@ impl NamesrvHarness {
     }
 
     async fn request(&self, request: RemotingCommand) -> anyhow::Result<RemotingCommand> {
+        let request_code = request.code();
+        let request_opaque = request.opaque();
         let outcome = self
             .client
             .invoke_request(Some(&self.addr), request, REQUEST_TIMEOUT_MILLIS)
             .await
-            .context("execute NameServer integration request")?;
+            .with_context(|| {
+                format!("execute NameServer integration request (code={request_code}, opaque={request_opaque})")
+            })?;
         match outcome {
-            OutboundRequestOutcome::Response(response) => Ok(response),
-            OutboundRequestOutcome::Rejected(rejection) => {
+            OutboundRequestResult::Response(response) => Ok(response),
+            OutboundRequestResult::Rejected(rejection) => {
                 bail!("NameServer integration request was rejected: {rejection:?}")
             }
-            OutboundRequestOutcome::Contract(contract) => {
+            OutboundRequestResult::Contract(contract) => {
                 bail!("NameServer integration request contract failed: {contract:?}")
             }
         }
@@ -221,21 +228,24 @@ async fn wait_until_ready(
         );
         request.make_custom_header_to_net();
 
-        let failure = match client.invoke_request(Some(addr), request, REQUEST_TIMEOUT_MILLIS).await {
-            Ok(OutboundRequestOutcome::Response(response))
+        let failure = match client
+            .invoke_request(Some(addr), request, READINESS_REQUEST_TIMEOUT_MILLIS)
+            .await
+        {
+            Ok(OutboundRequestResult::Response(response))
                 if ResponseCode::from(response.code()) == ResponseCode::Success =>
             {
                 return Ok(());
             }
-            Ok(OutboundRequestOutcome::Response(response)) => format!(
+            Ok(OutboundRequestResult::Response(response)) => format!(
                 "unexpected response code {:?}, remark {:?}",
                 ResponseCode::from(response.code()),
                 response.remark()
             ),
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 format!("request rejected before readiness: {rejection:?}")
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 format!("request contract failed before readiness: {contract:?}")
             }
             Err(error) => error.to_string(),

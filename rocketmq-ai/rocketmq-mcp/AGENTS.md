@@ -2,28 +2,29 @@
 
 ## Scope
 
-This file applies to `rocketmq-ai/rocketmq-mcp/`.
+This file applies to the standalone Rust 2021 `rocketmq-ai/rocketmq-mcp/` entrypoint crate.
 
 ## Boundary
 
-- This directory is a standalone Rust 2021 Cargo workspace.
-- The default server is read-only and diagnostic.
-- Depend on `rocketmq-admin-core` only through `read-client-adapter`.
-- Do not enable `client-adapter`, `mutation-client-adapter`, `admin-full`, or `admin-mutation`.
-- Streamable HTTP is authenticated by default. Stdio is local-development only and writes protocol frames only to stdout.
-- Tool and Resource output must use the shared authorization, audit, correlation, sanitization, row, and byte policy.
-- Prefer native async fn methods in traits. #[allow(async_fn_in_trait)] is permitted when required by the lint for an intentional public async trait API; do not add #[async_trait].
+- Compose query, auth, and control through optional dependencies and additive feature forwarding.
+  Disable implementation dependencies' default features explicitly.
+- Defaults remain `read-only`, `diagnose`, and `stdio`; `read-only` aliases `query`. The default
+  dependency closure must contain no control server or mutation adapter.
+- HTTP query builds imply auth; control builds imply auth. Only `write-tools` enables the control
+  crate's reviewed mutation feature, and compilation grants no runtime mutation authority.
+- `ROCKETMQ_MCP_MODE` selects exactly one server (`query` by default or `control`). Delegate to its
+  synchronous runtime-owning entrypoint. Never add a nested runtime or subprocess launcher, or merge
+  tool catalogs, authentication middleware, audit trails, or server policies.
+- Keep the query embedding API available through explicit compatibility re-exports. Export control
+  and auth in their named modules.
+- Combined builds unify shared Admin features and provide logical server separation. Separate dependency
+  closures require independent query and control builds and deployments. Keep their local boundaries intact.
+- Keep existing query configuration paths and protocol names compatible. Query owns the canonical examples;
+  copies under this crate's `conf/` must match them.
 
 ## Development validation
 
-From this directory, use `cargo fmt --all -- --check`, `cargo check --locked`,
-and focused `cargo test --locked <test_name>` cases for the changed behavior.
-A test build may replace the separate compile check.
-
-Run `python scripts/check_read_only_boundary.py` when tools, resources, authorization, adapter
-dependencies, or feature boundaries change. Test the affected transport/feature combination;
-changes spanning default and HTTP behavior need coverage of both.
-
-For MCP integration, select broader tests, `cargo clippy --locked --all-targets --features streamable-http -- -D warnings`,
-or `cargo doc --locked --no-deps` as relevant. Do not automatically stack root workspace checks or
-run all features for an internal fix.
+Use `cargo fmt --all -- --check` and focused `cargo test --locked` cases for feature or composition
+changes. Cover feature absence,
+HTTP query, control-only, and combined builds as affected. Test builds replace a separate compile check.
+Run the affected implementation crate's focused regressions and standalone boundary checks when changing it.

@@ -36,8 +36,17 @@ The default build exposes these read-only or diagnostic Tools:
 | `rocketmq_get_consumer_lag` | Read only | Queue `limit` and `cursor` |
 | `rocketmq_describe_broker` | Read only | Not applicable |
 | `rocketmq_diagnose_consumer_lag` | Diagnose | Not applicable |
+| `rocketmq_diagnose_consumer_group` | Diagnose | Not applicable |
+| `rocketmq_diagnose_broker_health` | Diagnose | Not applicable |
+| `rocketmq_get_cluster_health` | Diagnose | Not applicable |
+| `rocketmq_diagnose_message_delivery` | Diagnose | Not applicable |
 
-The optional `change-planning` feature adds these non-mutating Tools:
+The Tool Reference of the query MCP (`rocketmq-ai/rocketmq-mcp-query/docs/tool-reference.md`)
+lists the complete default catalog with every argument and output.
+
+The optional `change-planning` feature adds these non-mutating Tools. The
+feature and its Tools are deprecated and will be removed; a change is planned
+with a dry run of the control MCP server instead:
 
 - `rocketmq_plan_create_topic`
 - `rocketmq_plan_update_topic_config`
@@ -77,6 +86,10 @@ increases for a cache hit. `cache_status` is `miss`, `hit`, or `bypass`.
 `partial: true` requires at least one warning describing the unavailable
 source. A text summary, serialized JSON text block, and a ResourceLink for the
 corresponding replayable read model accompany `structuredContent`.
+
+A Tool that is not bound to one cluster, `rocketmq_list_clusters`, answers in
+the same envelope without `cluster` and without `source_failures`, and has no
+ResourceLink.
 
 Before a response is returned, it is validated against the Tool output schema
 and limited to 1 MiB. The default output policy removes NameServer addresses,
@@ -130,15 +143,25 @@ Correctable Tool failures set `isError: true`, omit success
 }
 ```
 
-Stable codes include `invalid_arguments`, `backend_error`,
-`permission_denied`, `rate_limited`, `change_planning_disabled`,
-`internal_error`, `output_too_large`, `backend_timeout`, and `cancelled`.
+Stable codes include `invalid_arguments`, `not_found`, `source_unavailable`,
+`permission_denied`, `rate_limited`, `concurrency_limited`,
+`change_planning_disabled`, `internal_error`, `output_too_large`,
+`backend_timeout`, `cancelled`, `cursor_expired`, `cursor_invalid`, and
+`result_too_large`. A `rate_limited` error also carries `retry_after_ms`, the
+wait after which one call is due; `concurrency_limited` is a cluster that
+already serves as many requests as it may at once and names no wait.
+A `not_found` error also carries `entity`, the kind of target that does not
+exist. An `invalid_arguments` error carries `violations` when the server can
+locate the arguments: up to three `path` and `constraint` pairs that name the
+argument and the kind of rule it broke, never the value that was sent. The three paging codes call for different recoveries: request the first
+page again, resend the cursor unchanged, or narrow the request. The Tool
+Reference lists every code.
 
 ## Query Lifecycle and Diagnosis Provenance
 
 Tools, Resources, and Diagnosis use the same `QueryFacade`. A simple query
 owns one workflow-scoped `AdminSession`; composite cluster overview and
-consumer-lag diagnosis workflows reuse that session for all admin-core calls.
+diagnosis workflows reuse that session for all admin-core calls.
 The session is explicitly shut down and awaited after success, failure,
 timeout, or MCP request cancellation. There is no process-global admin-client
 pool.
@@ -156,18 +179,49 @@ Consumer-lag diagnosis results include independent provenance fields:
 
 ```json
 {
-  "evidence_version": "rocketmq-mcp.evidence.consumer-lag.v1",
-  "rules_version": "rocketmq-mcp.rules.consumer-lag.v1"
+  "evidence_version": "rocketmq-mcp.evidence.consumer-lag.v3",
+  "rules_version": "rocketmq-mcp.rules.consumer-lag.v3"
 }
 ```
 
-Consumer-lag diagnosis v2 returns a replayable `evidence_snapshot`, a
+The consumer-lag diagnosis returns a replayable `evidence_snapshot`, a
 server-owned `policy_profile`, `confidence_band`, `partial`,
-`missing_evidence`, and `evidence_refs`. Evidence status is one of `present`,
-`missing`, `unavailable`, `timeout`, `unauthorized`, or `invalid`. Root causes
-may reference only `present` evidence. The Tool schema accepts cluster, topic,
+`missing_evidence`, and `evidence_refs`. The snapshot is the only place the
+report holds evidence: every other part names an evidence item by its `id`.
+Evidence kind is one of `consumer_lag`, `topic_route`, `broker_summary`,
+`consumer_group`, `topic_config`, or `topic_stats`. Evidence status is one of
+`present`, `missing`, `unavailable`, `timeout`, `unauthorized`, or `invalid`.
+Root causes may reference only `present` evidence, and each carries the stable
+`rule_id` of the rule that drew it. A read that fails is missing evidence in a
+partial report, never a failed diagnosis. Severity is graded from the size of
+the backlog and from the consume delay, against server-owned thresholds that
+the configuration can replace for single Topics and Consumer Groups; the
+report states the thresholds it used. The Tool schema accepts cluster, topic,
 and consumer group only; historical time-range analysis and caller-controlled
-lag thresholds are unavailable until a historical metrics source is introduced.
+thresholds are unavailable until a historical metrics source is introduced.
+
+Version 3 of the evidence and of the rules changed the report shape:
+the `evidences` array and the `topic_description` evidence item are gone, the
+Broker evidence is named `broker_summary` everywhere, `evidence_snapshot` is
+always present, and `root_causes[].rule_id` is new.
+
+Four more diagnosis Tools return the same report shape, each with its own
+`report_type` and its own first version of the evidence and of the rules:
+
+| Tool | `report_type` | Version suffix |
+| --- | --- | --- |
+| `rocketmq_diagnose_consumer_group` | `consumer_group` | `consumer-group.v1` |
+| `rocketmq_diagnose_broker_health` | `broker_health` | `broker-health.v1` |
+| `rocketmq_get_cluster_health` | `cluster_health` | `cluster-health.v1` |
+| `rocketmq_diagnose_message_delivery` | `message_delivery` | `message-delivery.v1` |
+
+They add the evidence kinds `consumer_progress`, `broker_diagnostics`,
+`broker_config`, `ha_status`, `broker_inventory`, and `message_metadata`.
+The reports of a Broker, of a cluster and of a message delivery are health
+reports: every finding has its own severity, and the report is as severe as
+its worst finding. No diagnosis result carries a message body or a message
+identifier. A message is named by its pseudonyms, and a call that names a
+message also needs the permission for `rocketmq_get_message_metadata`.
 
 ## Resource URIs
 

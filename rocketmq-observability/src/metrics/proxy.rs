@@ -27,7 +27,7 @@ use std::time::Duration;
 use dashmap::DashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProxyRpcOutcome {
+pub enum ProxyRpcCompletion {
     Succeeded,
     PayloadFailed,
     TransportFailed,
@@ -68,7 +68,7 @@ impl ProxyRpcMetrics {
         bucket.in_flight.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn record_request_completed(&self, rpc_name: &'static str, outcome: ProxyRpcOutcome, elapsed: Duration) {
+    pub fn record_request_completed(&self, rpc_name: &'static str, completion: ProxyRpcCompletion, elapsed: Duration) {
         let bucket = self.bucket(rpc_name);
         bucket.completed.fetch_add(1, Ordering::Relaxed);
         decrement_saturating(&bucket.in_flight);
@@ -77,14 +77,14 @@ impl ProxyRpcMetrics {
             Ordering::Relaxed,
         );
 
-        match outcome {
-            ProxyRpcOutcome::Succeeded => {
+        match completion {
+            ProxyRpcCompletion::Succeeded => {
                 bucket.succeeded.fetch_add(1, Ordering::Relaxed);
             }
-            ProxyRpcOutcome::PayloadFailed => {
+            ProxyRpcCompletion::PayloadFailed => {
                 bucket.payload_failures.fetch_add(1, Ordering::Relaxed);
             }
-            ProxyRpcOutcome::TransportFailed => {
+            ProxyRpcCompletion::TransportFailed => {
                 bucket.transport_failures.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -191,7 +191,7 @@ impl ProxyMetrics {
     pub fn record_active_connections(&self, _count: u64) {}
 
     #[inline]
-    pub fn record_grpc_error(&self, _outcome: ProxyRpcOutcome) {}
+    pub fn record_grpc_error(&self, _completion: ProxyRpcCompletion) {}
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -291,11 +291,11 @@ impl ProxyMetrics {
     }
 
     #[inline]
-    pub fn record_grpc_error(&self, outcome: ProxyRpcOutcome) {
-        let result = match outcome {
-            ProxyRpcOutcome::Succeeded => return,
-            ProxyRpcOutcome::PayloadFailed => "payload_failure",
-            ProxyRpcOutcome::TransportFailed => "transport_failure",
+    pub fn record_grpc_error(&self, completion: ProxyRpcCompletion) {
+        let result = match completion {
+            ProxyRpcCompletion::Succeeded => return,
+            ProxyRpcCompletion::PayloadFailed => "payload_failure",
+            ProxyRpcCompletion::TransportFailed => "transport_failure",
         };
         if self.is_active() {
             if let Some(instruments) = &self.instruments {
@@ -390,7 +390,7 @@ mod tests {
         metrics.record_grpc_request_latency(6);
         metrics.record_forward_latency(12);
         metrics.record_active_connections(4);
-        metrics.record_grpc_error(ProxyRpcOutcome::TransportFailed);
+        metrics.record_grpc_error(ProxyRpcCompletion::TransportFailed);
     }
 
     #[test]
@@ -410,7 +410,7 @@ mod tests {
         metrics.record_grpc_request_latency(6);
         metrics.record_forward_latency(12);
         metrics.record_active_connections(4);
-        metrics.record_grpc_error(ProxyRpcOutcome::TransportFailed);
+        metrics.record_grpc_error(ProxyRpcCompletion::TransportFailed);
     }
 }
 
@@ -422,9 +422,13 @@ mod rpc_tests {
     fn proxy_rpc_metrics_snapshot_tracks_outcomes() {
         let metrics = ProxyRpcMetrics::default();
         metrics.record_request_started("QueryRoute");
-        metrics.record_request_completed("QueryRoute", ProxyRpcOutcome::Succeeded, Duration::from_millis(4));
+        metrics.record_request_completed("QueryRoute", ProxyRpcCompletion::Succeeded, Duration::from_millis(4));
         metrics.record_request_started("QueryRoute");
-        metrics.record_request_completed("QueryRoute", ProxyRpcOutcome::TransportFailed, Duration::from_millis(6));
+        metrics.record_request_completed(
+            "QueryRoute",
+            ProxyRpcCompletion::TransportFailed,
+            Duration::from_millis(6),
+        );
 
         let snapshot = metrics.snapshot();
 

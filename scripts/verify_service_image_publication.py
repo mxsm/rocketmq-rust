@@ -41,6 +41,8 @@ PREDICATE_TYPE = (
     "service-image-evidence/v1"
 )
 STATEMENT_TYPE = "https://in-toto.io/Statement/v1"
+# Cosign 3.1.2 emits custom predicates in Statement v0.1 envelopes.
+STATEMENT_TYPES = ("https://in-toto.io/Statement/v0.1", STATEMENT_TYPE)
 DSSE_PAYLOAD_TYPE = "application/vnd.in-toto+json"
 TOOLS = {"syft": "v1.48.0", "trivy": "v0.72.0", "cosign": "v3.1.2"}
 POLICY = {
@@ -461,7 +463,7 @@ def statement_matches(
         and subjects[0]["digest"].get("sha256") == digest.removeprefix("sha256:")
     )
     return bool(
-        statement.get("_type") == STATEMENT_TYPE
+        statement.get("_type") in STATEMENT_TYPES
         and statement.get("predicateType") == PREDICATE_TYPE
         and subject_matches
         and json_exact_equal(statement.get("predicate"), predicate)
@@ -520,7 +522,7 @@ def verify_publication(publication: object, candidate: str, runner: CosignRunner
                 )
                 for statement in statements
             ),
-            f"no verified Statement/v1 matches {service}, its unique subject, and canonical predicate",
+            f"no verified supported in-toto statement matches {service}, its unique subject, and canonical predicate",
         )
     return images
 

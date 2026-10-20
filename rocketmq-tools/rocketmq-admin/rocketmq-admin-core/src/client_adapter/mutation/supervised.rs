@@ -40,7 +40,7 @@ impl SupervisedMutationAdmin for MutationAdminSession {
         })
     }
 
-    fn execute_topic<'a>(&'a mut self, plan: &'a TopicMutationPlan) -> AdminFuture<'a, MetadataMutationOutcome> {
+    fn execute_topic<'a>(&'a mut self, plan: &'a TopicMutationPlan) -> AdminFuture<'a, MetadataMutationReport> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             execute_topic_checked(&self.inner.inner, &self.plan_seal, plan).await
@@ -77,7 +77,7 @@ impl SupervisedMutationAdmin for MutationAdminSession {
     fn execute_subscription_group<'a>(
         &'a mut self,
         plan: &'a SubscriptionGroupMutationPlan,
-    ) -> AdminFuture<'a, MetadataMutationOutcome> {
+    ) -> AdminFuture<'a, MetadataMutationReport> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             execute_subscription_group_checked(&self.inner.inner, &self.plan_seal, plan).await
@@ -94,7 +94,7 @@ impl SupervisedMutationAdmin for MutationAdminSession {
         })
     }
 
-    fn execute_offset_reset<'a>(&'a mut self, plan: &'a OffsetResetPlan) -> AdminFuture<'a, OffsetResetOutcome> {
+    fn execute_offset_reset<'a>(&'a mut self, plan: &'a OffsetResetPlan) -> AdminFuture<'a, OffsetResetReport> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             execute_offset_reset_checked(&self.inner.inner, &self.plan_seal, plan).await
@@ -129,14 +129,14 @@ impl SupervisedMutationAdmin for MutationAdminSession {
         &'a mut self,
         plan: &'a BrokerMutationConfigPlan,
         patch: BrokerMutationConfigPatch,
-    ) -> AdminFuture<'a, MetadataMutationOutcome> {
+    ) -> AdminFuture<'a, MetadataMutationReport> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             self.ensure_plan_owned(&plan.seal)?;
             let properties = broker_patch_properties(patch)?;
-            let mut outcome = MetadataMutationOutcome {
+            let mut outcome = MetadataMutationReport {
                 failures: plan.failures.clone(),
-                ..MetadataMutationOutcome::default()
+                ..MetadataMutationReport::default()
             };
             for (broker_name, broker_addr, state) in &plan.targets {
                 match self
@@ -149,8 +149,8 @@ impl SupervisedMutationAdmin for MutationAdminSession {
                     )
                     .await
                 {
-                    Ok(ClientBrokerConfigPatchOutcome::Applied { generation, .. }) => {
-                        outcome.targets.push(MetadataMutationTargetOutcome {
+                    Ok(ClientBrokerConfigPatchResult::Applied { generation, .. }) => {
+                        outcome.targets.push(MetadataMutationTargetReport {
                             broker_name: broker_name.clone(),
                             expected_state: ExpectedState::Present {
                                 version: state.generation,
@@ -164,8 +164,8 @@ impl SupervisedMutationAdmin for MutationAdminSession {
                             retryable: false,
                         });
                     }
-                    Ok(ClientBrokerConfigPatchOutcome::GenerationConflict { actual_generation, .. }) => {
-                        outcome.targets.push(MetadataMutationTargetOutcome {
+                    Ok(ClientBrokerConfigPatchResult::GenerationConflict { actual_generation, .. }) => {
+                        outcome.targets.push(MetadataMutationTargetReport {
                             broker_name: broker_name.clone(),
                             expected_state: ExpectedState::Present {
                                 version: state.generation,
@@ -181,7 +181,7 @@ impl SupervisedMutationAdmin for MutationAdminSession {
                             retryable: false,
                         })
                     }
-                    Err(error) => outcome.targets.push(MetadataMutationTargetOutcome {
+                    Err(error) => outcome.targets.push(MetadataMutationTargetReport {
                         broker_name: broker_name.clone(),
                         expected_state: ExpectedState::Present {
                             version: state.generation,
@@ -204,7 +204,7 @@ impl SupervisedMutationAdmin for MutationAdminSession {
         &'a mut self,
         plan: &'a BrokerMutationConfigPlan,
         patch: BrokerMutationConfigPatch,
-    ) -> AdminFuture<'a, BrokerMutationConfigOutcome> {
+    ) -> AdminFuture<'a, BrokerConfigMutationReport> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             execute_broker_config_patch_verified_with_admin(&self.inner.inner, &self.plan_seal, plan, patch).await
@@ -224,7 +224,7 @@ impl SupervisedMutationAdmin for MutationAdminSession {
     fn execute_request_mode<'a>(
         &'a mut self,
         plan: &'a RequestModeMutationPlan,
-    ) -> AdminFuture<'a, RequestModeMutationOutcome> {
+    ) -> AdminFuture<'a, RequestModeMutationReport> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             execute_request_mode_checked(&self.inner.inner, &self.plan_seal, plan).await
@@ -235,7 +235,7 @@ impl SupervisedMutationAdmin for MutationAdminSession {
         &'a mut self,
         plan: &'a RequestModeMutationPlan,
         timeout_millis: u64,
-    ) -> AdminFuture<'a, RequestModeMutationOutcome> {
+    ) -> AdminFuture<'a, RequestModeMutationReport> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             if !(1..=24_000).contains(&timeout_millis) {
@@ -278,7 +278,7 @@ async fn preflight_topic_with_targets<A: MQAdminMutationExt + ?Sized>(
     let cluster_info = admin
         .mutation_cluster_info()
         .await
-        .map_err(|error| backend_error("mutation_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
     let mut targets = Vec::new();
     let mut failures = Vec::new();
     let master_targets = master_targets_by_cluster_name(&cluster_info, &cluster)?;
@@ -287,7 +287,7 @@ async fn preflight_topic_with_targets<A: MQAdminMutationExt + ?Sized>(
         let current = admin
             .mutation_order_topic_config(topic.clone().into())
             .await
-            .map_err(|error| backend_error("mutation_order_topic_config", error))?;
+            .map_err(|source| promote_to_admin_error("mutation_order_topic_config", source))?;
         let expected = parse_order_topic_config(current.as_deref())?;
         validate_targeted_order_state(
             &expected,
@@ -327,21 +327,21 @@ async fn execute_topic_checked<A: MQAdminMutationExt + ?Sized>(
     admin: &A,
     session_seal: &Arc<MutationPlanSeal>,
     plan: &TopicMutationPlan,
-) -> AdminResult<MetadataMutationOutcome> {
+) -> AdminResult<MetadataMutationReport> {
     ensure_same_plan_seal(session_seal, &plan.seal)?;
     if let Some(guard) = &plan.targeted_order_guard {
         let current = admin
             .mutation_order_topic_config(plan.topic.as_str().into())
             .await
-            .map_err(|error| backend_error("mutation_order_topic_config", error))?;
+            .map_err(|source| promote_to_admin_error("mutation_order_topic_config", source))?;
         let current = parse_order_topic_config(current.as_deref())?;
         if current != guard.expected {
             return Ok(targeted_order_conflict(plan));
         }
     }
-    let mut outcome = MetadataMutationOutcome {
+    let mut outcome = MetadataMutationReport {
         failures: plan.failures.clone(),
-        ..MetadataMutationOutcome::default()
+        ..MetadataMutationReport::default()
     };
     for target in &plan.targets {
         let expected_state = map_expected_state_to_client(target.state);
@@ -377,7 +377,7 @@ async fn execute_topic_checked<A: MQAdminMutationExt + ?Sized>(
                 } else {
                     MutationVerificationState::NotPerformed
                 };
-                outcome.targets.push(MetadataMutationTargetOutcome {
+                outcome.targets.push(MetadataMutationTargetReport {
                     broker_name: target.broker_name.clone(),
                     expected_state: target.state,
                     resulting_state: Some(map_client_expected_state(result.state)),
@@ -536,12 +536,12 @@ fn validate_targeted_order_state<'a>(
     Ok(())
 }
 
-fn targeted_order_conflict(plan: &TopicMutationPlan) -> MetadataMutationOutcome {
-    MetadataMutationOutcome {
+fn targeted_order_conflict(plan: &TopicMutationPlan) -> MetadataMutationReport {
+    MetadataMutationReport {
         targets: plan
             .targets
             .iter()
-            .map(|target| MetadataMutationTargetOutcome {
+            .map(|target| MetadataMutationTargetReport {
                 broker_name: target.broker_name.clone(),
                 expected_state: target.state,
                 resulting_state: None,
@@ -587,7 +587,7 @@ async fn preflight_subscription_group_with_targets<A: MQAdminMutationExt + ?Size
     let cluster_info = admin
         .mutation_cluster_info()
         .await
-        .map_err(|error| backend_error("mutation_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
     let mut targets = Vec::new();
     let mut failures = Vec::new();
     let master_targets = master_targets_by_cluster_name(&cluster_info, &cluster)?;
@@ -620,11 +620,11 @@ async fn execute_subscription_group_checked<A: MQAdminMutationExt + ?Sized>(
     admin: &A,
     session_seal: &Arc<MutationPlanSeal>,
     plan: &SubscriptionGroupMutationPlan,
-) -> AdminResult<MetadataMutationOutcome> {
+) -> AdminResult<MetadataMutationReport> {
     ensure_same_plan_seal(session_seal, &plan.seal)?;
-    let mut outcome = MetadataMutationOutcome {
+    let mut outcome = MetadataMutationReport {
         failures: plan.failures.clone(),
-        ..MetadataMutationOutcome::default()
+        ..MetadataMutationReport::default()
     };
     for target in &plan.targets {
         match admin
@@ -659,7 +659,7 @@ async fn execute_subscription_group_checked<A: MQAdminMutationExt + ?Sized>(
                 } else {
                     MutationVerificationState::NotPerformed
                 };
-                outcome.targets.push(MetadataMutationTargetOutcome {
+                outcome.targets.push(MetadataMutationTargetReport {
                     broker_name: target.broker_name.clone(),
                     expected_state: target.state,
                     resulting_state: Some(map_client_expected_state(result.state)),
@@ -700,7 +700,7 @@ async fn preflight_request_mode_with_admin<A: MQAdminMutationExt + ?Sized>(
     let cluster_info = admin
         .mutation_cluster_info()
         .await
-        .map_err(|error| backend_error("mutation_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
     let mut targets = Vec::new();
     let mut failures = Vec::new();
     for (broker_name, broker_addr) in master_targets_by_cluster_name(&cluster_info, &cluster)? {
@@ -786,7 +786,7 @@ async fn preflight_broker_config_with_admin<A: MQAdminMutationExt + ?Sized>(
     let cluster_info = admin
         .mutation_cluster_info()
         .await
-        .map_err(|error| backend_error("mutation_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
     let mut targets = Vec::new();
     let mut failures = Vec::new();
     for (broker_name, broker_addr) in master_targets_by_cluster_name(&cluster_info, &cluster)? {
@@ -814,7 +814,7 @@ async fn preflight_broker_config_target_with_admin<A: MQAdminMutationExt + ?Size
     let cluster_info = admin
         .mutation_cluster_info()
         .await
-        .map_err(|error| backend_error("mutation_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
     let all_targets = master_targets_by_cluster_name(&cluster_info, &cluster)?;
     let selected = vec![broker_name];
     let selected_targets = select_metadata_targets(all_targets, Some(&selected))?;
@@ -839,12 +839,12 @@ async fn execute_broker_config_patch_verified_with_admin<A: MQAdminMutationExt +
     session_seal: &Arc<MutationPlanSeal>,
     plan: &BrokerMutationConfigPlan,
     patch: BrokerMutationConfigPatch,
-) -> AdminResult<BrokerMutationConfigOutcome> {
+) -> AdminResult<BrokerConfigMutationReport> {
     ensure_same_plan_seal(session_seal, &plan.seal)?;
     let properties = broker_patch_properties(patch)?;
-    let mut outcome = BrokerMutationConfigOutcome {
+    let mut outcome = BrokerConfigMutationReport {
         failures: plan.failures.clone(),
-        ..BrokerMutationConfigOutcome::default()
+        ..BrokerConfigMutationReport::default()
     };
     for (broker_name, broker_addr, before) in &plan.targets {
         let planned_changed = broker_patch_changes(*before, patch);
@@ -852,12 +852,12 @@ async fn execute_broker_config_patch_verified_with_admin<A: MQAdminMutationExt +
             .patch_broker_config_if_generation(broker_addr.as_str().into(), before.generation, properties.clone())
             .await
         {
-            Ok(ClientBrokerConfigPatchOutcome::Applied { .. }) => {
+            Ok(ClientBrokerConfigPatchResult::Applied { .. }) => {
                 match admin.broker_mutation_config_state(broker_addr.as_str().into()).await {
                     Ok(observed) => {
                         let observed = map_client_broker_state(observed);
                         let verified = broker_patch_matches(observed, patch);
-                        outcome.targets.push(BrokerMutationConfigTargetOutcome {
+                        outcome.targets.push(BrokerConfigMutationTargetReport {
                             broker_name: broker_name.clone(),
                             before: *before,
                             after: Some(observed),
@@ -873,7 +873,7 @@ async fn execute_broker_config_patch_verified_with_admin<A: MQAdminMutationExt +
                             retryable: false,
                         });
                     }
-                    Err(error) => outcome.targets.push(BrokerMutationConfigTargetOutcome {
+                    Err(error) => outcome.targets.push(BrokerConfigMutationTargetReport {
                         broker_name: broker_name.clone(),
                         before: *before,
                         after: None,
@@ -886,8 +886,8 @@ async fn execute_broker_config_patch_verified_with_admin<A: MQAdminMutationExt +
                     }),
                 }
             }
-            Ok(ClientBrokerConfigPatchOutcome::GenerationConflict { .. }) => {
-                outcome.targets.push(BrokerMutationConfigTargetOutcome {
+            Ok(ClientBrokerConfigPatchResult::GenerationConflict { .. }) => {
+                outcome.targets.push(BrokerConfigMutationTargetReport {
                     broker_name: broker_name.clone(),
                     before: *before,
                     after: None,
@@ -899,7 +899,7 @@ async fn execute_broker_config_patch_verified_with_admin<A: MQAdminMutationExt +
                     retryable: false,
                 });
             }
-            Err(error) => outcome.targets.push(BrokerMutationConfigTargetOutcome {
+            Err(error) => outcome.targets.push(BrokerConfigMutationTargetReport {
                 broker_name: broker_name.clone(),
                 before: *before,
                 after: None,
@@ -919,7 +919,7 @@ async fn execute_request_mode_checked<A: MQAdminMutationExt + ?Sized>(
     admin: &A,
     session_seal: &Arc<MutationPlanSeal>,
     plan: &RequestModeMutationPlan,
-) -> AdminResult<RequestModeMutationOutcome> {
+) -> AdminResult<RequestModeMutationReport> {
     execute_request_mode_checked_inner(admin, session_seal, plan, None).await
 }
 
@@ -928,7 +928,7 @@ async fn execute_request_mode_checked_with_timeout<A: MQAdminMutationExt + ?Size
     session_seal: &Arc<MutationPlanSeal>,
     plan: &RequestModeMutationPlan,
     timeout_millis: u64,
-) -> AdminResult<RequestModeMutationOutcome> {
+) -> AdminResult<RequestModeMutationReport> {
     execute_request_mode_checked_inner(admin, session_seal, plan, Some(timeout_millis)).await
 }
 
@@ -937,11 +937,11 @@ async fn execute_request_mode_checked_inner<A: MQAdminMutationExt + ?Sized>(
     session_seal: &Arc<MutationPlanSeal>,
     plan: &RequestModeMutationPlan,
     timeout_millis: Option<u64>,
-) -> AdminResult<RequestModeMutationOutcome> {
+) -> AdminResult<RequestModeMutationReport> {
     ensure_same_plan_seal(session_seal, &plan.seal)?;
-    let mut outcome = RequestModeMutationOutcome {
+    let mut outcome = RequestModeMutationReport {
         failures: plan.failures.clone(),
-        ..RequestModeMutationOutcome::default()
+        ..RequestModeMutationReport::default()
     };
     for (broker_name, broker_addr, current) in &plan.targets {
         let expected = current.map_or(ClientExpectedMessageRequestMode::Absent, |value| {
@@ -1009,7 +1009,7 @@ async fn execute_request_mode_checked_inner<A: MQAdminMutationExt + ?Sized>(
                     ),
                 };
                 let persistence = map_client_persistence(result.persistence);
-                outcome.targets.push(RequestModeTargetOutcome {
+                outcome.targets.push(RequestModeMutationTargetReport {
                     broker_name: broker_name.clone(),
                     expected: *current,
                     current: current_result,
@@ -1030,7 +1030,7 @@ async fn execute_request_mode_checked_inner<A: MQAdminMutationExt + ?Sized>(
                     retryable,
                 });
             }
-            Ok(result) => outcome.targets.push(RequestModeTargetOutcome {
+            Ok(result) => outcome.targets.push(RequestModeMutationTargetReport {
                 broker_name: broker_name.clone(),
                 expected: *current,
                 current: result.current.map(map_client_request_mode),
@@ -1041,7 +1041,7 @@ async fn execute_request_mode_checked_inner<A: MQAdminMutationExt + ?Sized>(
                 failure: Some(MutationFailureCode::Conflict),
                 retryable: false,
             }),
-            Err(error) => outcome.targets.push(RequestModeTargetOutcome {
+            Err(error) => outcome.targets.push(RequestModeMutationTargetReport {
                 broker_name: broker_name.clone(),
                 expected: *current,
                 current: None,
@@ -1074,7 +1074,7 @@ async fn preview_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
     let cluster_info = admin
         .mutation_cluster_info()
         .await
-        .map_err(|error| backend_error("mutation_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
     let selected_masters = master_targets_by_cluster_name(&cluster_info, &cluster)?;
     let route = require_topic_route(admin, &topic).await?;
     let selected_names = selected_masters
@@ -1087,15 +1087,14 @@ async fn preview_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
             continue;
         }
         if broker.cluster() != cluster || route_masters.contains_key(broker.broker_name().as_str()) {
-            return Err(AdminError::backend(
+            return Err(AdminError::operation_failed(
                 "mutation_topic_route",
                 "selected Topic route has inconsistent broker identity",
             ));
         }
-        let master = broker
-            .broker_addrs()
-            .get(&MASTER_ID)
-            .ok_or_else(|| AdminError::backend("mutation_topic_route", "selected Topic route broker has no master"))?;
+        let master = broker.broker_addrs().get(&MASTER_ID).ok_or_else(|| {
+            AdminError::operation_failed("mutation_topic_route", "selected Topic route broker has no master")
+        })?;
         route_masters.insert(broker.broker_name().to_string(), master.clone());
     }
     let mut queue_data = HashMap::with_capacity(selected_masters.len());
@@ -1105,7 +1104,7 @@ async fn preview_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
             continue;
         }
         if queue_data.insert(broker_name, queue.read_queue_nums()).is_some() {
-            return Err(AdminError::backend(
+            return Err(AdminError::operation_failed(
                 "mutation_topic_route",
                 "selected Topic route has duplicate queue ownership",
             ));
@@ -1113,13 +1112,13 @@ async fn preview_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
     }
     for (broker_name, master_addr) in &selected_masters {
         if route_masters.get(broker_name) != Some(master_addr) {
-            return Err(AdminError::backend(
+            return Err(AdminError::operation_failed(
                 "mutation_topic_route",
                 "selected Topic route does not match cluster topology",
             ));
         }
         queue_data.get(broker_name).ok_or_else(|| {
-            AdminError::backend("mutation_topic_route", "selected Topic route has no queue ownership")
+            AdminError::operation_failed("mutation_topic_route", "selected Topic route has no queue ownership")
         })?;
     }
     let target_budget = checked_offset_target_budget(queue_data.values().copied())?;
@@ -1150,7 +1149,7 @@ async fn preview_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
                         .enumerate()
                         .any(|(expected, actual)| *actual != expected as i32)
                 {
-                    return Err(AdminError::backend(
+                    return Err(AdminError::operation_failed(
                         "preview_consumer_offset_reset_on_broker",
                         "Broker returned rows outside the selected Topic queue range",
                     ));
@@ -1198,15 +1197,15 @@ async fn preview_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
 async fn execute_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
     admin: &A,
     plan: &OffsetResetPlan,
-) -> AdminResult<OffsetResetOutcome> {
-    let mut outcome = OffsetResetOutcome {
+) -> AdminResult<OffsetResetReport> {
+    let mut outcome = OffsetResetReport {
         failures: plan.failures().to_vec(),
-        ..OffsetResetOutcome::default()
+        ..OffsetResetReport::default()
     };
     for target in &plan.targets {
         let row = &target.row;
         if !row.changed {
-            outcome.targets.push(OffsetResetTargetOutcome {
+            outcome.targets.push(OffsetResetTargetReport {
                 broker_name: row.broker_name.clone(),
                 queue_id: row.queue_id,
                 expected_offset: row.current_offset,
@@ -1240,7 +1239,7 @@ async fn execute_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
                     )
                     .await;
                 match verified {
-                    Ok(observed) => outcome.targets.push(OffsetResetTargetOutcome {
+                    Ok(observed) => outcome.targets.push(OffsetResetTargetReport {
                         broker_name: row.broker_name.clone(),
                         queue_id: row.queue_id,
                         expected_offset: row.current_offset,
@@ -1251,7 +1250,7 @@ async fn execute_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
                         failure: (observed != row.planned_offset).then_some(MutationFailureCode::VerificationFailed),
                         retryable: false,
                     }),
-                    Err(error) => outcome.targets.push(OffsetResetTargetOutcome {
+                    Err(error) => outcome.targets.push(OffsetResetTargetReport {
                         broker_name: row.broker_name.clone(),
                         queue_id: row.queue_id,
                         expected_offset: row.current_offset,
@@ -1264,7 +1263,7 @@ async fn execute_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
                     }),
                 }
             }
-            Ok(result) => outcome.targets.push(OffsetResetTargetOutcome {
+            Ok(result) => outcome.targets.push(OffsetResetTargetReport {
                 broker_name: row.broker_name.clone(),
                 queue_id: row.queue_id,
                 expected_offset: row.current_offset,
@@ -1275,7 +1274,7 @@ async fn execute_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
                 failure: Some(MutationFailureCode::Conflict),
                 retryable: false,
             }),
-            Err(error) => outcome.targets.push(OffsetResetTargetOutcome {
+            Err(error) => outcome.targets.push(OffsetResetTargetReport {
                 broker_name: row.broker_name.clone(),
                 queue_id: row.queue_id,
                 expected_offset: row.current_offset,
@@ -1295,7 +1294,7 @@ async fn execute_offset_reset_checked<A: MQAdminMutationExt + ?Sized>(
     admin: &A,
     session_seal: &Arc<MutationPlanSeal>,
     plan: &OffsetResetPlan,
-) -> AdminResult<OffsetResetOutcome> {
+) -> AdminResult<OffsetResetReport> {
     ensure_same_plan_seal(session_seal, &plan.seal)?;
     execute_offset_reset_with_admin(admin, plan).await
 }
@@ -1518,8 +1517,8 @@ fn client_failure(broker_name: String, queue_id: Option<i32>, error: &CanonicalE
 fn metadata_client_failure<T>(
     target: &ResolvedMetadataTarget<T>,
     error: &CanonicalError,
-) -> MetadataMutationTargetOutcome {
-    MetadataMutationTargetOutcome {
+) -> MetadataMutationTargetReport {
+    MetadataMutationTargetReport {
         broker_name: target.broker_name.clone(),
         expected_state: target.state,
         resulting_state: None,
@@ -1844,12 +1843,12 @@ mod tests {
             broker_addr: CheetahString,
             expected_generation: u64,
             properties: HashMap<CheetahString, CheetahString>,
-        ) -> rocketmq_client_rust::ClientResult<ClientBrokerConfigPatchOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<ClientBrokerConfigPatchResult> {
             self.record_endpoint("broker_write", &broker_addr);
             self.broker_writes.fetch_add(1, Ordering::SeqCst);
             let mut state = self.broker_state.lock().expect("broker state");
             if self.broker_conflict.load(Ordering::SeqCst) || state.generation != expected_generation {
-                return Ok(ClientBrokerConfigPatchOutcome::GenerationConflict {
+                return Ok(ClientBrokerConfigPatchResult::GenerationConflict {
                     expected_generation,
                     actual_generation: state.generation,
                 });
@@ -1875,7 +1874,7 @@ mod tests {
             }
             let previous_generation = state.generation;
             state.generation += 1;
-            Ok(ClientBrokerConfigPatchOutcome::Applied {
+            Ok(ClientBrokerConfigPatchResult::Applied {
                 previous_generation,
                 generation: state.generation,
             })
@@ -1887,7 +1886,7 @@ mod tests {
             _topic: CheetahString,
             _expected_version: u64,
             _patch: ClientTopicConfigPatch,
-        ) -> rocketmq_client_rust::ClientResult<ClientTopicConfigPatchOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<ClientTopicConfigPatchResult> {
             unsupported()
         }
 
@@ -1897,7 +1896,7 @@ mod tests {
             _group: CheetahString,
             _expected_version: u64,
             _patch: ClientSubscriptionGroupConfigPatch,
-        ) -> rocketmq_client_rust::ClientResult<ClientSubscriptionGroupConfigPatchOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<ClientSubscriptionGroupConfigPatchResult> {
             unsupported()
         }
 
@@ -2101,10 +2100,10 @@ mod tests {
             queue_id: i32,
             _expected_offset: i64,
             new_offset: i64,
-        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::ConditionalConsumerOffsetOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::ConsumerOffsetCasResult> {
             self.reset_calls.fetch_add(1, Ordering::SeqCst);
             self.offsets.lock().expect("offsets").insert(queue_id, new_offset);
-            Ok(rocketmq_client_rust::ConditionalConsumerOffsetOutcome {
+            Ok(rocketmq_client_rust::ConsumerOffsetCasResult {
                 applied: true,
                 actual_offset: new_offset,
             })
@@ -2145,11 +2144,11 @@ mod tests {
             _topic: CheetahString,
             expected_state: ClientExpectedState,
             replacement: ClientTopicConfig,
-        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::MutationStateCasOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::MetadataCasReport> {
             self.topic_writes.fetch_add(1, Ordering::SeqCst);
             let mut current = self.topic_state.lock().expect("topic state");
             if self.topic_dirty.load(Ordering::SeqCst) {
-                return Ok(rocketmq_client_rust::MutationStateCasOutcome {
+                return Ok(rocketmq_client_rust::MetadataCasReport {
                     applied: false,
                     changed: false,
                     state: current.state,
@@ -2157,7 +2156,7 @@ mod tests {
                 });
             }
             if current.state != expected_state {
-                return Ok(rocketmq_client_rust::MutationStateCasOutcome {
+                return Ok(rocketmq_client_rust::MetadataCasReport {
                     applied: false,
                     changed: false,
                     state: current.state,
@@ -2194,7 +2193,7 @@ mod tests {
             {
                 *self.order_config.lock().expect("order config") = Some(order);
             }
-            Ok(rocketmq_client_rust::MutationStateCasOutcome {
+            Ok(rocketmq_client_rust::MetadataCasReport {
                 applied: true,
                 changed,
                 state: current.state,
@@ -2218,11 +2217,11 @@ mod tests {
             _group: CheetahString,
             expected_state: ClientExpectedState,
             replacement: ClientSubscriptionGroupConfig,
-        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::MutationStateCasOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::MetadataCasReport> {
             self.group_writes.fetch_add(1, Ordering::SeqCst);
             let mut current = self.group_state.lock().expect("group state");
             if self.group_dirty.load(Ordering::SeqCst) {
-                return Ok(rocketmq_client_rust::MutationStateCasOutcome {
+                return Ok(rocketmq_client_rust::MetadataCasReport {
                     applied: false,
                     changed: false,
                     state: current.state,
@@ -2230,7 +2229,7 @@ mod tests {
                 });
             }
             if current.state != expected_state {
-                return Ok(rocketmq_client_rust::MutationStateCasOutcome {
+                return Ok(rocketmq_client_rust::MetadataCasReport {
                     applied: false,
                     changed: false,
                     state: current.state,
@@ -2257,7 +2256,7 @@ mod tests {
             ) {
                 self.group_dirty.store(true, Ordering::SeqCst);
             }
-            Ok(rocketmq_client_rust::MutationStateCasOutcome {
+            Ok(rocketmq_client_rust::MetadataCasReport {
                 applied: true,
                 changed,
                 state: current.state,
@@ -2300,11 +2299,11 @@ mod tests {
             _consumer_group: CheetahString,
             expected: ClientExpectedMessageRequestMode,
             replacement: ClientMessageRequestMode,
-        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::MutationMessageRequestModeOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::MessageRequestModeCasReport> {
             self.request_mode_writes.fetch_add(1, Ordering::SeqCst);
             let mut current = self.request_mode.lock().expect("request mode");
             if self.request_mode_dirty.load(Ordering::SeqCst) {
-                return Ok(rocketmq_client_rust::MutationMessageRequestModeOutcome {
+                return Ok(rocketmq_client_rust::MessageRequestModeCasReport {
                     applied: false,
                     changed: false,
                     current: *current,
@@ -2317,7 +2316,7 @@ mod tests {
                 _ => false,
             };
             if !matches {
-                return Ok(rocketmq_client_rust::MutationMessageRequestModeOutcome {
+                return Ok(rocketmq_client_rust::MessageRequestModeCasReport {
                     applied: false,
                     changed: false,
                     current: *current,
@@ -2337,7 +2336,7 @@ mod tests {
             ) {
                 self.request_mode_dirty.store(true, Ordering::SeqCst);
             }
-            Ok(rocketmq_client_rust::MutationMessageRequestModeOutcome {
+            Ok(rocketmq_client_rust::MessageRequestModeCasReport {
                 applied: true,
                 changed,
                 current: *current,
@@ -2353,7 +2352,7 @@ mod tests {
             expected: ClientExpectedMessageRequestMode,
             replacement: ClientMessageRequestMode,
             timeout_millis: u64,
-        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::MutationMessageRequestModeOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::MessageRequestModeCasReport> {
             self.request_mode_timeouts
                 .lock()
                 .expect("request mode timeouts")

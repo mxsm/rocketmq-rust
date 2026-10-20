@@ -188,9 +188,9 @@ impl MQClientAPIImpl {
             .await
             .map_err(RetryInput::Transport)?;
         let response = match outcome {
-            OutboundRequestOutcome::Response(response) => response,
-            OutboundRequestOutcome::Rejected(rejection) => return Err(RetryInput::Rejected(rejection)),
-            OutboundRequestOutcome::Contract(contract) => return Err(RetryInput::Contract(contract)),
+            OutboundRequestResult::Response(response) => response,
+            OutboundRequestResult::Rejected(rejection) => return Err(RetryInput::Rejected(rejection)),
+            OutboundRequestResult::Contract(contract) => return Err(RetryInput::Contract(contract)),
         };
         match ResponseCode::from(response.code()) {
             ResponseCode::FlushDiskTimeout
@@ -393,7 +393,7 @@ impl MQClientAPIImpl {
             let cost = (Instant::now() - begin_attempt_time).as_millis() as u64;
 
             match result {
-                Ok(OutboundRequestOutcome::Response(response)) => {
+                Ok(OutboundRequestResult::Response(response)) => {
                     // Determine send status
                     let response_code = ResponseCode::from(response.code());
                     let send_status = match response_code {
@@ -590,7 +590,7 @@ impl MQClientAPIImpl {
                         }
                     }
                 }
-                Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                Ok(OutboundRequestResult::Rejected(rejection)) => {
                     let input = RetryInput::Rejected(rejection);
                     if Self::handle_async_retry_input(
                         &mq_fault_strategy,
@@ -619,7 +619,7 @@ impl MQClientAPIImpl {
                     }
                     return;
                 }
-                Ok(OutboundRequestOutcome::Contract(contract)) => {
+                Ok(OutboundRequestResult::Contract(contract)) => {
                     let input = RetryInput::Contract(contract);
                     if Self::handle_async_retry_input(
                         &mq_fault_strategy,
@@ -694,8 +694,8 @@ impl MQClientAPIImpl {
             .invoke_request(Some(addr), request, timeout_millis)
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(
                     crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
                         RetryInput::Rejected(rejection),
@@ -703,7 +703,7 @@ impl MQClientAPIImpl {
                     ),
                 );
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(
                     crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
                         RetryInput::Contract(contract),
@@ -748,8 +748,8 @@ impl MQClientAPIImpl {
             .invoke_request(Some(addr), request, timeout_millis)
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(
                     crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
                         RetryInput::Rejected(rejection),
@@ -757,7 +757,7 @@ impl MQClientAPIImpl {
                     ),
                 );
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(
                     crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
                         RetryInput::Contract(contract),
@@ -782,8 +782,8 @@ impl MQClientAPIImpl {
             .invoke_request(Some(addr), request, timeout_millis)
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(
                     crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
                         RetryInput::Rejected(rejection),
@@ -791,7 +791,7 @@ impl MQClientAPIImpl {
                     ),
                 );
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(
                     crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
                         RetryInput::Contract(contract),
@@ -832,8 +832,8 @@ impl MQClientAPIImpl {
             .invoke_request(Some(&broker_addr), request, timeout_millis)
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(
                     crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
                         RetryInput::Rejected(rejection),
@@ -841,7 +841,7 @@ impl MQClientAPIImpl {
                     ),
                 );
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(
                     crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
                         RetryInput::Contract(contract),
@@ -874,8 +874,8 @@ impl MQClientAPIImpl {
             .invoke_request(Some(&remote_addr), request, timeout_millis)
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => response,
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            Ok(OutboundRequestResult::Response(response)) => response,
+            Ok(OutboundRequestResult::Rejected(rejection)) => {
                 return Err(
                     crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
                         RetryInput::Rejected(rejection),
@@ -883,7 +883,7 @@ impl MQClientAPIImpl {
                     ),
                 );
             }
-            Ok(OutboundRequestOutcome::Contract(contract)) => {
+            Ok(OutboundRequestResult::Contract(contract)) => {
                 return Err(
                     crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
                         RetryInput::Contract(contract),
@@ -929,14 +929,14 @@ impl MQClientAPIImpl {
             .invoke_request(Some(addr), request, timeout_millis)
             .await;
         let response = match outcome {
-            Ok(OutboundRequestOutcome::Response(response)) => Ok(response),
-            Ok(OutboundRequestOutcome::Rejected(rejection)) => Err(
+            Ok(OutboundRequestResult::Response(response)) => Ok(response),
+            Ok(OutboundRequestResult::Rejected(rejection)) => Err(
                 crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
                     RetryInput::Rejected(rejection),
                     Some(addr),
                 ),
             ),
-            Ok(OutboundRequestOutcome::Contract(contract)) => Err(
+            Ok(OutboundRequestResult::Contract(contract)) => Err(
                 crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
                     RetryInput::Contract(contract),
                     Some(addr),

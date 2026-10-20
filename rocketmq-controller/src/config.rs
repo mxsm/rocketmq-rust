@@ -24,7 +24,7 @@ mod peer_endpoints;
 
 pub use controller_config::ControllerConfig;
 pub use controller_config::RaftPeer;
-pub use controller_config::StorageBackendType;
+pub use controller_config::StorageEngineType;
 pub use peer_endpoints::ControllerPeerEndpoint;
 
 /// Shared owner for immutable controller configuration snapshots.

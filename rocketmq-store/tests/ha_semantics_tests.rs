@@ -38,6 +38,9 @@ use rocketmq_store::LocalFileMessageStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::StoreRuntimeConfig;
+use rocketmq_store_api::MasterEpoch;
+use rocketmq_store_api::WriteAuthority;
+use rocketmq_store_api::WriteLeaseToken;
 use tempfile::TempDir;
 
 fn test_service_context() -> ChildServiceContext {
@@ -187,6 +190,13 @@ async fn controller_role_failover_smoke_keeps_confirm_offset_at_master_tail() {
     store.sync_controller_sync_state_set(1, &HashSet::from([1_i64]));
 
     for round in 0..3 {
+        // Each master term needs a fresh Controller write lease before it can append.
+        let master_epoch = MasterEpoch::try_from(round + 1).expect("valid master epoch");
+        let authority = WriteAuthority::try_new(1, master_epoch).expect("valid write authority");
+        let generation = u64::try_from(round + 1).expect("positive lease generation");
+        let token = WriteLeaseToken::try_new(authority, generation).expect("valid write lease");
+        assert!(store.install_controller_write_lease(token, Duration::from_secs(60)));
+
         let body = match round {
             0 => b"phase6-ha-failover-round-0".as_slice(),
             1 => b"phase6-ha-failover-round-1".as_slice(),

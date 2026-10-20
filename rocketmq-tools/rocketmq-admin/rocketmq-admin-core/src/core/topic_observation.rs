@@ -119,6 +119,46 @@ pub struct QueryTopicConfigResult {
     pub inconsistent_fields: Vec<TopicConfigDifferenceField>,
 }
 
+/// Maximum Consumer Group names retained by one Topic subscriber observation.
+pub const MAX_TOPIC_SUBSCRIBER_GROUPS: usize = 10_000;
+/// Stable warning emitted when Consumer Group names are omitted by the retained-name cap.
+pub const TOPIC_SUBSCRIBERS_TRUNCATED_WARNING: &str = "topic_subscribers_truncated";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueryTopicSubscribersRequest {
+    pub cluster: String,
+    pub topic: String,
+}
+
+impl QueryTopicSubscribersRequest {
+    pub fn try_new(cluster: impl Into<String>, topic: impl Into<String>) -> AdminResult<Self> {
+        Ok(Self {
+            cluster: required("cluster", cluster)?,
+            topic: required("topic", topic)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueryTopicSubscribersResult {
+    pub topic: String,
+    /// Consumer Group names in ascending order, without duplicates.
+    pub consumer_groups: Vec<String>,
+    /// Whether names beyond [`MAX_TOPIC_SUBSCRIBER_GROUPS`] were left out.
+    pub truncated: bool,
+}
+
+/// Evidence-aware read of the Consumer Groups that consume one Topic.
+///
+/// The answer joins what every selected-cluster master of the Topic route records, because one
+/// Broker knows only the groups it has seen. A Broker that fails is reported as a source failure.
+pub trait TopicSubscriberQueryAdmin: Send {
+    fn query_topic_subscribers<'a>(
+        &'a mut self,
+        request: &'a QueryTopicSubscribersRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<QueryTopicSubscribersResult>>;
+}
+
 /// Evidence-aware read-only Topic observations.
 pub trait TopicObservationQueryAdmin: Send {
     fn query_topic_stats<'a>(

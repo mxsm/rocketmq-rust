@@ -25,6 +25,7 @@ mod json_field_source;
 mod json_writer;
 mod schema;
 mod sink;
+mod text_runs;
 mod value;
 
 mod private {
@@ -49,6 +50,7 @@ pub use schema::HeaderPresence;
 pub use schema::ResolvedHeaderKey;
 pub use sink::BinarySink;
 pub use sink::EncodeSink;
+pub use sink::HeaderFieldKey;
 pub use sink::JsonSink;
 pub use sink::MapSink;
 pub use value::validate_unsigned_java_range;

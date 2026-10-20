@@ -52,6 +52,9 @@ cargo build -p rocketmq-tieredstore
 rocketmq-tieredstore = { path = "../rocketmq-tieredstore" }
 ```
 
+配置迁移：将 `tieredStoreConfig.backendProvider` 改为
+`tieredStoreConfig.storageProviderId`。旧键会被忽略；未设置新键时使用默认的 `"posix"` provider。
+
 使用 memory provider 创建 store、分发一条消息、通过 shutdown drain dispatcher，然后按 queue offset 读取消息：
 
 ```rust
@@ -66,7 +69,7 @@ async fn example(parent_task_group: TaskGroup) -> Result<(), StoreError> {
     let Some(store) = TieredStore::new(
         TieredStoreConfig {
             storage_level: TieredStorageLevel::Force,
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             max_pending_tasks: 16,
             ..TieredStoreConfig::default()
         },
@@ -127,7 +130,7 @@ use rocketmq_tieredstore::{TieredStorageLevel, TieredStore, TieredStoreConfig};
 let Some(store) = TieredStore::new(
     TieredStoreConfig {
         storage_level: TieredStorageLevel::Force,
-        backend_provider: "posix".to_owned(),
+        storage_provider_id: "posix".to_owned(),
         store_path_root_dir: "./store/tieredstore".into(),
         ..TieredStoreConfig::default()
     },
@@ -185,6 +188,21 @@ let Some(store) = TieredStore::new(
 | Metadata | `TieredMetadataStore`, `JsonMetadataStore`, `TopicMetadata`, `TopicQueueMetadata`, `FileSegmentMetadata` |
 | Providers | `TieredStoreProvider`, `ProviderKind`, `PosixProvider`, `MemoryProvider` |
 | Services | `CommitLogRecoverService`, `TieredRecoverResult`, cleanup service set |
+
+FileSegment API 迁移：`FileSegment` trait 现在直接通过
+`#[trait_variant::make(Send)]` 声明，之前生成的源 trait
+`rocketmq_tieredstore::file::file_segment::FileSegmentInner` 已被移除。请将对
+`FileSegmentInner` 的 import、实现或泛型约束引用替换为规范的
+`rocketmq_tieredstore::FileSegment`。保留的 trait 要求实现类型及其异步 future 均为
+`Send`；依赖非 `Send` future 的实现需要相应调整，因为为旧名称提供别名无法保留该约定。
+
+### Provider API 迁移（尚未发布）
+
+移除 `rocketmq_tieredstore::provider::TieredStoreProviderInner`。
+请将导入、`impl` 声明和泛型约束中的旧名称替换为 `rocketmq_tieredstore::TieredStoreProvider`。
+这会破坏源码兼容性：保留的 trait 要求实现类型和返回的 future 满足 `Send`。
+依赖非 `Send` 类型或 future 的实现需要适配；保留旧名称的别名也无法维持原有契约。
+现有的 `Sync + Clone + 'static` 约束不变。
 
 ## 数据模型
 

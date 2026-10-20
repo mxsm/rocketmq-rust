@@ -117,7 +117,7 @@ pub struct ControllerMetricsManager {
     dledger_op_latency: HistogramInstrument,
     election_total: CounterInstrument,
     controller_metrics: ControllerMetrics,
-    base_attributes: Arc<Vec<KeyValue>>,
+    base_attributes: Arc<crate::MetricAttributes>,
     label_guard: RwLock<LabelGuard>,
     _observable_gauges: Vec<ObservableGauge<u64>>,
     #[cfg(test)]
@@ -158,7 +158,7 @@ impl ControllerMetricsManager {
         meter: Meter,
         config: ControllerMetricsConfig,
         active_broker_source: Arc<dyn Fn() -> u64 + Send + Sync>,
-        base_attributes: Arc<Vec<KeyValue>>,
+        base_attributes: Arc<crate::MetricAttributes>,
         label_guard: LabelGuard,
     ) -> Self {
         let role = meter
@@ -210,7 +210,7 @@ impl ControllerMetricsManager {
                 };
 
                 match storage_usage {
-                    Ok(size) if disk_telemetry.is_active() => observer.observe(size, disk_attributes.as_ref()),
+                    Ok(size) if disk_telemetry.is_active() => observer.observe(size, disk_attributes.as_key_values()),
                     Ok(_) => {}
                     Err(error) => {
                         error!(
@@ -236,7 +236,7 @@ impl ControllerMetricsManager {
                 if !broker_telemetry.is_active() {
                     return;
                 }
-                observer.observe(count, broker_attributes.as_ref());
+                observer.observe(count, broker_attributes.as_key_values());
                 callback_controller_metrics.record_active_brokers(count, broker_attributes.as_ref());
             })
             .build();
@@ -258,7 +258,11 @@ impl ControllerMetricsManager {
         }
     }
 
-    fn noop(telemetry: TelemetryRecorder, base_attributes: Arc<Vec<KeyValue>>, label_guard: LabelGuard) -> Self {
+    fn noop(
+        telemetry: TelemetryRecorder,
+        base_attributes: Arc<crate::MetricAttributes>,
+        label_guard: LabelGuard,
+    ) -> Self {
         Self {
             telemetry,
             role: RoleInstrument::Noop,
@@ -276,7 +280,7 @@ impl ControllerMetricsManager {
         }
     }
 
-    fn recording_attributes(&self) -> Option<Vec<KeyValue>> {
+    fn recording_attributes(&self) -> Option<crate::MetricAttributes> {
         self.telemetry
             .is_active()
             .then(|| self.base_attributes.as_ref().clone())
@@ -296,7 +300,7 @@ impl ControllerMetricsManager {
             return;
         }
 
-        self.role.add(new_role - old_role, self.base_attributes.as_ref());
+        self.role.add(new_role - old_role, self.base_attributes.as_key_values());
 
         if is_leader_role_transition(new_role, old_role) {
             self.controller_metrics
@@ -310,7 +314,7 @@ impl ControllerMetricsManager {
         };
         attributes.push(self.guarded_attribute(LABEL_REQUEST_TYPE, request_type));
         attributes.push(self.guarded_attribute(LABEL_REQUEST_HANDLE_STATUS, status.get_lower_case_name()));
-        self.request_total.add(1, &attributes);
+        self.request_total.add(1, attributes.as_key_values());
     }
 
     pub fn record_request_latency(&self, request_type: &str, latency_us: u64) {
@@ -318,7 +322,7 @@ impl ControllerMetricsManager {
             return;
         };
         attributes.push(self.guarded_attribute(LABEL_REQUEST_TYPE, request_type));
-        self.request_latency.record(latency_us, &attributes);
+        self.request_latency.record(latency_us, attributes.as_key_values());
     }
 
     pub fn inc_dledger_op_total(&self, operation: DLedgerOperation, status: DLedgerOperationStatus) {
@@ -327,7 +331,7 @@ impl ControllerMetricsManager {
         };
         attributes.push(self.guarded_attribute(LABEL_DLEDGER_OPERATION, operation.get_lower_case_name()));
         attributes.push(self.guarded_attribute(LABEL_DLEDGER_OPERATION_STATUS, status.get_lower_case_name()));
-        self.dledger_op_total.add(1, &attributes);
+        self.dledger_op_total.add(1, attributes.as_key_values());
     }
 
     pub fn record_dledger_op_latency(&self, operation: DLedgerOperation, latency_us: u64) {
@@ -335,7 +339,7 @@ impl ControllerMetricsManager {
             return;
         };
         attributes.push(self.guarded_attribute(LABEL_DLEDGER_OPERATION, operation.get_lower_case_name()));
-        self.dledger_op_latency.record(latency_us, &attributes);
+        self.dledger_op_latency.record(latency_us, attributes.as_key_values());
     }
 
     pub fn inc_election_total(&self, result: ElectionResult) {
@@ -343,7 +347,7 @@ impl ControllerMetricsManager {
             return;
         };
         attributes.push(self.guarded_attribute(LABEL_ELECTION_RESULT, result.get_lower_case_name()));
-        self.election_total.add(1, &attributes);
+        self.election_total.add(1, attributes.as_key_values());
         self.controller_metrics.record_election_total(1, &attributes);
     }
 
@@ -402,6 +406,7 @@ impl ControllerMetricsManager {
     #[cfg(test)]
     fn base_attribute_values(&self) -> Vec<String> {
         self.base_attributes
+            .as_key_values()
             .iter()
             .map(|attribute| attribute.value.to_string())
             .collect()
@@ -419,19 +424,21 @@ fn read_observable<T>(telemetry: &TelemetryRecorder, source: impl FnOnce() -> T)
     telemetry.is_active().then(source)
 }
 
-fn base_attributes(config: &ControllerMetricsConfig, label_guard: &mut LabelGuard) -> Vec<KeyValue> {
+fn base_attributes(config: &ControllerMetricsConfig, label_guard: &mut LabelGuard) -> crate::MetricAttributes {
     let mut labels = parse_key_value_list(&config.metrics_label);
     labels.insert(LABEL_ADDRESS.to_owned(), config.listen_addr.clone());
     labels.insert(LABEL_GROUP.to_owned(), config.controller_type.clone());
     labels.insert(LABEL_PEER_ID.to_owned(), config.node_id.clone());
 
-    labels
-        .into_iter()
-        .map(|(key, value)| {
-            let value = label_guard.normalize_metric_label(&key, &value).into_owned();
-            KeyValue::new(key, value)
-        })
-        .collect()
+    crate::MetricAttributes::from_key_values(
+        labels
+            .into_iter()
+            .map(|(key, value)| {
+                let value = label_guard.normalize_metric_label(&key, &value).into_owned();
+                KeyValue::new(key, value)
+            })
+            .collect(),
+    )
 }
 
 #[inline]

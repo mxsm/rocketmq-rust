@@ -40,10 +40,10 @@ use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_transport::api::error_response;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -173,7 +173,7 @@ where
     TM: TransactionalMessageService + 'static,
     MS: BrokerWriteStore + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.process_shared(request).await
     }
 }
@@ -186,7 +186,7 @@ where
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let opaque = request.original_identity().original_opaque();
         let command_factory = self.context.command_factory;
         let result = match self.process_command(request.command_mut()).await {
@@ -713,11 +713,11 @@ mod tests {
     use rocketmq_security_api::AuthorizationDecision;
     use rocketmq_security_api::Principal;
     use rocketmq_security_api::RequestPolicy;
-    use rocketmq_store::StorePorts;
+    use rocketmq_store::MessageStore;
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
-    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::TransportSecurity;
     use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
@@ -756,7 +756,7 @@ mod tests {
         runtime
     }
 
-    async fn dispatch_request<P>(processor: P, command: RemotingCommand) -> EmbeddedDispatchOutcome
+    async fn dispatch_request<P>(processor: P, command: RemotingCommand) -> EmbeddedDispatchResult
     where
         P: RequestProcessor + Clone + Sync + 'static,
     {
@@ -810,7 +810,7 @@ mod tests {
         )
         .set_opaque(6_606);
 
-        let EmbeddedDispatchOutcome::Reply(plan) = dispatch_request(processor, request).await else {
+        let EmbeddedDispatchResult::Reply(plan) = dispatch_request(processor, request).await else {
             panic!("end transaction must return an inline remoting response");
         };
 
@@ -973,7 +973,7 @@ mod tests {
 
     #[tokio::test]
     async fn end_transaction_store_capability_fails_closed_after_provider_shutdown() {
-        let capability = EndTransactionStoreCapability::<StorePorts> {
+        let capability = EndTransactionStoreCapability::<MessageStore> {
             escape_bridge: Weak::new(),
         };
 

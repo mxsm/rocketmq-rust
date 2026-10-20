@@ -110,7 +110,7 @@ use crate::producer::default_mq_producer::MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM;
 use crate::producer::default_mq_producer::MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE;
 use crate::producer::local_transaction_state::LocalTransactionState;
 use crate::producer::producer_impl::egress::BoundedEgress;
-use crate::producer::producer_impl::egress::OnewayAdmissionOutcome;
+use crate::producer::producer_impl::egress::OnewayAdmissionDecision;
 use crate::producer::producer_impl::egress::OnewayEgressSnapshot;
 use crate::producer::producer_impl::egress::OnewayEnvelope;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInner;

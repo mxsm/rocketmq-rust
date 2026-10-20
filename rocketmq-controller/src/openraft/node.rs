@@ -31,7 +31,7 @@ use crate::config::ControllerConfigReader;
 use crate::controller::membership::ConsensusMembership;
 use crate::controller::membership::ConsensusMembershipPort;
 use crate::controller::membership::MembershipChangeCoordinator;
-use crate::controller::membership::MembershipChangeOutcome;
+use crate::controller::membership::MembershipChangeReport;
 use crate::controller::membership::MembershipChangeRequest;
 use crate::error::consensus_failed;
 use crate::openraft::GrpcRaftService;
@@ -183,7 +183,7 @@ impl RaftNodeManager {
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         request: MembershipChangeRequest,
-    ) -> ControllerResult<MembershipChangeOutcome> {
+    ) -> ControllerResult<MembershipChangeReport> {
         self.membership_changes.apply(self, authorization, request).await
     }
 
@@ -251,6 +251,7 @@ impl RaftNodeManager {
         self.raft
             .ensure_linearizable(ReadPolicy::ReadIndex)
             .await
+            .map(|read_log_id| Some(*read_log_id.log_id()))
             .map_err(|error| consensus_failed("read linearizable Raft index", error))
     }
 

@@ -366,7 +366,7 @@ impl QueryMessageByIdRequest {
 }
 
 #[derive(Debug, Clone)]
-pub enum QueryMessageByIdOutcome {
+pub enum MessageIdLookupStatus {
     Found {
         message: Box<MessageExt>,
         broker_addr: String,
@@ -386,7 +386,7 @@ pub enum QueryMessageByIdOutcome {
 #[derive(Debug, Clone)]
 pub struct QueryMessageByIdEntry {
     pub message_id: CheetahString,
-    pub outcome: QueryMessageByIdOutcome,
+    pub outcome: MessageIdLookupStatus,
 }
 
 #[derive(Debug, Clone)]
@@ -401,7 +401,7 @@ impl QueryMessageByIdResult {
             .filter(|entry| {
                 matches!(
                     entry.outcome,
-                    QueryMessageByIdOutcome::Found { .. } | QueryMessageByIdOutcome::NotFound { .. }
+                    MessageIdLookupStatus::Found { .. } | MessageIdLookupStatus::NotFound { .. }
                 )
             })
             .count()
@@ -441,7 +441,7 @@ impl DecodeMessageIdRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DecodeMessageIdOutcome {
+pub enum MessageIdDecodeStatus {
     Decoded {
         broker_ip: String,
         broker_port: u16,
@@ -456,7 +456,7 @@ pub enum DecodeMessageIdOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecodeMessageIdEntry {
     pub message_id: CheetahString,
-    pub outcome: DecodeMessageIdOutcome,
+    pub outcome: MessageIdDecodeStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -774,7 +774,7 @@ pub struct MessageTrackRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum MessageTrackOutcome {
+pub enum MessageTrackLookupStatus {
     Found {
         broker_addr: String,
         query_time_ms: u64,
@@ -794,7 +794,7 @@ pub enum MessageTrackOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MessageTrackEntry {
     pub message_id: CheetahString,
-    pub outcome: MessageTrackOutcome,
+    pub outcome: MessageTrackLookupStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1119,13 +1119,13 @@ impl MessageService {
             .map(|message_id| {
                 let outcome = validate_message_id(message_id.as_str())
                     .and_then(|_| decode_message_id(message_id.as_str()))
-                    .map(|decoded| DecodeMessageIdOutcome::Decoded {
+                    .map(|decoded| MessageIdDecodeStatus::Decoded {
                         broker_ip: decoded.address.ip().to_string(),
                         broker_port: decoded.address.port(),
                         commit_log_offset: decoded.offset,
                         offset_hex: format!("{:#018X}", decoded.offset),
                     })
-                    .unwrap_or_else(|error| DecodeMessageIdOutcome::Invalid { error });
+                    .unwrap_or_else(|error| MessageIdDecodeStatus::Invalid { error });
 
                 DecodeMessageIdEntry {
                     message_id: message_id.clone(),
@@ -1250,7 +1250,7 @@ impl MessageService {
             let outcome = match tokio::time::timeout(Duration::from_millis(request.timeout_millis), query_future).await
             {
                 Ok(outcome) => outcome,
-                Err(_) => QueryMessageByIdOutcome::TimedOut,
+                Err(_) => MessageIdLookupStatus::TimedOut,
             };
             entries.push(QueryMessageByIdEntry {
                 message_id: message_id.clone(),
@@ -1265,7 +1265,7 @@ impl MessageService {
         message_id: &CheetahString,
         topic: &CheetahString,
         cluster: Option<&CheetahString>,
-    ) -> QueryMessageByIdOutcome {
+    ) -> MessageIdLookupStatus {
         let start_time = Instant::now();
         let query_result = admin
             .query_message(
@@ -1279,18 +1279,18 @@ impl MessageService {
         let query_time_ms = start_time.elapsed().as_millis() as u64;
 
         match query_result {
-            Ok(message) => QueryMessageByIdOutcome::Found {
+            Ok(message) => MessageIdLookupStatus::Found {
                 broker_addr: message.store_host().to_string(),
                 message: Box::new(message),
                 query_time_ms,
             },
             Err(error) if error.condition() == rocketmq_error::CanonicalCondition::NotFound => {
-                QueryMessageByIdOutcome::NotFound {
+                MessageIdLookupStatus::NotFound {
                     reason: stable_error_message(&error),
                     query_time_ms,
                 }
             }
-            Err(error) => QueryMessageByIdOutcome::Failed {
+            Err(error) => MessageIdLookupStatus::Failed {
                 error: stable_error_message(&error),
                 query_time_ms,
             },
@@ -1501,7 +1501,7 @@ impl MessageService {
             let outcome = match tokio::time::timeout(Duration::from_millis(request.timeout_millis), track_future).await
             {
                 Ok(outcome) => outcome,
-                Err(_) => MessageTrackOutcome::TimedOut,
+                Err(_) => MessageTrackLookupStatus::TimedOut,
             };
             entries.push(MessageTrackEntry {
                 message_id: message_id.clone(),
@@ -1516,30 +1516,30 @@ impl MessageService {
         admin: &DefaultMQAdminExt,
         request: &MessageTrackRequest,
         message_id: &CheetahString,
-    ) -> MessageTrackOutcome {
+    ) -> MessageTrackLookupStatus {
         match Self::query_single_message_by_id(admin, message_id, &request.topic, request.cluster.as_ref()).await {
-            QueryMessageByIdOutcome::Found {
+            MessageIdLookupStatus::Found {
                 message,
                 broker_addr,
                 query_time_ms,
             } => match admin.message_track_detail((*message).clone()).await {
-                Ok(tracks) => MessageTrackOutcome::Found {
+                Ok(tracks) => MessageTrackLookupStatus::Found {
                     broker_addr,
                     query_time_ms,
                     tracks: message_track_rows(tracks),
                 },
-                Err(error) => MessageTrackOutcome::Failed {
+                Err(error) => MessageTrackLookupStatus::Failed {
                     error: stable_error_message(&error),
                     query_time_ms,
                 },
             },
-            QueryMessageByIdOutcome::NotFound { reason, query_time_ms } => {
-                MessageTrackOutcome::NotFound { reason, query_time_ms }
+            MessageIdLookupStatus::NotFound { reason, query_time_ms } => {
+                MessageTrackLookupStatus::NotFound { reason, query_time_ms }
             }
-            QueryMessageByIdOutcome::Failed { error, query_time_ms } => {
-                MessageTrackOutcome::Failed { error, query_time_ms }
+            MessageIdLookupStatus::Failed { error, query_time_ms } => {
+                MessageTrackLookupStatus::Failed { error, query_time_ms }
             }
-            QueryMessageByIdOutcome::TimedOut => MessageTrackOutcome::TimedOut,
+            MessageIdLookupStatus::TimedOut => MessageTrackLookupStatus::TimedOut,
         }
     }
 
@@ -2352,7 +2352,7 @@ mod tests {
         assert_eq!(result.entries.len(), 2);
         assert!(matches!(
             &result.entries[0].outcome,
-            DecodeMessageIdOutcome::Decoded {
+            MessageIdDecodeStatus::Decoded {
                 broker_ip,
                 broker_port: 55334,
                 commit_log_offset: 860316681131967304,
@@ -2361,7 +2361,7 @@ mod tests {
         ));
         assert!(matches!(
             &result.entries[1].outcome,
-            DecodeMessageIdOutcome::Invalid { error } if error.contains("Invalid message ID length")
+            MessageIdDecodeStatus::Invalid { error } if error.contains("Invalid message ID length")
         ));
     }
 

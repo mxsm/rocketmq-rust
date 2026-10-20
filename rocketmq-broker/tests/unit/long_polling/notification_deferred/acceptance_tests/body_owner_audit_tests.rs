@@ -18,7 +18,7 @@ use std::sync::atomic::AtomicUsize;
 
 use bytes::Bytes;
 use rocketmq_transport::api::ClaimedDeferred;
-use rocketmq_transport::api::DeferredResumeOutcome;
+use rocketmq_transport::api::DeferredResumeResult;
 use rocketmq_transport::api::FileRegion;
 use rocketmq_transport::api::FileRegionLease;
 use rocketmq_transport::api::FileRegionSequence;
@@ -143,7 +143,7 @@ async fn notification_deferred_owner_backed_body_success_releases_once_without_r
             )
             .await
             .expect("write owner-backed Notification body"),
-        DeferredResumeOutcome::Completed(_)
+        DeferredResumeResult::Completed(_)
     ));
 
     let response = client
@@ -258,7 +258,7 @@ async fn notification_deferred_parent_cancel_releases_prepared_owner_once_withou
         .await
         .expect("cancelled Notification receipt channel")
         .expect("parent cancellation is a normal deferred resume outcome");
-    assert!(matches!(outcome, DeferredResumeOutcome::Cancelled));
+    assert!(matches!(outcome, DeferredResumeResult::Cancelled));
     assert!(release_plan_tx.send(()).is_err());
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
     assert_eq!(owner_drops.load(Ordering::SeqCst), 1);

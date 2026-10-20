@@ -33,11 +33,11 @@ use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQ
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::BrokerStorePort;
 use rocketmq_transport::api::error_response;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::RpcClient;
 use rocketmq_transport::api::RpcClientImpl;
 use rocketmq_transport::api::RpcRequest;
@@ -80,7 +80,7 @@ impl<MS> RequestProcessor for ConsumerManageProcessor<MS>
 where
     MS: BrokerStorePort + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.process_shared(request).await
     }
 }
@@ -89,7 +89,7 @@ impl<MS: BrokerStorePort> ConsumerManageProcessor<MS> {
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let original_opaque = request.original_identity().original_opaque();
         let request_source = trusted_request_source(request)?;
         let result = self.process_command(request_source, request.command_mut()).await;
@@ -682,7 +682,7 @@ mod tests {
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
-    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::TransportSecurity;
     use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
@@ -744,7 +744,7 @@ mod tests {
     async fn dispatch_request(
         processor: ConsumerManageProcessor<BrokerMessageStore>,
         command: RemotingCommand,
-    ) -> EmbeddedDispatchOutcome {
+    ) -> EmbeddedDispatchResult {
         let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             processor,
             Vec::new(),
@@ -771,7 +771,7 @@ mod tests {
         let request = RemotingCommand::create_request_command(RequestCode::GetConsumerListByGroup, EmptyHeader {})
             .set_opaque(4_204);
 
-        let EmbeddedDispatchOutcome::Reply(plan) = dispatch_request(processor, request).await else {
+        let EmbeddedDispatchResult::Reply(plan) = dispatch_request(processor, request).await else {
             panic!("consumer manager must return an inline remoting response");
         };
 

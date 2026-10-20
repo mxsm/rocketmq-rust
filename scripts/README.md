@@ -18,18 +18,34 @@ separate wrappers to enumerate tests, collect prototype reports, or compare hist
 
 | Task | Entry point |
 | --- | --- |
-| Understand PR and integration checks | [CI validation policy](../rocketmq-doc/en/ci-validation-policy.md) |
 | Inspect which root CI checks a path selects | `python scripts/ci_scope.py --paths <changed-path> ...` |
 | Check project instruction routing | [PowerShell](check-agents-routing.ps1) or [Bash](check-agents-routing.sh) |
 | Refresh the generated validation index | `python scripts/architecture_documentation_guard.py --write` |
 | Inspect request-header compatibility fixtures | [Protocol fixtures](../rocketmq-protocol/tests/fixtures/request_header_codec/README.md) |
 | Generate Admin operation fixtures | [Golden fixture generator](generate_admin_operation_goldens.py) |
-| Build release candidates | [Release preparation](run-release-preparation.ps1) |
 
-Scripts used by workflows, release tooling, compatibility fixtures, or documented manual operations
+Scripts used by workflows, compatibility fixtures, or documented manual operations
 belong here. Keep one-time migration edits and ad hoc report converters out of the maintained toolset.
 Before removing a script, check imports, callers, workflow routes, fixture generators, and documentation;
 the absence of a CI invocation alone does not make a manual tool obsolete.
+
+## Cargo version upgrades
+
+1. Choose the next version based on public API compatibility. Update
+   `workspace.package.version` and the corresponding internal dependency versions in
+   the root `Cargo.toml`. Members keep `version.workspace = true` and inherit shared
+   dependencies through `workspace.dependencies`.
+2. Update existing version requirements in standalone `Cargo.toml` files that point
+   to the changed root workspace crates. Keep independent package versions and
+   unrelated dependency requirements unchanged.
+3. Run `cargo update --workspace` at the repository root. Refresh each affected
+   standalone lockfile with `cargo update --workspace --manifest-path <path/to/Cargo.toml>`,
+   including consumers with path-only dependencies. Review the Cargo-generated diffs;
+   do not edit lockfiles by hand. Add `--offline` when all dependencies are cached.
+4. Run the relevant package and consumer checks with `--locked`, following their
+   `AGENTS.md` guides. At release time, move the relevant `CHANGELOG.md` entries from
+   `Unreleased` into a dated version section with a comparison link. The release tag
+   must match `v<workspace.package.version>`.
 
 ## Subdirectories
 
@@ -46,18 +62,30 @@ and V2/V3 or remoting refactor baseline collectors are no longer development gat
 Historical review reports remain reference material. Use the maintained crate tests
 and benchmark targets when investigating behavior or performance.
 
+The M10 target-hardware report collectors and the Transport P0, persistent-TCP, and
+TLS RSS probes are retired. Package-owned Criterion benchmarks and behavior tests
+remain maintained. Run one-off measurement helpers inline or from a system temporary
+directory outside the repository, and keep their outputs there as well.
+
 The completed M04-M09 migration suites have been retired, including source-text,
 fixed-layout, line-count, and exact-ledger assertions. Their `milestone_contract`
 runner tier is no longer available. Use the owning crate's behavior tests and the
-maintained dependency/API checks when those boundaries change. Release-script and
-dynamic-fixture regression suites remain available through the current CI routes.
+maintained dependency/API checks when those boundaries change. Dynamic-fixture
+regression suites remain available through the current CI routes.
 
 The completed Store capability and canonical-export source checks, Trait identity
 inventory, Rust lint debt inventory, and central debt count gate are also retired,
 including their dedicated tests and unused baselines. Keep regression tests for
-maintained CI routing, release tooling, generators, runtime/error checks, and
-compatibility behavior. Removing an obsolete gate includes its workflow calls,
-runner inventory entry, and documentation commands.
+maintained CI routing, generators, runtime/error checks, and compatibility behavior.
+Removing an obsolete gate includes its workflow calls, runner inventory entry, and
+documentation commands.
+
+The 1.0 release-candidate system is retired as well: the v1 capability, functional
+acceptance, candidate lifecycle, and phase-aware core release checks; the candidate,
+handoff, archive, SBOM, OCI layout, Helm, and crate staging tools under `distribution/`;
+and the `release-candidate`, `v1-functional-acceptance`, and `core-service-image-publish`
+workflows. Registry packages are prepared with Cargo directly. `core-release-scope.json`
+remains because the `--scope core-release` checks below read it.
 
 ## Necessary checks and architecture tools
 
@@ -79,6 +107,6 @@ Rust hygiene keeps safety failures and reports other observations without a base
 Runtime auditing now uses one cross-platform report generator; no fingerprints,
 per-file migration dispositions, or baseline-enforcement options remain.
 
-Keep operational tools for release packaging, fixture generation, container checks,
-interoperability, and live fault/soak testing. Select those tools for the corresponding
+Keep operational tools for fixture generation, container checks, interoperability,
+and live fault/soak testing. Select those tools for the corresponding
 task; they are not an additional routine development checklist.

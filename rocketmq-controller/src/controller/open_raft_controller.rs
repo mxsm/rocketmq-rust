@@ -35,7 +35,7 @@ use std::time::Instant;
 use crate::config::ControllerConfigReader;
 use crate::controller::broker_heartbeat_manager::DEFAULT_BROKER_CHANNEL_EXPIRED_TIME;
 use crate::controller::membership::ConsensusMembership;
-use crate::controller::membership::MembershipChangeOutcome;
+use crate::controller::membership::MembershipChangeReport;
 use crate::controller::membership::MembershipChangeRequest;
 use crate::controller::release_snapshot::controller_snapshot_error;
 use crate::controller::release_snapshot::controller_snapshot_error_by;
@@ -99,6 +99,7 @@ use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::BlockingKind;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -695,11 +696,12 @@ impl OpenRaftController {
             tokio::task::yield_now().await;
         };
 
-        let snapshot_id = snapshot.meta.snapshot_id.clone();
         let last_applied = snapshot.meta.last_log_id.ok_or_else(controller_snapshot_error)?;
         let voter_ids = snapshot.meta.last_membership.voter_ids().collect::<Vec<_>>();
         let payload = snapshot.snapshot.into_inner();
-        crate::openraft::validate_snapshot_payload(&payload).map_err(controller_snapshot_error_by)?;
+        let snapshot_id = crate::openraft::inspect_snapshot_payload(&payload)
+            .map_err(controller_snapshot_error_by)?
+            .snapshot_id;
         let max_snapshot_bytes =
             (crate::openraft::SNAPSHOT_MAX_BYTES as u64).min(authorization.resource_budget().max_checkpoint_bytes);
         if payload.len() as u64 > max_snapshot_bytes {
@@ -793,7 +795,7 @@ impl OpenRaftController {
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         request: MembershipChangeRequest,
-    ) -> ControllerResult<MembershipChangeOutcome> {
+    ) -> ControllerResult<MembershipChangeReport> {
         let node = self.node().ok_or_else(|| not_initialized("controller.openraft"))?;
         node.apply_membership_change(authorization, request).await
     }
@@ -838,6 +840,14 @@ impl OpenRaftController {
     }
 
     pub(crate) async fn startup_shared(&self) -> Result<()> {
+        self.startup_shared_inner(None).await
+    }
+
+    pub(crate) async fn startup_shared_with_listener(&self, listener: TcpListener) -> Result<()> {
+        self.startup_shared_inner(Some(listener)).await
+    }
+
+    async fn startup_shared_inner(&self, listener: Option<TcpListener>) -> Result<()> {
         let _lifecycle_guard = self.lifecycle_lock.lock().await;
         if self.node().is_some() {
             info!("OpenRaft controller is already started");
@@ -854,9 +864,20 @@ impl OpenRaftController {
 
         let addr = raft_bind_addr;
         let node_id = startup_config.node_id;
-        let listener = TcpListener::bind(addr)
-            .await
-            .map_err(|error| controller_bind_error(addr, node_id, error))?;
+        let listener = match listener {
+            Some(listener) => {
+                let bound_addr = listener
+                    .local_addr()
+                    .map_err(|error| controller_bind_error(addr, node_id, error))?;
+                if bound_addr != addr {
+                    return Err(configuration_invalid("controller.raft_listener_address"));
+                }
+                listener
+            }
+            None => TcpListener::bind(addr)
+                .await
+                .map_err(|error| controller_bind_error(addr, node_id, error))?,
+        };
         let task_group = self.ensure_task_group()?;
         let node =
             Arc::new(RaftNodeManager::new(self.config.clone(), self.service_context.storage_io().clone()).await?);
@@ -1003,7 +1024,7 @@ impl Controller for OpenRaftController {
             Duration::from_millis(initial_config.scan_not_active_broker_interval.max(1)),
         );
         task_config.initial_delay = Duration::from_millis(2000);
-        if let Err(error) = scheduled_tasks.schedule_fixed_delay(task_config, move || {
+        if let Err(error) = scheduled_tasks.schedule(task_config, ScheduledExecutionPolicy::default(), move || {
             let node = node.clone();
             let config = config.clone();
             let listeners = listeners.clone();
@@ -1315,7 +1336,7 @@ impl Controller for OpenRaftController {
                     (
                         metrics.current_leader,
                         metrics.last_log_index,
-                        metrics.committed.map(|log_id| log_id.index),
+                        metrics.local_committed.map(|log_id| log_id.index),
                         metrics.last_applied.map(|log_id| log_id.index),
                     )
                 } else {
@@ -1470,7 +1491,7 @@ mod tests {
         let config = ControllerConfig::default()
             .with_node_info(1, addr)
             .with_raft_peers(vec![RaftPeer { id: 1, addr }])
-            .with_storage_backend(crate::config::StorageBackendType::Memory);
+            .with_storage_engine_type(crate::config::StorageEngineType::Memory);
         let context = rocketmq_runtime::RuntimeContext::from_current("openraft-lifecycle-test");
         let controller = Arc::new(OpenRaftController::new(
             ControllerConfigReader::new(config),

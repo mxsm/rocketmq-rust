@@ -35,44 +35,8 @@
   "Supports multiple platforms including Linux, Windows, and macOS. Convenient deployment across different environments with consistent performance and behavior.": {
     "message": "Supports multiple platforms including Linux, Windows, and macOS. Convenient deployment across different environments with consistent performance and behavior."
   },
-  "homepage.features.rust.title": {
-    "message": "Rust Language Advantages"
-  },
-  "homepage.features.rust.badge": {
-    "message": "memory safe core"
-  },
-  "homepage.features.rust.description": {
-    "message": "RocketMQ-Rust uses Rust's ownership model and zero-cost abstractions to implement brokers, clients, remoting, and storage with predictable performance."
-  },
-  "homepage.features.async.title": {
-    "message": "Async Non-blocking Design"
-  },
-  "homepage.features.async.badge": {
-    "message": "tokio async I/O"
-  },
-  "homepage.features.async.description": {
-    "message": "Producer, consumer, remoting, and broker services are designed around asynchronous I/O so high-concurrency message traffic does not block worker threads."
-  },
-  "homepage.features.crossPlatform.title": {
-    "message": "Cross-platform Support"
-  },
-  "homepage.features.crossPlatform.badge": {
-    "message": "cargo ready"
-  },
-  "homepage.features.crossPlatform.description": {
-    "message": "Run and develop RocketMQ-Rust across Linux, Windows, and macOS with Cargo, examples, and documentation aligned for the Rust ecosystem."
-  },
-  "homepage.hero.subtitle": {
-    "message": ""
-  },
-  "homepage.hero.description": {
-    "message": "RocketMQ-Rust brings Apache RocketMQ's proven messaging model to Rust: producers send messages to brokers, NameServer provides routing, CommitLog persists data, and consumers process messages through async, type-safe APIs."
-  },
   "homepage.hero.getStarted": {
     "message": "Get Started"
-  },
-  "homepage.hero.github": {
-    "message": "GitHub"
   },
   "homepage.announcement.title": {
     "message": "RocketMQ-Rust v0.9.0 is out!"
@@ -80,88 +44,460 @@
   "homepage.announcement.link": {
     "message": "See what's new →"
   },
-  "homepage.features.eyebrow": {
-    "message": "ROCKETMQ-RUST CORE"
+  "homepage.arch.step.register.title": {
+    "message": "Register"
   },
-  "homepage.features.title": {
-    "message": "A Rust implementation of Apache RocketMQ's messaging architecture"
+  "homepage.arch.step.register.detail": {
+    "message": "Brokers register their topics with the NameServer and keep the route table fresh with heartbeats."
   },
-  "homepage.motion.title": {
-    "message": "RocketMQ message flow in Rust"
+  "homepage.arch.step.discover.title": {
+    "message": "Discover"
   },
-  "homepage.motion.nameserver.title": {
-    "message": "NameServer Routing"
+  "homepage.arch.step.discover.detail": {
+    "message": "Producers and consumers ask the NameServer for a topic route, then connect straight to the right Broker."
   },
-  "homepage.motion.nameserver.detail": {
-    "message": "Producers and consumers resolve broker routes through NameServer before sending or pulling messages."
+  "homepage.arch.step.send.title": {
+    "message": "Send"
   },
-  "homepage.motion.broker.title": {
-    "message": "Broker Storage"
+  "homepage.arch.step.send.detail": {
+    "message": "The producer picks a queue and sends asynchronously, over remoting or over gRPC through the Proxy."
   },
-  "homepage.motion.broker.detail": {
-    "message": "Messages are appended to CommitLog and dispatched to queues for reliable delivery."
+  "homepage.arch.step.persist.title": {
+    "message": "Persist"
   },
-  "homepage.motion.producer.title": {
-    "message": "Producer APIs"
+  "homepage.arch.step.persist.detail": {
+    "message": "The Broker appends to the CommitLog, builds ConsumeQueue and index entries, and replicates to its slave."
   },
-  "homepage.motion.producer.detail": {
-    "message": "Client APIs support topic messages, queue selection, batch sending, and transactional messaging flows."
+  "homepage.arch.step.consume.title": {
+    "message": "Consume"
   },
-  "homepage.motion.consumer.title": {
-    "message": "Consumer Delivery"
+  "homepage.arch.step.consume.detail": {
+    "message": "Consumers receive messages through Push, LitePull or POP, then commit offsets or acknowledge receipts."
   },
-  "homepage.motion.consumer.detail": {
-    "message": "Consumers process messages in push or pull mode and keep progress through offsets."
+  "homepage.arch.step.failover.title": {
+    "message": "Fail over"
   },
-  "homepage.hero.pill": {
-    "message": "APACHE ROCKETMQ ARCHITECTURE - RUST IMPLEMENTATION - ASYNC RUNTIME"
+  "homepage.arch.step.failover.detail": {
+    "message": "When a master goes down, the Raft-based Controller elects a new one from the in-sync replicas."
   },
-  "homepage.hero.subheadline": {
-    "message": "High-performance messaging middleware built with Rust"
+  "homepage.arch.badge.master": {
+    "message": "MASTER"
   },
-  "homepage.hero.motionSpec": {
-    "message": "Architecture flow"
+  "homepage.arch.badge.slave": {
+    "message": "SLAVE"
   },
-  "homepage.hero.stage.route": {
-    "message": "Route Lookup"
+  "homepage.arch.eyebrow": {
+    "message": "Architecture in motion"
   },
-  "homepage.hero.stage.produce": {
-    "message": "Producer Send"
+  "homepage.arch.title": {
+    "message": "Follow a message from producer to consumer"
   },
-  "homepage.hero.stage.append": {
-    "message": "Broker Append"
+  "homepage.arch.lead": {
+    "message": "Route discovery, sending, persistence, replication and delivery: every hop of the RocketMQ model, implemented in async Rust."
   },
-  "homepage.hero.stage.commitlog": {
-    "message": "CommitLog Flush"
+  "homepage.arch.diagram.label": {
+    "message": "Cluster diagram: producer, NameServer, a broker group with master and slave, consumer, Controller and Proxy. The highlighted links show the selected step."
   },
-  "homepage.hero.stage.consume": {
-    "message": "Consumer Pull"
+  "homepage.arch.group": {
+    "message": "BROKER GROUP"
   },
-  "homepage.hero.stage.offset": {
-    "message": "Offset Commit"
+  "homepage.arch.node.namesrv": {
+    "message": "route registry · :9876"
   },
-  "homepage.hero.status.nameserver.title": {
-    "message": "NameServer"
+  "homepage.arch.node.producer": {
+    "message": "async Rust client"
   },
-  "homepage.hero.status.nameserver.detail": {
-    "message": "route discovery"
+  "homepage.arch.node.consumer": {
+    "message": "consumer group"
   },
-  "homepage.hero.status.broker.title": {
-    "message": "Broker"
+  "homepage.arch.node.controller": {
+    "message": "Raft quorum"
   },
-  "homepage.hero.status.broker.detail": {
-    "message": "commit + dispatch"
+  "homepage.arch.node.proxy": {
+    "message": "gRPC ingress · :8081"
   },
-  "homepage.hero.status.storage.title": {
-    "message": "CommitLog"
+  "homepage.arch.badge.offline": {
+    "message": "OFFLINE"
   },
-  "homepage.hero.status.storage.detail": {
-    "message": "durable storage"
+  "homepage.arch.node.slave": {
+    "message": "HA replica"
   },
-  "homepage.hero.status.client.title": {
-    "message": "Rust Client"
+  "homepage.arch.legend.control": {
+    "message": "Control plane"
   },
-  "homepage.hero.status.client.detail": {
-    "message": "producer + consumer"
+  "homepage.arch.legend.produce": {
+    "message": "Produce"
+  },
+  "homepage.arch.legend.store": {
+    "message": "Store and replicate"
+  },
+  "homepage.arch.legend.consume": {
+    "message": "Consume"
+  },
+  "homepage.arch.pause": {
+    "message": "Pause tour"
+  },
+  "homepage.arch.play": {
+    "message": "Play tour"
+  },
+  "homepage.arch.link": {
+    "message": "Architecture overview"
+  },
+  "homepage.marquee.ordered": {
+    "message": "Ordered messages"
+  },
+  "homepage.marquee.delayed": {
+    "message": "Delayed delivery"
+  },
+  "homepage.marquee.transactional": {
+    "message": "Transactional messages"
+  },
+  "homepage.marquee.batch": {
+    "message": "Batch sending"
+  },
+  "homepage.marquee.requestReply": {
+    "message": "Request-reply"
+  },
+  "homepage.marquee.push": {
+    "message": "Push consumer"
+  },
+  "homepage.marquee.litePull": {
+    "message": "LitePull consumer"
+  },
+  "homepage.marquee.pop": {
+    "message": "POP consumption"
+  },
+  "homepage.marquee.filter": {
+    "message": "Tag and SQL92 filtering"
+  },
+  "homepage.marquee.acl": {
+    "message": "ACL authorization"
+  },
+  "homepage.marquee.tls": {
+    "message": "TLS transport"
+  },
+  "homepage.marquee.raft": {
+    "message": "Raft controller"
+  },
+  "homepage.marquee.grpc": {
+    "message": "gRPC proxy"
+  },
+  "homepage.marquee.tiered": {
+    "message": "Tiered storage"
+  },
+  "homepage.marquee.label": {
+    "message": "Capabilities and technology stack"
+  },
+  "homepage.code.producer.builder.title": {
+    "message": "Fluent, typed builders"
+  },
+  "homepage.code.producer.builder.text": {
+    "message": "Groups, NameServer addresses and timeouts are plain builder calls on a runtime you own."
+  },
+  "homepage.code.producer.message.title": {
+    "message": "Validated messages"
+  },
+  "homepage.code.producer.message.text": {
+    "message": "A message is checked when it is built, before it ever reaches the network."
+  },
+  "homepage.code.producer.result.title": {
+    "message": "Results you have to handle"
+  },
+  "homepage.code.producer.result.text": {
+    "message": "Every send returns a typed result carrying the status, message ID and queue offset."
+  },
+  "homepage.code.consumer.setup.title": {
+    "message": "Explicit setup"
+  },
+  "homepage.code.consumer.setup.text": {
+    "message": "Consumer group, start position and commit mode are all visible at the call site."
+  },
+  "homepage.code.consumer.loop.title": {
+    "message": "You drive the loop"
+  },
+  "homepage.code.consumer.loop.text": {
+    "message": "LitePull hands you batches on your schedule. Push and POP are there when you want callbacks or receipts."
+  },
+  "homepage.code.consumer.commit.title": {
+    "message": "Progress on your terms"
+  },
+  "homepage.code.consumer.commit.text": {
+    "message": "Commit offsets only after your own processing has succeeded."
+  },
+  "homepage.code.manifest.crates.title": {
+    "message": "Published on crates.io"
+  },
+  "homepage.code.manifest.crates.text": {
+    "message": "Client, model, runtime and observability crates are released together under one version."
+  },
+  "homepage.code.manifest.tokio.title": {
+    "message": "Built on Tokio"
+  },
+  "homepage.code.manifest.tokio.text": {
+    "message": "Async end to end, alongside the macros, signals and timers you already use."
+  },
+  "homepage.code.eyebrow": {
+    "message": "Developer experience"
+  },
+  "homepage.code.title": {
+    "message": "An API that feels like Rust"
+  },
+  "homepage.code.lead": {
+    "message": "Builders, typed results and explicit lifecycles. No hidden threads, no surprises."
+  },
+  "homepage.code.link.producer": {
+    "message": "Producer guide"
+  },
+  "homepage.code.link.consumer": {
+    "message": "Consumer guide"
+  },
+  "homepage.code.link.api": {
+    "message": "Rust API reference"
+  },
+  "homepage.code.tabs.label": {
+    "message": "Code samples"
+  },
+  "homepage.cta.title": {
+    "message": "Build the next generation of messaging with us"
+  },
+  "homepage.cta.lead": {
+    "message": "RocketMQ-Rust is developed in the open. Star the repository, join the discussion, or pick up a good first issue."
+  },
+  "homepage.hero.star": {
+    "message": "Star on GitHub"
+  },
+  "homepage.cta.discussions": {
+    "message": "Join the discussion"
+  },
+  "homepage.cta.contribute": {
+    "message": "Contributing guide"
+  },
+  "homepage.cta.issues": {
+    "message": "Browse good first issues"
+  },
+  "homepage.cta.disclaimer": {
+    "message": "RocketMQ-Rust is an independent community project, not an official Apache Software Foundation release. Apache RocketMQ is a trademark of the Apache Software Foundation."
+  },
+  "homepage.copy.done": {
+    "message": "Copied"
+  },
+  "homepage.copy.label": {
+    "message": "Copy to clipboard"
+  },
+  "homepage.eco.services.title": {
+    "message": "Core services"
+  },
+  "homepage.eco.services.text": {
+    "message": "NameServer, Broker, Proxy and Controller: the deployable runtime of a RocketMQ cluster."
+  },
+  "homepage.eco.services.link": {
+    "message": "Architecture overview"
+  },
+  "homepage.eco.libraries.title": {
+    "message": "Reusable crates"
+  },
+  "homepage.eco.libraries.text": {
+    "message": "Client SDK, protocol, transport, storage engines, runtime and auth, each usable on its own from crates.io."
+  },
+  "homepage.eco.libraries.link": {
+    "message": "Module map"
+  },
+  "homepage.eco.operations.title": {
+    "message": "Operations and AI"
+  },
+  "homepage.eco.operations.text": {
+    "message": "Admin CLI and TUI, web and desktop dashboards, MCP servers and AI SRE workflows."
+  },
+  "homepage.eco.operations.link": {
+    "message": "Ecosystem guide"
+  },
+  "homepage.eco.eyebrow": {
+    "message": "Ecosystem"
+  },
+  "homepage.eco.title": {
+    "message": "One workspace, a whole messaging platform"
+  },
+  "homepage.eco.lead": {
+    "message": "Services, libraries and operations tooling evolve together in a single repository."
+  },
+  "homepage.pattern.ordered": {
+    "message": "ordered"
+  },
+  "homepage.pattern.delayed": {
+    "message": "delayed"
+  },
+  "homepage.pattern.transactional": {
+    "message": "transactional"
+  },
+  "homepage.pattern.batched": {
+    "message": "batched"
+  },
+  "homepage.pattern.requestReply": {
+    "message": "request-reply"
+  },
+  "homepage.why.safety.title": {
+    "message": "Memory safety without a garbage collector"
+  },
+  "homepage.why.safety.text": {
+    "message": "Ownership and borrowing rule out data races and use-after-free at compile time. With no GC, there are no stop-the-world pauses on the message path."
+  },
+  "homepage.why.safety.verdict": {
+    "message": "Caught by the compiler, not in production"
+  },
+  "homepage.why.async.title": {
+    "message": "Async from socket to disk"
+  },
+  "homepage.why.async.text": {
+    "message": "Built on Tokio. Networking, request processing and background services are non-blocking, with owned runtimes and orderly shutdown."
+  },
+  "homepage.why.protocol.title": {
+    "message": "Speaks RocketMQ"
+  },
+  "homepage.why.protocol.text": {
+    "message": "Implements the remoting protocol and the gRPC messaging API, so Rust and Java clients and servers interoperate at documented boundaries."
+  },
+  "homepage.why.storage.title": {
+    "message": "Pluggable storage engines"
+  },
+  "homepage.why.storage.text": {
+    "message": "An append-only CommitLog with ConsumeQueue and index files, a RocksDB backend, and tiered storage for data beyond local disks."
+  },
+  "homepage.why.patterns.title": {
+    "message": "Every messaging pattern"
+  },
+  "homepage.why.patterns.text": {
+    "message": "Ordered, delayed, transactional, batch and request-reply messaging, consumed through Push, LitePull or POP."
+  },
+  "homepage.why.ha.title": {
+    "message": "High availability with Raft"
+  },
+  "homepage.why.ha.text": {
+    "message": "A Raft-based Controller coordinates master election and in-sync replicas across Broker groups."
+  },
+  "homepage.why.security.title": {
+    "message": "Security built in"
+  },
+  "homepage.why.security.text": {
+    "message": "Authentication, ACL authorization and TLS guard client and administrative access."
+  },
+  "homepage.why.observability.title": {
+    "message": "Observable by design"
+  },
+  "homepage.why.observability.text": {
+    "message": "Prometheus metrics plus OpenTelemetry traces and logs over OTLP, enabled through opt-in build features."
+  },
+  "homepage.why.eyebrow": {
+    "message": "Why RocketMQ-Rust"
+  },
+  "homepage.why.title": {
+    "message": "Engineered for the hot path"
+  },
+  "homepage.why.lead": {
+    "message": "The RocketMQ model you already know, rebuilt in a language that turns whole classes of runtime failures into compile errors."
+  },
+  "homepage.start.clone.title": {
+    "message": "Clone and build"
+  },
+  "homepage.start.clone.text": {
+    "message": "Fetch the workspace and build it with the pinned Rust 1.95 toolchain."
+  },
+  "homepage.start.namesrv.title": {
+    "message": "Start the NameServer"
+  },
+  "homepage.start.namesrv.text": {
+    "message": "The route registry for brokers and clients. It listens on 127.0.0.1:9876 by default."
+  },
+  "homepage.start.broker.title": {
+    "message": "Start a Broker"
+  },
+  "homepage.start.broker.text": {
+    "message": "Give the Broker a home directory for its store and point it at the NameServer."
+  },
+  "homepage.start.client.title": {
+    "message": "Send and consume"
+  },
+  "homepage.start.client.text": {
+    "message": "Start the consumer first, then run the producer from a second terminal."
+  },
+  "homepage.start.eyebrow": {
+    "message": "Quick start"
+  },
+  "homepage.start.title": {
+    "message": "From clone to first message"
+  },
+  "homepage.start.lead": {
+    "message": "Four steps stand up a local cluster from source and push your first messages through it."
+  },
+  "homepage.start.shell.label": {
+    "message": "Command shell"
+  },
+  "homepage.start.link.guide": {
+    "message": "Full first-message tutorial"
+  },
+  "homepage.start.link.install": {
+    "message": "Installation options"
+  },
+  "homepage.hero.rotator.prefix": {
+    "message": "Built for messages that are"
+  },
+  "homepage.hero.release.label": {
+    "message": "v{version} is live on crates.io"
+  },
+  "homepage.hero.release.action": {
+    "message": "Release notes"
+  },
+  "homepage.hero.title.lead": {
+    "message": "Distributed messaging,"
+  },
+  "homepage.hero.title.accent": {
+    "message": "forged in Rust."
+  },
+  "homepage.hero.lead": {
+    "message": "RocketMQ-Rust is a community-built Rust implementation of Apache RocketMQ: NameServer, Broker, Proxy, Controller and async clients — memory-safe, non-blocking, and speaking the RocketMQ remoting and gRPC protocols."
+  },
+  "homepage.hero.scroll": {
+    "message": "Scroll to explore"
+  },
+  "homepage.hero.chip.online": {
+    "message": "online"
+  },
+  "homepage.hero.chip.waiting": {
+    "message": "waiting"
+  },
+  "homepage.hero.terminal.label": {
+    "message": "Terminal replay: start a NameServer, start a Broker, then send messages to TopicTest with the Rust client."
+  },
+  "homepage.hero.chip.messages": {
+    "message": "messages sent"
+  },
+  "homepage.stats.label": {
+    "message": "Project at a glance"
+  },
+  "homepage.stats.release.label": {
+    "message": "Stable release"
+  },
+  "homepage.stats.release.detail": {
+    "message": "Published on crates.io"
+  },
+  "homepage.stats.crates.label": {
+    "message": "Workspace crates"
+  },
+  "homepage.stats.crates.detail": {
+    "message": "From protocol to storage, one repository"
+  },
+  "homepage.stats.gc.label": {
+    "message": "Garbage-collector pauses"
+  },
+  "homepage.stats.gc.detail": {
+    "message": "Rust frees memory without a GC"
+  },
+  "homepage.stats.stars.label": {
+    "message": "GitHub stars"
+  },
+  "homepage.stats.stars.detail": {
+    "message": "Star the repository"
+  },
+  "homepage.meta.description": {
+    "message": "RocketMQ-Rust is a community-built Rust implementation of Apache RocketMQ: NameServer, Broker, Proxy, Controller and async clients with memory safety and non-blocking I/O."
   }
 }

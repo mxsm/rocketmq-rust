@@ -34,17 +34,16 @@ use crate::dispatch::DeferredCommitErrorKind;
 use crate::dispatch::DeferredSessionCleanupOwner;
 use crate::dispatch::EmbeddedCaller;
 use crate::dispatch::EmbeddedDispatchError;
-use crate::dispatch::EmbeddedDispatchOutcome;
-use crate::dispatch::EmbeddedResolvedOutcome;
+use crate::dispatch::EmbeddedDispatchResult;
+use crate::dispatch::EmbeddedResponseAction;
 use crate::dispatch::ExplicitProcessor;
 use crate::dispatch::InternalFailureOrigin;
 use crate::dispatch::InternalProcessorCandidate;
-use crate::dispatch::InternalProcessorOutcome;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RemotingResponse;
 use crate::dispatch::RequestContext;
 use crate::dispatch::RequestControlView;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseSink;
 use crate::error::TransportError;
 use crate::runtime::processor::RequestProcessor;
@@ -66,7 +65,7 @@ mod terminal;
 use terminal::terminal;
 use terminal::EmbeddedTerminalSender;
 
-type TerminalResult = Result<EmbeddedDispatchOutcome, EmbeddedDispatchError>;
+type TerminalResult = Result<EmbeddedDispatchResult, EmbeddedDispatchError>;
 
 impl<P> AuthorizedCommandDispatcher<P>
 where
@@ -88,7 +87,7 @@ where
         principal: Principal,
         deadline: Option<RequestDeadline>,
         command: RemotingCommand,
-    ) -> Result<EmbeddedDispatchOutcome, TransportError> {
+    ) -> Result<EmbeddedDispatchResult, TransportError> {
         converge_embedded_result(
             self.dispatch_embedded_inner(task_group, principal, deadline, command, false)
                 .await,
@@ -114,7 +113,7 @@ where
         principal: Principal,
         deadline: Option<RequestDeadline>,
         command: RemotingCommand,
-    ) -> Result<EmbeddedDispatchOutcome, TransportError> {
+    ) -> Result<EmbeddedDispatchResult, TransportError> {
         converge_embedded_result(
             self.dispatch_embedded_inner(task_group, principal, deadline, command, true)
                 .await,
@@ -134,7 +133,7 @@ where
         let (session_id, original) = match capture_identity(&command) {
             Some(identity) => identity,
             None => {
-                let _ = terminal_sender.complete(Ok(EmbeddedDispatchOutcome::IdentityExhausted));
+                let _ = terminal_sender.complete(Ok(EmbeddedDispatchResult::IdentityExhausted));
                 return terminal_receiver.receive().await;
             }
         };
@@ -263,12 +262,12 @@ where
                                                 .await;
                                             } else {
                                                 let _ = terminal_sender
-                                                    .complete(Ok(EmbeddedDispatchOutcome::CompletionClosed));
+                                                    .complete(Ok(EmbeddedDispatchResult::CompletionClosed));
                                             }
                                         }
                                         _ => {
                                             let _ =
-                                                terminal_sender.complete(Ok(EmbeddedDispatchOutcome::CompletionClosed));
+                                                terminal_sender.complete(Ok(EmbeddedDispatchResult::CompletionClosed));
                                         }
                                     }
                                 } else {
@@ -298,20 +297,20 @@ where
                 },
                 Err(error) => {
                     let _ = error;
-                    let _ = terminal_sender.complete(Ok(EmbeddedDispatchOutcome::AdmissionRejected));
+                    let _ = terminal_sender.complete(Ok(EmbeddedDispatchResult::AdmissionRejected));
                 }
             }
         }
 
         let initial_result = terminal_receiver.receive().await;
         let result = match initial_result {
-            Ok(EmbeddedDispatchOutcome::Deferred { .. }) if wait_for_deferred_response => {
+            Ok(EmbeddedDispatchResult::Deferred { .. }) if wait_for_deferred_response => {
                 match deferred_receiver.take() {
                     Some(receiver) => match receiver.receive().await {
-                        Ok(response) => Ok(EmbeddedDispatchOutcome::Reply(response)),
+                        Ok(response) => Ok(EmbeddedDispatchResult::Reply(response)),
                         Err(outcome) => Ok(embedded_response_outcome(outcome)),
                     },
-                    None => Ok(EmbeddedDispatchOutcome::CompletionClosed),
+                    None => Ok(EmbeddedDispatchResult::CompletionClosed),
                 }
             }
             result => result,
@@ -423,11 +422,11 @@ where
                 retained_partial,
             }) => {
                 drop(retained_partial);
-                let _ = terminal_sender.complete(Ok(EmbeddedDispatchOutcome::AdmissionRejected));
+                let _ = terminal_sender.complete(Ok(EmbeddedDispatchResult::AdmissionRejected));
             }
             Ok(SessionDispatchAttempt::SessionClosed { retained_partial }) => {
                 drop(retained_partial);
-                let _ = terminal_sender.complete(Ok(EmbeddedDispatchOutcome::SessionClosed));
+                let _ = terminal_sender.complete(Ok(EmbeddedDispatchResult::SessionClosed));
             }
             Err(error) => {
                 let _ = terminal_sender.complete(Err(EmbeddedDispatchError::runtime(error)));
@@ -436,7 +435,7 @@ where
     }
 }
 
-fn converge_embedded_result(result: TerminalResult) -> Result<EmbeddedDispatchOutcome, TransportError> {
+fn converge_embedded_result(result: TerminalResult) -> Result<EmbeddedDispatchResult, TransportError> {
     result.map_err(|source| TransportError::dispatch(source))
 }
 
@@ -509,12 +508,12 @@ where
             original,
             request_started,
             InternalProcessorCandidate::failure(
-                InternalProcessorOutcome::Handled(crate::dispatch::HandlerOutcome::Reply(response)),
+                crate::dispatch::ResponseAction::Reply(response),
                 InternalFailureOrigin::Deadline,
             ),
         )
         .await;
-        if matches!(&result, Ok(EmbeddedDispatchOutcome::OneWay { .. })) {
+        if matches!(&result, Ok(EmbeddedDispatchResult::OneWay { .. })) {
             core.report_failure_category(InternalFailureOrigin::Deadline.category());
         }
         return result;
@@ -527,11 +526,11 @@ where
         .process_embedded(&mut request)
         .await
         .map_err(map_processor_error)?;
-    let InternalProcessorCandidate { outcome, failure } = candidate;
+    let InternalProcessorCandidate { action, failure } = candidate;
     let outcome = processor
-        .resolve_embedded_outcome(&mut request, outcome)
+        .resolve_embedded_response_action(&mut request, action)
         .map_err(map_resolve_error)?;
-    if matches!(&outcome, EmbeddedResolvedOutcome::OneWay) {
+    if matches!(&outcome, EmbeddedResponseAction::OneWay) {
         if let Some(failure) = failure {
             core.report_failure_category(failure.category());
         }
@@ -574,7 +573,7 @@ where
     let control = builder.control().clone();
     let mut request = builder.build().map_err(EmbeddedDispatchError::request_construction)?;
     let outcome = processor
-        .resolve_embedded_outcome(&mut request, candidate.outcome)
+        .resolve_embedded_response_action(&mut request, candidate.action)
         .map_err(map_resolve_error)?;
     finish_resolved(processor, control, original, request_started, outcome, false).await
 }
@@ -589,16 +588,16 @@ async fn finish_rejected_candidate<P>(
 where
     P: RequestProcessor + Clone + Sync + 'static,
 {
-    let InternalProcessorOutcome::Handled(crate::dispatch::HandlerOutcome::Reply(response)) = candidate.outcome else {
+    let crate::dispatch::ResponseAction::Reply(response) = candidate.action else {
         return Err(EmbeddedDispatchError::one_way_contract(
             crate::contract::TransportContractViolation::OneWayInvalidRejection,
         ));
     };
     let outcome = if original.is_one_way() {
         drop(response);
-        EmbeddedResolvedOutcome::OneWay
+        EmbeddedResponseAction::OneWay
     } else {
-        EmbeddedResolvedOutcome::Reply(response)
+        EmbeddedResponseAction::Reply(response)
     };
     finish_resolved(processor, control, original, request_started, outcome, false).await
 }
@@ -608,37 +607,37 @@ async fn finish_resolved<P>(
     control: RequestControlView,
     original: OriginalRequestIdentity,
     request_started: Instant,
-    outcome: EmbeddedResolvedOutcome,
+    outcome: EmbeddedResponseAction,
     commit_deferred: bool,
 ) -> TerminalResult
 where
     P: RequestProcessor + Clone + Sync + 'static,
 {
     match outcome {
-        EmbeddedResolvedOutcome::OneWay => Ok(EmbeddedDispatchOutcome::OneWay {
+        EmbeddedResponseAction::OneWay => Ok(EmbeddedDispatchResult::OneWay {
             request_id: original.request_id(),
         }),
-        EmbeddedResolvedOutcome::Deferred(registration) => {
+        EmbeddedResponseAction::Deferred(registration) => {
             let request_id = registration.request_id();
             if commit_deferred {
                 if let Err(error) = registration.commit() {
                     return match error.kind() {
-                        DeferredCommitErrorKind::ParentCancelled => Ok(EmbeddedDispatchOutcome::Cancelled),
-                        DeferredCommitErrorKind::SessionClosed => Ok(EmbeddedDispatchOutcome::SessionClosed),
-                        DeferredCommitErrorKind::DeadlineExpired => Ok(EmbeddedDispatchOutcome::DeadlineExceeded),
+                        DeferredCommitErrorKind::ParentCancelled => Ok(EmbeddedDispatchResult::Cancelled),
+                        DeferredCommitErrorKind::SessionClosed => Ok(EmbeddedDispatchResult::SessionClosed),
+                        DeferredCommitErrorKind::DeadlineExpired => Ok(EmbeddedDispatchResult::DeadlineExceeded),
                         DeferredCommitErrorKind::ResponseState | DeferredCommitErrorKind::RegistryInvariant => {
                             Err(EmbeddedDispatchError::deferred_commit(error))
                         }
                     };
                 }
             }
-            Ok(EmbeddedDispatchOutcome::Deferred { request_id })
+            Ok(EmbeddedDispatchResult::Deferred { request_id })
         }
-        EmbeddedResolvedOutcome::NoReply(marker) => Ok(EmbeddedDispatchOutcome::NoReply {
+        EmbeddedResponseAction::NoReply(marker) => Ok(EmbeddedDispatchResult::NoReply {
             request_id: marker.request_id(),
             reason: marker.reason(),
         }),
-        EmbeddedResolvedOutcome::Reply(response) => {
+        EmbeddedResponseAction::Reply(response) => {
             let response_code = response.response_code();
             let body_kind = response.body_kind();
             let bound = response
@@ -656,34 +655,32 @@ where
                 &send_result,
             );
             match send_result {
-                Ok(ResponseCompletionOutcome::Completed(_)) => {}
+                Ok(ResponseCompletionResult::Completed(_)) => {}
                 Ok(outcome) => return Ok(embedded_response_outcome(outcome)),
                 Err(error) => return Err(EmbeddedDispatchError::response(error)),
             }
             match receiver.receive().await {
-                Ok(response) => Ok(EmbeddedDispatchOutcome::Reply(response)),
+                Ok(response) => Ok(EmbeddedDispatchResult::Reply(response)),
                 Err(outcome) => Ok(embedded_response_outcome(outcome)),
             }
         }
     }
 }
 
-const fn embedded_response_outcome(outcome: ResponseCompletionOutcome) -> EmbeddedDispatchOutcome {
+const fn embedded_response_outcome(outcome: ResponseCompletionResult) -> EmbeddedDispatchResult {
     match outcome {
-        ResponseCompletionOutcome::Completed(_) | ResponseCompletionOutcome::AlreadyCompleted(_) => {
-            EmbeddedDispatchOutcome::CompletionClosed
+        ResponseCompletionResult::Completed(_) | ResponseCompletionResult::AlreadyCompleted(_) => {
+            EmbeddedDispatchResult::CompletionClosed
         }
-        ResponseCompletionOutcome::DeadlineExpired => EmbeddedDispatchOutcome::DeadlineExceeded,
-        ResponseCompletionOutcome::Cancelled => EmbeddedDispatchOutcome::Cancelled,
-        ResponseCompletionOutcome::SessionClosed => EmbeddedDispatchOutcome::SessionClosed,
-        ResponseCompletionOutcome::QueueSaturated => EmbeddedDispatchOutcome::AdmissionRejected,
+        ResponseCompletionResult::DeadlineExpired => EmbeddedDispatchResult::DeadlineExceeded,
+        ResponseCompletionResult::Cancelled => EmbeddedDispatchResult::Cancelled,
+        ResponseCompletionResult::SessionClosed => EmbeddedDispatchResult::SessionClosed,
+        ResponseCompletionResult::QueueSaturated => EmbeddedDispatchResult::AdmissionRejected,
     }
 }
 
 fn reply_candidate(response: RemotingResponse) -> InternalProcessorCandidate {
-    InternalProcessorCandidate::success(InternalProcessorOutcome::Handled(
-        crate::dispatch::HandlerOutcome::Reply(response),
-    ))
+    InternalProcessorCandidate::success(crate::dispatch::ResponseAction::Reply(response))
 }
 
 fn map_processor_error(error: crate::dispatch::DispatchProcessorError) -> EmbeddedDispatchError {
@@ -696,13 +693,13 @@ fn map_resolve_error(error: crate::contract::TransportContractViolation) -> Embe
     EmbeddedDispatchError::handler_contract(error)
 }
 
-fn receiver_stop(control: &RequestControlView, original_one_way: bool) -> Option<EmbeddedDispatchOutcome> {
+fn receiver_stop(control: &RequestControlView, original_one_way: bool) -> Option<EmbeddedDispatchResult> {
     if control.parent_is_cancelled() {
-        Some(EmbeddedDispatchOutcome::Cancelled)
+        Some(EmbeddedDispatchResult::Cancelled)
     } else if control.session_is_closed() {
-        Some(EmbeddedDispatchOutcome::SessionClosed)
+        Some(EmbeddedDispatchResult::SessionClosed)
     } else if !original_one_way && control.deadline().is_some_and(RequestDeadline::is_expired) {
-        Some(EmbeddedDispatchOutcome::DeadlineExceeded)
+        Some(EmbeddedDispatchResult::DeadlineExceeded)
     } else {
         None
     }

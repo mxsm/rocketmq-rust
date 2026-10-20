@@ -89,11 +89,6 @@ use rocketmq_protocol::protocol::header::{
 use rocketmq_protocol::protocol::header_codec::{
     AliasConflictPolicy, HeaderCodec, HeaderFieldSpec, HeaderFlattenSpec, HeaderPresence, HeaderRange, HeaderValueKind,
 };
-#[allow(
-    deprecated,
-    reason = "verifies the source-compatible legacy adapter delegates to the generated codec"
-)]
-use rocketmq_protocol::protocol::FastCodesHeader;
 use rocketmq_protocol::protocol::SerializeType;
 use rocketmq_protocol::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_protocol::rpc::topic_request_header::TopicRequestHeader;
@@ -2410,10 +2405,6 @@ fn generated_fast_headers_write_canonical_binary_pairs_in_schema_order() {
 }
 
 #[test]
-#[allow(
-    deprecated,
-    reason = "verifies the source-compatible legacy adapter delegates to the generated codec"
-)]
 fn typed_schemas_preserve_java_send_fast_contracts() {
     let rpc = RpcRequestHeader {
         namespace: Some("namespace-a".into()),
@@ -2465,7 +2456,7 @@ fn typed_schemas_preserve_java_send_fast_contracts() {
     assert_eq!(legacy_request.to_map(), Some(typed_request_map.clone()));
     assert_eq!(fast_request.to_map(), Some(typed_request_map));
 
-    let mut response = SendMessageResponseHeader::new(
+    let response = SendMessageResponseHeader::new(
         "message-a".into(),
         -1,
         -42,
@@ -2474,16 +2465,12 @@ fn typed_schemas_preserve_java_send_fast_contracts() {
         Some("recall-a".into()),
     );
     let typed_response_map = response.to_map().unwrap();
-    let mut legacy_response_bytes = BytesMut::new();
-    FastCodesHeader::encode_fast(&mut response, &mut legacy_response_bytes);
     let mut typed_response_bytes = BytesMut::new();
     CommandCustomHeader::encode_direct_binary(&response, &mut typed_response_bytes).unwrap();
-    assert_eq!(typed_response_bytes, legacy_response_bytes);
     assert_eq!(decode_fast_fields(&typed_response_bytes), typed_response_map);
 
-    let mut fast_response = SendMessageResponseHeader::default();
-    FastCodesHeader::decode_fast(&mut fast_response, &typed_response_map);
-    assert_eq!(fast_response.to_map(), Some(typed_response_map));
+    let decoded_response = <SendMessageResponseHeader as FromMap>::from(&typed_response_map).unwrap();
+    assert_eq!(decoded_response.to_map(), Some(typed_response_map));
 }
 
 fn assert_send_numeric_overflow_is_rejected<T>(base: &HeaderMap, cases: &[(&'static str, &'static str)])

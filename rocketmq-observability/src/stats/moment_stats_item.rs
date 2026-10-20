@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use rocketmq_runtime::OperationContext;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::TaskGroup;
@@ -26,8 +27,8 @@ use rocketmq_runtime::TaskKind;
 use tracing::info;
 use tracing::warn;
 
+use rocketmq_runtime::common::time_utils::compute_next_minutes_time_millis;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::common::util_all::compute_next_minutes_time_millis;
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -78,13 +79,15 @@ impl MomentStatsItem {
         config.initial_delay =
             Duration::from_millis((compute_next_minutes_time_millis() as i64 - current_millis() as i64).unsigned_abs());
 
-        if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap_operation(&operation, config, move || {
-            let self_clone = self_clone.clone();
-            async move {
-                self_clone.print_at_minutes();
-                self_clone.value.store(0, Ordering::Relaxed);
-            }
-        }) {
+        if let Err(error) =
+            scheduled_tasks.schedule_operation(&operation, config, ScheduledExecutionPolicy::default(), move || {
+                let self_clone = self_clone.clone();
+                async move {
+                    self_clone.print_at_minutes();
+                    self_clone.value.store(0, Ordering::Relaxed);
+                }
+            })
+        {
             warn!(
                 "[{}] [{}] failed to spawn MomentStatsItem task: {}",
                 self.stats_name, self.stats_key, error

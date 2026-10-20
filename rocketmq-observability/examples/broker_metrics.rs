@@ -14,8 +14,8 @@
 
 #[cfg(feature = "otlp-metrics")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use opentelemetry::KeyValue;
     use rocketmq_observability::metrics::broker::BrokerMetrics;
+    use rocketmq_observability::MetricAttributes;
     use rocketmq_observability::MetricsExporter;
     use rocketmq_observability::ObservabilityConfig;
 
@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let guard = rocketmq_observability::init_observability(&config)?;
     let metrics = BrokerMetrics::from_handle(&guard.handle()).expect("broker metrics should be initialized");
-    let attributes = [KeyValue::new("topic", "example-topic")];
+    let attributes = MetricAttributes::new().with("topic", "example-topic");
 
     metrics.record_messages_in_total(1, &attributes);
     metrics.record_throughput_in_total(128, &attributes);

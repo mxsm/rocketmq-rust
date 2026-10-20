@@ -71,7 +71,7 @@ fn main() {
     }
 }
 
-fn run() -> ProcessOutcome {
+fn run() -> StoreInspectionExitStatus {
     let verbosity = verbosity_requested();
     let cli = match RootCli::try_parse() {
         Ok(cli) => cli,
@@ -84,7 +84,7 @@ fn run() -> ProcessOutcome {
             ) =>
         {
             print!("{error}");
-            return ProcessOutcome::Completed;
+            return StoreInspectionExitStatus::Completed;
         }
         Err(_) => {
             return render_error(
@@ -147,23 +147,23 @@ fn run() -> ProcessOutcome {
                     print!("{body}");
                 }
                 if !report.allowed {
-                    return ProcessOutcome::PolicyRefused;
+                    return StoreInspectionExitStatus::PolicyRefused;
                 }
             }
             Err(error) => return render_error(&error, verbosity),
         },
     }
-    ProcessOutcome::Completed
+    StoreInspectionExitStatus::Completed
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProcessOutcome {
+enum StoreInspectionExitStatus {
     Completed,
     Error(CliExitCode),
     PolicyRefused,
 }
 
-impl ProcessOutcome {
+impl StoreInspectionExitStatus {
     const fn exit_code(self) -> i32 {
         match self {
             Self::Completed => 0,
@@ -208,10 +208,10 @@ fn serialization_error(operation: &'static str, source: serde_json::Error) -> Ca
     )
 }
 
-fn render_error(error: &rocketmq_error::Error, verbosity: CliVerbosity) -> ProcessOutcome {
+fn render_error(error: &rocketmq_error::Error, verbosity: CliVerbosity) -> StoreInspectionExitStatus {
     let output = CliErrorView::from_error(error).output(verbosity);
     eprintln!("{}", output.stderr());
-    ProcessOutcome::Error(output.exit_code())
+    StoreInspectionExitStatus::Error(output.exit_code())
 }
 
 #[cfg(test)]
@@ -242,8 +242,8 @@ mod tests {
 
     #[test]
     fn policy_refusal_is_a_distinct_non_error_outcome() {
-        assert_eq!(ProcessOutcome::Completed.exit_code(), 0);
-        assert_eq!(ProcessOutcome::PolicyRefused.exit_code(), 2);
-        assert_eq!(ProcessOutcome::Error(CliExitCode::DATA).exit_code(), 65);
+        assert_eq!(StoreInspectionExitStatus::Completed.exit_code(), 0);
+        assert_eq!(StoreInspectionExitStatus::PolicyRefused.exit_code(), 2);
+        assert_eq!(StoreInspectionExitStatus::Error(CliExitCode::DATA).exit_code(), 65);
     }
 }

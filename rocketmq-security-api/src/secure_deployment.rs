@@ -92,7 +92,7 @@ pub struct SecurityBootstrapConfig {
 /// Resolved process-wide security bootstrap state.
 #[derive(Debug, Clone)]
 pub enum SecurityBootstrap {
-    /// Represents the disabled case.
+    /// Bootstrap validation was disabled; supplied listeners were not checked.
     Disabled,
     /// Represents the enabled case.
     Enabled(SecurityBootstrapConfig),
@@ -117,12 +117,12 @@ impl SecurityBootstrap {
     pub fn validate(
         &self,
         listener_addresses: &[SocketAddr],
-    ) -> Result<SecurityBootstrapOutcome, SecurityProviderError> {
+    ) -> Result<SecurityBootstrapValidation, SecurityProviderError> {
         match self {
-            Self::Disabled => Ok(SecurityBootstrapOutcome::Disabled),
+            Self::Disabled => Ok(SecurityBootstrapValidation::Disabled),
             Self::Enabled(config) => config
                 .validate(listener_addresses)
-                .map(SecurityBootstrapOutcome::Validated),
+                .map(SecurityBootstrapValidation::Validated),
         }
     }
 }
@@ -319,7 +319,7 @@ impl SecurityBootstrapConfig {
 /// Returns [`SecurityProviderError`] for every incomplete, unsupported, unsafe, or unavailable profile.
 pub fn validate_security_bootstrap_from_env(
     listener_addresses: &[SocketAddr],
-) -> Result<SecurityBootstrapOutcome, SecurityProviderError> {
+) -> Result<SecurityBootstrapValidation, SecurityProviderError> {
     SecurityBootstrapConfig::from_env()
         .map_err(SecurityProviderError::from)?
         .validate(listener_addresses)
@@ -327,14 +327,14 @@ pub fn validate_security_bootstrap_from_env(
 
 /// Result of resolving and, when enabled, validating process security bootstrap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SecurityBootstrapOutcome {
-    /// Represents the disabled case.
+pub enum SecurityBootstrapValidation {
+    /// Bootstrap validation was disabled; supplied listeners were not checked.
     Disabled,
-    /// Represents the validated case.
+    /// The selected profile passed pre-bind checks, without installing TLS or authentication.
     Validated(ValidatedSecurityBootstrap),
 }
 
-/// Non-sensitive proof that canonical bootstrap completed before listener ownership begins.
+/// Non-sensitive evidence that the selected profile passed pre-bind checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ValidatedSecurityBootstrap {
     profile: SecurityBootstrapProfile,

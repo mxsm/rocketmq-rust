@@ -30,28 +30,28 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_transport::api::error_response as remoting_error_response;
-use rocketmq_transport::api::DeferredResponderOutcome;
-use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::DeferredResponderTakeResult;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 #[cfg(feature = "rocksdb_store")]
 use tracing::error;
 use tracing::warn;
 
 use super::resume::PopCallerHost;
-use super::resume::PopStoreReadOutcome;
 use super::resume::PopStoreReadRequest;
+use super::resume::PopStoreReadResult;
 use super::PopMessageProcessor;
 use super::BORN_TIME;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
+use crate::long_polling::pop_deferred::service::PopDeferredPreparationStatus;
 use crate::long_polling::pop_deferred::service::PopDeferredPrepareError;
-use crate::long_polling::pop_deferred::service::PopDeferredPrepareOutcome;
 use crate::long_polling::pop_deferred::service::PopDeferredPrepareRejection;
 use crate::long_polling::pop_deferred::service::PopDeferredRegisterError;
-use crate::long_polling::pop_deferred::service::PopDeferredRegisterOutcome;
 use crate::long_polling::pop_deferred::service::PopDeferredRegisterRejection;
+use crate::long_polling::pop_deferred::service::PopDeferredRegistrationStatus;
 use crate::long_polling::pop_deferred::service::PopRetainedEstimate;
 use crate::processor::response_assembly::BrokerResponseParts;
 
@@ -63,7 +63,7 @@ pub(super) struct PopInitialSuspend {
     pub(super) rest_num: i64,
 }
 
-pub(super) enum PopInitialOutcome {
+pub(super) enum PopInitialRequestDecision {
     Reply(BrokerResponseParts),
     Suspend(Box<PopInitialSuspend>),
 }
@@ -72,7 +72,7 @@ impl<MS> RequestProcessor for PopMessageProcessor<MS>
 where
     MS: BrokerReadWriteStore + Send + Sync + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.process_shared(request).await
     }
 }
@@ -84,7 +84,7 @@ where
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         if RequestCode::from(request.original_identity().original_code()) != RequestCode::PopMessage {
             return BrokerResponseParts::command(remoting_error_response(
                 PublicErrorView::descriptor_only(&rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED),
@@ -93,7 +93,7 @@ where
                     opaque: request.original_identity().original_opaque(),
                 },
             ))?
-            .into_handler_outcome();
+            .into_response_action();
         }
         if request.original_identity().is_one_way() {
             return self.invalid_reply(request.original_identity().original_opaque());
@@ -106,8 +106,8 @@ where
         };
         let outcome = self.execute_pop_initial(request.command_mut(), effective_peer).await?;
         match outcome {
-            PopInitialOutcome::Reply(parts) => parts.into_handler_outcome(),
-            PopInitialOutcome::Suspend(suspension) => {
+            PopInitialRequestDecision::Reply(parts) => parts.into_response_action(),
+            PopInitialRequestDecision::Suspend(suspension) => {
                 let suspension = *suspension;
                 let Some(service) = self.pop_deferred_service.get() else {
                     return self.reply_with_code(
@@ -121,17 +121,17 @@ where
                     suspension.message_filter,
                     PopRetainedEstimate::default(),
                 ) {
-                    Ok(PopDeferredPrepareOutcome::Prepared(prepared)) => prepared,
-                    Ok(PopDeferredPrepareOutcome::Rejected(rejection)) => {
+                    Ok(PopDeferredPreparationStatus::Prepared(prepared)) => prepared,
+                    Ok(PopDeferredPreparationStatus::Rejected(rejection)) => {
                         return self.prepare_rejection_outcome(suspension.head, rejection);
                     }
                     Err(error) => return self.prepare_error_outcome(suspension.head, error),
                 };
                 match service.register(*prepared, request) {
-                    Ok(PopDeferredRegisterOutcome::Registered(registration)) => {
-                        Ok(HandlerOutcome::Deferred(*registration))
+                    Ok(PopDeferredRegistrationStatus::Registered(registration)) => {
+                        Ok(ResponseAction::Deferred(*registration))
                     }
-                    Ok(PopDeferredRegisterOutcome::Rejected(rejection)) => {
+                    Ok(PopDeferredRegistrationStatus::Rejected(rejection)) => {
                         self.register_rejection_outcome(suspension.head, *rejection)
                     }
                     Err(error) => self.register_error_outcome(suspension.head, error),
@@ -144,7 +144,7 @@ where
         &self,
         request: &mut RemotingCommand,
         effective_peer: SocketAddr,
-    ) -> crate::broker_error::BrokerResult<PopInitialOutcome> {
+    ) -> crate::broker_error::BrokerResult<PopInitialRequestDecision> {
         normalize_born_time(request);
         let opaque = request.opaque();
         let request_header = match request.decode_command_custom_header::<PopMessageRequestHeader>() {
@@ -367,9 +367,9 @@ where
             ))
             .await?
         {
-            PopStoreReadOutcome::Found(parts) => Ok(PopInitialOutcome::Reply(parts)),
-            PopStoreReadOutcome::Empty { head, rest_num } => {
-                Ok(PopInitialOutcome::Suspend(Box::new(PopInitialSuspend {
+            PopStoreReadResult::Found(parts) => Ok(PopInitialRequestDecision::Reply(parts)),
+            PopStoreReadResult::Empty { head, rest_num } => {
+                Ok(PopInitialRequestDecision::Suspend(Box::new(PopInitialSuspend {
                     request_header,
                     subscription_data,
                     message_filter,
@@ -384,15 +384,15 @@ where
         &self,
         mut head: RemotingCommand,
         rejection: PopDeferredPrepareRejection,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         match rejection {
             PopDeferredPrepareRejection::DeadlineElapsed => {
                 head.set_code_ref(ResponseCode::PollingTimeout);
-                BrokerResponseParts::command(head)?.into_handler_outcome()
+                BrokerResponseParts::command(head)?.into_response_action()
             }
             PopDeferredPrepareRejection::Index(_) | PopDeferredPrepareRejection::Admission(_) => {
                 head.set_code_ref(ResponseCode::PollingFull);
-                BrokerResponseParts::command(head)?.into_handler_outcome()
+                BrokerResponseParts::command(head)?.into_response_action()
             }
             PopDeferredPrepareRejection::ServiceClosed => self.reply_with_code(
                 ResponseCode::ServiceNotAvailable,
@@ -405,14 +405,14 @@ where
         &self,
         mut head: RemotingCommand,
         error: PopDeferredPrepareError,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         match error {
             PopDeferredPrepareError::EmbeddedOrigin
             | PopDeferredPrepareError::Header(_)
             | PopDeferredPrepareError::MissingCallerHost => self.invalid_reply(0),
             PopDeferredPrepareError::Deadline(_) => {
                 head.set_code_ref(ResponseCode::PollingTimeout);
-                BrokerResponseParts::command(head)?.into_handler_outcome()
+                BrokerResponseParts::command(head)?.into_response_action()
             }
             PopDeferredPrepareError::InvalidExpiryMargins
             | PopDeferredPrepareError::RetainedSizeOverflow
@@ -425,25 +425,25 @@ where
         &self,
         mut head: RemotingCommand,
         rejection: PopDeferredRegisterRejection,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         match rejection {
             PopDeferredRegisterRejection::ProvenanceMismatch => self.internal_reply(head.opaque()),
             PopDeferredRegisterRejection::ServiceClosed => self.reply_with_code(
                 ResponseCode::ServiceNotAvailable,
                 "the deferred POP service is unavailable",
             ),
-            PopDeferredRegisterRejection::Responder(DeferredResponderOutcome::OneWayRequest) => {
+            PopDeferredRegisterRejection::Responder(DeferredResponderTakeResult::OneWayRequest) => {
                 head.set_code_ref(ResponseCode::PollingTimeout);
-                BrokerResponseParts::command(head)?.into_handler_outcome()
+                BrokerResponseParts::command(head)?.into_response_action()
             }
-            PopDeferredRegisterRejection::Responder(DeferredResponderOutcome::Unavailable) => self.reply_with_code(
+            PopDeferredRegisterRejection::Responder(DeferredResponderTakeResult::Unavailable) => self.reply_with_code(
                 ResponseCode::ServiceNotAvailable,
                 "a deferred POP responder is unavailable",
             ),
             PopDeferredRegisterRejection::Responder(
-                DeferredResponderOutcome::AlreadyTaken | DeferredResponderOutcome::OutcomeCompleted,
+                DeferredResponderTakeResult::AlreadyTaken | DeferredResponderTakeResult::OutcomeCompleted,
             ) => self.internal_reply(head.opaque()),
-            PopDeferredRegisterRejection::Responder(DeferredResponderOutcome::Taken(responder)) => {
+            PopDeferredRegisterRejection::Responder(DeferredResponderTakeResult::Taken(responder)) => {
                 drop(responder);
                 self.internal_reply(head.opaque())
             }
@@ -459,7 +459,7 @@ where
         &self,
         head: RemotingCommand,
         error: PopDeferredRegisterError,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         match error {
             PopDeferredRegisterError::RegistryIdentityExhausted => self.internal_reply(head.opaque()),
             PopDeferredRegisterError::RegistryContract(violation) => Err(crate::broker_error::internal(
@@ -484,16 +484,16 @@ where
         opaque: i32,
         code: ResponseCode,
         remark: impl Into<CheetahString>,
-    ) -> crate::broker_error::BrokerResult<PopInitialOutcome> {
+    ) -> crate::broker_error::BrokerResult<PopInitialRequestDecision> {
         let command = self
             .context
             .command_factory
             .create_response_command_with_code_remark(code, remark)
             .set_opaque(opaque);
-        Ok(PopInitialOutcome::Reply(BrokerResponseParts::command(command)?))
+        Ok(PopInitialRequestDecision::Reply(BrokerResponseParts::command(command)?))
     }
 
-    fn initial_invalid_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<PopInitialOutcome> {
+    fn initial_invalid_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<PopInitialRequestDecision> {
         let command = remoting_error_response(
             PublicErrorView::descriptor_only(&rocketmq_error::CORE_ARGUMENT_INVALID),
             RemotingErrorTarget::Reply {
@@ -501,10 +501,10 @@ where
                 opaque,
             },
         );
-        Ok(PopInitialOutcome::Reply(BrokerResponseParts::command(command)?))
+        Ok(PopInitialRequestDecision::Reply(BrokerResponseParts::command(command)?))
     }
 
-    fn initial_permission_denied(&self, opaque: i32) -> crate::broker_error::BrokerResult<PopInitialOutcome> {
+    fn initial_permission_denied(&self, opaque: i32) -> crate::broker_error::BrokerResult<PopInitialRequestDecision> {
         let command = remoting_error_response(
             PublicErrorView::descriptor_only(&rocketmq_error::AUTH_PERMISSION_DENIED),
             RemotingErrorTarget::Reply {
@@ -512,10 +512,10 @@ where
                 opaque,
             },
         );
-        Ok(PopInitialOutcome::Reply(BrokerResponseParts::command(command)?))
+        Ok(PopInitialRequestDecision::Reply(BrokerResponseParts::command(command)?))
     }
 
-    fn initial_internal_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<PopInitialOutcome> {
+    fn initial_internal_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<PopInitialRequestDecision> {
         let command = remoting_error_response(
             PublicErrorView::descriptor_only(&rocketmq_error::CORE_INTERNAL_FAILURE),
             RemotingErrorTarget::Reply {
@@ -523,23 +523,23 @@ where
                 opaque,
             },
         );
-        Ok(PopInitialOutcome::Reply(BrokerResponseParts::command(command)?))
+        Ok(PopInitialRequestDecision::Reply(BrokerResponseParts::command(command)?))
     }
 
     fn reply_with_code(
         &self,
         code: ResponseCode,
         remark: &'static str,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         BrokerResponseParts::command(
             self.context
                 .command_factory
                 .create_response_command_with_code_remark(code, remark),
         )?
-        .into_handler_outcome()
+        .into_response_action()
     }
 
-    fn invalid_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    fn invalid_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<ResponseAction> {
         BrokerResponseParts::command(remoting_error_response(
             PublicErrorView::descriptor_only(&rocketmq_error::CORE_ARGUMENT_INVALID),
             RemotingErrorTarget::Reply {
@@ -547,10 +547,10 @@ where
                 opaque,
             },
         ))?
-        .into_handler_outcome()
+        .into_response_action()
     }
 
-    fn internal_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    fn internal_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<ResponseAction> {
         BrokerResponseParts::command(remoting_error_response(
             PublicErrorView::descriptor_only(&rocketmq_error::CORE_INTERNAL_FAILURE),
             RemotingErrorTarget::Reply {
@@ -558,7 +558,7 @@ where
                 opaque,
             },
         ))?
-        .into_handler_outcome()
+        .into_response_action()
     }
 }
 
@@ -590,9 +590,9 @@ mod tests {
     use rocketmq_transport::api::DeferredAdmission;
     use rocketmq_transport::api::DeferredExpiryMargins;
     use rocketmq_transport::api::DeferredWaitLimits;
-    use rocketmq_transport::api::HandlerOutcome;
     use rocketmq_transport::api::RemotingRequest;
     use rocketmq_transport::api::RequestProcessor;
+    use rocketmq_transport::api::ResponseAction;
 
     use super::super::tests::new_test_runtime;
     use super::super::PopMessageProcessor;
@@ -614,7 +614,7 @@ mod tests {
         async fn process(
             &mut self,
             request: &mut RemotingRequest,
-        ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+        ) -> crate::broker_error::BrokerResult<ResponseAction> {
             self.inner.process_shared(request).await
         }
     }
@@ -689,7 +689,7 @@ mod tests {
         let outcome = processor
             .prepare_error_outcome(head, PopDeferredPrepareError::Deadline(deadline_error))
             .expect("deadline failure has a protocol response");
-        let HandlerOutcome::Reply(response) = outcome else {
+        let ResponseAction::Reply(response) = outcome else {
             panic!("deadline failure must reply")
         };
         let response = response.into_embedded_response();

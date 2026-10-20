@@ -48,11 +48,11 @@ use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
-use rocketmq_transport::api::EmbeddedDispatchOutcome;
-use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::EmbeddedDispatchResult;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::ResponseObservation;
 use rocketmq_transport::api::TransportSecurity;
 use rocketmq_transport::test_support::EmbeddedRequestHarness;
@@ -231,7 +231,7 @@ impl MessageAppender<()> for ReplyAppender {
                 ))
             }
             StoreBehavior::Error => Err(StoreError::new(
-                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                &rocketmq_error::STORAGE_UNAVAILABLE,
                 StoreOperation::Append,
             )),
         })
@@ -245,7 +245,7 @@ struct ReplyProbeProcessor {
 }
 
 impl RequestProcessor for ReplyProbeProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let control = request.control().clone();
         let identity = request.original_identity();
         let opaque = identity.original_opaque();
@@ -339,7 +339,7 @@ impl RequestPolicy for AllowEmbeddedPolicy {
     }
 }
 
-async fn dispatch(behavior: StoreBehavior, state: Arc<State>, name: &'static str) -> EmbeddedDispatchOutcome {
+async fn dispatch(behavior: StoreBehavior, state: Arc<State>, name: &'static str) -> EmbeddedDispatchResult {
     let owner = RuntimeOwner::plan(RuntimeConfig::server_default(name))
         .expect("test runtime configuration is valid")
         .build()
@@ -379,7 +379,7 @@ async fn dispatch(behavior: StoreBehavior, state: Arc<State>, name: &'static str
 #[tokio::test]
 async fn structured_reply_store_leaf_preserves_push_hook_metadata_and_error_visibility() {
     let success = State::new();
-    let EmbeddedDispatchOutcome::Reply(success_plan) =
+    let EmbeddedDispatchResult::Reply(success_plan) =
         dispatch(StoreBehavior::Success, Arc::clone(&success), "structured-reply-success").await
     else {
         panic!("successful Reply store must return one reply")
@@ -411,7 +411,7 @@ async fn structured_reply_store_leaf_preserves_push_hook_metadata_and_error_visi
     drop(success_plan);
 
     let failed = State::new();
-    let EmbeddedDispatchOutcome::Reply(error_plan) =
+    let EmbeddedDispatchResult::Reply(error_plan) =
         dispatch(StoreBehavior::Error, Arc::clone(&failed), "structured-reply-error").await
     else {
         panic!("failed Reply store must return one visible reply")

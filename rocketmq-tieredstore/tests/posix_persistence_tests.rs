@@ -42,7 +42,7 @@ async fn posix_store_recovers_dispatched_messages_and_index_after_restart() -> R
     })?;
     let config = TieredStoreConfig {
         storage_level: TieredStorageLevel::Force,
-        backend_provider: "posix".to_owned(),
+        storage_provider_id: "posix".to_owned(),
         store_path_root_dir: temp_dir.path().join("tieredstore"),
         commit_log_segment_size: 128,
         consume_queue_segment_size: 80,

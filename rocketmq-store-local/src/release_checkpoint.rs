@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Atomic, checksummed release checkpoints for the local Store backend.
+//! Atomic, checksummed release checkpoints for the local Store.
 
 use std::fmt;
 use std::fs;
@@ -35,21 +35,21 @@ use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_security_api::MaintenanceAuthorizationGrant;
 use rocketmq_security_api::MaintenanceCapability;
 use rocketmq_store_api::checkpoint::CheckpointArtifact as ReleaseCheckpointArtifact;
-use rocketmq_store_api::checkpoint::CheckpointBackend as ReleaseCheckpointBackend;
 use rocketmq_store_api::checkpoint::CheckpointManifest as StoreReleaseCheckpointManifest;
 use rocketmq_store_api::checkpoint::CheckpointOffsets as ReleaseCheckpointOffsets;
 use rocketmq_store_api::checkpoint::CheckpointRequest as StoreReleaseCheckpointRequest;
 use rocketmq_store_api::checkpoint::CheckpointRestoreVerification as ReleaseCheckpointRestoreVerification;
 use rocketmq_store_api::checkpoint::CheckpointStorageIdentity as ReleaseCheckpointStorageIdentity;
+use rocketmq_store_api::checkpoint::CheckpointStoreKind;
 use rocketmq_store_api::checkpoint::CHECKPOINT_SCHEMA_VERSION as RELEASE_CHECKPOINT_SCHEMA_VERSION;
 use rocketmq_store_api::file_uri_to_path;
 use rocketmq_store_api::hash_checkpoint_directory;
 use rocketmq_store_api::path_to_file_uri;
 use rocketmq_store_api::CheckpointDirectoryDigest;
-use rocketmq_store_api::ReleaseCheckpointCreateOutcome;
 use rocketmq_store_api::ReleaseCheckpointCreateRejection;
-use rocketmq_store_api::ReleaseCheckpointRestoreOutcome;
+use rocketmq_store_api::ReleaseCheckpointCreationResult;
 use rocketmq_store_api::ReleaseCheckpointRestoreRejection;
+use rocketmq_store_api::ReleaseCheckpointRestoreVerificationResult;
 use rocketmq_store_api::ReleaseCheckpointStore;
 use rocketmq_store_api::StoreComponent;
 use rocketmq_store_api::StoreContractViolation;
@@ -227,8 +227,8 @@ where
     ) -> Result<ReleaseCheckpointRestoreVerification, LocalReleaseCheckpointFailure> {
         validate_authorization(authorization)?;
         manifest.validate()?;
-        if manifest.backend != ReleaseCheckpointBackend::Local {
-            return Err(LocalReleaseCheckpointFailure::WrongBackend);
+        if manifest.store_kind != CheckpointStoreKind::Local {
+            return Err(LocalReleaseCheckpointFailure::StoreKindMismatch);
         }
         let deadline = authorization_deadline(authorization)?;
         let checkpoint_path = file_uri_to_path(&manifest.artifact.uri)?;
@@ -286,20 +286,20 @@ where
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         request: StoreReleaseCheckpointRequest,
-    ) -> Result<ReleaseCheckpointCreateOutcome, StoreError> {
+    ) -> Result<ReleaseCheckpointCreationResult, StoreError> {
         match self.create_release_checkpoint_inner(authorization, request).await {
-            Ok(manifest) => Ok(ReleaseCheckpointCreateOutcome::Created(manifest)),
-            Err(LocalReleaseCheckpointFailure::AuthorizationExpired) => Ok(ReleaseCheckpointCreateOutcome::Rejected(
+            Ok(manifest) => Ok(ReleaseCheckpointCreationResult::Created(manifest)),
+            Err(LocalReleaseCheckpointFailure::AuthorizationExpired) => Ok(ReleaseCheckpointCreationResult::Rejected(
                 ReleaseCheckpointCreateRejection::AuthorizationExpired,
             )),
-            Err(LocalReleaseCheckpointFailure::UnauthorizedCapability) => Ok(ReleaseCheckpointCreateOutcome::Rejected(
-                ReleaseCheckpointCreateRejection::CapabilityNotGranted,
-            )),
+            Err(LocalReleaseCheckpointFailure::UnauthorizedCapability) => Ok(
+                ReleaseCheckpointCreationResult::Rejected(ReleaseCheckpointCreateRejection::CapabilityNotGranted),
+            ),
             Err(LocalReleaseCheckpointFailure::CheckpointAlreadyExists(_)) => Ok(
-                ReleaseCheckpointCreateOutcome::Rejected(ReleaseCheckpointCreateRejection::AlreadyExists),
+                ReleaseCheckpointCreationResult::Rejected(ReleaseCheckpointCreateRejection::AlreadyExists),
             ),
             Err(LocalReleaseCheckpointFailure::CheckpointTooLarge { actual, maximum }) => Ok(
-                ReleaseCheckpointCreateOutcome::Rejected(ReleaseCheckpointCreateRejection::CapacityExceeded {
+                ReleaseCheckpointCreationResult::Rejected(ReleaseCheckpointCreateRejection::CapacityExceeded {
                     actual_bytes: actual,
                     maximum_bytes: maximum,
                 }),
@@ -312,18 +312,22 @@ where
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         manifest: &StoreReleaseCheckpointManifest,
-    ) -> Result<ReleaseCheckpointRestoreOutcome, StoreError> {
+    ) -> Result<ReleaseCheckpointRestoreVerificationResult, StoreError> {
         match self
             .restore_verify_release_checkpoint_inner(authorization, manifest)
             .await
         {
-            Ok(verification) => Ok(ReleaseCheckpointRestoreOutcome::Verified(verification)),
-            Err(LocalReleaseCheckpointFailure::AuthorizationExpired) => Ok(ReleaseCheckpointRestoreOutcome::Rejected(
-                ReleaseCheckpointRestoreRejection::AuthorizationExpired,
-            )),
-            Err(LocalReleaseCheckpointFailure::UnauthorizedCapability) => Ok(
-                ReleaseCheckpointRestoreOutcome::Rejected(ReleaseCheckpointRestoreRejection::CapabilityNotGranted),
-            ),
+            Ok(verification) => Ok(ReleaseCheckpointRestoreVerificationResult::Verified(verification)),
+            Err(LocalReleaseCheckpointFailure::AuthorizationExpired) => {
+                Ok(ReleaseCheckpointRestoreVerificationResult::Rejected(
+                    ReleaseCheckpointRestoreRejection::AuthorizationExpired,
+                ))
+            }
+            Err(LocalReleaseCheckpointFailure::UnauthorizedCapability) => {
+                Ok(ReleaseCheckpointRestoreVerificationResult::Rejected(
+                    ReleaseCheckpointRestoreRejection::CapabilityNotGranted,
+                ))
+            }
             Err(error) => Err(local_checkpoint_error(StoreOperation::Read, error)),
         }
     }
@@ -350,7 +354,7 @@ fn local_checkpoint_error(operation: StoreOperation, error: LocalReleaseCheckpoi
             let descriptor = match &error {
                 LocalReleaseCheckpointFailure::InvalidConfiguration(_)
                 | LocalReleaseCheckpointFailure::StorageIdentityMismatch
-                | LocalReleaseCheckpointFailure::WrongBackend
+                | LocalReleaseCheckpointFailure::StoreKindMismatch
                 | LocalReleaseCheckpointFailure::OverlappingRoots
                 | LocalReleaseCheckpointFailure::ReservedManifestInSource
                 | LocalReleaseCheckpointFailure::EmptyCheckpoint
@@ -406,7 +410,7 @@ fn runtime_error_descriptor(source: &RuntimeError) -> &'static rocketmq_error::E
     }
     match source.condition() {
         rocketmq_error::CanonicalCondition::InvalidArgument => &rocketmq_error::STORAGE_REQUEST_INVALID,
-        rocketmq_error::CanonicalCondition::Unavailable => &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+        rocketmq_error::CanonicalCondition::Unavailable => &rocketmq_error::STORAGE_UNAVAILABLE,
         rocketmq_error::CanonicalCondition::ResourceExhausted => &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
         rocketmq_error::CanonicalCondition::DeadlineExceeded => &rocketmq_error::STORAGE_OPERATION_TIMED_OUT,
         rocketmq_error::CanonicalCondition::Unimplemented => &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED,
@@ -469,7 +473,7 @@ fn create_atomic_checkpoint(
             uri: path_to_file_uri(&final_path),
         },
         member_id: request.member_id,
-        backend: ReleaseCheckpointBackend::Local,
+        store_kind: CheckpointStoreKind::Local,
         offsets: request.offsets,
         storage_identity: request.storage_identity,
         wal_retained: true,
@@ -685,8 +689,8 @@ pub(crate) enum LocalReleaseCheckpointFailure {
     },
     #[error("checkpoint artifact checksum or length does not match its manifest")]
     ArtifactChecksumMismatch,
-    #[error("checkpoint backend is not local")]
-    WrongBackend,
+    #[error("checkpoint store kind is not local")]
+    StoreKindMismatch,
     #[error("checkpoint root overlaps the live Store root")]
     OverlappingRoots,
     #[error("checkpoint '{0}' already exists or has an unfinished publication")]

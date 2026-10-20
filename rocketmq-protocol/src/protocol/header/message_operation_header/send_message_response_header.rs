@@ -17,15 +17,6 @@ use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::command_custom_header::CommandCustomHeader;
-use crate::protocol::command_custom_header::FromMap;
-use crate::protocol::command_custom_header::HeaderMap;
-#[allow(
-    deprecated,
-    reason = "imports the legacy trait only to provide its compatibility adapter"
-)]
-use crate::protocol::FastCodesHeader;
-
 #[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader",
@@ -114,22 +105,11 @@ impl SendMessageResponseHeader {
     }
 }
 
-#[allow(deprecated, reason = "source-compatible adapter for the legacy public trait")]
-impl FastCodesHeader for SendMessageResponseHeader {
-    fn encode_fast(&mut self, out: &mut bytes::BytesMut) {
-        let _ = CommandCustomHeader::encode_direct_binary(self, out);
-    }
-
-    fn decode_fast(&mut self, fields: &HeaderMap) {
-        if let Ok(decoded) = <Self as FromMap>::from(fields) {
-            *self = decoded;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::command_custom_header::CommandCustomHeader;
+    use crate::protocol::command_custom_header::FromMap;
 
     #[test]
     fn send_message_response_header_serialization_and_deserialization() {
@@ -157,12 +137,8 @@ mod tests {
     }
 
     #[test]
-    #[allow(
-        deprecated,
-        reason = "verifies the source-compatible legacy adapter delegates to the generated codec"
-    )]
-    fn send_message_response_header_encode_decode_fast() {
-        let mut header = SendMessageResponseHeader::new(
+    fn send_message_response_header_direct_encode_and_from_map() {
+        let header = SendMessageResponseHeader::new(
             CheetahString::from("msg123"),
             1,
             100,
@@ -178,7 +154,7 @@ mod tests {
         assert_eq!(header.recall_handle(), Some("recall-handle"));
 
         let mut out = bytes::BytesMut::new();
-        FastCodesHeader::encode_fast(&mut header, &mut out);
+        CommandCustomHeader::encode_direct_binary(&header, &mut out).unwrap();
         assert!(!out.is_empty());
 
         let mut fields = std::collections::HashMap::new();
@@ -192,8 +168,7 @@ mod tests {
             CheetahString::from("recall-handle"),
         );
 
-        let mut header = SendMessageResponseHeader::default();
-        FastCodesHeader::decode_fast(&mut header, &fields);
+        let header = <SendMessageResponseHeader as FromMap>::from(&fields).unwrap();
 
         assert_eq!(header.msg_id(), "msg123");
         assert_eq!(header.queue_id(), 1);
@@ -204,15 +179,11 @@ mod tests {
     }
 
     #[test]
-    #[allow(
-        deprecated,
-        reason = "verifies the source-compatible legacy adapter delegates to the generated codec"
-    )]
-    fn send_message_response_header_fast_encode_writes_signed_numeric_fields() {
-        let mut header = SendMessageResponseHeader::new(CheetahString::from("msg123"), -1, -42, None, None, None);
+    fn send_message_response_header_direct_encode_writes_signed_numeric_fields() {
+        let header = SendMessageResponseHeader::new(CheetahString::from("msg123"), -1, -42, None, None, None);
         let mut out = bytes::BytesMut::new();
 
-        FastCodesHeader::encode_fast(&mut header, &mut out);
+        CommandCustomHeader::encode_direct_binary(&header, &mut out).unwrap();
 
         let encoded = String::from_utf8(out.to_vec()).unwrap();
         assert!(encoded.contains("queueId"));

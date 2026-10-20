@@ -24,6 +24,7 @@ use crate::api::monitor_api;
 use crate::api::ops_api;
 use crate::api::producer_api;
 use crate::api::topic_api;
+use crate::api::topology_api;
 use crate::error::DashboardError;
 use crate::middleware::audit_mutation;
 use crate::middleware::http_trace_layer;
@@ -48,6 +49,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/dashboard/topic-current", get(dashboard_api::topic_current))
         .route("/api/dashboard/brokers/history", get(dashboard_api::broker_history))
         .route("/api/dashboard/topics/history", get(dashboard_api::topic_history))
+        .route("/api/topology", get(topology_api::topology))
         .route("/api/topics", get(topic_api::list_topics).post(topic_api::create_topic))
         .route(
             "/api/topics/{topic}",
@@ -231,7 +233,7 @@ mod tests {
     use crate::config::SqlPoolConfig;
     use crate::config::StorageConfig;
     use crate::model::DashboardConfigView;
-    use crate::model::StorageBackend;
+    use crate::model::StorageEngine;
     use crate::state::AppState;
     use axum::Router;
     use axum::body::Body;
@@ -293,7 +295,7 @@ mod tests {
                 port: 0,
             },
             storage: StorageConfig {
-                backend: StorageBackend::File,
+                backend: StorageEngine::File,
                 data_path,
                 database_url: None,
                 pool: SqlPoolConfig::default(),
@@ -435,6 +437,33 @@ mod tests {
             assert!(clear_cookie.starts_with("dashboard_session=;"));
             assert!(clear_cookie.contains("; HttpOnly;"));
             assert!(clear_cookie.contains("; Max-Age=0"));
+
+            drop(app);
+            drop(state);
+            client_runtime.shutdown().await.log_if_unhealthy();
+        });
+        owner.shutdown_runtime_blocking().expect("runtime shutdown");
+    }
+
+    #[test]
+    fn topology_is_a_protected_route() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let owner = RuntimeOwner::new().expect("runtime owner");
+        owner.block_on(async {
+            let (state, client_runtime) = test_state(&owner, directory.path().join("dashboard")).await;
+            let app = build_router(state.clone());
+
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/topology?skipSystem=true")
+                        .body(Body::empty())
+                        .expect("topology request"),
+                )
+                .await
+                .expect("topology response");
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
             drop(app);
             drop(state);

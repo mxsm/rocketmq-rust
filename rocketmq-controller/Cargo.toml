@@ -18,6 +18,7 @@ name                 = "rocketmq-controller"
 version.workspace    = true
 authors.workspace    = true
 edition.workspace    = true
+rust-version.workspace = true
 homepage.workspace   = true
 repository.workspace = true
 license.workspace    = true
@@ -42,16 +43,15 @@ tokio      = { workspace = true }
 tokio-util = { workspace = true }
 
 # Raft consensus algorithm
-openraft = { version = "=0.10.0-alpha.21", default-features = false, features = [
+openraft = { version = "=0.10.0-alpha.37", default-features = false, features = [
   "serde",
   "tokio-rt",
 ] }
 # OpenRaft prereleases use caret constraints internally. Keep the runtime crates
-# aligned with the core ABI. Pin macros separately: alpha.34 preserves the
-# runtime-related expansions used by alpha.21.
-openraft-macros   = "=0.10.0-alpha.34"
-openraft-rt       = "=0.10.0-alpha.21"
-openraft-rt-tokio = "=0.10.0-alpha.21"
+# and macros aligned with the core ABI.
+openraft-macros   = "=0.10.0-alpha.37"
+openraft-rt       = "=0.10.0-alpha.37"
+openraft-rt-tokio = "=0.10.0-alpha.37"
 
 # gRPC networking
 tonic       = { version = "0.14.6", features = ["transport", "codegen"] }
@@ -92,12 +92,16 @@ async-trait = "0.1"
 rocksdb = { workspace = true, optional = true }
 
 [build-dependencies]
-protoc-bin-vendored = "=3.2.0"
+protoc-bin-vendored = "=3.3.0"
 tonic-prost-build   = "0.14.6"
 
 [dev-dependencies]
 criterion          = { version = "0.8", features = ["async_tokio"] }
-rocketmq-client-rust = { workspace = true }
+# Path-only on purpose: cargo drops path-only dev-dependencies when packaging.
+# A versioned entry must already be on crates.io, and cargo does not order
+# workspace publishing by dev-dependencies. `default-features = false` matches
+# the `[workspace.dependencies]` entry.
+rocketmq-client-rust = { path = "../rocketmq-client", default-features = false }
 rocketmq-transport = { workspace = true, features = ["test-support"] }
 tempfile           = "3.27"
 tracing-subscriber = { workspace = true }

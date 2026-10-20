@@ -37,7 +37,7 @@ use rocketmq_security_api::RequestPolicy;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
-use rocketmq_transport::api::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::EmbeddedDispatchResult;
 use rocketmq_transport::api::RPCHook;
 use rocketmq_transport::api::RejectRequestDecision;
 use rocketmq_transport::api::RemotingResponse;
@@ -73,7 +73,7 @@ impl ProbeProcessor {
 }
 
 impl RequestProcessor for ProbeProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.seen.lock().push((
             request.original_identity().original_code(),
@@ -84,7 +84,7 @@ impl RequestProcessor for ProbeProcessor {
         request.command_mut().add_ext_field("broker-probe", "mutated");
         let response = RemotingCommand::create_response_command_with_code(ResponseCode::Success)
             .set_opaque(request.original_identity().original_opaque());
-        Ok(HandlerOutcome::Reply(
+        Ok(ResponseAction::Reply(
             RemotingResponse::command(response).expect("probe remoting response"),
         ))
     }
@@ -112,7 +112,7 @@ struct PreMutatingRouter {
 }
 
 impl RequestProcessor for PreMutatingRouter {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         request.command_mut().set_code_mut(MUTATED_CODE);
         request.command_mut().set_opaque_mut(77_777);
         RequestProcessor::process(&mut self.inner, request).await
@@ -138,7 +138,7 @@ struct OrderingProbeRouter {
 }
 
 impl RequestProcessor for OrderingProbeRouter {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         RequestProcessor::process(&mut self.inner, request).await
     }
 
@@ -223,7 +223,7 @@ async fn router_selects_by_immutable_original_code_and_forwards_mutable_command(
         )
         .await
         .expect("formal aggregate dispatch");
-    let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+    let EmbeddedDispatchResult::Reply(plan) = outcome else {
         panic!("formal aggregate must produce one reply");
     };
 
@@ -272,7 +272,7 @@ async fn router_computes_ordering_before_command_mutation() {
             .dispatch(None, command)
             .await
             .expect("formal ordering dispatch");
-        assert!(matches!(outcome, EmbeddedDispatchOutcome::Reply(_)));
+        assert!(matches!(outcome, EmbeddedDispatchResult::Reply(_)));
     }
 
     assert_eq!(observed.lock().as_slice(), expected.as_slice());
@@ -337,7 +337,7 @@ async fn unconfigured_auth_fails_closed_before_leaf_dispatch() {
         .dispatch(None, RemotingCommand::create_remoting_command(ROUTED_CODE))
         .await
         .expect("unconfigured auth must produce an owned denial");
-    let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+    let EmbeddedDispatchResult::Reply(plan) = outcome else {
         panic!("unconfigured auth must return one denial reply");
     };
     assert_eq!(plan.response_code(), ResponseCode::NoPermission as i32);
@@ -373,7 +373,7 @@ async fn broker_auth_uses_original_code_after_a_before_hook_mutates_the_command(
         .dispatch(None, RemotingCommand::create_remoting_command(ROUTED_CODE))
         .await
         .expect("Broker auth denial should remain an owned response");
-    let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+    let EmbeddedDispatchResult::Reply(plan) = outcome else {
         panic!("Broker auth denial must return one reply");
     };
     assert_eq!(plan.response_code(), ResponseCode::NoPermission as i32);
@@ -505,7 +505,7 @@ async fn real_authorization_provider_denies_all_six_supervised_codes_before_leaf
             .dispatch(None, supervised_auth_command(code))
             .await
             .expect("authorization denial should be an owned reply");
-        let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+        let EmbeddedDispatchResult::Reply(plan) = outcome else {
             panic!("authorization denial must reply");
         };
         assert_eq!(plan.response_code(), ResponseCode::NoPermission as i32);
@@ -551,7 +551,7 @@ async fn router_fast_failure_keeps_response_affine_and_releases_run_resources() 
         )
         .await
         .expect("admitted fast-failure dispatch");
-    let EmbeddedDispatchOutcome::Reply(first) = first else {
+    let EmbeddedDispatchResult::Reply(first) = first else {
         panic!("admitted route must reply");
     };
     assert_eq!(first.response_code(), ResponseCode::Success as i32);
@@ -574,7 +574,7 @@ async fn router_fast_failure_keeps_response_affine_and_releases_run_resources() 
         )
         .await
         .expect("budget rejection remains a typed reply");
-    let EmbeddedDispatchOutcome::Reply(rejected) = rejected else {
+    let EmbeddedDispatchResult::Reply(rejected) = rejected else {
         panic!("budget rejection must own one remoting response");
     };
     assert_eq!(rejected.response_code(), ResponseCode::SystemBusy as i32);

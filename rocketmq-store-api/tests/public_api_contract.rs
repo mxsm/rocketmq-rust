@@ -27,10 +27,10 @@ use rocketmq_store_api::DerivedEngine;
 use rocketmq_store_api::DerivedRecordId;
 use rocketmq_store_api::Durability;
 use rocketmq_store_api::MasterEpoch;
-use rocketmq_store_api::ReleaseCheckpointCreateOutcome;
 use rocketmq_store_api::ReleaseCheckpointCreateRejection;
-use rocketmq_store_api::ReleaseCheckpointRestoreOutcome;
+use rocketmq_store_api::ReleaseCheckpointCreationResult;
 use rocketmq_store_api::ReleaseCheckpointRestoreRejection;
+use rocketmq_store_api::ReleaseCheckpointRestoreVerificationResult;
 use rocketmq_store_api::StoreComponent;
 use rocketmq_store_api::StoreContractViolation;
 use rocketmq_store_api::StoreError;
@@ -60,7 +60,7 @@ fn storage_api_is_consumed_only_through_root_exports() {
 }
 
 #[test]
-fn operational_capabilities_expose_one_error_identity_and_exact_checkpoint_outcomes() {
+fn operational_capabilities_expose_one_error_identity_and_exact_checkpoint_results() {
     let capability_sources = [
         include_str!("../src/capability/admin.rs"),
         include_str!("../src/capability/appender.rs"),
@@ -95,14 +95,15 @@ fn operational_capabilities_expose_one_error_identity_and_exact_checkpoint_outco
         ["authorization", "capability"],
         restore_rejections.map(restore_rejection_name)
     );
-    let _create_classifier: fn(ReleaseCheckpointCreateOutcome) -> &'static str = create_outcome_name;
-    let _restore_classifier: fn(ReleaseCheckpointRestoreOutcome) -> &'static str = restore_outcome_name;
+    let _create_classifier: fn(ReleaseCheckpointCreationResult) -> &'static str = create_result_name;
+    let _restore_classifier: fn(ReleaseCheckpointRestoreVerificationResult) -> &'static str =
+        restore_verification_result_name;
 }
 
-fn create_outcome_name(outcome: ReleaseCheckpointCreateOutcome) -> &'static str {
+fn create_result_name(outcome: ReleaseCheckpointCreationResult) -> &'static str {
     match outcome {
-        ReleaseCheckpointCreateOutcome::Created(_) => "created",
-        ReleaseCheckpointCreateOutcome::Rejected(rejection) => create_rejection_name(rejection),
+        ReleaseCheckpointCreationResult::Created(_) => "created",
+        ReleaseCheckpointCreationResult::Rejected(rejection) => create_rejection_name(rejection),
     }
 }
 
@@ -118,10 +119,10 @@ fn create_rejection_name(rejection: ReleaseCheckpointCreateRejection) -> &'stati
     }
 }
 
-fn restore_outcome_name(outcome: ReleaseCheckpointRestoreOutcome) -> &'static str {
+fn restore_verification_result_name(outcome: ReleaseCheckpointRestoreVerificationResult) -> &'static str {
     match outcome {
-        ReleaseCheckpointRestoreOutcome::Verified(_) => "verified",
-        ReleaseCheckpointRestoreOutcome::Rejected(rejection) => restore_rejection_name(rejection),
+        ReleaseCheckpointRestoreVerificationResult::Verified(_) => "verified",
+        ReleaseCheckpointRestoreVerificationResult::Rejected(rejection) => restore_rejection_name(rejection),
     }
 }
 

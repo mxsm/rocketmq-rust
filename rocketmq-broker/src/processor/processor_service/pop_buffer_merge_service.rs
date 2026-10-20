@@ -648,10 +648,7 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
         }
 
         this.shutdown_requested.store(false, Ordering::Release);
-        let Some(task_group) = this.context.task_group() else {
-            this.running.store(false, Ordering::Release);
-            return;
-        };
+        let task_group = this.context.task_group();
         let cancellation_token = task_group.cancellation_token();
         let service = this.clone();
 

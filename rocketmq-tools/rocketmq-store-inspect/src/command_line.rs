@@ -18,7 +18,7 @@ use clap::Parser;
 use clap::Subcommand;
 
 #[derive(Parser, Debug)]
-#[command(author = "mxsm", version = "0.2.0", about = "RocketMQ CLI(Rust)")]
+#[command(author = "mxsm", version, about = "RocketMQ CLI(Rust)")]
 pub struct RootCli {
     #[arg(long, global = true, help = "Include controlled diagnostic fields in error output")]
     pub verbose: bool,
@@ -32,7 +32,7 @@ pub enum Commands {
     #[command(
         arg_required_else_help = true,
         author = "mxsm",
-        version = "0.2.0",
+        version,
         about = "read message log file"
     )]
     ReadMessageLog {

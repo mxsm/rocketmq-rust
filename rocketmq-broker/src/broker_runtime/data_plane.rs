@@ -107,10 +107,7 @@ impl BrokerRuntime {
         let broker_config = self.composition.state.broker_config_arc();
         let store_runtime_config = Arc::new(broker_config.store_runtime_config());
         let message_store_config = self.composition.state.message_store_config_arc();
-        let Some(service_context) = self.composition.state.service_context.as_ref() else {
-            error!("Message store requires an injected broker service context");
-            return false;
-        };
+        let service_context = &self.composition.state.service_context;
         let Some(factory_config) = StoreFactoryConfig::try_new(
             Arc::clone(&message_store_config),
             store_runtime_config,
@@ -128,11 +125,11 @@ impl BrokerRuntime {
         let opened = match StoreFactory::open(factory_config, service_context.component("broker.store")) {
             Ok(opened) => opened,
             Err(error) => {
-                error!(backend = ?message_store_config.store_type, %error, "Initialize message store failed");
+                error!(store_type = ?message_store_config.store_type, %error, "Initialize message store failed");
                 return false;
             }
         };
-        info!(backend = ?opened.backend(), "Use configured message store");
+        info!(store_type = ?opened.store_type(), "Use configured message store");
         let (message_store, timer_message_store) = opened.into_parts();
         if !message_store.install_message_index_runtime(Arc::new(self.composition.state.config_state.clone())) {
             error!("configured message store has no message-index dispatcher");
@@ -295,10 +292,7 @@ impl BrokerRuntime {
                     topic_registration,
                     escape_bridge: Arc::downgrade(&self.composition.data_plane.escape_bridge_owner),
                 });
-                let Some(service_context) = self.composition.state.broker_service_context() else {
-                    error!("Transaction metrics require an injected broker service context");
-                    return false;
-                };
+                let service_context = self.composition.state.broker_service_context();
                 let metrics_path = get_transaction_metrics_path(
                     self.composition.state.message_store_config().store_path_root_dir.as_str(),
                 );
@@ -357,24 +351,15 @@ impl BrokerRuntime {
             }
         }
         let broker_name = self.composition.state.broker_config().broker_name().clone();
-        let task_group = self.composition.state.service_context.as_ref().map(|service_context| {
-            service_context
-                .component(
-                    rocketmq_runtime::ScopeId::try_new(format!("rocketmq-broker.transaction-check.{broker_name}"))
-                        .expect("the transaction-check scope has a fixed nonblank prefix"),
-                )
-                .task_group()
-                .clone()
-        });
-        let Some(task_group) = task_group else {
-            error!("Transaction checking requires an injected broker service context");
-            return false;
-        };
+        let task_group = self
+            .composition
+            .state
+            .broker_component_task_group(format!("rocketmq-broker.transaction-check.{broker_name}"));
         let listener = DefaultTransactionalMessageCheckListener::new(
             broker_name,
             self.composition.state.producer_manager().session_registry(),
             Arc::new(Broker2Client::new(self.composition.state.command_factory())),
-            Some(task_group.clone()),
+            task_group.clone(),
         );
         self.composition.state.transactional_message_check_listener = Some(listener.clone());
         self.composition.state.transactional_message_check_service = self

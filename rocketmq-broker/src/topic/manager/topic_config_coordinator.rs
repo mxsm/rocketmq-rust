@@ -54,7 +54,7 @@ pub(crate) type TopicRegistrationAction = Box<dyn FnOnce() -> TopicRegistrationF
 /// written: when it fails the file still holds the change, so the durable state
 /// is known and a supervised topic can be released even though the command as a
 /// whole failed.
-pub(crate) struct TopicConfigCommandOutcome {
+pub(crate) struct TopicConfigCommandReport {
     /// What the persistence step confirmed about the durable file.
     pub(crate) conclusion: crate::broker::metadata_reconciliation::MetadataWriteConclusion,
     /// A failure that did not come from persistence, such as the registration
@@ -62,7 +62,7 @@ pub(crate) struct TopicConfigCommandOutcome {
     pub(crate) registration_error: Option<SharedError>,
 }
 
-impl TopicConfigCommandOutcome {
+impl TopicConfigCommandReport {
     /// Wraps a persistence conclusion that stands on its own.
     fn persisted(conclusion: crate::broker::metadata_reconciliation::MetadataWriteConclusion) -> Self {
         Self {
@@ -84,10 +84,10 @@ impl TopicConfigCommandOutcome {
     }
 }
 
-impl fmt::Debug for TopicConfigCommandOutcome {
+impl fmt::Debug for TopicConfigCommandReport {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("TopicConfigCommandOutcome")
+            .debug_struct("TopicConfigCommandReport")
             .field("durable", &self.conclusion.is_durable())
             .field("registration_error", &self.registration_error.is_some())
             .finish()
@@ -98,8 +98,8 @@ impl fmt::Debug for TopicConfigCommandOutcome {
 ///
 /// Callers that do not act on the persistence conclusion use this so the
 /// failure they report is the same one a supervisor would use.
-pub(crate) fn outcome_result(outcome: TopicConfigCommandOutcome) -> Result<()> {
-    match outcome.error() {
+pub(crate) fn topic_config_command_result(report: TopicConfigCommandReport) -> Result<()> {
+    match report.error() {
         Some(error) => Err(error),
         None => Ok(()),
     }
@@ -108,11 +108,11 @@ pub(crate) fn outcome_result(outcome: TopicConfigCommandOutcome) -> Result<()> {
 enum TopicConfigCommand {
     Persist {
         registration: Option<TopicRegistrationAction>,
-        completion: Option<oneshot::Sender<TopicConfigCommandOutcome>>,
+        completion: Option<oneshot::Sender<TopicConfigCommandReport>>,
         _pending: TopicConfigPendingGuard,
     },
     Finalize {
-        completion: oneshot::Sender<TopicConfigCommandOutcome>,
+        completion: oneshot::Sender<TopicConfigCommandReport>,
     },
 }
 
@@ -323,7 +323,7 @@ impl TopicConfigCoordinator {
             .map_err(topic_coordinator_source)?
     }
 
-    pub(crate) async fn persist_and_wait(&self) -> Result<TopicConfigCommandOutcome> {
+    pub(crate) async fn persist_and_wait(&self) -> Result<TopicConfigCommandReport> {
         self.submit(None, true)
             .await?
             .ok_or_else(|| topic_coordinator_error("topic config command was accepted without a conclusion"))
@@ -336,7 +336,7 @@ impl TopicConfigCoordinator {
     pub(crate) async fn persist_and_register_wait(
         &self,
         registration: TopicRegistrationAction,
-    ) -> Result<TopicConfigCommandOutcome> {
+    ) -> Result<TopicConfigCommandReport> {
         self.submit(Some(registration), true)
             .await?
             .ok_or_else(|| topic_coordinator_error("topic config command was accepted without a conclusion"))
@@ -350,7 +350,7 @@ impl TopicConfigCoordinator {
         &self,
         registration: Option<TopicRegistrationAction>,
         wait: bool,
-    ) -> Result<Option<TopicConfigCommandOutcome>> {
+    ) -> Result<Option<TopicConfigCommandReport>> {
         self.ensure_started().await?;
         let (completion, receiver) = if wait {
             let (sender, receiver) = oneshot::channel();
@@ -497,14 +497,14 @@ async fn run_topic_config_worker(
                 completion,
                 _pending,
             } => {
-                let mut outcome = TopicConfigCommandOutcome::persisted(
+                let mut outcome = TopicConfigCommandReport::persisted(
                     persist_stable(&manager, &blocking, metadata_io.as_ref()).await,
                 );
                 if outcome.conclusion.is_durable() {
                     if let Some(registration) = registration {
                         match registration().await {
                             Ok(()) => {
-                                outcome = TopicConfigCommandOutcome::persisted(
+                                outcome = TopicConfigCommandReport::persisted(
                                     persist_stable(&manager, &blocking, metadata_io.as_ref()).await,
                                 );
                             }
@@ -528,7 +528,7 @@ async fn run_topic_config_worker(
                 }
             }
             TopicConfigCommand::Finalize { completion } => {
-                let outcome = TopicConfigCommandOutcome::persisted(
+                let outcome = TopicConfigCommandReport::persisted(
                     persist_stable(&manager, &blocking, metadata_io.as_ref()).await,
                 );
                 if !outcome.is_ok() {

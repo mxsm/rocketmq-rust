@@ -26,7 +26,7 @@ use super::codec::validate_acknowledged_frame;
 use super::codec::AcknowledgementSlot;
 use super::codec::AcknowledgementSlotState;
 use super::codec::CommitSeal;
-use super::codec::DecodeOutcome;
+use super::codec::LedgerFrameDecodeResult;
 use super::codec::LedgerRecord;
 use super::codec::OpenReason;
 use super::sidecar::decode_snapshot;
@@ -52,7 +52,8 @@ mod validation;
 pub use discovery::{
     inspect_managed_lifecycle_read_only_for_store, inspect_managed_lifecycle_read_only_with_limits_for_store,
     inspect_managed_lifecycle_under_exclusive_lock_for_store, LockedManagedLifecycleInspection,
-    ManagedLifecycleReadLimits, ManagedLifecycleReadOutcome, ManagedLifecycleRecoveryReason, ManagedLifecycleSession,
+    ManagedLifecycleEvidenceStatus, ManagedLifecycleReadLimits, ManagedLifecycleRecoveryReason,
+    ManagedLifecycleSession,
 };
 pub(crate) use error::ReplayViolation;
 use model::*;

@@ -25,7 +25,7 @@ pub const TAG: &str = "TagA";
 // Send timeout in milliseconds
 pub const SEND_TIMEOUT_MS: u64 = 3000;
 
-#[path = "../support/mod.rs"]
+#[path = "../support.rs"]
 mod support;
 
 pub fn main() -> ClientResult<()> {

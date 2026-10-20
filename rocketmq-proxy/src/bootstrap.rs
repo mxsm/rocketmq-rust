@@ -30,11 +30,11 @@ use std::time::Duration;
 use crate::auth::build_cluster_acl_signer;
 use crate::auth::ProxyAuthRuntime;
 #[cfg(feature = "cluster-mode")]
+use crate::cluster::ClusterBrokerRemotingAdapter;
+#[cfg(feature = "cluster-mode")]
 use crate::cluster::ClusterClient;
 #[cfg(feature = "cluster-mode")]
-use crate::cluster::ClusterRemotingBackend;
-#[cfg(feature = "cluster-mode")]
-use crate::cluster::RocketmqClusterClient;
+use crate::cluster::ClusterCommandGateway;
 use crate::config::ProxyConfig;
 use crate::config::ProxyMode;
 use crate::dependency_health::{DependencyHealth, DependencyHealthMonitor};
@@ -46,13 +46,13 @@ use crate::grpc::ProxyGrpcService;
 #[cfg(feature = "local-mode")]
 use crate::local::local_components_from_config_with_service_context;
 #[cfg(feature = "local-mode")]
-use crate::local::LocalRemotingBackend;
+use crate::local::LocalBrokerRemotingAdapter;
 use crate::observability::ProxyHookChain;
 use crate::observability::ProxyMetrics;
 use crate::processor::DefaultMessagingProcessor;
 use crate::processor::MessagingProcessor;
 use crate::remoting;
-use crate::remoting::ProxyRemotingBackend;
+use crate::remoting::ProxyRemotingRequestHandler;
 #[cfg(feature = "cluster-mode")]
 use crate::service::ClusterServiceManager;
 use crate::service::MetadataService;
@@ -65,10 +65,13 @@ struct LifecycleReadiness {
     remaining_listeners: Arc<AtomicUsize>,
 }
 
-struct DefaultBackend {
+/// Dependencies used to assemble a Proxy runtime.
+///
+/// Includes a service manager, optional broker remoting handler, and optional child context.
+struct ProxyRuntimeDependencies {
     service_manager: Arc<dyn ServiceManager>,
     broker_remoting_handler:
-        Option<Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>>,
+        Option<Arc<dyn ProxyRemotingRequestHandler<Response = rocketmq_transport::api::EmbeddedDispatchResult>>>,
     context: Option<ChildServiceContext>,
 }
 
@@ -153,7 +156,7 @@ pub struct ProxyRuntimeBuilder {
     metrics: Option<ProxyMetrics>,
     telemetry: rocketmq_observability::TelemetryHandle,
     broker_remoting_handler:
-        Option<Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>>,
+        Option<Arc<dyn ProxyRemotingRequestHandler<Response = rocketmq_transport::api::EmbeddedDispatchResult>>>,
     service_context: ChildServiceContext,
     diagnostics_sources: rocketmq_observability::RuntimeDiagnosticsSources,
 }
@@ -222,12 +225,17 @@ impl ProxyRuntimeBuilder {
         self
     }
 
-    /// Injects the optional broker remoting handler used for broker-routed
-    /// remoting request codes (`ForwardToBroker` and the queue-lock routes).
+    /// Sets the broker handler for decoded Remoting commands delegated to an embedded or remote Broker.
+    ///
+    /// The handler returns [`rocketmq_transport::api::EmbeddedDispatchResult`] and is used alongside
+    /// a custom [`ServiceManager`] supplied through [`Self::with_service_manager`]. Without an
+    /// injected service manager, automatic dependency construction selects the mode-specific
+    /// adapter and ignores this override. An injected service manager without a handler leaves
+    /// broker-routed Remoting requests unsupported.
     pub fn with_broker_remoting_handler(
         mut self,
         broker_remoting_handler: Arc<
-            dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>,
+            dyn ProxyRemotingRequestHandler<Response = rocketmq_transport::api::EmbeddedDispatchResult>,
         >,
     ) -> Self {
         self.broker_remoting_handler = Some(broker_remoting_handler);
@@ -235,11 +243,11 @@ impl ProxyRuntimeBuilder {
     }
 
     /// Compatibility wrapper for [`Self::with_broker_remoting_handler`].
-    #[deprecated(since = "1.0.0", note = "use `with_broker_remoting_handler` instead")]
+    #[deprecated(note = "Use with_broker_remoting_handler instead")]
     pub fn with_remoting_backend(
         self,
         broker_remoting_handler: Arc<
-            dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>,
+            dyn ProxyRemotingRequestHandler<Response = rocketmq_transport::api::EmbeddedDispatchResult>,
         >,
     ) -> Self {
         self.with_broker_remoting_handler(broker_remoting_handler)
@@ -265,15 +273,15 @@ impl ProxyRuntimeBuilder {
         let transport_telemetry = rocketmq_transport::api::TransportTelemetry::from_handle(&telemetry);
         #[cfg(not(any(feature = "observability", feature = "otel-traces")))]
         let transport_telemetry = rocketmq_transport::api::TransportTelemetry::noop();
-        let backend = match self.service_manager {
-            Some(service_manager) => DefaultBackend {
+        let dependencies = match self.service_manager {
+            Some(service_manager) => ProxyRuntimeDependencies {
                 service_manager,
                 broker_remoting_handler: self.broker_remoting_handler,
                 context: None,
             },
-            None => default_service_manager_and_backend(&self.config, &service_context, telemetry.clone())?,
+            None => build_proxy_runtime_dependencies(&self.config, &service_context, telemetry.clone())?,
         };
-        let auth_metadata_service = Some(backend.service_manager.metadata_service());
+        let auth_metadata_service = Some(dependencies.service_manager.metadata_service());
         let session_registry = self.session_registry.unwrap_or_default();
         let resource_metrics = rocketmq_observability::metrics::resource::ResourceStabilityMetrics::from_handle(
             &telemetry,
@@ -302,7 +310,7 @@ impl ProxyRuntimeBuilder {
                 expired_before_renewal: snapshot.expired_before_renewal,
             }
         });
-        let processor = Arc::new(DefaultMessagingProcessor::new(backend.service_manager));
+        let processor = Arc::new(DefaultMessagingProcessor::new(dependencies.service_manager));
         let mut runtime = ProxyRuntime::from_processor_with_local_mode_support_and_guards(
             self.config,
             processor,
@@ -314,8 +322,8 @@ impl ProxyRuntimeBuilder {
             metrics,
             transport_telemetry,
             grpc_guards,
-            backend.broker_remoting_handler,
-            backend.context,
+            dependencies.broker_remoting_handler,
+            dependencies.context,
             service_context,
         );
         runtime.grpc_service = runtime
@@ -337,7 +345,7 @@ pub struct ProxyRuntime<P = DefaultMessagingProcessor> {
     auth_metadata_service: Option<Arc<dyn MetadataService>>,
     transport_telemetry: rocketmq_transport::api::TransportTelemetry,
     broker_remoting_handler:
-        Option<Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>>,
+        Option<Arc<dyn ProxyRemotingRequestHandler<Response = rocketmq_transport::api::EmbeddedDispatchResult>>>,
     backend_context: Option<ChildServiceContext>,
     service_context: ChildServiceContext,
 }
@@ -403,7 +411,7 @@ where
         metrics: ProxyMetrics,
         transport_telemetry: rocketmq_transport::api::TransportTelemetry,
         broker_remoting_handler: Option<
-            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
+            Arc<dyn ProxyRemotingRequestHandler<Response = rocketmq_transport::api::EmbeddedDispatchResult>>,
         >,
         backend_context: Option<ChildServiceContext>,
         service_context: ChildServiceContext,
@@ -443,7 +451,7 @@ where
         transport_telemetry: rocketmq_transport::api::TransportTelemetry,
         grpc_guards: crate::grpc::service::GrpcExecutionResources,
         broker_remoting_handler: Option<
-            Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
+            Arc<dyn ProxyRemotingRequestHandler<Response = rocketmq_transport::api::EmbeddedDispatchResult>>,
         >,
         backend_context: Option<ChildServiceContext>,
         service_context: ChildServiceContext,
@@ -555,6 +563,7 @@ where
             backend_context,
             service_context,
         } = self;
+        let broker_remoting_handler_for_shutdown = broker_remoting_handler.clone();
         let auth_context = service_context.component("auth");
         let mut auth_runtime_for_shutdown = auth_runtime.clone();
         let lifecycle_for_shutdown = lifecycle.clone();
@@ -657,6 +666,7 @@ where
         finalize_proxy_run(
             listener_result,
             Some(&mut dependency_health),
+            broker_remoting_handler_for_shutdown.as_ref(),
             backend_context.as_ref(),
             auth_runtime_for_shutdown.as_ref(),
             &auth_context,
@@ -682,6 +692,9 @@ fn resolve_shutdown_deadline(
 async fn finalize_proxy_run(
     primary_result: ProxyResult<()>,
     dependency_health: Option<&mut DependencyHealthMonitor>,
+    broker_remoting_handler: Option<
+        &Arc<dyn ProxyRemotingRequestHandler<Response = rocketmq_transport::api::EmbeddedDispatchResult>>,
+    >,
     backend_context: Option<&ChildServiceContext>,
     auth_runtime: Option<&ProxyAuthRuntime>,
     auth_context: &ChildServiceContext,
@@ -690,6 +703,7 @@ async fn finalize_proxy_run(
 ) -> ProxyResult<()> {
     let cleanup_result = shutdown_proxy_components(
         dependency_health,
+        broker_remoting_handler,
         backend_context,
         auth_runtime,
         auth_context,
@@ -718,6 +732,9 @@ async fn finalize_proxy_run(
 
 async fn shutdown_proxy_components(
     dependency_health: Option<&mut DependencyHealthMonitor>,
+    broker_remoting_handler: Option<
+        &Arc<dyn ProxyRemotingRequestHandler<Response = rocketmq_transport::api::EmbeddedDispatchResult>>,
+    >,
     backend_context: Option<&ChildServiceContext>,
     auth_runtime: Option<&ProxyAuthRuntime>,
     auth_context: &ChildServiceContext,
@@ -731,6 +748,12 @@ async fn shutdown_proxy_components(
             if let Err(error) = require_healthy_component_shutdown("Proxy dependency health", report) {
                 failures.push(error);
             }
+        }
+    }
+
+    if let Some(broker_remoting_handler) = broker_remoting_handler {
+        if let Err(error) = broker_remoting_handler.shutdown_until(deadline).await {
+            failures.push(error);
         }
     }
 
@@ -770,11 +793,11 @@ async fn shutdown_proxy_components(
     }
 }
 
-fn default_service_manager_and_backend(
+fn build_proxy_runtime_dependencies(
     config: &ProxyConfig,
     service_context: &ChildServiceContext,
     telemetry_handle: rocketmq_observability::TelemetryHandle,
-) -> ProxyResult<DefaultBackend> {
+) -> ProxyResult<ProxyRuntimeDependencies> {
     match config.mode {
         #[cfg(feature = "cluster-mode")]
         ProxyMode::Cluster => {
@@ -784,16 +807,16 @@ fn default_service_manager_and_backend(
             }
             let signer = build_cluster_acl_signer(config)?.map(|signer| signer.into_outbound_signer());
             let cluster_context = service_context.component("cluster-backend");
-            let client = Arc::new(RocketmqClusterClient::new(
+            let client = Arc::new(ClusterCommandGateway::new(
                 cluster_config,
                 signer,
                 &cluster_context,
                 telemetry_handle,
             )?);
             let service_client: Arc<dyn ClusterClient> = client.clone();
-            Ok(DefaultBackend {
+            Ok(ProxyRuntimeDependencies {
                 service_manager: Arc::new(ClusterServiceManager::from_cluster_client(service_client)),
-                broker_remoting_handler: Some(Arc::new(ClusterRemotingBackend::new(client))),
+                broker_remoting_handler: Some(Arc::new(ClusterBrokerRemotingAdapter::new(client))),
                 context: Some(cluster_context),
             })
         }
@@ -810,9 +833,9 @@ fn default_service_manager_and_backend(
                 &local_context,
                 telemetry_handle,
             )?;
-            Ok(DefaultBackend {
+            Ok(ProxyRuntimeDependencies {
                 service_manager: Arc::new(manager),
-                broker_remoting_handler: Some(Arc::new(LocalRemotingBackend::new(client))),
+                broker_remoting_handler: Some(Arc::new(LocalBrokerRemotingAdapter::new(client))),
                 context: Some(local_context),
             })
         }
@@ -825,6 +848,8 @@ fn default_service_manager_and_backend(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -839,7 +864,35 @@ mod tests {
     use super::ProxyRuntimeBuilder;
     use crate::config::ProxyConfig;
     use crate::config::ProxyMode;
+    use crate::remoting::ProxyRemotingRequestHandler;
     use crate::service::DefaultMetadataService;
+
+    struct ShutdownOrderRemotingHandler {
+        context: rocketmq_runtime::ChildServiceContext,
+        called: Arc<AtomicBool>,
+    }
+
+    impl ProxyRemotingRequestHandler for ShutdownOrderRemotingHandler {
+        type Response = rocketmq_transport::api::EmbeddedDispatchResult;
+
+        fn process(
+            &self,
+            _request: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'_, Self::Response> {
+            Box::pin(async { Err(crate::error::ProxyError::not_implemented("test backend request")) })
+        }
+
+        fn shutdown_until(
+            &self,
+            _deadline: rocketmq_runtime::ShutdownDeadline,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'_, ()> {
+            Box::pin(async move {
+                assert!(!self.context.task_group().cancellation_token().is_cancelled());
+                self.called.store(true, Ordering::Release);
+                Ok(())
+            })
+        }
+    }
 
     fn lifecycle() -> ServiceLifecycle {
         ServiceLifecycle::new(ServiceLifecycleConfig {
@@ -847,6 +900,7 @@ mod tests {
             probe_bind_addr: None,
             shutdown_timeout: Duration::from_secs(45),
             liveness_stale_after: Duration::from_secs(30),
+            drain_request_methods: rocketmq_runtime::DrainRequestMethods::PostOnly,
         })
     }
 
@@ -920,12 +974,20 @@ mod tests {
             .start(Arc::new(DefaultMetadataService), &service_context, None)
             .await
             .unwrap();
+        let handler_shutdown_called = Arc::new(AtomicBool::new(false));
+        let broker_remoting_handler: Arc<
+            dyn ProxyRemotingRequestHandler<Response = rocketmq_transport::api::EmbeddedDispatchResult>,
+        > = Arc::new(ShutdownOrderRemotingHandler {
+            context: backend_context.clone(),
+            called: Arc::clone(&handler_shutdown_called),
+        });
 
         let result = finalize_proxy_run(
             Err(crate::error::ProxyError::not_implemented(
                 "test startup failure after backend creation",
             )),
             Some(&mut health),
+            Some(&broker_remoting_handler),
             Some(&backend_context),
             None,
             &auth_context,
@@ -936,6 +998,7 @@ mod tests {
 
         assert_eq!(health_handle.snapshot().state, crate::DependencyHealthState::Stopped);
         assert_eq!(health_handle.snapshot().mode, ProxyMode::Local);
+        assert!(handler_shutdown_called.load(Ordering::Acquire));
 
         assert!(
             matches!(

@@ -258,7 +258,6 @@ data:
     queue_capacity = 1024
     max_record_bytes = 16384
     queue_max_bytes = 1048576
-    history_limit = 100
 
     [cache]
     enabled = true

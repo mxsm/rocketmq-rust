@@ -12,6 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Mapped-file access and queue ownership boundaries.
+//!
+//! Queue generations expose immutable snapshots through the public API:
+//!
+//! ```
+//! use rocketmq_store_local::mapped_file::{DefaultMappedFile, MappedFileQueueGeneration};
+//!
+//! let generation = MappedFileQueueGeneration::<DefaultMappedFile>::new();
+//! let _ = generation.snapshot();
+//! ```
+//!
+//! Durable retirement authority is internal and cannot be imported by downstream crates:
+//!
+//! ```compile_fail,E0603
+//! use rocketmq_store_local::mapped_file::retirement::registry::DurableRetirementToken;
+//!
+//! let _ = std::mem::size_of::<DurableRetirementToken<()>>();
+//! ```
+//!
+//! Queue generations do not expose their raw storage for callers to mutate:
+//!
+//! ```compile_fail,E0609
+//! use rocketmq_store_local::mapped_file::{DefaultMappedFile, MappedFileQueueGeneration};
+//!
+//! let generation = MappedFileQueueGeneration::<DefaultMappedFile>::new();
+//! let _ = generation.files;
+//! ```
+
 #[doc(hidden)]
 pub mod allocation_policy;
 #[doc(hidden)]
@@ -72,7 +100,8 @@ pub use retirement::registry::MappedFileQueueSnapshot;
 pub use retirement::replay::{
     inspect_managed_lifecycle_read_only_for_store, inspect_managed_lifecycle_read_only_with_limits_for_store,
     inspect_managed_lifecycle_under_exclusive_lock_for_store, LockedManagedLifecycleInspection,
-    ManagedLifecycleReadLimits, ManagedLifecycleReadOutcome, ManagedLifecycleRecoveryReason, ManagedLifecycleSession,
+    ManagedLifecycleEvidenceStatus, ManagedLifecycleReadLimits, ManagedLifecycleRecoveryReason,
+    ManagedLifecycleSession,
 };
 #[doc(hidden)]
 pub use retirement::service::{
@@ -106,15 +135,15 @@ pub use direct_io::DirectIoRequest;
 pub use flush_strategy::FlushStrategy;
 pub use generation::MappedReadLease;
 pub use generation::MappingGenerationId;
-pub use io_uring_impl::io_uring_backend_status;
-pub use io_uring_impl::IoUringBackendStatus;
-pub use lifecycle::LifecycleAcquireOutcome;
+pub use io_uring_impl::io_uring_build_support;
+pub use io_uring_impl::IoUringBuildSupport;
 pub use lifecycle::LifecycleAcquireRejection;
+pub use lifecycle::MappedFileAdmissionResult;
 pub use lifecycle::MappedFileAdmissionState;
 pub use lifecycle::MappedFileLifecycleSnapshot;
 pub use lifecycle::MappedFileOperation;
-pub use lifecycle_outcome::MappedFileDestroyOutcome;
-pub use lifecycle_outcome::MappedFileDetachOutcome;
+pub use lifecycle_outcome::MappedFileDetachResult;
+pub use lifecycle_outcome::MappedFileRemovalStatus;
 pub use mapped_buffer::MappedBuffer;
 pub(crate) use mapped_file_error::MappedFileFailure;
 pub use memory::MappedMemory;

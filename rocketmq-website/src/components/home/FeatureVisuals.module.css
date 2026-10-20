@@ -1,0 +1,765 @@
+/*
+ * Illustrations inside the FeatureBento cards. `--accent-rgb` is inherited from
+ * the card (see FeatureBento.module.css).
+ */
+
+/* ---------- Shared tag row ---------- */
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.4rem;
+}
+
+.tags span {
+  padding: 0.2rem 0.62rem;
+  border: 1px solid var(--home-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  color: #aab3c8;
+  font-family: var(--home-font-mono);
+  font-size: 0.68rem;
+}
+
+/* ---------- Memory safety: borrow-checker replay ---------- */
+
+.snippet {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(5, 7, 13, 0.72);
+}
+
+.snippetBar {
+  display: flex;
+  align-items: center;
+  gap: 0.34rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--home-faint);
+  font-family: var(--home-font-mono);
+  font-size: 0.68rem;
+}
+
+.snippetBar i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.snippetBar span {
+  margin-left: 0.5rem;
+}
+
+.snippetBody {
+  margin: 0;
+  overflow-x: auto;
+  padding: 0.8rem 0.9rem 0.35rem;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: #c2cadd;
+  font-family: var(--home-font-mono);
+  font-size: 0.74rem;
+  line-height: 1.8;
+  scrollbar-width: none;
+}
+
+.snippetLine {
+  display: block;
+  white-space: pre;
+}
+
+.kw {
+  color: #c792ea;
+}
+
+.fn {
+  color: #82aaff;
+}
+
+.str {
+  color: #c3e88d;
+}
+
+.mac {
+  color: #ffcb6b;
+}
+
+.cm {
+  color: #5d667d;
+  font-style: italic;
+}
+
+.moved {
+  text-decoration: underline wavy transparent;
+  text-underline-offset: 3px;
+  animation: squiggle 8s ease infinite;
+}
+
+.diagnostic {
+  color: #ff9aa8;
+  animation: diagnose 8s ease infinite;
+}
+
+.diagnostic b {
+  color: var(--home-rose);
+}
+
+.verdict {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.35rem 0.9rem 0.85rem;
+  padding: 0.42rem 0.7rem;
+  border: 1px solid rgba(52, 211, 153, 0.3);
+  border-radius: 9px;
+  background: rgba(52, 211, 153, 0.08);
+  color: #a7f3d0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  animation: verdict 8s ease infinite;
+}
+
+.verdict span {
+  color: var(--home-green);
+  font-weight: 800;
+}
+
+/* ---------- Async: request pipeline lanes ---------- */
+
+.lanes {
+  display: grid;
+  width: 100%;
+  gap: 0.75rem;
+}
+
+.lane {
+  display: grid;
+  grid-template-columns: 4.3rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.7rem;
+  color: var(--home-faint);
+  font-family: var(--home-font-mono);
+  font-size: 0.7rem;
+}
+
+.laneTrack {
+  position: relative;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.laneTrack i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 24%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, rgb(var(--accent-rgb)));
+  animation: laneRun calc(1.9s + var(--lane) * 0.35s) linear infinite;
+}
+
+.laneTrack i:nth-child(2) {
+  opacity: 0.7;
+  animation-delay: -0.7s;
+}
+
+.laneTrack i:nth-child(3) {
+  opacity: 0.45;
+  animation-delay: -1.3s;
+}
+
+/* ---------- Protocol: Java and Rust endpoints exchanging traffic ---------- */
+
+.interop {
+  display: grid;
+  width: 100%;
+  gap: 1rem;
+}
+
+.endpoints {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.endpoint {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--home-border-strong);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.endpoint b {
+  color: #e8ecf6;
+  font-family: var(--home-font-display);
+  font-size: 1rem;
+}
+
+.endpoint small {
+  color: var(--home-faint);
+  font-family: var(--home-font-mono);
+  font-size: 0.62rem;
+  white-space: nowrap;
+}
+
+.endpointRust {
+  border-color: rgba(255, 122, 38, 0.5);
+  box-shadow: 0 0 24px rgba(255, 122, 38, 0.14);
+}
+
+.endpointRust b {
+  color: var(--home-amber);
+}
+
+.wire {
+  position: relative;
+  height: 26px;
+}
+
+.wire::before,
+.wire::after {
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: repeating-linear-gradient(90deg, rgba(150, 166, 214, 0.42) 0 5px, transparent 5px 10px);
+  content: '';
+}
+
+.wire::before {
+  top: 7px;
+}
+
+.wire::after {
+  bottom: 7px;
+}
+
+.wire i {
+  position: absolute;
+  top: 3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgb(var(--accent-rgb));
+  box-shadow: 0 0 10px rgb(var(--accent-rgb));
+  animation: wireRight 2.2s linear infinite;
+}
+
+.wire i:nth-child(2) {
+  animation-delay: -1.1s;
+}
+
+.wire i:nth-child(n + 3) {
+  top: auto;
+  bottom: 3px;
+  background: var(--home-orange);
+  box-shadow: 0 0 10px var(--home-orange);
+  animation-name: wireLeft;
+}
+
+.wire i:nth-child(4) {
+  animation-delay: -1.1s;
+}
+
+/* ---------- Storage: logs filling segment by segment ---------- */
+
+.storage {
+  display: grid;
+  width: 100%;
+  gap: 0.5rem;
+}
+
+.layer {
+  display: grid;
+  grid-template-columns: 6.1rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--home-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+  color: #aab3c8;
+  font-family: var(--home-font-mono);
+  font-size: 0.68rem;
+}
+
+.segments {
+  display: flex;
+  gap: 3px;
+}
+
+.segments i {
+  height: 10px;
+  flex: 1;
+  border-radius: 2.5px;
+  background: rgba(150, 166, 214, 0.16);
+  animation: segmentFill 3.4s ease-in-out infinite;
+  animation-delay: calc(var(--layer) * 420ms + var(--segment) * 110ms);
+}
+
+.storage .tags {
+  margin-top: 0.3rem;
+}
+
+/* ---------- Patterns: chips lighting up in turn ---------- */
+
+.patterns {
+  display: flex;
+  width: 100%;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.pattern {
+  padding: 0.42rem 0.85rem;
+  border: 1px solid var(--home-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  color: #aab3c8;
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-transform: capitalize;
+  animation: chipGlow 7.5s ease-in-out infinite;
+  animation-delay: calc(var(--chip) * 1.5s);
+}
+
+.patterns .tags {
+  flex-basis: 100%;
+  margin-top: 0.35rem;
+}
+
+/* ---------- High availability: rotating Raft leader ---------- */
+
+.quorum {
+  width: min(250px, 100%);
+  height: auto;
+  overflow: visible;
+}
+
+.quorumEdge {
+  fill: none;
+  stroke: rgba(150, 166, 214, 0.32);
+  stroke-dasharray: 4 6;
+  stroke-width: 1.4;
+  animation: dashFlow 1.4s linear infinite;
+}
+
+.quorumCore {
+  fill: #131829;
+  stroke: rgba(var(--accent-rgb), 0.5);
+  stroke-width: 1.4;
+  animation: lead 9s ease-in-out infinite;
+  animation-delay: calc(var(--member) * 3s);
+}
+
+.quorumRing {
+  fill: none;
+  opacity: 0;
+  stroke: rgb(var(--accent-rgb));
+  stroke-width: 1.4;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: leadRing 9s ease-in-out infinite;
+  animation-delay: calc(var(--member) * 3s);
+}
+
+.quorumNode text {
+  fill: #dfe4f1;
+  font-family: var(--home-font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  text-anchor: middle;
+}
+
+/* ---------- Security: checks passing in sequence ---------- */
+
+.checks {
+  position: relative;
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 0 0.6rem;
+}
+
+.checkRail {
+  position: absolute;
+  top: 21px;
+  right: 2rem;
+  left: 2rem;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: rgba(150, 166, 214, 0.18);
+}
+
+.checkRail i {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgb(var(--accent-rgb)));
+  transform: translateX(-100%);
+  animation: railRun 6s ease-in-out infinite;
+}
+
+.check {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  color: #aab3c8;
+  font-family: var(--home-font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.checkMark {
+  display: inline-flex;
+  width: 44px;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid rgba(150, 166, 214, 0.3);
+  border-radius: 50%;
+  background: #0d1120;
+  color: transparent;
+  font-size: 1.05rem;
+  font-weight: 800;
+  animation: checkOn 6s ease-in-out infinite;
+  animation-delay: calc(var(--check) * 1.1s);
+}
+
+/* ---------- Observability: sparkline drawing itself ---------- */
+
+.telemetry {
+  display: grid;
+  width: 100%;
+  gap: 0.7rem;
+  color: rgb(var(--accent-rgb));
+}
+
+.chart {
+  width: 100%;
+  max-height: 112px;
+  overflow: visible;
+}
+
+.chartLine {
+  fill: none;
+  filter: drop-shadow(0 0 5px currentColor);
+  stroke: currentColor;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  animation: draw 5.5s ease-in-out infinite;
+}
+
+.chartArea {
+  opacity: 0;
+  animation: area 5.5s ease-in-out infinite;
+}
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 700px) {
+  .snippetBody {
+    font-size: 0.66rem;
+  }
+
+  /* The diagnostic is prose; let it wrap instead of scrolling the snippet. */
+  .diagnostic {
+    white-space: pre-wrap;
+  }
+}
+
+/* ---------- Keyframes ---------- */
+
+@keyframes squiggle {
+  0%,
+  18%,
+  96%,
+  100% {
+    color: inherit;
+    text-decoration-color: transparent;
+  }
+
+  24%,
+  90% {
+    color: #ffb4bf;
+    text-decoration-color: var(--home-rose);
+  }
+}
+
+@keyframes diagnose {
+  0%,
+  26%,
+  96%,
+  100% {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  32%,
+  90% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes verdict {
+  0%,
+  44%,
+  96%,
+  100% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  50%,
+  90% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes laneRun {
+  from {
+    transform: translateX(-110%);
+  }
+
+  to {
+    transform: translateX(430%);
+  }
+}
+
+@keyframes wireRight {
+  0% {
+    left: -8px;
+    opacity: 0;
+  }
+
+  12%,
+  88% {
+    opacity: 1;
+  }
+
+  100% {
+    left: 100%;
+    opacity: 0;
+  }
+}
+
+@keyframes wireLeft {
+  0% {
+    left: 100%;
+    opacity: 0;
+  }
+
+  12%,
+  88% {
+    opacity: 1;
+  }
+
+  100% {
+    left: -8px;
+    opacity: 0;
+  }
+}
+
+@keyframes segmentFill {
+  0%,
+  100% {
+    background-color: rgba(150, 166, 214, 0.16);
+  }
+
+  12%,
+  62% {
+    background-color: rgb(var(--accent-rgb));
+  }
+}
+
+@keyframes chipGlow {
+  0%,
+  22%,
+  100% {
+    border-color: var(--home-border);
+    background-color: rgba(255, 255, 255, 0.03);
+    box-shadow: none;
+    color: #aab3c8;
+  }
+
+  6%,
+  16% {
+    border-color: rgba(var(--accent-rgb), 0.7);
+    background-color: rgba(var(--accent-rgb), 0.14);
+    box-shadow: 0 0 22px rgba(var(--accent-rgb), 0.25);
+    color: #fff;
+  }
+}
+
+@keyframes dashFlow {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
+
+@keyframes lead {
+  0%,
+  30% {
+    fill: rgba(var(--accent-rgb), 0.42);
+    stroke: #d9ccff;
+  }
+
+  36%,
+  100% {
+    fill: #131829;
+    stroke: rgba(var(--accent-rgb), 0.5);
+  }
+}
+
+@keyframes leadRing {
+  0% {
+    opacity: 0;
+    transform: scale(0.7);
+  }
+
+  6%,
+  28% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+
+  34%,
+  100% {
+    opacity: 0;
+    transform: scale(1.25);
+  }
+}
+
+@keyframes railRun {
+  0% {
+    transform: translateX(-100%);
+  }
+
+  55%,
+  82% {
+    transform: translateX(0);
+  }
+
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes checkOn {
+  0%,
+  8%,
+  90%,
+  100% {
+    border-color: rgba(150, 166, 214, 0.3);
+    box-shadow: none;
+    color: transparent;
+  }
+
+  16%,
+  78% {
+    border-color: rgb(var(--accent-rgb));
+    box-shadow: 0 0 20px rgba(var(--accent-rgb), 0.3);
+    color: rgb(var(--accent-rgb));
+  }
+}
+
+@keyframes draw {
+  0% {
+    opacity: 1;
+    stroke-dashoffset: 1;
+  }
+
+  45%,
+  88% {
+    opacity: 1;
+    stroke-dashoffset: 0;
+  }
+
+  100% {
+    opacity: 0;
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes area {
+  0%,
+  30%,
+  100% {
+    opacity: 0;
+  }
+
+  55%,
+  88% {
+    opacity: 1;
+  }
+}
+
+/* Motion off: every illustration settles in its "resolved" state. */
+@media (prefers-reduced-motion: reduce) {
+  .moved,
+  .diagnostic,
+  .verdict,
+  .laneTrack i,
+  .wire i,
+  .segments i,
+  .pattern,
+  .quorumEdge,
+  .quorumCore,
+  .quorumRing,
+  .checkRail i,
+  .checkMark,
+  .chartLine,
+  .chartArea {
+    animation: none;
+  }
+
+  .moved {
+    color: #ffb4bf;
+    text-decoration-color: var(--home-rose);
+  }
+
+  .laneTrack i,
+  .wire i {
+    display: none;
+  }
+
+  .segments i {
+    background: rgba(var(--accent-rgb), 0.7);
+  }
+
+  .checkMark {
+    border-color: rgb(var(--accent-rgb));
+    color: rgb(var(--accent-rgb));
+  }
+
+  .chartLine {
+    stroke-dashoffset: 0;
+  }
+
+  .chartArea {
+    opacity: 1;
+  }
+}

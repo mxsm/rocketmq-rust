@@ -26,20 +26,14 @@
 //! Process entrypoints own [`RuntimeOwner`] and derive a single
 //! [`RootServiceContext`]. Production libraries receive a
 //! [`ChildServiceContext`] or a narrower capability. [`RuntimeContext`] is a
-//! test and migration harness, while [`RocketMQRuntime`] remains only as a
-//! deprecated compatibility boundary.
+//! test and migration harness.
 //!
 //! [`prelude`] documents the recommended entry path with an example that runs
-//! as a test. The older entry points are grouped in [`compat`], which states the
-//! migration direction without deprecating anything further.
+//! as a test.
 
-/// Actor types and operations.
-mod actor;
 pub mod blocking;
 /// Common types and operations.
 pub mod common;
-/// Compatibility facade for the older runtime entry points.
-pub mod compat;
 /// Config types and operations.
 mod config;
 /// Context types and operations.
@@ -49,11 +43,7 @@ mod critical;
 mod diagnostics;
 /// Error types and operations.
 mod error;
-/// Executor service types and operations.
-mod executor_service;
 mod handle;
-/// Legacy types and operations.
-mod legacy;
 mod metadata_io;
 mod metadata_target;
 mod operation;
@@ -64,15 +54,11 @@ mod public_api;
 /// Resource budget types and operations.
 pub mod resource_budget;
 mod resources;
-/// Schedule types and operations.
-pub mod schedule;
 /// Scheduled types and operations.
 mod scheduled;
 /// Service context types and operations.
 pub mod service_context;
 mod service_lifecycle;
-/// Shutdown types and operations.
-pub mod shutdown;
 /// Shutdown deadline types and operations.
 pub mod shutdown_deadline;
 /// Shutdown report types and operations.
@@ -85,10 +71,7 @@ pub mod task;
 /// Task group types and operations.
 pub mod task_group;
 mod task_spawner;
-/// Tokio lock types and operations.
-pub mod tokio_lock;
 
-pub use actor::ActorRuntime;
 pub use blocking::BlockingExecutorSnapshot;
 pub use blocking::BlockingKind;
 pub use blocking::BlockingLane;
@@ -101,21 +84,13 @@ pub use critical::CriticalFailure;
 pub use critical::CriticalFailureKind;
 pub use critical::CriticalFailureState;
 pub use critical::CriticalFailureSubscription;
+pub use error::ExternalOperation;
 pub use error::RuntimeContractPolicy;
 pub use error::RuntimeContractViolation;
 pub use error::RuntimeError;
+pub use error::RuntimeErrorKind;
 pub use error::RuntimeOperation;
 pub use error::RuntimeResult;
-pub use executor_service::FuturesExecutorPlan;
-pub use executor_service::FuturesExecutorService;
-pub use executor_service::FuturesExecutorServiceBuilder;
-pub use executor_service::ScheduledExecutorService;
-pub use executor_service::ScheduledExecutorServicePlan;
-pub use executor_service::TokioExecutorService;
-pub use executor_service::TokioExecutorServicePlan;
-pub(crate) use handle::RuntimeHandle;
-#[allow(deprecated)]
-pub use legacy::RocketMQRuntime;
 pub use metadata_io::LocalMetadataFileSystem;
 pub use metadata_io::MetadataDeadline;
 pub use metadata_io::MetadataDurability;
@@ -123,13 +98,9 @@ pub use metadata_io::MetadataFileSystem;
 pub use metadata_io::MetadataGeneration;
 pub use metadata_io::MetadataIoActor;
 pub use metadata_io::MetadataIoActorLimitsProfile;
-pub use metadata_io::MetadataIoAdmissionOutcome;
 pub use metadata_io::MetadataIoBlockingLaneProfile;
-pub use metadata_io::MetadataIoCommitAdmissionOutcome;
 pub use metadata_io::MetadataIoCommitObservation;
-pub use metadata_io::MetadataIoCommitOutcome;
 pub use metadata_io::MetadataIoConfig;
-pub use metadata_io::MetadataIoDurabilityOutcome;
 pub use metadata_io::MetadataIoEffectiveProfile;
 pub use metadata_io::MetadataIoLegacyBlockingField;
 pub use metadata_io::MetadataIoObserver;
@@ -140,8 +111,12 @@ pub use metadata_io::MetadataIoResourceSnapshot;
 pub use metadata_io::MetadataIoShutdownReport;
 pub use metadata_io::MetadataIoSnapshot;
 pub use metadata_io::MetadataLimitSource;
+pub use metadata_io::MetadataWriteCompletionStatus;
+pub use metadata_io::MetadataWriteDurabilityStatus;
+pub use metadata_io::MetadataWritePersistenceStatus;
 pub use metadata_io::MetadataWriteRequest;
-pub use metadata_target::{MetadataTargetIdentity, MetadataTargetRegistryStats, MetadataTargetRetirementOutcome};
+pub use metadata_io::MetadataWriteSubmissionStatus;
+pub use metadata_target::{MetadataTargetIdentity, MetadataTargetRegistryStats, MetadataTargetRetirementStatus};
 pub use public_api::*;
 pub use resource_budget::BudgetCapacity;
 pub use resource_budget::BudgetClass;
@@ -165,33 +140,15 @@ pub use resource_budget::ManagedMemoryRequest;
 pub use resource_budget::MemoryFileView;
 pub use resource_budget::MemoryLimitSource;
 pub use resource_budget::MonotonicClock;
-pub use resource_budget::PermitRebindOutcome;
+pub use resource_budget::PermitBudgetTransferStatus;
 pub use resource_budget::ProcessMemoryLimit;
-pub use resource_budget::QueuePushOutcome;
+pub use resource_budget::QueueEnqueueStatus;
 pub use resource_budget::QueuePushRejection;
 pub use resource_budget::QueueSnapshot;
 pub use resource_budget::RateLimit;
 pub use resource_budget::ResourceBudgetTree;
 pub use resource_budget::ResourcePermit;
 pub use resource_budget::SystemMonotonicClock;
-pub use schedule::executor::ExecutorConfig;
-pub use schedule::executor::ExecutorPool;
-pub use schedule::executor::TaskExecutor;
-pub use schedule::scheduler::SchedulerConfig;
-pub use schedule::scheduler::TaskScheduler;
-pub use schedule::task::Task;
-pub use schedule::task::TaskContext;
-pub use schedule::task::TaskResult as LegacyTaskResult;
-pub use schedule::task::TaskStatus;
-pub use schedule::trigger::CronTrigger;
-pub use schedule::trigger::DelayTrigger;
-pub use schedule::trigger::DelayedIntervalTrigger;
-pub use schedule::trigger::IntervalTrigger;
-pub use schedule::trigger::Trigger;
-pub use schedule::ScheduleControlOutcome;
-pub use schedule::ScheduleExecutionOutcome;
-pub use schedule::ScheduleRegistrationOutcome;
-pub use schedule::SchedulerStartOutcome;
 pub use scheduled::MissedTickPolicy;
 pub use scheduled::ScheduleMode;
 pub use scheduled::ScheduledExecutionPolicy;
@@ -200,11 +157,12 @@ pub use scheduled::ScheduledTaskConfig;
 pub use scheduled::ScheduledTaskControl;
 pub use scheduled::ScheduledTaskGroup;
 pub use scheduled::ScheduledTaskObserver;
-pub use scheduled::ScheduledTaskRegistrationOutcome;
+pub use scheduled::ScheduledTaskRegistrationStatus;
 pub use scheduled::ScheduledTaskSnapshot;
 pub use service_context::ScopeId;
 pub use service_lifecycle::CriticalFailureRecovery;
 pub use service_lifecycle::DependencyReadiness;
+pub use service_lifecycle::DrainRequestMethods;
 pub use service_lifecycle::ServiceLifecycle;
 pub use service_lifecycle::ServiceLifecycleConfig;
 pub use service_lifecycle::ServiceLifecycleObserver;
@@ -212,15 +170,16 @@ pub use service_lifecycle::ServiceLifecycleState;
 pub use service_lifecycle::ServiceLifecycleTransition;
 pub use service_lifecycle::ShutdownReason;
 pub use service_lifecycle::ShutdownRequest;
-pub use shutdown::Shutdown;
 pub use shutdown_report::ShutdownAnnotation;
 pub use shutdown_report::TaskSnapshot;
 pub use signal::wait_for_signal;
 pub use signal::wait_for_signal_result;
-pub use task_group::DetachedTaskPolicy;
+pub use stack::current_thread_committed_stack_bytes;
+pub use task_group::TaskGroupEventCounts;
 pub use task_group::TaskGroupId;
 pub use task_group::TaskGroupLifecycleState;
 pub use task_group::TaskId;
 pub use task_group::TaskKind;
+pub use task_group::TaskName;
 pub use task_group::TaskResult;
 pub use task_spawner::TaskSpawner;

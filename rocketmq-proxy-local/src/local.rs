@@ -22,7 +22,7 @@ use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use rocketmq_broker::proxy_facade::BrokerConfig;
-use rocketmq_broker::ProxyBrokerFacade;
+use rocketmq_broker::EmbeddedBroker;
 use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_model::common::boundary_type::BoundaryType;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
@@ -98,7 +98,7 @@ use rocketmq_proxy_core::MetadataService;
 use rocketmq_proxy_core::ProxyContext;
 use rocketmq_proxy_core::ProxyError;
 use rocketmq_proxy_core::ProxyMessage;
-use rocketmq_proxy_core::ProxyRemotingBackend;
+use rocketmq_proxy_core::ProxyRemotingRequestHandler;
 use rocketmq_proxy_core::ProxyResult;
 use rocketmq_proxy_core::ProxyServiceFuture;
 use rocketmq_proxy_core::ProxyTopicMessageType;
@@ -127,10 +127,12 @@ use rocketmq_proxy_core::UpdateOffsetRequest;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
+use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskId;
 use rocketmq_runtime::{
     BudgetCapacity, BudgetClass, BudgetLimit, FullPolicy, ResourceBudget, ResourceBudgetTree, ResourcePermit,
 };
-use rocketmq_transport::api::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::EmbeddedDispatchResult;
 use rocketmq_transport::api::EmbeddedResponse;
 use rocketmq_transport::api::EmbeddedResponseBody;
 use rocketmq_transport::api::RemotingDeserializable;
@@ -155,13 +157,19 @@ const LOCAL_LONG_POLL_TIMEOUT_MARGIN: Duration = Duration::from_millis(500);
 const LOCAL_REMOTING_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone)]
-pub struct LocalBrokerFacadeClient {
+pub struct LocalBrokerCommandGateway {
     sender: mpsc::Sender<QueuedLocalBrokerCommand>,
     budget: ResourceBudget,
     rejected: Arc<AtomicU64>,
     broker_name: String,
     context_deadline: Option<Instant>,
     cancellation: CancellationToken,
+    worker_shutdown: Option<Arc<LocalBrokerWorkerShutdown>>,
+}
+
+struct LocalBrokerWorkerShutdown {
+    task_group: TaskGroup,
+    task_id: TaskId,
 }
 
 pub(crate) struct QueuedLocalBrokerCommand {
@@ -215,7 +223,7 @@ pub(crate) enum LocalBrokerCommand {
     ProcessRemoting {
         request: RemotingCommand,
         timeout: Duration,
-        reply: oneshot::Sender<ProxyResult<EmbeddedDispatchOutcome>>,
+        reply: oneshot::Sender<ProxyResult<EmbeddedDispatchResult>>,
     },
 }
 
@@ -452,7 +460,25 @@ fn local_command_budget(config: &LocalConfig) -> ProxyResult<ResourceBudget> {
     .map_err(|error| canonical::configuration_invalid_with_source("proxy.local.command_budget", error).into())
 }
 
-impl LocalBrokerFacadeClient {
+impl LocalBrokerCommandGateway {
+    /// Stops the embedded Broker while its Store and metadata I/O scopes are
+    /// still open, then waits for the worker to release them.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error if the worker does not finish by `deadline`.
+    pub async fn shutdown_until(&self, deadline: ShutdownDeadline) -> ProxyResult<()> {
+        self.cancellation.cancel();
+        if let Some(worker) = &self.worker_shutdown {
+            if !worker.task_group.wait_task(worker.task_id, deadline.remaining()).await {
+                return Err(ProxyError::Transport {
+                    message: "embedded Broker shutdown exceeded the shared deadline".to_owned(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     pub async fn readiness_check(&self) -> ProxyResult<()> {
         self.execute(|reply| LocalBrokerCommand::ReadinessCheck { reply }).await
     }
@@ -490,7 +516,7 @@ impl LocalBrokerFacadeClient {
         let broker_name = config.broker_name.clone();
         let worker_context = service_context.component("command-worker");
         let broker_context = worker_context.component("embedded-broker-store");
-        let facade = ProxyBrokerFacade::try_new_from_broker_config(broker_config, broker_context, telemetry_handle)
+        let facade = EmbeddedBroker::try_new_from_broker_config(broker_config, broker_context, telemetry_handle)
             .map_err(|error| {
                 ProxyError::from(canonical::configuration_invalid_with_source(
                     "proxy.local.embeddedBroker",
@@ -498,9 +524,12 @@ impl LocalBrokerFacadeClient {
                 ))
             })?;
         let shutdown_context = service_context.clone();
-        let cancellation = worker_context.task_group().cancellation_token();
+        // This child token lets the Proxy stop the worker before closing the
+        // parent task group and its Store and metadata I/O descendants.
+        let cancellation = worker_context.task_group().cancellation_token().child_token();
+        let shutdown_cancellation = cancellation.clone();
         let lane_context = worker_context.component("command-lanes");
-        worker_context
+        let task_id = worker_context
             .spawn_service("proxy.local.worker", async move {
                 run_local_broker_worker(
                     config,
@@ -520,7 +549,11 @@ impl LocalBrokerFacadeClient {
             rejected,
             broker_name,
             context_deadline: None,
-            cancellation: service_context.task_group().cancellation_token(),
+            cancellation: shutdown_cancellation,
+            worker_shutdown: Some(Arc::new(LocalBrokerWorkerShutdown {
+                task_group: worker_context.task_group().clone(),
+                task_id,
+            })),
         })
     }
 
@@ -580,7 +613,7 @@ impl LocalBrokerFacadeClient {
     ///
     /// Returns an error when the local Broker worker is unavailable, rejects
     /// the command, or does not complete within the default timeout.
-    pub async fn process_remoting(&self, request: RemotingCommand) -> ProxyResult<EmbeddedDispatchOutcome> {
+    pub async fn process_remoting(&self, request: RemotingCommand) -> ProxyResult<EmbeddedDispatchResult> {
         self.process_remoting_with_timeout(request, LOCAL_REMOTING_RESPONSE_TIMEOUT)
             .await
     }
@@ -596,7 +629,7 @@ impl LocalBrokerFacadeClient {
         &self,
         mut request: RemotingCommand,
         timeout: Duration,
-    ) -> ProxyResult<EmbeddedDispatchOutcome> {
+    ) -> ProxyResult<EmbeddedDispatchResult> {
         request.make_custom_header_to_net();
         self.execute(|reply| LocalBrokerCommand::ProcessRemoting {
             request,
@@ -728,31 +761,35 @@ impl LocalBrokerFacadeClient {
 }
 
 #[derive(Clone)]
-pub struct LocalRemotingBackend {
-    client: LocalBrokerFacadeClient,
+pub struct LocalBrokerRemotingAdapter {
+    client: LocalBrokerCommandGateway,
 }
 
-impl LocalRemotingBackend {
-    pub fn new(client: LocalBrokerFacadeClient) -> Self {
+impl LocalBrokerRemotingAdapter {
+    pub fn new(client: LocalBrokerCommandGateway) -> Self {
         Self { client }
     }
 }
 
-impl ProxyRemotingBackend for LocalRemotingBackend {
-    type Response = EmbeddedDispatchOutcome;
+impl ProxyRemotingRequestHandler for LocalBrokerRemotingAdapter {
+    type Response = EmbeddedDispatchResult;
 
-    fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchOutcome> {
+    fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchResult> {
         Box::pin(async move { self.client.process_remoting(request).await })
+    }
+
+    fn shutdown_until(&self, deadline: ShutdownDeadline) -> ProxyServiceFuture<'_, ()> {
+        Box::pin(self.client.shutdown_until(deadline))
     }
 }
 
 #[derive(Clone)]
 pub struct LocalRouteService {
-    client: LocalBrokerFacadeClient,
+    client: LocalBrokerCommandGateway,
 }
 
 impl LocalRouteService {
-    pub fn new(client: LocalBrokerFacadeClient) -> Self {
+    pub fn new(client: LocalBrokerCommandGateway) -> Self {
         Self { client }
     }
 }
@@ -770,11 +807,11 @@ impl RouteService for LocalRouteService {
 
 #[derive(Clone)]
 pub struct LocalMetadataService {
-    client: LocalBrokerFacadeClient,
+    client: LocalBrokerCommandGateway,
 }
 
 impl LocalMetadataService {
-    pub fn new(client: LocalBrokerFacadeClient) -> Self {
+    pub fn new(client: LocalBrokerCommandGateway) -> Self {
         Self { client }
     }
 }
@@ -813,12 +850,12 @@ impl MetadataService for LocalMetadataService {
 
 #[derive(Clone)]
 pub struct LocalAssignmentService {
-    client: LocalBrokerFacadeClient,
+    client: LocalBrokerCommandGateway,
     strategy_name: String,
 }
 
 impl LocalAssignmentService {
-    pub fn new(client: LocalBrokerFacadeClient, strategy_name: impl Into<String>) -> Self {
+    pub fn new(client: LocalBrokerCommandGateway, strategy_name: impl Into<String>) -> Self {
         Self {
             client,
             strategy_name: strategy_name.into(),
@@ -850,11 +887,11 @@ impl AssignmentService for LocalAssignmentService {
 
 #[derive(Clone)]
 pub struct LocalMessageService {
-    client: LocalBrokerFacadeClient,
+    client: LocalBrokerCommandGateway,
 }
 
 impl LocalMessageService {
-    pub fn new(client: LocalBrokerFacadeClient) -> Self {
+    pub fn new(client: LocalBrokerCommandGateway) -> Self {
         Self { client }
     }
 }
@@ -897,11 +934,11 @@ impl MessageService for LocalMessageService {
 
 #[derive(Clone)]
 pub struct LocalTransactionService {
-    client: LocalBrokerFacadeClient,
+    client: LocalBrokerCommandGateway,
 }
 
 impl LocalTransactionService {
-    pub fn new(client: LocalBrokerFacadeClient) -> Self {
+    pub fn new(client: LocalBrokerCommandGateway) -> Self {
         Self { client }
     }
 }
@@ -931,11 +968,11 @@ impl TransactionService for LocalTransactionService {
 
 #[derive(Clone)]
 pub struct LocalConsumerService {
-    client: LocalBrokerFacadeClient,
+    client: LocalBrokerCommandGateway,
 }
 
 impl LocalConsumerService {
-    pub fn new(client: LocalBrokerFacadeClient) -> Self {
+    pub fn new(client: LocalBrokerCommandGateway) -> Self {
         Self { client }
     }
 }
@@ -1028,17 +1065,17 @@ pub fn local_components_from_config_with_service_context(
     strategy_name: impl Into<String>,
     service_context: &ChildServiceContext,
     telemetry_handle: TelemetryHandle,
-) -> ProxyResult<(LocalServiceManager, LocalBrokerFacadeClient)> {
+) -> ProxyResult<(LocalServiceManager, LocalBrokerCommandGateway)> {
     Ok(local_components(
-        LocalBrokerFacadeClient::new(config, service_context, telemetry_handle)?,
+        LocalBrokerCommandGateway::new(config, service_context, telemetry_handle)?,
         strategy_name,
     ))
 }
 
 fn local_components(
-    client: LocalBrokerFacadeClient,
+    client: LocalBrokerCommandGateway,
     strategy_name: impl Into<String>,
-) -> (LocalServiceManager, LocalBrokerFacadeClient) {
+) -> (LocalServiceManager, LocalBrokerCommandGateway) {
     let backend_client = client.clone();
     let manager = LocalServiceManager::with_services(
         std::sync::Arc::new(LocalRouteService::new(client.clone())),
@@ -1062,7 +1099,7 @@ pub fn local_service_manager_from_config(
 
 async fn run_local_broker_worker(
     config: LocalConfig,
-    mut facade: ProxyBrokerFacade,
+    mut facade: EmbeddedBroker,
     mut receiver: mpsc::Receiver<QueuedLocalBrokerCommand>,
     cancellation: CancellationToken,
     shutdown_context: ChildServiceContext,
@@ -1144,7 +1181,7 @@ async fn run_local_broker_worker(
 }
 
 struct BrokerLocalCommandHandler {
-    facade: Arc<ProxyBrokerFacade>,
+    facade: Arc<EmbeddedBroker>,
     startup_error: Option<rocketmq_error::SharedError>,
 }
 
@@ -1162,7 +1199,7 @@ fn shutdown_deadline(shutdown_context: &ChildServiceContext, config: &LocalConfi
 }
 
 async fn drain_local_commands(
-    facade: &ProxyBrokerFacade,
+    facade: &EmbeddedBroker,
     startup_error: Option<&str>,
     receiver: &mut mpsc::Receiver<QueuedLocalBrokerCommand>,
     max_queue_age: Duration,
@@ -1200,7 +1237,7 @@ async fn drain_local_commands(
 }
 
 async fn handle_local_broker_command(
-    facade: &ProxyBrokerFacade,
+    facade: &EmbeddedBroker,
     startup_error: Option<&rocketmq_error::SharedError>,
     command: LocalBrokerCommand,
     control: RequestControl,
@@ -1318,7 +1355,7 @@ async fn handle_local_broker_command(
     }
 }
 
-async fn shutdown_local_broker(facade: &mut ProxyBrokerFacade, deadline: ShutdownDeadline) {
+async fn shutdown_local_broker(facade: &mut EmbeddedBroker, deadline: ShutdownDeadline) {
     if tokio::time::timeout(deadline.remaining(), facade.shutdown())
         .await
         .is_err()
@@ -1327,16 +1364,16 @@ async fn shutdown_local_broker(facade: &mut ProxyBrokerFacade, deadline: Shutdow
     }
 }
 
-fn embedded_response(outcome: EmbeddedDispatchOutcome) -> ProxyResult<EmbeddedResponse> {
+fn embedded_response(outcome: EmbeddedDispatchResult) -> ProxyResult<EmbeddedResponse> {
     match outcome {
-        EmbeddedDispatchOutcome::Reply(response) => Ok(response.into_embedded_response()),
-        EmbeddedDispatchOutcome::OneWay { .. } => Err(ProxyError::Transport {
+        EmbeddedDispatchResult::Reply(response) => Ok(response.into_embedded_response()),
+        EmbeddedDispatchResult::OneWay { .. } => Err(ProxyError::Transport {
             message: "local Broker returned one-way completion where a response was required".to_owned(),
         }),
-        EmbeddedDispatchOutcome::Deferred { .. } => Err(ProxyError::Transport {
+        EmbeddedDispatchResult::Deferred { .. } => Err(ProxyError::Transport {
             message: "local Broker returned an unresolved deferred completion".to_owned(),
         }),
-        EmbeddedDispatchOutcome::NoReply { .. } => Err(ProxyError::Transport {
+        EmbeddedDispatchResult::NoReply { .. } => Err(ProxyError::Transport {
             message: "local Broker suppressed a required response".to_owned(),
         }),
         _ => Err(ProxyError::Transport {
@@ -1346,7 +1383,7 @@ fn embedded_response(outcome: EmbeddedDispatchOutcome) -> ProxyResult<EmbeddedRe
 }
 
 async fn facade_embedded_response(
-    facade: &ProxyBrokerFacade,
+    facade: &EmbeddedBroker,
     request: RemotingCommand,
     timeout: Duration,
 ) -> ProxyResult<EmbeddedResponse> {
@@ -1354,7 +1391,7 @@ async fn facade_embedded_response(
 }
 
 async fn query_assignment(
-    facade: &ProxyBrokerFacade,
+    facade: &EmbeddedBroker,
     topic: ResourceIdentity,
     group: ResourceIdentity,
     client_id: String,
@@ -1389,7 +1426,7 @@ async fn query_assignment(
 }
 
 async fn send_message(
-    facade: &ProxyBrokerFacade,
+    facade: &EmbeddedBroker,
     request: SendMessageRequest,
     client_id: Option<String>,
     request_id: String,
@@ -1429,7 +1466,7 @@ where
 }
 
 async fn sync_lite_subscription_via_broker(
-    client: &LocalBrokerFacadeClient,
+    client: &LocalBrokerCommandGateway,
     client_id: &str,
     request: &LiteSubscriptionSyncRequest,
 ) -> ProxyResult<()> {
@@ -1466,7 +1503,7 @@ fn compatible_batch_entries(entries: &[SendMessageEntry]) -> bool {
 }
 
 async fn send_compatible_batch(
-    facade: &ProxyBrokerFacade,
+    facade: &EmbeddedBroker,
     broker_name: &CheetahString,
     producer_group: &str,
     entries: Vec<SendMessageEntry>,
@@ -1519,7 +1556,7 @@ fn split_batch_send_result(result: SendResult, entries: &[SendMessageEntry]) -> 
 }
 
 async fn send_message_entry(
-    facade: &ProxyBrokerFacade,
+    facade: &EmbeddedBroker,
     broker_name: &CheetahString,
     producer_group: &str,
     entry: SendMessageEntry,
@@ -1538,7 +1575,7 @@ async fn send_message_entry(
 }
 
 async fn send_message_entry_inner(
-    facade: &ProxyBrokerFacade,
+    facade: &EmbeddedBroker,
     broker_name: &CheetahString,
     producer_group: &str,
     mut entry: SendMessageEntry,
@@ -1552,7 +1589,7 @@ async fn send_message_entry_inner(
 }
 
 async fn recall_message(
-    facade: &ProxyBrokerFacade,
+    facade: &EmbeddedBroker,
     request: RecallMessageRequest,
     client_id: Option<String>,
     request_id: String,
@@ -1583,7 +1620,7 @@ async fn recall_message(
 }
 
 async fn end_transaction(
-    facade: &ProxyBrokerFacade,
+    facade: &EmbeddedBroker,
     request: EndTransactionRequest,
     client_id: Option<String>,
     request_id: String,
@@ -1635,7 +1672,7 @@ async fn end_transaction(
 }
 
 async fn receive_message_via_broker(
-    client: &LocalBrokerFacadeClient,
+    client: &LocalBrokerCommandGateway,
     request: &ReceiveMessageRequest,
     caller_deadline: Option<Duration>,
 ) -> ProxyResult<ReceiveMessagePlan> {
@@ -1655,7 +1692,7 @@ async fn receive_message_via_broker(
 }
 
 async fn pull_message_via_broker(
-    client: &LocalBrokerFacadeClient,
+    client: &LocalBrokerCommandGateway,
     request: &PullMessageRequest,
     caller_deadline: Option<Duration>,
 ) -> ProxyResult<PullMessagePlan> {
@@ -1675,7 +1712,7 @@ fn local_long_poll_timeout(long_polling_timeout: Duration, caller_deadline: Opti
 }
 
 async fn ack_message_via_broker(
-    client: &LocalBrokerFacadeClient,
+    client: &LocalBrokerCommandGateway,
     request: &AckMessageRequest,
 ) -> ProxyResult<Vec<AckMessageResultEntry>> {
     let group_name = request.group.to_string();
@@ -1770,7 +1807,7 @@ fn invalid_receipt_handle_status() -> rocketmq_proxy_core::ProxyPayloadStatus {
 }
 
 async fn ack_message_entry_via_broker(
-    client: &LocalBrokerFacadeClient,
+    client: &LocalBrokerCommandGateway,
     request: &AckMessageRequest,
     entry: &rocketmq_proxy_core::AckMessageEntry,
 ) -> ProxyResult<rocketmq_proxy_core::ProxyPayloadStatus> {
@@ -1809,7 +1846,7 @@ async fn ack_message_entry_via_broker(
 }
 
 async fn forward_message_to_dead_letter_queue_via_broker(
-    client: &LocalBrokerFacadeClient,
+    client: &LocalBrokerCommandGateway,
     request: &ForwardMessageToDeadLetterQueueRequest,
 ) -> ProxyResult<ForwardMessageToDeadLetterQueuePlan> {
     let topic_name = request.lite_topic.clone().unwrap_or_else(|| request.topic.to_string());
@@ -1848,7 +1885,7 @@ async fn forward_message_to_dead_letter_queue_via_broker(
 }
 
 async fn change_invisible_duration_via_broker(
-    client: &LocalBrokerFacadeClient,
+    client: &LocalBrokerCommandGateway,
     request: &ChangeInvisibleDurationRequest,
 ) -> ProxyResult<ChangeInvisibleDurationPlan> {
     let topic_name = request.lite_topic.clone().unwrap_or_else(|| request.topic.to_string());
@@ -1917,7 +1954,7 @@ async fn change_invisible_duration_via_broker(
 }
 
 async fn update_offset_via_broker(
-    client: &LocalBrokerFacadeClient,
+    client: &LocalBrokerCommandGateway,
     request: &UpdateOffsetRequest,
 ) -> ProxyResult<UpdateOffsetPlan> {
     let header = build_update_offset_request_header(client.broker_name(), request);
@@ -1937,7 +1974,7 @@ async fn update_offset_via_broker(
 }
 
 async fn get_offset_via_broker(
-    client: &LocalBrokerFacadeClient,
+    client: &LocalBrokerCommandGateway,
     request: &GetOffsetRequest,
 ) -> ProxyResult<GetOffsetPlan> {
     let header = build_query_consumer_offset_request_header(client.broker_name(), request);
@@ -1962,7 +1999,7 @@ async fn get_offset_via_broker(
 }
 
 async fn query_offset_via_broker(
-    client: &LocalBrokerFacadeClient,
+    client: &LocalBrokerCommandGateway,
     request: &QueryOffsetRequest,
 ) -> ProxyResult<QueryOffsetPlan> {
     let broker_name = CheetahString::from(client.broker_name());
@@ -2333,16 +2370,16 @@ fn process_pop_response(
 }
 
 fn process_pull_response(response: EmbeddedResponse) -> ProxyResult<PullMessagePlan> {
-    enum PullResponseOutcome {
+    enum PullResponseStatus {
         Found,
         NotFound,
         OffsetMoved,
     }
 
-    let outcome = match ResponseCode::from(response.response_code()) {
-        ResponseCode::Success => PullResponseOutcome::Found,
-        ResponseCode::PullNotFound | ResponseCode::PullRetryImmediately => PullResponseOutcome::NotFound,
-        ResponseCode::PullOffsetMoved => PullResponseOutcome::OffsetMoved,
+    let response_status = match ResponseCode::from(response.response_code()) {
+        ResponseCode::Success => PullResponseStatus::Found,
+        ResponseCode::PullNotFound | ResponseCode::PullRetryImmediately => PullResponseStatus::NotFound,
+        ResponseCode::PullOffsetMoved => PullResponseStatus::OffsetMoved,
         _ => return Err(broker_operation_error("pullMessage", &response)),
     };
     let response_header = response
@@ -2352,8 +2389,8 @@ fn process_pull_response(response: EmbeddedResponse) -> ProxyResult<PullMessageP
     let next_offset = response_header.next_begin_offset;
     let min_offset = response_header.min_offset;
     let max_offset = response_header.max_offset;
-    match outcome {
-        PullResponseOutcome::Found => {
+    match response_status {
+        PullResponseStatus::Found => {
             let (_, body) = response.into_parts();
             Ok(PullMessagePlan {
                 status: ProxyStatusMapper::ok_payload(),
@@ -2366,7 +2403,7 @@ fn process_pull_response(response: EmbeddedResponse) -> ProxyResult<PullMessageP
                     .collect(),
             })
         }
-        PullResponseOutcome::NotFound => Ok(PullMessagePlan {
+        PullResponseStatus::NotFound => Ok(PullMessagePlan {
             status: ProxyStatusMapper::from_payload_code(
                 rocketmq_proxy_core::proto::v2::Code::MessageNotFound,
                 "no message available",
@@ -2376,7 +2413,7 @@ fn process_pull_response(response: EmbeddedResponse) -> ProxyResult<PullMessageP
             max_offset,
             messages: Vec::new(),
         }),
-        PullResponseOutcome::OffsetMoved => Ok(PullMessagePlan {
+        PullResponseStatus::OffsetMoved => Ok(PullMessagePlan {
             status: ProxyStatusMapper::from_payload_code(
                 rocketmq_proxy_core::proto::v2::Code::IllegalOffset,
                 "pull offset is illegal",
@@ -2810,7 +2847,7 @@ mod tests {
     use rocketmq_proxy_core::MessageQueueTarget;
     use rocketmq_proxy_core::ProxyError;
     use rocketmq_proxy_core::ProxyMessage;
-    use rocketmq_proxy_core::ProxyRemotingBackend;
+    use rocketmq_proxy_core::ProxyRemotingRequestHandler;
     use rocketmq_proxy_core::ProxyTopicMessageType;
     use rocketmq_proxy_core::PullMessageRequest;
     use rocketmq_proxy_core::ReceiveMessageRequest;
@@ -2819,7 +2856,7 @@ mod tests {
     use rocketmq_proxy_core::SendMessageEntry;
     use rocketmq_proxy_core::TransactionResolution;
     use rocketmq_runtime::ShutdownDeadline;
-    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::EmbeddedResponse;
     use rocketmq_transport::api::RemotingResponse;
 
@@ -2842,8 +2879,8 @@ mod tests {
     use super::split_batch_send_result;
     use super::transaction_resolution_flag;
     use super::validate_local_queue_config;
-    use super::LocalBrokerFacadeClient;
-    use super::LocalRemotingBackend;
+    use super::LocalBrokerCommandGateway;
+    use super::LocalBrokerRemotingAdapter;
     use super::MessageIdDecodeError;
     use crate::LocalConfig;
 
@@ -3287,7 +3324,7 @@ mod tests {
             store_root_dir: store.path().to_string_lossy().into_owned(),
             ..LocalConfig::default()
         };
-        let client = LocalBrokerFacadeClient::new(config, &service, TelemetryHandle::noop())
+        let client = LocalBrokerCommandGateway::new(config, &service, TelemetryHandle::noop())
             .expect("managed local client builds");
         assert_eq!(client.sender.max_capacity(), 7);
 
@@ -3302,6 +3339,10 @@ mod tests {
             }
         ));
 
+        client
+            .shutdown_until(ShutdownDeadline::after(Duration::from_secs(5)))
+            .await
+            .expect("embedded Broker should stop before its owner scope closes");
         let report = service.task_group().shutdown(Duration::from_secs(5)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
     }
@@ -3309,13 +3350,14 @@ mod tests {
     #[test]
     fn local_command_queue_rejects_count_overload_immediately() {
         let (sender, _receiver) = tokio::sync::mpsc::channel(1);
-        let client = LocalBrokerFacadeClient {
+        let client = LocalBrokerCommandGateway {
             sender,
             budget: test_budget(1, 4096),
             rejected: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             broker_name: "broker-a".to_owned(),
             context_deadline: None,
             cancellation: tokio_util::sync::CancellationToken::new(),
+            worker_shutdown: None,
         };
         let _first_reply = client
             .enqueue(|reply| super::LocalBrokerCommand::QueryRoute {
@@ -3341,15 +3383,16 @@ mod tests {
     #[tokio::test]
     async fn raw_command_backend_enqueues_only_one_dispatch() {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-        let client = LocalBrokerFacadeClient {
+        let client = LocalBrokerCommandGateway {
             sender,
             budget: test_budget(1, 4096),
             rejected: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             broker_name: "broker-a".to_owned(),
             context_deadline: None,
             cancellation: tokio_util::sync::CancellationToken::new(),
+            worker_shutdown: None,
         };
-        let backend = LocalRemotingBackend::new(client);
+        let backend = LocalBrokerRemotingAdapter::new(client);
         let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig).set_opaque(9_852);
 
         let call = tokio::spawn(async move { backend.process(request).await });
@@ -3371,7 +3414,7 @@ mod tests {
                         .set_opaque(request.opaque())
                         .mark_response_type(),
                 )
-                .map(EmbeddedDispatchOutcome::Reply)
+                .map(EmbeddedDispatchResult::Reply)
                 .expect("valid embedded response");
                 assert!(
                     reply.send(Ok(response)).is_ok(),
@@ -3382,7 +3425,7 @@ mod tests {
         }
 
         let response = call.await.expect("backend task joins").expect("backend succeeds");
-        let EmbeddedDispatchOutcome::Reply(response) = response else {
+        let EmbeddedDispatchResult::Reply(response) = response else {
             panic!("backend must return a reply plan")
         };
         assert_eq!(ResponseCode::from(response.response_code()), ResponseCode::Success);
@@ -3391,13 +3434,14 @@ mod tests {
     #[tokio::test]
     async fn client_api_preserves_timeout_and_identity() {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-        let client = LocalBrokerFacadeClient {
+        let client = LocalBrokerCommandGateway {
             sender,
             budget: test_budget(1, 4096),
             rejected: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             broker_name: "broker-a".to_owned(),
             context_deadline: None,
             cancellation: tokio_util::sync::CancellationToken::new(),
+            worker_shutdown: None,
         };
         let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig).set_opaque(9_857);
 
@@ -3421,7 +3465,7 @@ mod tests {
                         .set_opaque(request.opaque())
                         .mark_response_type(),
                 )
-                .map(EmbeddedDispatchOutcome::Reply)
+                .map(EmbeddedDispatchResult::Reply)
                 .expect("valid embedded response");
                 assert!(
                     reply.send(Ok(response)).is_ok(),
@@ -3432,7 +3476,7 @@ mod tests {
         }
 
         let response = call.await.expect("client task joins").expect("client call succeeds");
-        let EmbeddedDispatchOutcome::Reply(response) = response else {
+        let EmbeddedDispatchResult::Reply(response) = response else {
             panic!("client must return a reply plan")
         };
         assert_eq!(ResponseCode::from(response.response_code()), ResponseCode::Success);
@@ -3484,7 +3528,7 @@ mod tests {
             ..LocalConfig::default()
         };
 
-        match LocalBrokerFacadeClient::new(config, &service, TelemetryHandle::noop()) {
+        match LocalBrokerCommandGateway::new(config, &service, TelemetryHandle::noop()) {
             Err(error) if error.descriptor() == &rocketmq_error::CORE_CONFIGURATION_INVALID => {}
             Err(error) => panic!("unexpected error: {error}"),
             Ok(_) => panic!("invalid embedded broker configuration must be rejected"),
@@ -3503,7 +3547,7 @@ mod tests {
             store_root_dir: store.path().to_string_lossy().into_owned(),
             ..LocalConfig::default()
         };
-        let client = LocalBrokerFacadeClient::new(config, &service, TelemetryHandle::noop())
+        let client = LocalBrokerCommandGateway::new(config, &service, TelemetryHandle::noop())
             .expect("managed local client builds");
         assert_eq!(service.task_group().task_count(), 0);
         assert_eq!(service.task_group().component_count(), 1);
@@ -3513,9 +3557,12 @@ mod tests {
             .expect("embedded startup must remain bounded")
             .expect("started embedded Broker must have a writable Store");
         let deadline = ShutdownDeadline::after(Duration::from_secs(5));
+        client
+            .shutdown_until(deadline)
+            .await
+            .expect("embedded Broker should stop before its owner scope closes");
         let report = service.task_group().shutdown_until(deadline).await;
         assert!(report.is_healthy(), "{}", report.to_json());
-        assert!(report.to_json().contains("command-lanes"), "{}", report.to_json());
         assert_eq!(service.task_group().task_count(), 0);
         assert!(client.readiness_check().await.is_err());
     }
@@ -3523,13 +3570,14 @@ mod tests {
     async fn caller_drop_cancels_envelope_but_keeps_queue_budget() {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
         let budget = test_budget(1, 4096);
-        let client = LocalBrokerFacadeClient {
+        let client = LocalBrokerCommandGateway {
             sender,
             budget: budget.clone(),
             rejected: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             broker_name: "broker-a".to_owned(),
             context_deadline: None,
             cancellation: tokio_util::sync::CancellationToken::new(),
+            worker_shutdown: None,
         };
         let mut call = Box::pin(client.query_route(ResourceIdentity::new("", "topic")));
         tokio::select! { result = &mut call => panic!("must wait for worker: {result:?}"), () = tokio::task::yield_now() => {} }
@@ -3548,13 +3596,14 @@ mod tests {
     #[tokio::test]
     async fn typed_send_rejects_expired_deadline_before_admission() {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-        let client = LocalBrokerFacadeClient {
+        let client = LocalBrokerCommandGateway {
             sender,
             budget: test_budget(1, 4096),
             rejected: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             broker_name: "broker-a".to_owned(),
             context_deadline: Some(Instant::now()),
             cancellation: tokio_util::sync::CancellationToken::new(),
+            worker_shutdown: None,
         };
         let error = client
             .send_message(
@@ -3612,7 +3661,7 @@ mod tests {
                             ResponseCode::Success,
                         ))
                         .unwrap();
-                        let _ = reply.send(Ok(EmbeddedDispatchOutcome::Reply(response)));
+                        let _ = reply.send(Ok(EmbeddedDispatchResult::Reply(response)));
                     }
                     LocalBrokerCommand::SendMessage { reply, .. } => {
                         self.release_data.cancelled().await;
@@ -3632,13 +3681,14 @@ mod tests {
             };
             let budget = local_command_budget(&config).unwrap();
             let (sender, receiver) = mpsc::channel(config.command_queue_capacity);
-            let client = LocalBrokerFacadeClient {
+            let client = LocalBrokerCommandGateway {
                 sender,
                 budget: budget.clone(),
                 rejected: Arc::new(AtomicU64::new(0)),
                 broker_name: "test".into(),
                 context_deadline: None,
                 cancellation: CancellationToken::new(),
+                worker_shutdown: None,
             };
             let data_bytes = config.command_queue_max_bytes - local_control_reserve_bytes(&config).unwrap();
             let count = if bytes_full {
@@ -3716,7 +3766,7 @@ mod tests {
                         .process_remoting(RemotingCommand::create_remoting_command(RequestCode::AckMessage))
                         .await
                         .unwrap(),
-                    EmbeddedDispatchOutcome::Reply(_)
+                    EmbeddedDispatchResult::Reply(_)
                 ));
                 assert_eq!(
                     budget.snapshot().current_count,

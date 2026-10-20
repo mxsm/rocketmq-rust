@@ -70,7 +70,7 @@ fn readiness_response(status: HealthStatus) -> (StatusCode, Json<ApiResponse<Min
 mod tests {
     use super::readiness_response;
     use crate::model::HealthStatus;
-    use crate::model::StorageBackend;
+    use crate::model::StorageEngine;
     use crate::persistence::StorageHealth;
     use crate::persistence::StorageMode;
     use crate::persistence::StorageStatus;
@@ -81,7 +81,7 @@ mod tests {
         let (status, body) = readiness_response(HealthStatus {
             status: "DOWN".to_string(),
             storage: Some(StorageHealth {
-                backend: StorageBackend::MySql,
+                backend: StorageEngine::MySql,
                 mode: StorageMode::MultiNode,
                 status: StorageStatus::Unavailable,
                 schema_version: None,

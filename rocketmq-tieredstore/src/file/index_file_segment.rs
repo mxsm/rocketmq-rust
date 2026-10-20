@@ -91,7 +91,7 @@ where
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AppendOutcome {
+enum IndexSegmentAppendResult {
     Appended,
     Full,
 }
@@ -207,8 +207,8 @@ where
             };
             let path = self.segment_path(timestamp);
             match self.try_append_to_segment(&path, timestamp, entry).await? {
-                AppendOutcome::Appended => return Ok(()),
-                AppendOutcome::Full => {
+                IndexSegmentAppendResult::Appended => return Ok(()),
+                IndexSegmentAppendResult::Full => {
                     let next_timestamp = entry.store_timestamp.max(timestamp.saturating_add(1)).max(0);
                     segment_timestamps.push(next_timestamp);
                     self.persist_manifest(&segment_timestamps).await?;
@@ -448,11 +448,11 @@ where
         path: &str,
         begin_timestamp: i64,
         entry: &TieredIndexEntry,
-    ) -> Result<AppendOutcome, StoreError> {
+    ) -> Result<IndexSegmentAppendResult, StoreError> {
         self.ensure_segment_initialized(path, begin_timestamp).await?;
         let header = self.read_header(StoreOperation::AppendDerived, path).await?;
         if header.item_count as usize >= header.max_index_items as usize {
-            return Ok(AppendOutcome::Full);
+            return Ok(IndexSegmentAppendResult::Full);
         }
 
         let hash_code = java_positive_hash(&format!("{}#{}", entry.topic, entry.key));
@@ -497,7 +497,7 @@ where
             max_index_items: header.max_index_items,
         };
         self.write_header(path, &updated_header).await?;
-        Ok(AppendOutcome::Appended)
+        Ok(IndexSegmentAppendResult::Appended)
     }
 
     async fn ensure_segment_initialized(&self, path: &str, begin_timestamp: i64) -> Result<(), StoreError> {

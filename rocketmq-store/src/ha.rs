@@ -150,7 +150,7 @@ impl From<HAError> for rocketmq_store_api::StoreError {
             .in_component(rocketmq_store_api::StoreComponent::HighAvailability)
             .with_source(error),
             error => rocketmq_store_api::StoreError::new(
-                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                &rocketmq_error::STORAGE_UNAVAILABLE,
                 rocketmq_store_api::StoreOperation::Start,
             )
             .in_component(rocketmq_store_api::StoreComponent::HighAvailability)
@@ -165,11 +165,14 @@ mod failure_mapping_tests {
 
     use rocketmq_error::ViewValueRef;
     use rocketmq_runtime::RuntimeError;
+    use rocketmq_runtime::RuntimeOperation;
     use rocketmq_store_api::StoreComponent;
     use rocketmq_store_api::StoreError;
     use rocketmq_store_api::StoreOperation;
 
     use super::HAError;
+
+    const HA_RUNTIME: RuntimeOperation = RuntimeOperation::external("ha-runtime");
 
     #[test]
     fn connection_start_failure_maps_once_with_typed_source() {
@@ -208,10 +211,7 @@ mod failure_mapping_tests {
 
     #[test]
     fn runtime_failure_maps_once_with_its_typed_cause() {
-        let error: StoreError = HAError::Runtime(RuntimeError::context_unavailable(
-            rocketmq_runtime::RuntimeOperation::HaRuntime,
-        ))
-        .into();
+        let error: StoreError = HAError::Runtime(RuntimeError::context_unavailable(HA_RUNTIME)).into();
 
         assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);
         assert_eq!(error.operation(), StoreOperation::Replicate);
@@ -230,7 +230,7 @@ mod failure_mapping_tests {
     #[test]
     fn startup_wire_budget_and_boxed_operation_follow_the_owner_table() {
         let startup: StoreError = HAError::StartIo(std::io::Error::other("bind failed")).into();
-        assert_eq!(startup.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+        assert_eq!(startup.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
         assert_eq!(startup.operation(), StoreOperation::Start);
         assert_eq!(startup.component(), StoreComponent::HighAvailability);
         let startup_source = startup
@@ -268,7 +268,7 @@ mod failure_mapping_tests {
 
         let operation: StoreError =
             HAError::operation("start sensitive operation", std::io::Error::other("operation failed")).into();
-        assert_eq!(operation.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+        assert_eq!(operation.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
         assert_eq!(operation.operation(), StoreOperation::Start);
         assert_eq!(operation.component(), StoreComponent::HighAvailability);
         let operation_source = operation
@@ -292,9 +292,7 @@ mod failure_mapping_tests {
             HAError::Io(std::io::Error::other(SENTINEL)),
             HAError::StartIo(std::io::Error::other(SENTINEL)),
             HAError::Store(nested_store),
-            HAError::Runtime(RuntimeError::configuration(
-                rocketmq_runtime::RuntimeOperation::HaRuntime,
-            )),
+            HAError::Runtime(RuntimeError::configuration(HA_RUNTIME)),
             HAError::operation(SENTINEL, std::io::Error::other(SENTINEL)),
             HAError::budget(std::io::Error::other(SENTINEL)),
             HAError::invalid_state(SENTINEL),
@@ -340,14 +338,79 @@ pub(crate) mod test_support {
     use std::path::Path;
     use std::sync::Arc;
 
+    use bytes::BufMut;
+    use bytes::BytesMut;
+    use rocketmq_model::common::message::MessageVersion;
+
+    use crate::base::backend_ops::BackendOps;
+    use crate::config::flush_disk_type::FlushDiskType;
     use crate::config::message_store_config::MessageStoreConfig;
     use crate::config::store_runtime_config::StoreRuntimeConfig;
+    use crate::log_file::commit_log::MESSAGE_MAGIC_CODE;
+    use crate::message_encoder::message_ext_encoder::MessageExtEncoder;
     use crate::message_store::local_file_message_store::LocalFileMessageStore;
+    use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
+    use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
     use rocketmq_model::common::config::TopicConfig;
 
+    /// Appends CommitLog records the way a replica does: raw bytes, with no dispatch and no queue
+    /// offset assignment. Each entry is `(topic, queue_id, queue_offset)`.
+    pub(crate) async fn append_replicated_messages(store: &mut LocalFileMessageStore, messages: &[(&str, i32, i64)]) {
+        for (topic, queue_id, queue_offset) in messages {
+            let body = b"body";
+            let total_size =
+                MessageExtEncoder::cal_msg_length(MessageVersion::V1, 0, body.len() as i32, topic.len() as i32, 0);
+            let mut record = BytesMut::with_capacity(total_size as usize);
+            record.put_i32(total_size);
+            record.put_i32(MESSAGE_MAGIC_CODE);
+            record.put_i32(0); // body CRC
+            record.put_i32(*queue_id);
+            record.put_i32(0); // flag
+            record.put_i64(*queue_offset);
+            record.put_i64(0); // physical offset
+            record.put_i32(0); // system flag
+            record.put_i64(0); // born timestamp
+            record.put_bytes(0, 8); // born host
+            record.put_i64(0); // store timestamp
+            record.put_bytes(0, 8); // store host
+            record.put_i32(0); // reconsume times
+            record.put_i64(0); // prepared transaction offset
+            record.put_i32(body.len() as i32);
+            record.put_slice(body);
+            record.put_u8(topic.len() as u8);
+            record.put_slice(topic.as_bytes());
+            record.put_i16(0); // properties length
+            let start_offset = store.get_max_phy_offset();
+            store
+                .get_commit_log_mut()
+                .append_data(start_offset, &record, 0, total_size)
+                .await
+                .expect("append replicated message");
+        }
+    }
+
+    /// Returns the next queue offset the write path would assign for `topic` and `queue_id`.
+    pub(crate) fn next_queue_offset(store: &LocalFileMessageStore, topic: &str, queue_id: i32) -> Option<i64> {
+        store
+            .get_queue_store()
+            .downcast_ref::<ConsumeQueueStore>()
+            .expect("local consume queue store")
+            .get_topic_queue_table()
+            .get(&CheetahString::from_string(format!("{topic}-{queue_id}")))
+            .copied()
+    }
+
     pub(crate) fn new_test_message_store(root: &Path, enable_controller_mode: bool) -> LocalFileMessageStore {
+        new_test_message_store_with_flush(root, enable_controller_mode, FlushDiskType::default())
+    }
+
+    pub(crate) fn new_test_message_store_with_flush(
+        root: &Path,
+        enable_controller_mode: bool,
+        flush_disk_type: FlushDiskType,
+    ) -> LocalFileMessageStore {
         std::fs::create_dir_all(root).expect("create temp root dir");
         let broker_config = StoreRuntimeConfig {
             duplication_enable: true,
@@ -357,6 +420,7 @@ pub(crate) mod test_support {
         let message_store_config = MessageStoreConfig {
             duplication_enable: true,
             enable_controller_mode,
+            flush_disk_type,
             ha_max_time_slave_not_catchup: 1000,
             ha_listen_port: 0,
             store_path_root_dir: root.to_string_lossy().into_owned().into(),

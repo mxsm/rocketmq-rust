@@ -8,7 +8,8 @@ RocketMQ NameServer implementation for [RocketMQ-Rust](../README.md).
 RocketMQ brokers, clients, and admin tools. It tracks broker liveness, topic
 route metadata, broker membership, write permissions, KV configuration,
 runtime configuration, and optional embedded controller integration. The
-canonical route manager is built around concurrent tables and segmented locks.
+canonical route manager is built around concurrent tables and a serialized
+mutation coordinator.
 
 This crate can run as the `rocketmq-namesrv-rust` binary or be embedded through
 the `bootstrap::Builder` API for tests and service composition.
@@ -29,7 +30,7 @@ the `bootstrap::Builder` API for tests and service composition.
 
 ## Architecture
 
-![rocketmq-namesrv architecture](../resources/namesrv-architecture.svg)
+![rocketmq-namesrv architecture](../resources/rocketmq-namesrv-architecture.svg)
 
 `KVConfigManager` persists namespace config, `BrokerHousekeepingService` reacts
 to channel events, scheduled tasks scan inactive brokers, and optional
@@ -155,6 +156,34 @@ different purpose:
 The configuration model accepts Java-style camelCase keys and Rust-style
 field names where serde aliases are defined.
 
+### Startup-only Tokio runtime overrides
+
+The file selected with `--configFile` may contain an optional `[runtime]` section:
+
+```toml
+[runtime]
+workerThreads = 2
+maxBlockingThreads = 8
+```
+
+| Key | Default | Valid values |
+| --- | --- | --- |
+| `workerThreads` (`worker_threads`) | Available CPU parallelism, falling back to 4 | Positive integer |
+| `maxBlockingThreads` (`max_blocking_threads`) | Available CPU parallelism multiplied by 4 and clamped to 3..=512, falling back to 16 | Integer from 3 through 512 |
+
+Without a config file, without this section, or with an omitted key, the corresponding
+default is retained. Overriding only `workerThreads` does not recompute the default
+blocking limit. Unknown keys in `[runtime]` and duplicate camelCase/snake_case aliases
+fail at startup, as do malformed TOML and invalid thread counts, before runtime construction.
+
+These settings control the process runtime, independently of NameServer request pools
+such as `clientRequestThreadPoolNums`. The blocking limit controls the managed lanes;
+the Tokio blocking pool retains its additional runtime headroom. The thread name remains
+`rocketmq-namesrv`, and both I/O and time drivers remain enabled. Runtime overrides are
+startup-only and are not accepted by `UpdateNamesrvConfig`.
+
+### NameServer settings
+
 | Key | Default | Purpose |
 | --- | ------- | ------- |
 | `rocketmqHome` | `ROCKETMQ_HOME` / `ROCKETMQ_HOME_PROPERTY` | RocketMQ home directory used by the runtime. |
@@ -224,12 +253,12 @@ shutdown future.
 | [`src/processor/default_request_processor.rs`](src/processor/default_request_processor.rs) | Broker, topic, KV, permission, and runtime config request handling. |
 | [`src/processor/client_request_processor.rs`](src/processor/client_request_processor.rs) | Client topic-route lookup path. |
 | [`src/processor/cluster_test_request_processor.rs`](src/processor/cluster_test_request_processor.rs) | Cluster-test route lookup with product environment fallback. |
-| [`src/route`](src/route) | Route managers, segmented locks, route table implementations, unregister service, and zone route hook. |
+| [`src/route`](src/route) | Route managers, route table implementations, unregister service, and zone route hook. |
 | [`src/route/tables`](src/route/tables) | Concurrent tables for topic queues, brokers, clusters, live brokers, filter servers, and topic queue mapping. |
 | [`src/kvconfig`](src/kvconfig) | KV config manager and persistence. |
 | [`../rocketmq-observability/src/metrics/namesrv.rs`](../rocketmq-observability/src/metrics/namesrv.rs) | Low-cardinality NameServer metrics shared by OpenTelemetry and Prometheus exporters. |
 | [`tests`](tests) | Network-level and route-table integration coverage. |
-| [`benches`](benches) | Route manager, concurrency, lock, and topic-table hot-path benchmarks. |
+| [`benches`](benches) | Route manager, concurrency, and topic-table hot-path benchmarks. |
 
 ## Feature Flags
 
@@ -272,7 +301,6 @@ Run focused benchmarks from the workspace root:
 ```bash
 cargo bench -p rocketmq-namesrv --bench route_manager_benchmark
 cargo bench -p rocketmq-namesrv --bench route_concurrency_bench
-cargo bench -p rocketmq-namesrv --bench async_segmented_lock_bench
 cargo bench -p rocketmq-namesrv --bench topic_table_hot_path_bench
 ```
 

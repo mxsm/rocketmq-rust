@@ -2,12 +2,19 @@
 
 `rocketmq-mcp-control` is an isolated, deny-by-default server for supervised RocketMQ mutations. It is a
 standalone Cargo project and is not part of the root workspace. The reviewed `write-tools` surface contains
-exactly five typed tools: Topic and Consumer Group upsert, consumer offset reset, Broker configuration patch,
-and consumer request mode. The default build contains neither Admin Core nor production mutation tools.
+exactly nine typed mutation tools: Topic and Consumer Group upsert, consumer offset reset, Broker configuration
+patch, consumer request mode, beginning and cancelling a Proxy drain, and setting and restoring a temporary
+Broker log level. One read-only tool, `rocketmq_get_mutation_result`, reports how a caller's own mutation calls
+ended. The default build contains neither Admin Core nor production mutation tools.
+
+The `rocketmq-mcp` entrypoint can launch this same service with `ROCKETMQ_MCP_MODE=control` and its
+`control` feature. Its `write-tools` feature forwards this crate's reviewed mutation feature. The standalone
+binary remains available; both entrypoints use the same runtime-owning startup and security policy.
 
 Read the [reviewed mutation Tool Reference](docs/tool-reference.md) before operating the server. The
-[operations runbook](docs/operations-runbook.md) covers rollout, rollback, audit, and emergency stop-write
-handling; the [real-cluster E2E runbook](docs/e2e-runbook.md) covers the opt-in local harness and its cleanup.
+[operations runbook](docs/operations-runbook.md) covers rollout, rollback, logs and metrics, audit, and emergency
+stop-write handling; the [real-cluster E2E runbook](docs/e2e-runbook.md) covers the opt-in local harness and its
+cleanup.
 
 ## Security boundary
 
@@ -18,11 +25,26 @@ handling; the [real-cluster E2E runbook](docs/e2e-runbook.md) covers the opt-in 
 - JWKS generations have a bounded five-minute lifetime. Rotation and revocation replace the whole generation;
   unknown keys use a bounded negative cache and refresh cooldown. DNS answers are rechecked at connection time,
   and any private, loopback, link-local, or reserved answer rejects the connection.
+- The network defaults are strict: a specific bind address, a public canonical origin, and an identity provider
+  with a public name and a public JWKS address. A deployment inside a private network replaces them one by one
+  with `server.allow_wildcard_bind`, `server.allow_internal_base_url`, and `oauth.allow_private_network`. Each is
+  off unless set to `true`, and the server warns at startup about every one that is on. The
+  [operations runbook](docs/operations-runbook.md#deployment-inside-a-private-network) states what each one
+  accepts and what the operator takes on.
+- A JWKS entry is used when it is an RSA key of 2048 to 8192 bits with exponent 65537, its `use` is absent or
+  `sig`, its `key_ops` is absent or lists `verify`, its `alg` is absent or `RS256`, and its `kid` is 1 to 128
+  ASCII letters, digits, or `._:-`. Other entries, such as encryption keys, and members such as `x5c` and `x5t`
+  are ignored. The service does not start when the document has no usable entry or repeats a `kid` among them.
+  Retrieval, caching, and key selection are shared with the query MCP through
+  [`rocketmq-mcp-auth`](../rocketmq-mcp-auth/README.md).
 - The listener accepts at most 1 MiB per request and applies a 30-second request timeout.
 - Principal scope, closed cluster claim/allowlist, closed operation claim/allowlist, runtime enablement, and
   compile/catalog availability are evaluated in that order before common argument schema parsing or
   adapter/session creation.
 - The project exposes no CLI, shell, subprocess, free-form RPC, arbitrary Admin command, or stdout protocol path.
+- The server answers MCP protocol version `2025-11-25` and no other, the same set as `rocketmq-mcp`. `initialize`
+  declines another version, `server/discover` advertises this one alone, and an authenticated request whose
+  `MCP-Protocol-Version` header names another version gets `request_rejected`.
 
 The fixed capability Resource is `rocketmq-control://capabilities`. Its independent compile-time,
 runtime-enabled, and registered-operation fields make availability explicit. `mutation_supported` becomes true
@@ -31,17 +53,20 @@ operation is registered. Resource templates and prompts remain empty.
 
 ## Feature boundary
 
-| Build | Admin dependency | Runtime policy | `tools/list` | `mutation_supported` |
+| Build | Admin dependency | Runtime policy | Mutation tools listed | `mutation_supported` |
 |---|---|---:|---:|---:|
 | default | none | off or on | 0 | false |
 | `write-tools` | mutation-only adapter | off | 0 | false |
 | `write-tools` | mutation-only adapter | on, empty allowlist | 0 | false |
 | `write-tools` | mutation-only adapter | on, one reviewed operation | 1 | true |
-| `write-tools` | mutation-only adapter | on, all reviewed operations | 5 | true |
+| `write-tools` | mutation-only adapter | on, all reviewed operations | 9 | true |
 
 The optional feature enables only `rocketmq-admin-core/mutation-client-adapter`, whose client dependency enables
 only `admin-mutation`. It does not enable read or full Admin adapters. Delete, skip, resend, CLI, shell, and
 free-form RPC remain outside this delivery.
+
+A separate `otlp` feature adds an OTLP gRPC metrics exporter and no Admin dependency. Every build logs to
+stderr; see [Logs and metrics](docs/operations-runbook.md#logs-and-metrics).
 
 ## Configuration
 
@@ -49,20 +74,28 @@ Set `ROCKETMQ_MCP_CONTROL_CONFIG` to a TOML file based on
 [`conf/mcp-control.example.toml`](conf/mcp-control.example.toml). All configuration structs reject unknown
 fields. `mutations_enabled` defaults to `false` and `dry_run` defaults to `true`. Issuer, JWKS, and public server
 URLs must use canonical public HTTPS hostnames. The listener rejects wildcard binds. Configuration is loaded at
-startup; changing `mutations_enabled` or either allowlist, including an emergency disable, requires a process
-restart.
+startup; changing `mutations_enabled` or either allowlist requires a process restart. The one control that
+takes effect without a restart is the emergency stop: while the file that `mutations.emergency_stop_file` names
+exists, every mutation call is refused with `mutation_disabled`. It can only tighten the configured policy. A
+rejected configuration is logged with its stage, position, and key or field name, never with a value.
 
 The private cluster registry maps a logical alias to a NameServer endpoint, TLS policy, and optional environment
 variable names for credentials. Inline credentials are rejected. Registry values and resolved credentials have
 redacted debug behavior and never enter MCP responses or audit records. Every server-allowed cluster for a
 registered operation must have a registry entry.
 
+A cluster entry may also list Proxies under `[[clusters.proxies]]`, each with a `name` and one remoting
+`endpoint`. The name is the only way a caller can refer to a Proxy: it uses the grammar of a cluster alias, is
+unique within its cluster, and is the one part of the entry that reaches a response or an audit record. A drain
+call that names an alias the cluster does not list is refused before it is recorded.
+
 [`conf/permissions.example.toml`](conf/permissions.example.toml) documents the closed operation and cluster
 claim vocabulary for an authorization server. It is an identity-provider example, not a local authorization
 bypass.
 
-The closed policy vocabulary remains `topic_upsert`, `consumer_group_upsert`,
-`consumer_offset_reset`, `broker_config_patch`, and `consumer_request_mode`. Common request arguments reject
+The closed policy vocabulary is `topic_upsert`, `consumer_group_upsert`, `consumer_offset_reset`,
+`broker_config_patch`, `consumer_request_mode`, `proxy_drain_begin`, `proxy_drain_cancel`,
+`broker_log_filter_set`, and `broker_log_filter_restore`. Common request arguments reject
 unknown fields. Omitted `dry_run` uses the configured default and omitted `confirm` is false. Dry-run requests may
 omit `reason` and `request_key`; execution requires `confirm = true` and a trimmed 5–256 byte safe reason. A
 reason contains only ASCII letters/digits, ordinary space, and `._,#-`. That exact punctuation set supports
@@ -78,16 +111,17 @@ allowed. Safe examples
 include `CHG-1234 increase queue count` and `ticket INC_42, increase queue count`. A request key is optional and,
 when present, is a bounded safe identifier.
 
-The upsert tools accept 1–64 unique logical broker names. All five tools validate the complete selected cluster
+The upsert tools accept 1–64 unique logical broker names. All nine tools validate the complete selected cluster
 membership, embedded broker identity, master presence, and endpoint uniqueness before reading target state.
-Offset and request-mode operations use every validated master; Broker patch uses exactly one named master.
+Offset and request-mode operations use every validated master; Broker patch and the Broker log filter use
+exactly one named master, and a Proxy drain uses exactly one configured Proxy.
 Requests use closed typed fields and bounds. The Consumer Group validator reuses Admin Core's
 single canonical protected-group classifier, including RocketMQ defaults, tools/scheduler/filter/monitor groups,
 ONS groups, transaction/system prefixes, and the heartbeat syncer group. System names, addresses, inline
 secrets, and unknown fields are rejected before audit or session creation; Admin constructors repeat the same
 check as defense in depth.
 
-Each result uses `rocketmq-mcp-mutation.v1`, returns one of the five closed operations, and has an
+Each result uses `rocketmq-mcp-mutation.v1`, returns one of the nine closed operations, and has an
 operation-specific logical top-level `target`.
 Top-level `before`, `requested`, and post-read `after` preserve the complete aggregate state; broker-sorted
 `targets` retain per-target persistence, verification, and failure evidence rather than replacing that aggregate
@@ -99,6 +133,32 @@ failed outcomes set MCP `isError=true` while retaining the structured result. Th
 Responses never include addresses, credential
 references, OAuth subjects, reasons, request keys, or raw backend errors.
 
+A dry run also reports `plan_digest`, a SHA-256 of what was asked, the state that was read, and what each
+target would get. An execution that passes it back as `expected_plan_digest` writes only if the plan it reads
+is still that one; otherwise it writes nothing and ends with `precondition_conflict`. The argument is optional
+unless the server sets `mutations.require_plan_digest = true`, which refuses an execution without it as an
+invalid argument. The [tool reference](docs/tool-reference.md#executing-a-reviewed-plan) states what a plan
+covers for each tool.
+
+Every result also carries `invocation_id`, the sequence number of the call's `started` audit record. It belongs
+to the call, not to the result: a result replayed for a repeated request key is returned under the invocation of
+the call that asked for it. `rocketmq_get_mutation_result` takes that identifier, or the `request_key` that was
+sent, and answers `finished` with the status, `in_progress`, `interrupted` when the server stopped before the
+outcome was recorded, or `not_found`. It serves a response that was lost or a call that timed out. A call that
+ends in an error envelope has no identifier to quote, so send a `request_key` with every execute call you may
+need to look up. The lookup answers only for the caller's own calls on the authorized cluster, from a bounded
+memory of the 2,048 newest invocations that is rebuilt from the active audit segment at startup. It needs the
+`rocketmq:write` scope and the cluster but no operation, stays available when `mutations_enabled = false`,
+opens no Admin session, and writes no audit record. Lookups have a per-principal budget of their own, sized by
+`limits.dry_runs_per_minute`.
+
+A Proxy drain and a temporary Broker log level are operation-bound: the caller chooses an `operation_id` when
+it starts the state, and only a call with the same identifier ends it. The server reads the target before every
+write and never replaces a state that another identifier holds; it reports that as a conflict, and shows the
+holder only as `none`, `this_operation`, or `other_operation`. A log level override covers one
+`rocketmq_broker::` logger at `INFO` or `DEBUG` for 60 to 900 seconds, after which the Broker ends it by itself.
+An `operation_id` is never returned, logged, or stored; the audit record covers it with the request digest.
+
 Targeted Topic upserts never update or delete the NameServer-wide order-Topic KV. Before any broker state read,
 the server reads and strictly parses the complete KV: selected ordered entries must already equal the requested
 queue count, while selected unordered entries must already be absent. The sealed value is checked again before
@@ -106,13 +166,15 @@ broker CAS and after it. A pre-change is a zero-broker-write conflict; a post-ch
 truth and returns `order_reconciliation_failed` as a partial result. Unselected and other-cluster KV entries are
 never rewritten.
 
-Optional request keys use an in-process 10-minute, 4096-entry singleflight/result cache scoped by principal,
-operation, cluster, sorted target set, and canonical payload. Matching followers and cache hits open no Admin
-session and perform no RocketMQ RPC, but every invocation writes its own started/terminal audit pair. Reusing a
-key with a different payload is rejected. If all 4096 slots are in flight, a new explicit key is rejected before
-audit or session creation; an unkeyed request may still run uncached. A follower's cancellation or timeout ends
-only that invocation and its audit pair—the leader continues and its result remains cacheable. The cache makes no
-cross-restart guarantee.
+Optional request keys of execute calls use an in-process 10-minute, 4096-entry singleflight/result cache scoped
+by principal, operation, cluster, sorted target set, and canonical payload. Matching followers and cache hits open
+no Admin session and perform no RocketMQ RPC, but every invocation writes its own started/terminal audit pair.
+Only a settled outcome is kept: applied, partial, or conflict. After a failure, a timeout, a cancellation, or an
+unverified write, the same key runs preflight again instead of repeating the error, and a dry run is never keyed.
+Reusing a key with a different payload is rejected. If all 4096 slots are in flight, a new explicit key is
+rejected before audit or session creation; an unkeyed request may still run uncached. A follower's cancellation
+or timeout ends only that invocation and its audit pair—the leader continues and a settled result remains
+cacheable. The cache makes no cross-restart guarantee.
 
 ## Reliable audit and session ordering
 
@@ -121,12 +183,21 @@ and awaits append, flush, and storage confirmation. Payloads are synced before a
 transaction has an internal two-second budget. Cancellation or an incomplete transaction permanently poisons
 the live trail; a partial disk tail is rejected during restart. Its records are queryable by the owning service
 without adding an MCP audit tool. A bounded memory sink supports deterministic tests. New records use
-`rocketmq-mcp-control.audit.v2` and contain sequence, invocation id, timestamp, event, closed operation, safe
+`rocketmq-mcp-control.audit.v3` and contain sequence, invocation id, timestamp, event, closed operation, safe
 cluster alias, validated OAuth subject as `operator`, optional validated request `reason`,
 `dry_run|execute` mode, closed `started|planned|applied|partial|conflict|failed` result, terminal error code, and
-terminal monotonic duration. Operator and reason are a durable-audit-only exception: they never enter MCP
-responses, error envelopes, tracing, or ordinary logs. Audit records never contain tokens, credentials, network
-addresses, request keys, message bodies, endpoints, or raw backend errors.
+terminal monotonic duration. Version 3 adds the object and the outcome of the mutation: the validated logical
+`target` names, a Proxy alias included, SHA-256 digests of the requested state, the request key and the
+pre-change state, whether a target was written, and per-target result counts. Operator and reason are a durable-audit-only exception: they
+never enter MCP responses, error envelopes, tracing, or ordinary logs. Audit records never contain the requested
+values, tokens, credentials, network addresses, request keys, message bodies, endpoints, or raw backend errors.
+
+`audit.capacity` bounds one segment of the trail. A full segment is sealed beside the active file as
+`<path>.<six-digit number>` and a new one starts with a header that links to it, so the trail has no lifetime
+limit; the server never deletes a sealed segment. `[limits]` bounds how fast segments fill: each OAuth subject
+has a per-minute budget of dry runs and one of execute calls, and the server caps the calls in flight. A call
+over a limit gets `rate_limited` before its `started` record and so costs no audit capacity. The
+[tool reference](docs/tool-reference.md) describes the record fields and the segment header.
 
 The audit operator grammar is 1–128 ASCII bytes: it starts with an ASCII letter or digit, then uses only ASCII
 letters/digits plus `._@-`. Without `@`, endpoint-shaped dotted subjects are rejected. Email-like IDs contain
@@ -144,16 +215,17 @@ remain valid. Whitespace, controls, Unicode,
 paths/URLs, percent escapes, credentials, bearer material, canonical or legacy numeric IP/socket values, numeric
 top-level labels, and endpoint-shaped identities remain invalid. The same operator and reason rules run during
 OAuth principal construction, audit-context creation,
-and version-2 recovery. Version-1 records remain readable under their original identity-free rules.
+and version-2 and version-3 recovery. Version-1 records remain readable under their original identity-free rules.
 
 Every reliable audit sink read, recovery, append error, or two-second transaction timeout is exposed only as
 `audit_unavailable`; a sink-provided code or message is never propagated. Repair and validate durable audit
 storage before retrying. In particular, a failed `started` append opens no Admin session and performs no RPC;
 a terminal append failure is reported only after the acquired session has completed bounded shutdown.
 
-On restart, the trail reconstructs completed and dangling invocation state from strict version-1, version-2, or
-mixed JSONL without rewriting old bytes. Version-1 `invalid_arguments` and `conflict` values recover as
-`invalid_argument` and `precondition_conflict`; new writes are version 2 only. A terminal
+On restart, the trail validates the active segment, which may hold strict version-1, version-2, version-3, or
+mixed JSONL, without rewriting old bytes, and continues its sequence. Version-1 `invalid_arguments` and
+`conflict` values recover as `invalid_argument` and `precondition_conflict`; new writes are version 3 only. An
+invocation that an earlier process left without a terminal record stays unfinished. A terminal
 record is accepted only for a matching active invocation from the same live trail, and only one concurrent
 terminal attempt can become durable. Unknown, cross-trail, and duplicate terminal attempts fail closed; a failed
 terminal write leaves the invocation active while poisoning subsequent audit operations.

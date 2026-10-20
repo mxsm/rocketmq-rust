@@ -90,6 +90,49 @@ class KubernetesAssetsGuardTests(unittest.TestCase):
     def test_repository_contract_passes(self) -> None:
         self.run_guard(expect_success=True)
 
+    def test_workflow_action_pins_follow_container_policy(self) -> None:
+        policy_path = self.root / "docker/container-policy.json"
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        workflow_path = self.root / ".github/workflows/kubernetes-assets-ci.yml"
+        workflow = workflow_path.read_text(encoding="utf-8")
+        for action in ("actions/checkout", "actions/upload-artifact"):
+            old_sha = policy["workflow"]["actions"][action]
+            new_sha = "a" * 40
+            policy["workflow"]["actions"][action] = new_sha
+            workflow = workflow.replace(f"{action}@{old_sha}", f"{action}@{new_sha}")
+        policy_path.write_text(json.dumps(policy, indent=2), encoding="utf-8")
+        workflow_path.write_text(workflow, encoding="utf-8")
+        self.run_guard(expect_success=True)
+
+    def test_workflow_action_pins_reject_mutable_or_mismatched_references(self) -> None:
+        policy_path = self.root / "docker/container-policy.json"
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        workflow_path = self.root / ".github/workflows/kubernetes-assets-ci.yml"
+        workflow = workflow_path.read_text(encoding="utf-8")
+        for action in ("actions/checkout", "actions/upload-artifact"):
+            for reference in ("v7", "0" * 40):
+                with self.subTest(action=action, reference=reference):
+                    sha = policy["workflow"]["actions"][action]
+                    workflow_path.write_text(
+                        workflow.replace(f"{action}@{sha}", f"{action}@{reference}"),
+                        encoding="utf-8",
+                    )
+                    result = self.run_guard(expect_success=False)
+                    self.assertIn(f"workflow action pin missing: {action}@{sha}", result.stderr)
+
+        workflow_path.write_text(workflow, encoding="utf-8")
+        for action in ("actions/checkout", "actions/upload-artifact"):
+            with self.subTest(action=action, reference="matching mutable policy"):
+                updated = json.loads(json.dumps(policy))
+                sha = updated["workflow"]["actions"][action]
+                updated["workflow"]["actions"][action] = "v7"
+                policy_path.write_text(json.dumps(updated, indent=2), encoding="utf-8")
+                workflow_path.write_text(
+                    workflow.replace(f"{action}@{sha}", f"{action}@v7"), encoding="utf-8"
+                )
+                result = self.run_guard(expect_success=False)
+                self.assertIn(f"container policy must pin {action} to a full SHA", result.stderr)
+
     def test_every_service_config_requires_its_file_otlp_endpoint(self) -> None:
         path = self.root / "distribution/kubernetes/base/manifest.yaml"
         source = path.read_text(encoding="utf-8")

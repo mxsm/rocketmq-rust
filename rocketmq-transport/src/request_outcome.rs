@@ -48,7 +48,7 @@ pub enum OutboundRequestStage {
 /// request-contract failures remain typed values so callers can make policy
 /// decisions without parsing error text. Callers must handle all three outcome
 /// variants explicitly.
-pub enum OutboundRequestOutcome {
+pub enum OutboundRequestResult {
     /// A response passed Transport's final hooks and deadline validation.
     Response(RemotingCommand),
     /// Transport declined or stopped the attempt without an operational failure.
@@ -57,7 +57,7 @@ pub enum OutboundRequestOutcome {
     Contract(OutboundRequestContract),
 }
 
-impl fmt::Debug for OutboundRequestOutcome {
+impl fmt::Debug for OutboundRequestResult {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Response(response) => formatter

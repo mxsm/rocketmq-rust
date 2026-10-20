@@ -43,26 +43,26 @@ fn cancel_and_close_choose_exactly_one_terminal_winner() {
         let terminal = state.terminal_state().expect("terminal winner");
 
         assert_eq!(
-            usize::from(cancel == Ok(ResponseStateOutcome::Applied(())))
-                + usize::from(close == Ok(ResponseStateOutcome::Applied(()))),
+            usize::from(cancel == Ok(ResponseTransitionResult::Applied(())))
+                + usize::from(close == Ok(ResponseTransitionResult::Applied(()))),
             1
         );
         match terminal {
             ResponseTerminalState::Cancelled => {
-                assert_eq!(cancel, Ok(ResponseStateOutcome::Applied(())));
+                assert_eq!(cancel, Ok(ResponseTransitionResult::Applied(())));
                 assert_eq!(
                     close,
-                    Ok(ResponseStateOutcome::AlreadyCompleted {
+                    Ok(ResponseTransitionResult::AlreadyCompleted {
                         state: ResponseTerminalState::Cancelled,
                         reason: Some(DeferredTerminalReason::Explicit),
                     })
                 );
             }
             ResponseTerminalState::Closed => {
-                assert_eq!(close, Ok(ResponseStateOutcome::Applied(())));
+                assert_eq!(close, Ok(ResponseTransitionResult::Applied(())));
                 assert_eq!(
                     cancel,
-                    Ok(ResponseStateOutcome::AlreadyCompleted {
+                    Ok(ResponseTransitionResult::AlreadyCompleted {
                         state: ResponseTerminalState::Closed,
                         reason: Some(DeferredTerminalReason::SessionClosed),
                     })
@@ -101,8 +101,8 @@ fn racing_terminal_attempts_record_only_the_atomic_winner() {
         let cancel = cancel.join().expect("cancel thread");
         let close = close.join().expect("close thread");
         assert_eq!(
-            usize::from(cancel == Ok(ResponseStateOutcome::Applied(())))
-                + usize::from(close == Ok(ResponseStateOutcome::Applied(()))),
+            usize::from(cancel == Ok(ResponseTransitionResult::Applied(())))
+                + usize::from(close == Ok(ResponseTransitionResult::Applied(()))),
             1
         );
 
@@ -110,10 +110,10 @@ fn racing_terminal_attempts_record_only_the_atomic_winner() {
         match reason {
             DeferredTerminalReason::OwnerDeadline => {
                 assert_eq!(state.terminal_state(), Some(ResponseTerminalState::Cancelled));
-                assert_eq!(cancel, Ok(ResponseStateOutcome::Applied(())));
+                assert_eq!(cancel, Ok(ResponseTransitionResult::Applied(())));
                 assert_eq!(
                     close,
-                    Ok(ResponseStateOutcome::AlreadyCompleted {
+                    Ok(ResponseTransitionResult::AlreadyCompleted {
                         state: ResponseTerminalState::Cancelled,
                         reason: Some(DeferredTerminalReason::OwnerDeadline),
                     })
@@ -121,10 +121,10 @@ fn racing_terminal_attempts_record_only_the_atomic_winner() {
             }
             DeferredTerminalReason::SessionClosed => {
                 assert_eq!(state.terminal_state(), Some(ResponseTerminalState::Closed));
-                assert_eq!(close, Ok(ResponseStateOutcome::Applied(())));
+                assert_eq!(close, Ok(ResponseTransitionResult::Applied(())));
                 assert_eq!(
                     cancel,
-                    Ok(ResponseStateOutcome::AlreadyCompleted {
+                    Ok(ResponseTransitionResult::AlreadyCompleted {
                         state: ResponseTerminalState::Closed,
                         reason: Some(DeferredTerminalReason::SessionClosed),
                     })
@@ -147,7 +147,7 @@ fn stop_races_retry_across_register_and_claim_progress() {
 fn assert_stop_retries_after_lifecycle_advance(
     close: bool,
     initial: u8,
-    advance: impl FnOnce(&ResponseState) -> Result<ResponseStateOutcome, TransportContractViolation>,
+    advance: impl FnOnce(&ResponseState) -> Result<ResponseTransitionResult, TransportContractViolation>,
 ) {
     let state = Arc::new(ResponseState {
         state: std::sync::atomic::AtomicU8::new(initial),
@@ -182,7 +182,10 @@ fn assert_stop_retries_after_lifecycle_advance(
         "lifecycle state advance before the first stop CAS",
     );
     resume.wait();
-    assert_eq!(stop.join().expect("stop thread"), Ok(ResponseStateOutcome::Applied(())));
+    assert_eq!(
+        stop.join().expect("stop thread"),
+        Ok(ResponseTransitionResult::Applied(()))
+    );
     assert_eq!(
         state.terminal_state(),
         Some(if close {
@@ -228,7 +231,7 @@ fn begin_sending_and_stop_have_one_linearized_owner() {
             };
 
             match send {
-                Ok(ResponseStateOutcome::Applied(claim)) => {
+                Ok(ResponseTransitionResult::Applied(claim)) => {
                     assert_eq!(
                         stop,
                         Err(TransportContractViolation::DeferredResponseInvalidTransition {
@@ -244,7 +247,7 @@ fn begin_sending_and_stop_have_one_linearized_owner() {
                         })
                     );
                 }
-                Ok(ResponseStateOutcome::AlreadyCompleted { state: winner, reason }) => {
+                Ok(ResponseTransitionResult::AlreadyCompleted { state: winner, reason }) => {
                     assert_eq!(winner, stop_terminal);
                     assert_eq!(
                         reason,
@@ -254,7 +257,7 @@ fn begin_sending_and_stop_have_one_linearized_owner() {
                             DeferredTerminalReason::Explicit
                         })
                     );
-                    assert_eq!(stop, Ok(ResponseStateOutcome::Applied(())));
+                    assert_eq!(stop, Ok(ResponseTransitionResult::Applied(())));
                     assert_eq!(state.terminal_state(), Some(stop_terminal));
                 }
                 Err(_) => panic!("begin sending unexpectedly returned a contract violation"),

@@ -59,11 +59,11 @@ use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_transport::api::error_response;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -95,7 +95,7 @@ pub struct QueryAssignmentProcessor {
 }
 
 impl RequestProcessor for QueryAssignmentProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.process_shared(request).await
     }
 }
@@ -104,7 +104,7 @@ impl QueryAssignmentProcessor {
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let original_opaque = request.original_identity().original_opaque();
         let command_factory = self.command_factory;
         let peer_label = request_peer_label(request.origin());
@@ -924,7 +924,7 @@ mod tests {
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
-    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::ResponseBodyKind;
     use rocketmq_transport::api::ServerConfig;
     use rocketmq_transport::api::TransportClientConfig;
@@ -988,7 +988,11 @@ mod tests {
             owner.root_context().component("query-assignment-test.outer-api"),
             TransportTelemetry::noop(),
         );
-        let topic_route_info_manager = TopicRouteInfoManager::new(broker_outer_api, 60_000, None);
+        let topic_route_info_manager = TopicRouteInfoManager::new(
+            broker_outer_api,
+            60_000,
+            owner.root_context().component("query-assignment-test.route-info"),
+        );
         topic_route_info_manager.topic_subscribe_info_table.insert(
             CheetahString::from_static_str("assignment-topic"),
             [MessageQueue::from_parts("assignment-topic", "broker-a", 0)]
@@ -1342,7 +1346,7 @@ mod tests {
             .dispatch(None, RemotingCommand::create_remoting_command(-98_453).set_opaque(320))
             .await
             .expect("embedded QueryAssignment response");
-        let EmbeddedDispatchOutcome::Reply(response) = outcome else {
+        let EmbeddedDispatchResult::Reply(response) = outcome else {
             panic!("QueryAssignment unknown request must return a reply response");
         };
 
@@ -1393,7 +1397,7 @@ mod tests {
             .dispatch(None, request)
             .await
             .expect("embedded QueryAssignment success response");
-        let EmbeddedDispatchOutcome::Reply(response) = outcome else {
+        let EmbeddedDispatchResult::Reply(response) = outcome else {
             panic!("QueryAssignment success must return a reply response");
         };
 

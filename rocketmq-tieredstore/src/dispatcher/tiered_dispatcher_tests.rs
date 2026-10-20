@@ -59,7 +59,9 @@ fn dispatcher_task_result_preserves_original_error_kind() {
 fn dispatcher_startup_failed_uses_service_error_kind() {
     let error = dispatcher_startup_failed(
         "spawn test worker",
-        rocketmq_runtime::RuntimeError::internal_failure(rocketmq_runtime::RuntimeOperation::DispatcherTaskGroup),
+        rocketmq_runtime::RuntimeError::internal_failure(rocketmq_runtime::RuntimeOperation::external(
+            "dispatcher-task-group",
+        )),
     );
 
     assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);
@@ -79,7 +81,7 @@ async fn dispatch_writes_commit_log_and_consume_queue_unit() -> Result<(), Store
     })?;
     let config = Arc::new(TieredStoreConfig {
         store_path_root_dir: temp_dir.path().to_path_buf(),
-        backend_provider: "memory".to_owned(),
+        storage_provider_id: "memory".to_owned(),
         max_pending_tasks: 4,
         ..TieredStoreConfig::default()
     });
@@ -144,7 +146,7 @@ async fn new_with_task_group_parents_dispatcher_task() -> Result<(), StoreError>
     })?;
     let config = Arc::new(TieredStoreConfig {
         store_path_root_dir: temp_dir.path().to_path_buf(),
-        backend_provider: "memory".to_owned(),
+        storage_provider_id: "memory".to_owned(),
         max_pending_tasks: 4,
         ..TieredStoreConfig::default()
     });
@@ -184,7 +186,7 @@ async fn cancellation_releases_a_sender_waiting_for_byte_capacity() -> Result<()
     })?;
     let config = Arc::new(TieredStoreConfig {
         store_path_root_dir: temp_dir.path().to_path_buf(),
-        backend_provider: "memory".to_owned(),
+        storage_provider_id: "memory".to_owned(),
         max_pending_tasks: 1,
         max_pending_bytes: 4,
         ..TieredStoreConfig::default()
@@ -231,7 +233,7 @@ async fn cancellation_releases_a_sender_waiting_for_byte_capacity() -> Result<()
             )
         })?
         .expect_err("cancelled sender must return an interruption");
-    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
     assert!(dispatcher.is_shutdown());
     Ok(())
 }
@@ -243,7 +245,7 @@ async fn try_dispatch_distinguishes_full_capacity_from_closed_backend() -> Resul
     })?;
     let config = Arc::new(TieredStoreConfig {
         store_path_root_dir: temp_dir.path().to_path_buf(),
-        backend_provider: "memory".to_owned(),
+        storage_provider_id: "memory".to_owned(),
         max_pending_tasks: 1,
         ..TieredStoreConfig::default()
     });
@@ -281,7 +283,7 @@ async fn try_dispatch_distinguishes_full_capacity_from_closed_backend() -> Resul
     let closed = closed_dispatcher
         .try_dispatch_derived(record, valid_dispatch_request(0))
         .expect_err("a closed dispatch channel must report backend unavailability");
-    assert_eq!(closed.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(closed.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
     assert_eq!(closed.recovery_hint(), rocketmq_error::RecoveryHint::Backoff);
     assert_eq!(closed.operation(), StoreOperation::AppendDerived);
     assert_eq!(closed.component(), StoreComponent::TieredStore);

@@ -24,12 +24,12 @@ use crate::ClientError;
 use crate::ClientResult;
 use rocketmq_observability::metrics::client::ClientMetrics;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::Shutdown;
 use serde::Serialize;
 use tokio::select;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -182,7 +182,7 @@ pub struct RebalanceService {
     lifecycle_transition: Arc<Mutex<()>>,
     notify: Arc<Notify>,
     stopped_notify: Arc<Notify>,
-    tx_shutdown: Arc<StdRwLock<Option<tokio::sync::broadcast::Sender<()>>>>,
+    shutdown: Arc<StdRwLock<Option<CancellationToken>>>,
     started: Arc<AtomicBool>,
     task_handle: Arc<tokio::sync::Mutex<Option<ClientTrackedTaskHandle>>>,
     // Health check and metrics
@@ -224,7 +224,7 @@ impl RebalanceService {
             lifecycle_transition: Arc::new(Mutex::new(())),
             notify: Arc::new(Notify::new()),
             stopped_notify: Arc::new(Notify::new()),
-            tx_shutdown: Arc::new(StdRwLock::new(None)),
+            shutdown: Arc::new(StdRwLock::new(None)),
             started: Arc::new(AtomicBool::new(false)),
             task_handle: Arc::new(tokio::sync::Mutex::new(None)),
             last_success_timestamp: Arc::new(AtomicU64::new(0)),
@@ -249,11 +249,8 @@ impl RebalanceService {
 
         let notify = self.notify.clone();
         let stopped_notify = self.stopped_notify.clone();
-        let (mut shutdown, tx_shutdown) = Shutdown::new(1);
-        *self
-            .tx_shutdown
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(tx_shutdown);
+        let shutdown = CancellationToken::new();
+        *self.shutdown.write().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(shutdown.clone());
 
         let started_clone = self.started.clone();
         let last_success_ts = self.last_success_timestamp.clone();
@@ -276,7 +273,7 @@ impl RebalanceService {
                     _ = notify.notified() => {
                         info!("RebalanceService wakeup triggered");
                     }
-                    _ = shutdown.recv() => {
+                    _ = shutdown.cancelled() => {
                         info!("RebalanceService shutdown signal received, timestamp={}", current_millis());
                         started_clone.store(false, Ordering::SeqCst);
                         stopped_notify.notify_waiters();
@@ -284,7 +281,7 @@ impl RebalanceService {
                     }
                     _ = tokio::time::sleep(real_wait_interval) => {}
                 }
-                if shutdown.is_shutdown() {
+                if shutdown.is_cancelled() {
                     started_clone.store(false, Ordering::SeqCst);
                     stopped_notify.notify_waiters();
                     return;
@@ -344,7 +341,7 @@ impl RebalanceService {
             Ok(task_handle) => task_handle,
             Err(error) => {
                 self.started.store(false, Ordering::SeqCst);
-                self.tx_shutdown
+                self.shutdown
                     .write()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .take();
@@ -378,15 +375,13 @@ impl RebalanceService {
         }
 
         // Send shutdown signal
-        let tx_shutdown = self
-            .tx_shutdown
+        let shutdown = self
+            .shutdown
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
-        if let Some(tx_shutdown) = tx_shutdown {
-            if let Err(e) = tx_shutdown.send(()) {
-                warn!("Failed to send shutdown signal to RebalanceService, error: {:?}", e);
-            }
+        if let Some(shutdown) = shutdown {
+            shutdown.cancel();
         } else {
             warn!("Shutdown called but no shutdown channel available");
             return Ok(());
@@ -674,13 +669,13 @@ mod tests {
         );
 
         let stopped = service.stopped_notify.notified();
-        let tx_shutdown = service
-            .tx_shutdown
+        let shutdown = service
+            .shutdown
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
-            .expect("start should install shutdown sender");
-        let _ = tx_shutdown.send(());
+            .expect("start should install a shutdown token");
+        shutdown.cancel();
 
         futures::executor::block_on(stopped);
 
@@ -693,17 +688,17 @@ mod tests {
     #[tokio::test]
     async fn shutdown_without_task_handle_waits_for_stop_notification() {
         let service = RebalanceService::new(ClientMetrics::noop());
-        let (mut shutdown, tx_shutdown) = Shutdown::new(1);
+        let shutdown = CancellationToken::new();
         *service
-            .tx_shutdown
+            .shutdown
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(tx_shutdown);
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(shutdown.clone());
         service.started.store(true, Ordering::SeqCst);
 
         let started = service.started.clone();
         let stopped_notify = service.stopped_notify.clone();
         tokio::spawn(async move {
-            shutdown.recv().await;
+            shutdown.cancelled().await;
             started.store(false, Ordering::SeqCst);
             stopped_notify.notify_waiters();
         });

@@ -1,0 +1,579 @@
+.section {
+  overflow: hidden;
+}
+
+.glow {
+  position: absolute;
+  top: 6%;
+  left: -18%;
+  width: min(70vw, 900px);
+  aspect-ratio: 1;
+  background: radial-gradient(closest-side, rgba(152, 114, 255, 0.15), transparent);
+  pointer-events: none;
+}
+
+/* Accent per traffic class; shared by links, nodes, packets and the legend. */
+.control {
+  --tone: var(--home-violet);
+  --tone-soft: rgba(152, 114, 255, 0.1);
+  --tone-glow: rgba(152, 114, 255, 0.42);
+}
+
+.produce {
+  --tone: var(--home-orange);
+  --tone-soft: rgba(255, 122, 38, 0.1);
+  --tone-glow: rgba(255, 122, 38, 0.42);
+}
+
+.store {
+  --tone: var(--home-green);
+  --tone-soft: rgba(52, 211, 153, 0.09);
+  --tone-glow: rgba(52, 211, 153, 0.36);
+}
+
+.consume {
+  --tone: var(--home-cyan);
+  --tone-soft: rgba(66, 208, 240, 0.1);
+  --tone-glow: rgba(66, 208, 240, 0.4);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.75fr) minmax(0, 1fr);
+  align-items: stretch;
+  gap: 1.4rem;
+  margin-top: clamp(2.4rem, 5vw, 4rem);
+}
+
+/* ---------- Diagram ---------- */
+
+.diagramCard {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
+  padding: 1.1rem 1.1rem 0.9rem;
+  border: 1px solid var(--home-border);
+  border-radius: 24px;
+  background:
+    radial-gradient(rgba(170, 186, 235, 0.1) 1px, transparent 1.3px) 0 0 / 26px 26px,
+    linear-gradient(160deg, rgba(18, 23, 40, 0.86), rgba(8, 10, 19, 0.94));
+  box-shadow:
+    0 30px 80px rgba(0, 0, 0, 0.36),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.diagramScroll {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.diagram {
+  display: block;
+  width: 100%;
+  min-width: 660px;
+  height: auto;
+}
+
+.group rect {
+  fill: rgba(255, 255, 255, 0.014);
+  stroke: rgba(150, 166, 214, 0.24);
+  stroke-dasharray: 5 7;
+  stroke-width: 1.2;
+}
+
+.group text {
+  fill: var(--home-faint);
+  font-family: var(--home-font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+}
+
+.route {
+  fill: none;
+  stroke: rgba(150, 166, 214, 0.26);
+  stroke-linecap: round;
+  stroke-width: 1.6;
+  transition:
+    stroke 420ms ease,
+    stroke-width 420ms ease;
+}
+
+.routeDashed {
+  stroke-dasharray: 5 7;
+}
+
+.routeActive {
+  filter: drop-shadow(0 0 6px var(--tone-glow));
+  stroke: var(--tone);
+  stroke-width: 2.4;
+}
+
+.routeActive.routeDashed {
+  animation: dashFlow 1s linear infinite;
+}
+
+.packet {
+  fill: #fff;
+  filter: drop-shadow(0 0 6px var(--tone)) drop-shadow(0 0 2px var(--tone));
+}
+
+.node {
+  opacity: 0.66;
+  transition: opacity 420ms ease;
+}
+
+.nodeActive {
+  filter: drop-shadow(0 0 16px var(--tone-glow));
+  opacity: 1;
+}
+
+.nodeBox {
+  fill: rgba(13, 17, 30, 0.94);
+  stroke: rgba(150, 166, 214, 0.26);
+  stroke-width: 1.2;
+  transition:
+    fill 420ms ease,
+    stroke 420ms ease;
+}
+
+.nodeActive .nodeBox {
+  fill: #0e1220;
+  stroke: var(--tone);
+}
+
+.nodeTitle {
+  fill: #f1f4fb;
+  font-family: var(--home-font-display);
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.nodeSub {
+  fill: #8791a8;
+  font-family: var(--home-font-mono);
+  font-size: 11px;
+}
+
+.nodeNote {
+  fill: var(--home-faint);
+  font-family: var(--home-font-mono);
+  font-size: 10px;
+}
+
+.badge rect {
+  fill: rgba(52, 211, 153, 0.13);
+  stroke: rgba(52, 211, 153, 0.45);
+}
+
+.badge text {
+  fill: var(--home-green);
+  font-family: var(--home-font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-anchor: middle;
+}
+
+.slave .badgeBefore rect {
+  fill: rgba(150, 166, 214, 0.1);
+  stroke: rgba(150, 166, 214, 0.34);
+}
+
+.slave .badgeBefore text {
+  fill: #9ba4b9;
+}
+
+.blocks rect {
+  fill: rgba(150, 166, 214, 0.17);
+}
+
+.quorum circle {
+  fill: rgba(152, 114, 255, 0.34);
+}
+
+.quorum circle:first-child {
+  fill: var(--home-violet);
+}
+
+/* Persist: the log fills block by block, the replica trails slightly behind. */
+.step-persist .blocks rect {
+  animation: blockFill 2.6s ease-in-out infinite;
+  animation-delay: calc(var(--block) * 110ms);
+}
+
+.step-persist .slave .blocks rect {
+  animation-delay: calc(520ms + var(--block) * 110ms);
+}
+
+/* Fail over: the master drops, the quorum votes, the replica is promoted. */
+.masterDown {
+  filter: none;
+  opacity: 0.86;
+}
+
+.masterDown .nodeBox {
+  fill: rgba(251, 113, 133, 0.06);
+  stroke: var(--home-rose);
+  stroke-dasharray: 6 6;
+}
+
+.masterDown .blocks rect {
+  fill: rgba(251, 113, 133, 0.22);
+}
+
+.badgeDown rect {
+  fill: rgba(251, 113, 133, 0.14);
+  stroke: rgba(251, 113, 133, 0.55);
+}
+
+.badgeDown text {
+  fill: var(--home-rose);
+  animation: blink 900ms steps(2, jump-none) infinite;
+}
+
+.electing .quorum circle {
+  animation: vote 1.1s ease-in-out infinite;
+}
+
+.electing .quorum circle:nth-child(2) {
+  animation-delay: 180ms;
+}
+
+.electing .quorum circle:nth-child(3) {
+  animation-delay: 360ms;
+}
+
+.slavePromoted .badgeBefore {
+  animation: fadeOut 320ms ease 2.4s both;
+}
+
+.badgeAfter {
+  animation: fadeIn 420ms ease 2.6s both;
+}
+
+.slavePromoted .nodeBox {
+  animation: promote 700ms ease 2.5s both;
+}
+
+/* ---------- Legend ---------- */
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem 1.4rem;
+  margin: 0.6rem 0 0;
+  padding: 0.8rem 0 0;
+  border-top: 1px solid var(--home-border);
+  color: var(--home-muted);
+  font-size: 0.8rem;
+  list-style: none;
+}
+
+.legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.legend li::before {
+  width: 18px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--tone);
+  box-shadow: 0 0 8px var(--tone-glow);
+  content: '';
+}
+
+/* ---------- Step list ---------- */
+
+.panel {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  padding: 0.7rem;
+  border: 1px solid var(--home-border);
+  border-radius: 24px;
+  background: var(--home-surface);
+  box-shadow:
+    0 30px 80px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(16px);
+}
+
+.steps {
+  display: grid;
+  flex: 1;
+  align-content: start;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  position: relative;
+  display: flex;
+  width: 100%;
+  gap: 0.9rem;
+  overflow: hidden;
+  padding: 0.82rem 0.9rem;
+  border: 1px solid transparent;
+  border-radius: 16px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 240ms ease,
+    border-color 240ms ease;
+}
+
+.step:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.step:focus-visible,
+.toggle:focus-visible {
+  outline: 2px solid var(--home-amber);
+  outline-offset: 2px;
+}
+
+.stepCurrent,
+.stepCurrent:hover {
+  border-color: var(--home-border-strong);
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.stepIndex {
+  padding-top: 0.2rem;
+  color: var(--home-faint);
+  font-family: var(--home-font-mono);
+  font-size: 0.76rem;
+  font-weight: 600;
+  transition: color 240ms ease;
+}
+
+.stepCurrent .stepIndex {
+  color: var(--home-amber);
+}
+
+.stepBody {
+  display: block;
+  min-width: 0;
+}
+
+.stepTitle {
+  display: block;
+  color: #c9d0e2;
+  font-size: 1rem;
+  font-weight: 700;
+  transition: color 240ms ease;
+}
+
+.stepCurrent .stepTitle {
+  color: #fff;
+}
+
+/* Collapsible without measuring: the grid row animates between 0fr and 1fr. */
+.stepDetail {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 420ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 420ms ease;
+}
+
+.stepDetail > span {
+  overflow: hidden;
+  color: var(--home-muted);
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.stepCurrent .stepDetail {
+  grid-template-rows: 1fr;
+  padding-top: 0.3rem;
+  opacity: 1;
+}
+
+.stepProgress {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--home-orange), #f2468c, var(--home-violet));
+  transform-origin: 0 50%;
+  animation: progress linear both;
+}
+
+.panelFooter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-top: 0.6rem;
+  padding: 0.85rem 0.6rem 0.35rem;
+  border-top: 1px solid var(--home-border);
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.42rem 0.8rem;
+  border: 1px solid var(--home-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--home-muted);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    border-color 200ms ease,
+    color 200ms ease;
+}
+
+.toggle:hover {
+  border-color: var(--home-border-strong);
+  color: #fff;
+}
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 1080px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .steps {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .diagramCard {
+    padding: 0.8rem 0.8rem 0.7rem;
+    border-radius: 20px;
+  }
+
+  .panel {
+    border-radius: 20px;
+  }
+}
+
+/* ---------- Keyframes ---------- */
+
+@keyframes dashFlow {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+@keyframes blockFill {
+  0%,
+  100% {
+    fill: rgba(150, 166, 214, 0.17);
+  }
+
+  14%,
+  66% {
+    fill: var(--home-green);
+  }
+}
+
+@keyframes blink {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0.35;
+  }
+}
+
+@keyframes vote {
+  0%,
+  100% {
+    fill: rgba(152, 114, 255, 0.34);
+  }
+
+  50% {
+    fill: #d9ccff;
+  }
+}
+
+@keyframes fadeOut {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes promote {
+  from {
+    stroke: rgba(150, 166, 214, 0.26);
+  }
+
+  to {
+    fill: rgba(52, 211, 153, 0.07);
+    stroke: var(--home-green);
+  }
+}
+
+@keyframes progress {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .route,
+  .node,
+  .nodeBox,
+  .step,
+  .stepDetail {
+    transition: none;
+  }
+
+  .routeActive.routeDashed,
+  .step-persist .blocks rect,
+  .badgeDown text,
+  .electing .quorum circle {
+    animation: none;
+  }
+
+  /* Jump straight to the promoted state. */
+  .slavePromoted .badgeBefore,
+  .badgeAfter,
+  .slavePromoted .nodeBox {
+    animation-delay: 0s;
+    animation-duration: 1ms;
+  }
+}

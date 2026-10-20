@@ -39,7 +39,7 @@ use super::client_config_validation::ClientConfigValidator;
 ///     .enable_tls(true)
 ///     .poll_name_server_interval(60_000)
 ///     .build()?;
-/// # Ok::<(), crate::ClientError>(())
+/// # Ok::<(), rocketmq_client_rust::ClientError>(())
 /// ```
 pub struct ClientConfigBuilder {
     config: ClientConfig,

@@ -36,6 +36,24 @@ secret keys configure outbound cluster authentication separately. See the
 [parent README](../README.md) for the complete environment configuration,
 frontend proxy, deployment and persistence choices.
 
+## SQL migrations
+
+SQLite, MySQL and PostgreSQL each have one consolidated `0001_initial.sql`
+under `migrations/<backend>/`. The file contains the original migration versions
+1 through 4, separated by `-- migration: <version>` comments. Startup selects
+the required sections using `dashboard_schema_migration`, preserving applied
+versions and existing data, including the guards against replacing populated
+legacy session and audit tables.
+
+For future schema changes, add a new `0002_<description>.sql` file for each
+affected backend, followed by `0003_*.sql`, `0004_*.sql`, and so on. Register
+each new file's execution in `src/persistence/migration.rs`. File numbering
+starts after the consolidated initial file, while database migration versions
+continue after the existing version 4 to avoid collisions with applied records.
+Do not change already-applied sections or reset migration records. Add
+regression coverage for both fresh initialization and upgrades from the
+preceding schema version.
+
 ## Development
 
 Select relevant checks from this directory:

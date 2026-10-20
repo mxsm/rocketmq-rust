@@ -27,38 +27,37 @@ use rocketmq_transport::api::AuthorizedCommandDispatcher;
 use rocketmq_transport::api::ClaimedDeferred;
 use rocketmq_transport::api::DefaultRequestProcessor;
 use rocketmq_transport::api::DeferredCancellationReason;
-use rocketmq_transport::api::DeferredClaimOutcome;
+use rocketmq_transport::api::DeferredClaimResult;
 use rocketmq_transport::api::DeferredExpiry;
+use rocketmq_transport::api::DeferredExpiryAttachmentStatus;
 use rocketmq_transport::api::DeferredExpiryBatch;
 use rocketmq_transport::api::DeferredExpiryBatchStats;
 use rocketmq_transport::api::DeferredExpiryKind;
 use rocketmq_transport::api::DeferredExpiryMargins;
-use rocketmq_transport::api::DeferredExpiryOutcome;
 use rocketmq_transport::api::DeferredId;
 use rocketmq_transport::api::DeferredParts;
 use rocketmq_transport::api::DeferredRegistration;
+use rocketmq_transport::api::DeferredRegistrationResult;
 use rocketmq_transport::api::DeferredRegistry;
-use rocketmq_transport::api::DeferredRegistryOutcome;
 use rocketmq_transport::api::DeferredRegistryRecovery;
-use rocketmq_transport::api::DeferredRegistryShutdownOutcome;
 use rocketmq_transport::api::DeferredRegistryShutdownStats;
+use rocketmq_transport::api::DeferredRegistryShutdownStatus;
 use rocketmq_transport::api::DeferredRequest;
 use rocketmq_transport::api::DeferredResponder;
-use rocketmq_transport::api::DeferredResumeOutcome;
+use rocketmq_transport::api::DeferredResumeResult;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
-use rocketmq_transport::api::DeferredResumeSubmitOutcome;
+use rocketmq_transport::api::DeferredResumeSubmissionStatus;
 use rocketmq_transport::api::DeferredRetainedSize;
 use rocketmq_transport::api::DeferredRetainedSizeParts;
 use rocketmq_transport::api::DeferredTerminalReason;
 use rocketmq_transport::api::DeferredWaitPermit;
 use rocketmq_transport::api::DeferredWakeReason;
 use rocketmq_transport::api::EmbeddedCaller;
-use rocketmq_transport::api::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::EmbeddedDispatchResult;
 use rocketmq_transport::api::EmbeddedResponse;
 use rocketmq_transport::api::EmbeddedResponseBody;
 use rocketmq_transport::api::FileRegion;
 use rocketmq_transport::api::FileRegionSequence;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::IngressRequestView;
 use rocketmq_transport::api::LocalRequestProcessor;
 use rocketmq_transport::api::OriginalRequestIdentity;
@@ -78,12 +77,13 @@ use rocketmq_transport::api::RequestOrdering;
 use rocketmq_transport::api::RequestOrderingKey;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::ResponseBodyKind;
-use rocketmq_transport::api::ResponseCompletionOutcome;
+use rocketmq_transport::api::ResponseCompletionResult;
+use rocketmq_transport::api::ResponseDeliveryEvent;
 use rocketmq_transport::api::ResponseDisposition;
 use rocketmq_transport::api::ResponseReceipt;
 use rocketmq_transport::api::ResponseWriteObservation;
-use rocketmq_transport::api::ResponseWriteOutcome;
 use rocketmq_transport::api::ResponseWritePath;
 use rocketmq_transport::api::SessionEvent;
 use rocketmq_transport::api::SessionId;
@@ -163,14 +163,14 @@ fn assert_error_contract<T: std::error::Error>() {}
 
 fn assert_debug_contract<T: std::fmt::Debug>() {}
 
-fn assert_embedded_dispatch_contract(outcome: Option<EmbeddedDispatchOutcome>, error: Option<TransportError>) {
+fn assert_embedded_dispatch_contract(outcome: Option<EmbeddedDispatchResult>, error: Option<TransportError>) {
     if let Some(outcome) = outcome {
         match outcome {
-            EmbeddedDispatchOutcome::Reply(plan) => assert_remoting_response_contract(Some(plan)),
-            EmbeddedDispatchOutcome::OneWay { request_id } | EmbeddedDispatchOutcome::Deferred { request_id } => {
+            EmbeddedDispatchResult::Reply(plan) => assert_remoting_response_contract(Some(plan)),
+            EmbeddedDispatchResult::OneWay { request_id } | EmbeddedDispatchResult::Deferred { request_id } => {
                 let _: RequestId = request_id;
             }
-            EmbeddedDispatchOutcome::NoReply { request_id, reason } => {
+            EmbeddedDispatchResult::NoReply { request_id, reason } => {
                 let _: RequestId = request_id;
                 let _: ProtocolNoResponseReason = reason;
             }
@@ -210,14 +210,14 @@ fn assert_remoting_response_contract(plan: Option<RemotingResponse>) {
     assert_error_contract::<TransportContractViolation>();
 }
 
-fn consume_handler_outcome_exhaustively(outcome: HandlerOutcome) -> Option<RequestId> {
+fn consume_handler_outcome_exhaustively(outcome: ResponseAction) -> Option<RequestId> {
     match outcome {
-        HandlerOutcome::Reply(plan) => {
+        ResponseAction::Reply(plan) => {
             let _: i32 = plan.response_code();
             None
         }
-        HandlerOutcome::Deferred(registration) => Some(registration.request_id()),
-        HandlerOutcome::NoReply(marker) => {
+        ResponseAction::Deferred(registration) => Some(registration.request_id()),
+        ResponseAction::NoReply(marker) => {
             let _: i32 = marker.original_code();
             let _: ProtocolNoResponseReason = marker.reason();
             Some(marker.request_id())
@@ -268,14 +268,14 @@ fn assert_deferred_registry_contract<R, E, F>(
     id: Option<DeferredId>,
     parts: Option<DeferredParts>,
     request: Option<DeferredRequest<R>>,
-    outcome: Option<DeferredRegistryOutcome<R, E, F>>,
+    outcome: Option<DeferredRegistrationResult<R, E, F>>,
 ) where
     R: Send + 'static,
     E: std::error::Error + Send + Sync + 'static,
 {
     let _: DeferredRegistry<R> = registry.clone();
     let _: fn() -> DeferredRegistry<R> = DeferredRegistry::<R>::new;
-    let _: fn(&DeferredRegistry<R>) -> DeferredRegistryShutdownOutcome = DeferredRegistry::<R>::shutdown;
+    let _: fn(&DeferredRegistry<R>) -> DeferredRegistryShutdownStatus = DeferredRegistry::<R>::shutdown;
     let _ = id;
     if let Some(parts) = parts {
         let _: RequestId = parts.request_id();
@@ -293,24 +293,24 @@ fn assert_deferred_registry_contract<R, E, F>(
     }
     if let Some(outcome) = outcome {
         match outcome {
-            DeferredRegistryOutcome::Registered(registration) => {
+            DeferredRegistrationResult::Registered(registration) => {
                 let _: DeferredId = registration.deferred_id();
                 let _: RequestId = registration.request_id();
             }
-            DeferredRegistryOutcome::DuplicateRequest(recovery) => inspect_registry_recovery(recovery),
-            DeferredRegistryOutcome::IdentityExhausted(recovery) => inspect_registry_recovery(recovery),
-            DeferredRegistryOutcome::ParentCancelled
-            | DeferredRegistryOutcome::SessionClosed
-            | DeferredRegistryOutcome::DeadlineExpired => {}
-            DeferredRegistryOutcome::BuilderRejected { error, parts } => {
+            DeferredRegistrationResult::DuplicateRequest(recovery) => inspect_registry_recovery(recovery),
+            DeferredRegistrationResult::IdentityExhausted(recovery) => inspect_registry_recovery(recovery),
+            DeferredRegistrationResult::ParentCancelled
+            | DeferredRegistrationResult::SessionClosed
+            | DeferredRegistrationResult::DeadlineExpired => {}
+            DeferredRegistrationResult::BuilderRejected { error, parts } => {
                 let _: E = error;
                 let _: DeferredResponder = parts.into_responder();
             }
-            DeferredRegistryOutcome::ContractViolation { violation, recovery } => {
+            DeferredRegistrationResult::ContractViolation { violation, recovery } => {
                 let _: TransportContractViolation = violation;
                 inspect_registry_recovery(recovery);
             }
-            DeferredRegistryOutcome::OperationalFailure { error, recovery } => {
+            DeferredRegistrationResult::OperationalFailure { error, recovery } => {
                 let _: TransportError = error;
                 let _: &(dyn std::error::Error + 'static) = &error;
                 assert!(std::error::Error::source(&error).is_some());
@@ -324,7 +324,7 @@ fn assert_deferred_registry_contract<R, E, F>(
         &mut DeferredParts,
         tokio::time::Instant,
         DeferredExpiryMargins,
-    ) -> Result<DeferredExpiryOutcome, TransportContractViolation> = DeferredParts::try_with_expiry;
+    ) -> Result<DeferredExpiryAttachmentStatus, TransportContractViolation> = DeferredParts::try_with_expiry;
     let _: fn(R, DeferredParts) -> DeferredRequest<R> = DeferredRequest::new;
     let _: fn(DeferredRetainedSizeParts) -> Result<DeferredRetainedSize, _> = DeferredRegistry::<R>::try_retained_size;
 }
@@ -373,7 +373,7 @@ fn assert_claim_resume_contract<R>(
 struct LocalOnlyProcessor;
 
 impl LocalRequestProcessor for LocalOnlyProcessor {
-    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         let local = Rc::new(());
         std::future::ready(()).await;
         drop(local);
@@ -385,7 +385,7 @@ impl LocalRequestProcessor for LocalOnlyProcessor {
 struct SendProcessor;
 
 impl RequestProcessor for SendProcessor {
-    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         Err(argument_invalid())
     }
 }
@@ -401,11 +401,11 @@ fn consume_rejection_exhaustively(decision: RejectRequestDecision) -> Option<Rem
     }
 }
 
-fn inspect_write_outcome(outcome: ResponseWriteOutcome) -> Option<ResponseReceipt> {
-    match outcome {
-        ResponseWriteOutcome::Written(receipt) => Some(receipt),
-        ResponseWriteOutcome::Failed { completion, progress } => {
-            let _: Option<ResponseCompletionOutcome> = completion;
+fn inspect_delivery_event(event: ResponseDeliveryEvent) -> Option<ResponseReceipt> {
+    match event {
+        ResponseDeliveryEvent::DeliveryCompleted(receipt) => Some(receipt),
+        ResponseDeliveryEvent::Failed { completion, progress } => {
+            let _: Option<ResponseCompletionResult> = completion;
             let _: Option<WriteProgress> = progress;
             None
         }
@@ -420,7 +420,7 @@ fn assert_response_write_observation_contract(observation: &ResponseWriteObserva
     let _: ResponseWritePath = observation.path();
     let _: Duration = observation.write_elapsed();
     let _: Duration = observation.end_to_end_elapsed();
-    let _: Option<ResponseReceipt> = inspect_write_outcome(observation.outcome());
+    let _: Option<ResponseReceipt> = inspect_delivery_event(observation.event());
 }
 
 fn order_from_ingress<P: LocalRequestProcessor>(processor: &P, ingress: IngressRequestView<'_>) -> RequestOrdering {
@@ -529,19 +529,19 @@ fn api_exposes_only_remoting_response_metadata_and_file_region_construction_dtos
 
 #[test]
 fn api_exposes_the_affine_embedded_outcome_and_redacted_error_facades() {
-    assert_debug_contract::<EmbeddedDispatchOutcome>();
+    assert_debug_contract::<EmbeddedDispatchResult>();
     assert_error_contract::<TransportError>();
     assert_embedded_dispatch_contract(None, None);
 }
 
 #[test]
 fn api_exposes_exactly_three_exhaustive_affine_handler_outcomes() {
-    assert_debug_contract::<HandlerOutcome>();
+    assert_debug_contract::<ResponseAction>();
     assert_debug_contract::<DeferredRegistration>();
     assert_debug_contract::<ProtocolNoResponse>();
     let plan = RemotingResponse::command(RemotingCommand::create_response_command_with_code(0))
         .expect("public reply plan should construct");
-    assert_eq!(consume_handler_outcome_exhaustively(HandlerOutcome::Reply(plan)), None);
+    assert_eq!(consume_handler_outcome_exhaustively(ResponseAction::Reply(plan)), None);
     assert_handler_outcome_contract(None, None);
 
     let _ = ProtocolNoResponseReason::CallbackHandled;
@@ -569,7 +569,7 @@ fn api_exposes_the_affine_transactional_deferred_registry_contract() {
     assert_debug_contract::<DeferredParts>();
     assert_debug_contract::<DeferredRequest<String>>();
     assert_debug_contract::<DeferredRegistry<String>>();
-    assert_debug_contract::<DeferredRegistryShutdownOutcome>();
+    assert_debug_contract::<DeferredRegistryShutdownStatus>();
     assert_debug_contract::<DeferredRegistryShutdownStats>();
     assert_debug_contract::<DeferredExpiry>();
     assert_debug_contract::<DeferredExpiryBatchStats>();
@@ -580,11 +580,11 @@ fn api_exposes_the_affine_transactional_deferred_registry_contract() {
     let _: fn(DeferredRegistryShutdownStats) -> usize = DeferredRegistryShutdownStats::in_progress_responses;
     let _: fn(DeferredRegistryShutdownStats) -> usize = DeferredRegistryShutdownStats::invariant_failures;
     assert_error_contract::<TransportError>();
-    let _: DeferredRegistryOutcome<String> = DeferredRegistryOutcome::ParentCancelled;
-    let _: DeferredClaimOutcome<String> = DeferredClaimOutcome::AlreadyClaimed;
-    let _: DeferredExpiryOutcome = DeferredExpiryOutcome::AlreadyAttached;
-    let _: DeferredResumeOutcome = DeferredResumeOutcome::SessionClosed;
-    let _: DeferredResumeSubmitOutcome = DeferredResumeSubmitOutcome::AdmissionRejected;
+    let _: DeferredRegistrationResult<String> = DeferredRegistrationResult::ParentCancelled;
+    let _: DeferredClaimResult<String> = DeferredClaimResult::AlreadyClaimed;
+    let _: DeferredExpiryAttachmentStatus = DeferredExpiryAttachmentStatus::AlreadyAttached;
+    let _: DeferredResumeResult = DeferredResumeResult::SessionClosed;
+    let _: DeferredResumeSubmissionStatus = DeferredResumeSubmissionStatus::AdmissionRejected;
     let _ = assert_claim_resume_contract::<String>;
     let margins = DeferredExpiryMargins::new(Duration::from_millis(2), Duration::from_millis(3));
     assert_eq!(margins.recovery(), Duration::from_millis(2));
@@ -638,11 +638,11 @@ fn api_processor_side_contracts_are_typed_and_body_free() {
 
     let _ = ResponseWritePath::Inline;
     let _ = ResponseWritePath::Deferred;
-    let failure = ResponseWriteOutcome::Failed {
-        completion: Some(ResponseCompletionOutcome::QueueSaturated),
+    let failure = ResponseDeliveryEvent::Failed {
+        completion: Some(ResponseCompletionResult::QueueSaturated),
         progress: Some(WriteProgress::PossiblyPartial),
     };
-    assert!(inspect_write_outcome(failure).is_none());
+    assert!(inspect_delivery_event(failure).is_none());
     let _ = ResponseDisposition::TransportWritten;
     let _ = ResponseDisposition::InProcessAccepted;
     let _ = RequestOrdering::Concurrent;

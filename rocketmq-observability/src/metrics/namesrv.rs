@@ -80,7 +80,7 @@ pub enum NameServerRouteStage {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NameServerRouteCacheOutcome {
+pub enum NameServerRouteCacheEvent {
     Hit,
     Miss,
     Bypass,
@@ -95,7 +95,7 @@ pub enum NameServerWorkloadClass {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NameServerAdmissionOutcome {
+pub enum NameServerAdmissionEvent {
     Acquired,
     Queued,
     Released,
@@ -105,7 +105,7 @@ pub enum NameServerAdmissionOutcome {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NameServerRequestOutcome {
+pub enum NameServerRequestStatus {
     Success,
     Rejected,
     Error,
@@ -154,7 +154,7 @@ impl NameServerRouteStage {
 }
 
 #[cfg(feature = "otel-metrics")]
-impl NameServerRouteCacheOutcome {
+impl NameServerRouteCacheEvent {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Hit => "hit",
@@ -177,7 +177,7 @@ impl NameServerWorkloadClass {
 }
 
 #[cfg(feature = "otel-metrics")]
-impl NameServerAdmissionOutcome {
+impl NameServerAdmissionEvent {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Acquired => "acquired",
@@ -191,7 +191,7 @@ impl NameServerAdmissionOutcome {
 }
 
 #[cfg(feature = "otel-metrics")]
-impl NameServerRequestOutcome {
+impl NameServerRequestStatus {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Success => "success",
@@ -332,13 +332,13 @@ impl NameServerMetrics {
     pub fn record_route_response_bytes(&self, _bytes: usize) {}
 
     #[inline]
-    pub fn record_route_cache(&self, _outcome: NameServerRouteCacheOutcome, _current_bytes: u64) {}
+    pub fn record_route_cache(&self, _event: NameServerRouteCacheEvent, _current_bytes: u64) {}
 
     #[inline]
     pub fn record_workload_admission(
         &self,
         _class: NameServerWorkloadClass,
-        _outcome: NameServerAdmissionOutcome,
+        _event: NameServerAdmissionEvent,
         _inflight: usize,
         _waiting: usize,
     ) {
@@ -363,7 +363,7 @@ impl NameServerMetrics {
     pub fn record_request(
         &self,
         _class: NameServerWorkloadClass,
-        _outcome: NameServerRequestOutcome,
+        _status: NameServerRequestStatus,
         _elapsed: Duration,
         _response_bytes: usize,
     ) {
@@ -515,53 +515,55 @@ impl NameServerMetrics {
     }
 
     #[inline]
-    pub fn record_route_request_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_route_request_total(&self, count: u64, attributes: &crate::MetricAttributes) {
         if self.is_active() {
             if let Some(instruments) = &self.instruments {
-                instruments.route_request_total.add(count, attributes);
+                instruments.route_request_total.add(count, attributes.as_key_values());
             }
         }
     }
 
     #[inline]
-    pub fn record_route_request_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_route_request_latency(&self, latency_ms: u64, attributes: &crate::MetricAttributes) {
         if self.is_active() {
             if let Some(instruments) = &self.instruments {
-                instruments.route_request_latency.record(latency_ms, attributes);
+                instruments
+                    .route_request_latency
+                    .record(latency_ms, attributes.as_key_values());
             }
         }
     }
 
     #[inline]
-    pub fn record_broker_registrations(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_broker_registrations(&self, count: u64, attributes: &crate::MetricAttributes) {
         if self.is_active() {
             if let Some(instruments) = &self.instruments {
-                instruments.broker_registrations.add(count, attributes);
+                instruments.broker_registrations.add(count, attributes.as_key_values());
             }
         }
     }
 
     #[inline]
-    pub fn record_active_brokers(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+    pub fn record_active_brokers(&self, count: u64, attributes: &crate::MetricAttributes) {
         if self.is_active() {
             if let Some(instruments) = &self.instruments {
-                instruments.active_brokers.record(count, attributes);
+                instruments.active_brokers.record(count, attributes.as_key_values());
             }
         }
     }
 
     pub fn record_route_request(&self, elapsed: Duration) {
-        self.record_route_request_total(1, &[]);
-        self.record_route_request_latency(duration_millis_u64(elapsed), &[]);
+        self.record_route_request_total(1, &crate::MetricAttributes::new());
+        self.record_route_request_latency(duration_millis_u64(elapsed), &crate::MetricAttributes::new());
     }
 
     pub fn record_broker_registration(&self, active_brokers: usize) {
-        self.record_broker_registrations(1, &[]);
-        self.record_active_brokers(active_brokers as u64, &[]);
+        self.record_broker_registrations(1, &crate::MetricAttributes::new());
+        self.record_active_brokers(active_brokers as u64, &crate::MetricAttributes::new());
     }
 
     pub fn record_active_broker_count(&self, active_brokers: usize) {
-        self.record_active_brokers(active_brokers as u64, &[]);
+        self.record_active_brokers(active_brokers as u64, &crate::MetricAttributes::new());
     }
 
     pub fn record_route_error(&self, failure: NameServerRouteFailureLabel) {
@@ -569,10 +571,10 @@ impl NameServerMetrics {
             if let Some(instruments) = &self.instruments {
                 instruments.record_route_errors_total(
                     1,
-                    &[opentelemetry::KeyValue::new(
+                    &crate::MetricAttributes::from_array([opentelemetry::KeyValue::new(
                         crate::semantic::labels::RESULT,
                         failure.as_str(),
-                    )],
+                    )]),
                 );
             }
         }
@@ -581,7 +583,7 @@ impl NameServerMetrics {
     pub fn record_route_freshness(&self, freshness_ms: u64) {
         if self.is_active() {
             if let Some(instruments) = &self.instruments {
-                instruments.record_route_freshness(freshness_ms, &[]);
+                instruments.record_route_freshness(freshness_ms, &crate::MetricAttributes::new());
             }
         }
     }
@@ -616,14 +618,14 @@ impl NameServerMetrics {
         }
     }
 
-    pub fn record_route_cache(&self, outcome: NameServerRouteCacheOutcome, current_bytes: u64) {
+    pub fn record_route_cache(&self, event: NameServerRouteCacheEvent, current_bytes: u64) {
         if self.is_active() {
             if let Some(instruments) = &self.instruments {
                 instruments.route_cache_events_total.add(
                     1,
                     &[opentelemetry::KeyValue::new(
                         crate::semantic::labels::RESULT,
-                        outcome.as_str(),
+                        event.as_str(),
                     )],
                 );
                 instruments.route_cache_bytes.record(current_bytes, &[]);
@@ -634,7 +636,7 @@ impl NameServerMetrics {
     pub fn record_workload_admission(
         &self,
         class: NameServerWorkloadClass,
-        outcome: NameServerAdmissionOutcome,
+        event: NameServerAdmissionEvent,
         inflight: usize,
         waiting: usize,
     ) {
@@ -646,7 +648,7 @@ impl NameServerMetrics {
                     1,
                     &[
                         class_attribute.clone(),
-                        opentelemetry::KeyValue::new(crate::semantic::labels::RESULT, outcome.as_str()),
+                        opentelemetry::KeyValue::new(crate::semantic::labels::RESULT, event.as_str()),
                     ],
                 );
                 instruments
@@ -737,14 +739,14 @@ impl NameServerMetrics {
     pub fn record_request(
         &self,
         class: NameServerWorkloadClass,
-        outcome: NameServerRequestOutcome,
+        status: NameServerRequestStatus,
         elapsed: Duration,
         response_bytes: usize,
     ) {
         if self.is_active() {
             if let Some(instruments) = &self.instruments {
                 let class = opentelemetry::KeyValue::new(crate::semantic::labels::REQUEST_TYPE, class.as_str());
-                let result = opentelemetry::KeyValue::new(crate::semantic::labels::RESULT, outcome.as_str());
+                let result = opentelemetry::KeyValue::new(crate::semantic::labels::RESULT, status.as_str());
                 instruments.requests_total.add(1, &[class.clone(), result.clone()]);
                 instruments
                     .request_handler_latency
@@ -1175,13 +1177,13 @@ impl NameServerMetricInstruments {
     }
 
     #[inline]
-    pub fn record_route_errors_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.route_errors_total.add(count, attributes);
+    pub fn record_route_errors_total(&self, count: u64, attributes: &crate::MetricAttributes) {
+        self.route_errors_total.add(count, attributes.as_key_values());
     }
 
     #[inline]
-    pub fn record_route_freshness(&self, freshness_ms: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.route_freshness.record(freshness_ms, attributes);
+    pub fn record_route_freshness(&self, freshness_ms: u64, attributes: &crate::MetricAttributes) {
+        self.route_freshness.record(freshness_ms, attributes.as_key_values());
     }
 }
 
@@ -1197,7 +1199,7 @@ mod tests {
         let provider = SdkMeterProvider::builder().build();
         let meter = provider.meter("namesrv-metrics-test");
         let metrics = NameServerMetrics::new(&meter);
-        let attrs = [opentelemetry::KeyValue::new("namesrv_id", "namesrv-a")];
+        let attrs = crate::MetricAttributes::new().with("namesrv_id", "namesrv-a");
 
         metrics.record_route_request_total(1, &attrs);
         metrics.record_route_request_latency(3, &attrs);
@@ -1211,7 +1213,7 @@ mod tests {
         metrics.record_expiry_scan("shadow", 10, 1, Duration::from_micros(75));
         metrics.record_request(
             NameServerWorkloadClass::Admin,
-            NameServerRequestOutcome::Success,
+            NameServerRequestStatus::Success,
             Duration::from_micros(10),
             128,
         );
@@ -1242,7 +1244,7 @@ mod tests {
         metrics.record_expiry_scan("off", 10, 0, Duration::from_micros(25));
         metrics.record_request(
             NameServerWorkloadClass::Admin,
-            NameServerRequestOutcome::Success,
+            NameServerRequestStatus::Success,
             Duration::ZERO,
             0,
         );

@@ -39,17 +39,17 @@ use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::DeferredAdmission;
 use rocketmq_transport::api::DeferredExpiryMargins;
-use rocketmq_transport::api::DeferredRegistryShutdownOutcome;
+use rocketmq_transport::api::DeferredRegistryShutdownStatus;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
 use rocketmq_transport::api::DeferredWaitLimits;
 use rocketmq_transport::api::DeferredWakeReason;
 use rocketmq_transport::api::FileTransferMode;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestOrdering;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::ServerConfig;
 use rocketmq_transport::api::TransportServer;
 use rocketmq_transport::test_support::Connection;
@@ -59,11 +59,11 @@ use tokio::sync::oneshot;
 
 use super::index::NotificationArrivalView;
 use super::index::NotificationCriteriaLimits;
-use super::service::NotificationContinuationOutcome;
+use super::service::NotificationContinuationDecision;
+use super::service::NotificationDeferredPreparationStatus;
 use super::service::NotificationDeferredPrepareFailure;
-use super::service::NotificationDeferredPrepareOutcome;
 use super::service::NotificationDeferredRegisterFailure;
-use super::service::NotificationDeferredRegisterOutcome;
+use super::service::NotificationDeferredRegistrationStatus;
 use super::service::NotificationDeferredService;
 use super::service::NotificationRetainedEstimate;
 use super::service::PreparedNotificationRegistration;
@@ -123,11 +123,11 @@ struct Registration {
 }
 
 fn prepared_or_test_error(
-    result: Result<NotificationDeferredPrepareOutcome, NotificationDeferredPrepareFailure>,
+    result: Result<NotificationDeferredPreparationStatus, NotificationDeferredPrepareFailure>,
 ) -> crate::broker_error::BrokerResult<PreparedNotificationRegistration> {
     match result {
-        Ok(NotificationDeferredPrepareOutcome::Prepared(prepared)) => Ok(*prepared),
-        Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => {
+        Ok(NotificationDeferredPreparationStatus::Prepared(prepared)) => Ok(*prepared),
+        Ok(NotificationDeferredPreparationStatus::Rejected(rejection)) => {
             Err(crate::broker_error::invalid_argument(format!("{:?}", rejection.kind())))
         }
         Err(error) => Err(crate::broker_error::invalid_argument(error.to_string())),
@@ -135,11 +135,11 @@ fn prepared_or_test_error(
 }
 
 fn registration_or_test_error(
-    result: Result<NotificationDeferredRegisterOutcome, NotificationDeferredRegisterFailure>,
+    result: Result<NotificationDeferredRegistrationStatus, NotificationDeferredRegisterFailure>,
 ) -> crate::broker_error::BrokerResult<rocketmq_transport::api::DeferredRegistration> {
     match result {
-        Ok(NotificationDeferredRegisterOutcome::Registered(registration)) => Ok(*registration),
-        Ok(NotificationDeferredRegisterOutcome::Rejected(rejection)) => {
+        Ok(NotificationDeferredRegistrationStatus::Registered(registration)) => Ok(*registration),
+        Ok(NotificationDeferredRegistrationStatus::Rejected(rejection)) => {
             Err(crate::broker_error::invalid_argument(format!("{:?}", rejection.kind())))
         }
         Err(error) => Err(crate::broker_error::invalid_argument(error.to_string())),
@@ -154,7 +154,7 @@ struct DeferredProcessor {
 }
 
 impl RequestProcessor for DeferredProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let prepared = prepared_or_test_error(self.service.prepare(
             request,
             None,
@@ -169,7 +169,7 @@ impl RequestProcessor for DeferredProcessor {
         self.registrations
             .send(Registration { peer })
             .map_err(|_| crate::broker_error::invalid_argument("Notification registration observer closed"))?;
-        Ok(HandlerOutcome::Deferred(registration))
+        Ok(ResponseAction::Deferred(registration))
     }
 
     fn request_ordering(&self, _ingress: rocketmq_transport::api::IngressRequestView<'_>) -> RequestOrdering {
@@ -334,7 +334,7 @@ async fn notification_deferred_tcp_prepare_register_claim_resume_writes_one_fram
             .await
             .expect("Notification receipt channel")
             .expect("canonical Notification write"),
-        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        rocketmq_transport::api::DeferredResumeResult::Completed(_)
     ));
 
     let response = client
@@ -427,7 +427,7 @@ async fn notification_deferred_filter_miss_stays_registered_then_later_match_cla
             .await
             .expect("filtered Notification receipt channel")
             .expect("canonical filtered Notification write"),
-        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        rocketmq_transport::api::DeferredResumeResult::Completed(_)
     ));
     let response = client
         .receive_command()
@@ -476,7 +476,7 @@ async fn notification_deferred_session_close_drains_registry_permit_and_index() 
     })
     .await
     .expect("session close drains Notification deferred state");
-    let DeferredRegistryShutdownOutcome::Completed(stats) = service.shutdown() else {
+    let DeferredRegistryShutdownStatus::Completed(stats) = service.shutdown() else {
         panic!("session-close verification should win service shutdown");
     };
     assert_eq!(
@@ -605,8 +605,8 @@ async fn notification_deferred_newest_first_bounded_batch_continuation_advances_
     );
 
     let continuation = match service.admit_continuation(arrival, cursor) {
-        Ok(NotificationContinuationOutcome::Continued(continuation)) => continuation,
-        Ok(NotificationContinuationOutcome::Rejected(rejection)) => {
+        Ok(NotificationContinuationDecision::Ready(continuation)) => continuation,
+        Ok(NotificationContinuationDecision::Rejected(rejection)) => {
             panic!("admit bounded continuation: {rejection:?}")
         }
         Err(error) => panic!("admit bounded continuation: {error:?}"),

@@ -51,6 +51,7 @@ use crate::slave::slave_synchronize::SlaveMasterAddress;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 mod bootstrap;
+pub(crate) mod sync_state_set;
 
 #[cfg(test)]
 pub(crate) type ControllerStoreRoleAction =
@@ -144,7 +145,7 @@ pub(crate) struct BrokerControllerRuntime<MS: BrokerReplicationStore> {
     pop_policy: PopPolicyState,
     escape_policy: EscapeBridgePolicyState,
     metadata_io: Option<MetadataIoActor>,
-    blocking: Option<BlockingExecutor>,
+    blocking: BlockingExecutor,
     #[cfg(test)]
     store_role_action: Arc<Mutex<Option<ControllerStoreRoleAction>>>,
 }
@@ -172,7 +173,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         pop_policy: PopPolicyState,
         escape_policy: EscapeBridgePolicyState,
         metadata_io: Option<MetadataIoActor>,
-        blocking: Option<BlockingExecutor>,
+        blocking: BlockingExecutor,
     ) -> Self {
         Self {
             controller,
@@ -242,17 +243,19 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         sync_state_set: std::collections::HashSet<i64>,
     ) -> crate::broker_error::BrokerResult<bool> {
         let _operation_guard = self.controller.lock_operation().await;
-        let outcome = self
+        let (outcome, controller_broker_id) = self
             .controller
             .with_replicas_mut(|replicas_manager| {
-                replicas_manager.change_broker_role(
-                    controller_leader_address,
-                    new_master_broker_id,
-                    new_master_address,
-                    new_master_epoch,
-                    sync_state_set_epoch,
-                    Some(&sync_state_set),
-                )
+                replicas_manager
+                    .change_broker_role(
+                        controller_leader_address,
+                        new_master_broker_id,
+                        new_master_address,
+                        new_master_epoch,
+                        sync_state_set_epoch,
+                        Some(&sync_state_set),
+                    )
+                    .map(|outcome| (outcome, replicas_manager.broker_controller_id()))
             })
             .ok_or_else(|| {
                 crate::broker_error::invalid_argument(
@@ -262,10 +265,12 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
 
         // Controller metadata can arrive before Store initialization. The legacy
         // root path treated that window as a no-op and still advanced control-plane
-        // state, so keep the extracted boundary compatible.
+        // state, so keep the extracted boundary compatible. Sync state sets hold
+        // Controller-assigned broker ids, so the Store must know this broker by that
+        // id even when promotion reports `MASTER_ID` as its role id.
         let _ = self
             .store
-            .sync_controller_sync_state_set(outcome.local_broker_id as i64, &outcome.sync_state_set);
+            .sync_controller_sync_state_set(controller_broker_id as i64, &outcome.sync_state_set);
         let Some(role) = outcome.role else {
             return Ok(true);
         };

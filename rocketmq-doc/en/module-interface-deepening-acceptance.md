@@ -58,7 +58,7 @@ ordinary security-disabled configuration remains supported by
 - `CheckpointOffsets`
 - `CheckpointRestoreVerification`
 - `CheckpointArtifact`
-- `CheckpointBackend`
+- `CheckpointStoreKind`
 
 `ReleaseCheckpointStore` accepts that domain request plus a security-api grant.
 `rocketmq-store-api`, `rocketmq-store-local`, and `rocketmq-store-rocksdb` no
@@ -68,7 +68,7 @@ behavior.
 The Broker maintenance processor is the wire adapter. It maps the existing
 protocol DTO to the domain request and maps the manifest back to the unchanged
 camelCase wire shape. Round-trip and serialized-field tests cover both Local
-and RocksDB backend values. Protocol response codes, headers, Serde names, and
+and RocksDB Store-kind values. Protocol response codes, headers, Serde names, and
 checkpoint storage identity semantics are unchanged.
 
 ## Store capability migration

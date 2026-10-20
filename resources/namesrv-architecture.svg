@@ -82,7 +82,7 @@
   <text x="1040" y="238" class="small">single canonical implementation</text>
   <rect x="1018" y="286" width="176" height="58" rx="9" class="chip-green"/>
   <text x="1040" y="309" class="label">Concurrent state</text>
-  <text x="1040" y="326" class="small">DashMap + segmented locks</text>
+  <text x="1040" y="326" class="small">DashMap + mutation coordinator</text>
   <rect x="1018" y="374" width="176" height="58" rx="9" class="chip-gray"/>
   <text x="1040" y="397" class="label">Reverse topic index</text>
   <text x="1040" y="414" class="small">consistent broker/topic lookup</text>

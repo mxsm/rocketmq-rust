@@ -117,23 +117,3 @@ where
 /// }
 /// ```
 pub type ArcSendCallback = Arc<dyn SendCallback>;
-
-/// Legacy type alias for backward compatibility.
-///
-/// This type is deprecated in favor of the trait-based approach.
-/// Use `ArcSendCallback` for storage or generic `SendCallback` bound for parameters.
-///
-/// # Migration
-///
-/// ```rust,ignore
-/// // Old style (still works)
-/// let callback: SendMessageCallback = Arc::new(|result, error| { /* ... */ });
-///
-/// // New style (recommended)
-/// let callback: ArcSendCallback = Arc::new(|result, error| { /* ... */ });
-///
-/// // Or use generic parameter (best performance)
-/// fn my_function<CB: SendCallback + 'static>(callback: CB) { /* ... */ }
-/// ```
-#[deprecated(since = "0.8.0", note = "Use ArcSendCallback or generic SendCallback bound instead")]
-pub type SendMessageCallback = Arc<dyn Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync>;

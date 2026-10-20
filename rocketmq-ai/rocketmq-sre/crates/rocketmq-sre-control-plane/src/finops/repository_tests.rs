@@ -13,8 +13,10 @@
 // limitations under the License.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use chrono::Duration;
+use chrono::TimeZone;
 use chrono::Utc;
 use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::FinOpsAllocationMode;
@@ -47,9 +49,10 @@ async fn postgres_finops_tracks_cost_enforces_budget_and_preserves_safety() {
         .await
         .expect("repository with FinOps migrations");
     let fixture = seed_fixture(&repository).await;
-    let service = FinOpsService::new(repository.clone());
+    let evaluated_at = Utc.with_ymd_and_hms(2026, 1, 15, 12, 0, 0).single().expect("test time");
+    let service = FinOpsService::new_with_clock(repository.clone(), Arc::new(move || evaluated_at));
     let auth = operator_auth(fixture.tenant_id, fixture.cluster_id);
-    let occurred_at = Utc::now() - Duration::minutes(10);
+    let occurred_at = evaluated_at - Duration::minutes(10);
 
     let sources = [
         FinOpsCostSource::ControlPlane,
@@ -114,6 +117,9 @@ async fn postgres_finops_tracks_cost_enforces_budget_and_preserves_safety() {
         .expect("background budget decision");
     assert!(!background.decision.allowed);
     assert_eq!(background.decision.degradation, FinOpsDegradation::DenyLowPriority);
+    assert_eq!(background.decision.observed_cost_micros, 800);
+    assert_eq!(background.decision.projected_cost_micros, 801);
+    assert_eq!(background.decision.evaluated_at, evaluated_at);
     let rollback = service
         .evaluate_budget(
             &auth,
@@ -164,7 +170,7 @@ async fn postgres_finops_tracks_cost_enforces_budget_and_preserves_safety() {
             &auth,
             &FinOpsReportQuery {
                 from: occurred_at - Duration::minutes(5),
-                to: Utc::now() + Duration::minutes(1),
+                to: evaluated_at + Duration::minutes(1),
                 cluster_id: Some(fixture.cluster_id),
                 limit: 100,
             },
@@ -189,6 +195,8 @@ async fn postgres_finops_tracks_cost_enforces_budget_and_preserves_safety() {
             .is_some_and(|source| source == "observability")
     }));
     assert!(!report.forecasts.is_empty());
+    assert_eq!(report.forecasts[0].observed_cost_micros, 800);
+    assert_eq!(report.forecasts[0].sample_count, 7);
     assert!(!report.anomalies.is_empty());
     assert!(
         report
@@ -196,6 +204,26 @@ async fn postgres_finops_tracks_cost_enforces_budget_and_preserves_safety() {
             .iter()
             .any(|warning| warning.starts_with("slo_outcome_attribution_not_available"))
     );
+
+    // At 00:05 UTC, yesterday's costs must not consume the new day's budget.
+    let next_day = evaluated_at + Duration::hours(12) + Duration::minutes(5);
+    let next_day_service = FinOpsService::new_with_clock(repository, Arc::new(move || next_day));
+    let next_day_background = next_day_service
+        .evaluate_budget(
+            &auth,
+            &EvaluateFinOpsBudgetRequest {
+                budget_id: budget.id,
+                cluster_id: Some(fixture.cluster_id),
+                work_class: FinOpsWorkClass::Background,
+                requested_cost_micros: 1,
+            },
+        )
+        .await
+        .expect("new daily budget decision");
+    assert!(next_day_background.decision.allowed);
+    assert_eq!(next_day_background.decision.degradation, FinOpsDegradation::None);
+    assert_eq!(next_day_background.decision.observed_cost_micros, 0);
+    assert_eq!(next_day_background.decision.projected_cost_micros, 1);
 }
 
 fn cost_request(

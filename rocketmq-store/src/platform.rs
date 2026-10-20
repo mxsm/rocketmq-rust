@@ -16,7 +16,7 @@ use crate::utils::ffi::get_page_size;
 
 pub use rocketmq_store_local::mapped_file::file::classify_file_preallocate_result;
 pub use rocketmq_store_local::mapped_file::file::preallocate_file;
-pub use rocketmq_store_local::mapped_file::file::FilePreallocateOutcome;
+pub use rocketmq_store_local::mapped_file::file::FilePreallocationResult;
 pub use rocketmq_store_local::mapped_file::file::PREALLOCATE_UNSUPPORTED_ERRNO;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

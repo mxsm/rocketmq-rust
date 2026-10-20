@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use bytes::Bytes;
+use rocketmq_store_api::DecodedReadResult;
 use rocketmq_store_api::GetResult;
 use rocketmq_store_api::GetStatus;
 use rocketmq_store_api::LeasedBytes;
 use rocketmq_store_api::QueryResult;
 use rocketmq_store_api::ReadCacheState;
-use rocketmq_store_api::ReadOutcome;
 use rocketmq_store_api::SelectResult;
 
 #[test]
@@ -59,9 +59,9 @@ fn get_result_preserves_legacy_navigation_and_accounting_fields() {
 }
 
 #[test]
-fn read_outcome_owns_decoded_records_and_preserves_absence() {
-    let found = ReadOutcome::new(GetStatus::Found, 9, 2, 20, vec!["first", "second"]);
-    let absent = ReadOutcome::<String>::new(GetStatus::NoMessageInQueue, 20, 2, 20, None);
+fn decoded_read_result_owns_decoded_records_and_preserves_absence() {
+    let found = DecodedReadResult::new(GetStatus::Found, 9, 2, 20, vec!["first", "second"]);
+    let absent = DecodedReadResult::<String>::new(GetStatus::NoMessageInQueue, 20, 2, 20, None);
 
     assert_eq!(GetStatus::Found, found.status());
     assert_eq!(9, found.next_begin_offset());

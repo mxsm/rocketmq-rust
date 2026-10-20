@@ -265,7 +265,7 @@ async fn public_restore_preserves_owner_correct_store_error_without_nesting() {
         .create_release_checkpoint(&fixture.grant, fixture.request.clone())
         .await
         .expect("create checkpoint fixture for restore");
-    let ReleaseCheckpointCreateOutcome::Created(manifest) = outcome else {
+    let ReleaseCheckpointCreationResult::Created(manifest) = outcome else {
         panic!("checkpoint fixture creation must succeed");
     };
     let restore_service = fixture.service_with_hasher("restore-passthrough-verify", owner_correct_restore_failure);

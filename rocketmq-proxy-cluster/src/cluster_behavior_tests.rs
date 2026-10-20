@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use rocketmq_error::Error as CanonicalError;
-use rocketmq_model::result::PullOutcome;
+use rocketmq_model::result::PullResponse;
 use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_proxy_core::ConsumerFilterExpression;
 use rocketmq_proxy_core::ProxyMessage;
@@ -133,7 +133,7 @@ struct ProducerStartControl {
 struct ScriptedClientIo {
     events: EventLog,
     routes: Mutex<VecDeque<Result<Option<TopicRouteData>, CanonicalError>>>,
-    pulls: Mutex<VecDeque<Result<PullOutcome<MessageExt>, CanonicalError>>>,
+    pulls: Mutex<VecDeque<Result<PullResponse<MessageExt>, CanonicalError>>>,
     pops: Mutex<VecDeque<Result<PopResult, CanonicalError>>>,
     acks: Mutex<VecDeque<Result<AckResult, CanonicalError>>>,
     broker_lookup_misses: AtomicUsize,
@@ -152,6 +152,7 @@ struct ScriptedClientIo {
     start_block: Option<Arc<Notify>>,
     pull_entered: Mutex<Option<oneshot::Sender<()>>>,
     pull_block: Option<Arc<Notify>>,
+    pull_wait_poll_gate: Option<CancellationToken>,
     shutdown_block: Option<Arc<Notify>>,
 }
 
@@ -179,6 +180,7 @@ impl ScriptedClientIo {
             start_block: None,
             pull_entered: Mutex::new(None),
             pull_block: None,
+            pull_wait_poll_gate: None,
             shutdown_block: None,
         }
     }
@@ -216,11 +218,11 @@ impl ScriptedClientIo {
             .push_back(Ok(Some(route)));
     }
 
-    fn push_pull(&self, outcome: PullOutcome<MessageExt>) {
+    fn push_pull(&self, response: PullResponse<MessageExt>) {
         self.pulls
             .lock()
             .expect("pull script lock poisoned")
-            .push_back(Ok(outcome));
+            .push_back(Ok(response));
     }
 
     fn push_pop(&self, result: PopResult) {
@@ -421,12 +423,15 @@ impl ClusterClientIo for ScriptedClientIo {
         CheetahString::from(queue.broker_name())
     }
 
-    async fn pull_outcome_from_broker(
+    async fn pull_response_from_broker(
         &self,
         _broker_addr: &str,
         _request: PullMessageRequestHeader,
         _timeout_millis: u64,
-    ) -> Result<PullOutcome<MessageExt>, CanonicalError> {
+    ) -> Result<PullResponse<MessageExt>, CanonicalError> {
+        // Subscribe before publishing readiness so a broadcast cannot be lost
+        // between the call count becoming visible and the wait being polled.
+        let released = self.pull_block.as_ref().map(|block| block.notified());
         self.record("client.pull");
         self.pull_calls.fetch_add(1, Ordering::AcqRel);
         if let Some(sender) = self
@@ -437,10 +442,13 @@ impl ClusterClientIo for ScriptedClientIo {
         {
             let _ = sender.send(());
         }
-        if let Some(block) = &self.pull_block {
-            block.notified().await;
+        if let Some(gate) = &self.pull_wait_poll_gate {
+            gate.cancelled().await;
         }
-        Self::scripted(&self.pulls, "pull_outcome_from_broker")
+        if let Some(released) = released {
+            released.await;
+        }
+        Self::scripted(&self.pulls, "pull_response_from_broker")
     }
 
     async fn consumer_send_message_back(
@@ -968,7 +976,7 @@ fn shutdown_report_panics(report: &rocketmq_runtime::ShutdownReport) -> usize {
 async fn unrelated_route_progresses_while_pull_is_blocked() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let (client, pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
-    client.push_pull(PullOutcome::new(
+    client.push_pull(PullResponse::new(
         PullStatus::NoNewMsg,
         7,
         1,
@@ -1030,14 +1038,14 @@ async fn unrelated_route_progresses_while_pull_is_blocked() {
 async fn same_consumer_key_is_fifo_without_serializing_distinct_keys() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let (client, first_pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
-    client.push_pull(PullOutcome::new(
+    client.push_pull(PullResponse::new(
         PullStatus::NoNewMsg,
         11,
         1,
         21,
         None::<Vec<MessageExt>>,
     ));
-    client.push_pull(PullOutcome::new(
+    client.push_pull(PullResponse::new(
         PullStatus::NoNewMsg,
         22,
         1,
@@ -1081,15 +1089,17 @@ async fn same_consumer_key_is_fifo_without_serializing_distinct_keys() {
 #[tokio::test]
 async fn distinct_consumer_keys_reach_remote_io_concurrently() {
     let events = Arc::new(Mutex::new(Vec::new()));
-    let (client, first_pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
-    client.push_pull(PullOutcome::new(
+    let (mut client, first_pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
+    let pull_wait_poll_gate = CancellationToken::new();
+    client.pull_wait_poll_gate = Some(pull_wait_poll_gate.clone());
+    client.push_pull(PullResponse::new(
         PullStatus::NoNewMsg,
         11,
         1,
         21,
         None::<Vec<MessageExt>>,
     ));
-    client.push_pull(PullOutcome::new(
+    client.push_pull(PullResponse::new(
         PullStatus::NoNewMsg,
         22,
         1,
@@ -1116,13 +1126,15 @@ async fn distinct_consumer_keys_reach_remote_io_concurrently() {
                     .as_ref()
                     .expect("blocking pull control")
                     .notify_waiters();
+                // Broadcast before either mock is allowed to poll its wait.
+                pull_wait_poll_gate.cancel();
             };
             let (second, ()) = tokio::join!(second, observe);
             second
         };
         let (first, second) = tokio::join!(first, probe);
-        assert!(first.is_ok(), "first distinct-key pull");
-        assert!(second.is_ok(), "second distinct-key pull");
+        first.expect("first distinct-key pull");
+        second.expect("second distinct-key pull");
         assert_eq!(executor.lanes.snapshot().max_inflight, 2);
         cancellation.cancel();
     })
@@ -1133,14 +1145,14 @@ async fn distinct_consumer_keys_reach_remote_io_concurrently() {
 async fn long_poll_saturation_preserves_short_data_and_control_capacity() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let (client, first_pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
-    client.push_pull(PullOutcome::new(
+    client.push_pull(PullResponse::new(
         PullStatus::NoNewMsg,
         11,
         1,
         21,
         None::<Vec<MessageExt>>,
     ));
-    client.push_pull(PullOutcome::new(
+    client.push_pull(PullResponse::new(
         PullStatus::NoNewMsg,
         22,
         1,
@@ -1274,7 +1286,7 @@ async fn idle_key_lane_is_reclaimed_without_leaking_budget_or_tasks() {
 async fn active_long_poll_uses_only_the_long_poll_budget() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let (client, pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
-    client.push_pull(PullOutcome::new(
+    client.push_pull(PullResponse::new(
         PullStatus::NoNewMsg,
         7,
         1,
@@ -1347,7 +1359,7 @@ async fn active_long_poll_uses_only_the_long_poll_budget() {
 async fn request_timeout_cancels_remote_io_and_releases_all_permits() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let (client, pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
-    client.push_pull(PullOutcome::new(
+    client.push_pull(PullResponse::new(
         PullStatus::NoNewMsg,
         7,
         1,
@@ -1441,7 +1453,6 @@ async fn panicked_lane_is_reclaimed_and_closes_without_leaks() {
     cancellation.cancel();
     let report = service.task_group().shutdown(Duration::from_secs(1)).await;
     assert_eq!(report.leaked, 0, "{}", report.to_json());
-    assert_eq!(report.detached_still_running, 0, "{}", report.to_json());
     assert_eq!(shutdown_report_panics(&report), 1, "{}", report.to_json());
 }
 
@@ -1450,7 +1461,7 @@ async fn worker_maps_route_pull_pop_and_ack_with_retry() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let client = Arc::new(ScriptedClientIo::new(events.clone()));
     client.push_route(TopicRouteData::default());
-    client.push_pull(PullOutcome::new(
+    client.push_pull(PullResponse::new(
         PullStatus::NoNewMsg,
         7,
         1,
@@ -1558,7 +1569,7 @@ async fn worker_maps_route_pull_pop_and_ack_with_retry() {
 async fn worker_preserves_owned_messages_for_found_pull_and_pop_results() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let client = Arc::new(ScriptedClientIo::new(events.clone()));
-    client.push_pull(PullOutcome::new(
+    client.push_pull(PullResponse::new(
         PullStatus::Found,
         8,
         1,
@@ -1776,18 +1787,32 @@ async fn cancellation_during_client_start_still_shuts_down_owned_client() {
     });
     let error = run_test_worker(client, factory, |executor, cancellation| async move {
         let command = executor.query_route(ResourceIdentity::new("", "TopicA"));
-        let cancel = async move {
-            start_entered.await.expect("Client start was entered");
-            cancellation.cancel();
-        };
-        let (result, ()) = tokio::join!(command, cancel);
-        result.expect_err("cancelled startup must not produce a route")
+        tokio::pin!(command);
+        tokio::select! {
+            result = &mut command => panic!("blocked Client startup completed unexpectedly: {result:?}"),
+            entered = start_entered => entered.expect("Client start was entered"),
+        }
+        cancellation.cancel();
+        // Keep the caller unpolled until the lane exits so the closed reply is observed before
+        // the executor's shutdown notification, independently of scheduler timing.
+        assert!(
+            executor
+                .lanes
+                .wait_for_lane_tasks(rocketmq_runtime::ShutdownDeadline::after(Duration::from_secs(1)))
+                .await,
+            "cancelled startup must retire its owned lane"
+        );
+        command.await.expect_err("cancelled startup must not produce a route")
     })
     .await;
-    assert!(matches!(error, ProxyError::Transport { .. }));
     assert_eq!(
         events.lock().expect("event log lock poisoned").as_slice(),
         ["client.start", "client.shutdown"]
+    );
+    assert_eq!(
+        error.descriptor(),
+        &rocketmq_error::PROXY_TRANSPORT_UNAVAILABLE,
+        "unexpected startup cancellation error: {error:?}"
     );
 }
 
@@ -1823,7 +1848,11 @@ async fn cancellation_during_active_pull_cancels_the_command_and_shuts_down_clie
     })
     .await;
 
-    assert!(matches!(error, ProxyError::Transport { .. }));
+    assert_eq!(
+        error.descriptor(),
+        &rocketmq_error::PROXY_TRANSPORT_UNAVAILABLE,
+        "unexpected pull cancellation error: {error:?}"
+    );
     assert_eq!(
         events.lock().expect("event log lock poisoned").as_slice(),
         ["client.start", "client.pull", "client.shutdown"]
@@ -1867,8 +1896,9 @@ async fn cancellation_during_producer_start_still_shuts_down_producer_before_cli
         result.expect_err("cancelled producer startup must not send")
     });
     let error = error.await;
-    assert!(
-        matches!(error, ProxyError::Transport { .. }),
+    assert_eq!(
+        error.descriptor(),
+        &rocketmq_error::PROXY_TRANSPORT_UNAVAILABLE,
         "producer startup cancellation must surface as transport shutdown: {error:?}"
     );
     let events = events.lock().expect("event log lock poisoned");

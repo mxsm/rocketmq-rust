@@ -167,8 +167,8 @@ export default function MonitorPage() {
 
       <div className="metric-grid entity-metrics">
         <MetricCard label="Rules" value={metrics.ruleCount} detail="Persisted configurations" />
-        <MetricCard label="Min Count range" value={metrics.minCountRange} detail="Across persisted rules" />
-        <MetricCard label="Max Diff Total range" value={metrics.maxDiffTotalRange} detail="Across persisted rules" />
+        <MetricCard label="Min Count range" value={metrics.minCountRange} detail="Across persisted rules" accent="cyan" />
+        <MetricCard label="Max Diff Total range" value={metrics.maxDiffTotalRange} detail="Across persisted rules" accent="amber" />
       </div>
 
       {mutationError ? <ErrorState message={mutationError.message} onRetry={mutationError.retry} retryLabel={mutationError.retryLabel} /> : null}

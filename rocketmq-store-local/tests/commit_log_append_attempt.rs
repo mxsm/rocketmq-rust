@@ -19,9 +19,9 @@ use rocketmq_store_local::commit_log::append::AppendMessageResult;
 use rocketmq_store_local::commit_log::append::AppendMessageStatus;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAborted;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAttempt;
+use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAttemptResult;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendCompleted;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendFailure;
-use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendOutcome;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendResolution;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendStatus;
 
@@ -79,7 +79,7 @@ fn initial_present_put_ok_observes_strict_order_without_acquiring() {
     );
 
     match outcome {
-        CommitLogAppendOutcome::Completed(CommitLogAppendCompleted::PutOk { result, rolled_segment }) => {
+        CommitLogAppendAttemptResult::Completed(CommitLogAppendCompleted::PutOk { result, rolled_segment }) => {
             assert_eq!(AppendMessageStatus::PutOk, result.status);
             assert_eq!(11, result.wrote_offset);
             assert!(rolled_segment.is_none());
@@ -122,7 +122,7 @@ fn missing_or_full_initial_segment_acquires_exactly_once() {
 
         assert!(matches!(
             outcome,
-            CommitLogAppendOutcome::Completed(CommitLogAppendCompleted::PutOk {
+            CommitLogAppendAttemptResult::Completed(CommitLogAppendCompleted::PutOk {
                 rolled_segment: None,
                 ..
             })
@@ -162,7 +162,7 @@ fn full_initial_acquire_failure_drops_old_only_after_acquire() {
 
     assert!(matches!(
         outcome,
-        CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialSegmentUnavailable)
+        CommitLogAppendAttemptResult::Aborted(CommitLogAppendAborted::InitialSegmentUnavailable)
     ));
     assert_eq!(["full:full", "acquire", "drop:full"], events.borrow().as_slice());
 }
@@ -183,7 +183,7 @@ fn initial_lock_failure_drops_segment_after_the_failed_lock() {
 
     assert!(matches!(
         outcome,
-        CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialActiveLockFailed { error: "lock-error" })
+        CommitLogAppendAttemptResult::Aborted(CommitLogAppendAborted::InitialActiveLockFailed { error: "lock-error" })
     ));
     assert_eq!(["lock:initial", "drop:initial"], events.borrow().as_slice());
 }
@@ -207,14 +207,14 @@ fn initial_abort_outcomes_are_explicit_and_do_not_retry() {
             AppendMessageStatus::MessageSizeExceeded | AppendMessageStatus::PropertiesSizeExceeded => {
                 assert!(matches!(
                     outcome,
-                    CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialMessageIllegal {
+                    CommitLogAppendAttemptResult::Aborted(CommitLogAppendAborted::InitialMessageIllegal {
                         result: AppendMessageResult { status: actual, .. }
                     }) if actual == status
                 ));
             }
             AppendMessageStatus::UnknownError => assert!(matches!(
                 outcome,
-                CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialUnknown {
+                CommitLogAppendAttemptResult::Aborted(CommitLogAppendAborted::InitialUnknown {
                     result: AppendMessageResult {
                         status: AppendMessageStatus::UnknownError,
                         ..
@@ -234,7 +234,7 @@ fn initial_abort_outcomes_are_explicit_and_do_not_retry() {
     );
     assert!(matches!(
         unavailable,
-        CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialSegmentUnavailable)
+        CommitLogAppendAttemptResult::Aborted(CommitLogAppendAborted::InitialSegmentUnavailable)
     ));
 
     let lock_failed = CommitLogAppendAttempt::run(
@@ -246,7 +246,9 @@ fn initial_abort_outcomes_are_explicit_and_do_not_retry() {
     );
     assert!(matches!(
         lock_failed,
-        CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialActiveLockFailed { error: "initial-lock" })
+        CommitLogAppendAttemptResult::Aborted(CommitLogAppendAborted::InitialActiveLockFailed {
+            error: "initial-lock"
+        })
     ));
 }
 
@@ -279,7 +281,7 @@ fn first_eof_rolls_once_and_retry_put_ok_returns_old_segment() {
     );
 
     let old = match outcome {
-        CommitLogAppendOutcome::Completed(CommitLogAppendCompleted::PutOk {
+        CommitLogAppendAttemptResult::Completed(CommitLogAppendCompleted::PutOk {
             result,
             rolled_segment: Some(old),
         }) => {
@@ -314,7 +316,7 @@ fn rolled_abort_outcomes_retain_first_eof_and_old_segment() {
         |_| result(AppendMessageStatus::EndOfFile, 51),
     );
     match unavailable {
-        CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::RolledSegmentUnavailable { first_eof, old }) => {
+        CommitLogAppendAttemptResult::Aborted(CommitLogAppendAborted::RolledSegmentUnavailable { first_eof, old }) => {
             assert_eq!(51, first_eof.wrote_offset);
             assert_eq!("old-unavailable", old.name);
             drop(old);
@@ -337,7 +339,11 @@ fn rolled_abort_outcomes_retain_first_eof_and_old_segment() {
         |_| result(AppendMessageStatus::EndOfFile, 52),
     );
     match lock_failed {
-        CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::RolledActiveLockFailed { first_eof, old, error }) => {
+        CommitLogAppendAttemptResult::Aborted(CommitLogAppendAborted::RolledActiveLockFailed {
+            first_eof,
+            old,
+            error,
+        }) => {
             assert_eq!(52, first_eof.wrote_offset);
             assert_eq!("old-lock", old.name);
             assert_eq!("rolled-lock-error", error);
@@ -378,7 +384,10 @@ fn every_non_put_ok_retry_is_rejected_without_a_third_attempt() {
         );
 
         match outcome {
-            CommitLogAppendOutcome::Completed(CommitLogAppendCompleted::RetryRejected { result, rolled_segment }) => {
+            CommitLogAppendAttemptResult::Completed(CommitLogAppendCompleted::RetryRejected {
+                result,
+                rolled_segment,
+            }) => {
                 assert_eq!(retry_status, result.status);
                 assert_eq!("old", rolled_segment.name);
                 drop(rolled_segment);
@@ -391,7 +400,7 @@ fn every_non_put_ok_retry_is_rejected_without_a_third_attempt() {
 
 #[test]
 fn completed_outcomes_resolve_to_continue_status_and_unlock_identity() {
-    let put_ok = CommitLogAppendOutcome::<(), &'static str>::Completed(CommitLogAppendCompleted::PutOk {
+    let put_ok = CommitLogAppendAttemptResult::<(), &'static str>::Completed(CommitLogAppendCompleted::PutOk {
         result: result(AppendMessageStatus::PutOk, 61),
         rolled_segment: None,
     });
@@ -404,11 +413,12 @@ fn completed_outcomes_resolve_to_continue_status_and_unlock_identity() {
         }
     ));
 
-    let retry_rejected =
-        CommitLogAppendOutcome::<&'static str, &'static str>::Completed(CommitLogAppendCompleted::RetryRejected {
+    let retry_rejected = CommitLogAppendAttemptResult::<&'static str, &'static str>::Completed(
+        CommitLogAppendCompleted::RetryRejected {
             result: result(AppendMessageStatus::UnknownError, 62),
             rolled_segment: "old",
-        });
+        },
+    );
     assert!(matches!(
         retry_rejected.resolve(),
         CommitLogAppendResolution::Continue {
@@ -422,19 +432,21 @@ fn completed_outcomes_resolve_to_continue_status_and_unlock_identity() {
 #[test]
 fn aborted_outcomes_resolve_every_return_status_and_owned_detail() {
     let cases = [
-        CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialSegmentUnavailable),
-        CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialActiveLockFailed { error: "initial-lock" }),
-        CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialMessageIllegal {
+        CommitLogAppendAttemptResult::Aborted(CommitLogAppendAborted::InitialSegmentUnavailable),
+        CommitLogAppendAttemptResult::Aborted(CommitLogAppendAborted::InitialActiveLockFailed {
+            error: "initial-lock",
+        }),
+        CommitLogAppendAttemptResult::Aborted(CommitLogAppendAborted::InitialMessageIllegal {
             result: result(AppendMessageStatus::MessageSizeExceeded, 71),
         }),
-        CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialUnknown {
+        CommitLogAppendAttemptResult::Aborted(CommitLogAppendAborted::InitialUnknown {
             result: result(AppendMessageStatus::UnknownError, 72),
         }),
-        CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::RolledSegmentUnavailable {
+        CommitLogAppendAttemptResult::Aborted(CommitLogAppendAborted::RolledSegmentUnavailable {
             first_eof: result(AppendMessageStatus::EndOfFile, 73),
             old: "old-unavailable",
         }),
-        CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::RolledActiveLockFailed {
+        CommitLogAppendAttemptResult::Aborted(CommitLogAppendAborted::RolledActiveLockFailed {
             first_eof: result(AppendMessageStatus::EndOfFile, 74),
             old: "old-lock",
             error: "rolled-lock",
@@ -442,7 +454,7 @@ fn aborted_outcomes_resolve_every_return_status_and_owned_detail() {
     ];
 
     let [initial_unavailable, initial_lock, initial_illegal, initial_unknown, rolled_unavailable, rolled_lock] =
-        cases.map(CommitLogAppendOutcome::resolve);
+        cases.map(CommitLogAppendAttemptResult::resolve);
     assert!(matches!(
         initial_unavailable,
         CommitLogAppendResolution::Return {

@@ -339,9 +339,9 @@ impl NamespaceAbsenceProof {
     }
 }
 
-/// Complete typed result of one authorized transition attempt.
+/// Typed result of namespace verification, creation, or retirement.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum NamespaceTransitionOutcome {
+pub(crate) enum NamespaceOperationResult {
     Tombstoned(NamespaceTombstoneProof),
     NamespaceAbsentVerified(NamespaceAbsenceProof),
     Superseded {

@@ -29,10 +29,10 @@ use rocketmq_transport::api::DeferredId;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
 use rocketmq_transport::api::DeferredWaitLimits;
 use rocketmq_transport::api::DeferredWakeReason;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrdering;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::TransportServer;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -40,8 +40,8 @@ use tokio::sync::oneshot;
 
 use super::*;
 use crate::long_polling::pop_lite_deferred::index::PopLiteIndexLimits;
-use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredPrepareOutcome;
-use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredRegisterOutcome;
+use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredPreparationStatus;
+use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredRegistrationStatus;
 use crate::long_polling::pop_lite_deferred::prepare::PopLiteRetainedEstimate;
 use crate::long_polling::pop_lite_deferred::service::PopLiteDeferredService;
 
@@ -93,10 +93,10 @@ struct RegisteringProcessor {
 }
 
 impl RequestProcessor for RegisteringProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let prepared = match self.service.prepare(request, PopLiteRetainedEstimate::default()) {
-            Ok(PopLiteDeferredPrepareOutcome::Prepared(prepared)) => *prepared,
-            Ok(PopLiteDeferredPrepareOutcome::Rejected(_)) => {
+            Ok(PopLiteDeferredPreparationStatus::Prepared(prepared)) => *prepared,
+            Ok(PopLiteDeferredPreparationStatus::Rejected(_)) => {
                 return Err(crate::broker_error::from_shared(Arc::new(CanonicalError::new(
                     &CORE_ARGUMENT_INVALID,
                 ))));
@@ -109,8 +109,8 @@ impl RequestProcessor for RegisteringProcessor {
             }
         };
         let registration = match self.service.register(prepared, request) {
-            Ok(PopLiteDeferredRegisterOutcome::Registered(registration)) => *registration,
-            Ok(PopLiteDeferredRegisterOutcome::Rejected(_)) => {
+            Ok(PopLiteDeferredRegistrationStatus::Registered(registration)) => *registration,
+            Ok(PopLiteDeferredRegistrationStatus::Rejected(_)) => {
                 return Err(crate::broker_error::from_shared(Arc::new(CanonicalError::new(
                     &CORE_ARGUMENT_INVALID,
                 ))));
@@ -125,7 +125,7 @@ impl RequestProcessor for RegisteringProcessor {
         self.registrations
             .send(registration.deferred_id())
             .map_err(|_| crate::broker_error::invalid_argument("PopLite registration observer closed"))?;
-        Ok(HandlerOutcome::Deferred(registration))
+        Ok(ResponseAction::Deferred(registration))
     }
 
     fn request_ordering(&self, _ingress: rocketmq_transport::api::IngressRequestView<'_>) -> RequestOrdering {
@@ -320,7 +320,7 @@ async fn pop_lite_deferred_real_store_single_chain_writes_exact_terminal_frame()
             )
             .await
             .expect("write canonical real-store PopLite response"),
-        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        rocketmq_transport::api::DeferredResumeResult::Completed(_)
     ));
 
     let mut response = client
@@ -408,7 +408,7 @@ async fn pop_lite_deferred_real_store_claimed_empty_is_exact_terminal_timeout() 
             )
             .await
             .expect("write canonical empty-store PopLite response"),
-        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        rocketmq_transport::api::DeferredResumeResult::Completed(_)
     ));
 
     let mut response = client

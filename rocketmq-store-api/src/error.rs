@@ -367,7 +367,7 @@ mod tests {
     use rocketmq_error::ContextVisibility;
     use rocketmq_error::ViewValueRef;
     use rocketmq_error::PROTOCOL_HEADER_INVALID;
-    use rocketmq_error::STORAGE_BACKEND_UNAVAILABLE;
+    use rocketmq_error::STORAGE_UNAVAILABLE;
     use rocketmq_error::STORAGE_WRITE_FAILED;
 
     use super::*;
@@ -397,10 +397,10 @@ mod tests {
 
     #[test]
     fn storage_error_exposes_catalog_metadata() {
-        let error = StoreError::new(&STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Append)
+        let error = StoreError::new(&STORAGE_UNAVAILABLE, StoreOperation::Append)
             .in_component(StoreComponent::HighAvailability);
 
-        assert_eq!(&STORAGE_BACKEND_UNAVAILABLE, error.descriptor());
+        assert_eq!(&STORAGE_UNAVAILABLE, error.descriptor());
         assert_eq!("storage.backend.unavailable", error.code().as_str());
         assert_eq!(StoreOperation::Append, error.operation());
         assert_eq!(StoreComponent::HighAvailability, error.component());

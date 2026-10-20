@@ -11,19 +11,20 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use crate::model::StorageBackend;
-use crate::persistence::file_store::FilePersistence;
-use crate::persistence::sql_store::SqlPersistence;
+use crate::model::StorageEngine;
+use crate::persistence::file_store::FileDashboardStore;
+use crate::persistence::sql_store::SqlDashboardStore;
 
-pub enum PersistenceBackend {
-    File(Box<FilePersistence>),
-    Sql(Box<SqlPersistence>),
+/// Owns the initialized File or SQL store for durable Dashboard data.
+pub enum DashboardDataStore {
+    File(Box<FileDashboardStore>),
+    Sql(Box<SqlDashboardStore>),
 }
 
-impl PersistenceBackend {
-    pub const fn storage_backend(&self) -> StorageBackend {
+impl DashboardDataStore {
+    pub const fn storage_backend(&self) -> StorageEngine {
         match self {
-            Self::File(_) => StorageBackend::File,
+            Self::File(_) => StorageEngine::File,
             Self::Sql(store) => store.storage_backend(),
         }
     }

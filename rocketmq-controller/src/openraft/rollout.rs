@@ -149,7 +149,7 @@ mod tests {
 
     use super::*;
     use crate::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
-    use crate::{ControllerConfig, ControllerConfigReader, Node, StorageBackendType};
+    use crate::{ControllerConfig, ControllerConfigReader, Node, StorageEngineType};
 
     #[tokio::test]
     async fn rollout_requires_fresh_quorum_without_the_target_voter() {
@@ -163,7 +163,7 @@ mod tests {
             let addr = listener.local_addr().unwrap();
             let config = ControllerConfig::default()
                 .with_node_info(id, addr)
-                .with_storage_backend(StorageBackendType::Memory)
+                .with_storage_engine_type(StorageEngineType::Memory)
                 .with_heartbeat_interval_ms(100)
                 .with_election_timeout_ms(1_000);
             let node = RaftNodeManager::new(ControllerConfigReader::new(config), scope.storage_io().clone())

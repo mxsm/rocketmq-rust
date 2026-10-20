@@ -239,7 +239,7 @@ impl CriticalFailureState {
     pub fn spawn_monitor<F>(
         &self,
         owner: &TaskSpawner,
-        name: impl Into<Arc<str>>,
+        name: impl Into<crate::TaskName>,
         on_failure: F,
     ) -> RuntimeResult<TaskId>
     where

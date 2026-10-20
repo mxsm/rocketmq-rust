@@ -231,7 +231,6 @@ impl ConsumeMessagePopOrderlyService {
             "rocketmq-client-pop-orderly-lock-refresh",
             initial_delay,
             period,
-            Duration::from_secs(5),
             move || {
                 let stopped = stopped.clone();
                 let default_mqpush_consumer_impl = default_mqpush_consumer_impl.clone();
@@ -1160,21 +1159,6 @@ mod tests {
 
         service.update_core_pool_size(0);
         assert_eq!(service.get_core_pool_size(), 4);
-    }
-
-    #[test]
-    fn inc_and_dec_core_pool_size_are_noops_like_java() {
-        let config = ConsumerConfig {
-            consume_thread_min: 2,
-            consume_thread_max: 5,
-            ..Default::default()
-        };
-        let service = new_service_with_config(config);
-
-        service.inc_core_pool_size();
-        service.dec_core_pool_size();
-
-        assert_eq!(service.get_core_pool_size(), 2);
     }
 
     #[test]

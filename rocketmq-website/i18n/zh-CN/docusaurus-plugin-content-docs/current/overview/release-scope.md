@@ -13,7 +13,7 @@ RocketMQ-Rust 包含的产品多于一次核心发行。使用根 Cargo manifest
 | 根 Cargo 工作区 | `Cargo.toml`，28 个成员 | 可从仓库根目录通过 Cargo 选择这些包。 |
 | 核心发行包集合 | `scripts/core-release-scope.json`，27 个包 | 已纳入核心发行流程分类，不代表已在 registry 发布。 |
 | 核心服务 | NameServer、Broker、Controller、Proxy | 核心范围命名的服务产品，仍有不同构建 feature、配置和启动命令。 |
-| Dashboard common | 根工作区成员，明确排除在核心发行外 | 可随根工作区构建共享 Dashboard 模型/服务，但桌面和 Web 产品不因此属于核心发行。 |
+| Dashboard common | 根工作区成员，不在核心包清单中，但随工作区一起发布到 crates.io | 可随根工作区构建和发布共享 Dashboard 模型/服务，但桌面和 Web 产品不因此属于核心发行。 |
 | 独立 Cargo 产品 | Examples、GPUI、Tauri 后端、Web 后端、MCP、MCP Control、SRE 及专用测试 fixture/fuzzing | 使用各自 manifest 和指南，根构建不覆盖它们。 |
 | Node 项目 | 网站、Dashboard 前端、SRE UI 和 TypeScript SDK | 各自拥有 package manifest 和命令。 |
 
@@ -23,12 +23,12 @@ RocketMQ-Rust 包含的产品多于一次核心发行。使用根 Cargo manifest
 
 | 分类 | 在发行模型中的含义 | 当前示例 |
 | --- | --- | --- |
-| `registry-publish` | 纳入 registry 包规划 | 客户端、模型、协议、传输、运行时、安全、存储、服务库和 Admin Core |
-| `binary-only` | 在该分类中作为二进制产品分发，而非 registry 库 | `rocketmq-admin-cli`、`rocketmq-admin-tui`、`rocketmq-store-inspect` |
+| `registry-publish` | 纳入 registry 包规划 | 客户端、模型、协议、传输、运行时、安全、存储、服务库、Admin Core，以及 Admin CLI、Admin TUI 和存储检查工具 |
+| `binary-only` | 在该分类中作为二进制产品分发，而非 registry 库 | 当前核心条目未使用 |
 | `internal-only` | 模式允许的内部包分类 | 当前核心条目未使用 |
 | `non-publish` | 模式允许的不发布包分类 | 当前核心条目未使用 |
 
-当前核心清单包含 24 个 `registry-publish` 和三个 `binary-only` 条目。服务包可以同时包含库和二进制，分类不会移除可执行文件。反过来，Cargo.toml 中的包版本不能证明下载归档或 registry 版本已经存在。
+当前核心清单的 27 个条目都是 `registry-publish`。服务包可以同时包含库和二进制，分类不会移除可执行文件。反过来，Cargo.toml 中的包版本不能证明下载归档或 registry 版本已经存在。
 
 ## 分发身份
 

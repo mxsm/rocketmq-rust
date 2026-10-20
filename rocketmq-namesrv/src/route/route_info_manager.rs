@@ -71,9 +71,9 @@ mod management;
 
 const DEFAULT_BROKER_CHANNEL_EXPIRED_TIME: u64 = 1000 * 60 * 2; // 2 minutes
 
-/// Result of looking up route data for a topic.
+/// Classification of a local published-route lookup for a topic.
 #[derive(Clone, Debug, PartialEq)]
-pub enum TopicRouteLookupOutcome<T> {
+pub enum TopicRouteLookupStatus<T> {
     /// The requested topic has published route data.
     Found(T),
     /// The requested topic has no published route data.
@@ -970,10 +970,7 @@ impl RouteInfoManager {
             .insert(broker_name.clone(), notification_version);
 
         // Send notification to each broker asynchronously
-        let Some(task_group) = self.name_server_runtime_inner.task_group() else {
-            warn!("skip min broker id notification because NameServer task group is unavailable");
-            return;
-        };
+        let task_group = self.name_server_runtime_inner.task_group();
         let remoting_client = self.name_server_runtime_inner.clone();
         let broker_name = broker_name.clone();
         let notification_versions = Arc::clone(&self.min_broker_notify_versions);
@@ -1555,18 +1552,18 @@ impl RouteInfoManager {
     ///
     /// This method loads one immutable snapshot. Source tables are consulted only
     /// by the serialized write model when publishing a replacement snapshot.
-    pub fn pickup_topic_route_data(&self, topic: &str) -> RouteResult<TopicRouteLookupOutcome<TopicRouteData>> {
+    pub fn pickup_topic_route_data(&self, topic: &str) -> RouteResult<TopicRouteLookupStatus<TopicRouteData>> {
         self.load_topic_route_view(topic).map(|outcome| match outcome {
-            TopicRouteLookupOutcome::Found(view) => TopicRouteLookupOutcome::Found(view.route_data().as_ref().clone()),
-            TopicRouteLookupOutcome::NotFound => TopicRouteLookupOutcome::NotFound,
+            TopicRouteLookupStatus::Found(view) => TopicRouteLookupStatus::Found(view.route_data().as_ref().clone()),
+            TopicRouteLookupStatus::NotFound => TopicRouteLookupStatus::NotFound,
         })
     }
 
-    pub(crate) fn load_topic_route_view(&self, topic: &str) -> RouteResult<TopicRouteLookupOutcome<TopicRouteView>> {
+    pub(crate) fn load_topic_route_view(&self, topic: &str) -> RouteResult<TopicRouteLookupStatus<TopicRouteView>> {
         use rocketmq_model::common::topic::TopicValidator;
 
         let Some(snapshot) = self.route_mutations.load(topic) else {
-            return Ok(TopicRouteLookupOutcome::NotFound);
+            return Ok(TopicRouteLookupStatus::NotFound);
         };
         debug!(
             "Loaded topic route snapshot: topic={}, version={}, published_at={}",
@@ -1579,10 +1576,10 @@ impl RouteInfoManager {
             .support_acting_master
             || topic.starts_with(TopicValidator::SYNC_BROKER_MEMBER_GROUP_PREFIX)
         {
-            return Ok(TopicRouteLookupOutcome::Found(snapshot.base_view()));
+            return Ok(TopicRouteLookupStatus::Found(snapshot.base_view()));
         }
 
-        Ok(TopicRouteLookupOutcome::Found(
+        Ok(TopicRouteLookupStatus::Found(
             snapshot.acting_master_view(build_acting_master_route_data),
         ))
     }
@@ -2060,10 +2057,10 @@ mod tests {
     use super::*;
     use crate::bootstrap::Builder;
 
-    fn expect_found<T>(result: RouteResult<TopicRouteLookupOutcome<T>>, expectation: &str) -> T {
+    fn expect_found<T>(result: RouteResult<TopicRouteLookupStatus<T>>, expectation: &str) -> T {
         match result.expect(expectation) {
-            TopicRouteLookupOutcome::Found(value) => value,
-            TopicRouteLookupOutcome::NotFound => panic!("{expectation}"),
+            TopicRouteLookupStatus::Found(value) => value,
+            TopicRouteLookupStatus::NotFound => panic!("{expectation}"),
         }
     }
 
@@ -2558,7 +2555,7 @@ mod tests {
         );
         assert!(matches!(
             manager.pickup_topic_route_data(topic.as_str()),
-            Ok(TopicRouteLookupOutcome::NotFound)
+            Ok(TopicRouteLookupStatus::NotFound)
         ));
     }
 
@@ -2619,21 +2616,21 @@ mod tests {
         manager.delete_topic(topic.clone(), None);
         assert!(matches!(
             manager.pickup_topic_route_data(topic.as_str()),
-            Ok(TopicRouteLookupOutcome::NotFound)
+            Ok(TopicRouteLookupStatus::NotFound)
         ));
     }
 
     #[test]
-    fn missing_topic_is_an_explicit_normal_lookup_outcome() {
+    fn missing_topic_is_an_explicit_normal_lookup_status() {
         let (_bootstrap, manager) = test_route_manager();
 
         assert!(matches!(
             manager.pickup_topic_route_data("missing-topic"),
-            Ok(TopicRouteLookupOutcome::NotFound)
+            Ok(TopicRouteLookupStatus::NotFound)
         ));
         assert!(matches!(
             manager.load_topic_route_view("missing-topic"),
-            Ok(TopicRouteLookupOutcome::NotFound)
+            Ok(TopicRouteLookupStatus::NotFound)
         ));
     }
 

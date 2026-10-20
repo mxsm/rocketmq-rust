@@ -38,11 +38,11 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use tokio::sync::broadcast;
 
 use crate::base::pending_request_table::materialize_and_estimate_remoting_command_retained_bytes;
-use crate::base::pending_request_table::PendingRegistrationOutcome;
 use crate::base::pending_request_table::PendingRequestCompletion;
 use crate::base::pending_request_table::PendingRequestOwner;
+use crate::base::pending_request_table::PendingRequestRegistrationResult;
 use crate::base::pending_request_table::PendingRequestTable;
-use crate::connection::CommandSendOutcome;
+use crate::connection::CommandWriteResult;
 use crate::deadline::RequestDeadline;
 use crate::error::TransportError;
 use crate::error_helpers::connection_failed_without_source;
@@ -184,8 +184,9 @@ pub enum SessionCloseReason {
 
 /// Result of attempting one typed server push.
 #[must_use]
-pub enum ServerPushOutcome {
-    /// The canonical socket write completed.
+pub enum ServerPushResult {
+    /// The canonical local socket write and flush completed; this asserts
+    /// nothing about peer receipt or business completion.
     Sent(ServerPushReceipt),
     /// The bounded writer queue rejected the command before writing.
     QueueSaturated,
@@ -207,14 +208,14 @@ enum ServerCommandDisposition {
     },
 }
 
-fn server_command_disposition(outcome: CommandSendOutcome) -> ServerCommandDisposition {
+fn server_command_disposition(outcome: CommandWriteResult) -> ServerCommandDisposition {
     match outcome {
-        CommandSendOutcome::Written => ServerCommandDisposition::Written,
-        CommandSendOutcome::QueueSaturated => ServerCommandDisposition::QueueSaturated,
-        CommandSendOutcome::DeadlineExpired => ServerCommandDisposition::DeadlineExpired,
-        CommandSendOutcome::SessionClosed | CommandSendOutcome::Cancelled => ServerCommandDisposition::SessionClosed,
-        CommandSendOutcome::EncodingFailed(source) => ServerCommandDisposition::EncodingFailed(source),
-        CommandSendOutcome::OperationalFailure { progress, error } => {
+        CommandWriteResult::Written => ServerCommandDisposition::Written,
+        CommandWriteResult::QueueSaturated => ServerCommandDisposition::QueueSaturated,
+        CommandWriteResult::DeadlineExpired => ServerCommandDisposition::DeadlineExpired,
+        CommandWriteResult::SessionClosed | CommandWriteResult::Cancelled => ServerCommandDisposition::SessionClosed,
+        CommandWriteResult::EncodingFailed(source) => ServerCommandDisposition::EncodingFailed(source),
+        CommandWriteResult::OperationalFailure { progress, error } => {
             ServerCommandDisposition::OperationalFailure { progress, error }
         }
     }
@@ -231,10 +232,17 @@ impl From<SessionCloseReason> for crate::server::SessionCloseCause {
     }
 }
 
-/// Result of gracefully retiring one canonical session.
+/// Completion status of gracefully retiring one canonical session.
+///
+/// Both variants are returned only after the full server-owned close boundary completes: ordered
+/// cleanup, executor drain, and writer completion. Neither variant reports close still in progress.
+/// `Closed` identifies the caller that initiated close, and `AlreadyClosed` identifies a caller that
+/// observed a prior initiator's close.
+///
+/// Renamed from `SessionCloseOutcome`; the variants are unchanged.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[must_use]
-pub enum SessionCloseOutcome {
+pub enum SessionCloseStatus {
     /// This caller initiated and observed full close completion.
     Closed,
     /// A prior caller initiated close; this caller also observed full completion.
@@ -267,12 +275,12 @@ impl ServerPushSender {
         &self,
         command: ServerPushCommand,
         timeout: Duration,
-    ) -> Result<ServerPushOutcome, TransportError> {
+    ) -> Result<ServerPushResult, TransportError> {
         let session_id = self.session_id();
         let kind = command.kind();
         let _outbound_lease = match self.session.acquire_server_outbound() {
             Ok(lease) => lease,
-            Err(_) => return Ok(ServerPushOutcome::SessionClosed),
+            Err(_) => return Ok(ServerPushResult::SessionClosed),
         };
         let mut connection = self.session.connection();
         match server_command_disposition(
@@ -284,10 +292,10 @@ impl ServerPushSender {
                 )
                 .await,
         ) {
-            ServerCommandDisposition::Written => Ok(ServerPushOutcome::Sent(ServerPushReceipt { session_id, kind })),
-            ServerCommandDisposition::QueueSaturated => Ok(ServerPushOutcome::QueueSaturated),
-            ServerCommandDisposition::DeadlineExpired => Ok(ServerPushOutcome::DeadlineExpired),
-            ServerCommandDisposition::SessionClosed => Ok(ServerPushOutcome::SessionClosed),
+            ServerCommandDisposition::Written => Ok(ServerPushResult::Sent(ServerPushReceipt { session_id, kind })),
+            ServerCommandDisposition::QueueSaturated => Ok(ServerPushResult::QueueSaturated),
+            ServerCommandDisposition::DeadlineExpired => Ok(ServerPushResult::DeadlineExpired),
+            ServerCommandDisposition::SessionClosed => Ok(ServerPushResult::SessionClosed),
             ServerCommandDisposition::EncodingFailed(source) => Err(TransportError::push(source)),
             ServerCommandDisposition::OperationalFailure { error, .. } => Err(TransportError::push(error)),
         }
@@ -437,12 +445,13 @@ impl ServerRequestResponse {
 
 /// Result of one typed broker-to-client request.
 #[must_use]
-pub enum ServerRequestOutcome {
+pub enum ServerRequestResult {
     /// The exactly correlated client response was received.
     Responded(ServerRequestResponse),
     /// Pending-response or writer capacity was exhausted before writing.
     QueueSaturated,
-    /// The immutable deadline elapsed before the first socket write.
+    /// The immutable deadline elapsed before the first socket write, or while
+    /// waiting for its pending response.
     DeadlineExpired,
     /// The session closed before admission or while waiting for its response.
     ///
@@ -528,12 +537,12 @@ impl ServerRequestSender {
         &self,
         command: ServerRequestCommand,
         timeout: Duration,
-    ) -> Result<ServerRequestOutcome, TransportError> {
+    ) -> Result<ServerRequestResult, TransportError> {
         let session_id = self.session_id();
         let kind = command.kind();
         let outbound_lease = match self.session.acquire_server_outbound() {
             Ok(lease) => lease,
-            Err(_) => return Ok(ServerRequestOutcome::SessionClosed),
+            Err(_) => return Ok(ServerRequestResult::SessionClosed),
         };
         let deadline = RequestDeadline::after(timeout);
         let mut command = command.into_command();
@@ -547,11 +556,11 @@ impl ServerRequestSender {
             retained_bytes,
             response_tx,
         ) {
-            PendingRegistrationOutcome::Registered(guard) => guard,
-            PendingRegistrationOutcome::QueueSaturated => return Ok(ServerRequestOutcome::QueueSaturated),
-            PendingRegistrationOutcome::DeadlineExpired => return Ok(ServerRequestOutcome::DeadlineExpired),
-            PendingRegistrationOutcome::SessionClosed => return Ok(ServerRequestOutcome::SessionClosed),
-            PendingRegistrationOutcome::OperationalFailure(source) => {
+            PendingRequestRegistrationResult::Registered(guard) => guard,
+            PendingRequestRegistrationResult::QueueSaturated => return Ok(ServerRequestResult::QueueSaturated),
+            PendingRequestRegistrationResult::DeadlineExpired => return Ok(ServerRequestResult::DeadlineExpired),
+            PendingRequestRegistrationResult::SessionClosed => return Ok(ServerRequestResult::SessionClosed),
+            PendingRequestRegistrationResult::OperationalFailure(source) => {
                 return Err(TransportError::request_failed(
                     crate::error::RequestOperation::Register,
                     crate::request_outcome::OutboundRequestStage::BeforeWrite,
@@ -572,9 +581,9 @@ impl ServerRequestSender {
             | ServerCommandDisposition::DeadlineExpired
             | ServerCommandDisposition::SessionClosed) => {
                 let outcome = match normal {
-                    ServerCommandDisposition::QueueSaturated => ServerRequestOutcome::QueueSaturated,
-                    ServerCommandDisposition::DeadlineExpired => ServerRequestOutcome::DeadlineExpired,
-                    ServerCommandDisposition::SessionClosed => ServerRequestOutcome::SessionClosed,
+                    ServerCommandDisposition::QueueSaturated => ServerRequestResult::QueueSaturated,
+                    ServerCommandDisposition::DeadlineExpired => ServerRequestResult::DeadlineExpired,
+                    ServerCommandDisposition::SessionClosed => ServerRequestResult::SessionClosed,
                     _ => unreachable!("normal server-request dispositions are exhaustive"),
                 };
                 fail_closed.complete();
@@ -609,11 +618,11 @@ impl ServerRequestSender {
             Ok(Ok(PendingRequestCompletion::Response(response))) => response,
             Ok(Ok(PendingRequestCompletion::DeadlineExpired)) => {
                 fail_closed.complete();
-                return Ok(ServerRequestOutcome::DeadlineExpired);
+                return Ok(ServerRequestResult::DeadlineExpired);
             }
             Ok(Ok(PendingRequestCompletion::Cancelled | PendingRequestCompletion::SessionClosed)) => {
                 fail_closed.complete();
-                return Ok(ServerRequestOutcome::SessionClosed);
+                return Ok(ServerRequestResult::SessionClosed);
             }
             Ok(Ok(PendingRequestCompletion::OperationalFailure(source))) => {
                 return Err(TransportError::request_failed(
@@ -645,7 +654,7 @@ impl ServerRequestSender {
             }
         };
         fail_closed.complete();
-        Ok(ServerRequestOutcome::Responded(ServerRequestResponse {
+        Ok(ServerRequestResult::Responded(ServerRequestResponse {
             session_id,
             kind,
             command: response,
@@ -682,16 +691,16 @@ impl SessionCloseHandle {
     ///
     /// Operational finalization failures retain their typed source in
     /// [`TransportError`].
-    pub async fn close(&self, reason: SessionCloseReason) -> Result<SessionCloseOutcome, TransportError> {
+    pub async fn close(&self, reason: SessionCloseReason) -> Result<SessionCloseStatus, TransportError> {
         let (initiated, winning_cause) = self.session.request_close(reason.into());
         self.session
             .wait_for_close_completion()
             .await
             .map_err(|source| TransportError::close(winning_cause, source))?;
         Ok(if initiated {
-            SessionCloseOutcome::Closed
+            SessionCloseStatus::Closed
         } else {
-            SessionCloseOutcome::AlreadyClosed
+            SessionCloseStatus::AlreadyClosed
         })
     }
 
@@ -1007,7 +1016,7 @@ mod tests {
 
     #[test]
     fn post_acquire_expected_close_outcomes_remain_normal_session_closure() {
-        for outcome in [CommandSendOutcome::SessionClosed, CommandSendOutcome::Cancelled] {
+        for outcome in [CommandWriteResult::SessionClosed, CommandWriteResult::Cancelled] {
             assert!(matches!(
                 server_command_disposition(outcome),
                 ServerCommandDisposition::SessionClosed

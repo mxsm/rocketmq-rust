@@ -31,6 +31,7 @@ mod filesystem;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fmt;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
@@ -39,6 +40,8 @@ use std::sync::Arc;
 use std::sync::Weak;
 use std::time::Duration;
 
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -47,9 +50,14 @@ use tokio_util::sync::CancellationToken;
 
 use crate::metadata_target::MetadataTargetIdentity;
 use crate::metadata_target::MetadataTargetRegistration;
-use crate::metadata_target::MetadataTargetRegistrationOutcome;
+use crate::metadata_target::MetadataTargetRegistrationStatus;
 use crate::metadata_target::MetadataTargetRegistry;
-use crate::metadata_target::MetadataTargetRetirementOutcome;
+use crate::metadata_target::MetadataTargetRetirementStatus;
+use crate::resource_budget::BudgetCapacity;
+use crate::resource_budget::BudgetLimit;
+use crate::resource_budget::FullPolicy;
+use crate::resource_budget::ResourceBudget;
+use crate::resource_budget::ResourcePermit;
 use crate::shutdown_deadline::ShutdownDeadline;
 use crate::BlockingExecutor;
 use crate::BlockingPoolPolicy;
@@ -329,6 +337,7 @@ pub struct MetadataIoConfig {
 #[derive(Debug, Clone)]
 pub struct MetadataIoPlan {
     config: MetadataIoConfig,
+    max_concurrent_writes: NonZeroUsize,
 }
 
 impl MetadataIoConfig {
@@ -369,11 +378,29 @@ impl MetadataIoConfig {
     /// blocking duration is invalid.
     pub fn into_plan(self) -> Result<MetadataIoPlan, RuntimeContractViolation> {
         self.validate()?;
-        Ok(MetadataIoPlan { config: self })
+        Ok(MetadataIoPlan {
+            config: self,
+            max_concurrent_writes: NonZeroUsize::MIN,
+        })
     }
 }
 
 impl MetadataIoPlan {
+    /// Lets the actor write up to `writes` different resources at the same time.
+    ///
+    /// The default is one: resources are written one after another, so one
+    /// slow write delays every other resource of the actor. A larger value lets
+    /// independent resources proceed while a write is slow. Generations of one
+    /// resource are still written one at a time and in order, and its queued
+    /// generations still coalesce. The actor never runs more writes than the
+    /// shared metadata lane admits at once; [`MetadataIoActor::effective_profile`]
+    /// reports the value in force.
+    #[must_use]
+    pub fn with_max_concurrent_writes(mut self, writes: NonZeroUsize) -> Self {
+        self.max_concurrent_writes = writes;
+        self
+    }
+
     /// Starts the validated actor with the production filesystem.
     ///
     /// # Errors
@@ -381,7 +408,7 @@ impl MetadataIoPlan {
     /// Returns an operational lifecycle error when the owned coordinator
     /// cannot start.
     pub fn start(self, service_context: &ChildServiceContext) -> RuntimeResult<MetadataIoActor> {
-        MetadataIoActor::start_validated(service_context, self.config, Arc::new(LocalMetadataFileSystem))
+        MetadataIoActor::start_validated(service_context, self, Arc::new(LocalMetadataFileSystem))
     }
 
     /// Starts the validated actor with an injected filesystem implementation.
@@ -395,7 +422,7 @@ impl MetadataIoPlan {
         service_context: &ChildServiceContext,
         file_system: Arc<dyn MetadataFileSystem>,
     ) -> RuntimeResult<MetadataIoActor> {
-        MetadataIoActor::start_validated(service_context, self.config, file_system)
+        MetadataIoActor::start_validated(service_context, self, file_system)
     }
 }
 
@@ -459,6 +486,9 @@ pub struct MetadataIoActorLimitsProfile {
     pub max_pending_bytes: usize,
     /// The waiter ceiling derived from `max_pending_operations`.
     pub max_waiters: usize,
+    /// The number of different resources written at the same time: the
+    /// planned value, capped by the concurrency of the shared metadata lane.
+    pub max_concurrent_writes: usize,
 }
 
 /// A read-only view of the metadata I/O limits actually in force.
@@ -487,7 +517,17 @@ fn max_metadata_waiters(max_pending_operations: usize) -> usize {
     max_pending_operations.saturating_mul(4).max(1)
 }
 
-fn effective_profile(config: &MetadataIoConfig, blocking_policy: &BlockingPoolPolicy) -> MetadataIoEffectiveProfile {
+/// Caps the planned write concurrency by the lane, so the actor never queues
+/// its own writes behind lane capacity it cannot use.
+fn effective_concurrent_writes(planned: NonZeroUsize, blocking_policy: &BlockingPoolPolicy) -> usize {
+    planned.get().min(blocking_policy.max_concurrency).max(1)
+}
+
+fn effective_profile(
+    config: &MetadataIoConfig,
+    blocking_policy: &BlockingPoolPolicy,
+    max_concurrent_writes: usize,
+) -> MetadataIoEffectiveProfile {
     let legacy_blocking_field =
         |field: &'static str, configured: Duration, effective: Duration| MetadataIoLegacyBlockingField {
             field,
@@ -508,6 +548,7 @@ fn effective_profile(config: &MetadataIoConfig, blocking_policy: &BlockingPoolPo
             max_pending_operations: config.max_pending_operations,
             max_pending_bytes: config.max_pending_bytes,
             max_waiters: max_metadata_waiters(config.max_pending_operations),
+            max_concurrent_writes,
         },
         legacy_blocking_fields: [
             legacy_blocking_field(
@@ -620,24 +661,25 @@ pub struct MetadataIoShutdownReport {
 pub struct MetadataIoReceipt {
     generation: MetadataGeneration,
     identity: MetadataTargetIdentity,
-    durable: oneshot::Receiver<RuntimeResult<MetadataIoCommitOutcome>>,
+    durable: oneshot::Receiver<RuntimeResult<MetadataWritePersistenceStatus>>,
 }
 
-/// The normal admission result for one metadata write request.
+/// Describes request submission for one metadata write request.
+/// Persistence is observed through the receipt.
 ///
 /// A target conflict retains the original immutable request so the caller can
 /// retry it after reconciling the resource-to-target mapping.
 #[derive(Debug)]
-pub enum MetadataIoAdmissionOutcome {
+pub enum MetadataWriteSubmissionStatus {
     /// The actor accepted the snapshot and returned its durability receipt.
     Accepted(MetadataIoReceipt),
     /// The resource already has pending work for a different target path.
     TargetConflict(MetadataWriteRequest),
 }
 
-/// The normal durable-completion result for one metadata write request.
+/// Reports durable completion or a target conflict for a metadata write.
 #[derive(Debug)]
-pub enum MetadataIoDurabilityOutcome {
+pub enum MetadataWriteDurabilityStatus {
     /// The accepted snapshot, or a coalesced newer snapshot, became durable.
     Durable(MetadataGeneration),
     /// The request was not admitted because its resource has a pending
@@ -647,7 +689,7 @@ pub enum MetadataIoDurabilityOutcome {
 
 /// The real persistence conclusion for an accepted metadata snapshot.
 #[derive(Debug, Clone)]
-pub enum MetadataIoCommitOutcome {
+pub enum MetadataWritePersistenceStatus {
     /// The snapshot or a newer coalesced snapshot completed the persistence
     /// protocol and is durable.
     Durable(MetadataGeneration),
@@ -658,11 +700,11 @@ pub enum MetadataIoCommitOutcome {
     CommitOutcomeUnknown(RuntimeError),
 }
 
-/// Result of waiting for a committed metadata snapshot.
+/// Reports the persistence conclusion for an accepted write or a target conflict.
 #[derive(Debug)]
-pub enum MetadataIoCommitAdmissionOutcome {
+pub enum MetadataWriteCompletionStatus {
     /// The accepted snapshot reached a terminal persistence conclusion.
-    Completed(MetadataIoCommitOutcome),
+    Completed(MetadataWritePersistenceStatus),
     /// The request was not admitted because the resource or target has a
     /// different process-local writer binding.
     TargetConflict(MetadataWriteRequest),
@@ -670,7 +712,7 @@ pub enum MetadataIoCommitAdmissionOutcome {
 
 /// What a caller actually confirmed about one admitted metadata snapshot.
 ///
-/// Unlike [`MetadataIoCommitOutcome`], this models the case where the caller
+/// Unlike [`MetadataWritePersistenceStatus`], this models the case where the caller
 /// stopped observing before the persistence protocol reached a terminal
 /// conclusion. An unobserved generation is not evidence that the write did not
 /// happen: the admitted snapshot keeps its ordering and byte charge, so it may
@@ -689,7 +731,7 @@ pub enum MetadataIoCommitObservation {
         /// The generation the caller observed.
         generation: MetadataGeneration,
         /// The conclusion the actor delivered.
-        outcome: MetadataIoCommitOutcome,
+        outcome: MetadataWritePersistenceStatus,
     },
     /// The caller stopped observing first. The generation identifies the
     /// change whose durability was not confirmed.
@@ -712,7 +754,7 @@ impl MetadataIoCommitObservation {
     pub fn requires_reconciliation(&self) -> bool {
         match self {
             MetadataIoCommitObservation::Settled { outcome, .. } => {
-                matches!(outcome, MetadataIoCommitOutcome::CommitOutcomeUnknown(_))
+                matches!(outcome, MetadataWritePersistenceStatus::CommitOutcomeUnknown(_))
             }
             MetadataIoCommitObservation::Unobserved { .. } => true,
             MetadataIoCommitObservation::TargetConflict(_) => false,
@@ -721,7 +763,7 @@ impl MetadataIoCommitObservation {
 
     /// Consumes the observation and returns the terminal conclusion, if any.
     #[must_use]
-    pub fn settled(self) -> Option<MetadataIoCommitOutcome> {
+    pub fn settled(self) -> Option<MetadataWritePersistenceStatus> {
         match self {
             MetadataIoCommitObservation::Settled { outcome, .. } => Some(outcome),
             MetadataIoCommitObservation::Unobserved { .. } | MetadataIoCommitObservation::TargetConflict(_) => None,
@@ -759,7 +801,7 @@ enum ReceiptConclusion {
     /// The receipt channel delivered the actor's result. That is either a
     /// terminal persistence conclusion or the worker-stopped error, which the
     /// actor only produces for a generation that never ran.
-    Delivered(RuntimeResult<MetadataIoCommitOutcome>),
+    Delivered(RuntimeResult<MetadataWritePersistenceStatus>),
     /// The caller's absolute deadline elapsed first.
     Expired,
     /// The coordinator task was dropped without delivering a conclusion.
@@ -789,15 +831,15 @@ impl MetadataIoReceipt {
     /// # Errors
     ///
     /// Returns an operational runtime failure if persistence cannot complete.
-    pub async fn wait_until_outcome(self, deadline: MetadataDeadline) -> RuntimeResult<MetadataIoCommitOutcome> {
+    pub async fn wait_until_outcome(self, deadline: MetadataDeadline) -> RuntimeResult<MetadataWritePersistenceStatus> {
         if deadline.is_expired() {
             return Err(RuntimeError::timed_out(crate::RuntimeOperation::WaitForDurableMetadata));
         }
         match self.conclude(deadline).await {
             ReceiptConclusion::Delivered(result) => result,
-            ReceiptConclusion::CoordinatorStopped => Err(RuntimeError::context_unavailable(
-                crate::RuntimeOperation::MetadataWorkerStopped,
-            )),
+            ReceiptConclusion::CoordinatorStopped => {
+                Err(RuntimeError::closed(crate::RuntimeOperation::MetadataWorkerStopped))
+            }
             ReceiptConclusion::Expired => Err(RuntimeError::timed_out(crate::RuntimeOperation::WaitForDurableMetadata)),
         }
     }
@@ -823,7 +865,7 @@ impl MetadataIoReceipt {
             // pre-commit failure rather than an unconfirmed replacement.
             ReceiptConclusion::Delivered(Err(error)) => MetadataIoCommitObservation::Settled {
                 generation,
-                outcome: MetadataIoCommitOutcome::FailedBeforeCommit(error),
+                outcome: MetadataWritePersistenceStatus::FailedBeforeCommit(error),
             },
             // A stopped coordinator and an elapsed deadline are both
             // "no conclusion observed": a submitted closure may still be
@@ -854,9 +896,9 @@ impl MetadataIoReceipt {
     /// Returns an operational runtime failure if persistence cannot complete.
     pub async fn wait_until(self, deadline: MetadataDeadline) -> RuntimeResult<MetadataGeneration> {
         match self.wait_until_outcome(deadline).await? {
-            MetadataIoCommitOutcome::Durable(generation) => Ok(generation),
-            MetadataIoCommitOutcome::FailedBeforeCommit(source)
-            | MetadataIoCommitOutcome::CommitOutcomeUnknown(source) => Err(source),
+            MetadataWritePersistenceStatus::Durable(generation) => Ok(generation),
+            MetadataWritePersistenceStatus::FailedBeforeCommit(source)
+            | MetadataWritePersistenceStatus::CommitOutcomeUnknown(source) => Err(source),
         }
     }
 }
@@ -887,6 +929,9 @@ impl MetadataIoObserver {
 struct ActorInner {
     config: MetadataIoConfig,
     blocking_policy: BlockingPoolPolicy,
+    max_concurrent_writes: usize,
+    /// Charges every retained snapshot to the owner's process budget.
+    retained_bytes: ResourceBudget,
     targets: MetadataTargetRegistry,
     waiter_count: Arc<AtomicUsize>,
     state: Mutex<ActorState>,
@@ -918,18 +963,28 @@ struct ResourceState {
 struct QueuedMetadataWrite {
     request: MetadataWriteRequest,
     registration: MetadataTargetRegistration,
+    /// The snapshot's process-budget charge. Replacing a queued generation
+    /// releases it with the replaced snapshot.
+    charge: ResourcePermit,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct WorkMeta {
     generation: MetadataGeneration,
     bytes: usize,
 }
 
+// Field order drops the actual payload before returning its byte reservation,
+// including when Tokio discards a closure before it starts.
+struct ChargedSnapshot {
+    bytes: Arc<[u8]>,
+    _charge: ResourcePermit,
+}
+
 #[derive(Debug)]
 struct GenerationWaiter {
     generation: MetadataGeneration,
-    sender: oneshot::Sender<RuntimeResult<MetadataIoCommitOutcome>>,
+    sender: oneshot::Sender<RuntimeResult<MetadataWritePersistenceStatus>>,
     _permit: WaiterPermit,
 }
 
@@ -974,18 +1029,26 @@ impl ActorInner {
 impl MetadataIoActor {
     fn start_validated(
         service_context: &ChildServiceContext,
-        config: MetadataIoConfig,
+        plan: MetadataIoPlan,
         file_system: Arc<dyn MetadataFileSystem>,
     ) -> RuntimeResult<Self> {
+        let MetadataIoPlan {
+            config,
+            max_concurrent_writes,
+        } = plan;
         let task_group = service_context.component("metadata-io").task_group().clone();
         let blocking = service_context.metadata_io().clone();
         let blocking_policy = blocking.policy().clone();
         warn_legacy_blocking_fields(&config, &blocking_policy);
+        let max_concurrent_writes = effective_concurrent_writes(max_concurrent_writes, &blocking_policy);
+        let retained_bytes = retained_bytes_budget(&service_context.process_budget())?;
         let targets = service_context.resources().metadata_targets();
         let (sender, receiver) = mpsc::channel(config.max_pending_operations);
         let inner = Arc::new(ActorInner {
             config,
             blocking_policy,
+            max_concurrent_writes,
+            retained_bytes,
             targets,
             waiter_count: Arc::new(AtomicUsize::new(0)),
             state: Mutex::new(ActorState {
@@ -1018,7 +1081,7 @@ impl MetadataIoActor {
     /// returned immediately and the absolute deadline is checked before
     /// admission.
     ///
-    /// Returns a normal [`MetadataIoAdmissionOutcome::TargetConflict`] when
+    /// Returns a normal [`MetadataWriteSubmissionStatus::TargetConflict`] when
     /// the same resource already has pending work for a different target.
     ///
     /// # Errors
@@ -1028,7 +1091,7 @@ impl MetadataIoActor {
         &self,
         request: MetadataWriteRequest,
         deadline: MetadataDeadline,
-    ) -> RuntimeResult<MetadataIoAdmissionOutcome> {
+    ) -> RuntimeResult<MetadataWriteSubmissionStatus> {
         if deadline.is_expired() {
             return Err(RuntimeError::timed_out(crate::RuntimeOperation::AdmitMetadataSnapshot));
         }
@@ -1038,21 +1101,19 @@ impl MetadataIoActor {
         let (waiter_sender, durable) = oneshot::channel();
         let mut state = self.inner.state.lock();
         if !state.accepting {
-            return Err(RuntimeError::context_unavailable(
-                crate::RuntimeOperation::MetadataIoClosed,
-            ));
+            return Err(RuntimeError::closed(crate::RuntimeOperation::MetadataIoClosed));
         }
 
         let Some(target_registration) = ensure_target_registration(&mut state, &self.inner.targets, &request)? else {
-            return Ok(MetadataIoAdmissionOutcome::TargetConflict(request));
+            return Ok(MetadataWriteSubmissionStatus::TargetConflict(request));
         };
 
         let existing = state.resources.get(&resource);
         if let Some(existing) = existing {
             if let Some(durable_generation) = existing.durable_generation {
                 if generation <= durable_generation {
-                    let _ = waiter_sender.send(Ok(MetadataIoCommitOutcome::Durable(durable_generation)));
-                    return Ok(MetadataIoAdmissionOutcome::Accepted(MetadataIoReceipt {
+                    let _ = waiter_sender.send(Ok(MetadataWritePersistenceStatus::Durable(durable_generation)));
+                    return Ok(MetadataWriteSubmissionStatus::Accepted(MetadataIoReceipt {
                         generation,
                         identity: target_registration.identity(),
                         durable,
@@ -1063,16 +1124,14 @@ impl MetadataIoActor {
                 if generation <= in_flight.generation {
                     let waiter_permit = self.inner.reserve_waiter(existing.waiters.len())?;
                     let Some(resource_state) = state.resources.get_mut(&resource) else {
-                        return Err(RuntimeError::context_unavailable(
-                            crate::RuntimeOperation::MetadataWorkerStopped,
-                        ));
+                        return Err(RuntimeError::closed(crate::RuntimeOperation::MetadataWorkerStopped));
                     };
                     resource_state.waiters.push(GenerationWaiter {
                         generation,
                         sender: waiter_sender,
                         _permit: waiter_permit,
                     });
-                    return Ok(MetadataIoAdmissionOutcome::Accepted(MetadataIoReceipt {
+                    return Ok(MetadataWriteSubmissionStatus::Accepted(MetadataIoReceipt {
                         generation,
                         identity: target_registration.identity(),
                         durable,
@@ -1083,16 +1142,14 @@ impl MetadataIoActor {
                 if generation <= queued.request.generation {
                     let waiter_permit = self.inner.reserve_waiter(existing.waiters.len())?;
                     let Some(resource_state) = state.resources.get_mut(&resource) else {
-                        return Err(RuntimeError::context_unavailable(
-                            crate::RuntimeOperation::MetadataWorkerStopped,
-                        ));
+                        return Err(RuntimeError::closed(crate::RuntimeOperation::MetadataWorkerStopped));
                     };
                     resource_state.waiters.push(GenerationWaiter {
                         generation,
                         sender: waiter_sender,
                         _permit: waiter_permit,
                     });
-                    return Ok(MetadataIoAdmissionOutcome::Accepted(MetadataIoReceipt {
+                    return Ok(MetadataWriteSubmissionStatus::Accepted(MetadataIoReceipt {
                         generation,
                         identity: target_registration.identity(),
                         durable,
@@ -1121,7 +1178,6 @@ impl MetadataIoActor {
         if next_bytes > self.inner.config.max_pending_bytes {
             return Err(RuntimeError::capacity(crate::RuntimeOperation::AdmitMetadataBytes));
         }
-
         let queue_permit = if needs_queue_token {
             Some(
                 self.sender
@@ -1132,26 +1188,48 @@ impl MetadataIoActor {
             None
         };
 
-        state.pending_operations = next_operations;
-        state.pending_bytes = next_bytes;
         let resource_state = state.resources.entry(resource.clone()).or_default();
+        if let Some(queued) = &mut resource_state.queued {
+            let new_bytes = request.len();
+            // Only the growth is reserved, and a rejection leaves the old
+            // generation intact. Shrink only after dropping the old payload.
+            queued
+                .charge
+                .try_resize(new_bytes.max(queued.charge.bytes()))
+                .map_err(|_rejection| RuntimeError::capacity(crate::RuntimeOperation::AdmitMetadataBytes))?;
+            queued.request = request;
+            queued.charge.shrink_to(new_bytes);
+            queued.registration = target_registration.clone();
+        } else {
+            let charge = self
+                .inner
+                .retained_bytes
+                .try_acquire_data(request.len())
+                .map_err(|_rejection| RuntimeError::capacity(crate::RuntimeOperation::AdmitMetadataBytes))?;
+            resource_state.queued = Some(QueuedMetadataWrite {
+                request,
+                registration: target_registration.clone(),
+                charge,
+            });
+        }
         let identity = target_registration.identity();
-        resource_state.target = Some(request.target.clone());
+        resource_state.target = resource_state
+            .queued
+            .as_ref()
+            .map(|queued| queued.request.target.clone());
         resource_state.target_registration = Some(target_registration.clone());
-        resource_state.queued = Some(QueuedMetadataWrite {
-            request,
-            registration: target_registration,
-        });
         resource_state.waiters.push(GenerationWaiter {
             generation,
             sender: waiter_sender,
             _permit: waiter_permit,
         });
+        state.pending_operations = next_operations;
+        state.pending_bytes = next_bytes;
         drop(state);
         if let Some(permit) = queue_permit {
             permit.send(resource.clone());
         }
-        Ok(MetadataIoAdmissionOutcome::Accepted(MetadataIoReceipt {
+        Ok(MetadataWriteSubmissionStatus::Accepted(MetadataIoReceipt {
             generation,
             identity,
             durable,
@@ -1175,7 +1253,7 @@ impl MetadataIoActor {
         target: impl Into<PathBuf>,
         bytes: impl Into<Vec<u8>>,
         deadline: MetadataDeadline,
-    ) -> RuntimeResult<MetadataIoAdmissionOutcome> {
+    ) -> RuntimeResult<MetadataWriteSubmissionStatus> {
         let generation = self.inner.targets.next_generation();
         self.submit(MetadataWriteRequest::new(resource, generation, target, bytes), deadline)
     }
@@ -1183,7 +1261,7 @@ impl MetadataIoActor {
     /// Accepts a snapshot and waits for durable completion using the same
     /// absolute deadline.
     ///
-    /// Returns [`MetadataIoDurabilityOutcome::TargetConflict`] without
+    /// Returns [`MetadataWriteDurabilityStatus::TargetConflict`] without
     /// starting I/O when a pending request owns a different target path.
     ///
     /// # Errors
@@ -1193,14 +1271,14 @@ impl MetadataIoActor {
         &self,
         request: MetadataWriteRequest,
         deadline: MetadataDeadline,
-    ) -> RuntimeResult<MetadataIoDurabilityOutcome> {
+    ) -> RuntimeResult<MetadataWriteDurabilityStatus> {
         match self.submit(request, deadline)? {
-            MetadataIoAdmissionOutcome::Accepted(receipt) => receipt
+            MetadataWriteSubmissionStatus::Accepted(receipt) => receipt
                 .wait_until(deadline)
                 .await
-                .map(MetadataIoDurabilityOutcome::Durable),
-            MetadataIoAdmissionOutcome::TargetConflict(request) => {
-                Ok(MetadataIoDurabilityOutcome::TargetConflict(request))
+                .map(MetadataWriteDurabilityStatus::Durable),
+            MetadataWriteSubmissionStatus::TargetConflict(request) => {
+                Ok(MetadataWriteDurabilityStatus::TargetConflict(request))
             }
         }
     }
@@ -1213,14 +1291,14 @@ impl MetadataIoActor {
         &self,
         request: MetadataWriteRequest,
         deadline: MetadataDeadline,
-    ) -> RuntimeResult<MetadataIoCommitAdmissionOutcome> {
+    ) -> RuntimeResult<MetadataWriteCompletionStatus> {
         match self.submit(request, deadline)? {
-            MetadataIoAdmissionOutcome::Accepted(receipt) => receipt
+            MetadataWriteSubmissionStatus::Accepted(receipt) => receipt
                 .wait_until_outcome(deadline)
                 .await
-                .map(MetadataIoCommitAdmissionOutcome::Completed),
-            MetadataIoAdmissionOutcome::TargetConflict(request) => {
-                Ok(MetadataIoCommitAdmissionOutcome::TargetConflict(request))
+                .map(MetadataWriteCompletionStatus::Completed),
+            MetadataWriteSubmissionStatus::TargetConflict(request) => {
+                Ok(MetadataWriteCompletionStatus::TargetConflict(request))
             }
         }
     }
@@ -1238,14 +1316,14 @@ impl MetadataIoActor {
         target: impl Into<PathBuf>,
         bytes: impl Into<Vec<u8>>,
         deadline: MetadataDeadline,
-    ) -> RuntimeResult<MetadataIoDurabilityOutcome> {
+    ) -> RuntimeResult<MetadataWriteDurabilityStatus> {
         match self.submit_next(resource, target, bytes, deadline)? {
-            MetadataIoAdmissionOutcome::Accepted(receipt) => receipt
+            MetadataWriteSubmissionStatus::Accepted(receipt) => receipt
                 .wait_until(deadline)
                 .await
-                .map(MetadataIoDurabilityOutcome::Durable),
-            MetadataIoAdmissionOutcome::TargetConflict(request) => {
-                Ok(MetadataIoDurabilityOutcome::TargetConflict(request))
+                .map(MetadataWriteDurabilityStatus::Durable),
+            MetadataWriteSubmissionStatus::TargetConflict(request) => {
+                Ok(MetadataWriteDurabilityStatus::TargetConflict(request))
             }
         }
     }
@@ -1258,14 +1336,14 @@ impl MetadataIoActor {
         target: impl Into<PathBuf>,
         bytes: impl Into<Vec<u8>>,
         deadline: MetadataDeadline,
-    ) -> RuntimeResult<MetadataIoCommitAdmissionOutcome> {
+    ) -> RuntimeResult<MetadataWriteCompletionStatus> {
         match self.submit_next(resource, target, bytes, deadline)? {
-            MetadataIoAdmissionOutcome::Accepted(receipt) => receipt
+            MetadataWriteSubmissionStatus::Accepted(receipt) => receipt
                 .wait_until_outcome(deadline)
                 .await
-                .map(MetadataIoCommitAdmissionOutcome::Completed),
-            MetadataIoAdmissionOutcome::TargetConflict(request) => {
-                Ok(MetadataIoCommitAdmissionOutcome::TargetConflict(request))
+                .map(MetadataWriteCompletionStatus::Completed),
+            MetadataWriteSubmissionStatus::TargetConflict(request) => {
+                Ok(MetadataWriteCompletionStatus::TargetConflict(request))
             }
         }
     }
@@ -1287,8 +1365,8 @@ impl MetadataIoActor {
         deadline: MetadataDeadline,
     ) -> RuntimeResult<MetadataIoCommitObservation> {
         match self.submit(request, deadline)? {
-            MetadataIoAdmissionOutcome::Accepted(receipt) => Ok(receipt.observe_until(deadline).await),
-            MetadataIoAdmissionOutcome::TargetConflict(request) => {
+            MetadataWriteSubmissionStatus::Accepted(receipt) => Ok(receipt.observe_until(deadline).await),
+            MetadataWriteSubmissionStatus::TargetConflict(request) => {
                 Ok(MetadataIoCommitObservation::TargetConflict(request))
             }
         }
@@ -1309,8 +1387,8 @@ impl MetadataIoActor {
         deadline: MetadataDeadline,
     ) -> RuntimeResult<MetadataIoCommitObservation> {
         match self.submit_next(resource, target, bytes, deadline)? {
-            MetadataIoAdmissionOutcome::Accepted(receipt) => Ok(receipt.observe_until(deadline).await),
-            MetadataIoAdmissionOutcome::TargetConflict(request) => {
+            MetadataWriteSubmissionStatus::Accepted(receipt) => Ok(receipt.observe_until(deadline).await),
+            MetadataWriteSubmissionStatus::TargetConflict(request) => {
                 Ok(MetadataIoCommitObservation::TargetConflict(request))
             }
         }
@@ -1403,22 +1481,22 @@ impl MetadataIoActor {
     /// # Errors
     ///
     /// Returns a typed path normalization error without modifying the history.
-    pub fn retire_target_for_new_identity(&self, resource: &str) -> RuntimeResult<MetadataTargetRetirementOutcome> {
+    pub fn retire_target_for_new_identity(&self, resource: &str) -> RuntimeResult<MetadataTargetRetirementStatus> {
         let mut state = self.inner.state.lock();
         if state.accepting {
-            return Ok(MetadataTargetRetirementOutcome::AdmissionOpen);
+            return Ok(MetadataTargetRetirementStatus::AdmissionOpen);
         }
         if !state.worker_finished {
-            return Ok(MetadataTargetRetirementOutcome::WorkInProgress);
+            return Ok(MetadataTargetRetirementStatus::WorkInProgress);
         }
         let Some(resource_state) = state.resources.get_mut(resource) else {
-            return Ok(MetadataTargetRetirementOutcome::NotFound);
+            return Ok(MetadataTargetRetirementStatus::NotFound);
         };
         if resource_state.in_flight.is_some() || resource_state.queued.is_some() || !resource_state.waiters.is_empty() {
-            return Ok(MetadataTargetRetirementOutcome::WorkInProgress);
+            return Ok(MetadataTargetRetirementStatus::WorkInProgress);
         }
         let (Some(target), Some(identity)) = (&resource_state.target, &resource_state.identity) else {
-            return Ok(MetadataTargetRetirementOutcome::NotFound);
+            return Ok(MetadataTargetRetirementStatus::NotFound);
         };
         // A cached, idle registration has no pending work after coordinator completion.
         // Real blocking closures retain their own clone and still prevent retirement.
@@ -1427,7 +1505,7 @@ impl MetadataIoActor {
             .inner
             .targets
             .retire(target, resource, identity, resource_state.durable_generation)?;
-        if outcome == MetadataTargetRetirementOutcome::Retired {
+        if outcome == MetadataTargetRetirementStatus::Retired {
             state.resources.remove(resource);
         }
         Ok(outcome)
@@ -1440,8 +1518,32 @@ impl MetadataIoActor {
     /// values that drive execution rather than the values a caller requested.
     #[must_use]
     pub fn effective_profile(&self) -> MetadataIoEffectiveProfile {
-        effective_profile(&self.inner.config, &self.inner.blocking_policy)
+        effective_profile(
+            &self.inner.config,
+            &self.inner.blocking_policy,
+            self.inner.max_concurrent_writes,
+        )
     }
+}
+
+/// Derives the ledger node that charges retained snapshots to the process
+/// budget.
+///
+/// The node copies its parent's limits instead of adding its own:
+/// `max_pending_bytes` stays the actor's admission bound, while the process
+/// budget bounds what every budgeted component retains together, including the
+/// other metadata actors of the same owner.
+fn retained_bytes_budget(process_budget: &ResourceBudget) -> RuntimeResult<ResourceBudget> {
+    let parent = process_budget.limit();
+    let limit = BudgetLimit {
+        capacity: parent.capacity,
+        control_reserve: BudgetCapacity::default(),
+        max_age: parent.max_age,
+        full_policy: FullPolicy::Reject,
+    };
+    process_budget.child("metadata-io", limit).map_err(|violation| {
+        RuntimeError::configuration_failure(crate::RuntimeOperation::AdmitMetadataBytes, violation)
+    })
 }
 
 fn ensure_target_registration(
@@ -1486,9 +1588,9 @@ fn ensure_target_registration(
         .filter(|_| !target_changed)
         .and_then(|state| state.identity.as_ref());
     let registration = match registry.register_with_identity(request.target.as_ref(), Arc::clone(resource), expected)? {
-        MetadataTargetRegistrationOutcome::Registered(registration) => registration,
-        MetadataTargetRegistrationOutcome::Conflict => return Ok(None),
-        MetadataTargetRegistrationOutcome::ReconciliationRequired => {
+        MetadataTargetRegistrationStatus::Registered(registration) => registration,
+        MetadataTargetRegistrationStatus::Conflict => return Ok(None),
+        MetadataTargetRegistrationStatus::ReconciliationRequired => {
             return Err(RuntimeError::context_unavailable(
                 crate::RuntimeOperation::MetadataResourceTarget,
             ));
@@ -1521,24 +1623,25 @@ async fn run_actor(
     cancellation: CancellationToken,
 ) {
     let mut cancellation_observed = false;
+    let mut channel_closed = false;
+    // A resource with work is in exactly one place: the channel, `ready`, or
+    // `writes`. Writes of one resource therefore never overlap, and each keeps
+    // its generation order however many resources are written at once.
     let mut ready: VecDeque<Arc<str>> = VecDeque::new();
+    let mut writes = FuturesUnordered::new();
     loop {
         if !cancellation_observed && cancellation.is_cancelled() {
             cancellation_observed = true;
             stop_admission(&inner);
         }
-        if should_finish(&inner) {
-            break;
+        while writes.len() < inner.max_concurrent_writes {
+            let Some(resource) = ready.pop_front() else {
+                break;
+            };
+            writes.push(write_resource(&inner, &blocking, &file_system, resource));
         }
-        if let Some(resource) = ready.pop_front() {
-            let has_more = process_resource(&inner, &blocking, &file_system, resource.clone()).await;
-            while let Ok(resource) = receiver.try_recv() {
-                ready.push_back(resource);
-            }
-            if has_more {
-                ready.push_back(resource);
-            }
-            continue;
+        if writes.is_empty() && should_finish(&inner) {
+            break;
         }
         tokio::select! {
             biased;
@@ -1546,20 +1649,22 @@ async fn run_actor(
                 cancellation_observed = true;
                 stop_admission(&inner);
             }
+            Some((resource, has_more)) = writes.next(), if !writes.is_empty() => {
+                // Resources that arrived during the write go first, so a
+                // resource that keeps receiving generations cannot starve them.
+                while let Ok(pending) = receiver.try_recv() {
+                    ready.push_back(pending);
+                }
+                if has_more {
+                    ready.push_back(resource);
+                }
+            }
             _ = inner.shutdown.notified() => {}
-            resource = receiver.recv() => {
+            resource = receiver.recv(), if !channel_closed => {
                 match resource {
-                    Some(resource) => {
-                        let has_more =
-                            process_resource(&inner, &blocking, &file_system, resource.clone()).await;
-                        while let Ok(pending) = receiver.try_recv() {
-                            ready.push_back(pending);
-                        }
-                        if has_more {
-                            ready.push_back(resource);
-                        }
-                    }
+                    Some(resource) => ready.push_back(resource),
                     None => {
+                        channel_closed = true;
                         stop_admission(&inner);
                     }
                 }
@@ -1569,16 +1674,32 @@ async fn run_actor(
     finish_worker(&inner);
 }
 
+/// Writes the next generation of `resource` and reports whether another one
+/// was queued meanwhile.
+async fn write_resource(
+    inner: &Arc<ActorInner>,
+    blocking: &BlockingExecutor,
+    file_system: &Arc<dyn MetadataFileSystem>,
+    resource: Arc<str>,
+) -> (Arc<str>, bool) {
+    let has_more = process_resource(inner, blocking, file_system, resource.clone()).await;
+    (resource, has_more)
+}
+
 async fn process_resource(
     inner: &Arc<ActorInner>,
     blocking: &BlockingExecutor,
     file_system: &Arc<dyn MetadataFileSystem>,
     resource: Arc<str>,
 ) -> bool {
-    let Some(queued) = take_next_request(inner, &resource) else {
+    let Some(QueuedMetadataWrite {
+        request,
+        registration,
+        charge,
+    }) = take_next_request(inner, &resource)
+    else {
         return false;
     };
-    let QueuedMetadataWrite { request, registration } = queued;
     let MetadataWriteRequest {
         target,
         bytes,
@@ -1593,9 +1714,13 @@ async fn process_resource(
     let lane_deadline = lane_deadline.map(|deadline| ShutdownDeadline::at(deadline.instant().into_std()));
     let worker_file_system = file_system.clone();
     let completion_registration = registration.clone();
+    let snapshot = ChargedSnapshot { bytes, _charge: charge };
     let result = match blocking
         .submit_io_until(format!("metadata-io:{resource}"), lane_deadline, move || {
-            let result = worker_file_system.persist_atomic(&target, &bytes);
+            // Capture the whole owner, not individual fields: the byte charge
+            // survives coordinator cancellation and leaves with the payload.
+            let snapshot = snapshot;
+            let result = worker_file_system.persist_atomic(&target, &snapshot.bytes);
             match &result {
                 Ok(()) => {
                     let _ = completion_registration.record_durable(generation);
@@ -1628,12 +1753,12 @@ async fn process_resource(
 fn take_next_request(inner: &ActorInner, resource: &Arc<str>) -> Option<QueuedMetadataWrite> {
     let mut state = inner.state.lock();
     let resource_state = state.resources.get_mut(resource)?;
-    let request = resource_state.queued.take()?;
+    let queued = resource_state.queued.take()?;
     resource_state.in_flight = Some(WorkMeta {
-        generation: request.request.generation,
-        bytes: request.request.len(),
+        generation: queued.request.generation,
+        bytes: queued.request.len(),
     });
-    Some(request)
+    Some(queued)
 }
 
 fn finish_request(
@@ -1655,9 +1780,11 @@ fn finish_request(
         debug_assert_eq!(in_flight.generation, generation);
         state.pending_operations = state.pending_operations.saturating_sub(1);
         state.pending_bytes = state.pending_bytes.saturating_sub(in_flight.bytes);
+        // The closure has already released its payload charge. Local pending
+        // counters settle here; they may briefly lag the shared byte ledger.
 
         let outcome = commit_outcome(generation, result);
-        if matches!(outcome, MetadataIoCommitOutcome::Durable(_)) {
+        if matches!(outcome, MetadataWritePersistenceStatus::Durable(_)) {
             resource_state.durable_generation = Some(
                 resource_state
                     .durable_generation
@@ -1687,13 +1814,13 @@ fn finish_request(
     has_queued
 }
 
-fn commit_outcome(generation: MetadataGeneration, result: RuntimeResult<()>) -> MetadataIoCommitOutcome {
+fn commit_outcome(generation: MetadataGeneration, result: RuntimeResult<()>) -> MetadataWritePersistenceStatus {
     match result {
-        Ok(()) => MetadataIoCommitOutcome::Durable(generation),
+        Ok(()) => MetadataWritePersistenceStatus::Durable(generation),
         Err(error) if error.operation() == crate::RuntimeOperation::MetadataSyncParent => {
-            MetadataIoCommitOutcome::CommitOutcomeUnknown(error)
+            MetadataWritePersistenceStatus::CommitOutcomeUnknown(error)
         }
-        Err(error) => MetadataIoCommitOutcome::FailedBeforeCommit(error),
+        Err(error) => MetadataWritePersistenceStatus::FailedBeforeCommit(error),
     }
 }
 
@@ -1727,7 +1854,7 @@ fn finish_worker(inner: &ActorInner) {
         }
     }
     for (_resource, waiter) in abandoned {
-        let _ = waiter.sender.send(Err(RuntimeError::context_unavailable(
+        let _ = waiter.sender.send(Err(RuntimeError::closed(
             crate::RuntimeOperation::MetadataWorkerStopped,
         )));
     }
@@ -1850,11 +1977,11 @@ mod tests {
         let confirmed = [
             MetadataIoCommitObservation::Settled {
                 generation: MetadataGeneration::new(7),
-                outcome: MetadataIoCommitOutcome::Durable(MetadataGeneration::new(7)),
+                outcome: MetadataWritePersistenceStatus::Durable(MetadataGeneration::new(7)),
             },
             MetadataIoCommitObservation::Settled {
                 generation: MetadataGeneration::new(7),
-                outcome: MetadataIoCommitOutcome::FailedBeforeCommit(step_error()),
+                outcome: MetadataWritePersistenceStatus::FailedBeforeCommit(step_error()),
             },
         ];
         for observation in confirmed {
@@ -1868,7 +1995,7 @@ mod tests {
 
         let unconfirmed = MetadataIoCommitObservation::Settled {
             generation: MetadataGeneration::new(7),
-            outcome: MetadataIoCommitOutcome::CommitOutcomeUnknown(step_error()),
+            outcome: MetadataWritePersistenceStatus::CommitOutcomeUnknown(step_error()),
         };
         assert!(unconfirmed.requires_reconciliation());
         assert_eq!(unconfirmed.generation(), Some(MetadataGeneration::new(7)));

@@ -28,7 +28,7 @@ use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbea
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::{RemotingCommandDefaults, RemotingCommandFactory};
 use rocketmq_protocol::protocol::SerializeType;
-use rocketmq_transport::api::OutboundRequestOutcome;
+use rocketmq_transport::api::OutboundRequestResult;
 
 #[test]
 fn controller_manager_does_not_log_the_full_configuration() {
@@ -328,7 +328,7 @@ async fn concurrent_start_waits_for_the_single_lifecycle_transition() {
     let config = ControllerConfig::default()
         .with_node_info(1, remoting_addr)
         .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
-        .with_storage_backend(crate::config::StorageBackendType::Memory);
+        .with_storage_engine_type(crate::config::StorageEngineType::Memory);
     let manager = Arc::new(
         ControllerManager::new(config, test_service_context(), test_telemetry_handle())
             .await
@@ -349,11 +349,11 @@ async fn concurrent_start_waits_for_the_single_lifecycle_transition() {
         .invoke_request(Some(&endpoint), request, 3_000)
         .await
     {
-        Ok(OutboundRequestOutcome::Response(response)) => response,
-        Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+        Ok(OutboundRequestResult::Response(response)) => response,
+        Ok(OutboundRequestResult::Rejected(rejection)) => {
             panic!("production V2 Controller request was rejected: {rejection:?}")
         }
-        Ok(OutboundRequestOutcome::Contract(contract)) => {
+        Ok(OutboundRequestResult::Contract(contract)) => {
             panic!("production V2 Controller request contract failed: {contract:?}")
         }
         Err(error) => panic!("production V2 Controller request failed: {error:?}"),
@@ -378,7 +378,7 @@ async fn startup_failure_cleanup_stops_owned_components() {
     let config = ControllerConfig::default()
         .with_node_info(1, remoting_addr)
         .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
-        .with_storage_backend(crate::config::StorageBackendType::Memory);
+        .with_storage_engine_type(crate::config::StorageEngineType::Memory);
     let manager = Arc::new(
         ControllerManager::new(config, test_service_context(), test_telemetry_handle())
             .await
@@ -406,6 +406,137 @@ async fn startup_failure_cleanup_stops_owned_components() {
 }
 
 #[tokio::test]
+async fn prebound_listeners_are_owned_through_startup_and_shutdown() {
+    let listeners = ControllerListeners {
+        remoting: tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind remoting listener"),
+        raft: tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind Raft listener"),
+    };
+    let remoting_addr = listeners.remoting.local_addr().expect("remoting address");
+    let raft_addr = listeners.raft.local_addr().expect("Raft address");
+    assert_ne!(remoting_addr, raft_addr);
+    let config = ControllerConfig::default()
+        .with_node_info(1, remoting_addr)
+        .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
+        .with_storage_engine_type(crate::config::StorageEngineType::Memory);
+    let manager = Arc::new(
+        ControllerManager::new(config, test_service_context(), test_telemetry_handle())
+            .await
+            .expect("create manager"),
+    );
+    manager.initialize().await.expect("initialize manager");
+    manager
+        .start_with_bound_listeners(listeners)
+        .await
+        .expect("startup must consume the reserved listeners without rebinding");
+    assert!(manager.is_running());
+    for addr in [remoting_addr, raft_addr] {
+        let connection = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("connect to owned listener");
+        drop(connection);
+    }
+    manager.shutdown().await.expect("shutdown manager");
+    assert!(!manager.is_running());
+    assert_eq!(manager.heartbeat_manager.scan_task_count(), 0);
+    assert!(manager.manager_task_group.lock().is_none());
+    for addr in [remoting_addr, raft_addr] {
+        let rebound = std::net::TcpListener::bind(addr).expect("shutdown releases owned listener");
+        drop(rebound);
+    }
+}
+
+#[tokio::test]
+async fn prebound_listener_address_mismatch_fails_closed_and_releases_sockets() {
+    for mismatched_listener in ["remoting", "raft"] {
+        let mut listeners = ControllerListeners {
+            remoting: tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind remoting"),
+            raft: tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind Raft"),
+        };
+        let config = ControllerConfig::default()
+            .with_node_info(1, listeners.remoting.local_addr().expect("remoting address"))
+            .with_raft_peers(vec![crate::config::RaftPeer {
+                id: 1,
+                addr: listeners.raft.local_addr().expect("Raft address"),
+            }])
+            .with_storage_engine_type(crate::config::StorageEngineType::Memory);
+        let replacement = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind replacement");
+        if mismatched_listener == "remoting" {
+            listeners.remoting = replacement;
+        } else {
+            listeners.raft = replacement;
+        }
+        let bound_addresses = [
+            listeners.remoting.local_addr().expect("bound remoting address"),
+            listeners.raft.local_addr().expect("bound Raft address"),
+        ];
+        let manager = Arc::new(
+            ControllerManager::new(config, test_service_context(), test_telemetry_handle())
+                .await
+                .expect("create manager"),
+        );
+        manager.initialize().await.expect("initialize manager");
+        let error = manager
+            .start_with_bound_listeners(listeners)
+            .await
+            .expect_err("listener must match the configured endpoint");
+        assert_eq!(error.descriptor(), &rocketmq_error::CONTROLLER_CONFIGURATION_INVALID);
+        assert!(!manager.is_running());
+        manager.shutdown().await.expect("shutdown after rejected listener");
+        for addr in bound_addresses {
+            let rebound = std::net::TcpListener::bind(addr).expect("rejected listeners are released");
+            drop(rebound);
+        }
+    }
+}
+
+#[tokio::test]
+async fn aliased_probe_ports_reproduce_the_remoting_startup_failure() {
+    // Match the remoting server's wildcard bind so Windows cannot allow a
+    // distinct wildcard/specific-address socket to mask the collision.
+    let reservation = tokio::net::TcpListener::bind("0.0.0.0:0")
+        .await
+        .expect("select probe address");
+    let addr = reservation.local_addr().expect("probe address");
+    let config = ControllerConfig::default()
+        .with_node_info(1, addr)
+        .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr }])
+        .with_storage_engine_type(crate::config::StorageEngineType::Memory);
+    let manager = Arc::new(
+        ControllerManager::new(config, test_service_context(), test_telemetry_handle())
+            .await
+            .expect("create manager"),
+    );
+    manager.initialize().await.expect("initialize manager");
+    manager
+        .raft_controller
+        .startup_shared_with_listener(reservation)
+        .await
+        .expect("Raft owns the shared port before remoting starts");
+    let error = manager.start().await.expect_err("Raft already owns the remoting port");
+    assert_eq!(error.descriptor(), &rocketmq_error::CONTROLLER_INTERNAL_FAILURE);
+    let mut cause = std::error::Error::source(&error);
+    let mut bind_error_kind = None;
+    while let Some(source) = cause {
+        if let Some(io_error) = source.downcast_ref::<std::io::Error>() {
+            bind_error_kind = Some(io_error.kind());
+            break;
+        }
+        cause = source.source();
+    }
+    assert_eq!(bind_error_kind, Some(std::io::ErrorKind::AddrInUse));
+    assert!(!manager.is_running());
+    manager.shutdown().await.expect("shutdown failed-start manager");
+}
+
+#[tokio::test]
 async fn occupied_remoting_listener_fails_startup_and_cleans_up_owned_components() {
     let occupied = std::net::TcpListener::bind("0.0.0.0:0").expect("occupy remoting listener");
     let remoting_addr = std::net::SocketAddr::from((
@@ -416,7 +547,7 @@ async fn occupied_remoting_listener_fails_startup_and_cleans_up_owned_components
     let config = ControllerConfig::default()
         .with_node_info(1, remoting_addr)
         .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
-        .with_storage_backend(crate::config::StorageBackendType::Memory);
+        .with_storage_engine_type(crate::config::StorageEngineType::Memory);
     let manager = Arc::new(
         ControllerManager::new(config, test_service_context(), test_telemetry_handle())
             .await
@@ -453,7 +584,7 @@ async fn shutdown_before_start_does_not_consume_lifecycle() {
     let config = ControllerConfig::default()
         .with_node_info(1, remoting_addr)
         .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
-        .with_storage_backend(crate::config::StorageBackendType::Memory);
+        .with_storage_engine_type(crate::config::StorageEngineType::Memory);
 
     let manager = ControllerManager::new(config, test_service_context(), test_telemetry_handle())
         .await
@@ -500,7 +631,7 @@ async fn leadership_watch_enables_scheduling_for_openraft_leader() {
         .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
         .with_heartbeat_interval_ms(100)
         .with_election_timeout_ms(300)
-        .with_storage_backend(crate::config::StorageBackendType::Memory);
+        .with_storage_engine_type(crate::config::StorageEngineType::Memory);
 
     let manager = Arc::new(
         ControllerManager::new(config, test_service_context(), test_telemetry_handle())
@@ -547,7 +678,7 @@ async fn leadership_gate_recovers_from_pre_start_notifier_poisoning() {
     let config = ControllerConfig::default()
         .with_node_info(1, remoting_addr)
         .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
-        .with_storage_backend(crate::config::StorageBackendType::Memory);
+        .with_storage_engine_type(crate::config::StorageEngineType::Memory);
     let manager = Arc::new(
         ControllerManager::new(config, test_service_context(), test_telemetry_handle())
             .await
@@ -592,7 +723,7 @@ async fn leadership_gate_orders_authoritative_promotion_and_demotion_before_noti
     let config = ControllerConfig::default()
         .with_node_info(1, remoting_addr)
         .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
-        .with_storage_backend(crate::config::StorageBackendType::Memory);
+        .with_storage_engine_type(crate::config::StorageEngineType::Memory);
     let manager = Arc::new(
         ControllerManager::new(config, test_service_context(), test_telemetry_handle())
             .await
@@ -658,7 +789,7 @@ async fn inactive_slave_does_not_elect_but_inactive_master_does() {
         .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
         .with_heartbeat_interval_ms(100)
         .with_election_timeout_ms(300)
-        .with_storage_backend(crate::config::StorageBackendType::Memory)
+        .with_storage_engine_type(crate::config::StorageEngineType::Memory)
         .with_notify_broker_role_changed(false);
 
     let manager = Arc::new(
@@ -844,7 +975,7 @@ async fn processor_successful_manual_election_records_role_change_notification()
         .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
         .with_heartbeat_interval_ms(100)
         .with_election_timeout_ms(300)
-        .with_storage_backend(crate::config::StorageBackendType::Memory)
+        .with_storage_engine_type(crate::config::StorageEngineType::Memory)
         .with_notify_broker_role_changed(true);
 
     let manager = Arc::new(

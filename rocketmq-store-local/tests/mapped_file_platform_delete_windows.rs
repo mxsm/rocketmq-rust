@@ -20,7 +20,7 @@ use std::os::windows::fs::OpenOptionsExt;
 use cheetah_string::CheetahString;
 use rocketmq_store_local::mapped_file::DefaultMappedFile;
 use rocketmq_store_local::mapped_file::MappedFile;
-use rocketmq_store_local::mapped_file::MappedFileDestroyOutcome;
+use rocketmq_store_local::mapped_file::MappedFileRemovalStatus;
 use windows::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
 
@@ -41,12 +41,12 @@ fn sharing_violation_retains_the_namespace_until_an_explicit_retry() {
     MappedFile::shutdown(&mapped, 0);
     assert!(matches!(
         mapped.try_destroy(0),
-        MappedFileDestroyOutcome::DeleteFailed { .. }
+        MappedFileRemovalStatus::DeleteFailed { .. }
     ));
     assert!(path.exists());
 
     drop(blocker);
-    assert_eq!(mapped.try_destroy(0), MappedFileDestroyOutcome::NamespaceRemoved);
+    assert_eq!(mapped.try_destroy(0), MappedFileRemovalStatus::NamespaceRemoved);
     assert!(!path.exists());
 }
 

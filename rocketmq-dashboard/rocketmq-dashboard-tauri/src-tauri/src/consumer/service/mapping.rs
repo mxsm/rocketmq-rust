@@ -215,7 +215,7 @@ mod tests {
     use rocketmq_admin_core::core::consumer::DashboardConsumerSubscriptionItem;
     use rocketmq_admin_core::core::consumer::DashboardConsumerTopicDetail;
     use rocketmq_admin_core::core::consumer::DashboardConsumerTopicQueue;
-    use rocketmq_admin_core::core::consumer::{DashboardConsumerBatchResult, DashboardConsumerTargetOutcome};
+    use rocketmq_admin_core::core::consumer::{DashboardConsumerBatchResult, DashboardConsumerTargetResult};
 
     #[test]
     fn group_mapping_and_summary_preserve_dashboard_fields() {
@@ -325,13 +325,13 @@ mod tests {
                 consumer_group: "group-a".into(),
                 success: false,
                 targets: vec![
-                    DashboardConsumerTargetOutcome {
+                    DashboardConsumerTargetResult {
                         target: "broker-a".into(),
                         kind: "BROKER".into(),
                         success: true,
                         message: "ok".into(),
                     },
-                    DashboardConsumerTargetOutcome {
+                    DashboardConsumerTargetResult {
                         target: "broker-b".into(),
                         kind: "BROKER".into(),
                         success: false,

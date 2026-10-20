@@ -30,6 +30,9 @@ const BACKEND_ENDPOINT: &str = "broker-a:10911";
 const RAW_BACKEND_ERROR: &str = "raw-backend-error-must-not-leak";
 const MESSAGE_BODY: &str = "message-body-must-not-leak";
 const CLIENT_IDENTITY: &str = "client-identity-must-not-leak";
+/// The identifier of the drain or log filter that the matrix calls name. It is the caller's text
+/// and belongs on no surface.
+const OPERATION_ID: &str = "matrix-operation-1";
 const SENSITIVE_BACKEND_FAILURE: &str = "access-secret-must-not-leak broker-a:10911 raw-backend-error-must-not-leak message-body-must-not-leak client-identity-must-not-leak";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,15 +42,23 @@ enum ToolKind {
     Offset,
     BrokerConfig,
     RequestMode,
+    DrainBegin,
+    DrainCancel,
+    LogFilterSet,
+    LogFilterRestore,
 }
 
 impl ToolKind {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 9] = [
         Self::Topic,
         Self::ConsumerGroup,
         Self::Offset,
         Self::BrokerConfig,
         Self::RequestMode,
+        Self::DrainBegin,
+        Self::DrainCancel,
+        Self::LogFilterSet,
+        Self::LogFilterRestore,
     ];
 
     const fn name(self) -> &'static str {
@@ -57,6 +68,10 @@ impl ToolKind {
             Self::Offset => tools::RESET_CONSUMER_OFFSET_TOOL,
             Self::BrokerConfig => tools::PATCH_BROKER_CONFIG_TOOL,
             Self::RequestMode => tools::SET_CONSUMER_REQUEST_MODE_TOOL,
+            Self::DrainBegin => tools::BEGIN_PROXY_DRAIN_TOOL,
+            Self::DrainCancel => tools::CANCEL_PROXY_DRAIN_TOOL,
+            Self::LogFilterSet => tools::SET_BROKER_LOG_FILTER_TTL_TOOL,
+            Self::LogFilterRestore => tools::RESTORE_BROKER_LOG_FILTER_TOOL,
         }
     }
 
@@ -67,6 +82,10 @@ impl ToolKind {
             Self::Offset => ControlOperation::ConsumerOffsetReset,
             Self::BrokerConfig => ControlOperation::BrokerConfigPatch,
             Self::RequestMode => ControlOperation::ConsumerRequestMode,
+            Self::DrainBegin => ControlOperation::ProxyDrainBegin,
+            Self::DrainCancel => ControlOperation::ProxyDrainCancel,
+            Self::LogFilterSet => ControlOperation::BrokerLogFilterSet,
+            Self::LogFilterRestore => ControlOperation::BrokerLogFilterRestore,
         }
     }
 
@@ -81,6 +100,10 @@ impl ToolKind {
             Self::Offset => "offset",
             Self::BrokerConfig => "broker",
             Self::RequestMode => "mode",
+            Self::DrainBegin => "drain-begin",
+            Self::DrainCancel => "drain-cancel",
+            Self::LogFilterSet => "log-filter-set",
+            Self::LogFilterRestore => "log-filter-restore",
         }
     }
 
@@ -89,7 +112,32 @@ impl ToolKind {
             Self::Topic => &["orders", "broker-a"],
             Self::ConsumerGroup => &["orders_consumers", "broker-a"],
             Self::Offset | Self::RequestMode => &["orders", "orders_consumers"],
-            Self::BrokerConfig => &["broker-a"],
+            Self::BrokerConfig | Self::LogFilterSet | Self::LogFilterRestore => &["broker-a"],
+            Self::DrainBegin | Self::DrainCancel => &["proxy-a"],
+        }
+    }
+
+    /// For a Tool that changes exactly one target: the argument that names it, and the list
+    /// argument that it must not accept.
+    const fn single_target(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Self::BrokerConfig | Self::LogFilterSet | Self::LogFilterRestore => Some(("broker_name", "broker_names")),
+            Self::DrainBegin | Self::DrainCancel => Some(("proxy_name", "proxy_names")),
+            Self::Topic | Self::ConsumerGroup | Self::Offset | Self::RequestMode => None,
+        }
+    }
+
+    /// Whether `arguments` decode as the input of this Tool.
+    fn decodes(self, arguments: serde_json::Value) -> bool {
+        match self {
+            Self::Topic => serde_json::from_value::<tools::UpsertTopicArgs>(arguments).is_ok(),
+            Self::ConsumerGroup => serde_json::from_value::<tools::UpsertConsumerGroupArgs>(arguments).is_ok(),
+            Self::Offset => serde_json::from_value::<tools::ResetConsumerOffsetArgs>(arguments).is_ok(),
+            Self::BrokerConfig => serde_json::from_value::<tools::PatchBrokerConfigArgs>(arguments).is_ok(),
+            Self::RequestMode => serde_json::from_value::<tools::SetConsumerRequestModeArgs>(arguments).is_ok(),
+            Self::DrainBegin | Self::DrainCancel => serde_json::from_value::<tools::ProxyDrainArgs>(arguments).is_ok(),
+            Self::LogFilterSet => serde_json::from_value::<tools::SetBrokerLogFilterTtlArgs>(arguments).is_ok(),
+            Self::LogFilterRestore => serde_json::from_value::<tools::RestoreBrokerLogFilterArgs>(arguments).is_ok(),
         }
     }
 }
@@ -200,6 +248,28 @@ impl Scenario {
                 | Self::AuditWriteFailure
                 | Self::SensitiveRuntimeFailure
         )
+    }
+
+    /// Sessions that two identical calls carrying one request key open.
+    ///
+    /// A settled outcome is replayed for the second call. A plan, a failure and an unverified
+    /// write are not kept, so the second call runs again.
+    const fn sessions_for_two_calls(self) -> usize {
+        match self {
+            Self::ValidExecute | Self::CasConflict | Self::MultiTargetPartial => 1,
+            Self::ValidDryRun
+            | Self::SingleTargetFailure
+            | Self::PostReadFailure
+            | Self::SessionShutdownFailure
+            | Self::SensitiveRuntimeFailure => 2,
+            Self::ExecuteWithoutConfirm
+            | Self::ExecuteWithoutReason
+            | Self::MissingWriteScope
+            | Self::ClusterNotAllowed
+            | Self::OperationNotAllowed
+            | Self::ArgumentOutOfBounds
+            | Self::AuditWriteFailure => 0,
+        }
     }
 
     const fn expected_audit_result(self) -> Option<AuditResult> {
@@ -428,6 +498,8 @@ async fn matrix_router(
         allowed_operations: ToolKind::ALL.into_iter().map(ToolKind::operation).collect(),
         allowed_clusters: vec![ClusterName::try_new("cluster-a").unwrap()],
         operation_timeout_seconds: 2,
+        require_plan_digest: false,
+        emergency_stop_file: None,
     };
     transport_config.mutations = policy.clone();
     let runtime = rocketmq_runtime::RuntimeContext::from_current("control-acceptance-matrix");
@@ -441,7 +513,8 @@ async fn matrix_router(
         AuditTrail::new(sink),
         factory,
         owner,
-    );
+    )
+    .with_proxy_aliases(ClusterName::try_new("cluster-a").unwrap(), &["proxy-a"]);
     let auth = AuthState::from_source(
         &transport_config.oauth,
         resource_metadata_url(&transport_config),
@@ -511,6 +584,27 @@ fn arguments(tool: ToolKind, scenario: Scenario) -> serde_json::Value {
             "pop_share_queue_num": 4,
             "timeout_millis": 12000
         }),
+        ToolKind::DrainBegin | ToolKind::DrainCancel => serde_json::json!({
+            "schema_version": MUTATION_ARGUMENTS_SCHEMA_VERSION,
+            "cluster": "cluster-a",
+            "proxy_name": "proxy-a",
+            "operation_id": OPERATION_ID
+        }),
+        ToolKind::LogFilterSet => serde_json::json!({
+            "schema_version": MUTATION_ARGUMENTS_SCHEMA_VERSION,
+            "cluster": "cluster-a",
+            "broker_name": "broker-a",
+            "logger": "rocketmq_broker::processor",
+            "level": "DEBUG",
+            "ttl_seconds": 300,
+            "operation_id": OPERATION_ID
+        }),
+        ToolKind::LogFilterRestore => serde_json::json!({
+            "schema_version": MUTATION_ARGUMENTS_SCHEMA_VERSION,
+            "cluster": "cluster-a",
+            "broker_name": "broker-a",
+            "operation_id": OPERATION_ID
+        }),
     };
     let object = value.as_object_mut().unwrap();
     let dry_run = scenario == Scenario::ValidDryRun;
@@ -543,6 +637,12 @@ fn arguments(tool: ToolKind, scenario: Scenario) -> serde_json::Value {
             }
             ToolKind::RequestMode => {
                 object.insert("timeout_millis".to_owned(), serde_json::json!(24_001));
+            }
+            ToolKind::DrainBegin | ToolKind::DrainCancel | ToolKind::LogFilterRestore => {
+                object.insert("operation_id".to_owned(), serde_json::json!("short"));
+            }
+            ToolKind::LogFilterSet => {
+                object.insert("ttl_seconds".to_owned(), serde_json::json!(901));
             }
         },
         Scenario::ValidDryRun
@@ -603,6 +703,36 @@ fn response_for(request: MutationToolRequest, scenario: Scenario) -> MutationToo
         MutationToolRequest::BrokerConfig(args) => MutationToolResponse::BrokerConfig(broker_response(&args, scenario)),
         MutationToolRequest::ConsumerRequestMode(args) => {
             MutationToolResponse::ConsumerRequestMode(request_mode_response(&args, scenario))
+        }
+        MutationToolRequest::ProxyDrainBegin(args) => MutationToolResponse::ProxyDrain(proxy_drain_response(
+            tools::ProxyDrainOperation::ProxyDrainBegin,
+            &args,
+            scenario,
+        )),
+        MutationToolRequest::ProxyDrainCancel(args) => MutationToolResponse::ProxyDrain(proxy_drain_response(
+            tools::ProxyDrainOperation::ProxyDrainCancel,
+            &args,
+            scenario,
+        )),
+        MutationToolRequest::BrokerLogFilterSet(args) => MutationToolResponse::BrokerLogFilter(log_filter_response(
+            tools::BrokerLogFilterOperation::BrokerLogFilterSet,
+            &args.cluster,
+            &args.broker_name,
+            tools::BrokerLogFilterRequested::Set {
+                logger: args.logger.clone(),
+                level: args.level,
+                ttl_seconds: args.ttl_seconds,
+            },
+            scenario,
+        )),
+        MutationToolRequest::BrokerLogFilterRestore(args) => {
+            MutationToolResponse::BrokerLogFilter(log_filter_response(
+                tools::BrokerLogFilterOperation::BrokerLogFilterRestore,
+                &args.cluster,
+                &args.broker_name,
+                tools::BrokerLogFilterRequested::Restore,
+                scenario,
+            ))
         }
     }
 }
@@ -950,6 +1080,158 @@ fn request_mode_response(
     }
 }
 
+/// Who holds the target before a call: nobody before a begin or a set, the call's own operation
+/// before a cancel or a restore, and another operation when the call ends in a conflict.
+const fn holder_before(starts: bool, scenario: Scenario) -> tools::OperationHolder {
+    if matches!(scenario, Scenario::CasConflict) {
+        tools::OperationHolder::OtherOperation
+    } else if starts {
+        tools::OperationHolder::None
+    } else {
+        tools::OperationHolder::ThisOperation
+    }
+}
+
+/// Who holds the target once a call has done what it asked.
+const fn holder_after(starts: bool) -> tools::OperationHolder {
+    if starts {
+        tools::OperationHolder::ThisOperation
+    } else {
+        tools::OperationHolder::None
+    }
+}
+
+/// A begin finds the Proxy accepting and leaves it draining; a cancel does the reverse.
+fn proxy_drain_response(
+    operation: tools::ProxyDrainOperation,
+    args: &tools::ProxyDrainArgs,
+    scenario: Scenario,
+) -> tools::ProxyDrainToolResponse {
+    let status = fake_runtime_status(scenario);
+    let truth = target_truth(scenario, 0);
+    let begin = operation == tools::ProxyDrainOperation::ProxyDrainBegin;
+    let requested = tools::ProxyDrainRequested {
+        action: if begin {
+            tools::ProxyDrainAction::Begin
+        } else {
+            tools::ProxyDrainAction::Cancel
+        },
+    };
+    let before_state = drain_state(holder_before(begin, scenario));
+    let after_state = drain_state(holder_after(begin));
+    let target = tools::ProxyDrainTarget {
+        proxy_name: args.proxy_name.clone(),
+        before: Some(before_state),
+        requested,
+        after: truth.after.then_some(after_state),
+        applied: truth.applied,
+        changed: truth.applied,
+        verification: truth.verification,
+        failure: truth.failure,
+        retryable: truth.retryable,
+    };
+    tools::ProxyDrainToolResponse {
+        schema_version: tools::MutationResultSchemaVersion::V1,
+        operation,
+        cluster: args.cluster.clone(),
+        mode: scenario_mode(scenario),
+        status,
+        error_code: tools::response_error_code(status, [target.failure]),
+        target: tools::ProxyDrainResource {
+            proxy_name: args.proxy_name.clone(),
+        },
+        before: BTreeMap::from([(args.proxy_name.clone(), before_state)]),
+        requested,
+        after: truth
+            .after
+            .then(|| BTreeMap::from([(args.proxy_name.clone(), after_state)])),
+        targets: vec![target],
+        warnings: Vec::new(),
+    }
+}
+
+const fn drain_state(held_by: tools::OperationHolder) -> tools::ProxyDrainState {
+    let draining = !matches!(held_by, tools::OperationHolder::None);
+    tools::ProxyDrainState {
+        phase: if draining {
+            tools::ProxyDrainPhase::Draining
+        } else {
+            tools::ProxyDrainPhase::Accepting
+        },
+        held_by,
+        admission_open: !draining,
+        routing_open: !draining,
+        readiness_published: !draining,
+        zero_pending: !draining,
+        pending: tools::ProxyDrainPending {
+            active_connections: 0,
+            sessions: if draining { 3 } else { 0 },
+            receipt_handles: 0,
+            prepared_transactions: 0,
+            telemetry_links: 0,
+            remoting_channels: 0,
+            telemetry_commands: 0,
+            rpc_in_flight: 0,
+        },
+    }
+}
+
+/// A set finds no override and leaves its own; a restore does the reverse and names no logger.
+fn log_filter_response(
+    operation: tools::BrokerLogFilterOperation,
+    cluster: &str,
+    broker_name: &str,
+    requested: tools::BrokerLogFilterRequested,
+    scenario: Scenario,
+) -> tools::BrokerLogFilterToolResponse {
+    let status = fake_runtime_status(scenario);
+    let truth = target_truth(scenario, 0);
+    let set = operation == tools::BrokerLogFilterOperation::BrokerLogFilterSet;
+    let state = |held_by: tools::OperationHolder| {
+        let overridden = held_by != tools::OperationHolder::None;
+        tools::BrokerLogFilterState {
+            level: set.then_some(if overridden {
+                tools::BrokerLogLevel::Debug
+            } else {
+                tools::BrokerLogLevel::Info
+            }),
+            held_by,
+            expires_at_millis: overridden.then_some(1_788_048_300_000),
+        }
+    };
+    let before_state = state(holder_before(set, scenario));
+    let after_state = state(holder_after(set));
+    let target = tools::BrokerLogFilterTarget {
+        broker_name: broker_name.to_owned(),
+        before: Some(before_state),
+        requested: requested.clone(),
+        after: truth.after.then_some(after_state),
+        applied: truth.applied,
+        changed: truth.applied,
+        verification: truth.verification,
+        failure: truth.failure,
+        retryable: truth.retryable,
+    };
+    tools::BrokerLogFilterToolResponse {
+        schema_version: tools::MutationResultSchemaVersion::V1,
+        operation,
+        cluster: cluster.to_owned(),
+        mode: scenario_mode(scenario),
+        status,
+        error_code: tools::response_error_code(status, [target.failure]),
+        target: tools::BrokerLogFilterResource {
+            broker_name: broker_name.to_owned(),
+        },
+        before: BTreeMap::from([(broker_name.to_owned(), before_state)]),
+        requested,
+        after: truth
+            .after
+            .then(|| BTreeMap::from([(broker_name.to_owned(), after_state)])),
+        targets: vec![target],
+        warnings: Vec::new(),
+    }
+}
+
 const fn scenario_mode(scenario: Scenario) -> tools::MutationMode {
     if matches!(scenario, Scenario::ValidDryRun) {
         tools::MutationMode::DryRun
@@ -1120,6 +1402,7 @@ fn expected_adapter_error_envelope(code: ControlErrorCode) -> serde_json::Value 
             "mutation operation is unavailable",
             false,
         ),
+        ControlErrorCode::RateLimited => ("rate_limited", "mutation call rate limit was reached", true),
         ControlErrorCode::ConfirmationRequired => (
             "confirmation_required",
             "explicit mutation confirmation is required",
@@ -1163,6 +1446,35 @@ fn expected_adapter_error_envelope(code: ControlErrorCode) -> serde_json::Value 
     })
 }
 
+/// The arguments an `invalid_argument` scenario must locate, as path and constraint pairs.
+///
+/// The pre-epoch timestamp, the empty patch and the missing reason break rules that the input
+/// schemas do not declare, so those rejections locate nothing.
+fn expected_violations(tool: ToolKind, scenario: Scenario) -> &'static [(&'static str, &'static str)] {
+    match (scenario, tool) {
+        (Scenario::ArgumentOutOfBounds, ToolKind::Topic) => &[("/read_queue_nums", "minimum")],
+        (Scenario::ArgumentOutOfBounds, ToolKind::ConsumerGroup) => &[("/retry_queue_nums", "maximum")],
+        (Scenario::ArgumentOutOfBounds, ToolKind::RequestMode) => &[("/timeout_millis", "maximum")],
+        (
+            Scenario::ArgumentOutOfBounds,
+            ToolKind::DrainBegin | ToolKind::DrainCancel | ToolKind::LogFilterRestore,
+        ) => &[("/operation_id", "min_length")],
+        (Scenario::ArgumentOutOfBounds, ToolKind::LogFilterSet) => &[("/ttl_seconds", "maximum")],
+        _ => &[],
+    }
+}
+
+fn located_error_envelope(scenario: Scenario, violations: &[(&str, &str)]) -> serde_json::Value {
+    let mut envelope = expected_error_envelope(scenario);
+    if !violations.is_empty() {
+        envelope["violations"] = violations
+            .iter()
+            .map(|(path, constraint)| serde_json::json!({"path": path, "constraint": constraint}))
+            .collect();
+    }
+    envelope
+}
+
 fn expected_adapter_retryable(code: ControlErrorCode) -> bool {
     expected_adapter_error_envelope(code)["retryable"].as_bool().unwrap()
 }
@@ -1201,16 +1513,14 @@ fn strict_payload(call: &ObservedCall, scenario: Scenario) -> &serde_json::Value
 fn assert_public_contract(
     tool: ToolKind,
     scenario: Scenario,
+    violations: &[(&str, &str)],
     first: &ObservedCall,
     second: &ObservedCall,
     bearer: &str,
 ) -> serde_json::Value {
     let first_payload = strict_payload(first, scenario);
     let second_payload = strict_payload(second, scenario);
-    assert_eq!(
-        first_payload, second_payload,
-        "replay mismatch for {tool:?}/{scenario:?}"
-    );
+    assert_same_response_under_own_invocations(first_payload, second_payload, &format!("{tool:?}/{scenario:?}"));
     let expected_code = scenario.expected_code().map(ControlErrorCode::as_str);
     match scenario.expected_status() {
         Some(status) if scenario != Scenario::SessionShutdownFailure => {
@@ -1227,7 +1537,11 @@ fn assert_public_contract(
             assert_response_truth(first_payload, scenario);
         }
         _ => {
-            assert_eq!(first_payload, &expected_error_envelope(scenario));
+            assert_eq!(
+                first_payload,
+                &located_error_envelope(scenario, violations),
+                "envelope mismatch for {tool:?}/{scenario:?}"
+            );
             assert!(first_payload.get("status").is_none());
         }
     }
@@ -1241,6 +1555,7 @@ fn assert_public_contract(
         RAW_BACKEND_ERROR,
         MESSAGE_BODY,
         CLIENT_IDENTITY,
+        OPERATION_ID,
         "127.0.0.1",
     ] {
         assert!(
@@ -1257,6 +1572,34 @@ fn assert_public_contract(
         }
     }
     first_payload.clone()
+}
+
+/// Splits a payload into the invocation it was returned under and everything else.
+fn split_invocation(payload: &serde_json::Value) -> (Option<u64>, serde_json::Value) {
+    let mut rest = payload.clone();
+    let invocation = rest
+        .as_object_mut()
+        .and_then(|members| members.remove(tools::INVOCATION_ID_MEMBER))
+        .map(|invocation| invocation.as_u64().expect("an invocation id is a positive integer"));
+    (invocation, rest)
+}
+
+/// Asserts that two calls returned the same response, each under an invocation of its own.
+///
+/// A mutation response carries the invocation of the call that returns it, replayed or not. An
+/// error envelope carries none.
+fn assert_same_response_under_own_invocations(first: &serde_json::Value, second: &serde_json::Value, case: &str) {
+    let (first_invocation, first_rest) = split_invocation(first);
+    let (second_invocation, second_rest) = split_invocation(second);
+    assert_eq!(first_rest, second_rest, "replay mismatch for {case}");
+    match (first_invocation, second_invocation) {
+        (Some(first), Some(second)) => {
+            assert!(first >= 1 && second >= 1, "invocation ids start at one for {case}");
+            assert_ne!(first, second, "two calls shared one invocation for {case}");
+        }
+        (None, None) => assert!(first.get("status").is_none(), "a mutation response lacks its invocation for {case}"),
+        _ => panic!("only one of two equal responses carries an invocation for {case}"),
+    }
 }
 
 fn assert_response_truth(response: &serde_json::Value, scenario: Scenario) {
@@ -1315,8 +1658,12 @@ fn assert_response_truth(response: &serde_json::Value, scenario: Scenario) {
 }
 
 fn assert_lifecycle(tool: ToolKind, scenario: Scenario, counters: &LifecycleCounters) {
-    let runtime_started = scenario.reaches_runtime() && scenario != Scenario::AuditWriteFailure;
-    let expected = usize::from(runtime_started);
+    let expected = scenario.sessions_for_two_calls();
+    assert_eq!(
+        expected > 0,
+        scenario.reaches_runtime() && scenario != Scenario::AuditWriteFailure,
+        "{scenario:?}"
+    );
     assert_eq!(
         counters.starts.load(Ordering::SeqCst),
         expected,
@@ -1333,21 +1680,27 @@ fn assert_lifecycle(tool: ToolKind, scenario: Scenario, counters: &LifecycleCoun
         expected,
         "{tool:?}/{scenario:?}"
     );
-    let mutation = usize::from(
-        runtime_started && !matches!(scenario, Scenario::ValidDryRun | Scenario::SensitiveRuntimeFailure),
-    );
+    let mutation = if matches!(scenario, Scenario::ValidDryRun | Scenario::SensitiveRuntimeFailure) {
+        0
+    } else {
+        expected
+    };
     assert_eq!(
         counters.mutation_calls.load(Ordering::SeqCst),
         mutation,
         "{tool:?}/{scenario:?}"
     );
-    let verification = usize::from(matches!(
+    let verification = if matches!(
         scenario,
         Scenario::ValidExecute
             | Scenario::MultiTargetPartial
             | Scenario::PostReadFailure
             | Scenario::SessionShutdownFailure
-    ));
+    ) {
+        expected
+    } else {
+        0
+    };
     assert_eq!(
         counters.verification_reads.load(Ordering::SeqCst),
         verification,
@@ -1355,7 +1708,11 @@ fn assert_lifecycle(tool: ToolKind, scenario: Scenario, counters: &LifecycleCoun
     );
     assert_eq!(
         counters.sensitive_failures.load(Ordering::SeqCst),
-        usize::from(scenario == Scenario::SensitiveRuntimeFailure),
+        if scenario == Scenario::SensitiveRuntimeFailure {
+            expected
+        } else {
+            0
+        },
         "{tool:?}/{scenario:?}"
     );
 }
@@ -1490,26 +1847,47 @@ fn changed_collision_arguments(tool: ToolKind) -> serde_json::Value {
         ToolKind::Offset => value["force"] = serde_json::json!(true),
         ToolKind::BrokerConfig => value["properties"]["traceTopicEnable"] = serde_json::json!("false"),
         ToolKind::RequestMode => value["pop_share_queue_num"] = serde_json::json!(5),
+        ToolKind::DrainBegin | ToolKind::DrainCancel | ToolKind::LogFilterRestore => {
+            value["operation_id"] = serde_json::json!("matrix-operation-2");
+        }
+        ToolKind::LogFilterSet => value["ttl_seconds"] = serde_json::json!(301),
     }
     value
 }
 
 #[test]
-fn enabled_tool_contract_marks_all_state_replacing_tools_destructive() {
+fn enabled_tool_contract_marks_state_replacing_tools_destructive_and_restoring_ones_not() {
     let enabled = MutationPolicyConfig {
         mutations_enabled: true,
         dry_run: true,
         allowed_operations: ToolKind::ALL.into_iter().map(ToolKind::operation).collect(),
         allowed_clusters: vec![ClusterName::try_new("cluster-a").unwrap()],
         operation_timeout_seconds: 2,
+        require_plan_digest: false,
+        emergency_stop_file: None,
     };
     let tools = crate::catalog::OperationCatalog::from_policy(&enabled).list_tools().tools;
-    assert_eq!(tools.len(), 5);
+    assert_eq!(tools.len(), 9);
+    // Ending a drain gives a Proxy back, and a log filter is bounded and ends by itself.
+    let restoring = [
+        crate::tools::CANCEL_PROXY_DRAIN_TOOL,
+        crate::tools::SET_BROKER_LOG_FILTER_TTL_TOOL,
+        crate::tools::RESTORE_BROKER_LOG_FILTER_TOOL,
+    ];
     for tool in tools {
         let annotations = tool.annotations.unwrap();
         assert_eq!(annotations.read_only_hint, Some(false));
-        assert_eq!(annotations.destructive_hint, Some(true));
+        assert_eq!(
+            annotations.destructive_hint,
+            Some(!restoring.contains(&tool.name.as_ref())),
+            "{}",
+            tool.name
+        );
+        assert_eq!(annotations.idempotent_hint, Some(true));
         assert_eq!(tool.input_schema["additionalProperties"], false);
+        // No Tool takes an address: a Proxy is named by its alias and a Broker by its name.
+        let properties = tool.input_schema["properties"].as_object().unwrap();
+        assert!(properties.keys().all(|name| !name.contains("addr") && !name.contains("endpoint")));
         if tool.name.as_ref() == crate::tools::PATCH_BROKER_CONFIG_TOOL {
             assert!(tool.input_schema["properties"].get("broker_name").is_some());
             assert!(tool.input_schema["properties"].get("broker_names").is_none());
@@ -1555,7 +1933,7 @@ async fn terminal_audit_failure_never_replays_an_unaudited_success() {
             request_arguments,
         )
         .await;
-        assert_public_contract(tool, Scenario::AuditWriteFailure, &first, &second, &bearer);
+        assert_public_contract(tool, Scenario::AuditWriteFailure, &[], &first, &second, &bearer);
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
         assert_eq!(counters.runs.load(Ordering::SeqCst), 1);
         assert_eq!(counters.preflight_reads.load(Ordering::SeqCst), 1);
@@ -1604,6 +1982,7 @@ async fn raw_backend_failures_are_sanitized_across_every_public_surface() {
         assert_public_contract(
             tool,
             Scenario::SensitiveRuntimeFailure,
+            &[],
             &first,
             &second,
             &bearer,
@@ -1653,11 +2032,13 @@ async fn raw_backend_failures_are_sanitized_across_every_public_surface() {
         assert_public_contract(
             tool,
             Scenario::SensitiveRuntimeFailure,
+            &[],
             &open_first,
             &open_second,
             &bearer,
         );
-        assert_eq!(opens.load(Ordering::SeqCst), 1);
+        // A session that could not be opened settles nothing, so the second call tries again.
+        assert_eq!(opens.load(Ordering::SeqCst), 2);
         let open_records = open_sink.records().await.unwrap();
         assert_eq!(open_records.len(), 4);
         for pair in open_records.chunks_exact(2) {
@@ -1711,6 +2092,7 @@ async fn adapter_error_codes_survive_canonical_redaction_for_open_run_followers_
         ControlErrorCode::OperationNotAllowed,
         ControlErrorCode::MutationDisabled,
         ControlErrorCode::OperationUnavailable,
+        ControlErrorCode::RateLimited,
         ControlErrorCode::ConfirmationRequired,
         ControlErrorCode::InvalidArgument,
         ControlErrorCode::AuditUnavailable,
@@ -1789,6 +2171,15 @@ async fn adapter_error_codes_survive_canonical_redaction_for_open_run_followers_
             assert_eq!(mcp_payload(&leader, true), &expected);
             assert_eq!(mcp_payload(&follower, true), &expected);
 
+            // Only a conflict or a partial apply is settled and replayed. After any other code
+            // the same key is a new attempt, which reaches the hostile adapter again.
+            let settled = matches!(
+                code,
+                ControlErrorCode::PreconditionConflict | ControlErrorCode::PartialApply
+            );
+            if !settled {
+                gate.notify_one();
+            }
             let replay = acceptance_tool_call(
                 &router,
                 &bearer,
@@ -1798,12 +2189,15 @@ async fn adapter_error_codes_survive_canonical_redaction_for_open_run_followers_
             )
             .await;
             assert_eq!(mcp_payload(&replay, true), &expected);
-            assert_eq!(opens.load(Ordering::SeqCst), 1);
-            assert_eq!(runs.load(Ordering::SeqCst), usize::from(matches!(stage, HostileFailureStage::Run)));
-            assert_eq!(
-                shutdowns.load(Ordering::SeqCst),
-                usize::from(matches!(stage, HostileFailureStage::Run))
-            );
+            let attempts = if settled { 1 } else { 2 };
+            let sessions = if matches!(stage, HostileFailureStage::Run) {
+                attempts
+            } else {
+                0
+            };
+            assert_eq!(opens.load(Ordering::SeqCst), attempts, "{code:?}");
+            assert_eq!(runs.load(Ordering::SeqCst), sessions, "{code:?}");
+            assert_eq!(shutdowns.load(Ordering::SeqCst), sessions, "{code:?}");
 
             let records = sink.records().await.unwrap();
             assert_eq!(records.len(), 6);
@@ -1902,6 +2296,7 @@ async fn request_keys_share_leaders_replay_results_and_reject_collisions_for_eve
         assert_public_contract(
             tool,
             Scenario::ValidExecute,
+            &[],
             &first,
             &follower,
             &bearer,
@@ -1935,7 +2330,11 @@ async fn request_keys_share_leaders_replay_results_and_reject_collisions_for_eve
             request_arguments,
         )
         .await;
-        assert_eq!(mcp_payload(&replay, false), mcp_payload(&first, false));
+        assert_same_response_under_own_invocations(
+            mcp_payload(&replay, false),
+            mcp_payload(&first, false),
+            &format!("{tool:?}/replay"),
+        );
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
         assert_eq!(counters.mutation_calls.load(Ordering::SeqCst), 1);
 
@@ -1960,7 +2359,7 @@ async fn request_keys_share_leaders_replay_results_and_reject_collisions_for_eve
 }
 
 #[tokio::test]
-async fn five_tool_by_fourteen_scenario_acceptance_matrix() {
+async fn nine_tool_by_fourteen_scenario_acceptance_matrix() {
     let logs = CapturedLogs::default();
     let subscriber = tracing_subscriber::fmt()
         .without_time()
@@ -1975,26 +2374,23 @@ async fn five_tool_by_fourteen_scenario_acceptance_matrix() {
 
     for tool in ToolKind::ALL {
         for scenario in Scenario::ALL {
-            if tool == ToolKind::BrokerConfig && scenario == Scenario::MultiTargetPartial {
+            if let (Some((accepted, rejected)), Scenario::MultiTargetPartial) = (tool.single_target(), scenario) {
+                // A Tool that changes one target cannot end partially: it takes no target list.
                 let value = arguments(tool, scenario);
-                assert!(value.get("broker_name").is_some());
-                assert!(value.get("broker_names").is_none());
-                assert!(serde_json::from_value::<tools::PatchBrokerConfigArgs>(serde_json::json!({
-                        "schema_version": MUTATION_ARGUMENTS_SCHEMA_VERSION,
-                        "cluster": "cluster-a",
-                        "broker_name": "broker-a",
-                        "broker_names": ["broker-a", "broker-b"],
-                        "properties": {"traceTopicEnable": "true"}
-                    }))
-                    .is_err());
+                assert!(value.get(accepted).is_some());
+                assert!(value.get(rejected).is_none());
+                assert!(tool.decodes(value.clone()));
+                let mut listed = value;
+                listed[rejected] = serde_json::json!(["first-target", "second-target"]);
+                assert!(!tool.decodes(listed), "{tool:?} accepted {rejected}");
                 assert!(exact_contract
                     .insert(
                         format!("{}/{}", tool.slug(), scenario.slug()),
                         serde_json::json!({
                             "applicability": "not_applicable",
-                            "contract": "broker_config_patch_is_single_target",
-                            "accepted_argument": "broker_name",
-                            "rejected_argument": "broker_names"
+                            "contract": format!("{}_is_single_target", tool.claim()),
+                            "accepted_argument": accepted,
+                            "rejected_argument": rejected
                         }),
                     )
                     .is_none());
@@ -2021,7 +2417,14 @@ async fn five_tool_by_fourteen_scenario_acceptance_matrix() {
                 request_arguments,
             )
             .await;
-            let payload = assert_public_contract(tool, scenario, &first, &second, &bearer);
+            let payload = assert_public_contract(
+                tool,
+                scenario,
+                expected_violations(tool, scenario),
+                &first,
+                &second,
+                &bearer,
+            );
             assert!(exact_contract
                 .insert(format!("{}/{}", tool.slug(), scenario.slug()), payload)
                 .is_none());
@@ -2047,10 +2450,13 @@ async fn five_tool_by_fourteen_scenario_acceptance_matrix() {
                 assert_public_contract(
                     tool,
                     Scenario::ArgumentOutOfBounds,
+                    &[("/*", "additional_property")],
                     &unknown_first,
                     &unknown_second,
                     &bearer,
                 );
+                // The undeclared property is located without repeating the name the caller chose.
+                assert!(!format!("{}{}", unknown_first.body, unknown_second.body).contains("unexpected"));
             }
             if scenario == Scenario::ExecuteWithoutReason {
                 let mut unsafe_reason = arguments(tool, Scenario::ValidExecute);
@@ -2074,6 +2480,7 @@ async fn five_tool_by_fourteen_scenario_acceptance_matrix() {
                 assert_public_contract(
                     tool,
                     Scenario::ExecuteWithoutReason,
+                    &[],
                     &unsafe_first,
                     &unsafe_second,
                     &bearer,
@@ -2088,9 +2495,9 @@ async fn five_tool_by_fourteen_scenario_acceptance_matrix() {
         }
     }
 
-    assert_eq!((applicable, passed, not_applicable), (69, 69, 1));
-    assert_eq!(exact_contract.len(), 70);
-    insta::assert_json_snapshot!("five_tool_by_fourteen_scenario_acceptance_truth", exact_contract);
+    assert_eq!((applicable, passed, not_applicable), (121, 121, 5));
+    assert_eq!(exact_contract.len(), 126);
+    insta::assert_json_snapshot!("nine_tool_by_fourteen_scenario_acceptance_truth", exact_contract);
     let captured = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
     for forbidden in [
         SAFE_OPERATOR,
@@ -2100,9 +2507,67 @@ async fn five_tool_by_fourteen_scenario_acceptance_matrix() {
         RAW_BACKEND_ERROR,
         MESSAGE_BODY,
         CLIENT_IDENTITY,
+        OPERATION_ID,
         "127.0.0.1",
         "Bearer ",
     ] {
         assert!(!captured.contains(forbidden), "logs leaked protected material");
+    }
+}
+
+#[tokio::test]
+async fn unknown_proxy_alias_is_rejected_before_a_call_is_recorded_or_a_session_opens() {
+    for (index, tool) in [ToolKind::DrainBegin, ToolKind::DrainCancel].into_iter().enumerate() {
+        let harness = matrix_harness(Scenario::ValidExecute).await;
+        let bearer = token_for(tool, Scenario::ValidExecute);
+        // Each alias is well formed. It is just not one that the selected cluster configures.
+        for (attempt, alias) in ["proxy-b", "Proxy-A", "proxy-a-"].into_iter().enumerate() {
+            let mut request_arguments = arguments(tool, Scenario::ValidExecute);
+            request_arguments["proxy_name"] = serde_json::json!(alias);
+            let call = acceptance_tool_call(
+                &harness.router,
+                &bearer,
+                40_000 + index * 10 + attempt,
+                tool.name(),
+                request_arguments,
+            )
+            .await;
+            assert_eq!(
+                mcp_payload(&call, true),
+                &serde_json::json!({
+                    "schema_version": ERROR_SCHEMA_VERSION,
+                    "code": "invalid_argument",
+                    "message": "mutation argument is invalid",
+                    "retryable": false,
+                    "violations": [{"path": "/proxy_name", "constraint": "other"}]
+                }),
+                "{tool:?}/{alias}"
+            );
+            // The refusal repeats neither the alias that was sent nor one that is configured.
+            assert!(!call.body.to_string().contains(alias));
+        }
+        assert_eq!(harness.counters.starts.load(Ordering::SeqCst), 0);
+        assert_eq!(harness.counters.runs.load(Ordering::SeqCst), 0);
+        assert!(harness.sink.records().await.unwrap().is_empty());
+
+        // The configured alias is recorded as the object of the call, and nothing else about it.
+        let call = acceptance_tool_call(
+            &harness.router,
+            &bearer,
+            40_009 + index * 10,
+            tool.name(),
+            arguments(tool, Scenario::ValidExecute),
+        )
+        .await;
+        assert_eq!(mcp_payload(&call, false)["target"], serde_json::json!({"proxy_name": "proxy-a"}));
+        let records = harness.sink.records().await.unwrap();
+        assert_eq!(records.len(), 2);
+        for record in &records {
+            let target = serde_json::to_value(record.target.as_ref().unwrap()).unwrap();
+            assert_eq!(target, serde_json::json!({"proxy": "proxy-a"}));
+            // The identifier of the drain is digested with what was asked, never recorded.
+            let digest = record.requested_digest.as_deref().unwrap();
+            assert!(digest.len() == 64 && !digest.contains(OPERATION_ID));
+        }
     }
 }

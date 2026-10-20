@@ -20,7 +20,7 @@ use rocketmq_security_api::Principal;
 
 use crate::deadline::RequestDeadline;
 use crate::dispatch::AuthorizedCommandDispatcher;
-use crate::dispatch::EmbeddedDispatchOutcome;
+use crate::dispatch::EmbeddedDispatchResult;
 use crate::error::TransportError;
 use crate::runtime::processor::RequestProcessor;
 
@@ -51,7 +51,7 @@ where
         &self,
         deadline: Option<RequestDeadline>,
         command: RemotingCommand,
-    ) -> Result<EmbeddedDispatchOutcome, TransportError> {
+    ) -> Result<EmbeddedDispatchResult, TransportError> {
         self.dispatcher
             .dispatch_embedded(&self.task_group, self.principal.clone(), deadline, command)
             .await

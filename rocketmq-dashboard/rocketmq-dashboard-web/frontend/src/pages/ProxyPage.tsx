@@ -1,4 +1,4 @@
-import { CheckCircle2, Plus, RefreshCw, Route, Trash2 } from 'lucide-react';
+import { CheckCircle2, Plus, RefreshCw, Route, Split, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { configApi } from '../api/config_api';
 import { ApiClientError, userErrorMessage } from '../api/client';
@@ -9,9 +9,11 @@ import LoadingState from '../components/LoadingState';
 import PageHeader from '../components/PageHeader';
 import StatusBadge from '../components/StatusBadge';
 import { Button } from '../components/ui/Button';
+import { Card } from '../components/ui/Card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/Dialog';
 import { Input } from '../components/ui/Input';
 import { Label } from '../components/ui/Label';
+import { StatusDot } from '../components/ui/StatusDot';
 import type { ConfigMutationResult, DashboardConfigView, EndpointView } from '../types/config';
 import { getProxyEndpointLabel, isDuplicateProxyAddress, normalizeProxyAddress } from './proxy/proxy-model';
 
@@ -212,18 +214,22 @@ export default function ProxyPage() {
 
       {notice ? <div className={`notice notice-${notice.tone}`} role={notice.tone === 'danger' ? 'alert' : 'status'}>{notice.message}</div> : null}
 
-      <section className="proxy-summary" aria-label="Proxy endpoint summary">
-        <div className="panel proxy-summary-card">
+      <Card className="dashboard-health-rail proxy-health-rail" aria-label="Proxy endpoint summary">
+        <div className="health-signal">
+          <span className="health-signal-icon" aria-hidden="true"><Split size={16} /></span>
           <span>Total endpoints</span>
           <strong>{proxies.length}</strong>
+          <StatusDot className="health-signal-dot" tone="neutral" />
         </div>
-        <div className="panel proxy-summary-card">
+        <div className={currentProxy ? 'health-signal health-success' : 'health-signal health-warning'}>
+          <span className="health-signal-icon" aria-hidden="true"><Route size={16} /></span>
           <span>Current endpoint</span>
-          {currentProxy ? <StatusBadge status={currentProxy} tone="success" /> : <strong className="proxy-summary-empty">No current endpoint</strong>}
+          <strong title={currentProxy ?? undefined}>{currentProxy ?? 'No current endpoint'}</strong>
+          <StatusDot className="health-signal-dot" tone={currentProxy ? 'success' : 'warning'} />
         </div>
-      </section>
+      </Card>
 
-      <section className="panel proxy-endpoint-panel" aria-labelledby="proxy-endpoints-heading">
+      <section className="proxy-endpoint-panel" data-surface="panel" aria-labelledby="proxy-endpoints-heading">
         <div className="proxy-table-toolbar">
           <div>
             <h2 id="proxy-endpoints-heading">Proxy endpoints</h2>
@@ -273,8 +279,8 @@ export default function ProxyPage() {
                           confirmLabel={retryingDelete ? 'Retry delete proxy' : 'Delete proxy'}
                           onConfirm={() => deleteProxy(endpoint)}
                         >
-                          <Button type="button" variant="destructive" size="sm" disabled={pending} aria-label={`Delete proxy ${address}`}>
-                            <Trash2 size={14} aria-hidden="true" /> {retryingDelete ? 'Retry delete' : 'Delete'}
+                          <Button type="button" variant="ghost" size={retryingDelete ? 'sm' : 'icon'} className="ui-button-tone-danger" disabled={pending} aria-label={`Delete proxy ${address}`}>
+                            <Trash2 size={15} aria-hidden="true" />{retryingDelete ? ' Retry delete' : null}
                           </Button>
                         </ConfirmDialog>
                       </td>

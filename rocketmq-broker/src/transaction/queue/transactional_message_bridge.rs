@@ -36,14 +36,14 @@ use rocketmq_store::BrokerMasterAddressStore;
 use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
-use rocketmq_store_api::ReadOutcome;
+use rocketmq_store_api::DecodedReadResult;
 use tokio::sync::Mutex;
 use tracing::error;
 
 use crate::broker_error::BrokerResult;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
-use crate::store_read::decode_transaction_read_outcome;
+use crate::store_read::decode_transaction_read_result;
 use crate::transaction::queue::transaction_message_store::TransactionMessageStore;
 use crate::transaction::queue::transaction_topic_registration::TransactionTopicRegistration;
 use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
@@ -134,7 +134,7 @@ where
         queue_id: i32,
         offset: i64,
         nums: i32,
-    ) -> BrokerResult<Option<ReadOutcome<MessageExt>>> {
+    ) -> BrokerResult<Option<DecodedReadResult<MessageExt>>> {
         self.get_message(
             &CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group()),
             &CheetahString::from_static_str(TransactionalMessageUtil::build_half_topic()),
@@ -151,7 +151,7 @@ where
         queue_id: i32,
         offset: i64,
         nums: i32,
-    ) -> BrokerResult<Option<ReadOutcome<MessageExt>>> {
+    ) -> BrokerResult<Option<DecodedReadResult<MessageExt>>> {
         self.get_message(
             &CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group()),
             &CheetahString::from_static_str(TransactionalMessageUtil::build_op_topic()),
@@ -172,14 +172,14 @@ where
         nums: i32,
         _sub: Option<SubscriptionData>, /* in Java version, this is not used, so we keep it as
                                          * Option */
-    ) -> BrokerResult<Option<ReadOutcome<MessageExt>>> {
+    ) -> BrokerResult<Option<DecodedReadResult<MessageExt>>> {
         let get_message_result = self
             .message_store
             .get_message(group, topic, queue_id, offset, nums)
             .await?;
 
         if let Some(get_message_result) = get_message_result {
-            decode_transaction_read_outcome(get_message_result).map(Some)
+            decode_transaction_read_result(get_message_result).map(Some)
         } else {
             error!(
                 "Get message from store return null. topic={}, groupId={}, requestOffset={}",

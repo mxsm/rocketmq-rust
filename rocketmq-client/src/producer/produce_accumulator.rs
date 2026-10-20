@@ -455,8 +455,8 @@ impl ProduceAccumulator {
             let mut batch_guard = batch.lock().await;
             batch_guard.add_with_resource_permit(message, None, hold_size, hold_ms as u64, resource_permit)
         };
-        let add_outcome = match add_result {
-            Ok(outcome) => outcome,
+        let append_receipt = match add_result {
+            Ok(receipt) => receipt,
             Err(error) => {
                 self.release_hold_size(reserved_size);
                 return Err(error);
@@ -464,16 +464,16 @@ impl ProduceAccumulator {
         };
 
         // Check if add failed (batch closed)
-        let Some(add_outcome) = add_outcome else {
+        let Some(append_receipt) = append_receipt else {
             // Batch is closed, cannot retry because message is already consumed
             remove_batch_if_same(&self.sync_send_batchs, &partition_key, &batch);
             self.release_hold_size(reserved_size);
             return Err(crate::mq_client_err!("Batch is closed, cannot add message"));
         };
 
-        let msg_index = add_outcome.index;
-        let notify = add_outcome.notify;
-        if add_outcome.should_flush {
+        let msg_index = append_receipt.index;
+        let notify = append_receipt.notify;
+        if append_receipt.should_flush {
             let batch_to_send = remove_batch_if_same(&self.sync_send_batchs, &partition_key, &batch);
             if let Some(batch_arc) = batch_to_send {
                 self.send_batch_sync(batch_arc).await?;
@@ -567,8 +567,8 @@ impl ProduceAccumulator {
             let mut batch_guard = batch.lock().await;
             batch_guard.add_with_resource_permit(message, send_callback, hold_size, hold_ms as u64, resource_permit)
         };
-        let add_outcome = match add_result {
-            Ok(outcome) => outcome,
+        let append_receipt = match add_result {
+            Ok(receipt) => receipt,
             Err(error) => {
                 self.release_hold_size(reserved_size);
                 return Err(error);
@@ -576,10 +576,10 @@ impl ProduceAccumulator {
         };
 
         // Try to add message to batch
-        match add_outcome {
-            Some(add_outcome) => {
+        match append_receipt {
+            Some(append_receipt) => {
                 // Message added successfully, check if ready to send
-                if add_outcome.should_flush {
+                if append_receipt.should_flush {
                     // Remove batch from map
                     let batch_to_send = remove_batch_if_same(&self.async_send_batchs, &partition_key, &batch);
 
@@ -1188,19 +1188,19 @@ mod tests {
             .body_slice(b"def")
             .build_unchecked();
 
-        let first_outcome = accumulation
+        let first_receipt = accumulation
             .add(first, None, 5, 30_000)
             .unwrap()
             .expect("first message should be added");
-        let second_outcome = accumulation
+        let second_receipt = accumulation
             .add(second, None, 5, 30_000)
             .unwrap()
             .expect("second message should be added");
 
-        assert_eq!(first_outcome.index, 0);
-        assert!(!first_outcome.should_flush);
-        assert_eq!(second_outcome.index, 1);
-        assert!(second_outcome.should_flush);
+        assert_eq!(first_receipt.index, 0);
+        assert!(!first_receipt.should_flush);
+        assert_eq!(second_receipt.index, 1);
+        assert!(second_receipt.should_flush);
     }
 
     #[test]
@@ -1723,7 +1723,7 @@ struct MessageAccumulation {
 }
 
 #[derive(Clone)]
-struct AddOutcome {
+struct BatchAppendReceipt {
     index: usize,
     should_flush: bool,
     notify: Arc<tokio::sync::Notify>,
@@ -1866,7 +1866,7 @@ impl MessageAccumulation {
         send_callback: Option<ArcSendCallback>,
         hold_size: usize,
         hold_ms: u64,
-    ) -> crate::ClientResult<Option<AddOutcome>> {
+    ) -> crate::ClientResult<Option<BatchAppendReceipt>> {
         self.add_inner(msg, send_callback, hold_size, hold_ms, None)
     }
 
@@ -1877,7 +1877,7 @@ impl MessageAccumulation {
         hold_size: usize,
         hold_ms: u64,
         resource_permit: ResourcePermit,
-    ) -> crate::ClientResult<Option<AddOutcome>> {
+    ) -> crate::ClientResult<Option<BatchAppendReceipt>> {
         self.add_inner(msg, send_callback, hold_size, hold_ms, Some(resource_permit))
     }
 
@@ -1888,7 +1888,7 @@ impl MessageAccumulation {
         hold_size: usize,
         hold_ms: u64,
         resource_permit: Option<ResourcePermit>,
-    ) -> crate::ClientResult<Option<AddOutcome>> {
+    ) -> crate::ClientResult<Option<BatchAppendReceipt>> {
         // Check if batch is already closed
         if self.state() != BatchState::Open {
             return Ok(None);
@@ -1925,7 +1925,7 @@ impl MessageAccumulation {
         let index = self.count;
         self.count += 1;
 
-        Ok(Some(AddOutcome {
+        Ok(Some(BatchAppendReceipt {
             index,
             should_flush: self.ready_to_send(hold_size, hold_ms),
             notify: self.completion_notify.clone(),
@@ -2332,12 +2332,12 @@ impl GuardForSyncSendService {
         };
         let retained_bytes = command.retained_bytes();
         match schedule_queue.try_push_data(command, retained_bytes) {
-            rocketmq_runtime::QueuePushOutcome::Rejected { .. } => {
+            rocketmq_runtime::QueueEnqueueStatus::Rejected { .. } => {
                 Err(crate::mq_client_err!("sync batch deadline queue is full"))
             }
-            rocketmq_runtime::QueuePushOutcome::Enqueued
-            | rocketmq_runtime::QueuePushOutcome::Coalesced { .. }
-            | rocketmq_runtime::QueuePushOutcome::DroppedStale { .. } => Ok(()),
+            rocketmq_runtime::QueueEnqueueStatus::Enqueued
+            | rocketmq_runtime::QueueEnqueueStatus::Coalesced { .. }
+            | rocketmq_runtime::QueueEnqueueStatus::DroppedStale { .. } => Ok(()),
         }
     }
 
@@ -2527,12 +2527,12 @@ impl GuardForAsyncSendService {
         };
         let retained_bytes = command.retained_bytes();
         match schedule_queue.try_push_data(command, retained_bytes) {
-            rocketmq_runtime::QueuePushOutcome::Rejected { .. } => {
+            rocketmq_runtime::QueueEnqueueStatus::Rejected { .. } => {
                 Err(crate::mq_client_err!("async batch deadline queue is full"))
             }
-            rocketmq_runtime::QueuePushOutcome::Enqueued
-            | rocketmq_runtime::QueuePushOutcome::Coalesced { .. }
-            | rocketmq_runtime::QueuePushOutcome::DroppedStale { .. } => Ok(()),
+            rocketmq_runtime::QueueEnqueueStatus::Enqueued
+            | rocketmq_runtime::QueueEnqueueStatus::Coalesced { .. }
+            | rocketmq_runtime::QueueEnqueueStatus::DroppedStale { .. } => Ok(()),
         }
     }
 

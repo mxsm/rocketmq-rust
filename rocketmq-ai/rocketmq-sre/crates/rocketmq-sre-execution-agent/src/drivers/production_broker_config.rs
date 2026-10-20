@@ -18,9 +18,9 @@ use std::sync::Arc;
 
 use chrono::DateTime;
 use chrono::Utc;
+use rocketmq_admin_core::core::broker::BrokerConfigPatchResult;
 use rocketmq_admin_core::core::broker::BrokerMutationAdmin;
 use rocketmq_admin_core::core::broker::BrokerQueryAdmin;
-use rocketmq_admin_core::core::broker::PatchBrokerConfigOutcome;
 use rocketmq_admin_core::core::broker::PatchBrokerConfigRequest;
 use rocketmq_admin_core::core::broker::QueryBrokerAllowlistedConfigRequest;
 use rocketmq_admin_core::mutation_client_adapter::MutationAdminBuilder;
@@ -408,14 +408,14 @@ impl ProductionBrokerConfigPatchClient {
                 .map_err(crate::ExecutionAgentRequestFailure::driver_source)?
         };
         Ok(match outcome {
-            PatchBrokerConfigOutcome::Applied {
+            BrokerConfigPatchResult::Applied {
                 previous_generation,
                 generation,
             } => BrokerConfigPatchApplyOutcome::Applied {
                 previous_generation,
                 generation,
             },
-            PatchBrokerConfigOutcome::GenerationConflict {
+            BrokerConfigPatchResult::GenerationConflict {
                 expected_generation,
                 actual_generation,
             } => BrokerConfigPatchApplyOutcome::GenerationConflict {

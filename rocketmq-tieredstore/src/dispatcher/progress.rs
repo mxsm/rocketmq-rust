@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use parking_lot::RwLock;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_store_api::CursorAdvanceDisposition;
 use rocketmq_store_api::DerivedCheckpoint;
 use rocketmq_store_api::DerivedCursor;
@@ -212,7 +213,7 @@ pub(crate) enum RecordDisposition {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FailureRecordOutcome {
+pub(crate) enum RetryLedgerRecordResult {
     Recorded,
     AlreadyCommitted,
 }
@@ -239,7 +240,11 @@ pub(crate) struct TieredProgressTracker {
 }
 
 impl TieredProgressTracker {
-    pub(crate) fn new(config: &TieredStoreConfig, health: Arc<RwLock<TieredDispatchHealth>>) -> Self {
+    pub(crate) fn new(
+        config: &TieredStoreConfig,
+        health: Arc<RwLock<TieredDispatchHealth>>,
+        task_group: TaskGroup,
+    ) -> Self {
         Self {
             source_epoch: config.source_epoch,
             retry_max_entries: config.retry_ledger_max_entries.max(1),
@@ -248,7 +253,7 @@ impl TieredProgressTracker {
             retry_backoff_initial: config.retry_backoff_initial.max(Duration::from_millis(1)),
             retry_backoff_max: config.retry_backoff_max.max(config.retry_backoff_initial),
             source_wal_segment_size: config.source_wal_segment_size.max(1),
-            persistence: TieredProgressPersistence::new(config.store_path_root_dir.clone()),
+            persistence: TieredProgressPersistence::new(config.store_path_root_dir.clone(), task_group),
             state: Mutex::new(TieredProgressState::default()),
             health,
             loaded: AtomicBool::new(false),
@@ -311,6 +316,10 @@ impl TieredProgressTracker {
         Ok(())
     }
 
+    pub(crate) async fn drain_pending_writes(&self) -> Result<(), StoreError> {
+        self.persistence.drain().await
+    }
+
     pub(crate) const fn retry_poll_interval(&self) -> Duration {
         self.retry_backoff_initial
     }
@@ -365,7 +374,7 @@ impl TieredProgressTracker {
         record: DerivedRecordId,
         request: &TieredDispatchRequest,
         now_millis: u64,
-    ) -> Result<Result<FailureRecordOutcome, RetryCapacityRejection>, StoreError> {
+    ) -> Result<Result<RetryLedgerRecordResult, RetryCapacityRejection>, StoreError> {
         self.validate_epoch(record)?;
         let mut state_guard = self.state.lock().await;
         let mut candidate = state_guard.clone();
@@ -378,7 +387,7 @@ impl TieredProgressTracker {
         {
             CursorAdvanceDisposition::AlreadyCommitted => {
                 if !candidate.retries.contains_key(&record) {
-                    return Ok(Ok(FailureRecordOutcome::AlreadyCommitted));
+                    return Ok(Ok(RetryLedgerRecordResult::AlreadyCommitted));
                 }
                 None
             }
@@ -418,7 +427,7 @@ impl TieredProgressTracker {
         self.persist_candidate(&candidate).await?;
         *state_guard = candidate.clone();
         self.refresh_health(&candidate, now_millis, self.health_readiness(&candidate, now_millis));
-        Ok(Ok(FailureRecordOutcome::Recorded))
+        Ok(Ok(RetryLedgerRecordResult::Recorded))
     }
 
     pub(crate) async fn due_retries(&self, now_millis: u64) -> Vec<TieredRetryEntry> {

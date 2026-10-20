@@ -14,14 +14,8 @@
 
 /// File utils types and operations.
 pub mod file_utils;
-/// Future types and operations.
-pub mod future;
 /// Parse config file types and operations.
 pub mod parse_config_file;
 /// System clock types and operations.
 pub mod system_clock;
-/// Thread types and operations.
-pub mod thread;
 pub mod time_utils;
-/// Util all types and operations.
-pub mod util_all;

@@ -24,8 +24,8 @@ use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::body::consumer_running_info::ConsumerRunningInfo;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
+use rocketmq_runtime::common::time_utils;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::common::util_all;
 use rocketmq_transport::api::RPCHook;
 
 use crate::base::client_config::ClientConfig;
@@ -420,7 +420,7 @@ impl Default for ConsumerConfig {
             sub_expression: CheetahString::new(),
             message_model: MessageModel::Clustering,
             consume_from_where: ConsumeFromWhere::ConsumeFromLastOffset,
-            consume_timestamp: Some(CheetahString::from_string(util_all::time_millis_to_human_string3(
+            consume_timestamp: Some(CheetahString::from_string(time_utils::time_millis_to_human_string3(
                 (current_millis() - (1000 * 60 * 30)) as i64,
             ))),
             allocate_message_queue_strategy: Some(Arc::new(AllocateMessageQueueAveragely)),

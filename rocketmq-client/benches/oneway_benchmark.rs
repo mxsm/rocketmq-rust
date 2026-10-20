@@ -21,7 +21,7 @@
 //! cargo bench --bench oneway_benchmark
 //! ```
 
-#[path = "support/mod.rs"]
+#[path = "support.rs"]
 mod support;
 
 use bytes::Bytes;

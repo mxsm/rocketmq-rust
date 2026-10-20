@@ -20,7 +20,7 @@
 //! maintenance-locked write transaction.
 
 use crate::persistence::DashboardPersistence;
-use crate::persistence::backend::PersistenceBackend;
+use crate::persistence::backend::DashboardDataStore;
 use crate::persistence::error::PersistenceError;
 
 pub const BACKUP_FORMAT_VERSION: u32 = 1;
@@ -57,9 +57,9 @@ pub use format::write_backup;
 /// offline by construction because `DashboardPersistence::initialize` owns
 /// the directory lock; SQL delegates to its narrow snapshot transaction.
 pub async fn snapshot(persistence: &DashboardPersistence) -> Result<BackupData, PersistenceError> {
-    match &persistence.backend {
-        PersistenceBackend::File(store) => file::snapshot_file(persistence, store).await,
-        PersistenceBackend::Sql(store) => store.snapshot_for_operations().await,
+    match &persistence.store {
+        DashboardDataStore::File(store) => file::snapshot_file(persistence, store).await,
+        DashboardDataStore::Sql(store) => store.snapshot_for_operations().await,
     }
 }
 
@@ -68,9 +68,9 @@ pub async fn snapshot(persistence: &DashboardPersistence) -> Result<BackupData, 
 /// backend-specific write transaction.
 pub async fn restore(persistence: &DashboardPersistence, data: &BackupData) -> Result<(), PersistenceError> {
     validation::verify_data(data, Some(persistence.storage_backend()))?;
-    match &persistence.backend {
-        PersistenceBackend::Sql(store) => store.restore_for_operations(data).await,
-        PersistenceBackend::File(_) => Err(PersistenceError::InvalidConfig(
+    match &persistence.store {
+        DashboardDataStore::Sql(store) => store.restore_for_operations(data).await,
+        DashboardDataStore::File(_) => Err(PersistenceError::InvalidConfig(
             "file restore must publish an unopened target".to_string(),
         )),
     }

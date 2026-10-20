@@ -19,31 +19,6 @@ use super::RemotingCommand;
 use crate::protocol::command_custom_header::CommandCustomHeader;
 
 impl RemotingCommand {
-    /// Legacy ambiguous-success response factory.
-    ///
-    /// New code should call [`Self::create_success_response_command`] so the
-    /// response intent is visible during review. Call
-    /// [`Self::create_java_default_error_response_command`] when matching
-    /// Java's unset-response behavior instead.
-    #[deprecated(
-        note = "use create_success_response_command for SUCCESS or create_java_default_error_response_command for Java-compatible unset errors"
-    )]
-    pub fn create_response_command() -> Self {
-        Self::create_success_response_command()
-    }
-
-    /// Legacy ambiguous-success typed-header response factory.
-    ///
-    /// New code should call [`Self::create_success_response_command_with_header`].
-    /// Call [`Self::create_java_default_error_response_command_with_header`]
-    /// when matching Java's unset-response behavior instead.
-    #[deprecated(
-        note = "use create_success_response_command_with_header for SUCCESS or create_java_default_error_response_command_with_header for Java-compatible unset errors"
-    )]
-    pub fn create_response_command_with_header(header: impl CommandCustomHeader + Sync + Send + 'static) -> Self {
-        Self::create_success_response_command_with_header(header)
-    }
-
     /// Convert custom header to network format (merge into ext_fields)
     #[inline]
     pub fn make_custom_header_to_net(&mut self) {
@@ -53,40 +28,6 @@ impl RemotingCommand {
     #[inline]
     pub fn materialize_custom_header_to_ext_fields(&mut self) {
         let _ = self.try_make_custom_header_to_net();
-    }
-
-    #[deprecated(
-        since = "1.0.0",
-        note = "use try_read_custom_header_ref; this compatibility alias is fallible despite its historical unchecked name"
-    )]
-    pub fn read_custom_header_ref_unchecked<T>(&self) -> rocketmq_error::Result<&T>
-    where
-        T: CommandCustomHeader + Sync + Send + 'static,
-    {
-        self.try_read_custom_header_ref::<T>()
-    }
-
-    /// Compatibility name for the former shared-reference mutation escape.
-    ///
-    /// Mutation now requires exclusive access to this command and succeeds only
-    /// when the safely shared header is uniquely owned.
-    #[deprecated(note = "use read_custom_header_mut; shared-reference mutation is no longer supported")]
-    pub fn read_custom_header_mut_from_ref<T>(&mut self) -> Option<&mut T>
-    where
-        T: CommandCustomHeader + Sync + Send + 'static,
-    {
-        self.try_read_custom_header_mut::<T>().ok()
-    }
-
-    #[deprecated(
-        since = "1.0.0",
-        note = "use try_read_custom_header_mut; this compatibility alias is fallible despite its historical unchecked name"
-    )]
-    pub fn read_custom_header_mut_unchecked<T>(&mut self) -> rocketmq_error::Result<&mut T>
-    where
-        T: CommandCustomHeader + Sync + Send + 'static,
-    {
-        self.try_read_custom_header_mut::<T>()
     }
 
     pub fn read_custom_header_ref<T>(&self) -> Option<&T>

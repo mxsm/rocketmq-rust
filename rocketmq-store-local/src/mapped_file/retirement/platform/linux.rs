@@ -28,10 +28,10 @@ use super::physical_key;
 use super::types::NamespaceEntry;
 use super::types::NamespaceFailureClass;
 use super::types::NamespaceOperation;
+use super::types::NamespaceOperationResult;
 use super::types::NamespacePolicyViolation;
 use super::types::NamespaceRetirementRequest;
 use super::types::NamespaceTransition;
-use super::types::NamespaceTransitionOutcome;
 use crate::mapped_file::retirement::identity::PhysicalFileKey;
 use crate::mapped_file::retirement::identity::StoreRelativePath;
 use crate::mapped_file::retirement::writer::AllocatedIncarnationReceipt;
@@ -58,12 +58,12 @@ pub(super) struct NamespaceRoot {
 }
 
 impl NamespaceRoot {
-    pub(super) fn open(file: File) -> Result<Self, NamespaceTransitionOutcome> {
+    pub(super) fn open(file: File) -> Result<Self, NamespaceOperationResult> {
         let metadata = file
             .metadata()
             .map_err(|error| classify_io(NamespaceOperation::VerifyRoot, error).into_verification_error())?;
         if !metadata.is_dir() {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::RootIsNotDirectory,
             ));
         }
@@ -81,16 +81,16 @@ impl NamespaceRoot {
         &self,
         request: &NamespaceRetirementRequest,
         _transition: NamespaceTransition,
-    ) -> Result<NamespaceReservation, NamespaceTransitionOutcome> {
+    ) -> Result<NamespaceReservation, NamespaceOperationResult> {
         if !matches!(request.physical_key(), PhysicalFileKey::Unix(_)) {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::PhysicalKeyPlatformMismatch,
             ));
         }
         let (parent_path, canonical_name) = split_parent(request.canonical_path().as_str());
         let (tombstone_parent, tombstone_name) = split_parent(request.tombstone_path().as_str());
         if parent_path != tombstone_parent {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::ParentEscapedRoot,
             ));
         }
@@ -99,16 +99,16 @@ impl NamespaceRoot {
             .metadata()
             .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?;
         if !metadata.is_dir() || metadata.dev() != self.device {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::ParentEscapedRoot,
             ));
         }
         Ok(NamespaceReservation {
             parent,
             canonical_name: CString::new(canonical_name)
-                .map_err(|_| NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::ParentEscapedRoot))?,
+                .map_err(|_| NamespaceOperationResult::Rejected(NamespacePolicyViolation::ParentEscapedRoot))?,
             tombstone_name: CString::new(tombstone_name)
-                .map_err(|_| NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::ParentEscapedRoot))?,
+                .map_err(|_| NamespaceOperationResult::Rejected(NamespacePolicyViolation::ParentEscapedRoot))?,
             canonical: None,
             tombstone: None,
         })
@@ -123,9 +123,9 @@ impl NamespaceRoot {
         path: &StoreRelativePath,
         expected_key: PhysicalFileKey,
         expected_length: u64,
-    ) -> Result<File, NamespaceTransitionOutcome> {
+    ) -> Result<File, NamespaceOperationResult> {
         if !matches!(expected_key, PhysicalFileKey::Unix(_)) {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::PhysicalKeyPlatformMismatch,
             ));
         }
@@ -135,26 +135,26 @@ impl NamespaceRoot {
             .metadata()
             .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?;
         if !parent_metadata.is_dir() || parent_metadata.dev() != self.device {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::ParentEscapedRoot,
             ));
         }
         let file_name = CString::new(file_name)
-            .map_err(|_| NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::ParentEscapedRoot))?;
+            .map_err(|_| NamespaceOperationResult::Rejected(NamespacePolicyViolation::ParentEscapedRoot))?;
         let file = openat2(&parent, &file_name, libc::O_RDWR | libc::O_CLOEXEC | libc::O_NOFOLLOW)
             .map_err(|error| classify_io(NamespaceOperation::VerifyCanonical, error).into_verification_error())?;
         let metadata = file
             .metadata()
             .map_err(|error| classify_io(NamespaceOperation::VerifyCanonical, error).into_verification_error())?;
         if !metadata.is_file() || metadata.dev() != self.device {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::UnexpectedEntryType {
                     entry: NamespaceEntry::Canonical,
                 },
             ));
         }
         if metadata.len() != expected_length {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::ExpectedLengthMismatch {
                     entry: NamespaceEntry::Canonical,
                     expected: expected_length,
@@ -165,7 +165,7 @@ impl NamespaceRoot {
         let actual_key = physical_key::capture(&file)
             .map_err(|error| classify_io(NamespaceOperation::VerifyCanonical, error).into_verification_error())?;
         if actual_key != expected_key {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::NamespaceChangedDuringVerification,
             ));
         }
@@ -470,27 +470,27 @@ fn observe_entry(
     })
 }
 
-fn open_parent_strict(root: &File, parent_path: &str) -> Result<File, NamespaceTransitionOutcome> {
+fn open_parent_strict(root: &File, parent_path: &str) -> Result<File, NamespaceOperationResult> {
     let path = CString::new(if parent_path.is_empty() { "." } else { parent_path })
-        .map_err(|_| NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::ParentEscapedRoot))?;
+        .map_err(|_| NamespaceOperationResult::Rejected(NamespacePolicyViolation::ParentEscapedRoot))?;
     match openat2(
         root,
         &path,
         libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
     ) {
         Ok(parent) => Ok(parent),
-        Err(error) if error.raw_os_error() == Some(libc::ENOSYS) => Err(NamespaceTransitionOutcome::Unsupported {
+        Err(error) if error.raw_os_error() == Some(libc::ENOSYS) => Err(NamespaceOperationResult::Unsupported {
             platform: "linux",
             reason: OPENAT2_UNAVAILABLE,
         }),
         Err(error) if error.raw_os_error() == Some(libc::EXDEV) || error.raw_os_error() == Some(libc::ELOOP) => Err(
-            NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::ParentEscapedRoot),
+            NamespaceOperationResult::Rejected(NamespacePolicyViolation::ParentEscapedRoot),
         ),
         Err(error) => Err(classify_io(NamespaceOperation::OpenParent, error).into_verification_error()),
     }
 }
 
-fn open_or_create_parent_strict(root: &File, parent_path: &str) -> Result<File, NamespaceTransitionOutcome> {
+fn open_or_create_parent_strict(root: &File, parent_path: &str) -> Result<File, NamespaceOperationResult> {
     let root_device = root
         .metadata()
         .map_err(|error| classify_io(NamespaceOperation::VerifyRoot, error).into_verification_error())?
@@ -506,12 +506,12 @@ fn open_or_create_parent_strict(root: &File, parent_path: &str) -> Result<File, 
         .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?;
     for component in parent_path.split('/') {
         if component.is_empty() || component == "." || component == ".." {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::ParentEscapedRoot,
             ));
         }
         let component = CString::new(component)
-            .map_err(|_| NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::ParentEscapedRoot))?;
+            .map_err(|_| NamespaceOperationResult::Rejected(NamespacePolicyViolation::ParentEscapedRoot))?;
         let next = match openat2(
             &parent,
             &component,
@@ -539,13 +539,13 @@ fn open_or_create_parent_strict(root: &File, parent_path: &str) -> Result<File, 
                 .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?
             }
             Err(error) if error.raw_os_error() == Some(libc::ENOSYS) => {
-                return Err(NamespaceTransitionOutcome::Unsupported {
+                return Err(NamespaceOperationResult::Unsupported {
                     platform: "linux",
                     reason: OPENAT2_UNAVAILABLE,
                 });
             }
             Err(error) if error.raw_os_error() == Some(libc::EXDEV) || error.raw_os_error() == Some(libc::ELOOP) => {
-                return Err(NamespaceTransitionOutcome::Rejected(
+                return Err(NamespaceOperationResult::Rejected(
                     NamespacePolicyViolation::ParentEscapedRoot,
                 ));
             }
@@ -557,7 +557,7 @@ fn open_or_create_parent_strict(root: &File, parent_path: &str) -> Result<File, 
             .metadata()
             .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?;
         if !metadata.is_dir() || metadata.dev() != root_device {
-            return Err(NamespaceTransitionOutcome::Rejected(
+            return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::ParentEscapedRoot,
             ));
         }

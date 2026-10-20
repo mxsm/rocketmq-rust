@@ -8,6 +8,7 @@ import ErrorState from '../components/ErrorState';
 import LoadingState from '../components/LoadingState';
 import PageHeader from '../components/PageHeader';
 import RefreshButton from '../components/RefreshButton';
+import StatusBadge from '../components/StatusBadge';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import type { SessionListPage } from '../types/audit';
@@ -104,7 +105,7 @@ export default function SessionAdminPage() {
         description="Review active and revoked dashboard sign-ins. Session credentials are never shown."
         actions={<RefreshButton onRefresh={() => void load(appliedUsername, undefined, true)} />}
       />
-      <section className="table-shell audit-admin-shell">
+      <section className="table-shell audit-admin-shell" data-surface="panel">
         <div className="audit-filter-row">
           <Input value={username} placeholder="Exact username" aria-label="Exact username" onChange={(event) => setUsername(event.target.value)} />
           <Button
@@ -155,7 +156,7 @@ export default function SessionAdminPage() {
                       <td>{formatTime(session.createdAtMs)}</td>
                       <td>{formatTime(session.expiresAtMs)}</td>
                       <td>{formatTime(session.lastSeenAtMs)}</td>
-                      <td>{sessionStatus(session)}</td>
+                      <td><StatusBadge status={sessionStatus(session)} tone={sessionTone(session)} /></td>
                     </tr>
                   ))}
                 </tbody>
@@ -179,6 +180,11 @@ export default function SessionAdminPage() {
 function formatTime(value: number) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? 'Unknown' : date.toLocaleString();
+}
+
+function sessionTone(session: SessionListPage['items'][number]) {
+  if (session.revokedAtMs) return 'danger' as const;
+  return Date.now() >= session.expiresAtMs ? 'neutral' as const : 'success' as const;
 }
 
 function sessionStatus(session: SessionListPage['items'][number]) {

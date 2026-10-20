@@ -25,16 +25,6 @@ impl SerdeJsonUtils {
         Self::from_json_slice(bytes)
     }
 
-    /// Deserialize JSON from bytes into a Rust type.
-    #[deprecated(since = "0.7.0", note = "Use `from_json_bytes` or `from_json_slice` instead")]
-    #[inline]
-    pub fn decode<T>(bytes: &[u8]) -> rocketmq_error::Result<T>
-    where
-        T: serde::de::DeserializeOwned,
-    {
-        Self::from_json_bytes(bytes)
-    }
-
     /// Deserialize JSON from a string into a Rust type.
     #[inline]
     pub fn from_json_str<T>(json: &str) -> rocketmq_error::Result<T>

@@ -31,6 +31,8 @@ use axum::Router;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::tower::StreamableHttpService;
 use rmcp::transport::StreamableHttpServerConfig;
+use rocketmq_mcp_auth::requested_protocol_version;
+use rocketmq_mcp_auth::RequestedProtocolVersion;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_transport::api::TlsConfig as RocketmqTlsConfig;
 use rocketmq_transport::api::TlsMode;
@@ -48,6 +50,9 @@ use crate::config::ControlConfig;
 use crate::config::REQUIRED_WRITE_SCOPE;
 use crate::error::ControlError;
 use crate::server::ControlServer;
+use crate::telemetry::server_failed;
+use crate::telemetry::ControlSignals;
+use crate::telemetry::ServerStage;
 
 pub const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
 pub const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -61,11 +66,32 @@ pub async fn serve<F>(
 where
     F: FutureShutdown,
 {
+    serve_with_signals(config, service_context, audit, ControlSignals::default(), shutdown).await
+}
+
+/// Serves the control endpoint and reports rejections and mutation results through `signals`.
+///
+/// # Errors
+///
+/// Returns a stable error when the configuration, signing keys, certificate, or listener is
+/// unusable, or when the server stops abnormally. The failed stage is logged.
+pub async fn serve_with_signals<F>(
+    config: ControlConfig,
+    service_context: ChildServiceContext,
+    audit: crate::audit::AuditTrail,
+    signals: ControlSignals,
+    shutdown: F,
+) -> Result<(), ControlError>
+where
+    F: FutureShutdown,
+{
     config.validate()?;
+    crate::telemetry::deployment_switches_on(&config.deployment_switches());
     let metadata_url = resource_metadata_url(&config);
     let auth = AuthState::<HttpJwksSource>::initialize(&config.oauth, metadata_url)
         .await
-        .map_err(|_| ControlError::invalid_config())?;
+        .map_err(|_| server_failed(ServerStage::OAuthKeys, ControlError::invalid_config()))?
+        .with_signals(signals);
     serve_authenticated(config, service_context, audit, shutdown, auth).await
 }
 
@@ -82,37 +108,43 @@ where
 {
     let tls = TlsServerRuntime::initialize_with_service_context(tls_config(&config), &service_context)
         .await
-        .map_err(|_| ControlError::invalid_config())?;
+        .map_err(|_| server_failed(ServerStage::Tls, ControlError::invalid_config()))?;
     if tls.active_generation() == 0 {
-        return Err(ControlError::invalid_config());
+        return Err(server_failed(ServerStage::Tls, ControlError::invalid_config()));
     }
     let bind = config
         .server
         .bind
         .parse::<SocketAddr>()
-        .map_err(|_| ControlError::invalid_config())?;
+        .map_err(|_| server_failed(ServerStage::Listener, ControlError::invalid_config()))?;
     let tcp = tokio::net::TcpListener::bind(bind)
         .await
-        .map_err(|_| ControlError::invalid_config())?;
+        .map_err(|_| server_failed(ServerStage::Listener, ControlError::invalid_config()))?;
     let listener = HttpsListener { tcp, tls };
     let cancellation = CancellationToken::new();
     #[cfg(feature = "write-tools")]
-    let server = ControlServer::from_config(&config, audit, service_context.component("mutation-tools"))?;
+    let server = ControlServer::from_config(&config, audit, service_context.component("mutation-tools"))
+        .map_err(|error| server_failed(ServerStage::MutationTools, error))?;
     #[cfg(not(feature = "write-tools"))]
     let server = {
         let _ = (audit, &service_context);
         ControlServer::new(config.mutations.mutations_enabled)
     };
+    let server = server.with_signals(auth.signals().clone());
+    if server.emergency_stop_engaged().await {
+        crate::telemetry::emergency_stop_engaged();
+    }
+    let capabilities = server.capabilities().clone();
     let router = build_router_with_auth(&config, server, cancellation.clone(), auth);
 
-    tracing::info!("rocketmq-mcp-control authenticated HTTPS transport is ready");
+    crate::telemetry::server_ready(&capabilities);
     axum::serve(listener, router)
         .with_graceful_shutdown(async move {
             shutdown.await;
             cancellation.cancel();
         })
         .await
-        .map_err(|_| ControlError::execution_failed())
+        .map_err(|_| server_failed(ServerStage::Serve, ControlError::execution_failed()))
 }
 
 pub trait FutureShutdown: std::future::Future<Output = ()> + Send + 'static {}
@@ -126,16 +158,24 @@ pub(crate) fn build_router_with_auth<S: JwksSource + 'static>(
     auth: AuthState<S>,
 ) -> Router {
     let endpoint = config.server.endpoint.clone();
+    let signals = server.signals().clone();
     let service = streamable_service(config, server, cancellation);
     let metadata_path = "/.well-known/oauth-protected-resource";
     let metadata = protected_resource_metadata(config);
+    // Layers run from the last one added: a request is authenticated before anything else about
+    // it is answered, the revision it names included.
     let mcp_router = Router::new()
         .nest_service(&endpoint, service)
+        .layer(middleware::from_fn_with_state(
+            signals.clone(),
+            validate_protocol_version,
+        ))
         .layer(middleware::from_fn_with_state(auth, oauth_middleware::<S>));
 
     let policy = RequestOriginPolicy {
         host: config.server.public_base_url.host().to_string(),
         origin: config.server.public_base_url.as_str().to_string(),
+        signals,
     };
     apply_http_limits(
         Router::new()
@@ -162,6 +202,7 @@ fn apply_http_limits(router: Router) -> Router {
 struct RequestOriginPolicy {
     host: String,
     origin: String,
+    signals: ControlSignals,
 }
 
 async fn validate_host_origin(State(policy): State<RequestOriginPolicy>, request: Request, next: Next) -> Response {
@@ -176,6 +217,26 @@ async fn validate_host_origin(State(policy): State<RequestOriginPolicy>, request
         .map(|value| value.to_str().is_ok_and(|value| value == policy.origin))
         .unwrap_or(true);
     if !host_matches || !origin_matches {
+        policy.signals.request_rejected();
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(ControlError::request_rejected().envelope()),
+        )
+            .into_response();
+    }
+    next.run(request).await
+}
+
+/// Refuses a request whose `MCP-Protocol-Version` header names a revision this server does not
+/// answer.
+///
+/// The SDK holds that header to every revision it knows, not to the ones a server supports, and
+/// would answer such a request as if nothing were wrong. A request without the header passes
+/// here: it speaks through `initialize` or names its revision in its metadata, and the handler
+/// holds both to the same set.
+async fn validate_protocol_version(State(signals): State<ControlSignals>, request: Request, next: Next) -> Response {
+    if requested_protocol_version(request.headers()) == RequestedProtocolVersion::Unsupported {
+        signals.protocol_version_rejected();
         return (
             StatusCode::BAD_REQUEST,
             axum::Json(ControlError::request_rejected().envelope()),
@@ -309,6 +370,8 @@ mod tests {
     struct StaticSource;
 
     impl JwksSource for StaticSource {
+        type Error = AuthError;
+
         async fn fetch(&self) -> Result<Vec<u8>, AuthError> {
             Ok(serde_json::to_vec(&serde_json::json!({"keys": [{
                 "kty": "RSA", "kid": "test-key", "alg": "RS256", "use": "sig",
@@ -361,12 +424,15 @@ mod tests {
                     cert_path: "server.pem".to_string(),
                     key_path: "server-key.pem".to_string(),
                 },
+                allow_wildcard_bind: false,
+                allow_internal_base_url: false,
             },
             oauth: OAuthConfig {
                 issuer: "https://issuer.example.test".to_string(),
                 audience: "rocketmq-mcp-control".to_string(),
                 jwks_url: "https://issuer.example.test/jwks".to_string(),
                 jwks_ca_path: None,
+                allow_private_network: false,
             },
             mutations: MutationPolicyConfig::default(),
             clusters: Vec::new(),
@@ -375,6 +441,7 @@ mod tests {
                 capacity: 64,
                 max_record_bytes: 4096,
             },
+            limits: crate::config::LimitsConfig::default(),
         }
     }
 
@@ -412,6 +479,9 @@ mod tests {
         preflights: std::sync::atomic::AtomicUsize,
         executes: std::sync::atomic::AtomicUsize,
         shutdowns: std::sync::atomic::AtomicUsize,
+        /// The version of the Topic that another writer left on every Broker; zero while no
+        /// other writer created it. A test moves it to change the state between two calls.
+        topic_version: std::sync::atomic::AtomicU64,
     }
 
     #[cfg(feature = "write-tools")]
@@ -487,18 +557,20 @@ mod tests {
                 self.counters
                     .preflights
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let found = self.counters.topic_version.load(std::sync::atomic::Ordering::SeqCst);
+                let version = found + u64::from(self.topic_executed);
                 Ok(ProtocolTopicPlan {
                     targets: broker_names
                         .iter()
                         .cloned()
                         .map(|broker_name| MetadataPreflightTarget {
                             broker_name,
-                            state: if self.topic_executed {
-                                ExpectedState::Present { version: 1 }
-                            } else {
+                            state: if version == 0 {
                                 ExpectedState::Absent
+                            } else {
+                                ExpectedState::Present { version }
                             },
-                            current: self.topic_executed.then(|| request.replacement.clone()),
+                            current: (version > 0).then(|| request.replacement.clone()),
                         })
                         .collect(),
                     failures: Vec::new(),
@@ -527,21 +599,21 @@ mod tests {
             plan: &'a Self::TopicPlan,
         ) -> crate::tool_runtime::RuntimeFuture<
             'a,
-            Result<rocketmq_admin_core::core::supervised_mutation::MetadataMutationOutcome, ControlError>,
+            Result<rocketmq_admin_core::core::supervised_mutation::MetadataMutationReport, ControlError>,
         > {
             Box::pin(async move {
                 use rocketmq_admin_core::core::supervised_mutation::ExpectedState;
-                use rocketmq_admin_core::core::supervised_mutation::MetadataMutationOutcome;
-                use rocketmq_admin_core::core::supervised_mutation::MetadataMutationTargetOutcome;
+                use rocketmq_admin_core::core::supervised_mutation::MetadataMutationReport;
+                use rocketmq_admin_core::core::supervised_mutation::MetadataMutationTargetReport;
                 use rocketmq_admin_core::core::supervised_mutation::MutationPersistenceState;
                 use rocketmq_admin_core::core::supervised_mutation::MutationVerificationState;
                 self.counters.executes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 self.topic_executed = true;
-                Ok(MetadataMutationOutcome {
+                Ok(MetadataMutationReport {
                     targets: plan
                         .targets
                         .iter()
-                        .map(|target| MetadataMutationTargetOutcome {
+                        .map(|target| MetadataMutationTargetReport {
                             broker_name: target.broker_name.clone(),
                             expected_state: target.state,
                             resulting_state: Some(ExpectedState::Present { version: 1 }),
@@ -610,21 +682,21 @@ mod tests {
             plan: &'a Self::GroupPlan,
         ) -> crate::tool_runtime::RuntimeFuture<
             'a,
-            Result<rocketmq_admin_core::core::supervised_mutation::MetadataMutationOutcome, ControlError>,
+            Result<rocketmq_admin_core::core::supervised_mutation::MetadataMutationReport, ControlError>,
         > {
             Box::pin(async move {
                 use rocketmq_admin_core::core::supervised_mutation::ExpectedState;
-                use rocketmq_admin_core::core::supervised_mutation::MetadataMutationOutcome;
-                use rocketmq_admin_core::core::supervised_mutation::MetadataMutationTargetOutcome;
+                use rocketmq_admin_core::core::supervised_mutation::MetadataMutationReport;
+                use rocketmq_admin_core::core::supervised_mutation::MetadataMutationTargetReport;
                 use rocketmq_admin_core::core::supervised_mutation::MutationPersistenceState;
                 use rocketmq_admin_core::core::supervised_mutation::MutationVerificationState;
                 self.counters.executes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 self.group_executed = true;
-                Ok(MetadataMutationOutcome {
+                Ok(MetadataMutationReport {
                     targets: plan
                         .targets
                         .iter()
-                        .map(|target| MetadataMutationTargetOutcome {
+                        .map(|target| MetadataMutationTargetReport {
                             broker_name: target.broker_name.clone(),
                             expected_state: target.state,
                             resulting_state: Some(ExpectedState::Present { version: 1 }),
@@ -666,7 +738,7 @@ mod tests {
             _plan: &'a Self::OffsetPlan,
         ) -> crate::tool_runtime::RuntimeFuture<
             'a,
-            Result<rocketmq_admin_core::core::supervised_mutation::OffsetResetOutcome, ControlError>,
+            Result<rocketmq_admin_core::core::supervised_mutation::OffsetResetReport, ControlError>,
         > {
             Box::pin(async { Err(ControlError::operation_unavailable()) })
         }
@@ -697,7 +769,7 @@ mod tests {
             _patch: rocketmq_admin_core::core::supervised_mutation::BrokerMutationConfigPatch,
         ) -> crate::tool_runtime::RuntimeFuture<
             'a,
-            Result<rocketmq_admin_core::core::supervised_mutation::BrokerMutationConfigOutcome, ControlError>,
+            Result<rocketmq_admin_core::core::supervised_mutation::BrokerConfigMutationReport, ControlError>,
         > {
             Box::pin(async { Err(ControlError::operation_unavailable()) })
         }
@@ -730,7 +802,7 @@ mod tests {
             _timeout_millis: u64,
         ) -> crate::tool_runtime::RuntimeFuture<
             'a,
-            Result<rocketmq_admin_core::core::supervised_mutation::RequestModeMutationOutcome, ControlError>,
+            Result<rocketmq_admin_core::core::supervised_mutation::RequestModeMutationReport, ControlError>,
         > {
             Box::pin(async { Err(ControlError::operation_unavailable()) })
         }
@@ -745,6 +817,61 @@ mod tests {
         }
     }
 
+    /// The protocol tests call no operation-bound Tool, so this part of the session stays shut.
+    #[cfg(feature = "write-tools")]
+    impl crate::tool_runtime::OperationBackend for ProtocolBackend {
+        type ProxyDrainPlan = ();
+        type LogFilterPlan = ();
+
+        fn preflight_proxy_drain<'a>(
+            &'a mut self,
+            _request: &'a rocketmq_admin_core::core::supervised_operation::ProxyDrainPreflightRequest,
+        ) -> crate::tool_runtime::RuntimeFuture<'a, Result<Self::ProxyDrainPlan, ControlError>> {
+            Box::pin(async { Err(ControlError::operation_unavailable()) })
+        }
+
+        fn planned_proxy_drain(
+            _plan: &Self::ProxyDrainPlan,
+        ) -> crate::tool_runtime::Planned<rocketmq_admin_core::core::supervised_operation::ProxyDrainObservation>
+        {
+            unreachable!("no drain plan is ever made")
+        }
+
+        fn execute_proxy_drain<'a>(
+            &'a mut self,
+            _plan: &'a Self::ProxyDrainPlan,
+        ) -> crate::tool_runtime::RuntimeFuture<
+            'a,
+            Result<rocketmq_admin_core::core::supervised_operation::ProxyDrainReport, ControlError>,
+        > {
+            Box::pin(async { Err(ControlError::operation_unavailable()) })
+        }
+
+        fn preflight_log_filter<'a>(
+            &'a mut self,
+            _request: &'a rocketmq_admin_core::core::supervised_operation::BrokerLogFilterPreflightRequest,
+        ) -> crate::tool_runtime::RuntimeFuture<'a, Result<Self::LogFilterPlan, ControlError>> {
+            Box::pin(async { Err(ControlError::operation_unavailable()) })
+        }
+
+        fn planned_log_filter(
+            _plan: &Self::LogFilterPlan,
+        ) -> crate::tool_runtime::Planned<rocketmq_admin_core::core::supervised_operation::BrokerLogFilterObservation>
+        {
+            unreachable!("no log-filter plan is ever made")
+        }
+
+        fn execute_log_filter<'a>(
+            &'a mut self,
+            _plan: &'a Self::LogFilterPlan,
+        ) -> crate::tool_runtime::RuntimeFuture<
+            'a,
+            Result<rocketmq_admin_core::core::supervised_operation::BrokerLogFilterReport, ControlError>,
+        > {
+            Box::pin(async { Err(ControlError::operation_unavailable()) })
+        }
+    }
+
     #[cfg(feature = "write-tools")]
     async fn write_router() -> (Router, Arc<ProtocolCounters>, Arc<MemoryAuditSink>) {
         write_router_with_mutations_enabled(true).await
@@ -754,13 +881,33 @@ mod tests {
     async fn write_router_with_mutations_enabled(
         mutations_enabled: bool,
     ) -> (Router, Arc<ProtocolCounters>, Arc<MemoryAuditSink>) {
-        use crate::audit::AuditTrail;
+        let sink = Arc::new(MemoryAuditSink::new(64, 4096));
+        let (router, counters) =
+            write_router_over(mutations_enabled, crate::audit::AuditTrail::new(sink.clone())).await;
+        (router, counters, sink)
+    }
+
+    /// Builds the write router over an existing audit trail, as a restarted server would.
+    #[cfg(feature = "write-tools")]
+    async fn write_router_over(
+        mutations_enabled: bool,
+        trail: crate::audit::AuditTrail,
+    ) -> (Router, Arc<ProtocolCounters>) {
+        write_router_with(|policy| policy.mutations_enabled = mutations_enabled, trail).await
+    }
+
+    /// Builds the write router with the test policy as `adjust` leaves it.
+    #[cfg(feature = "write-tools")]
+    async fn write_router_with(
+        adjust: impl FnOnce(&mut MutationPolicyConfig),
+        trail: crate::audit::AuditTrail,
+    ) -> (Router, Arc<ProtocolCounters>) {
         use crate::model::ClusterName;
         use crate::model::ControlOperation;
 
         let mut config = config();
         config.mutations = MutationPolicyConfig {
-            mutations_enabled,
+            mutations_enabled: true,
             dry_run: true,
             allowed_operations: vec![
                 ControlOperation::TopicUpsert,
@@ -771,18 +918,20 @@ mod tests {
             ],
             allowed_clusters: vec![ClusterName::try_new("cluster-a").unwrap()],
             operation_timeout_seconds: 2,
+            require_plan_digest: false,
+            emergency_stop_file: None,
         };
+        adjust(&mut config.mutations);
         let runtime = rocketmq_runtime::RuntimeContext::from_current("control-protocol-write-test");
         let owner = runtime
             .service_context("control-protocol-write-test")
             .task_group()
             .clone();
         let counters = Arc::new(ProtocolCounters::default());
-        let sink = Arc::new(MemoryAuditSink::new(64, 4096));
         let server = ControlServer::with_test_factory(
             &config.mutations,
             std::collections::BTreeSet::from([ClusterName::try_new("cluster-a").unwrap()]),
-            AuditTrail::new(sink.clone()),
+            trail,
             Arc::new(ProtocolFactory {
                 counters: counters.clone(),
             }),
@@ -794,7 +943,6 @@ mod tests {
         (
             build_router_with_auth(&config, server, CancellationToken::new(), auth),
             counters,
-            sink,
         )
     }
 
@@ -884,6 +1032,30 @@ mod tests {
         serde_json::from_slice(&bytes).unwrap()
     }
 
+    /// The response as one call returns it: under the invocation of that call.
+    #[cfg(feature = "write-tools")]
+    fn invoked(mut response: serde_json::Value, invocation_id: u64) -> serde_json::Value {
+        response[crate::tools::INVOCATION_ID_MEMBER] = serde_json::json!(invocation_id);
+        response
+    }
+
+    /// Whether `value` has the form of a plan digest.
+    #[cfg(feature = "write-tools")]
+    fn is_plan_digest(value: &serde_json::Value) -> bool {
+        value.as_str().is_some_and(crate::tools::is_plan_digest)
+    }
+
+    /// The expected response of a dry run with the plan digest that `sent` reports.
+    ///
+    /// What a digest binds has tests of its own; here it only has to be one.
+    #[cfg(feature = "write-tools")]
+    fn planned_as(mut response: serde_json::Value, sent: &serde_json::Value) -> serde_json::Value {
+        let digest = &sent["result"]["structuredContent"][crate::tools::PLAN_DIGEST_MEMBER];
+        assert!(is_plan_digest(digest), "a dry run reports no plan digest: {digest}");
+        response[crate::tools::PLAN_DIGEST_MEMBER] = digest.clone();
+        response
+    }
+
     #[cfg(feature = "write-tools")]
     fn expected_upsert_response(
         operation: &str,
@@ -944,7 +1116,9 @@ mod tests {
             "requested": requested,
             "after": after,
             "targets": targets,
-            "warnings": []
+            "warnings": [],
+            // An execution reports no plan. `planned_as` adds the one of a dry run.
+            "plan_digest": null
         })
     }
 
@@ -1069,6 +1243,7 @@ mod tests {
                 "rocketmq_reset_consumer_offset",
                 "rocketmq_patch_broker_config",
                 "rocketmq_set_consumer_request_mode",
+                "rocketmq_get_mutation_result",
             ]
         );
         let both = token_with_claims(
@@ -1087,12 +1262,14 @@ mod tests {
             .unwrap();
         let body = to_bytes(tools.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
         let listed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 2);
+        // The two allowed mutations, and the result lookup that every writer of the cluster gets.
+        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 3);
         for tool in listed["result"]["tools"].as_array().unwrap() {
-            assert_eq!(tool["annotations"]["readOnlyHint"], false);
-            assert_eq!(tool["annotations"]["destructiveHint"], true);
+            let lookup = tool["name"] == crate::tools::GET_MUTATION_RESULT_TOOL;
+            assert_eq!(tool["annotations"]["readOnlyHint"], lookup, "{}", tool["name"]);
+            assert_eq!(tool["annotations"]["destructiveHint"], !lookup, "{}", tool["name"]);
             assert_eq!(tool["annotations"]["idempotentHint"], true);
-            assert_eq!(tool["annotations"]["openWorldHint"], true);
+            assert_eq!(tool["annotations"]["openWorldHint"], !lookup, "{}", tool["name"]);
         }
 
         let topic_only = token_with_claims(REQUIRED_WRITE_SCOPE, vec!["topic_upsert"], vec!["cluster-a"]);
@@ -1107,7 +1284,8 @@ mod tests {
             .unwrap();
         let one_body = to_bytes(one.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
         let one_value: serde_json::Value = serde_json::from_slice(&one_body).unwrap();
-        assert_eq!(one_value["result"]["tools"].as_array().unwrap().len(), 1);
+        assert_eq!(one_value["result"]["tools"].as_array().unwrap().len(), 2);
+        // Without an allowed cluster there is nothing to change and no result to read.
         let no_cluster = token_with_claims(
             REQUIRED_WRITE_SCOPE,
             vec!["topic_upsert", "consumer_group_upsert"],
@@ -1193,7 +1371,39 @@ mod tests {
                 value["result"]["structuredContent"]["code"], expected_code,
                 "case {index}"
             );
+            // A caller that fails authorization learns nothing about the arguments it sent.
+            assert!(
+                value["result"]["structuredContent"].get("violations").is_none(),
+                "case {index}"
+            );
         }
+
+        // The same arguments are located once the caller may run the operation on the cluster.
+        let located = router
+            .clone()
+            .oneshot(request(
+                "/mcp",
+                Body::from(r#"{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{"name":"rocketmq_upsert_topic","arguments":{"cluster":"cluster-a","unknown":true}}}"#),
+                Some(&both),
+            ))
+            .await
+            .unwrap();
+        let located_body = to_bytes(located.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
+        let located_value: serde_json::Value = serde_json::from_slice(&located_body).unwrap();
+        assert_eq!(
+            located_value["result"]["structuredContent"],
+            serde_json::json!({
+                "schema_version": crate::error::ERROR_SCHEMA_VERSION,
+                "code": "invalid_argument",
+                "message": "mutation argument is invalid",
+                "retryable": false,
+                "violations": [
+                    {"path": "/schema_version", "constraint": "required"},
+                    {"path": "/topic", "constraint": "required"},
+                    {"path": "/broker_names", "constraint": "required"}
+                ]
+            })
+        );
         assert_eq!(counters.opens.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_eq!(counters.preflights.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_eq!(counters.executes.load(std::sync::atomic::Ordering::SeqCst), 0);
@@ -1392,9 +1602,16 @@ mod tests {
             topic_dry_arguments.clone(),
         )
         .await;
+        // Every call writes a `started` and a terminal record, so invocations are 1, 3, 5, ...
         assert_eq!(
             topic_dry["result"]["structuredContent"],
-            expected_upsert_response("topic_upsert", "topic", "orders", topic_requested.clone(), false)
+            invoked(
+                planned_as(
+                    expected_upsert_response("topic_upsert", "topic", "orders", topic_requested.clone(), false),
+                    &topic_dry
+                ),
+                1
+            )
         );
         let mut topic_execute_arguments = topic_dry_arguments;
         let topic_object = topic_execute_arguments.as_object_mut().unwrap();
@@ -1411,7 +1628,10 @@ mod tests {
         )
         .await;
         let expected_topic_execute = expected_upsert_response("topic_upsert", "topic", "orders", topic_requested, true);
-        assert_eq!(topic_execute["result"]["structuredContent"], expected_topic_execute);
+        assert_eq!(
+            topic_execute["result"]["structuredContent"],
+            invoked(expected_topic_execute.clone(), 3)
+        );
         let topic_cache_hit = authenticated_tool_call(
             &router,
             &token,
@@ -1420,7 +1640,11 @@ mod tests {
             topic_execute_arguments,
         )
         .await;
-        assert_eq!(topic_cache_hit["result"]["structuredContent"], expected_topic_execute);
+        // A replayed response is returned under the invocation of the call that asked for it.
+        assert_eq!(
+            topic_cache_hit["result"]["structuredContent"],
+            invoked(expected_topic_execute, 5)
+        );
 
         let group_requested = serde_json::json!({
             "consume_enable": true,
@@ -1447,12 +1671,18 @@ mod tests {
         .await;
         assert_eq!(
             group_dry["result"]["structuredContent"],
-            expected_upsert_response(
-                "consumer_group_upsert",
-                "consumer_group",
-                "orders_consumers",
-                group_requested.clone(),
-                false,
+            invoked(
+                planned_as(
+                    expected_upsert_response(
+                        "consumer_group_upsert",
+                        "consumer_group",
+                        "orders_consumers",
+                        group_requested.clone(),
+                        false,
+                    ),
+                    &group_dry
+                ),
+                7
             )
         );
         let mut group_execute_arguments = group_dry_arguments;
@@ -1476,7 +1706,10 @@ mod tests {
             group_requested,
             true,
         );
-        assert_eq!(group_execute["result"]["structuredContent"], expected_group_execute);
+        assert_eq!(
+            group_execute["result"]["structuredContent"],
+            invoked(expected_group_execute.clone(), 9)
+        );
         let group_cache_hit = authenticated_tool_call(
             &router,
             &token,
@@ -1485,7 +1718,10 @@ mod tests {
             group_execute_arguments,
         )
         .await;
-        assert_eq!(group_cache_hit["result"]["structuredContent"], expected_group_execute);
+        assert_eq!(
+            group_cache_hit["result"]["structuredContent"],
+            invoked(expected_group_execute, 11)
+        );
 
         assert_eq!(counters.opens.load(std::sync::atomic::Ordering::SeqCst), 4);
         assert_eq!(counters.preflights.load(std::sync::atomic::Ordering::SeqCst), 6);
@@ -1875,7 +2111,8 @@ mod tests {
             assert_eq!(response.status(), StatusCode::OK, "valid case {index}");
             let body = to_bytes(response.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
             let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            assert_eq!(value["result"]["tools"].as_array().unwrap().len(), 1);
+            // The one allowed mutation and the result lookup.
+            assert_eq!(value["result"]["tools"].as_array().unwrap().len(), 2);
             assert!(!value.to_string().contains(subject));
         }
 
@@ -2028,6 +2265,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_internal_origin_with_a_port_is_the_one_authority_a_request_may_name() {
+        const AUTHORITY: &str = "control.mq.svc.cluster.local:8443";
+        let mut config = config();
+        config.server.bind = "0.0.0.0:8443".to_string();
+        config.server.allow_wildcard_bind = true;
+        config.server.allow_internal_base_url = true;
+        config.server.public_base_url =
+            serde_json::from_value(serde_json::json!(format!("https://{AUTHORITY}"))).unwrap();
+        config.validate().unwrap();
+        let auth = AuthState::from_source(&config.oauth, resource_metadata_url(&config), StaticSource)
+            .await
+            .unwrap();
+        let router = build_router_with_auth(&config, ControlServer::new(false), CancellationToken::new(), auth);
+        let metadata = |host: &str| {
+            Request::builder()
+                .uri("/.well-known/oauth-protected-resource")
+                .header(HOST, host)
+                .body(Body::empty())
+                .unwrap()
+        };
+
+        let published = router.clone().oneshot(metadata(AUTHORITY)).await.unwrap();
+        assert_eq!(published.status(), StatusCode::OK);
+        let body = to_bytes(published.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["resource"], format!("https://{AUTHORITY}/mcp"));
+
+        // The wildcard bind adds no name: the origin is still the only authority that is served.
+        for refused in [
+            "control.mq.svc.cluster.local",
+            "control.mq.svc.cluster.local:9443",
+            "0.0.0.0:8443",
+            "10.0.0.5:8443",
+            "control.example.test",
+        ] {
+            let response = router.clone().oneshot(metadata(refused)).await.unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{refused}");
+        }
+
+        let write_token = token(REQUIRED_WRITE_SCOPE);
+        let initialize = |host: &str, origin: &str| {
+            Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header(HOST, host)
+                .header(ORIGIN, origin)
+                .header("content-type", "application/json")
+                .header("accept", "application/json, text/event-stream")
+                .header("mcp-protocol-version", "2025-11-25")
+                .header(AUTHORIZATION, format!("Bearer {write_token}"))
+                .body(Body::from(
+                    r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"control-test","version":"1.0"}}}"#,
+                ))
+                .unwrap()
+        };
+        let accepted = router
+            .clone()
+            .oneshot(initialize(AUTHORITY, &format!("https://{AUTHORITY}")))
+            .await
+            .unwrap();
+        assert_eq!(accepted.status(), StatusCode::OK);
+        let foreign_origin = router
+            .oneshot(initialize(AUTHORITY, "https://control.mq.svc.cluster.local"))
+            .await
+            .unwrap();
+        assert_eq!(foreign_origin.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn hostile_host_and_origin_are_rejected_before_oauth_without_echo_or_logs() {
         let logs = CapturedLogs::default();
         let subscriber = tracing_subscriber::fmt()
@@ -2066,6 +2372,102 @@ mod tests {
         for forbidden in [hostile_host, hostile_origin, "token=secret", "127.0.0.1"] {
             assert!(!body.contains(forbidden));
             assert!(!captured.contains(forbidden));
+        }
+        assert!(captured.contains(
+            r#"request was rejected before authentication site="origin" code="request_rejected" suppressed=0"#
+        ));
+    }
+
+    #[tokio::test]
+    async fn rejections_are_logged_with_closed_labels_and_without_caller_text() {
+        let logs = crate::telemetry::testing::LogCapture::start();
+        let router = router().await;
+
+        for credential in [None, Some("attacker-controlled-credential")] {
+            let response = router
+                .clone()
+                .oneshot(request("/mcp", Body::from("{}"), credential))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+
+        let write_token = token_with_claims(REQUIRED_WRITE_SCOPE, vec!["topic_upsert"], vec!["cluster-a"]);
+        let hostile_tool = "rocketmq_upsert_topic; drop 10.0.0.9";
+        let hostile_cluster = "nameserver-10.0.0.9:9876";
+        let call = json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": {"name": hostile_tool, "arguments": {"cluster": hostile_cluster}}
+        });
+        let response = router
+            .oneshot(request("/mcp", Body::from(call.to_string()), Some(&write_token)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["result"]["structuredContent"]["code"], "cluster_not_allowed");
+
+        let text = logs.text();
+        assert!(text.contains(r#"site="authentication" code="unauthorized" reason="invalid_token" suppressed=0"#));
+        assert!(text.contains(r#"site="call" tool="unknown" code="cluster_not_allowed" suppressed=0"#));
+        for forbidden in [
+            "attacker-controlled-credential",
+            hostile_tool,
+            hostile_cluster,
+            "10.0.0.9",
+            "operator@example.test",
+            write_token.as_str(),
+        ] {
+            assert!(!text.contains(forbidden), "log exposed {forbidden}");
+        }
+    }
+
+    #[cfg(feature = "write-tools")]
+    #[tokio::test]
+    async fn supervised_mutations_are_logged_with_the_audit_invocation_and_no_operator_evidence() {
+        let logs = crate::telemetry::testing::LogCapture::start();
+        let (router, _, sink) = write_router().await;
+        let token = token_with_claims(REQUIRED_WRITE_SCOPE, vec!["topic_upsert"], vec!["cluster-a"]);
+
+        let mut arguments = topic_arguments("orders", vec!["broker-a".to_owned(), "broker-b".to_owned()]);
+        let planned =
+            authenticated_tool_call(&router, &token, 500, crate::tools::UPSERT_TOPIC_TOOL, arguments.clone()).await;
+        assert_eq!(planned["result"]["structuredContent"]["status"], "planned");
+        let object = arguments.as_object_mut().unwrap();
+        object.insert("dry_run".to_owned(), serde_json::json!(false));
+        object.insert("confirm".to_owned(), serde_json::json!(true));
+        object.insert("reason".to_owned(), serde_json::json!("approved topic rollout"));
+        let applied = authenticated_tool_call(&router, &token, 501, crate::tools::UPSERT_TOPIC_TOOL, arguments).await;
+        assert_eq!(applied["result"]["structuredContent"]["status"], "applied");
+
+        // The logged invocation is the sequence number of the durable `started` record.
+        let records = sink.records().await.unwrap();
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.invocation_id.get())
+                .collect::<Vec<_>>(),
+            [1, 1, 3, 3]
+        );
+        let text = logs.text();
+        assert!(text.contains(
+            r#"mutation finished operation="topic_upsert" cluster="cluster-a" mode="dry_run" result="planned" invocation_id=1 "#
+        ));
+        assert!(text.contains(
+            r#"mutation finished operation="topic_upsert" cluster="cluster-a" mode="execute" result="applied" invocation_id=3 "#
+        ));
+        assert_eq!(text.matches("mutation finished").count(), 2);
+        for forbidden in [
+            "operator@example.test",
+            "approved topic rollout",
+            "orders",
+            "broker-a",
+            token.as_str(),
+        ] {
+            assert!(!text.contains(forbidden), "log exposed {forbidden}");
         }
     }
 
@@ -2124,8 +2526,35 @@ mod tests {
             .unwrap();
     }
 
+    mod protocol_version {
+        use super::*;
+
+        include!("transport/protocol_version.rs");
+    }
+
     #[cfg(feature = "write-tools")]
     include!("transport/acceptance_matrix.rs");
+
+    #[cfg(feature = "write-tools")]
+    mod emergency_stop {
+        use super::*;
+
+        include!("transport/emergency_stop.rs");
+    }
+
+    #[cfg(feature = "write-tools")]
+    mod mutation_result {
+        use super::*;
+
+        include!("transport/mutation_result.rs");
+    }
+
+    #[cfg(feature = "write-tools")]
+    mod plan_digest {
+        use super::*;
+
+        include!("transport/plan_digest.rs");
+    }
 }
 
 #[cfg(all(test, feature = "write-tools"))]

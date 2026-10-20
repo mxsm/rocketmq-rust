@@ -37,9 +37,9 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::base::pending_request_table::materialize_and_estimate_remoting_command_retained_bytes;
-use crate::base::pending_request_table::PendingRegistrationOutcome;
 use crate::base::pending_request_table::PendingRequestCompletion;
 use crate::base::pending_request_table::PendingRequestOwner;
+use crate::base::pending_request_table::PendingRequestRegistrationResult;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::base::pending_request_table::PendingRequestToken;
 use crate::connection::Connection;
@@ -616,40 +616,24 @@ impl ChannelInner {
         response_table: PendingRequestTable,
         parent_task_group: TaskGroup,
     ) -> Result<Self, rocketmq_error::SharedError> {
-        Self::try_new_with_pending_requests_and_task_group(connection, response_table, parent_task_group)
-    }
-
-    pub fn try_new_with_pending_requests_and_task_group(
-        connection: Connection,
-        response_table: PendingRequestTable,
-        parent_task_group: TaskGroup,
-    ) -> Result<Self, rocketmq_error::SharedError> {
         let owner = response_table.new_owner();
         Self::try_new_with_send_task_group(connection, response_table, Some(owner), parent_task_group, true)
     }
 
+    /// Creates a transport-backed channel under the supplied task group without a second send task.
     pub(crate) fn new_transport_session(
         connection: Connection,
         response_table: PendingRequestTable,
         parent_task_group: TaskGroup,
     ) -> Result<Self, rocketmq_error::SharedError> {
-        Self::new_transport_session_with_task_group(connection, response_table, parent_task_group)
-    }
-
-    /// Creates a transport-backed channel snapshot under an already-owned task group.
-    ///
-    /// Unlike `new_transport_session`, this does not register another fixed child. The caller
-    /// chooses the registration lifetime and the returned `ChannelInner` keeps the supplied
-    /// group alive for exactly as long as the snapshot remains reachable. Its
-    /// request APIs write through the supplied queued connection directly and
-    /// therefore do not create a second background send task.
-    pub(crate) fn new_transport_session_with_task_group(
-        connection: Connection,
-        response_table: PendingRequestTable,
-        task_group: TaskGroup,
-    ) -> Result<Self, rocketmq_error::SharedError> {
         let pending_request_owner = Some(response_table.new_owner());
-        Self::try_new_with_send_task_group(connection, response_table, pending_request_owner, task_group, false)
+        Self::try_new_with_send_task_group(
+            connection,
+            response_table,
+            pending_request_owner,
+            parent_task_group,
+            false,
+        )
     }
 
     fn try_new_with_send_task_group(
@@ -875,15 +859,15 @@ impl ChannelInner {
             retained_bytes,
             response_tx,
         ) {
-            PendingRegistrationOutcome::Registered(guard) => guard,
-            PendingRegistrationOutcome::DeadlineExpired => return Err(deadline.elapsed_error()),
-            PendingRegistrationOutcome::SessionClosed => {
+            PendingRequestRegistrationResult::Registered(guard) => guard,
+            PendingRequestRegistrationResult::DeadlineExpired => return Err(deadline.elapsed_error()),
+            PendingRequestRegistrationResult::SessionClosed => {
                 return Err(connection_failed_without_source(TransportStage::Closed));
             }
-            PendingRegistrationOutcome::QueueSaturated => {
+            PendingRequestRegistrationResult::QueueSaturated => {
                 return Err(admission_queue_saturated("channel"));
             }
-            PendingRegistrationOutcome::OperationalFailure(error) => {
+            PendingRequestRegistrationResult::OperationalFailure(error) => {
                 return Err(error);
             }
         };
@@ -1138,7 +1122,7 @@ mod tests {
         let response = RemotingCommand::create_response_command_with_code(0).set_opaque(73);
         assert_eq!(
             response_table.complete_response_for_owner(&response_owner, 73, response),
-            crate::base::pending_request_table::PendingResponseOutcome::Completed
+            crate::base::pending_request_table::PendingResponseDisposition::Completed
         );
         let (response, report) = response_task.await.unwrap();
         assert_eq!(response.unwrap().opaque(), 73);
@@ -1171,7 +1155,7 @@ mod tests {
             test_parent("channel-close-test"),
         )
         .unwrap();
-        let PendingRegistrationOutcome::Registered(guard) = pending_requests.register_for_owner(
+        let PendingRequestRegistrationResult::Registered(guard) = pending_requests.register_for_owner(
             channel_inner.pending_request_owner().unwrap(),
             91,
             RequestDeadline::from_timeout_millis(30_000),
@@ -1218,7 +1202,7 @@ mod tests {
         .unwrap();
         let (first_sender, first_receiver) = tokio::sync::oneshot::channel();
         let (second_sender, mut second_receiver) = tokio::sync::oneshot::channel();
-        let PendingRegistrationOutcome::Registered(first_guard) = pending_requests.register_for_owner(
+        let PendingRequestRegistrationResult::Registered(first_guard) = pending_requests.register_for_owner(
             first.pending_request_owner().unwrap(),
             51,
             RequestDeadline::from_timeout_millis(30_000),
@@ -1226,7 +1210,7 @@ mod tests {
         ) else {
             panic!("first pending request must be registered")
         };
-        let PendingRegistrationOutcome::Registered(second_guard) = pending_requests.register_for_owner(
+        let PendingRequestRegistrationResult::Registered(second_guard) = pending_requests.register_for_owner(
             second.pending_request_owner().unwrap(),
             51,
             RequestDeadline::from_timeout_millis(30_000),

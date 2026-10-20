@@ -21,7 +21,7 @@ use rocketmq_runtime::TaskGroup;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::DeferredAdmission;
 use rocketmq_transport::api::DeferredExpiryMargins;
-use rocketmq_transport::api::DeferredRegistryShutdownOutcome;
+use rocketmq_transport::api::DeferredRegistryShutdownStatus;
 use rocketmq_transport::api::DeferredWaitLimits;
 
 use super::*;
@@ -177,8 +177,8 @@ impl BrokerDeferredLifecycle {
         self.pop_lite.seal();
     }
 
-    pub(super) fn shutdown(&self) -> BrokerDeferredRegistryShutdownOutcomes {
-        BrokerDeferredRegistryShutdownOutcomes {
+    pub(super) fn shutdown(&self) -> BrokerDeferredRegistryShutdownSnapshot {
+        BrokerDeferredRegistryShutdownSnapshot {
             pop: self.pop.shutdown(),
             pull: self.pull.shutdown(),
             notification: self.notification.shutdown(),
@@ -432,14 +432,14 @@ mod resource_snapshot_tests {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct BrokerDeferredRegistryShutdownOutcomes {
-    pub(crate) pop: DeferredRegistryShutdownOutcome,
-    pub(crate) pull: DeferredRegistryShutdownOutcome,
-    pub(crate) notification: DeferredRegistryShutdownOutcome,
-    pub(crate) pop_lite: DeferredRegistryShutdownOutcome,
+pub(crate) struct BrokerDeferredRegistryShutdownSnapshot {
+    pub(crate) pop: DeferredRegistryShutdownStatus,
+    pub(crate) pull: DeferredRegistryShutdownStatus,
+    pub(crate) notification: DeferredRegistryShutdownStatus,
+    pub(crate) pop_lite: DeferredRegistryShutdownStatus,
 }
 
-impl BrokerDeferredRegistryShutdownOutcomes {
+impl BrokerDeferredRegistryShutdownSnapshot {
     pub(crate) fn is_healthy(self) -> bool {
         [self.pop, self.pull, self.notification, self.pop_lite]
             .into_iter()
@@ -449,14 +449,14 @@ impl BrokerDeferredRegistryShutdownOutcomes {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct BrokerDeferredRegistryShutdownReport {
-    pub(crate) initial: BrokerDeferredRegistryShutdownOutcomes,
-    pub(crate) terminal: BrokerDeferredRegistryShutdownOutcomes,
+    pub(crate) initial: BrokerDeferredRegistryShutdownSnapshot,
+    pub(crate) terminal: BrokerDeferredRegistryShutdownSnapshot,
 }
 
 impl BrokerDeferredRegistryShutdownReport {
     pub(crate) const fn new(
-        initial: BrokerDeferredRegistryShutdownOutcomes,
-        terminal: BrokerDeferredRegistryShutdownOutcomes,
+        initial: BrokerDeferredRegistryShutdownSnapshot,
+        terminal: BrokerDeferredRegistryShutdownSnapshot,
     ) -> Self {
         Self { initial, terminal }
     }
@@ -466,11 +466,11 @@ impl BrokerDeferredRegistryShutdownReport {
     }
 }
 
-fn deferred_registry_shutdown_outcome_is_healthy(outcome: DeferredRegistryShutdownOutcome) -> bool {
+fn deferred_registry_shutdown_outcome_is_healthy(outcome: DeferredRegistryShutdownStatus) -> bool {
     match outcome {
-        DeferredRegistryShutdownOutcome::Completed(stats) => stats.invariant_failures() == 0,
-        DeferredRegistryShutdownOutcome::AlreadyClosed => true,
-        DeferredRegistryShutdownOutcome::InProgress => false,
+        DeferredRegistryShutdownStatus::Completed(stats) => stats.invariant_failures() == 0,
+        DeferredRegistryShutdownStatus::AlreadyClosed => true,
+        DeferredRegistryShutdownStatus::InProgress => false,
         _ => false,
     }
 }
@@ -494,18 +494,7 @@ impl BrokerRuntime {
             return Ok(admission_controller);
         }
         let config = self.composition.state.broker_config();
-        let admission_budget = self
-            .composition
-            .state
-            .service_context
-            .as_ref()
-            .ok_or_else(|| {
-                BrokerStartupError::initialization(
-                    "deferred_admission",
-                    "Broker deferred admission requires an injected service context".to_owned(),
-                )
-            })?
-            .process_budget();
+        let admission_budget = self.composition.state.service_context.process_budget();
         let retained_bytes = usize::try_from(
             self.composition
                 .state

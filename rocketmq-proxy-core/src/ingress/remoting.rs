@@ -15,7 +15,7 @@
 //! Backend-neutral contracts for the legacy Remoting ingress.
 //!
 //! Wire decoding and TCP lifecycle remain facade responsibilities. This ingress module
-//! owns the stable request classification and backend port used after a facade
+//! owns the stable request classification and request handler used after a facade
 //! has decoded a canonical protocol command.
 
 use rocketmq_model::result::SendResult;
@@ -23,17 +23,18 @@ use rocketmq_model::result::SendStatus;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::ShutdownDeadline;
 
 use crate::proto::v2;
 use crate::status::ProxyPayloadStatus;
 use crate::ProxyServiceFuture;
 
-/// Backend port for requests that must be handled by a facade-owned runtime.
+/// Handles canonical commands already decoded by the facade.
 ///
-/// The command is the canonical protocol DTO. Implementations may bridge it to
-/// an embedded broker or another provider, but Core does not depend on those
-/// implementations.
-pub trait ProxyRemotingBackend: Send + Sync {
+/// Implementations may bridge commands to an embedded broker or another provider,
+/// but Core does not depend on those implementations. Wire decoding and TCP
+/// lifecycle remain facade responsibilities.
+pub trait ProxyRemotingRequestHandler: Send + Sync {
     type Response: Send;
 
     /// Processes a canonical command through the channel-free Broker boundary.
@@ -42,6 +43,11 @@ pub trait ProxyRemotingBackend: Send + Sync {
     /// remote providers wrap their response command in a `RemotingResponse`
     /// without introducing a reverse response-to-command adapter.
     fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, Self::Response>;
+
+    /// Drains backend-owned work before its service task group is closed.
+    fn shutdown_until(&self, _deadline: ShutdownDeadline) -> ProxyServiceFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 /// Stable operations recognized by the Remoting ingress.
@@ -76,7 +82,7 @@ pub enum RemotingIngressRoute {
     GetProxyDrainState,
     BeginProxyDrain,
     CancelProxyDrain,
-    ForwardBackend,
+    ForwardToBroker,
     AuthAdminUnsupported,
     Unsupported,
 }
@@ -86,8 +92,8 @@ pub enum RemotingIngressRoute {
 pub enum RemotingRouteClass {
     /// The Proxy decodes the request and invokes a backend-neutral service.
     Translate,
-    /// The Proxy preserves the command and forwards it to exactly one Broker backend.
-    ForwardBackend,
+    /// The Proxy preserves the command and delegates execution to an embedded or remote Broker.
+    ForwardToBroker,
     /// The request is outside the supported Proxy surface.
     Unsupported,
 }
@@ -127,9 +133,9 @@ impl RemotingRoutePolicy {
     /// Returns who owns execution for this route.
     pub const fn route_class(self) -> RemotingRouteClass {
         match self.route {
-            RemotingIngressRoute::ForwardBackend
+            RemotingIngressRoute::ForwardToBroker
             | RemotingIngressRoute::LockBatchMessageQueue
-            | RemotingIngressRoute::UnlockBatchMessageQueue => RemotingRouteClass::ForwardBackend,
+            | RemotingIngressRoute::UnlockBatchMessageQueue => RemotingRouteClass::ForwardToBroker,
             RemotingIngressRoute::AuthAdminUnsupported | RemotingIngressRoute::Unsupported => {
                 RemotingRouteClass::Unsupported
             }
@@ -157,17 +163,17 @@ const JAVA_PROXY_ACTIVE_ROUTE_POLICIES: &[RemotingRoutePolicy] = &[
     RemotingRoutePolicy::new(
         RequestCode::ConsumerSendMsgBack,
         "CONSUMER_SEND_MSG_BACK",
-        RemotingIngressRoute::ForwardBackend,
+        RemotingIngressRoute::ForwardToBroker,
     ),
     RemotingRoutePolicy::new(
         RequestCode::EndTransaction,
         "END_TRANSACTION",
-        RemotingIngressRoute::ForwardBackend,
+        RemotingIngressRoute::ForwardToBroker,
     ),
     RemotingRoutePolicy::new(
         RequestCode::RecallMessage,
         "RECALL_MESSAGE",
-        RemotingIngressRoute::ForwardBackend,
+        RemotingIngressRoute::ForwardToBroker,
     ),
     RemotingRoutePolicy::new(RequestCode::HeartBeat, "HEART_BEAT", RemotingIngressRoute::Heartbeat),
     RemotingRoutePolicy::new(
@@ -193,7 +199,7 @@ const JAVA_PROXY_ACTIVE_ROUTE_POLICIES: &[RemotingRoutePolicy] = &[
     RemotingRoutePolicy::new(
         RequestCode::PopMessage,
         "POP_MESSAGE",
-        RemotingIngressRoute::ForwardBackend,
+        RemotingIngressRoute::ForwardToBroker,
     ),
     RemotingRoutePolicy::new(
         RequestCode::UpdateConsumerOffset,
@@ -203,12 +209,12 @@ const JAVA_PROXY_ACTIVE_ROUTE_POLICIES: &[RemotingRoutePolicy] = &[
     RemotingRoutePolicy::new(
         RequestCode::AckMessage,
         "ACK_MESSAGE",
-        RemotingIngressRoute::ForwardBackend,
+        RemotingIngressRoute::ForwardToBroker,
     ),
     RemotingRoutePolicy::new(
         RequestCode::ChangeMessageInvisibleTime,
         "CHANGE_MESSAGE_INVISIBLETIME",
-        RemotingIngressRoute::ForwardBackend,
+        RemotingIngressRoute::ForwardToBroker,
     ),
     RemotingRoutePolicy::new(
         RequestCode::GetConsumerConnectionList,

@@ -16,9 +16,13 @@ use serde::Deserialize;
 use serde::Serialize;
 use uuid::Uuid;
 
+/// Selects the persistence engine used by the Dashboard.
+///
+/// This only identifies the engine; the implementations live in
+/// `DashboardDataStore`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub enum StorageBackend {
+pub enum StorageEngine {
     File,
     Sqlite,
     #[serde(rename = "mysql")]
@@ -27,7 +31,7 @@ pub enum StorageBackend {
     Postgres,
 }
 
-impl StorageBackend {
+impl StorageEngine {
     pub fn parse(value: &str) -> Result<Self, String> {
         match value.trim().to_ascii_lowercase().as_str() {
             "file" => Ok(Self::File),
@@ -282,12 +286,12 @@ pub struct DashboardConfigView {
     pub use_tls: bool,
     pub current_proxy_addr: Option<String>,
     pub proxy_addr_list: Vec<String>,
-    pub storage_backend: StorageBackend,
+    pub storage_backend: StorageEngine,
     pub storage_mode: StorageMode,
 }
 
 impl DashboardConfigView {
-    pub fn from_environment(environment: &DashboardEnvironment, storage_backend: StorageBackend) -> Self {
+    pub fn from_environment(environment: &DashboardEnvironment, storage_backend: StorageEngine) -> Self {
         let mut sorted_endpoints = environment.endpoints.clone();
         sorted_endpoints.sort_by(|left, right| {
             endpoint_type_sort_key(left.endpoint_type)
@@ -333,8 +337,8 @@ impl DashboardConfigView {
             proxy_addr_list: addresses_for(EndpointType::Proxy),
             storage_backend,
             storage_mode: match storage_backend {
-                StorageBackend::File | StorageBackend::Sqlite => StorageMode::SingleNode,
-                StorageBackend::MySql | StorageBackend::Postgres => StorageMode::MultiNode,
+                StorageEngine::File | StorageEngine::Sqlite => StorageMode::SingleNode,
+                StorageEngine::MySql | StorageEngine::Postgres => StorageMode::MultiNode,
             },
         }
     }
@@ -358,7 +362,7 @@ pub struct PublishedEnvironment {
 }
 
 impl PublishedEnvironment {
-    pub fn from_environment(environment: DashboardEnvironment, storage_backend: StorageBackend) -> Self {
+    pub fn from_environment(environment: DashboardEnvironment, storage_backend: StorageEngine) -> Self {
         let config = DashboardConfigView::from_environment(&environment, storage_backend);
         Self { environment, config }
     }
@@ -377,7 +381,7 @@ impl Default for DashboardConfigView {
             use_tls: false,
             current_proxy_addr: Some("127.0.0.1:8080".to_string()),
             proxy_addr_list: vec!["127.0.0.1:8080".to_string()],
-            storage_backend: StorageBackend::File,
+            storage_backend: StorageEngine::File,
             storage_mode: StorageMode::SingleNode,
         }
     }

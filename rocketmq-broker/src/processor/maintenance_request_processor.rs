@@ -27,10 +27,10 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::body::release_checkpoint::MaintenanceCapabilitiesResponse;
 use rocketmq_protocol::protocol::body::release_checkpoint::MaintenanceStoreCapabilities;
 use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointArtifact;
-use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointBackend;
 use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointOffsets;
 use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointRestoreVerification;
 use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointStorageIdentity;
+use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointStoreKind;
 use rocketmq_protocol::protocol::body::release_checkpoint::StoreReleaseCheckpointManifest;
 use rocketmq_protocol::protocol::body::release_checkpoint::StoreReleaseCheckpointRequest;
 use rocketmq_protocol::protocol::body::release_checkpoint::RELEASE_CHECKPOINT_SCHEMA_VERSION;
@@ -45,24 +45,24 @@ use rocketmq_security_api::MaintenanceCapability;
 use rocketmq_security_api::MaintenanceRequestClass;
 use rocketmq_store::StoreReleaseCheckpointService;
 use rocketmq_store_api::checkpoint::CheckpointArtifact;
-use rocketmq_store_api::checkpoint::CheckpointBackend;
 use rocketmq_store_api::checkpoint::CheckpointManifest;
 use rocketmq_store_api::checkpoint::CheckpointOffsets;
 use rocketmq_store_api::checkpoint::CheckpointRequest;
 use rocketmq_store_api::checkpoint::CheckpointRestoreVerification;
 use rocketmq_store_api::checkpoint::CheckpointStorageIdentity;
-use rocketmq_store_api::ReleaseCheckpointCreateOutcome;
+use rocketmq_store_api::checkpoint::CheckpointStoreKind;
 use rocketmq_store_api::ReleaseCheckpointCreateRejection;
-use rocketmq_store_api::ReleaseCheckpointRestoreOutcome;
+use rocketmq_store_api::ReleaseCheckpointCreationResult;
 use rocketmq_store_api::ReleaseCheckpointRestoreRejection;
+use rocketmq_store_api::ReleaseCheckpointRestoreVerificationResult;
 use rocketmq_store_api::ReleaseCheckpointStore;
 use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::EmbeddedCaller;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 
 use crate::config::broker_config::BrokerConfig;
 use crate::processor::response_assembly::immediate_outcome_from_command_result;
@@ -217,7 +217,7 @@ impl MaintenanceRequestProcessor {
                 "encode expired Broker maintenance capabilities",
             );
         };
-        let backend = self.checkpoint_service.backend().map_err(checkpoint_error)?;
+        let store_kind = self.checkpoint_service.store_kind().map_err(checkpoint_error)?;
         let response = MaintenanceCapabilitiesResponse {
             schema_version: RELEASE_CHECKPOINT_SCHEMA_VERSION,
             policy_id: self.authorizer.policy().policy_id.clone(),
@@ -233,7 +233,7 @@ impl MaintenanceRequestProcessor {
             max_concurrent_operations: grant.resource_budget().max_concurrent_operations,
             store: Some(MaintenanceStoreCapabilities {
                 member_id: self.broker_config.broker_identity.get_canonical_name(),
-                backend: checkpoint_backend_to_wire(backend),
+                store_kind: checkpoint_store_kind_to_wire(store_kind),
                 storage_identity: checkpoint_identity_to_wire(storage_identity),
             }),
         };
@@ -259,12 +259,12 @@ impl MaintenanceRequestProcessor {
             .await
             .map_err(checkpoint_error)?;
         match outcome {
-            ReleaseCheckpointCreateOutcome::Created(manifest) => encode_success(
+            ReleaseCheckpointCreationResult::Created(manifest) => encode_success(
                 &self.command_factory,
                 &checkpoint_manifest_to_wire(manifest),
                 "encode Store release-checkpoint manifest",
             ),
-            ReleaseCheckpointCreateOutcome::Rejected(rejection) => {
+            ReleaseCheckpointCreationResult::Rejected(rejection) => {
                 Ok(checkpoint_create_rejection_response(&self.command_factory, rejection))
             }
         }
@@ -298,12 +298,12 @@ impl MaintenanceRequestProcessor {
             .await
             .map_err(checkpoint_error)?;
         match outcome {
-            ReleaseCheckpointRestoreOutcome::Verified(verification) => encode_success(
+            ReleaseCheckpointRestoreVerificationResult::Verified(verification) => encode_success(
                 &self.command_factory,
                 &checkpoint_verification_to_wire(verification),
                 "encode Store restore-verification proof",
             ),
-            ReleaseCheckpointRestoreOutcome::Rejected(rejection) => {
+            ReleaseCheckpointRestoreVerificationResult::Rejected(rejection) => {
                 Ok(checkpoint_restore_rejection_response(&self.command_factory, rejection))
             }
         }
@@ -315,13 +315,13 @@ fn maintenance_permission_denied() -> SharedError {
 }
 
 impl RequestProcessor for MaintenanceRequestProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction> {
         self.process_shared(request).await
     }
 }
 
 impl MaintenanceRequestProcessor {
-    pub(crate) async fn process_shared(&self, request: &mut RemotingRequest) -> Result<HandlerOutcome> {
+    pub(crate) async fn process_shared(&self, request: &mut RemotingRequest) -> Result<ResponseAction> {
         let original_opaque = request.original_identity().original_opaque();
         let original_code = request.original_identity().original_code();
         let result = match self.authorize_request(request, original_code).await {
@@ -402,7 +402,7 @@ fn checkpoint_manifest_from_wire(manifest: StoreReleaseCheckpointManifest) -> Ch
     CheckpointManifest {
         artifact: checkpoint_artifact_from_wire(manifest.artifact),
         member_id: manifest.member_id,
-        backend: checkpoint_backend_from_wire(manifest.backend),
+        store_kind: checkpoint_store_kind_from_wire(manifest.store_kind),
         offsets: checkpoint_offsets_from_wire(manifest.offsets),
         storage_identity: checkpoint_identity_from_wire(manifest.storage_identity),
         wal_retained: manifest.wal_retained,
@@ -414,7 +414,7 @@ fn checkpoint_manifest_to_wire(manifest: CheckpointManifest) -> StoreReleaseChec
     StoreReleaseCheckpointManifest {
         artifact: checkpoint_artifact_to_wire(manifest.artifact),
         member_id: manifest.member_id,
-        backend: checkpoint_backend_to_wire(manifest.backend),
+        store_kind: checkpoint_store_kind_to_wire(manifest.store_kind),
         offsets: checkpoint_offsets_to_wire(manifest.offsets),
         storage_identity: checkpoint_identity_to_wire(manifest.storage_identity),
         wal_retained: manifest.wal_retained,
@@ -450,17 +450,17 @@ fn checkpoint_artifact_to_wire(artifact: CheckpointArtifact) -> ReleaseCheckpoin
     }
 }
 
-const fn checkpoint_backend_from_wire(backend: ReleaseCheckpointBackend) -> CheckpointBackend {
-    match backend {
-        ReleaseCheckpointBackend::Local => CheckpointBackend::Local,
-        ReleaseCheckpointBackend::RocksDb => CheckpointBackend::RocksDb,
+const fn checkpoint_store_kind_from_wire(store_kind: ReleaseCheckpointStoreKind) -> CheckpointStoreKind {
+    match store_kind {
+        ReleaseCheckpointStoreKind::Local => CheckpointStoreKind::Local,
+        ReleaseCheckpointStoreKind::RocksDb => CheckpointStoreKind::RocksDb,
     }
 }
 
-const fn checkpoint_backend_to_wire(backend: CheckpointBackend) -> ReleaseCheckpointBackend {
-    match backend {
-        CheckpointBackend::Local => ReleaseCheckpointBackend::Local,
-        CheckpointBackend::RocksDb => ReleaseCheckpointBackend::RocksDb,
+const fn checkpoint_store_kind_to_wire(store_kind: CheckpointStoreKind) -> ReleaseCheckpointStoreKind {
+    match store_kind {
+        CheckpointStoreKind::Local => ReleaseCheckpointStoreKind::Local,
+        CheckpointStoreKind::RocksDb => ReleaseCheckpointStoreKind::RocksDb,
     }
 }
 
@@ -539,13 +539,13 @@ mod tests {
     use rocketmq_security_api::RequestPolicy;
     use rocketmq_security_api::MAINTENANCE_POLICY_SCHEMA_VERSION;
     use rocketmq_store::LocalFileMessageStore;
+    use rocketmq_store::MessageStore;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_store::StorePorts;
     use rocketmq_store::StoreRuntimeConfig;
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
-    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::RPCHook;
     use rocketmq_transport::api::ServerConfig;
     use rocketmq_transport::api::TransportSecurity;
@@ -629,7 +629,7 @@ mod tests {
             maintenance_policy().into_validated().expect("valid maintenance policy"),
         ));
         let checkpoint_service = Arc::new(StoreReleaseCheckpointService::new(
-            Weak::<StorePorts>::new(),
+            Weak::<MessageStore>::new(),
             PathBuf::from("maintenance-unused"),
             service_context.component("checkpoint"),
         ));
@@ -647,7 +647,7 @@ mod tests {
     }
 
     async fn maintenance_processor_with_store_for_test(
-    ) -> (MaintenanceRequestProcessor, Arc<StorePorts>, tempfile::TempDir) {
+    ) -> (MaintenanceRequestProcessor, Arc<MessageStore>, tempfile::TempDir) {
         let service_context = crate::test_service_context("maintenance-original-code");
         let auth_runtime = Arc::new(
             AuthRuntimeBuilder::new(maintenance_auth_config(), service_context.component("auth"))
@@ -660,7 +660,7 @@ mod tests {
         ));
         let root = tempfile::tempdir().expect("maintenance checkpoint root");
         let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
-        let store = Arc::new(StorePorts::local_file(
+        let store = Arc::new(MessageStore::local_file(
             LocalFileMessageStore::new(
                 Arc::new(MessageStoreConfig {
                     store_path_root_dir: root.path().to_string_lossy().into_owned().into(),
@@ -700,7 +700,7 @@ mod tests {
         processor: MaintenanceRequestProcessor,
         principal: &'static str,
         command: RemotingCommand,
-    ) -> std::result::Result<EmbeddedDispatchOutcome, rocketmq_transport::api::TransportError> {
+    ) -> std::result::Result<EmbeddedDispatchResult, rocketmq_transport::api::TransportError> {
         dispatch_request_with_hooks(processor, principal, command, Vec::new()).await
     }
 
@@ -709,7 +709,7 @@ mod tests {
         principal: &'static str,
         command: RemotingCommand,
         hooks: Vec<Arc<dyn RPCHook>>,
-    ) -> std::result::Result<EmbeddedDispatchOutcome, rocketmq_transport::api::TransportError> {
+    ) -> std::result::Result<EmbeddedDispatchResult, rocketmq_transport::api::TransportError> {
         let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             processor,
             hooks,
@@ -741,7 +741,7 @@ mod tests {
         .set_opaque(opaque)
     }
 
-    fn wire_manifest(backend: ReleaseCheckpointBackend) -> StoreReleaseCheckpointManifest {
+    fn wire_manifest(store_kind: ReleaseCheckpointStoreKind) -> StoreReleaseCheckpointManifest {
         StoreReleaseCheckpointManifest {
             artifact: ReleaseCheckpointArtifact {
                 schema_version: RELEASE_CHECKPOINT_SCHEMA_VERSION,
@@ -755,7 +755,7 @@ mod tests {
                 uri: "file:///checkpoints/checkpoint-7".to_string(),
             },
             member_id: "broker-a".to_string(),
-            backend,
+            store_kind,
             offsets: ReleaseCheckpointOffsets {
                 appended_offset: 100,
                 durable_offset: 90,
@@ -783,7 +783,7 @@ mod tests {
             },
         )
         .set_body(
-            serde_json::to_vec(&wire_manifest(ReleaseCheckpointBackend::Local))
+            serde_json::to_vec(&wire_manifest(ReleaseCheckpointStoreKind::Local))
                 .expect("serialize maintenance manifest"),
         )
         .set_opaque(opaque)
@@ -817,7 +817,7 @@ mod tests {
     async fn maintenance_uses_authenticated_principal_for_authorization() {
         let processor = maintenance_processor_for_test().await;
 
-        let EmbeddedDispatchOutcome::Reply(plan) =
+        let EmbeddedDispatchResult::Reply(plan) =
             dispatch_request(processor.clone(), "release-operator", verify_request(5_505))
                 .await
                 .expect("bound maintenance principal should be authorized")
@@ -827,7 +827,7 @@ mod tests {
         assert_eq!(ResponseCode::from(plan.response_code()), ResponseCode::Success);
         assert!(plan.body_len() > 0);
 
-        let EmbeddedDispatchOutcome::Reply(denied) =
+        let EmbeddedDispatchResult::Reply(denied) =
             dispatch_request(processor, "ordinary-admin", verify_request(5_506))
                 .await
                 .expect("authorization failures should become typed remoting responses")
@@ -933,7 +933,7 @@ mod tests {
     async fn maintenance_before_hook_cannot_replace_the_original_operation() {
         let (processor, _store, _root) = maintenance_processor_with_store_for_test().await;
 
-        let EmbeddedDispatchOutcome::Reply(plan) = dispatch_request_with_hooks(
+        let EmbeddedDispatchResult::Reply(plan) = dispatch_request_with_hooks(
             processor,
             "release-operator",
             capabilities_request(5_507),
@@ -949,9 +949,9 @@ mod tests {
     }
 
     #[test]
-    fn wire_domain_manifest_mapping_is_lossless_for_every_backend() {
-        for backend in [ReleaseCheckpointBackend::Local, ReleaseCheckpointBackend::RocksDb] {
-            let wire = wire_manifest(backend);
+    fn wire_domain_manifest_mapping_is_lossless_for_every_store_kind() {
+        for store_kind in [ReleaseCheckpointStoreKind::Local, ReleaseCheckpointStoreKind::RocksDb] {
+            let wire = wire_manifest(store_kind);
 
             let round_trip = checkpoint_manifest_to_wire(checkpoint_manifest_from_wire(wire.clone()));
 
@@ -961,42 +961,45 @@ mod tests {
 
     #[test]
     fn checkpoint_wire_json_field_names_remain_compatible() {
-        let wire = wire_manifest(ReleaseCheckpointBackend::Local);
-
-        assert_eq!(
-            serde_json::to_value(wire).expect("serialize wire manifest"),
-            serde_json::json!({
-                "artifact": {
-                    "schemaVersion": 1,
-                    "checkpointId": "checkpoint-7",
-                    "checkpointSetId": "set-4",
-                    "generation": 9,
-                    "barrierId": "barrier-3",
-                    "createdAtUnixMillis": 123456,
-                    "lengthBytes": 4096,
-                    "sha256": "a".repeat(64),
-                    "uri": "file:///checkpoints/checkpoint-7"
-                },
-                "memberId": "broker-a",
-                "backend": "local",
-                "offsets": {
-                    "appendedOffset": 100,
-                    "durableOffset": 90,
-                    "consumeQueueOffset": 80,
-                    "indexOffset": 70
-                },
-                "storageIdentity": {
-                    "volumeId": "volume-a",
-                    "walGeneration": 5
-                },
-                "walRetained": true,
-                "persistentVolumeRetained": true
-            })
-        );
+        let mut expected = serde_json::json!({
+            "artifact": {
+                "schemaVersion": 1,
+                "checkpointId": "checkpoint-7",
+                "checkpointSetId": "set-4",
+                "generation": 9,
+                "barrierId": "barrier-3",
+                "createdAtUnixMillis": 123456,
+                "lengthBytes": 4096,
+                "sha256": "a".repeat(64),
+                "uri": "file:///checkpoints/checkpoint-7"
+            },
+            "memberId": "broker-a",
+            "backend": "local",
+            "offsets": {
+                "appendedOffset": 100,
+                "durableOffset": 90,
+                "consumeQueueOffset": 80,
+                "indexOffset": 70
+            },
+            "storageIdentity": {
+                "volumeId": "volume-a",
+                "walGeneration": 5
+            },
+            "walRetained": true,
+            "persistentVolumeRetained": true
+        });
+        for (store_kind, name) in [
+            (ReleaseCheckpointStoreKind::Local, "local"),
+            (ReleaseCheckpointStoreKind::RocksDb, "rocks_db"),
+        ] {
+            expected["backend"] = name.into();
+            let wire = wire_manifest(store_kind);
+            assert_eq!(serde_json::to_value(wire).expect("serialize wire manifest"), expected);
+        }
     }
 
     #[test]
-    fn checkpoint_outcome_rejections_use_fixed_redaction_safe_broker_responses() {
+    fn checkpoint_result_rejections_use_fixed_redaction_safe_broker_responses() {
         let factory = application_remoting_command_factory();
         let create_cases = [
             ReleaseCheckpointCreateRejection::AuthorizationExpired,

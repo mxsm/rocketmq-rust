@@ -18,7 +18,7 @@ use rocketmq_error::Result as CanonicalResult;
 use rocketmq_protocol::protocol::admin::offset_wrapper::OffsetWrapper;
 use rocketmq_protocol::protocol::body::lite_lag_info::LiteLagInfo;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::common::util_all::time_millis_to_human_string2;
+use rocketmq_runtime::common::time_utils::time_millis_to_human_string2;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::lite::LiteGroupInfoQueryRequest;

@@ -18,11 +18,11 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use rocketmq_admin_core::core::topic::GetTopicRouteRequest;
-use rocketmq_admin_core::core::topic::PatchTopicConfigOutcome;
 use rocketmq_admin_core::core::topic::PatchTopicConfigRequest;
 use rocketmq_admin_core::core::topic::QueryTopicConfigCasRequest;
 use rocketmq_admin_core::core::topic::TopicConfigCasPatch;
 use rocketmq_admin_core::core::topic::TopicConfigCasState;
+use rocketmq_admin_core::core::topic::TopicConfigPatchResult;
 use rocketmq_admin_core::core::topic::TopicMutationAdmin;
 use rocketmq_admin_core::core::topic::TopicQueryAdmin;
 use rocketmq_admin_core::mutation_client_adapter::MutationAdminBuilder;
@@ -232,14 +232,14 @@ impl ProductionTopicConfigPatchClient {
                 .map_err(ExecutionAgentError::driver_source)?
         };
         Ok(match outcome {
-            PatchTopicConfigOutcome::Applied {
+            TopicConfigPatchResult::Applied {
                 previous_version,
                 version,
             } => TopicConfigPatchApplyOutcome::Applied {
                 previous_version,
                 version,
             },
-            PatchTopicConfigOutcome::VersionConflict {
+            TopicConfigPatchResult::VersionConflict {
                 expected_version,
                 actual_version,
             } => TopicConfigPatchApplyOutcome::VersionConflict {

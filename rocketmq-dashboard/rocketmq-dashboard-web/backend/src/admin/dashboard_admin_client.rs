@@ -54,7 +54,6 @@ use crate::model::ConsumerProgress;
 use crate::model::ConsumerQueueProgress;
 use crate::model::ConsumerResetOffsetRequest;
 use crate::model::DashboardOverview;
-use crate::model::DashboardTopicCurrent;
 use crate::model::DlqBatchResendRequest;
 use crate::model::DlqExportView;
 use crate::model::DlqMessageQuery;
@@ -71,7 +70,6 @@ use crate::model::ProducerConnectionInfo;
 use crate::model::ProducerConnectionView;
 use crate::model::ProducerInfo;
 use crate::model::PublishedEnvironment;
-use crate::model::TopicCurrentMetric;
 use crate::model::TopicInfo;
 use crate::model::TopicListView;
 use crate::model::TopicMutationRequest;
@@ -237,8 +235,16 @@ where
     operation.await
 }
 
+mod replication;
 mod topic;
+mod topic_current;
 mod topic_session;
+
+pub use self::replication::ControllerReading;
+pub use self::replication::GroupReplication;
+pub use self::replication::MasterElection;
+pub use self::replication::ReplicationObservation;
+pub use self::replication::ReplicationTarget;
 
 use self::topic_session::*;
 
@@ -404,40 +410,6 @@ impl DashboardAdminClient {
         })
     }
 
-    pub async fn topic_current(&self) -> Result<DashboardTopicCurrent, DashboardError> {
-        let topics = match self.list_topics().await {
-            Ok(topics) => topics,
-            Err(DashboardError::Admin(error)) => {
-                tracing::warn!(error = %error, "RocketMQ cluster is not reachable while building topic-current metrics");
-                return Ok(DashboardTopicCurrent {
-                    total_topics: 0,
-                    top_topics: Vec::new(),
-                });
-            }
-            Err(error) => return Err(error),
-        };
-
-        let mut top_topics = run_admin_rpc!(self, |admin| async {
-            let mut top_topics = Vec::new();
-            for topic in topics.items.iter().take(20) {
-                if let Ok(stats) = admin.dashboard_topic_stats(&topic.topic).await {
-                    top_topics.push(TopicCurrentMetric {
-                        topic: topic.topic.clone(),
-                        total_msg: stats.total_max_offset.saturating_sub(stats.total_min_offset),
-                        in_tps: 0.0,
-                        out_tps: 0.0,
-                    });
-                }
-            }
-            Ok::<_, DashboardError>(top_topics)
-        })?;
-        top_topics.sort_by_key(|topic| Reverse(topic.total_msg));
-        Ok(DashboardTopicCurrent {
-            total_topics: topics.total,
-            top_topics,
-        })
-    }
-
     pub async fn list_consumer_groups(&self) -> Result<ConsumerListView, DashboardError> {
         let list = run_admin_rpc!(self, |admin| admin.dashboard_list_consumers())?;
         let items = list
@@ -511,6 +483,7 @@ impl DashboardAdminClient {
                 topic: item.topic,
                 producer_group: item.producer_group,
                 connection_count: item.connection_count,
+                broker_names: item.broker_names,
             })
             .collect();
         Ok(items)
@@ -1376,7 +1349,7 @@ mod tests {
             let service_config = Arc::clone(&config);
             let service_build_started = Arc::clone(&build_started);
 
-            context
+            let task_id = context
                 .spawn_service("topic-build", async move {
                     let _ = run_tracked_topic_admin_service(
                         &service_sessions,
@@ -1403,7 +1376,14 @@ mod tests {
             .await
             .expect("production topic shutdown must reach its bounded task-group drain");
 
-            assert_eq!(report.aborted, 1, "{report:?}");
+            // The deadline snapshot may precede Tokio destroying the aborted future.
+            assert_eq!(report.timed_out, 1, "{report:?}");
+            assert_eq!(report.aborted + report.leaked, 1, "{report:?}");
+            assert!(
+                context.task_group().wait_task(task_id, Duration::from_secs(1)).await,
+                "the aborted guard builder must finish releasing its resources"
+            );
+            assert_eq!(context.task_group().task_count(), 0);
             assert!(!sessions.has_current());
         });
 

@@ -135,6 +135,8 @@ where
 }
 
 impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
+    type SnapshotData = std::io::Cursor<Vec<u8>>;
+
     async fn append_entries(
         &mut self,
         req: AppendEntriesRequest<TypeConfig>,
@@ -241,6 +243,9 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
             ))));
         }
         let snapshot_checksum = crc32(&snapshot_data);
+        let snapshot_id = crate::openraft::state_machine::inspect_snapshot_payload(&snapshot_data)
+            .map_err(|error| StreamingError::Network(network_error(&error)))?
+            .snapshot_id;
         let total_size = snapshot_data.len() as u64;
         let snapshot_meta = snapshot.meta;
 
@@ -267,7 +272,7 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
                             node_id: id.leader_id.node_id,
                             index: id.index,
                         }),
-                    snapshot_id: snapshot_meta.snapshot_id.clone(),
+                    snapshot_id: snapshot_id.clone(),
                     last_membership: last_membership.clone(),
                 }),
                 offset: start as u64,
@@ -311,6 +316,7 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
         );
 
         let proto_req = ProtoVoteRequest {
+            leadership_transfer: req.leadership_transfer,
             vote: Some(crate::protobuf::openraft::OpenRaftVote {
                 term: req.vote.leader_id().term,
                 node_id: req.vote.leader_id().node_id,
@@ -383,6 +389,7 @@ mod tests {
         let result = network
             .vote(
                 VoteRequest {
+                    leadership_transfer: false,
                     vote: Vote::new(1, 1),
                     last_log_id: None,
                 },

@@ -47,14 +47,14 @@ use crate::contract::TransportContractViolation;
 use crate::dispatch::deferred_session_cleanup::RegistryCleanupTarget;
 use crate::dispatch::deferred_session_cleanup::TargetRecord;
 use crate::dispatch::DeferredAdmission;
-use crate::dispatch::DeferredAdmissionAcquireOutcome;
 use crate::dispatch::DeferredExpiryKind;
+use crate::dispatch::DeferredWaitAdmissionResult;
 use crate::dispatch::DeferredWaitLimits;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestMeta;
 use crate::dispatch::ResponseSink;
-use crate::dispatch::ResponseStateOutcome;
 use crate::dispatch::ResponseTerminalState;
+use crate::dispatch::ResponseTransitionResult;
 use crate::session_view::EmbeddedSessionRecord;
 use crate::telemetry::TransportTelemetry;
 
@@ -65,14 +65,14 @@ trait DeferredAdmissionTestExt {
     fn expect(self, message: &str) -> DeferredWaitPermit;
 }
 
-impl DeferredAdmissionTestExt for DeferredAdmissionAcquireOutcome {
+impl DeferredAdmissionTestExt for DeferredWaitAdmissionResult {
     fn expect(self, message: &str) -> DeferredWaitPermit {
         match self {
-            DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
-            DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
-            DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)
-            | DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)
-            | DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => panic!("{message}"),
+            DeferredWaitAdmissionResult::Closed => panic!("deferred admission unexpectedly closed"),
+            DeferredWaitAdmissionResult::Acquired(permit) => permit,
+            DeferredWaitAdmissionResult::WaiterCapacityExhausted(_)
+            | DeferredWaitAdmissionResult::RetainedByteCapacityExhausted(_)
+            | DeferredWaitAdmissionResult::ParentCapacityExhausted(_) => panic!("{message}"),
         }
     }
 }
@@ -81,43 +81,43 @@ trait DeferredRegistryTestExt {
     fn expect(self, message: &str) -> DeferredRegistration;
 }
 
-impl<R, E, F> DeferredRegistryTestExt for DeferredRegistryOutcome<R, E, F> {
+impl<R, E, F> DeferredRegistryTestExt for DeferredRegistrationResult<R, E, F> {
     fn expect(self, message: &str) -> DeferredRegistration {
         match self {
-            DeferredRegistryOutcome::Registered(registration) => registration,
-            DeferredRegistryOutcome::DuplicateRequest(_)
-            | DeferredRegistryOutcome::IdentityExhausted(_)
-            | DeferredRegistryOutcome::ParentCancelled
-            | DeferredRegistryOutcome::SessionClosed
-            | DeferredRegistryOutcome::DeadlineExpired
-            | DeferredRegistryOutcome::BuilderRejected { .. }
-            | DeferredRegistryOutcome::ContractViolation { .. }
-            | DeferredRegistryOutcome::OperationalFailure { .. } => panic!("{message}"),
+            DeferredRegistrationResult::Registered(registration) => registration,
+            DeferredRegistrationResult::DuplicateRequest(_)
+            | DeferredRegistrationResult::IdentityExhausted(_)
+            | DeferredRegistrationResult::ParentCancelled
+            | DeferredRegistrationResult::SessionClosed
+            | DeferredRegistrationResult::DeadlineExpired
+            | DeferredRegistrationResult::BuilderRejected { .. }
+            | DeferredRegistrationResult::ContractViolation { .. }
+            | DeferredRegistrationResult::OperationalFailure { .. } => panic!("{message}"),
         }
     }
 }
 
 fn expect_claimed<R>(
-    result: Result<DeferredClaimOutcome<R>, crate::error::TransportError>,
+    result: Result<DeferredClaimResult<R>, crate::error::TransportError>,
     message: &str,
 ) -> ClaimedDeferred<R>
 where
     R: Send + 'static,
 {
     match result {
-        Ok(DeferredClaimOutcome::Claimed(claimed)) => claimed,
-        Ok(DeferredClaimOutcome::NotFound) => panic!("{message}: request was not found"),
-        Ok(DeferredClaimOutcome::AlreadyClaimed) => panic!("{message}: request was already claimed"),
-        Ok(DeferredClaimOutcome::AlreadyCompleted) => panic!("{message}: response was already completed"),
-        Ok(DeferredClaimOutcome::ParentCancelled) => panic!("{message}: parent was cancelled"),
-        Ok(DeferredClaimOutcome::SessionClosed) => panic!("{message}: session was closed"),
-        Ok(DeferredClaimOutcome::DeadlineExpired) => panic!("{message}: deadline expired"),
+        Ok(DeferredClaimResult::Claimed(claimed)) => claimed,
+        Ok(DeferredClaimResult::NotFound) => panic!("{message}: request was not found"),
+        Ok(DeferredClaimResult::AlreadyClaimed) => panic!("{message}: request was already claimed"),
+        Ok(DeferredClaimResult::AlreadyCompleted) => panic!("{message}: response was already completed"),
+        Ok(DeferredClaimResult::ParentCancelled) => panic!("{message}: parent was cancelled"),
+        Ok(DeferredClaimResult::SessionClosed) => panic!("{message}: session was closed"),
+        Ok(DeferredClaimResult::DeadlineExpired) => panic!("{message}: deadline expired"),
         Err(error) => panic!("{message}: operational claim failure {error:?}"),
     }
 }
 
 fn expect_claim_failure<R>(
-    result: Result<DeferredClaimOutcome<R>, crate::error::TransportError>,
+    result: Result<DeferredClaimResult<R>, crate::error::TransportError>,
     message: &str,
 ) -> crate::error::TransportError
 where
@@ -464,7 +464,7 @@ fn underreported_permit_is_rejected_before_id_index_and_builder_with_exact_parts
         Ok::<_, std::io::Error>(7)
     });
     assert!(!called.load(Ordering::SeqCst));
-    let DeferredRegistryOutcome::ContractViolation { violation, recovery } = outcome else {
+    let DeferredRegistrationResult::ContractViolation { violation, recovery } = outcome else {
         panic!("underreported permit must be a contract violation");
     };
     assert_eq!(violation, TransportContractViolation::DeferredRetainedSizeUnderreported);
@@ -489,7 +489,7 @@ fn underreported_permit_is_rejected_before_id_index_and_builder_with_exact_parts
         8,
         harness.parts_with_retained(direct_original, fixed_only),
     ));
-    let DeferredRegistryOutcome::ContractViolation { violation, recovery } = direct else {
+    let DeferredRegistrationResult::ContractViolation { violation, recovery } = direct else {
         panic!("direct underreported request must be a contract violation");
     };
     assert_eq!(violation, TransportContractViolation::DeferredRetainedSizeUnderreported);
@@ -533,7 +533,7 @@ fn duplicate_request_has_one_deterministic_owner_and_recovers_the_loser() {
         .expect("first request wins");
     let loser = registry.register(DeferredRequest::new(2, harness.parts::<u64>(original)));
     assert_eq!(harness.admission.snapshot().waiting_count(), 2);
-    let DeferredRegistryOutcome::DuplicateRequest(DeferredRegistryRecovery::Request(loser)) = loser else {
+    let DeferredRegistrationResult::DuplicateRequest(DeferredRegistryRecovery::Request(loser)) = loser else {
         panic!("same request must recover the losing request");
     };
     assert_eq!(loser.resume(), &2);
@@ -558,7 +558,7 @@ fn duplicate_register_with_recovers_the_uninvoked_builder_and_exact_parts() {
         observed.store(true, Ordering::SeqCst);
         Ok::<_, BuilderFailure>(2)
     });
-    let DeferredRegistryOutcome::DuplicateRequest(DeferredRegistryRecovery::Builder { builder, parts }) = outcome
+    let DeferredRegistrationResult::DuplicateRequest(DeferredRegistryRecovery::Builder { builder, parts }) = outcome
     else {
         panic!("duplicate builder registration must return the uninvoked builder and parts")
     };
@@ -585,7 +585,7 @@ fn identity_exhaustion_recovers_the_uninvoked_builder_and_exact_parts() {
         observed.store(true, Ordering::SeqCst);
         Ok::<_, BuilderFailure>(3)
     });
-    let DeferredRegistryOutcome::IdentityExhausted(DeferredRegistryRecovery::Builder { builder, parts }) = outcome
+    let DeferredRegistrationResult::IdentityExhausted(DeferredRegistryRecovery::Builder { builder, parts }) = outcome
     else {
         panic!("identity exhaustion must return the uninvoked builder and parts")
     };
@@ -620,7 +620,7 @@ fn typed_builder_failure_preserves_source_and_parts_while_outer_formatting_is_re
     let outcome = registry.register_with(harness.parts_with_cleanup::<u64>(original, &cleanup), |_| {
         Err(BuilderFailure("secret business key"))
     });
-    let DeferredRegistryOutcome::BuilderRejected { error: source, parts } = outcome else {
+    let DeferredRegistrationResult::BuilderRejected { error: source, parts } = outcome else {
         panic!("builder failure must retain its error and exact parts");
     };
     assert_eq!(source.0, "secret business key");
@@ -898,7 +898,7 @@ async fn terminal_and_invalid_claim_cas_retire_all_registry_ownership() {
         .claim(terminal_id, DeferredWakeReason::Timeout)
         .await
         .expect("terminal claim is a normal outcome");
-    assert!(matches!(terminal_outcome, DeferredClaimOutcome::AlreadyCompleted));
+    assert!(matches!(terminal_outcome, DeferredClaimResult::AlreadyCompleted));
     assert_eq!(terminal_state.terminal_state(), Some(ResponseTerminalState::Cancelled));
     assert_eq!(terminal_registry.inner.index_counts(), (0, 0, 0));
     assert_eq!(terminal_harness.admission.snapshot().waiting_count(), 0);
@@ -1006,7 +1006,7 @@ async fn assert_first_claim_reason_wins(
     assert_eq!(claimed.reason(), first_reason);
     assert!(matches!(
         second.await.expect("duplicate claim is a normal outcome"),
-        DeferredClaimOutcome::AlreadyClaimed
+        DeferredClaimResult::AlreadyClaimed
     ));
     assert!(!registry.test_contains(id));
     assert_eq!(registry.test_session_member_count(harness.session.view().id()), 1);
@@ -1021,7 +1021,7 @@ async fn assert_first_claim_reason_wins(
             .claim(id, DeferredWakeReason::ForcedRefresh)
             .await
             .expect("missing claim is a normal outcome"),
-        DeferredClaimOutcome::NotFound
+        DeferredClaimResult::NotFound
     ));
     assert_registry_released(&registry, &harness.admission);
 }
@@ -1084,7 +1084,7 @@ async fn duplicate_claim_drops_its_upgraded_marker_after_releasing_the_registry_
         .await
         .expect("duplicate task publishes its result")
         .expect("the upgraded marker returns a normal outcome");
-    assert!(matches!(outcome, DeferredClaimOutcome::AlreadyCompleted));
+    assert!(matches!(outcome, DeferredClaimResult::AlreadyCompleted));
     assert_eq!(registry.inner.claim_marker_count(), 0);
     assert_eq!(harness.admission.snapshot().waiting_count(), 0);
 }
@@ -1111,7 +1111,7 @@ async fn provisional_waiter_observes_parent_removal_even_when_it_awaits_after_ro
     drop(registration);
     assert!(matches!(
         claim.await.expect("durable removal returns a normal outcome"),
-        DeferredClaimOutcome::ParentCancelled
+        DeferredClaimResult::ParentCancelled
     ));
     assert_eq!(registry.inner.index_counts(), (0, 0, 0));
 }
@@ -1125,7 +1125,7 @@ fn lifecycle_stop_after_builder_takes_priority_and_consumes_source_and_parts() {
         parent.cancel();
         Err(BuilderFailure("must be consumed"))
     });
-    assert!(matches!(outcome, DeferredRegistryOutcome::ParentCancelled));
+    assert!(matches!(outcome, DeferredRegistrationResult::ParentCancelled));
     assert_eq!(registry.inner.index_counts(), (0, 0, 0));
     assert_eq!(harness.admission.snapshot().waiting_count(), 0);
 }
@@ -1154,7 +1154,7 @@ fn simultaneous_lifecycle_stops_report_parent_before_session_and_deadline() {
     harness.parent.cancel();
 
     let outcome = registry.register_with(DeferredParts::new(responder, permit), |_| Ok::<_, BuilderFailure>(23));
-    assert!(matches!(outcome, DeferredRegistryOutcome::ParentCancelled));
+    assert!(matches!(outcome, DeferredRegistrationResult::ParentCancelled));
     assert_eq!(registry.inner.index_counts(), (0, 0, 0));
     assert_eq!(harness.admission.snapshot().waiting_count(), 0);
 }
@@ -1256,7 +1256,7 @@ fn session_cleanup_detaches_multiple_registries_once_and_preserves_other_session
     let cleanup_report = cleanup.close();
     assert_eq!(
         cleanup_report.outcome,
-        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseStatus::Completed
     );
     assert_eq!(cleanup_report.registered_waiters, 3);
     assert_eq!(cleanup_report.removed_waiters, 3);
@@ -1271,7 +1271,7 @@ fn session_cleanup_detaches_multiple_registries_once_and_preserves_other_session
     assert_eq!(other.admission.snapshot().waiting_count(), 1);
     assert_eq!(
         cleanup.close(),
-        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::AlreadyClosed
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseStatus::AlreadyClosed
     );
     drop(first);
     assert_eq!(other.admission.snapshot().waiting_count(), 0);
@@ -1298,7 +1298,7 @@ async fn claimed_session_cleanup_closes_marker_and_fresh_claim_is_not_found() {
     harness.session.close();
     assert_eq!(
         cleanup.close(),
-        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseStatus::Completed
     );
     assert_eq!(registry.inner.session_member_count(harness.session.view().id()), 0);
     assert_eq!(registry.inner.claim_marker_count(), 0);
@@ -1312,7 +1312,7 @@ async fn claimed_session_cleanup_closes_marker_and_fresh_claim_is_not_found() {
             .claim(id, DeferredWakeReason::Timeout)
             .await
             .expect("fresh post-cleanup claim is a normal outcome"),
-        DeferredClaimOutcome::NotFound
+        DeferredClaimResult::NotFound
     ));
     drop(claimed);
     assert_eq!(
@@ -1331,14 +1331,14 @@ fn registry_shutdown_is_typed_idempotent_and_rejects_new_ownership() {
         .expect("shutdown registration");
     registration.commit().expect("shutdown commit");
     let outcome = registry.shutdown();
-    let DeferredRegistryShutdownOutcome::Completed(stats) = outcome else {
+    let DeferredRegistryShutdownStatus::Completed(stats) = outcome else {
         panic!("first shutdown must complete: {outcome:?}");
     };
     assert_eq!(stats.detached_entries(), 1);
     assert_eq!(stats.terminalized_responses(), 1);
     assert_eq!(stats.in_progress_responses(), 0);
     assert_eq!(stats.invariant_failures(), 0);
-    assert_eq!(registry.shutdown(), DeferredRegistryShutdownOutcome::AlreadyClosed);
+    assert_eq!(registry.shutdown(), DeferredRegistryShutdownStatus::AlreadyClosed);
     assert_registry_released(&registry, &harness.admission);
 
     let called = Arc::new(AtomicBool::new(false));
@@ -1347,7 +1347,7 @@ fn registry_shutdown_is_typed_idempotent_and_rejects_new_ownership() {
         builder_called.store(true, Ordering::SeqCst);
         Ok::<_, BuilderFailure>(12)
     });
-    assert!(matches!(outcome, DeferredRegistryOutcome::ParentCancelled));
+    assert!(matches!(outcome, DeferredRegistrationResult::ParentCancelled));
     assert!(!called.load(Ordering::SeqCst));
     assert_registry_released(&registry, &harness.admission);
 }
@@ -1358,7 +1358,7 @@ fn closed_cleanup_owner_rejects_before_id_allocation_and_builder_execution() {
     let cleanup = crate::dispatch::DeferredSessionCleanupOwner::new(harness.session.view().id());
     assert_eq!(
         cleanup.close(),
-        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseStatus::Completed
     );
     let sequence = Arc::new(AtomicU64::new(900));
     let registry = DeferredRegistry::<u64>::with_test_sequence(Arc::clone(&sequence));
@@ -1371,7 +1371,7 @@ fn closed_cleanup_owner_rejects_before_id_allocation_and_builder_execution() {
             Ok::<_, BuilderFailure>(13)
         },
     );
-    assert!(matches!(outcome, DeferredRegistryOutcome::SessionClosed));
+    assert!(matches!(outcome, DeferredRegistrationResult::SessionClosed));
     assert!(!called.load(Ordering::SeqCst));
     assert_eq!(sequence.load(Ordering::SeqCst), 900);
     assert_eq!(registry.inner.index_counts(), (0, 0, 0));
@@ -1400,7 +1400,7 @@ fn cleanup_removes_shell_and_prepared_entries_independently() {
     assert_eq!(shell_registry.inner.phase(shell_id), Some(EntryPhaseTag::Shell));
     assert_eq!(
         shell_cleanup.close(),
-        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseStatus::Completed
     );
     assert_eq!(shell_registry.inner.index_counts(), (0, 0, 0));
     assert_eq!(shell_state.terminal_state(), Some(ResponseTerminalState::Closed));
@@ -1419,7 +1419,7 @@ fn cleanup_removes_shell_and_prepared_entries_independently() {
     );
     assert_eq!(
         prepared_cleanup.close(),
-        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseStatus::Completed
     );
     assert_eq!(prepared_registry.inner.index_counts(), (0, 0, 0));
     assert_eq!(prepared_state.terminal_state(), Some(ResponseTerminalState::Closed));
@@ -1480,11 +1480,11 @@ async fn cleanup_detaches_building_entry_and_notifies_ticket_before_builder_retu
 
     assert_eq!(
         cleanup.close(),
-        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseStatus::Completed
     );
     assert!(matches!(
         claim.await.expect("cleanup returns a normal claim outcome"),
-        DeferredClaimOutcome::SessionClosed
+        DeferredClaimResult::SessionClosed
     ));
     assert_eq!(registry.inner.index_counts(), (0, 0, 0));
     assert_eq!(harness.admission.snapshot().waiting_count(), 1);
@@ -1492,7 +1492,7 @@ async fn cleanup_detaches_building_entry_and_notifies_ticket_before_builder_retu
 
     release.wait();
     let outcome = builder.join().expect("building registration thread");
-    assert!(matches!(outcome, DeferredRegistryOutcome::SessionClosed));
+    assert!(matches!(outcome, DeferredRegistrationResult::SessionClosed));
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     assert_eq!(harness.admission.snapshot().waiting_count(), 0);
 }
@@ -1516,15 +1516,15 @@ async fn session_cleanup_does_not_overwrite_sending_response() {
     );
     let state = claimed.response_state_for_test();
     let send = match state.begin_sending().expect("sending owner contract") {
-        ResponseStateOutcome::Applied(send) => send,
-        ResponseStateOutcome::AlreadyCompleted { state, reason } => {
+        ResponseTransitionResult::Applied(send) => send,
+        ResponseTransitionResult::AlreadyCompleted { state, reason } => {
             panic!("sending owner unexpectedly observed {state:?} with {reason:?}")
         }
     };
     harness.session.close();
     assert_eq!(
         cleanup.close(),
-        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseStatus::Completed
     );
     assert_eq!(state.snapshot(), crate::dispatch::ResponseStateSnapshot::Sending);
     send.fail(crate::dispatch::WriteProgress::NotStarted)
@@ -1570,13 +1570,13 @@ fn concurrent_registry_shutdown_reports_in_progress_until_registry_batch_drops()
     let winner_registry = registry.clone();
     let winner = std::thread::spawn(move || winner_registry.shutdown());
     entered.wait();
-    assert_eq!(registry.shutdown(), DeferredRegistryShutdownOutcome::InProgress);
+    assert_eq!(registry.shutdown(), DeferredRegistryShutdownStatus::InProgress);
     release.wait();
     assert!(matches!(
         winner.join().expect("shutdown winner thread"),
-        DeferredRegistryShutdownOutcome::Completed(_)
+        DeferredRegistryShutdownStatus::Completed(_)
     ));
-    assert_eq!(registry.shutdown(), DeferredRegistryShutdownOutcome::AlreadyClosed);
+    assert_eq!(registry.shutdown(), DeferredRegistryShutdownStatus::AlreadyClosed);
     assert_eq!(harness.admission.snapshot().waiting_count(), 0);
 }
 
@@ -1589,8 +1589,8 @@ struct PanickingShutdownLease {
 impl Drop for PanickingShutdownLease {
     fn drop(&mut self) {
         let observed = match self.registry.shutdown() {
-            DeferredRegistryShutdownOutcome::InProgress => 1,
-            DeferredRegistryShutdownOutcome::Completed(_) | DeferredRegistryShutdownOutcome::AlreadyClosed => 2,
+            DeferredRegistryShutdownStatus::InProgress => 1,
+            DeferredRegistryShutdownStatus::Completed(_) | DeferredRegistryShutdownStatus::AlreadyClosed => 2,
         };
         self.observed.store(observed, Ordering::SeqCst);
         if !self.panicked.swap(true, Ordering::SeqCst) {
@@ -1615,13 +1615,14 @@ fn panicking_registry_owned_drop_still_seals_shutdown_without_holding_the_lock()
             harness.parts::<PanickingShutdownLease>(harness.identity(218)),
         ))
         .expect("panicking shutdown registration");
-    registration.commit().expect("panicking shutdown commit");
+    let ticket = registry.inner.install_claim_ticket(registration.deferred_id(), 1, 1);
 
     let panic = std::panic::catch_unwind(AssertUnwindSafe(|| registry.shutdown()));
     assert!(panic.is_err());
     assert_eq!(observed.load(Ordering::SeqCst), 1);
     assert!(panicked.load(Ordering::SeqCst));
-    assert_eq!(registry.shutdown(), DeferredRegistryShutdownOutcome::AlreadyClosed);
+    assert_eq!(ticket.resolution(), TicketResolution::RemovedParentCancelled);
+    assert_eq!(registry.shutdown(), DeferredRegistryShutdownStatus::AlreadyClosed);
     assert_eq!(registry.inner.index_counts(), (0, 0, 0));
     assert_eq!(harness.admission.snapshot().waiting_count(), 0);
 }
@@ -1652,11 +1653,11 @@ async fn simultaneous_parent_and_session_cleanup_cancel_entry_and_ticket_consist
     harness.session.close();
     assert_eq!(
         cleanup.close(),
-        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+        crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseStatus::Completed
     );
     assert!(matches!(
         claim.await.expect("parent cancellation is a normal claim outcome"),
-        DeferredClaimOutcome::ParentCancelled
+        DeferredClaimResult::ParentCancelled
     ));
     assert_eq!(state.terminal_state(), Some(ResponseTerminalState::Cancelled));
     assert_eq!(
@@ -1692,20 +1693,20 @@ async fn registry_shutdown_wakes_provisional_ticket_and_claims_stay_parent_cance
         },
         () = tokio::task::yield_now() => {}
     }
-    let DeferredRegistryShutdownOutcome::Completed(stats) = registry.shutdown() else {
+    let DeferredRegistryShutdownStatus::Completed(stats) = registry.shutdown() else {
         panic!("shutdown winner completes");
     };
     assert_eq!(stats.detached_entries(), 1);
     assert_eq!(stats.notified_tickets(), 1);
     assert!(matches!(
         claim.await.expect("shutdown wake is a normal claim outcome"),
-        DeferredClaimOutcome::ParentCancelled
+        DeferredClaimResult::ParentCancelled
     ));
     let fresh = registry
         .claim(id, DeferredWakeReason::Timeout)
         .await
         .expect("closed registry returns a normal claim outcome");
-    assert!(matches!(fresh, DeferredClaimOutcome::ParentCancelled));
+    assert!(matches!(fresh, DeferredClaimResult::ParentCancelled));
     drop(registration);
     assert_eq!(harness.admission.snapshot().waiting_count(), 0);
 }
@@ -1718,8 +1719,8 @@ struct ReentrantShutdownLease {
 impl Drop for ReentrantShutdownLease {
     fn drop(&mut self) {
         let observed = match self.registry.shutdown() {
-            DeferredRegistryShutdownOutcome::InProgress => 1,
-            DeferredRegistryShutdownOutcome::Completed(_) | DeferredRegistryShutdownOutcome::AlreadyClosed => 2,
+            DeferredRegistryShutdownStatus::InProgress => 1,
+            DeferredRegistryShutdownStatus::Completed(_) | DeferredRegistryShutdownStatus::AlreadyClosed => 2,
         };
         self.observed.store(observed, Ordering::SeqCst);
     }
@@ -1742,10 +1743,10 @@ fn registry_shutdown_is_reentrant_without_holding_the_registry_lock() {
     registration.commit().expect("reentrant shutdown commit");
     assert!(matches!(
         registry.shutdown(),
-        DeferredRegistryShutdownOutcome::Completed(_)
+        DeferredRegistryShutdownStatus::Completed(_)
     ));
     assert_eq!(observed.load(Ordering::SeqCst), 1);
-    assert_eq!(registry.shutdown(), DeferredRegistryShutdownOutcome::AlreadyClosed);
+    assert_eq!(registry.shutdown(), DeferredRegistryShutdownStatus::AlreadyClosed);
     assert_eq!(harness.admission.snapshot().waiting_count(), 0);
 }
 
@@ -1766,7 +1767,7 @@ fn session_cleanup_wins_from_activating_and_commit_reports_session_closed() {
     registration.set_commit_checkpoint(move || {
         assert_eq!(
             close.close(),
-            crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseOutcome::Completed
+            crate::dispatch::deferred_session_cleanup::DeferredSessionCleanupCloseStatus::Completed
         );
     });
     let error = registration
@@ -1804,7 +1805,7 @@ async fn resume_without_an_owned_processor_terminalizes_as_processor_unavailable
         })
         .await
         .expect("missing processor is a normal lifecycle outcome");
-    assert_eq!(outcome, DeferredResumeOutcome::Cancelled);
+    assert_eq!(outcome, DeferredResumeResult::Cancelled);
     assert_eq!(
         state.terminal_reason(),
         Some(crate::dispatch::DeferredTerminalReason::ProcessorUnavailable)
@@ -1830,7 +1831,7 @@ async fn claimed_owner_cutoff_cancels_without_reentering_the_handler() {
                 DeferredExpiryMargins::new(Duration::from_secs(5), Duration::from_secs(5)),
             )
             .expect("attach claimed owner cutoff contract"),
-        DeferredExpiryOutcome::Attached
+        DeferredExpiryAttachmentStatus::Attached
     );
     let registration = registry
         .register(DeferredRequest::new(47, parts))
@@ -1854,7 +1855,7 @@ async fn claimed_owner_cutoff_cancels_without_reentering_the_handler() {
         })
         .await
         .expect("owner cutoff is a normal cancellation outcome");
-    assert_eq!(outcome, DeferredResumeOutcome::Cancelled);
+    assert_eq!(outcome, DeferredResumeResult::Cancelled);
     assert_eq!(
         state.terminal_reason(),
         Some(crate::dispatch::DeferredTerminalReason::OwnerDeadline)

@@ -33,12 +33,15 @@ use rocketmq_controller::ControllerManager;
 use rocketmq_controller::Node;
 use rocketmq_error::fields;
 use rocketmq_error::CliErrorView;
+use rocketmq_error::CliExitCode;
 use rocketmq_error::CliVerbosity;
 use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
 use rocketmq_error::CONTROLLER_CONFIGURATION_INVALID;
 use rocketmq_error::CONTROLLER_CONSENSUS_TIMED_OUT;
 use rocketmq_error::CONTROLLER_INTERNAL_FAILURE;
+use rocketmq_error::CORE_CONFIGURATION_MISSING;
+use rocketmq_model::common::mix_all::ROCKETMQ_HOME_ENV;
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
 use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_defaults;
 use rocketmq_runtime::common::parse_config_file;
@@ -53,8 +56,8 @@ use rocketmq_runtime::ShutdownReason;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_security_api::SecurityBootstrap;
 use rocketmq_security_api::SecurityBootstrapConfig;
-use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
+use rocketmq_security_api::SecurityBootstrapValidation;
 use tracing::info;
 
 use controller_security::build_controller_security;
@@ -80,6 +83,18 @@ use controller_security::build_controller_security;
 /// rocketmq-controller-rust --print-config-item
 /// ```
 const CONTROLLER_AUTO_INITIALIZE_CLUSTER_ENV: &str = "ROCKETMQ_CONTROLLER_AUTO_INITIALIZE_CLUSTER";
+
+/// `ROCKETMQ_HOME` did not supply a home directory.
+#[derive(Debug)]
+struct RocketmqHomeNotSet;
+
+impl std::fmt::Display for RocketmqHomeNotSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("set the ROCKETMQ_HOME environment variable")
+    }
+}
+
+impl std::error::Error for RocketmqHomeNotSet {}
 
 fn controller_internal(operation: &'static str) -> Error {
     Error::new(&CONTROLLER_INTERNAL_FAILURE)
@@ -197,17 +212,41 @@ fn print_release_version_if_requested(component: &str) -> bool {
 
 pub fn main() {
     if let Err(source) = try_main() {
-        let error = Error::new(&CONTROLLER_INTERNAL_FAILURE)
-            .with_boxed_source(source.into_boxed_dyn_error())
-            .with_context(
-                ErrorContext::new()
-                    .with_text(fields::OPERATION_DIAGNOSTIC, "run-controller-service")
-                    .with_secret_presence(fields::SOURCE_PRESENT),
-            );
-        let output = CliErrorView::from_error(&error).output(CliVerbosity::Default);
-        eprintln!("{}", output.stderr());
-        std::process::exit(output.exit_code().as_i32());
+        let (stderr, exit_code) = startup_failure_output(source);
+        eprintln!("{stderr}");
+        std::process::exit(exit_code.as_i32());
     }
+}
+
+/// Projects a startup failure onto the CLI boundary.
+///
+/// A missing `ROCKETMQ_HOME` renders its fixed hint after the stable error line. Every other
+/// source stays hidden behind the generic controller failure.
+fn startup_failure_output(source: anyhow::Error) -> (String, CliExitCode) {
+    let home_not_set = source.downcast_ref::<RocketmqHomeNotSet>().is_some();
+    let (descriptor, context) = if home_not_set {
+        (
+            &CORE_CONFIGURATION_MISSING,
+            ErrorContext::new().with_text(fields::KEY, ROCKETMQ_HOME_ENV),
+        )
+    } else {
+        (
+            &CONTROLLER_INTERNAL_FAILURE,
+            ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "run-controller-service")
+                .with_secret_presence(fields::SOURCE_PRESENT),
+        )
+    };
+    let error = Error::new(descriptor)
+        .with_boxed_source(source.into_boxed_dyn_error())
+        .with_context(context);
+    let output = CliErrorView::from_error(&error).output(CliVerbosity::Default);
+    let stderr = if home_not_set {
+        format!("{}: {RocketmqHomeNotSet}", output.stderr())
+    } else {
+        output.stderr().to_string()
+    };
+    (stderr, output.exit_code())
 }
 
 fn try_main() -> Result<()> {
@@ -268,7 +307,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
 
     let rocketmq_home = &config.rocketmq_home;
     if rocketmq_home.is_empty() {
-        bail!("Please set the ROCKETMQ_HOME environment variable. Example: export ROCKETMQ_HOME=/opt/rocketmq");
+        return Err(RocketmqHomeNotSet.into());
     }
 
     let logging_overrides = load_logging_overrides(cli.config_file.as_deref())?;
@@ -288,7 +327,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     .context("failed to resolve Controller telemetry configuration")?;
     let security_bootstrap =
         SecurityBootstrapConfig::from_env().context("failed to load Controller security bootstrap configuration")?;
-    let validated_security = validate_controller_security(
+    let security_validation = validate_controller_security(
         &security_bootstrap,
         &config,
         prometheus_listener_addr,
@@ -326,7 +365,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         &resolved_filter,
         telemetry_guard.subscriber_install_status(),
     );
-    log_security_bootstrap(validated_security);
+    log_security_bootstrap(security_validation);
 
     lifecycle.set_observer(std::sync::Arc::new(
         rocketmq_observability::metrics::runtime::RuntimeMetricsRecorder::from_handle(
@@ -410,11 +449,11 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         rocketmq_runtime::RuntimeComponent::Controller,
     )
     .record_business_drain(if shutdown_request.deadline.is_expired() {
-        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::DeadlineExceeded
+        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainStatus::DeadlineExceeded
     } else if controller_result.is_ok() {
-        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::Drained
+        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainStatus::Drained
     } else {
-        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::Failed
+        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainStatus::Failed
     });
     let telemetry_report = match telemetry_flush_lease {
         Some(lease) => {
@@ -458,7 +497,7 @@ fn validate_controller_security(
     controller_config: &ControllerConfig,
     prometheus_bind_addr: Option<SocketAddr>,
     probe_bind_addr: Option<SocketAddr>,
-) -> Result<SecurityBootstrapOutcome> {
+) -> Result<SecurityBootstrapValidation> {
     if security_bootstrap.requires_authentication()
         && (!controller_config.authentication_enabled || !controller_config.authorization_enabled)
     {
@@ -479,12 +518,12 @@ fn validate_controller_security(
     security_bootstrap.validate(&listeners).map_err(anyhow::Error::from)
 }
 
-fn log_security_bootstrap(outcome: SecurityBootstrapOutcome) {
-    match outcome {
-        SecurityBootstrapOutcome::Disabled => {
+fn log_security_bootstrap(validation: SecurityBootstrapValidation) {
+    match validation {
+        SecurityBootstrapValidation::Disabled => {
             tracing::warn!("Controller security bootstrap is disabled because no security profile is configured")
         }
-        SecurityBootstrapOutcome::Validated(validated) => match validated.profile() {
+        SecurityBootstrapValidation::Validated(validated) => match validated.profile() {
             SecurityBootstrapProfile::DevelopmentInsecureLoopback => tracing::warn!(
                 profile = validated.profile().as_str(),
                 listener_count = validated.listener_count(),
@@ -818,6 +857,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn startup_failure_output_names_missing_rocketmq_home() {
+        let (stderr, exit_code) = startup_failure_output(RocketmqHomeNotSet.into());
+
+        assert_eq!(
+            stderr,
+            "ERROR core.configuration.missing: Required configuration is missing: set the ROCKETMQ_HOME environment \
+             variable"
+        );
+        assert_eq!(exit_code, CliExitCode::CONFIG);
+    }
+
+    #[test]
+    fn startup_failure_output_hides_untyped_sources() {
+        let source = anyhow::anyhow!("token=secret-value").context("failed to load controller configuration");
+
+        let (stderr, exit_code) = startup_failure_output(source);
+
+        assert_eq!(stderr, "ERROR controller.internal.failure: Controller operation failed");
+        assert_eq!(exit_code, CliExitCode::SOFTWARE);
+    }
+
+    #[test]
     fn secure_profile_rejects_disabled_request_protection_before_material_loading() {
         let security =
             SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(SecurityBootstrapProfile::SecureEnforced));
@@ -851,7 +912,7 @@ mod tests {
 
     #[test]
     fn disabled_security_bootstrap_allows_default_controller_listeners() {
-        let outcome = validate_controller_security(
+        let validation = validate_controller_security(
             &rocketmq_security_api::SecurityBootstrap::Disabled,
             &ControllerConfig::default(),
             None,
@@ -859,7 +920,7 @@ mod tests {
         )
         .expect("disabled security bootstrap should not restrict Controller listeners");
 
-        assert_eq!(outcome, rocketmq_security_api::SecurityBootstrapOutcome::Disabled);
+        assert_eq!(validation, rocketmq_security_api::SecurityBootstrapValidation::Disabled);
     }
 
     #[test]

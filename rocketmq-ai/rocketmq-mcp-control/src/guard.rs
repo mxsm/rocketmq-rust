@@ -28,6 +28,7 @@ use crate::model::Principal;
 pub struct MutationGuard {
     runtime_enabled: bool,
     default_dry_run: bool,
+    require_plan_digest: bool,
     allowed_operations: BTreeSet<ControlOperation>,
     allowed_clusters: BTreeSet<ClusterName>,
 }
@@ -37,6 +38,7 @@ impl MutationGuard {
         Self {
             runtime_enabled: policy.mutations_enabled,
             default_dry_run: policy.dry_run,
+            require_plan_digest: policy.require_plan_digest,
             allowed_operations: policy.operation_allowlist(),
             allowed_clusters: policy.cluster_allowlist(),
         }
@@ -75,6 +77,47 @@ impl MutationGuard {
         })
     }
 
+    /// Authorizes a caller to read the results of its own mutation calls on `cluster`.
+    ///
+    /// A lookup needs the write scope and the cluster, like the mutations it reports on, and no
+    /// operation: it changes nothing. It is deliberately not tied to `mutations_enabled`, so that
+    /// the outcome of earlier calls stays readable after mutations are switched off.
+    ///
+    /// # Errors
+    ///
+    /// Returns `permission_denied` without the write scope, `cluster_not_allowed` for a cluster
+    /// the caller or the server policy does not allow, and `operation_unavailable` in a build
+    /// without mutation tools.
+    pub fn authorize_result_lookup(
+        &self,
+        principal: &Principal,
+        cluster: &str,
+    ) -> Result<AuthorizedResultLookup, ControlError> {
+        if !principal.scopes.contains(REQUIRED_WRITE_SCOPE) {
+            return Err(ControlError::permission_denied());
+        }
+        let cluster = ClusterName::try_new(cluster).map_err(|_| ControlError::cluster_not_allowed())?;
+        if !principal.allowed_clusters.contains(&cluster) || !self.allowed_clusters.contains(&cluster) {
+            return Err(ControlError::cluster_not_allowed());
+        }
+        if !cfg!(feature = "write-tools") {
+            return Err(ControlError::operation_unavailable());
+        }
+        Ok(AuthorizedResultLookup {
+            cluster,
+            operator: principal.subject.clone(),
+        })
+    }
+
+    /// Whether `principal` could look up a result on at least one configured cluster.
+    pub fn allows_result_discovery(&self, principal: &Principal, configured_clusters: &BTreeSet<ClusterName>) -> bool {
+        principal.scopes.contains(REQUIRED_WRITE_SCOPE)
+            && principal
+                .allowed_clusters
+                .iter()
+                .any(|cluster| self.allowed_clusters.contains(cluster) && configured_clusters.contains(cluster))
+    }
+
     /// Parses common arguments only after an [`AuthorizedMutation`] has been minted.
     pub fn parse_arguments(
         &self,
@@ -93,6 +136,11 @@ impl MutationGuard {
 
     pub const fn default_dry_run(&self) -> bool {
         self.default_dry_run
+    }
+
+    /// Whether an execution has to name the plan it runs.
+    pub const fn requires_plan_digest(&self) -> bool {
+        self.require_plan_digest
     }
 
     pub fn allows_discovery(
@@ -134,11 +182,54 @@ impl AuthorizedMutation {
 
     #[cfg(test)]
     pub(crate) fn synthetic(operation: ControlOperation, cluster: ClusterName) -> Self {
+        Self::synthetic_as(operation, cluster, "test-operator")
+    }
+
+    /// Like [`Self::synthetic`], for a named caller.
+    #[cfg(test)]
+    pub(crate) fn synthetic_as(operation: ControlOperation, cluster: ClusterName, operator: &str) -> Self {
         Self {
             operation,
             cluster,
-            operator: "test-operator".to_owned(),
+            operator: operator.to_owned(),
         }
+    }
+}
+
+/// Proof that a caller may read the results of its own mutation calls on one cluster.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AuthorizedResultLookup {
+    cluster: ClusterName,
+    operator: String,
+}
+
+impl AuthorizedResultLookup {
+    pub fn cluster(&self) -> &ClusterName {
+        &self.cluster
+    }
+
+    /// The validated caller. Results are matched against it and it is never returned.
+    #[cfg(feature = "write-tools")]
+    pub(crate) fn operator(&self) -> &str {
+        &self.operator
+    }
+
+    #[cfg(all(test, feature = "write-tools"))]
+    pub(crate) fn synthetic(cluster: ClusterName, operator: &str) -> Self {
+        Self {
+            cluster,
+            operator: operator.to_owned(),
+        }
+    }
+}
+
+impl std::fmt::Debug for AuthorizedResultLookup {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AuthorizedResultLookup")
+            .field("cluster", &self.cluster)
+            .field("operator_validated", &true)
+            .finish()
     }
 }
 
@@ -164,6 +255,8 @@ mod tests {
             allowed_operations: vec![ControlOperation::TopicUpsert],
             allowed_clusters: vec![ClusterName::try_new("cluster-a").unwrap()],
             operation_timeout_seconds: 24,
+            require_plan_digest: false,
+            emergency_stop_file: None,
         }
     }
 

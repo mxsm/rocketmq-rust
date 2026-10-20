@@ -38,9 +38,9 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_runtime::MetadataIoCommitObservation;
-use rocketmq_runtime::MetadataIoCommitOutcome;
 #[cfg(test)]
 use rocketmq_runtime::MetadataIoOperation;
+use rocketmq_runtime::MetadataWritePersistenceStatus;
 use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::RuntimeOperation;
 use rocketmq_runtime::RuntimeResult;
@@ -58,6 +58,9 @@ use super::KVConfigSerializeWrapper;
 
 const KV_RESOURCE: &str = "namesrv.kv-config";
 pub(crate) const DEFAULT_KV_MUTATION_MAX_PENDING_BYTES: usize = 16 * 1024 * 1024;
+const ADMIT_KV_MUTATION: RuntimeOperation = RuntimeOperation::external("admit-kv-mutation");
+const ADMIT_KV_MUTATION_BYTES: RuntimeOperation = RuntimeOperation::external("admit-kv-mutation-bytes");
+const KV_MUTATION_WORKER: RuntimeOperation = RuntimeOperation::external("kv-mutation-worker");
 
 #[derive(Clone, Debug)]
 pub(crate) enum KvMutation {
@@ -155,17 +158,13 @@ pub(crate) struct KvMutationReceipt {
 impl KvMutationReceipt {
     pub(crate) async fn wait_until(self, deadline: MetadataDeadline) -> NameServerResult<KvCommitReceipt> {
         if deadline.is_expired() {
-            return Err(crate::runtime_error(RuntimeError::timed_out(
-                RuntimeOperation::AdmitKvMutation,
-            )));
+            return Err(crate::runtime_error(RuntimeError::timed_out(ADMIT_KV_MUTATION)));
         }
         match tokio::time::timeout_at(deadline.instant(), self.completion).await {
             Ok(Ok(Ok(receipt))) => Ok(receipt),
             Ok(Ok(Err(error))) => Err(error.into_error()),
             Ok(Err(_)) => Err(KvCommitError::WorkerStopped.into_error()),
-            Err(_) => Err(crate::runtime_error(RuntimeError::timed_out(
-                RuntimeOperation::AdmitKvMutation,
-            ))),
+            Err(_) => Err(crate::runtime_error(RuntimeError::timed_out(ADMIT_KV_MUTATION))),
         }
     }
 
@@ -281,15 +280,11 @@ impl KvMutationService {
         deadline: MetadataDeadline,
     ) -> NameServerResult<KvMutationReceipt> {
         if deadline.is_expired() {
-            return Err(crate::runtime_error(RuntimeError::timed_out(
-                RuntimeOperation::AdmitKvMutation,
-            )));
+            return Err(crate::runtime_error(RuntimeError::timed_out(ADMIT_KV_MUTATION)));
         }
         if !self.inner.accepting.load(Ordering::Acquire) {
             self.metrics.record_kv_event(NameServerKvEvent::Closed);
-            return Err(crate::runtime_error(RuntimeError::context_unavailable(
-                RuntimeOperation::KvMutationWorker,
-            )));
+            return Err(crate::runtime_error(RuntimeError::closed(KV_MUTATION_WORKER)));
         }
         if self.inner.reconciliation_required.load(Ordering::Acquire) {
             return Err(crate::namesrv_error::storage_write(std::io::Error::other(
@@ -309,11 +304,11 @@ impl KvMutationService {
                 let metadata_error = match error {
                     mpsc::error::TrySendError::Closed(_) => {
                         self.metrics.record_kv_event(NameServerKvEvent::Closed);
-                        RuntimeError::context_unavailable(RuntimeOperation::KvMutationWorker)
+                        RuntimeError::closed(KV_MUTATION_WORKER)
                     }
                     mpsc::error::TrySendError::Full(_) => {
                         self.metrics.record_kv_event(NameServerKvEvent::QueueFull);
-                        RuntimeError::capacity(RuntimeOperation::AdmitKvMutation)
+                        RuntimeError::capacity(ADMIT_KV_MUTATION)
                     }
                 };
                 return Err(crate::runtime_error(metadata_error));
@@ -385,11 +380,9 @@ fn reserve_pending_bytes(inner: &MutationServiceInner, requested: usize) -> Name
     loop {
         let next = retained
             .checked_add(requested)
-            .ok_or_else(|| crate::runtime_error(RuntimeError::capacity(RuntimeOperation::AdmitKvMutationBytes)))?;
+            .ok_or_else(|| crate::runtime_error(RuntimeError::capacity(ADMIT_KV_MUTATION_BYTES)))?;
         if next > inner.max_pending_bytes {
-            return Err(crate::runtime_error(RuntimeError::capacity(
-                RuntimeOperation::AdmitKvMutationBytes,
-            )));
+            return Err(crate::runtime_error(RuntimeError::capacity(ADMIT_KV_MUTATION_BYTES)));
         }
         match inner
             .pending_bytes
@@ -468,7 +461,7 @@ async fn run_worker(
     inner.finished.notify_waiters();
 }
 
-struct MutationOutcome {
+struct KvMutationEffect {
     changed_entries: usize,
     namespace: Option<Namespace>,
 }
@@ -485,7 +478,7 @@ async fn process_batch(
     let mut candidate = snapshot_table(config_table);
     let mut touched_namespaces = HashSet::new();
     let mut force_persist = false;
-    let mut outcomes = Vec::with_capacity(batch.len());
+    let mut effects = Vec::with_capacity(batch.len());
     let mut max_generation = 0;
     let mut deadline = batch[0].deadline;
 
@@ -495,16 +488,16 @@ async fn process_batch(
             deadline = command.deadline;
         }
         force_persist |= matches!(command.mutation, KvMutation::Persist);
-        let outcome = apply_mutation(&mut candidate, &command.mutation);
-        if outcome.changed_entries > 0 {
-            if let Some(namespace) = &outcome.namespace {
+        let effect = apply_mutation(&mut candidate, &command.mutation);
+        if effect.changed_entries > 0 {
+            if let Some(namespace) = &effect.namespace {
                 touched_namespaces.insert(namespace.clone());
             }
         }
-        outcomes.push(outcome);
+        effects.push(effect);
     }
 
-    let changed = outcomes.iter().any(|outcome| outcome.changed_entries > 0);
+    let changed = effects.iter().any(|effect| effect.changed_entries > 0);
     if changed || force_persist {
         let persist_started = std::time::Instant::now();
         let bytes = match serialize_candidate(&candidate) {
@@ -521,11 +514,11 @@ async fn process_batch(
             .await
         {
             Ok(MetadataIoCommitObservation::Settled {
-                outcome: MetadataIoCommitOutcome::Durable(_),
+                outcome: MetadataWritePersistenceStatus::Durable(_),
                 ..
             }) => {}
             Ok(MetadataIoCommitObservation::Settled {
-                outcome: MetadataIoCommitOutcome::FailedBeforeCommit(error),
+                outcome: MetadataWritePersistenceStatus::FailedBeforeCommit(error),
                 ..
             }) => {
                 metrics.record_kv_persist(persist_started.elapsed(), false, batch_size);
@@ -534,7 +527,7 @@ async fn process_batch(
                 return;
             }
             Ok(MetadataIoCommitObservation::Settled {
-                outcome: MetadataIoCommitOutcome::CommitOutcomeUnknown(error),
+                outcome: MetadataWritePersistenceStatus::CommitOutcomeUnknown(error),
                 ..
             }) => {
                 inner.reconciliation_required.store(true, Ordering::Release);
@@ -588,12 +581,12 @@ async fn process_batch(
     inner.durable_generation.store(max_generation, Ordering::Release);
     inner.applied_generation.store(max_generation, Ordering::Release);
 
-    for (command, outcome) in batch.into_iter().zip(outcomes) {
+    for (command, effect) in batch.into_iter().zip(effects) {
         let receipt = KvCommitReceipt {
             requested_generation: command.requested_generation,
             durable_generation: max_generation,
             applied_generation: max_generation,
-            changed_entries: outcome.changed_entries,
+            changed_entries: effect.changed_entries,
         };
         let _ = command.completion.send(Ok(receipt));
         finish_command(inner, command.estimated_bytes);
@@ -644,7 +637,7 @@ fn serialize_candidate(candidate: &HashMap<Namespace, ConfigMap>) -> NameServerR
         .map_err(|error| crate::namesrv_error::serialization("encode-kv-config", "json", error))
 }
 
-fn apply_mutation(candidate: &mut HashMap<Namespace, ConfigMap>, mutation: &KvMutation) -> MutationOutcome {
+fn apply_mutation(candidate: &mut HashMap<Namespace, ConfigMap>, mutation: &KvMutation) -> KvMutationEffect {
     match mutation {
         KvMutation::Put { namespace, key, value } => {
             let values = candidate.entry(namespace.clone()).or_default();
@@ -652,7 +645,7 @@ fn apply_mutation(candidate: &mut HashMap<Namespace, ConfigMap>, mutation: &KvMu
             if changed > 0 {
                 values.insert(key.clone(), value.clone());
             }
-            MutationOutcome {
+            KvMutationEffect {
                 changed_entries: changed,
                 namespace: Some(namespace.clone()),
             }
@@ -662,7 +655,7 @@ fn apply_mutation(candidate: &mut HashMap<Namespace, ConfigMap>, mutation: &KvMu
                 .get_mut(namespace)
                 .and_then(|values| values.remove(key))
                 .is_some() as usize;
-            MutationOutcome {
+            KvMutationEffect {
                 changed_entries: changed,
                 namespace: Some(namespace.clone()),
             }
@@ -676,7 +669,7 @@ fn apply_mutation(candidate: &mut HashMap<Namespace, ConfigMap>, mutation: &KvMu
                     changed += 1;
                 }
             }
-            MutationOutcome {
+            KvMutationEffect {
                 changed_entries: changed,
                 namespace: Some(namespace.clone()),
             }
@@ -688,16 +681,16 @@ fn apply_mutation(candidate: &mut HashMap<Namespace, ConfigMap>, mutation: &KvMu
                     changed += usize::from(current.remove(key).is_some());
                 }
             }
-            MutationOutcome {
+            KvMutationEffect {
                 changed_entries: changed,
                 namespace: Some(namespace.clone()),
             }
         }
-        KvMutation::DeleteNamespace { namespace } => MutationOutcome {
+        KvMutation::DeleteNamespace { namespace } => KvMutationEffect {
             changed_entries: candidate.remove(namespace).map_or(0, |values| values.len()),
             namespace: Some(namespace.clone()),
         },
-        KvMutation::Persist => MutationOutcome {
+        KvMutation::Persist => KvMutationEffect {
             changed_entries: 0,
             namespace: None,
         },
@@ -718,6 +711,8 @@ mod tests {
 
     use super::*;
 
+    const KV_PERSISTENCE_FAULT: RuntimeOperation = RuntimeOperation::external("injected-kv-persistence-failure");
+
     #[derive(Debug, Default)]
     struct RecordingFileSystem {
         fail: AtomicBool,
@@ -736,7 +731,7 @@ mod tests {
                         operation.runtime_operation(),
                         std::io::Error::other("injected KV persistence failure"),
                     )),
-                    None => Err(RuntimeError::internal_failure(RuntimeOperation::KvPersistenceFault)),
+                    None => Err(RuntimeError::internal_failure(KV_PERSISTENCE_FAULT)),
                 };
             }
             *self.last_bytes.lock() = bytes.to_vec();
@@ -1003,19 +998,20 @@ mod tests {
         panic!("the KV persistence state never reached the expected value");
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn observation_timeout_after_a_durable_commit_still_requires_reconciliation() {
         let table = Arc::new(ConfigTable::new());
         let file_system = Arc::new(GatedFileSystem::default());
         let _release_on_failure = ReleaseGateOnDrop(file_system.clone());
         let (_context, actor, service, _root) =
             start_service_with("kv-observation-timeout", file_system.clone(), Arc::clone(&table), 8, 8);
-        // The batch deadline is short and the write is parked, so the worker
-        // always stops observing before the replacement can complete. It is
-        // either already expired when the worker checks or expires while the
-        // closure is parked; both paths reach the same conclusion.
-        let deadline = MetadataDeadline::after(Duration::from_millis(1));
+        // Admit the real write before expiring its observer. A short wall-clock
+        // deadline can reject admission under load, which never requires
+        // reconciliation and therefore exercises a different contract.
+        let deadline = MetadataDeadline::after(Duration::from_secs(30));
         let receipt = service.submit(put("ns", "key", "new"), deadline).unwrap();
+        wait_until(|| file_system.writes.load(Ordering::Relaxed) == 1).await;
+        tokio::time::advance(Duration::from_secs(31)).await;
 
         wait_until(|| service.snapshot().reconciliation_required).await;
         assert!(

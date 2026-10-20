@@ -28,7 +28,7 @@ export default function AclScopePicker({
   const canConfirm = createAclScopeQuery(draftScope, brokers) !== null;
 
   return (
-    <section className="acl-selector-panel" aria-label="ACL scope">
+    <section className="acl-selector-panel" data-surface="panel" aria-label="ACL scope">
       <div className="acl-selector-grid">
         <label className="acl-field">
           <span><strong>*</strong> Cluster</span>
@@ -59,7 +59,7 @@ export default function AclScopePicker({
           <CheckCircle2 size={15} aria-hidden="true" /> Confirm
         </Button>
       </div>
-      <div className="acl-scope-card">
+      <div className="acl-scope-card" data-confirmed={confirmedScope ? 'true' : 'false'}>
         <ShieldCheck size={18} aria-hidden="true" />
         <div>
           <span>Active broker scope</span>

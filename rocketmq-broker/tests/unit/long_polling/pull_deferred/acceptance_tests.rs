@@ -40,17 +40,17 @@ use rocketmq_store::MessageFilter;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::DeferredAdmission;
-use rocketmq_transport::api::DeferredClaimOutcome;
+use rocketmq_transport::api::DeferredClaimResult;
 use rocketmq_transport::api::DeferredExpiryMargins;
 use rocketmq_transport::api::DeferredId;
 use rocketmq_transport::api::DeferredWaitLimits;
 use rocketmq_transport::api::DeferredWakeReason;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestOrdering;
 use rocketmq_transport::api::RequestOrderingKey;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::ServerConfig;
 use rocketmq_transport::api::TransportServer;
 use rocketmq_transport::test_support::Connection;
@@ -69,11 +69,11 @@ use super::index::PullCriteriaLimits;
 use super::index::PullIndexSnapshot;
 use super::index::PullScanCursor;
 use super::service::PreparedPullRegistration;
+use super::service::PullDeferredPreparationStatus;
 use super::service::PullDeferredPrepareError;
-use super::service::PullDeferredPrepareOutcome;
 use super::service::PullDeferredPrepareRejectionKind;
-use super::service::PullDeferredRegisterOutcome;
 use super::service::PullDeferredRegisterRejectionKind;
+use super::service::PullDeferredRegistrationStatus;
 use super::service::PullDeferredService;
 use super::service::PullRetainedEstimate;
 use super::service::PullSuspendTiming;
@@ -319,7 +319,7 @@ struct PullDeferredTestProcessor {
 }
 
 impl RequestProcessor for PullDeferredTestProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         if request.command().code() == SENTINEL_CODE {
             self.barrier.commit_observed.notify_one();
             return success_reply();
@@ -364,8 +364,8 @@ impl RequestProcessor for PullDeferredTestProcessor {
             .map_err(|error| {
                 crate::broker_error::from_shared(Arc::new(CanonicalError::caused_by(&CORE_ARGUMENT_INVALID, error)))
             })? {
-            PullDeferredPrepareOutcome::Prepared(prepared) => prepared,
-            PullDeferredPrepareOutcome::Rejected(_) => {
+            PullDeferredPreparationStatus::Prepared(prepared) => prepared,
+            PullDeferredPreparationStatus::Rejected(_) => {
                 return Err(crate::broker_error::invalid_argument(
                     "unexpected Pull preparation rejection",
                 ));
@@ -374,8 +374,8 @@ impl RequestProcessor for PullDeferredTestProcessor {
         let registration = match self.service.register(prepared, request).map_err(|error| {
             crate::broker_error::from_shared(Arc::new(CanonicalError::caused_by(&CORE_ARGUMENT_INVALID, error)))
         })? {
-            PullDeferredRegisterOutcome::Registered(registration) => *registration,
-            PullDeferredRegisterOutcome::Rejected(_) => {
+            PullDeferredRegistrationStatus::Registered(registration) => *registration,
+            PullDeferredRegistrationStatus::Rejected(_) => {
                 return Err(crate::broker_error::invalid_argument(
                     "unexpected Pull registration rejection",
                 ));
@@ -397,7 +397,7 @@ impl RequestProcessor for PullDeferredTestProcessor {
             self.barrier.before_outcome.notify_one();
             self.barrier.release_outcome.notified().await;
         }
-        Ok(HandlerOutcome::Deferred(registration))
+        Ok(ResponseAction::Deferred(registration))
     }
 
     fn request_ordering(&self, _ingress: rocketmq_transport::api::IngressRequestView<'_>) -> RequestOrdering {
@@ -405,11 +405,11 @@ impl RequestProcessor for PullDeferredTestProcessor {
     }
 }
 
-fn success_reply() -> crate::broker_error::BrokerResult<HandlerOutcome> {
+fn success_reply() -> crate::broker_error::BrokerResult<ResponseAction> {
     RemotingResponse::command(RemotingCommand::create_response_command_with_code(
         ResponseCode::Success,
     ))
-    .map(HandlerOutcome::Reply)
+    .map(ResponseAction::Reply)
     .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
 }
 
@@ -577,7 +577,7 @@ async fn tcp_pending_arrival_and_timeout_reexecute_then_write_one_bound_frame() 
             barrier.release_outcome.notify_one();
             pending_claim.await.expect("pending timeout wake replays after commit")
         };
-        let DeferredClaimOutcome::Claimed(claim) = claim else {
+        let DeferredClaimResult::Claimed(claim) = claim else {
             panic!("prepared Pull wake must retain its claimed request");
         };
         assert_eq!(claim.reason(), wake_reason);
@@ -647,7 +647,7 @@ async fn tcp_pending_arrival_and_timeout_reexecute_then_write_one_bound_frame() 
                 .await
                 .expect("Pull resume receipt channel")
                 .expect("canonical Pull resume/write"),
-            rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+            rocketmq_transport::api::DeferredResumeResult::Completed(_)
         ));
         assert_eq!(response.opaque(), original_opaque);
         assert_eq!(response.code(), ResponseCode::PullNotFound as i32);
@@ -726,7 +726,7 @@ async fn tcp_partial_write_drops_owner_once_without_retrying() {
     let mut candidates = service.reserve_arrival_batch(&PullArrivalView::new(&topic, 0, 8), &mut cursor);
     let candidate = candidates.pop().expect("one partial-write Pull candidate");
     assert!(candidates.is_empty());
-    let DeferredClaimOutcome::Claimed(claim) = service
+    let DeferredClaimResult::Claimed(claim) = service
         .claim_candidate(candidate, DeferredWakeReason::MessageArrived)
         .await
         .expect("claim partial-write Pull")

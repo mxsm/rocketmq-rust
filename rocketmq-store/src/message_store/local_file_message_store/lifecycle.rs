@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 
 mod flush_consume_queue;
 
@@ -49,8 +50,9 @@ impl LocalFileMessageStore {
             let interval_ms = self.message_store_config.timer_store_config.scheduler_interval_ms;
             let max_messages = self.message_store_config.timer_store_config.materialize_batch_messages;
             let max_bytes = self.message_store_config.timer_store_config.materialize_batch_bytes;
-            if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+            if let Err(error) = scheduled_tasks.schedule(
                 ScheduledTaskConfig::fixed_delay("timer-extended-materializer", Duration::from_millis(interval_ms)),
+                ScheduledExecutionPolicy::default(),
                 move || {
                     let engine = engine.clone();
                     async move {
@@ -83,8 +85,9 @@ impl LocalFileMessageStore {
             let formal = self.message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline;
             let max_messages = self.message_store_config.timer_store_config.due_scan_messages;
             let max_bytes = self.message_store_config.timer_store_config.due_scan_bytes;
-            if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+            if let Err(error) = scheduled_tasks.schedule(
                 ScheduledTaskConfig::fixed_delay("timer-extended-due-scanner", Duration::from_millis(interval_ms)),
+                ScheduledExecutionPolicy::default(),
                 move || {
                     let engine = engine.clone();
                     let role = Arc::clone(&role);
@@ -120,11 +123,12 @@ impl LocalFileMessageStore {
             let interval_ms = self.message_store_config.timer_store_config.scheduler_interval_ms;
             let max_records = self.message_store_config.timer_store_config.due_scan_messages;
             let max_bytes = self.message_store_config.timer_store_config.due_scan_bytes;
-            if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+            if let Err(error) = scheduled_tasks.schedule(
                 ScheduledTaskConfig::fixed_delay(
                     "timer-extended-completion-reconciler",
                     Duration::from_millis(interval_ms),
                 ),
+                ScheduledExecutionPolicy::default(),
                 move || {
                     let completion = Arc::clone(&completion);
                     let runtime_scope = runtime_scope.clone();
@@ -153,8 +157,9 @@ impl LocalFileMessageStore {
         if let Some(delivery) = self.extended_timeline_delivery.as_ref() {
             let delivery = Arc::clone(delivery);
             let interval_ms = self.message_store_config.timer_store_config.scheduler_interval_ms;
-            if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+            if let Err(error) = scheduled_tasks.schedule(
                 ScheduledTaskConfig::fixed_delay("timer-extended-delivery", Duration::from_millis(interval_ms)),
+                ScheduledExecutionPolicy::default(),
                 move || {
                     let delivery = Arc::clone(&delivery);
                     async move {
@@ -186,8 +191,9 @@ impl LocalFileMessageStore {
                 .scheduler_interval_ms
                 .max(60_000);
             let max_records = self.message_store_config.timer_store_config.due_scan_messages;
-            if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+            if let Err(error) = scheduled_tasks.schedule(
                 ScheduledTaskConfig::fixed_delay("timer-extended-gc", Duration::from_millis(interval_ms)),
+                ScheduledExecutionPolicy::default(),
                 move || {
                     let gc = Arc::clone(&gc);
                     let completion = Arc::clone(&completion);
@@ -224,11 +230,12 @@ impl LocalFileMessageStore {
         let clean_resource_interval = self.message_store_config.clean_resource_interval as u64;
         let clean_commit_log_active = Arc::new(AtomicBool::new(true));
         let clean_commit_log_runtime_scope = self.runtime_scope.clone();
-        if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+        if let Err(error) = scheduled_tasks.schedule(
             ScheduledTaskConfig::fixed_delay(
                 "clean-commit-log-scheduler",
                 Duration::from_millis(clean_resource_interval.max(1)),
             ),
+            ScheduledExecutionPolicy::default(),
             move || {
                 let service = Arc::clone(&clean_commit_log_service_arc);
                 let active = Arc::clone(&clean_commit_log_active);
@@ -251,8 +258,9 @@ impl LocalFileMessageStore {
 
         let store_self_check_active = Arc::new(AtomicBool::new(true));
         let store_self_check_runtime_scope = self.runtime_scope.clone();
-        if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+        if let Err(error) = scheduled_tasks.schedule(
             ScheduledTaskConfig::fixed_delay("store-self-check-scheduler", Duration::from_secs(10 * 60)),
+            ScheduledExecutionPolicy::default(),
             move || {
                 let commit_log = self_check_commit_log.clone();
                 let consume_queue_store = self_check_consume_queue_store.clone();
@@ -282,8 +290,9 @@ impl LocalFileMessageStore {
         // store check point flush
         let checkpoint_flush_active = Arc::new(AtomicBool::new(true));
         let checkpoint_flush_runtime_scope = self.runtime_scope.clone();
-        if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+        if let Err(error) = scheduled_tasks.schedule(
             ScheduledTaskConfig::fixed_delay("store-checkpoint-flush-scheduler", Duration::from_secs(1)),
+            ScheduledExecutionPolicy::default(),
             move || {
                 let checkpoint = Arc::clone(&store_checkpoint_arc);
                 let active = Arc::clone(&checkpoint_flush_active);
@@ -312,11 +321,12 @@ impl LocalFileMessageStore {
         let clean_consume_queue_service_arc = self.clean_consume_queue_service.clone();
         let clean_consume_queue_active = Arc::new(AtomicBool::new(true));
         let clean_consume_queue_runtime_scope = self.runtime_scope.clone();
-        if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+        if let Err(error) = scheduled_tasks.schedule(
             ScheduledTaskConfig::fixed_delay(
                 "clean-consume-queue-scheduler",
                 Duration::from_millis(clean_resource_interval.max(1)),
             ),
+            ScheduledExecutionPolicy::default(),
             move || {
                 let correct_service = Arc::clone(&correct_logic_offset_service_arc);
                 let clean_service = Arc::clone(&clean_consume_queue_service_arc);

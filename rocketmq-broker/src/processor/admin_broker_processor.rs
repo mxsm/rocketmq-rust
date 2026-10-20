@@ -51,11 +51,11 @@ use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFacto
 use rocketmq_store::BrokerAdminStore;
 use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::EmbeddedCaller;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::SessionView;
 use std::fmt;
 use std::net::SocketAddr;
@@ -134,7 +134,7 @@ impl<MS: BrokerAdminStore> AdminBrokerProcessor<MS> {
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome>
+    ) -> crate::broker_error::BrokerResult<ResponseAction>
     where
         MS: 'static,
     {
@@ -157,7 +157,7 @@ impl<MS> RequestProcessor for AdminBrokerProcessor<MS>
 where
     MS: BrokerAdminStore + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.process_shared(request).await
     }
 }

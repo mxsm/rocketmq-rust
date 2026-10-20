@@ -28,17 +28,7 @@ pub mod message;
 pub mod processor;
 pub mod proto;
 pub mod receipt_renewal;
-#[deprecated(
-    since = "1.1.0",
-    note = "use rocketmq_proxy_core::ingress::remoting; this compatibility path will be removed in 2.0.0"
-)]
-pub mod remoting;
 pub mod retained_message;
-#[deprecated(
-    since = "1.1.0",
-    note = "use rocketmq_proxy_core::contracts; this compatibility path will be removed in 2.0.0"
-)]
-pub mod service;
 pub mod session;
 pub mod settings;
 pub mod status;
@@ -65,7 +55,7 @@ pub use error::ProxyError;
 pub use error::ProxyResult;
 pub use identity::ResourceIdentity;
 pub use ingress::remoting::classify_remoting_request;
-pub use ingress::remoting::ProxyRemotingBackend;
+pub use ingress::remoting::ProxyRemotingRequestHandler;
 pub use ingress::remoting::RemotingIngressDispatcher;
 pub use ingress::remoting::RemotingIngressRoute;
 pub use ingress::remoting::RemotingStatusMapper;

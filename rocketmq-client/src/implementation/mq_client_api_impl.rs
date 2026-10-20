@@ -22,7 +22,7 @@ use std::time::Instant;
 
 use crate::base::client_config::ClientConfig;
 #[cfg(feature = "admin-full")]
-use crate::base::mq_client_admin::MqClientAdminInner;
+use crate::base::mq_client_admin::MqClientAdmin;
 use crate::consumer::ack_callback::AckCallback;
 use crate::consumer::ack_result::AckResult;
 use crate::consumer::ack_status::AckStatus;
@@ -266,7 +266,7 @@ use rocketmq_transport::api::ConnectionNetEvent;
 use rocketmq_transport::api::DefaultTopAddressing;
 use rocketmq_transport::api::HeartbeatV2Result;
 use rocketmq_transport::api::NameServerUpdateCallback;
-use rocketmq_transport::api::OutboundRequestOutcome;
+use rocketmq_transport::api::OutboundRequestResult;
 use rocketmq_transport::api::RemotingClient;
 use rocketmq_transport::api::RequestDeadline;
 use rocketmq_transport::api::TopAddressing;

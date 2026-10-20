@@ -36,8 +36,8 @@ mod history_capacity_tests;
 mod session_audit_docker_tests;
 
 use crate::config::StorageConfig;
-use crate::model::StorageBackend;
-use crate::persistence::backend::PersistenceBackend;
+use crate::model::StorageEngine;
+use crate::persistence::backend::DashboardDataStore;
 use crate::persistence::error::PersistenceError;
 use chrono::Utc;
 use rocketmq_runtime::ChildServiceContext;
@@ -65,7 +65,7 @@ pub enum StorageStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageHealth {
-    pub backend: StorageBackend,
+    pub backend: StorageEngine,
     pub mode: StorageMode,
     pub status: StorageStatus,
     pub schema_version: Option<i64>,
@@ -128,7 +128,7 @@ pub enum TransactionOutcome {
 /// Shared persistence entry point. Future repositories are added here rather
 /// than allowing services to open files or database connections directly.
 pub struct DashboardPersistence {
-    backend: PersistenceBackend,
+    store: DashboardDataStore,
     observation_started_at: i64,
 }
 
@@ -141,33 +141,33 @@ impl DashboardPersistence {
         config
             .validate()
             .map_err(|error| PersistenceError::InvalidConfig(error.to_string()))?;
-        let backend = match config.backend {
-            StorageBackend::File => PersistenceBackend::File(Box::new(
-                file_store::FilePersistence::initialize(config, service_context).await?,
+        let store = match config.backend {
+            StorageEngine::File => DashboardDataStore::File(Box::new(
+                file_store::FileDashboardStore::initialize(config, service_context).await?,
             )),
-            StorageBackend::Sqlite | StorageBackend::MySql | StorageBackend::Postgres => PersistenceBackend::Sql(
-                Box::new(sql_store::SqlPersistence::initialize(config, service_context).await?),
+            StorageEngine::Sqlite | StorageEngine::MySql | StorageEngine::Postgres => DashboardDataStore::Sql(
+                Box::new(sql_store::SqlDashboardStore::initialize(config, service_context).await?),
             ),
         };
         let persistence = Self {
-            backend,
+            store,
             observation_started_at: Utc::now().timestamp_millis(),
         };
         // Migrations cannot repair an ambiguous historical default identity.
-        // Validate every decoded aggregate before the backend is exposed so a
+        // Validate every decoded aggregate before the store is exposed so a
         // restart fails closed instead of serving a pre-existing mismatch.
         persistence.validate_persisted_environments().await?;
         Ok(persistence)
     }
 
-    pub const fn storage_backend(&self) -> StorageBackend {
-        self.backend.storage_backend()
+    pub const fn storage_backend(&self) -> StorageEngine {
+        self.store.storage_backend()
     }
 
     pub async fn storage_health(&self) -> StorageHealth {
-        match &self.backend {
-            PersistenceBackend::File(store) => store.storage_health().await,
-            PersistenceBackend::Sql(store) => store.storage_health().await,
+        match &self.store {
+            DashboardDataStore::File(store) => store.storage_health().await,
+            DashboardDataStore::Sql(store) => store.storage_health().await,
         }
     }
 
@@ -241,8 +241,8 @@ fn legacy_interim_paths(config: &StorageConfig) -> Vec<PathBuf> {
 
 fn storage_root_for_legacy_check(config: &StorageConfig) -> Option<&Path> {
     match config.backend {
-        StorageBackend::Sqlite => config.data_path.parent(),
-        StorageBackend::File | StorageBackend::MySql | StorageBackend::Postgres => Some(config.data_path.as_path()),
+        StorageEngine::Sqlite => config.data_path.parent(),
+        StorageEngine::File | StorageEngine::MySql | StorageEngine::Postgres => Some(config.data_path.as_path()),
     }
 }
 
@@ -263,14 +263,14 @@ mod tests {
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             for backend in [
-                StorageBackend::File,
-                StorageBackend::Sqlite,
-                StorageBackend::MySql,
-                StorageBackend::Postgres,
+                StorageEngine::File,
+                StorageEngine::Sqlite,
+                StorageEngine::MySql,
+                StorageEngine::Postgres,
             ] {
                 let data_path = match backend {
-                    StorageBackend::Sqlite => data.join("dashboard/dashboard.db"),
-                    StorageBackend::File | StorageBackend::MySql | StorageBackend::Postgres => data.join("dashboard"),
+                    StorageEngine::Sqlite => data.join("dashboard/dashboard.db"),
+                    StorageEngine::File | StorageEngine::MySql | StorageEngine::Postgres => data.join("dashboard"),
                 };
                 let result = DashboardPersistence::initialize(
                     &StorageConfig {
@@ -303,14 +303,14 @@ mod tests {
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             for backend in [
-                StorageBackend::File,
-                StorageBackend::Sqlite,
-                StorageBackend::MySql,
-                StorageBackend::Postgres,
+                StorageEngine::File,
+                StorageEngine::Sqlite,
+                StorageEngine::MySql,
+                StorageEngine::Postgres,
             ] {
                 let deployed_path = match backend {
-                    StorageBackend::Sqlite => deployed_root.join("dashboard.db"),
-                    StorageBackend::File | StorageBackend::MySql | StorageBackend::Postgres => deployed_root.clone(),
+                    StorageEngine::Sqlite => deployed_root.join("dashboard.db"),
+                    StorageEngine::File | StorageEngine::MySql | StorageEngine::Postgres => deployed_root.clone(),
                 };
                 let deployed = DashboardPersistence::initialize(
                     &StorageConfig {

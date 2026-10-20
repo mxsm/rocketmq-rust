@@ -69,8 +69,7 @@
         {
           "kind": "contract",
           "sources": [
-            "scripts/tests/test_rust_hygiene_guard.py",
-            "scripts/tests/test_core_release_check_routes.py"
+            "scripts/tests/test_rust_hygiene_guard.py"
           ],
           "trigger_paths": [
             "rocketmq-protocol/**",
@@ -78,7 +77,7 @@
             "scripts/**",
             ".github/workflows/rocketmq-rust-ci.yaml"
           ],
-          "command": "python -m unittest scripts.tests.test_rust_hygiene_guard scripts.tests.test_core_release_check_routes -v",
+          "command": "python -m unittest scripts.tests.test_rust_hygiene_guard -v",
           "duration_seconds": 60,
           "platform": "any",
           "features": "not-applicable",

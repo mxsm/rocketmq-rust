@@ -88,13 +88,13 @@ use super::ReputMessageService;
 use super::ReputMessageServiceInner;
 use super::StoreRootLeaseState;
 use crate::base::backend_ops::BackendOps;
-use crate::base::backend_read_ops::BackendReadOps;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::message_arriving_listener::MessageArrivingListener;
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::message_status_enum::PutMessageStatus;
+use crate::base::message_store_reader::MessageStoreReader;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::base::store_enum::StoreType;
 use crate::config::flush_disk_type::FlushDiskType;
@@ -120,7 +120,7 @@ use crate::store_error::StoreError;
 use crate::store_path_config_helper::get_abort_file;
 use crate::store_path_config_helper::get_store_checkpoint;
 use crate::store_path_config_helper::get_timer_metrics_path;
-use rocketmq_store_local::mapped_file::ManagedLifecycleReadOutcome;
+use rocketmq_store_local::mapped_file::ManagedLifecycleEvidenceStatus;
 use rocketmq_store_local::mapped_file::ManagedLifecycleRecoveryReason;
 use rocketmq_store_local::message_store::lifecycle::LocalStoreState;
 
@@ -696,7 +696,7 @@ async fn destroy_store_is_write_disabled_and_retries_without_namespace_mutation(
         Ok(_) => panic!("destroy retry state must retain the Store root lease across shutdown"),
         Err(error) => error,
     };
-    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
     assert!(std::error::Error::source(&error)
         .and_then(|source| source.downcast_ref::<std::io::Error>())
         .is_some());
@@ -743,7 +743,7 @@ fn destroyed_store_outcome_is_idempotent_and_retains_root_lease_until_drop() {
         Ok(_) => panic!("terminal destroy state must retain the Store root lease until owner drop"),
         Err(error) => error,
     };
-    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
 
     drop(store);
     drop(new_configured_test_store(&temp_dir, MessageStoreConfig::default()));
@@ -842,7 +842,7 @@ fn assert_destroy_is_non_mutating_after_root_replacement(replacement_contents: O
         Ok(_) => panic!("the retained physical root must stay leased until owner drop"),
         Err(error) => error,
     };
-    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
 
     drop(store);
     drop(
@@ -1863,7 +1863,7 @@ async fn tieredstore_write_path_dispatches_commitlog_reput_messages() {
             timer_wheel_enable: false,
             tiered_store_config: Some(TieredStoreConfig {
                 storage_level: TieredStorageLevel::Force,
-                backend_provider: "memory".to_string(),
+                storage_provider_id: "memory".to_string(),
                 store_path_root_dir: temp_dir.path().join("tieredstore"),
                 max_pending_tasks: 16,
                 ..TieredStoreConfig::default()
@@ -1925,7 +1925,7 @@ async fn tieredstore_read_path_falls_back_when_local_queue_is_missing() {
             timer_wheel_enable: false,
             tiered_store_config: Some(TieredStoreConfig {
                 storage_level: TieredStorageLevel::Force,
-                backend_provider: "memory".to_string(),
+                storage_provider_id: "memory".to_string(),
                 store_path_root_dir: temp_dir.path().join("tieredstore"),
                 delete_file_enable: false,
                 max_pending_tasks: 16,
@@ -2306,7 +2306,7 @@ async fn store_root_lease_outlives_shutdown_until_owner_drop() {
         Ok(_) => panic!("second store must not inspect the root while its lock is held"),
         Err(error) => error,
     };
-    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
 
     first.shutdown().await;
 
@@ -2314,7 +2314,7 @@ async fn store_root_lease_outlives_shutdown_until_owner_drop() {
         Ok(_) => panic!("shutdown must not expose a stale Store object alongside a replacement owner"),
         Err(error) => error,
     };
-    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
 
     drop(first);
     let mut second = new_configured_test_store(&temp_dir, config);
@@ -2345,7 +2345,7 @@ fn constructor_checks_store_lock_before_checkpoint_creation() {
         Err(error) => error,
     };
 
-    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
     assert!(
         !std::path::PathBuf::from(get_store_checkpoint(temp_dir.path().to_string_lossy().as_ref())).exists(),
         "checkpoint construction must remain behind the exclusive root lock"
@@ -2355,15 +2355,15 @@ fn constructor_checks_store_lock_before_checkpoint_creation() {
 #[test]
 fn root_mode_accepts_only_stable_legacy_or_reconciliable_managed_evidence() {
     assert_eq!(
-        StoreRootMode::from_read_outcome(ManagedLifecycleReadOutcome::LegacyAbsent),
+        StoreRootMode::from_read_outcome(ManagedLifecycleEvidenceStatus::LegacyAbsent),
         Ok(StoreRootMode::Legacy)
     );
     assert_eq!(
-        StoreRootMode::from_read_outcome(ManagedLifecycleReadOutcome::ManagedNeedsReconciliation),
+        StoreRootMode::from_read_outcome(ManagedLifecycleEvidenceStatus::ManagedNeedsReconciliation),
         Ok(StoreRootMode::Managed)
     );
     assert_eq!(
-        StoreRootMode::from_read_outcome(ManagedLifecycleReadOutcome::RecoveryWriteRequired(
+        StoreRootMode::from_read_outcome(ManagedLifecycleEvidenceStatus::RecoveryWriteRequired(
             ManagedLifecycleRecoveryReason::TailRepair,
         )),
         Err(ManagedLifecycleRecoveryReason::TailRepair)
@@ -2423,8 +2423,8 @@ fn managed_lifecycle_session_owns_the_exclusive_root_lease() {
         .expect("inspect managed evidence under the retained exclusive lease");
 
     assert_eq!(
-        inspection.outcome(),
-        ManagedLifecycleReadOutcome::RecoveryWriteRequired(ManagedLifecycleRecoveryReason::BootstrapResume)
+        inspection.evidence_status(),
+        ManagedLifecycleEvidenceStatus::RecoveryWriteRequired(ManagedLifecycleRecoveryReason::BootstrapResume)
     );
 
     drop(lease);
@@ -2432,7 +2432,7 @@ fn managed_lifecycle_session_owns_the_exclusive_root_lease() {
         Ok(_) => panic!("the managed session must keep the exclusive root lease alive"),
         Err(error) => error,
     };
-    assert_eq!(competing.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(competing.descriptor(), &rocketmq_error::STORAGE_UNAVAILABLE);
 
     drop(inspection);
     drop(
@@ -4361,7 +4361,11 @@ async fn runtime_info_includes_store_offsets_and_timer_defaults_when_timer_disab
     assert_eq!(runtime_info["storeType"], "LocalFile");
     assert_eq!(runtime_info["rocksdbCqDoubleWriteEnable"], "false");
     assert_eq!(runtime_info["rocksdbCompatibilityMode"], "disabled");
-    assert!(runtime_info.contains_key("ioUringBackendStatus"));
+    assert_eq!(
+        runtime_info["ioUringBuildSupport"],
+        crate::log_file::mapped_file::io_uring_build_support().as_str()
+    );
+    assert!(!runtime_info.contains_key("ioUringBackendStatus"));
     assert_eq!(runtime_info["timerReadBehind"], "0");
     assert_eq!(runtime_info["timerOffsetBehind"], "0");
     assert_eq!(runtime_info["timerCongestNum"], "0");
@@ -5568,7 +5572,7 @@ async fn clean_expired_removes_trimmed_queue_directly() {
 #[cfg(any(target_os = "linux", windows))]
 #[tokio::test]
 async fn managed_cleanup_reports_submission_before_reaper_completion() {
-    use crate::consume_queue::mapped_file_queue::CleanupOutcome;
+    use crate::consume_queue::mapped_file_queue::MappedFileCleanupReport;
     let temp_dir = tempdir().unwrap();
     let mut store = new_configured_test_store(
         &temp_dir,
@@ -5599,13 +5603,13 @@ async fn managed_cleanup_reports_submission_before_reaper_completion() {
     }
     let alias = store.commit_log.get_data(0).unwrap();
     let runtime = store.managed_lifecycle_runtime.as_ref().unwrap();
-    let outcome = store
+    let cleanup_report = store
         .commit_log
         .cleanup_handle()
         .delete_expired_files_by_time_before(0, 0, 0, true, 10, None);
     assert_eq!(
-        outcome,
-        CleanupOutcome::ManagedSubmitted {
+        cleanup_report,
+        MappedFileCleanupReport::ManagedSubmitted {
             selected: 2,
             submitted: 2
         }

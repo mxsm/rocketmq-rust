@@ -198,3 +198,146 @@ impl<T, R> Default for HandlerChain<T, R> {
         Self::create()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use super::*;
+
+    type Log = Rc<RefCell<Vec<&'static str>>>;
+
+    struct Delegate {
+        name: &'static str,
+        log: Log,
+    }
+
+    impl Handler<i32, i32> for Delegate {
+        fn handle(&self, request: i32, chain: &HandlerChain<i32, i32>) -> Option<i32> {
+            self.log.borrow_mut().push(self.name);
+            chain.handle(request + 1)
+        }
+    }
+
+    struct Terminal {
+        name: &'static str,
+        log: Log,
+    }
+
+    impl Handler<i32, i32> for Terminal {
+        fn handle(&self, request: i32, _chain: &HandlerChain<i32, i32>) -> Option<i32> {
+            self.log.borrow_mut().push(self.name);
+            Some(request * 10)
+        }
+    }
+
+    struct Silent {
+        name: &'static str,
+        log: Log,
+    }
+
+    impl Handler<i32, i32> for Silent {
+        fn handle(&self, _request: i32, _chain: &HandlerChain<i32, i32>) -> Option<i32> {
+            self.log.borrow_mut().push(self.name);
+            None
+        }
+    }
+
+    #[test]
+    fn empty_chain_returns_none() {
+        let chain = HandlerChain::<i32, i32>::create();
+        assert!(chain.is_empty());
+        assert_eq!(chain.len(), 0);
+        assert_eq!(chain.handle(1), None);
+        assert_eq!(chain.handle(2), None);
+    }
+
+    #[test]
+    fn terminal_first_handler_leaves_rest_for_next_call() {
+        let log = Log::default();
+        let chain = HandlerChain::create()
+            .add_next(Box::new(Terminal {
+                name: "first",
+                log: log.clone(),
+            }))
+            .add_next(Box::new(Terminal {
+                name: "second",
+                log: log.clone(),
+            }));
+
+        assert_eq!(chain.handle(1), Some(10));
+        assert_eq!(*log.borrow(), ["first"]);
+
+        assert_eq!(chain.handle(2), Some(20));
+        assert_eq!(*log.borrow(), ["first", "second"]);
+
+        assert_eq!(chain.handle(3), None);
+        assert_eq!(*log.borrow(), ["first", "second"]);
+    }
+
+    #[test]
+    fn delegating_handlers_run_in_order() {
+        let log = Log::default();
+        let chain = HandlerChain::create()
+            .add_next(Box::new(Delegate {
+                name: "a",
+                log: log.clone(),
+            }))
+            .add_next(Box::new(Delegate {
+                name: "b",
+                log: log.clone(),
+            }))
+            .add_next(Box::new(Terminal {
+                name: "c",
+                log: log.clone(),
+            }));
+
+        assert_eq!(chain.handle(1), Some(30));
+        assert_eq!(*log.borrow(), ["a", "b", "c"]);
+        assert_eq!(chain.handle(1), None);
+    }
+
+    #[test]
+    fn handler_returning_none_consumes_its_position() {
+        let log = Log::default();
+        let chain = HandlerChain::create()
+            .add_next(Box::new(Silent {
+                name: "silent",
+                log: log.clone(),
+            }))
+            .add_next(Box::new(Terminal {
+                name: "terminal",
+                log: log.clone(),
+            }));
+
+        assert_eq!(chain.handle(4), None);
+        assert_eq!(*log.borrow(), ["silent"]);
+
+        assert_eq!(chain.handle(4), Some(40));
+        assert_eq!(*log.borrow(), ["silent", "terminal"]);
+    }
+
+    #[test]
+    fn reset_replays_from_first_handler() {
+        let log = Log::default();
+        let mut chain = HandlerChain::create()
+            .add_next(Box::new(Terminal {
+                name: "first",
+                log: log.clone(),
+            }))
+            .add_next(Box::new(Terminal {
+                name: "second",
+                log: log.clone(),
+            }));
+
+        assert_eq!(chain.handle(1), Some(10));
+        assert_eq!(chain.handle(2), Some(20));
+        assert_eq!(chain.handle(3), None);
+
+        chain.reset();
+
+        assert_eq!(chain.handle(5), Some(50));
+        assert_eq!(*log.borrow(), ["first", "second", "first"]);
+    }
+}

@@ -33,16 +33,16 @@ use super::DeferredRequest;
 use super::DeferredRetainedSizeParts;
 use super::DeferredWaitLimits;
 use super::DeferredWakeReason;
-use super::HandlerOutcome;
 use super::ProtocolNoResponseReason;
 use super::RejectRequestDecision;
 use super::RemotingRequest;
 use super::RemotingResponse;
 use super::RequestProcessor;
+use super::ResponseAction;
 use super::TransportServer;
-use crate::dispatch::DeferredAdmissionAcquireOutcome;
-use crate::dispatch::DeferredRegistryOutcome;
-use crate::dispatch::DeferredResponderOutcome;
+use crate::dispatch::DeferredRegistrationResult;
+use crate::dispatch::DeferredResponderTakeResult;
+use crate::dispatch::DeferredWaitAdmissionResult;
 use crate::telemetry::TransportTelemetry;
 
 const REPLY_CODE: i32 = 8_201;
@@ -59,32 +59,32 @@ struct ConstructionProbeProcessor {
 }
 
 impl RequestProcessor for ConstructionProbeProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         match request.command().code() {
             ERROR_CODE => Err(crate::error_helpers::argument_invalid()),
-            NO_REPLY_CODE => Ok(HandlerOutcome::NoReply(
+            NO_REPLY_CODE => Ok(ResponseAction::NoReply(
                 request
                     .protocol_no_response(ProtocolNoResponseReason::CallbackHandled)
                     .map_err(|_| crate::error_helpers::argument_invalid())?,
             )),
             DEFERRED_CODE => {
                 let responder = match request.take_deferred_responder() {
-                    DeferredResponderOutcome::Taken(responder) => responder,
-                    DeferredResponderOutcome::OneWayRequest
-                    | DeferredResponderOutcome::Unavailable
-                    | DeferredResponderOutcome::AlreadyTaken
-                    | DeferredResponderOutcome::OutcomeCompleted => {
+                    DeferredResponderTakeResult::Taken(responder) => responder,
+                    DeferredResponderTakeResult::OneWayRequest
+                    | DeferredResponderTakeResult::Unavailable
+                    | DeferredResponderTakeResult::AlreadyTaken
+                    | DeferredResponderTakeResult::OutcomeCompleted => {
                         return Err(crate::error_helpers::argument_invalid());
                     }
                 };
                 let retained = DeferredRegistry::<i32>::try_retained_size(DeferredRetainedSizeParts::new(0))
                     .map_err(|_| crate::error_helpers::argument_invalid())?;
                 let permit = match self.admission.try_reserve(retained) {
-                    DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
-                    DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
-                    DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)
-                    | DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)
-                    | DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
+                    DeferredWaitAdmissionResult::Closed => panic!("deferred admission unexpectedly closed"),
+                    DeferredWaitAdmissionResult::Acquired(permit) => permit,
+                    DeferredWaitAdmissionResult::WaiterCapacityExhausted(_)
+                    | DeferredWaitAdmissionResult::RetainedByteCapacityExhausted(_)
+                    | DeferredWaitAdmissionResult::ParentCapacityExhausted(_) => {
                         return Err(crate::error_helpers::argument_invalid());
                     }
                 };
@@ -92,28 +92,28 @@ impl RequestProcessor for ConstructionProbeProcessor {
                     request.original_identity().original_opaque(),
                     DeferredParts::new(responder, permit),
                 )) {
-                    DeferredRegistryOutcome::Registered(registration) => registration,
-                    DeferredRegistryOutcome::DuplicateRequest(_)
-                    | DeferredRegistryOutcome::IdentityExhausted(_)
-                    | DeferredRegistryOutcome::ParentCancelled
-                    | DeferredRegistryOutcome::SessionClosed
-                    | DeferredRegistryOutcome::DeadlineExpired
-                    | DeferredRegistryOutcome::ContractViolation { .. }
-                    | DeferredRegistryOutcome::OperationalFailure { .. } => {
+                    DeferredRegistrationResult::Registered(registration) => registration,
+                    DeferredRegistrationResult::DuplicateRequest(_)
+                    | DeferredRegistrationResult::IdentityExhausted(_)
+                    | DeferredRegistrationResult::ParentCancelled
+                    | DeferredRegistrationResult::SessionClosed
+                    | DeferredRegistrationResult::DeadlineExpired
+                    | DeferredRegistrationResult::ContractViolation { .. }
+                    | DeferredRegistrationResult::OperationalFailure { .. } => {
                         return Err(crate::error_helpers::argument_invalid());
                     }
-                    DeferredRegistryOutcome::BuilderRejected { error, .. } => match error {},
+                    DeferredRegistrationResult::BuilderRejected { error, .. } => match error {},
                 };
                 self.registrations
                     .send(registration.deferred_id())
                     .map_err(|_| crate::error_helpers::argument_invalid())?;
-                Ok(HandlerOutcome::Deferred(registration))
+                Ok(ResponseAction::Deferred(registration))
             }
             REPLY_CODE => RemotingResponse::bytes(
                 RemotingCommand::create_response_command_with_code(ResponseCode::Success),
                 Bytes::from_static(b"inline-without-deferred-state"),
             )
-            .map(HandlerOutcome::Reply)
+            .map(ResponseAction::Reply)
             .map_err(|_| crate::error_helpers::argument_invalid()),
             _ => Err(crate::error_helpers::argument_invalid()),
         }

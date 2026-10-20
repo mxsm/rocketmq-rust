@@ -109,12 +109,12 @@
   <text x="372" y="641" class="section-title">ServiceManager Backends</text>
   <rect x="372" y="666" width="236" height="42" rx="9" class="chip-blue"/>
   <text x="394" y="684" class="label">ClusterServiceManager</text>
-  <text x="394" y="700" class="tiny">RocketmqClusterClient + RPC hook</text>
+  <text x="394" y="700" class="tiny">ClusterCommandGateway + RPC hook</text>
   <rect x="636" y="666" width="236" height="42" rx="9" class="chip-teal"/>
   <text x="658" y="684" class="label">LocalServiceManager</text>
   <text x="658" y="700" class="tiny">embedded broker-backed services</text>
   <rect x="900" y="666" width="236" height="42" rx="9" class="chip-gray"/>
-  <text x="922" y="684" class="label">LocalRemotingBackend</text>
+  <text x="922" y="684" class="label">LocalBrokerRemotingAdapter</text>
   <text x="922" y="700" class="tiny">local-mode remoting passthrough</text>
 
   <rect x="106" y="628" width="176" height="64" rx="12" class="subpanel"/>

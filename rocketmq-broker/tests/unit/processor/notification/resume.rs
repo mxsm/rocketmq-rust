@@ -33,7 +33,7 @@ use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_transport::api::DeferredWakeReason;
 
-use super::super::core::NotificationCoreOutcome;
+use super::super::core::NotificationCoreDecision;
 use super::super::NotificationPolicy;
 use super::super::NotificationPopOffsetCapability;
 use super::super::NotificationProcessor;
@@ -44,7 +44,7 @@ use crate::broker_runtime::BrokerMessageStore;
 use crate::broker_runtime::BrokerRuntime;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::long_polling::notification_deferred::deadline::NotificationWaitDeadline;
-use crate::long_polling::notification_deferred::deadline::NotificationWaitDeadlineOutcome;
+use crate::long_polling::notification_deferred::deadline::NotificationWaitDecision;
 use crate::long_polling::notification_deferred::index::NotificationMatchCriteria;
 use crate::long_polling::notification_deferred::service::NotificationRequestData;
 use crate::long_polling::notification_deferred::service::ResumeNotification;
@@ -169,8 +169,8 @@ fn resume_request() -> ResumeNotification {
     let deadline = match NotificationWaitDeadline::checked(now, 60_000, now, tokio::time::Instant::now())
         .expect("live Notification test deadline must not overflow")
     {
-        NotificationWaitDeadlineOutcome::Pending(deadline) => deadline,
-        NotificationWaitDeadlineOutcome::Rejected(rejection) => {
+        NotificationWaitDecision::Pending(deadline) => deadline,
+        NotificationWaitDecision::Rejected(rejection) => {
             panic!("live Notification test deadline was rejected: {rejection:?}")
         }
     };
@@ -224,8 +224,8 @@ async fn notification_core_finds_message_from_configured_retry_topic() {
         .await
         .expect("retry-store Notification core")
     {
-        NotificationCoreOutcome::Ready(ready) => ready,
-        NotificationCoreOutcome::Reply(response) => {
+        NotificationCoreDecision::Ready(ready) => ready,
+        NotificationCoreDecision::Reply(response) => {
             panic!("retry-store Notification core failed with code {}", response.code())
         }
     };
@@ -359,8 +359,8 @@ async fn notification_core_characterizes_permission_topic_group_queue_filter_and
             .await
             .expect("owner-controlled Notification validation response")
         {
-            NotificationCoreOutcome::Reply(response) => response,
-            NotificationCoreOutcome::Ready(_) => panic!("Notification validation failure must be terminal"),
+            NotificationCoreDecision::Reply(response) => response,
+            NotificationCoreDecision::Ready(_) => panic!("Notification validation failure must be terminal"),
         };
         assert_eq!(response.code(), expected as i32);
         assert_eq!(response.opaque(), 20_002);
@@ -471,8 +471,8 @@ async fn notification_core_characterizes_permission_topic_group_queue_filter_and
         .await
         .expect("unblocked order Notification core")
     {
-        NotificationCoreOutcome::Ready(ready) => ready,
-        NotificationCoreOutcome::Reply(response) => {
+        NotificationCoreDecision::Ready(ready) => ready,
+        NotificationCoreDecision::Reply(response) => {
             panic!("unblocked order request failed with code {}", response.code())
         }
     };
@@ -484,8 +484,8 @@ async fn notification_core_characterizes_permission_topic_group_queue_filter_and
         .await
         .expect("same-attempt order Notification core")
     {
-        NotificationCoreOutcome::Ready(ready) => ready,
-        NotificationCoreOutcome::Reply(response) => {
+        NotificationCoreDecision::Ready(ready) => ready,
+        NotificationCoreDecision::Reply(response) => {
             panic!("same-attempt order request failed with code {}", response.code())
         }
     };
@@ -497,8 +497,8 @@ async fn notification_core_characterizes_permission_topic_group_queue_filter_and
         .await
         .expect("blocked order Notification core")
     {
-        NotificationCoreOutcome::Ready(ready) => ready,
-        NotificationCoreOutcome::Reply(response) => {
+        NotificationCoreDecision::Ready(ready) => ready,
+        NotificationCoreDecision::Reply(response) => {
             panic!("blocked order request failed with code {}", response.code())
         }
     };
@@ -520,8 +520,8 @@ async fn notification_core_characterizes_permission_topic_group_queue_filter_and
         .await
         .expect("filter parse remains an owner-controlled response")
     {
-        NotificationCoreOutcome::Reply(response) => response,
-        NotificationCoreOutcome::Ready(_) => panic!("enabled invalid Notification filter must be terminal"),
+        NotificationCoreDecision::Reply(response) => response,
+        NotificationCoreDecision::Ready(_) => panic!("enabled invalid Notification filter must be terminal"),
     };
     assert_eq!(response.code(), ResponseCode::SubscriptionParseFailed as i32);
     assert_eq!(response.opaque(), 20_008);

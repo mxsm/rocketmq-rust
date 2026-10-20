@@ -18,7 +18,7 @@ use std::io;
 use std::path::Path;
 
 use rocketmq_store_local::mapped_file::inspect_managed_lifecycle_read_only_for_store;
-use rocketmq_store_local::mapped_file::ManagedLifecycleReadOutcome;
+use rocketmq_store_local::mapped_file::ManagedLifecycleEvidenceStatus;
 
 #[test]
 fn legacy_probe_is_read_only_and_does_not_create_lifecycle_state() {
@@ -27,7 +27,7 @@ fn legacy_probe_is_read_only_and_does_not_create_lifecycle_state() {
 
     assert_eq!(
         inspect_managed_lifecycle_read_only_for_store(&handle).expect("legacy probe succeeds"),
-        ManagedLifecycleReadOutcome::LegacyAbsent
+        ManagedLifecycleEvidenceStatus::LegacyAbsent
     );
     assert_eq!(fs::read_dir(root.path()).expect("read Store root").count(), 0);
 }

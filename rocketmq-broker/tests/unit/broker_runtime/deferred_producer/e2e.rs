@@ -39,16 +39,16 @@ use rocketmq_store::FlushDiskType;
 use rocketmq_store::MessageFilter;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageStatus;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 
 use crate::broker_runtime::BrokerMessageStore;
 use crate::broker_runtime::BrokerRuntime;
 use crate::config::broker_config::BrokerConfig;
 use crate::deferred_generation_handoff::DeferredGenerationTarget;
-use crate::long_polling::pop_deferred::service::PopDeferredPrepareOutcome;
-use crate::long_polling::pop_deferred::service::PopDeferredRegisterOutcome;
+use crate::long_polling::pop_deferred::service::PopDeferredPreparationStatus;
+use crate::long_polling::pop_deferred::service::PopDeferredRegistrationStatus;
 use crate::long_polling::pop_deferred::service::PopDeferredService;
 use crate::long_polling::pop_deferred::service::PopRetainedEstimate;
 use crate::processor::notification_processor::NotificationProcessor;
@@ -65,7 +65,7 @@ const MATCH_TAG: &str = "match";
 struct PullLeaf(Arc<PullMessageProcessor<BrokerMessageStore>>);
 
 impl RequestProcessor for PullLeaf {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.0.process_shared(request).await
     }
 }
@@ -77,27 +77,27 @@ struct PopLeaf {
 }
 
 impl RequestProcessor for PopLeaf {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let prepared = match self.service.prepare(
             request,
             None,
             Some(Arc::clone(&self.filter)),
             PopRetainedEstimate::default(),
         ) {
-            Ok(PopDeferredPrepareOutcome::Prepared(prepared)) => *prepared,
-            Ok(PopDeferredPrepareOutcome::Rejected(rejection)) => {
+            Ok(PopDeferredPreparationStatus::Prepared(prepared)) => *prepared,
+            Ok(PopDeferredPreparationStatus::Rejected(rejection)) => {
                 panic!("POP frozen-filter preparation was rejected: {:?}", rejection.kind())
             }
             Err(error) => panic!("POP frozen-filter preparation failed: {:?}", error.kind()),
         };
         let registration = match self.service.register(prepared, request) {
-            Ok(PopDeferredRegisterOutcome::Registered(registration)) => *registration,
-            Ok(PopDeferredRegisterOutcome::Rejected(rejection)) => {
+            Ok(PopDeferredRegistrationStatus::Registered(registration)) => *registration,
+            Ok(PopDeferredRegistrationStatus::Rejected(rejection)) => {
                 panic!("POP frozen-filter registration was rejected: {:?}", rejection.kind())
             }
             Err(error) => panic!("POP frozen-filter registration failed: {:?}", error.kind()),
         };
-        Ok(HandlerOutcome::Deferred(registration))
+        Ok(ResponseAction::Deferred(registration))
     }
 }
 
@@ -121,7 +121,7 @@ impl MessageFilter for FrozenPopTagFilter {
 struct NotificationLeaf(Arc<NotificationProcessor<BrokerMessageStore>>);
 
 impl RequestProcessor for NotificationLeaf {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         self.0.process_shared(request).await
     }
 }

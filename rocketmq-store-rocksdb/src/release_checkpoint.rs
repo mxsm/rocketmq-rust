@@ -32,19 +32,19 @@ use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_security_api::MaintenanceAuthorizationGrant;
 use rocketmq_security_api::MaintenanceCapability;
 use rocketmq_store_api::checkpoint::CheckpointArtifact as ReleaseCheckpointArtifact;
-use rocketmq_store_api::checkpoint::CheckpointBackend as ReleaseCheckpointBackend;
 use rocketmq_store_api::checkpoint::CheckpointManifest as StoreReleaseCheckpointManifest;
 use rocketmq_store_api::checkpoint::CheckpointRequest as StoreReleaseCheckpointRequest;
 use rocketmq_store_api::checkpoint::CheckpointRestoreVerification as ReleaseCheckpointRestoreVerification;
 use rocketmq_store_api::checkpoint::CheckpointStorageIdentity as ReleaseCheckpointStorageIdentity;
+use rocketmq_store_api::checkpoint::CheckpointStoreKind;
 use rocketmq_store_api::checkpoint::CHECKPOINT_SCHEMA_VERSION as RELEASE_CHECKPOINT_SCHEMA_VERSION;
 use rocketmq_store_api::file_uri_to_path;
 use rocketmq_store_api::path_to_file_uri;
 use rocketmq_store_api::CheckpointDirectoryDigest;
-use rocketmq_store_api::ReleaseCheckpointCreateOutcome;
 use rocketmq_store_api::ReleaseCheckpointCreateRejection;
-use rocketmq_store_api::ReleaseCheckpointRestoreOutcome;
+use rocketmq_store_api::ReleaseCheckpointCreationResult;
 use rocketmq_store_api::ReleaseCheckpointRestoreRejection;
+use rocketmq_store_api::ReleaseCheckpointRestoreVerificationResult;
 use rocketmq_store_api::ReleaseCheckpointStore;
 use rocketmq_store_api::StoreComponent;
 use rocketmq_store_api::StoreContractViolation;
@@ -207,7 +207,7 @@ impl RocksDbReleaseCheckpointService {
                 uri: path_to_file_uri(&final_path),
             },
             member_id: request.member_id,
-            backend: ReleaseCheckpointBackend::RocksDb,
+            store_kind: CheckpointStoreKind::RocksDb,
             offsets: request.offsets,
             storage_identity: request.storage_identity,
             wal_retained: true,
@@ -232,9 +232,9 @@ impl RocksDbReleaseCheckpointService {
     ) -> Result<ReleaseCheckpointRestoreVerification, RocksDbReleaseCheckpointError> {
         validate_authorization(authorization, self.clock)?;
         manifest.validate()?;
-        if manifest.backend != ReleaseCheckpointBackend::RocksDb {
+        if manifest.store_kind != CheckpointStoreKind::RocksDb {
             return Err(RocksDbReleaseCheckpointError::Violation(
-                RocksDbReleaseCheckpointViolation::WrongBackend,
+                RocksDbReleaseCheckpointViolation::StoreKindMismatch,
             ));
         }
         if manifest.storage_identity != self.storage_identity {
@@ -298,21 +298,21 @@ impl ReleaseCheckpointStore for RocksDbReleaseCheckpointService {
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         request: StoreReleaseCheckpointRequest,
-    ) -> Result<ReleaseCheckpointCreateOutcome, StoreError> {
+    ) -> Result<ReleaseCheckpointCreationResult, StoreError> {
         match self.create_release_checkpoint_inner(authorization, request).await {
-            Ok(manifest) => Ok(ReleaseCheckpointCreateOutcome::Created(manifest)),
-            Err(RocksDbReleaseCheckpointError::AuthorizationExpired) => Ok(ReleaseCheckpointCreateOutcome::Rejected(
+            Ok(manifest) => Ok(ReleaseCheckpointCreationResult::Created(manifest)),
+            Err(RocksDbReleaseCheckpointError::AuthorizationExpired) => Ok(ReleaseCheckpointCreationResult::Rejected(
                 ReleaseCheckpointCreateRejection::AuthorizationExpired,
             )),
-            Err(RocksDbReleaseCheckpointError::UnauthorizedCapability) => Ok(ReleaseCheckpointCreateOutcome::Rejected(
-                ReleaseCheckpointCreateRejection::CapabilityNotGranted,
-            )),
+            Err(RocksDbReleaseCheckpointError::UnauthorizedCapability) => Ok(
+                ReleaseCheckpointCreationResult::Rejected(ReleaseCheckpointCreateRejection::CapabilityNotGranted),
+            ),
             Err(RocksDbReleaseCheckpointError::CheckpointAlreadyExists) => Ok(
-                ReleaseCheckpointCreateOutcome::Rejected(ReleaseCheckpointCreateRejection::AlreadyExists),
+                ReleaseCheckpointCreationResult::Rejected(ReleaseCheckpointCreateRejection::AlreadyExists),
             ),
             Err(RocksDbReleaseCheckpointError::Artifact(source)) => {
                 if let Some((actual_bytes, maximum_bytes)) = checkpoint_capacity_rejection(&source) {
-                    Ok(ReleaseCheckpointCreateOutcome::Rejected(
+                    Ok(ReleaseCheckpointCreationResult::Rejected(
                         ReleaseCheckpointCreateRejection::CapacityExceeded {
                             actual_bytes,
                             maximum_bytes,
@@ -330,18 +330,22 @@ impl ReleaseCheckpointStore for RocksDbReleaseCheckpointService {
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         manifest: &StoreReleaseCheckpointManifest,
-    ) -> Result<ReleaseCheckpointRestoreOutcome, StoreError> {
+    ) -> Result<ReleaseCheckpointRestoreVerificationResult, StoreError> {
         match self
             .restore_verify_release_checkpoint_inner(authorization, manifest)
             .await
         {
-            Ok(verification) => Ok(ReleaseCheckpointRestoreOutcome::Verified(verification)),
-            Err(RocksDbReleaseCheckpointError::AuthorizationExpired) => Ok(ReleaseCheckpointRestoreOutcome::Rejected(
-                ReleaseCheckpointRestoreRejection::AuthorizationExpired,
-            )),
-            Err(RocksDbReleaseCheckpointError::UnauthorizedCapability) => Ok(
-                ReleaseCheckpointRestoreOutcome::Rejected(ReleaseCheckpointRestoreRejection::CapabilityNotGranted),
-            ),
+            Ok(verification) => Ok(ReleaseCheckpointRestoreVerificationResult::Verified(verification)),
+            Err(RocksDbReleaseCheckpointError::AuthorizationExpired) => {
+                Ok(ReleaseCheckpointRestoreVerificationResult::Rejected(
+                    ReleaseCheckpointRestoreRejection::AuthorizationExpired,
+                ))
+            }
+            Err(RocksDbReleaseCheckpointError::UnauthorizedCapability) => {
+                Ok(ReleaseCheckpointRestoreVerificationResult::Rejected(
+                    ReleaseCheckpointRestoreRejection::CapabilityNotGranted,
+                ))
+            }
             Err(error) => Err(rocksdb_checkpoint_error(StoreOperation::Read, error)),
         }
     }
@@ -558,7 +562,7 @@ fn rocksdb_checkpoint_error(operation: StoreOperation, error: RocksDbReleaseChec
                 }
                 RocksDbReleaseCheckpointViolation::StorageIdentityMismatch
                 | RocksDbReleaseCheckpointViolation::OverlappingRoots
-                | RocksDbReleaseCheckpointViolation::WrongBackend => {
+                | RocksDbReleaseCheckpointViolation::StoreKindMismatch => {
                     (&rocketmq_error::STORAGE_REQUEST_INVALID, StoreComponent::RocksDb)
                 }
             };
@@ -666,7 +670,7 @@ enum RocksDbReleaseCheckpointViolation {
     InvalidConfiguration,
     StorageIdentityMismatch,
     OverlappingRoots,
-    WrongBackend,
+    StoreKindMismatch,
     ArtifactChecksumMismatch,
 }
 

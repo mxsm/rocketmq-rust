@@ -47,13 +47,13 @@ use crate::base::backend_ops::BackendOps;
 use crate::base::backend_ops::MessageStoreShutdownReport;
 use crate::base::backend_ops::PutMessagePreflight;
 use crate::base::backend_ops::StateMachineVersionView;
-use crate::base::backend_read_ops::BackendReadOps;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::get_message_result::GetMessageResult;
 use crate::base::message_arriving_listener::MessageArrivingListener;
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
+use crate::base::message_store_reader::MessageStoreReader;
 use crate::base::query_message_request::QueryMessageRequest;
 use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferResult;
@@ -75,7 +75,7 @@ use crate::queue::ArcConsumeQueue;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
 use crate::store_error::StoreError;
-use crate::store_ports::StorePorts;
+use crate::store_ports::MessageStore;
 use crate::timer::timer_message_store::TimerMessageStore;
 
 macro_rules! store_composition_methods {
@@ -130,7 +130,7 @@ macro_rules! store_composition_methods {
     };
 }
 
-impl StorePorts {
+impl MessageStore {
     store_composition_methods!();
 }
 
@@ -154,7 +154,7 @@ macro_rules! delegate_store_async {
     };
 }
 
-impl BackendReadOps for StorePorts {
+impl MessageStoreReader for MessageStore {
     fn is_message_in_cold_area(
         &self,
         group: &CheetahString,
@@ -853,6 +853,6 @@ macro_rules! message_store_methods {
     };
 }
 
-impl BackendOps for StorePorts {
+impl BackendOps for MessageStore {
     message_store_methods!();
 }

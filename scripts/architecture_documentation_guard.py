@@ -282,8 +282,8 @@ def validate_schema(policy: dict[str, Any]) -> list[Finding]:
     if set(policy) != required or policy.get("schema_version") != 1:
         findings.append(Finding("policy-schema", normalized(POLICY_RELATIVE), "unexpected top-level schema"))
     standalone = policy.get("standalone", [])
-    if not isinstance(standalone, list) or len(standalone) != 7:
-        findings.append(Finding("standalone-count", normalized(POLICY_RELATIVE), "exactly seven Cargo roots required"))
+    if not isinstance(standalone, list) or len(standalone) != 8:
+        findings.append(Finding("standalone-count", normalized(POLICY_RELATIVE), "exactly eight Cargo roots required"))
     return findings
 
 
@@ -702,7 +702,6 @@ def validate_documentation_contracts(root: Path, policy: dict[str, Any], facts: 
                 "ready_rto_millis",
                 "message_visible_rto_millis",
                 "leaked",
-                "detached_still_running",
                 "checksums",
             ):
                 if field not in required_run_fields:
@@ -746,8 +745,8 @@ def render_document(policy: dict[str, Any], facts: Facts) -> str:
         f"- Formal Rust toolchain and MSRV: `{facts.formal_toolchain}`.",
         f"- Root workspace packages: {len(facts.root_packages)}.",
         "- Full integration checks: `cargo fmt --all -- --check`, workspace Clippy, all-feature tests, and",
-        "  `cargo doc --workspace --no-deps --all-features`. Routine PR work is selected by changed paths;",
-        "  see the [CI validation policy](ci-validation-policy.md) for feature and platform routing.",
+        "  `cargo doc --workspace --no-deps --all-features`. Routine PR work is selected by changed paths",
+        "  through `scripts/ci_scope.py`.",
         "",
         "| Package | Workspace path |",
         "|---|---|",
@@ -872,10 +871,11 @@ def render_document(policy: dict[str, Any], facts: Facts) -> str:
             "fingerprints, frozen command inventories, and fixed comparison thresholds are retired. Fault and",
             "soak artifacts use their dedicated qualification policies; failures retain replay inputs and",
             "diagnostics without committing runtime output.",
-            "The SLO and fault workflows now accept `candidate_publication_json` (or the scheduled",
-            "`ARCHITECTURE_CANDIDATE_PUBLICATION_JSON`) instead of the former self-reported image-map",
-            "input. Callers must pass the signed five-image publication manifest; the workflows verify it and",
-            "derive the candidate image map only after all five service identities and digests match.",
+            "The automated SLO and Kubernetes fault workflows are retired. Their local runners and",
+            "evidence guards remain available for explicitly provisioned qualification environments.",
+            "For published service images, use `scripts/verify_service_image_publication.py` to verify",
+            "the signed five-image publication before deriving the candidate image map. The retained",
+            "Kubernetes assets workflow performs static checks and does not produce live fault or soak evidence.",
             "",
             "## Unified production qualification bundle",
             "",

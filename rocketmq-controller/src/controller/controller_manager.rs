@@ -27,13 +27,13 @@ use crate::config::ControllerConfig;
 use crate::config::ControllerConfigHandle;
 use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
 use crate::controller::broker_heartbeat_manager::BrokerSessionId;
+use crate::controller::broker_role_notifier::BrokerRoleNotificationSubmissionStatus;
 use crate::controller::broker_role_notifier::BrokerRoleNotifier;
 use crate::controller::broker_role_notifier::NotifyKey;
 #[cfg(test)]
 use crate::controller::broker_role_notifier::NotifySnapshot;
 use crate::controller::broker_role_notifier::NotifyState;
 use crate::controller::broker_role_notifier::NotifyTask;
-use crate::controller::broker_role_notifier::SubmitOutcome;
 use crate::controller::Controller;
 use crate::error::configuration_invalid;
 use crate::error::controller_internal_by;
@@ -96,6 +96,12 @@ struct PendingControllerRemotingServer {
     service_context: ChildServiceContext,
     telemetry: TransportTelemetry,
     session_registry: Arc<SessionRegistry>,
+}
+
+/// Keeps both ports reserved until their runtime-owned servers consume them.
+pub(crate) struct ControllerListeners {
+    pub(crate) remoting: tokio::net::TcpListener,
+    pub(crate) raft: tokio::net::TcpListener,
 }
 
 impl PendingControllerRemotingServer {

@@ -18,6 +18,7 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -217,7 +218,7 @@ impl RocksDbMaintenanceService {
         let runtime_scope = self.runtime_scope.clone();
         let mut task_config = ScheduledTaskConfig::fixed_delay(operation.task_name(), interval);
         task_config.initial_delay = interval;
-        if let Err(error) = scheduled_tasks.schedule_fixed_delay(task_config, move || {
+        if let Err(error) = scheduled_tasks.schedule(task_config, ScheduledExecutionPolicy::default(), move || {
             let store = Arc::clone(&store);
             let config = config.clone();
             let runtime_scope = runtime_scope.clone();

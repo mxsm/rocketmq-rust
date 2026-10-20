@@ -25,12 +25,4 @@ impl RuntimeHandle {
     pub(crate) fn tokio_handle(&self) -> &tokio::runtime::Handle {
         &self.handle
     }
-
-    pub(crate) fn spawn_owned<F>(&self, future: F) -> tokio::task::JoinHandle<F::Output>
-    where
-        F: std::future::Future + Send + 'static,
-        F::Output: Send + 'static,
-    {
-        self.handle.spawn(future)
-    }
 }

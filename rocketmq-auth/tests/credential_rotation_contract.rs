@@ -29,9 +29,9 @@ use rocketmq_auth::AuthServiceResult;
 use rocketmq_auth::BreakGlassReason;
 use rocketmq_auth::CredentialAuditAction;
 use rocketmq_auth::CredentialAuditEvent;
-use rocketmq_auth::CredentialAuditOutcome;
 use rocketmq_auth::CredentialAuditSink;
 use rocketmq_auth::CredentialBundleParser;
+use rocketmq_auth::CredentialChangeDecision;
 use rocketmq_auth::CredentialId;
 use rocketmq_auth::CredentialRotationManager;
 use rocketmq_auth::CredentialVerificationSource;
@@ -171,7 +171,7 @@ fn overlap_switch_and_finalize_revoke_the_old_credential() {
     assert_eq!(events[1].action(), CredentialAuditAction::RetiringCredentialRevoked);
     assert!(events
         .iter()
-        .all(|event| event.outcome() == CredentialAuditOutcome::Authorized));
+        .all(|event| event.decision() == CredentialChangeDecision::Approved));
 }
 
 #[test]
@@ -388,6 +388,10 @@ fn provider_reload_is_single_bundle_and_invalid_candidates_preserve_snapshot() {
         audit.events().last().unwrap().action(),
         CredentialAuditAction::ReloadRejected
     );
+    assert_eq!(
+        audit.events().last().unwrap().decision(),
+        CredentialChangeDecision::Rejected
+    );
 
     let unavailable = StaticProvider {
         id: SecretProviderId::new("test-provider").unwrap(),
@@ -407,6 +411,10 @@ fn provider_reload_is_single_bundle_and_invalid_candidates_preserve_snapshot() {
         .and_then(|source| source.downcast_ref::<SecurityProviderError>())
         .is_some());
     assert_eq!(manager.snapshot().generation(), 1);
+    assert_eq!(
+        audit.events().last().unwrap().decision(),
+        CredentialChangeDecision::Rejected
+    );
 
     let valid = StaticProvider {
         id: SecretProviderId::new("test-provider").unwrap(),
@@ -423,6 +431,10 @@ fn provider_reload_is_single_bundle_and_invalid_candidates_preserve_snapshot() {
         AuthFailureKind::InvalidData,
     );
     assert_eq!(manager.snapshot().generation(), 1);
+    assert_eq!(
+        audit.events().last().unwrap().decision(),
+        CredentialChangeDecision::Rejected
+    );
 
     assert_eq!(
         manager

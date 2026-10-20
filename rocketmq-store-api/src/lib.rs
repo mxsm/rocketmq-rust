@@ -32,21 +32,21 @@ pub use capability::DerivedRecordSink;
 pub use capability::MessageAppender;
 pub use capability::MessageReader;
 pub use capability::OffsetIndex;
-pub use capability::ReleaseCheckpointCreateOutcome;
 pub use capability::ReleaseCheckpointCreateRejection;
-pub use capability::ReleaseCheckpointRestoreOutcome;
+pub use capability::ReleaseCheckpointCreationResult;
 pub use capability::ReleaseCheckpointRestoreRejection;
+pub use capability::ReleaseCheckpointRestoreVerificationResult;
 pub use capability::ReleaseCheckpointStore;
 pub use capability::ReplicationControl;
 pub use capability::StoreHealth;
 pub use capability::StoreLifecycle;
 pub use checkpoint::CheckpointArtifact;
-pub use checkpoint::CheckpointBackend;
 pub use checkpoint::CheckpointManifest;
 pub use checkpoint::CheckpointOffsets;
 pub use checkpoint::CheckpointRequest;
 pub use checkpoint::CheckpointRestoreVerification;
 pub use checkpoint::CheckpointStorageIdentity;
+pub use checkpoint::CheckpointStoreKind;
 pub use checkpoint::CHECKPOINT_SCHEMA_VERSION;
 pub use checkpoint_artifact::file_uri_to_path;
 pub use checkpoint_artifact::hash_checkpoint_directory;
@@ -529,13 +529,13 @@ impl<L> Default for GetResult<L> {
     }
 }
 
-/// Owned logical-read outcome after backend leases have been decoded by an adapter.
+/// Owned logical-read result after backend leases have been decoded by an adapter.
 ///
 /// This projection keeps storage navigation semantics in the storage boundary while allowing the
 /// caller to own decoded records. `None` records remain distinct from a successful read containing
 /// an empty record collection.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReadOutcome<T> {
+pub struct DecodedReadResult<T> {
     status: GetStatus,
     next_begin_offset: i64,
     min_offset: i64,
@@ -543,8 +543,8 @@ pub struct ReadOutcome<T> {
     records: Option<Vec<T>>,
 }
 
-impl<T> ReadOutcome<T> {
-    /// Creates an owned read outcome from canonical store navigation fields.
+impl<T> DecodedReadResult<T> {
+    /// Creates an owned read result from canonical store navigation fields.
     pub fn new<R>(status: GetStatus, next_begin_offset: i64, min_offset: i64, max_offset: i64, records: R) -> Self
     where
         R: Into<Option<Vec<T>>>,
@@ -583,7 +583,7 @@ impl<T> ReadOutcome<T> {
         self.records.as_deref()
     }
 
-    /// Consumes the outcome and returns its decoded records.
+    /// Consumes the result and returns its decoded records.
     pub fn into_records(self) -> Option<Vec<T>> {
         self.records
     }

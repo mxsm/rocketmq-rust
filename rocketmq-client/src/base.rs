@@ -24,4 +24,3 @@ pub mod validators;
 
 pub use mq_admin::MQAdmin;
 pub use mq_client_admin::MqClientAdmin;
-pub use mq_client_admin::MqClientAdminInner;

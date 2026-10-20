@@ -17,10 +17,10 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::utils::store_util::offset_to_file_name;
 use arc_swap::ArcSwap;
 use rocketmq_model::common::boundary_type::BoundaryType;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::common::util_all::offset_to_file_name;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_local::flush::queue::commit_mapped_file_queue;
 use rocketmq_store_local::flush::queue::try_flush_mapped_file_queue;
@@ -39,7 +39,7 @@ use rocketmq_store_local::mapped_file::queue_io::create_mapped_file_for_queue;
 use rocketmq_store_local::mapped_file::queue_io::create_mapped_file_for_queue_without_preallocation;
 use rocketmq_store_local::mapped_file::queue_io::load_mapped_file_queue_files;
 use rocketmq_store_local::mapped_file::queue_io::load_mapped_file_queue_path;
-use rocketmq_store_local::mapped_file::queue_io::MappedFileQueueLoadOutcome;
+use rocketmq_store_local::mapped_file::queue_io::MappedFileQueueLoadReport;
 use rocketmq_store_local::mapped_file::queue_lifecycle::clean_swapped_mapped_file_queue;
 use rocketmq_store_local::mapped_file::queue_lifecycle::delete_expired_mapped_files_by_offset;
 use rocketmq_store_local::mapped_file::queue_lifecycle::delete_expired_mapped_files_by_time_before;
@@ -676,12 +676,12 @@ where
 
 /// Submission and namespace completion are distinct cleanup outcomes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CleanupOutcome {
+pub(crate) enum MappedFileCleanupReport {
     ManagedSubmitted { selected: usize, submitted: i32 },
     LegacyCompleted { namespace_removed: i32 },
 }
 
-impl CleanupOutcome {
+impl MappedFileCleanupReport {
     // Compatibility only: managed counts mean accepted tickets, never physical deletion.
     fn compatibility_count(self) -> i32 {
         match self {
@@ -755,7 +755,7 @@ impl MappedFileQueueCleanupHandle {
         clean_immediately: bool,
         delete_file_batch_max: i32,
         pinned_file_offset: Option<u64>,
-    ) -> CleanupOutcome {
+    ) -> MappedFileCleanupReport {
         let _maintenance_guard = self.runtime_state.commit_lock().lock();
         let files = self.mapped_files.snapshot();
         self.check_self();
@@ -771,7 +771,7 @@ impl MappedFileQueueCleanupHandle {
             let selected = candidates.len();
             let submitted =
                 submit_managed_retirements(&runtime, &generation, candidates, ManagedRetirementReason::TtlExpired);
-            return CleanupOutcome::ManagedSubmitted { selected, submitted };
+            return MappedFileCleanupReport::ManagedSubmitted { selected, submitted };
         }
         let deletion = delete_expired_mapped_files_by_time_before(
             files.as_ref(),
@@ -783,7 +783,7 @@ impl MappedFileQueueCleanupHandle {
             pinned_file_offset,
             || i64::try_from(current_millis()).unwrap_or(i64::MAX),
         );
-        CleanupOutcome::LegacyCompleted {
+        MappedFileCleanupReport::LegacyCompleted {
             namespace_removed: self.mapped_files.apply_legacy_namespace_removal(deletion),
         }
     }
@@ -1039,7 +1039,7 @@ impl MappedFileQueue {
         if !self.storage.mapped_files().allows_legacy_namespace_mutation() {
             return false;
         }
-        let outcome = if let Some(paths) = self.commit_log_paths.as_ref() {
+        let load_report = if let Some(paths) = self.commit_log_paths.as_ref() {
             match paths.scan_segments(self.storage.mapped_file_size()) {
                 Ok(segments) => load_mapped_file_queue_files(
                     segments.into_iter().map(|segment| segment.path).collect(),
@@ -1054,7 +1054,7 @@ impl MappedFileQueue {
         } else {
             load_mapped_file_queue_path(self.storage.store_path(), self.storage.mapped_file_size())
         };
-        let loaded = self.apply_load_outcome(outcome);
+        let loaded = self.apply_queue_load_report(load_report);
         if !loaded && self.is_multipath_commit_log() {
             self.fence_writes();
         }
@@ -1100,13 +1100,13 @@ impl MappedFileQueue {
         if !self.storage.mapped_files().allows_legacy_namespace_mutation() {
             return false;
         }
-        let outcome = load_mapped_file_queue_files(files, self.storage.mapped_file_size());
-        self.apply_load_outcome(outcome)
+        let load_report = load_mapped_file_queue_files(files, self.storage.mapped_file_size());
+        self.apply_queue_load_report(load_report)
     }
 
-    fn apply_load_outcome(&mut self, outcome: MappedFileQueueLoadOutcome) -> bool {
-        let success = outcome.is_success();
-        let loaded_files = outcome.into_mapped_files();
+    fn apply_queue_load_report(&mut self, load_report: MappedFileQueueLoadReport) -> bool {
+        let success = load_report.is_success();
+        let loaded_files = load_report.into_mapped_files();
         self.storage
             .mapped_files()
             .extend_legacy_recovery_generation(loaded_files)

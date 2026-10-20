@@ -14,17 +14,16 @@
 
 #![recursion_limit = "512"]
 
-use std::future::Future;
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::pin::Pin;
 
 use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
 use rocketmq_broker::build_broker_telemetry_bootstrap_config;
 use rocketmq_broker::command::Args;
+use rocketmq_broker::command::BrokerArgsError;
 use rocketmq_broker::command::ConfigFileFormat;
 use rocketmq_broker::config::broker_config::BrokerConfig;
 use rocketmq_broker::config::java_properties::JavaBrokerProperties;
@@ -33,9 +32,12 @@ use rocketmq_broker::config::validated::ValidatedBrokerConfig;
 use rocketmq_broker::Builder;
 use rocketmq_error::fields;
 use rocketmq_error::CliErrorView;
+use rocketmq_error::CliExitCode;
 use rocketmq_error::CliVerbosity;
 use rocketmq_error::ErrorContext;
+use rocketmq_error::CORE_CONFIGURATION_MISSING;
 use rocketmq_error::CORE_SERVICE_FAILED;
+use rocketmq_model::common::mix_all::ROCKETMQ_HOME_ENV;
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
 use rocketmq_model::utils::env_utils::EnvUtils;
 use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_defaults;
@@ -47,8 +49,8 @@ use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ShutdownReason;
 use rocketmq_security_api::SecurityBootstrap;
 use rocketmq_security_api::SecurityBootstrapConfig;
-use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
+use rocketmq_security_api::SecurityBootstrapValidation;
 use rocketmq_store::MessageStoreConfig;
 #[cfg(test)]
 use rocketmq_transport::api::ServerConfig;
@@ -92,18 +94,63 @@ fn print_release_version_if_requested(component: &str) -> bool {
     true
 }
 
+/// Set by the Windows process test to read the main thread's stack peak.
+const MAIN_STACK_REPORT_ENV: &str = "ROCKETMQ_REPORT_MAIN_STACK";
+
 fn main() {
-    if let Err(source) = try_main() {
-        let error = rocketmq_error::Error::new(&CORE_SERVICE_FAILED)
-            .with_boxed_source(source.into_boxed_dyn_error())
-            .with_context(
-                ErrorContext::new()
-                    .with_text(fields::OPERATION_DIAGNOSTIC, "run-broker-service")
-                    .with_secret_presence(fields::SOURCE_PRESENT),
-            );
-        let output = CliErrorView::from_error(&error).output(CliVerbosity::Default);
-        eprintln!("{}", output.stderr());
-        std::process::exit(output.exit_code().as_i32());
+    let result = try_main();
+    report_main_stack_if_requested();
+    if let Err(source) = result {
+        let (stderr, exit_code) = startup_failure_output(source);
+        eprintln!("{stderr}");
+        std::process::exit(exit_code.as_i32());
+    }
+}
+
+/// Projects a startup failure onto the CLI boundary.
+///
+/// A missing `ROCKETMQ_HOME` renders its fixed hint after the stable error line. Every other
+/// source stays hidden behind the generic service failure.
+fn startup_failure_output(source: anyhow::Error) -> (String, CliExitCode) {
+    let home_not_set = matches!(
+        source.downcast_ref::<BrokerArgsError>(),
+        Some(BrokerArgsError::RocketmqHomeNotSet)
+    );
+    let (descriptor, context) = if home_not_set {
+        (
+            &CORE_CONFIGURATION_MISSING,
+            ErrorContext::new().with_text(fields::KEY, ROCKETMQ_HOME_ENV),
+        )
+    } else {
+        (
+            &CORE_SERVICE_FAILED,
+            ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "run-broker-service")
+                .with_secret_presence(fields::SOURCE_PRESENT),
+        )
+    };
+    let error = rocketmq_error::Error::new(descriptor)
+        .with_boxed_source(source.into_boxed_dyn_error())
+        .with_context(context);
+    let output = CliErrorView::from_error(&error).output(CliVerbosity::Default);
+    let stderr = if home_not_set {
+        format!("{}: {}", output.stderr(), BrokerArgsError::RocketmqHomeNotSet)
+    } else {
+        output.stderr().to_string()
+    };
+    (stderr, output.exit_code())
+}
+
+/// Prints the main thread's committed stack once the runtime is gone.
+///
+/// Committed stack pages stay committed until the thread exits, so this is the
+/// deepest the main thread went during the whole run.
+fn report_main_stack_if_requested() {
+    if std::env::var_os(MAIN_STACK_REPORT_ENV).is_none() {
+        return;
+    }
+    if let Some(bytes) = rocketmq_runtime::current_thread_committed_stack_bytes() {
+        eprintln!("main_thread_stack_committed_bytes={bytes}");
     }
 }
 
@@ -150,14 +197,7 @@ fn broker_runtime_config() -> RuntimeConfig {
     RuntimeConfig::broker_default()
 }
 
-fn run(
-    service_context: ChildServiceContext,
-    lifecycle: ServiceLifecycle,
-) -> Pin<Box<impl Future<Output = Result<()>>>> {
-    Box::pin(run_inner(service_context, lifecycle))
-}
-
-async fn run_inner(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> Result<()> {
+async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> Result<()> {
     initialize_remoting_defaults(CURRENT_VERSION as i32)
         .context("failed to initialize the immutable broker remoting defaults")?;
 
@@ -200,7 +240,7 @@ async fn run_inner(service_context: ChildServiceContext, lifecycle: ServiceLifec
 
     let security_bootstrap =
         SecurityBootstrapConfig::from_env().context("failed to load broker security bootstrap configuration")?;
-    let validated_security = validate_broker_security(
+    let security_validation = validate_broker_security(
         &security_bootstrap,
         broker_config,
         message_store_config,
@@ -225,7 +265,7 @@ async fn run_inner(service_context: ChildServiceContext, lifecycle: ServiceLifec
         &resolved_filter,
         telemetry_guard.subscriber_install_status(),
     );
-    log_security_bootstrap(validated_security);
+    log_security_bootstrap(security_validation);
 
     // Print logo
     println!("{}", LOGO);
@@ -295,7 +335,7 @@ fn validate_broker_security(
     message_store_config: &MessageStoreConfig,
     observability_config: &rocketmq_observability::ObservabilityConfig,
     probe_bind_addr: Option<SocketAddr>,
-) -> Result<SecurityBootstrapOutcome> {
+) -> Result<SecurityBootstrapValidation> {
     if security_bootstrap.requires_authentication()
         && (!broker_config.authentication_enabled || !broker_config.authorization_enabled)
     {
@@ -366,12 +406,12 @@ fn register_broker_release_identity(
     }
 }
 
-fn log_security_bootstrap(outcome: SecurityBootstrapOutcome) {
-    match outcome {
-        SecurityBootstrapOutcome::Disabled => {
+fn log_security_bootstrap(validation: SecurityBootstrapValidation) {
+    match validation {
+        SecurityBootstrapValidation::Disabled => {
             warn!("broker security bootstrap is disabled because no security profile is configured")
         }
-        SecurityBootstrapOutcome::Validated(validated) => match validated.profile() {
+        SecurityBootstrapValidation::Validated(validated) => match validated.profile() {
             SecurityBootstrapProfile::DevelopmentInsecureLoopback => warn!(
                 profile = validated.profile().as_str(),
                 listener_count = validated.listener_count(),
@@ -409,9 +449,7 @@ fn log_telemetry_bootstrap(
 fn verify_rocketmq_home() -> Result<()> {
     let home = EnvUtils::get_rocketmq_home();
     if home.is_empty() {
-        anyhow::bail!(
-            "Please set the ROCKETMQ_HOME environment variable to match the location of the RocketMQ installation"
-        );
+        return Err(BrokerArgsError::RocketmqHomeNotSet.into());
     }
 
     let home_path = PathBuf::from(&home);
@@ -570,7 +608,10 @@ fn print_important_tieredstore_config(config: &MessageStoreConfig) {
 
     println!("    tieredStoreEnable: {}", tiered_store_config.storage_level.enabled());
     println!("    tieredStorageLevel: {:?}", tiered_store_config.storage_level);
-    println!("    tieredBackendProvider: {}", tiered_store_config.backend_provider);
+    println!(
+        "    tieredStorageProviderId: {}",
+        tiered_store_config.storage_provider_id
+    );
     println!(
         "    tieredStorePathRootDir: {}",
         tiered_store_config.store_path_root_dir.display()
@@ -607,7 +648,7 @@ fn print_all_tieredstore_config(config: &MessageStoreConfig) {
 
     println!("    tieredStoreConfig:");
     println!("      storageLevel: {:?}", tiered_store_config.storage_level);
-    println!("      backendProvider: {}", tiered_store_config.backend_provider);
+    println!("      storageProviderId: {}", tiered_store_config.storage_provider_id);
     println!("      metadataProvider: {}", tiered_store_config.metadata_provider);
     println!(
         "      storePathRootDir: {}",
@@ -667,9 +708,9 @@ fn print_tieredstore_startup_info(message_store_config: &MessageStoreConfig) {
     match message_store_config.tiered_store_config.as_ref() {
         Some(config) if config.storage_level.enabled() => {
             info!(
-                "Tieredstore enabled: storageLevel={:?}, backendProvider={}, storePathRootDir={}",
+                "Tieredstore enabled: storageLevel={:?}, storageProviderId={}, storePathRootDir={}",
                 config.storage_level,
-                config.backend_provider,
+                config.storage_provider_id,
                 config.store_path_root_dir.display()
             );
         }
@@ -685,6 +726,33 @@ fn print_tieredstore_startup_info(message_store_config: &MessageStoreConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_failure_output_names_missing_rocketmq_home() {
+        let (stderr, exit_code) = startup_failure_output(BrokerArgsError::RocketmqHomeNotSet.into());
+
+        assert!(stderr.starts_with("ERROR core.configuration.missing: Required configuration is missing: "));
+        assert!(stderr.contains("ROCKETMQ_HOME environment variable is not set"));
+        assert_eq!(exit_code, CliExitCode::CONFIG);
+    }
+
+    #[test]
+    fn startup_failure_output_hides_untyped_and_other_argument_sources() {
+        let sources = [
+            anyhow::anyhow!("token=secret-value").context("failed to parse broker configuration"),
+            anyhow::Error::from(BrokerArgsError::ConfigFileNotFound(PathBuf::from(
+                "secret-path/broker.toml",
+            )))
+            .context("invalid broker arguments"),
+        ];
+
+        for source in sources {
+            let (stderr, exit_code) = startup_failure_output(source);
+
+            assert_eq!(stderr, "ERROR core.service.failed: Service lifecycle operation failed");
+            assert_eq!(exit_code, CliExitCode::SOFTWARE);
+        }
+    }
 
     #[test]
     fn secure_profile_rejects_disabled_request_protection_before_material_loading() {
@@ -714,7 +782,7 @@ mod tests {
     fn disabled_security_bootstrap_allows_default_broker_listeners() {
         let broker = BrokerConfig::default();
         let observability = build_broker_telemetry_bootstrap_config(&broker).observability;
-        let outcome = validate_broker_security(
+        let validation = validate_broker_security(
             &rocketmq_security_api::SecurityBootstrap::Disabled,
             &broker,
             &MessageStoreConfig::default(),
@@ -723,7 +791,7 @@ mod tests {
         )
         .expect("disabled security bootstrap should not restrict Broker listeners");
 
-        assert_eq!(outcome, rocketmq_security_api::SecurityBootstrapOutcome::Disabled);
+        assert_eq!(validation, rocketmq_security_api::SecurityBootstrapValidation::Disabled);
     }
 
     #[test]

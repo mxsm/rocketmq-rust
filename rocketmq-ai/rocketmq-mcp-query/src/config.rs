@@ -1,0 +1,2525 @@
+// Copyright 2026 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::collections::BTreeSet;
+use std::path::Path;
+use std::str::FromStr;
+use std::time::Duration;
+
+use clap::Parser;
+use rocketmq_admin_core::core::security::AdminCredentials;
+use serde::de;
+use serde::Deserialize;
+
+use crate::error::McpError;
+
+mod defaults;
+
+const MAX_JWKS_CA_BYTES: usize = 1024 * 1024;
+const MAX_CLUSTER_CREDENTIAL_BYTES: usize = 64 * 1024;
+/// How long the HTTPS transport lets a request run before it answers with HTTP 408.
+pub(crate) const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// The request budget when `server.request_timeout_ms` is not configured.
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(25);
+/// A shorter budget is almost certainly seconds written where milliseconds are expected.
+const MIN_REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
+/// The shortest shared pseudonym key: 128 bits of entropy written as hexadecimal.
+const MIN_PSEUDONYM_KEY_BYTES: usize = 32;
+const MAX_PSEUDONYM_KEY_BYTES: usize = 1_024;
+
+#[derive(Debug, Clone, Parser)]
+pub struct Args {
+    /// Configuration file; an empty value selects built-in local stdio settings.
+    #[arg(long, env = "ROCKETMQ_MCP_CONFIG", default_value = "", hide_default_value = true)]
+    pub config: String,
+
+    #[arg(long, default_value = "stdio", value_parser = parse_transport)]
+    pub transport: TransportKind,
+
+    #[arg(long)]
+    pub bind: Option<String>,
+
+    #[arg(long)]
+    pub endpoint: Option<String>,
+}
+
+#[derive(Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct McpConfig {
+    pub server: ServerConfig,
+    #[serde(default)]
+    pub logging: rocketmq_observability::LoggingOverrideConfig,
+    #[serde(default)]
+    pub observability: rocketmq_observability::ObservabilityOverrides,
+    pub clusters: Vec<ClusterConfig>,
+    pub security: SecurityConfig,
+    pub audit: AuditConfig,
+    pub cache: CacheConfig,
+    #[serde(default)]
+    pub diagnosis: DiagnosisConfig,
+}
+
+impl std::fmt::Debug for McpConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("McpConfig")
+            .field("server", &self.server)
+            .field("logging", &self.logging)
+            .field("observability", &ObservabilityDebugSummary::from(&self.observability))
+            .field("clusters", &self.clusters)
+            .field("security", &self.security)
+            .field("audit", &self.audit)
+            .field("cache", &self.cache)
+            .field("diagnosis", &self.diagnosis)
+            .finish()
+    }
+}
+
+struct ObservabilityDebugSummary {
+    configured: bool,
+    resource_attributes_present: bool,
+    metrics_configured: bool,
+    traces_configured: bool,
+    logs_configured: bool,
+    otlp_configured: bool,
+    prometheus_configured: bool,
+}
+
+impl std::fmt::Debug for ObservabilityDebugSummary {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ObservabilityDebugSummary")
+            .field("configured", &self.configured)
+            .field("resource_attributes_present", &self.resource_attributes_present)
+            .field("metrics_configured", &self.metrics_configured)
+            .field("traces_configured", &self.traces_configured)
+            .field("logs_configured", &self.logs_configured)
+            .field("otlp_configured", &self.otlp_configured)
+            .field("prometheus_configured", &self.prometheus_configured)
+            .finish()
+    }
+}
+
+impl From<&rocketmq_observability::ObservabilityOverrides> for ObservabilityDebugSummary {
+    fn from(overrides: &rocketmq_observability::ObservabilityOverrides) -> Self {
+        Self {
+            configured: overrides != &rocketmq_observability::ObservabilityOverrides::default(),
+            resource_attributes_present: overrides.resource_attributes.is_some(),
+            metrics_configured: overrides.metrics != rocketmq_observability::MetricsOverrides::default(),
+            traces_configured: overrides.traces != rocketmq_observability::TracesOverrides::default(),
+            logs_configured: overrides.logs != rocketmq_observability::LogsOverrides::default(),
+            otlp_configured: overrides.otlp != rocketmq_observability::OtlpOverrides::default(),
+            prometheus_configured: overrides.prometheus != rocketmq_observability::PrometheusOverrides::default(),
+        }
+    }
+}
+
+impl McpConfig {
+    pub fn load(path: impl AsRef<Path>) -> crate::error::McpResult<Self> {
+        let requested_path = path.as_ref();
+        let path = requested_path.canonicalize().map_err(McpError::from_source)?;
+        let config = config::Config::builder()
+            .add_source(config::File::from(path.as_path()))
+            .build()
+            .map_err(McpError::from)?;
+        let mut config = config.try_deserialize::<Self>().map_err(McpError::from)?;
+        config.resolve_paths(&path)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn load_with_overrides(args: &Args) -> crate::error::McpResult<Self> {
+        let mut config = if args.config.is_empty() {
+            if args.transport != TransportKind::Stdio {
+                return Err(McpError::invalid_config(
+                    "streamable-http requires --config or ROCKETMQ_MCP_CONFIG".to_string(),
+                ));
+            }
+            defaults::load()?
+        } else {
+            Self::load(&args.config)?
+        };
+        config.apply_overrides(args)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn apply_overrides(&mut self, args: &Args) -> crate::error::McpResult<()> {
+        self.server.transport = args.transport;
+
+        if let Some(bind) = trimmed_override("bind", args.bind.as_deref())? {
+            self.server.http.bind = bind;
+        }
+
+        if let Some(endpoint) = trimmed_override("endpoint", args.endpoint.as_deref())? {
+            if !endpoint.starts_with('/') {
+                return Err(McpError::invalid_config(
+                    "server.http.endpoint must start with '/'".to_string(),
+                ));
+            }
+            self.server.http.endpoint = endpoint;
+        }
+
+        Ok(())
+    }
+
+    pub fn validate(&self) -> crate::error::McpResult<()> {
+        validate_non_empty("server.name", &self.server.name)?;
+        validate_non_empty("server.version", &self.server.version)?;
+        validate_non_empty("server.http.bind", &self.server.http.bind)?;
+        rocketmq_observability::LogFilterResolver::resolve(rocketmq_observability::LogFilterInputs {
+            config: self.logging.filter.as_deref(),
+            legacy_config: self.server.log_level.as_deref(),
+            ..rocketmq_observability::LogFilterInputs::default()
+        })
+        .map_err(McpError::from_source)?;
+
+        if !self.server.http.endpoint.starts_with('/') {
+            return Err(McpError::invalid_config(
+                "server.http.endpoint must start with '/'".to_string(),
+            ));
+        }
+        // A request has to fail with a structured Tool error before the transport gives up on it.
+        if !(MIN_REQUEST_TIMEOUT..HTTP_REQUEST_TIMEOUT).contains(&self.server.request_timeout()) {
+            return Err(McpError::invalid_config(
+                "server.request_timeout_ms must be at least 1000 and less than 30000".to_string(),
+            ));
+        }
+
+        if self.clusters.is_empty() {
+            return Err(McpError::invalid_config(
+                "at least one cluster must be configured".to_string(),
+            ));
+        }
+
+        let mut default_count = 0usize;
+        let mut normalized_cluster_names = BTreeSet::new();
+        let mut infrastructure_endpoint_owners = BTreeSet::new();
+        for cluster in &self.clusters {
+            validate_non_empty("clusters.name", &cluster.name)?;
+            if !normalized_cluster_names.insert(cluster.name.trim().to_ascii_lowercase()) {
+                return Err(McpError::invalid_config(
+                    "cluster names must be unique after normalization".to_string(),
+                ));
+            }
+            validate_non_empty("clusters.namesrv_addr", &cluster.namesrv_addr)?;
+            let nameserver_endpoints = cluster
+                .namesrv_addr
+                .split(';')
+                .map(str::trim)
+                .filter(|endpoint| !endpoint.is_empty())
+                .collect::<Vec<_>>();
+            if nameserver_endpoints.len()
+                > rocketmq_admin_core::core::infrastructure_observation::MAX_NAMESERVER_TARGETS
+            {
+                return Err(McpError::invalid_config(
+                    "clusters.namesrv_addr must contain at most 16 configured NameServers".to_string(),
+                ));
+            }
+            let mut unique_nameservers = BTreeSet::new();
+            for endpoint in nameserver_endpoints {
+                let Some(endpoint) = rocketmq_admin_core::core::broker::canonical_remoting_endpoint(endpoint) else {
+                    return Err(McpError::invalid_config(
+                        "clusters.namesrv_addr must contain unique bounded remoting host:port values".to_string(),
+                    ));
+                };
+                if !unique_nameservers.insert(endpoint.clone()) || !infrastructure_endpoint_owners.insert(endpoint) {
+                    return Err(McpError::invalid_config(
+                        "Controller and NameServer endpoints must have one global logical owner".to_string(),
+                    ));
+                }
+            }
+            if let Some(rocketmq_cluster_name) = cluster.rocketmq_cluster_name.as_deref() {
+                validate_non_empty("clusters.rocketmq_cluster_name", rocketmq_cluster_name)?;
+            }
+            if cluster.tenant.as_deref().is_some_and(|tenant| tenant.trim().is_empty()) {
+                return Err(McpError::invalid_config(
+                    "clusters.tenant must not be empty when configured".to_string(),
+                ));
+            }
+            if cluster.default.unwrap_or(false) {
+                default_count += 1;
+            }
+            if let Some(credentials) = &cluster.credentials {
+                credentials.validate_reference(&cluster.name)?;
+                credentials.resolve(&cluster.name)?;
+            }
+            let mut proxy_names = BTreeSet::new();
+            for proxy in &cluster.proxies {
+                validate_logical_alias("clusters.proxies.name", &proxy.name)?;
+                if !rocketmq_admin_core::core::broker::is_valid_remoting_endpoint(&proxy.endpoint) {
+                    return Err(McpError::invalid_config(
+                        "clusters.proxies.endpoint must be a single bounded remoting host:port".to_string(),
+                    ));
+                }
+                if !proxy_names.insert(proxy.name.as_str()) {
+                    return Err(McpError::invalid_config(format!(
+                        "clusters `{}` contains duplicate Proxy alias `{}`",
+                        cluster.name, proxy.name
+                    )));
+                }
+            }
+            if cluster.controllers.len() > rocketmq_admin_core::core::infrastructure_observation::MAX_CONTROLLER_TARGETS
+            {
+                return Err(McpError::invalid_config(
+                    "clusters.controllers must contain at most 32 configured Controllers".to_string(),
+                ));
+            }
+            let mut controller_names = BTreeSet::new();
+            let mut controller_endpoints = BTreeSet::new();
+            for controller in &cluster.controllers {
+                validate_logical_alias("clusters.controllers.name", &controller.name)?;
+                let Some(endpoint) =
+                    rocketmq_admin_core::core::broker::canonical_remoting_endpoint(&controller.endpoint)
+                else {
+                    return Err(McpError::invalid_config(
+                        "clusters.controllers.endpoint must be a single bounded remoting host:port".to_string(),
+                    ));
+                };
+                if !controller_names.insert(controller.name.as_str()) || !controller_endpoints.insert(endpoint.clone())
+                {
+                    return Err(McpError::invalid_config(format!(
+                        "clusters `{}` contains duplicate Controller configuration",
+                        cluster.name
+                    )));
+                }
+                if !infrastructure_endpoint_owners.insert(endpoint) {
+                    return Err(McpError::invalid_config(
+                        "Controller and NameServer endpoints must have one global logical owner".to_string(),
+                    ));
+                }
+            }
+        }
+
+        if default_count > 1 {
+            return Err(McpError::invalid_config(
+                "only one cluster can be marked as default".to_string(),
+            ));
+        }
+
+        if matches!(self.server.transport, TransportKind::StreamableHttp) && !cfg!(feature = "streamable-http") {
+            return Err(McpError::unsupported_transport(
+                "streamable-http transport requires the streamable-http feature".to_string(),
+            ));
+        }
+
+        validate_security_profile(&self.security.profile)?;
+        if self.security.rate_limit_per_minute == 0 {
+            return Err(McpError::invalid_config(
+                "security.rate_limit_per_minute must be greater than zero".to_string(),
+            ));
+        }
+        if self.security.http_rate_limit_per_minute == Some(0) {
+            return Err(McpError::invalid_config(
+                "security.http_rate_limit_per_minute must be greater than zero".to_string(),
+            ));
+        }
+        if self.security.max_concurrent_requests_per_cluster == 0 {
+            return Err(McpError::invalid_config(
+                "security.max_concurrent_requests_per_cluster must be greater than zero".to_string(),
+            ));
+        }
+        if self.security.permissions_file.trim().is_empty() {
+            return Err(McpError::invalid_config(
+                "security.permissions_file must not be empty".to_string(),
+            ));
+        }
+
+        validate_audit_sink(&self.audit.sink)?;
+        if self.audit.enabled && self.audit.sink == "file" {
+            validate_non_empty("audit.path", &self.audit.path)?;
+        }
+        if self.audit.queue_capacity == 0 {
+            return Err(McpError::invalid_config(
+                "audit.queue_capacity must be greater than zero".to_string(),
+            ));
+        }
+        if self.audit.max_record_bytes == 0 {
+            return Err(McpError::invalid_config(
+                "audit.max_record_bytes must be greater than zero".to_string(),
+            ));
+        }
+        if self.audit.queue_max_bytes < self.audit.max_record_bytes {
+            return Err(McpError::invalid_config(
+                "audit.queue_max_bytes must be at least audit.max_record_bytes".to_string(),
+            ));
+        }
+        if self.audit.queue_max_bytes > u32::MAX as usize {
+            return Err(McpError::invalid_config(
+                "audit.queue_max_bytes must not exceed u32::MAX".to_string(),
+            ));
+        }
+        if self.audit.max_file_bytes != 0 && self.audit.max_file_bytes < self.audit.max_record_bytes as u64 {
+            return Err(McpError::invalid_config(
+                "audit.max_file_bytes must be zero or at least audit.max_record_bytes".to_string(),
+            ));
+        }
+
+        // Fail at startup, not on the first request that needs a pseudonym.
+        self.security.resolve_pseudonym_key()?;
+
+        self.server.http.auth.validate()?;
+        if self.server.transport == TransportKind::StreamableHttp {
+            self.server.http.validate_streamable_http()?;
+        }
+
+        if self.cache.enabled && self.cache.max_entries == 0 {
+            return Err(McpError::invalid_config(
+                "cache.max_entries must be greater than zero when cache is enabled".to_string(),
+            ));
+        }
+        if self.cache.cursor_snapshot_ttl_ms == 0 || self.cache.cursor_snapshot_ttl_ms > 5 * 60 * 1_000 {
+            return Err(McpError::invalid_config(
+                "cache.cursor_snapshot_ttl_ms must be between 1 and 300000".to_string(),
+            ));
+        }
+        if !(1..=10_000).contains(&self.cache.cursor_snapshot_max_entries) {
+            return Err(McpError::invalid_config(
+                "cache.cursor_snapshot_max_entries must be between 1 and 10000".to_string(),
+            ));
+        }
+        if self.cache.stale_if_error_ms > 5 * 60 * 1_000 {
+            return Err(McpError::invalid_config(
+                "cache.stale_if_error_ms must not exceed 300000".to_string(),
+            ));
+        }
+        self.diagnosis.validate()?;
+
+        Ok(())
+    }
+
+    fn resolve_paths(&mut self, config_path: &Path) -> crate::error::McpResult<()> {
+        let config_dir = config_path
+            .parent()
+            .ok_or_else(|| McpError::invalid_config("MCP configuration has no parent directory".to_string()))?;
+        let resolved = resolve_config_relative(config_dir, &self.security.permissions_file);
+        let canonical = resolved.canonicalize().map_err(McpError::from_source)?;
+        self.security.permissions_file = canonical.to_string_lossy().into_owned();
+
+        self.server.http.tls.cert_path = resolve_config_relative(config_dir, &self.server.http.tls.cert_path)
+            .to_string_lossy()
+            .into_owned();
+        self.server.http.tls.key_path = resolve_config_relative(config_dir, &self.server.http.tls.key_path)
+            .to_string_lossy()
+            .into_owned();
+        if let Some(jwks_ca_path) = self.server.http.auth.jwks_ca_path.as_deref() {
+            validate_non_empty("server.http.auth.jwks_ca_path", jwks_ca_path)?;
+            let resolved = resolve_config_relative(config_dir, jwks_ca_path);
+            let canonical = resolved.canonicalize().map_err(McpError::from_source)?;
+            validate_jwks_ca_file(&canonical)?;
+            self.server.http.auth.jwks_ca_path = Some(canonical.to_string_lossy().into_owned());
+        }
+        if !self.audit.path.trim().is_empty() {
+            self.audit.path = resolve_config_relative(config_dir, &self.audit.path)
+                .to_string_lossy()
+                .into_owned();
+        }
+        for cluster in &mut self.clusters {
+            if let Some(credentials) = &mut cluster.credentials {
+                credentials.resolve_paths(config_dir, &cluster.name)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn resolve_config_relative(config_dir: &Path, value: &str) -> std::path::PathBuf {
+    let path = Path::new(value);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        config_dir.join(path)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportKind {
+    Stdio,
+    StreamableHttp,
+}
+
+impl TransportKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Stdio => "stdio",
+            Self::StreamableHttp => "streamable-http",
+        }
+    }
+}
+
+impl FromStr for TransportKind {
+    type Err = McpError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "stdio" => Ok(Self::Stdio),
+            "http" | "streamable-http" => Ok(Self::StreamableHttp),
+            other => Err(McpError::unsupported_transport(other.to_string())),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for TransportKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::from_str(&value).map_err(de::Error::custom)
+    }
+}
+
+fn parse_transport(value: &str) -> Result<TransportKind, String> {
+    TransportKind::from_str(value).map_err(|err| err.to_string())
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ServerConfig {
+    pub name: String,
+    pub version: String,
+    pub transport: TransportKind,
+    #[serde(default)]
+    pub log_level: Option<String>,
+    /// How long one request may spend on RocketMQ sources, in milliseconds; 25000 when absent.
+    #[serde(default)]
+    pub request_timeout_ms: Option<u64>,
+    pub stdio: StdioConfig,
+    pub http: HttpConfig,
+}
+
+impl ServerConfig {
+    /// The time one request may spend on RocketMQ sources, over all the queries it runs.
+    pub(crate) fn request_timeout(&self) -> Duration {
+        self.request_timeout_ms
+            .map_or(DEFAULT_REQUEST_TIMEOUT, Duration::from_millis)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct StdioConfig {
+    pub log_to_stderr: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HttpConfig {
+    pub bind: String,
+    pub endpoint: String,
+    #[serde(default)]
+    pub public_base_url: String,
+    pub validate_origin: bool,
+    pub allowed_origins: Vec<String>,
+    #[serde(default)]
+    pub tls: HttpTlsConfig,
+    pub auth: HttpAuthConfig,
+}
+
+impl HttpConfig {
+    fn validate_streamable_http(&self) -> crate::error::McpResult<()> {
+        let bind = self
+            .bind
+            .parse::<std::net::SocketAddr>()
+            .map_err(|_| McpError::invalid_config("server.http.bind must be a socket address".to_string()))?;
+        let public_base_url = url::Url::parse(&self.public_base_url).map_err(|_| {
+            McpError::invalid_config("server.http.public_base_url must be an absolute HTTPS URL".to_string())
+        })?;
+        if public_base_url.scheme() != "https" || public_base_url.cannot_be_a_base() {
+            return Err(McpError::invalid_config(
+                "server.http.public_base_url must be an absolute HTTPS URL".to_string(),
+            ));
+        }
+        if public_base_url.path() != "/"
+            || public_base_url.query().is_some()
+            || public_base_url.fragment().is_some()
+            || !public_base_url.username().is_empty()
+            || public_base_url.password().is_some()
+        {
+            return Err(McpError::invalid_config(
+                "server.http.public_base_url must contain only an HTTPS origin".to_string(),
+            ));
+        }
+        self.tls.validate()?;
+        if self.auth.mode == HttpAuthMode::DevelopmentToken && !bind.ip().is_loopback() {
+            return Err(McpError::invalid_config(
+                "development-token authentication is restricted to loopback HTTP listeners".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HttpTlsConfig {
+    #[serde(default)]
+    pub cert_path: String,
+    #[serde(default)]
+    pub key_path: String,
+}
+
+impl HttpTlsConfig {
+    fn validate(&self) -> crate::error::McpResult<()> {
+        validate_non_empty("server.http.tls.cert_path", &self.cert_path)?;
+        validate_non_empty("server.http.tls.key_path", &self.key_path)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HttpAuthConfig {
+    pub mode: HttpAuthMode,
+    pub development_token_env: String,
+    #[serde(default)]
+    pub development_tenant: Option<String>,
+    pub issuer: String,
+    pub audience: String,
+    pub required_scopes: Vec<String>,
+    pub jwt_algorithm: JwtAlgorithm,
+    #[serde(default)]
+    pub jwt_key_env: String,
+    #[serde(default)]
+    pub jwks_url: String,
+    #[serde(default)]
+    pub jwks_ca_path: Option<String>,
+    #[serde(default = "default_jwks_refresh_seconds")]
+    pub jwks_refresh_seconds: u64,
+    #[serde(default = "default_jwks_max_stale_seconds")]
+    pub jwks_max_stale_seconds: u64,
+    pub protected_resource_metadata_path: String,
+}
+
+impl HttpAuthConfig {
+    fn validate(&self) -> crate::error::McpResult<()> {
+        validate_non_empty("server.http.auth.development_token_env", &self.development_token_env)?;
+        if self
+            .development_tenant
+            .as_deref()
+            .is_some_and(|tenant| tenant.trim().is_empty())
+        {
+            return Err(McpError::invalid_config(
+                "server.http.auth.development_tenant must not be empty when configured".to_string(),
+            ));
+        }
+        validate_non_empty(
+            "server.http.auth.protected_resource_metadata_path",
+            &self.protected_resource_metadata_path,
+        )?;
+        if !self.protected_resource_metadata_path.starts_with('/') {
+            return Err(McpError::invalid_config(
+                "server.http.auth.protected_resource_metadata_path must start with '/'".to_string(),
+            ));
+        }
+        if self.required_scopes.iter().any(|scope| scope.trim().is_empty()) {
+            return Err(McpError::invalid_config(
+                "server.http.auth.required_scopes must not contain empty values".to_string(),
+            ));
+        }
+        if self.jwks_ca_path.is_some() && self.mode != HttpAuthMode::OAuthJwt {
+            return Err(McpError::invalid_config(
+                "server.http.auth.jwks_ca_path is only valid for OAuth JWT over HTTPS".to_string(),
+            ));
+        }
+        if self.mode == HttpAuthMode::OAuthJwt {
+            validate_non_empty("server.http.auth.issuer", &self.issuer)?;
+            validate_non_empty("server.http.auth.audience", &self.audience)?;
+            if self.required_scopes.is_empty() {
+                return Err(McpError::invalid_config(
+                    "server.http.auth.required_scopes must not be empty for OAuth".to_string(),
+                ));
+            }
+            let issuer = url::Url::parse(&self.issuer).map_err(|_| {
+                McpError::invalid_config("server.http.auth.issuer must be an absolute HTTPS URL".to_string())
+            })?;
+            if issuer.scheme() != "https"
+                || issuer.cannot_be_a_base()
+                || issuer.host_str().is_none()
+                || !issuer.username().is_empty()
+                || issuer.password().is_some()
+                || issuer.fragment().is_some()
+            {
+                return Err(McpError::invalid_config(
+                    "server.http.auth.issuer must be an absolute HTTPS URL".to_string(),
+                ));
+            }
+            if self.jwt_algorithm != JwtAlgorithm::Rs256 {
+                return Err(McpError::invalid_config(
+                    "server.http.auth.jwt_algorithm must be rs256 for OAuth".to_string(),
+                ));
+            }
+            let jwks_url = url::Url::parse(&self.jwks_url).map_err(|_| {
+                McpError::invalid_config("server.http.auth.jwks_url must be an absolute HTTPS URL".to_string())
+            })?;
+            if jwks_url.scheme() != "https"
+                || jwks_url.cannot_be_a_base()
+                || jwks_url.host_str().is_none()
+                || !jwks_url.username().is_empty()
+                || jwks_url.password().is_some()
+                || jwks_url.fragment().is_some()
+            {
+                return Err(McpError::invalid_config(
+                    "server.http.auth.jwks_url must be an absolute HTTPS URL".to_string(),
+                ));
+            }
+            if let Some(jwks_ca_path) = self.jwks_ca_path.as_deref() {
+                validate_non_empty("server.http.auth.jwks_ca_path", jwks_ca_path)?;
+                validate_jwks_ca_file(Path::new(jwks_ca_path))?;
+            }
+            if self.jwks_refresh_seconds == 0 {
+                return Err(McpError::invalid_config(
+                    "server.http.auth.jwks_refresh_seconds must be greater than zero".to_string(),
+                ));
+            }
+            if self.jwks_max_stale_seconds < self.jwks_refresh_seconds {
+                return Err(McpError::invalid_config(
+                    "server.http.auth.jwks_max_stale_seconds must be at least jwks_refresh_seconds".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+const fn default_jwks_refresh_seconds() -> u64 {
+    300
+}
+
+const fn default_jwks_max_stale_seconds() -> u64 {
+    900
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum HttpAuthMode {
+    DevelopmentToken,
+    #[serde(rename = "oauth-jwt", alias = "o-auth-jwt")]
+    OAuthJwt,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum JwtAlgorithm {
+    Hs256,
+    Rs256,
+}
+
+#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ClusterConfig {
+    pub name: String,
+    pub namesrv_addr: String,
+    pub default: Option<bool>,
+    /// Physical cluster name returned by NameServer. Defaults to the logical
+    /// MCP cluster name when both are identical.
+    #[serde(default)]
+    pub rocketmq_cluster_name: Option<String>,
+    /// Optional tenant binding. When set, HTTP callers must present the exact
+    /// `rocketmq_tenant` JWT claim.
+    #[serde(default)]
+    pub tenant: Option<String>,
+    /// Reference to a RocketMQ request-signing identity.
+    ///
+    /// Secret values are never accepted inline in the MCP configuration.
+    #[serde(default)]
+    pub credentials: Option<ClusterCredentialReference>,
+    /// Logical Proxy aliases. Endpoints are internal-only topology data.
+    #[serde(default)]
+    pub proxies: Vec<ProxyAlias>,
+    /// Logical Controller aliases. Endpoints are internal-only topology data.
+    #[serde(default)]
+    pub controllers: Vec<ControllerAlias>,
+}
+
+impl ClusterConfig {
+    pub(crate) fn physical_cluster_name(&self) -> &str {
+        self.rocketmq_cluster_name.as_deref().unwrap_or(&self.name)
+    }
+
+    pub(crate) fn proxy_endpoint(&self, proxy_name: &str) -> Option<&str> {
+        self.proxies
+            .iter()
+            .find(|proxy| proxy.name == proxy_name)
+            .map(|proxy| proxy.endpoint.as_str())
+    }
+}
+
+/// Returns the cluster a request selects when it omits `cluster`: the one marked `default`,
+/// otherwise the only configured cluster.
+pub(crate) fn default_cluster(clusters: &[ClusterConfig]) -> Option<&ClusterConfig> {
+    clusters
+        .iter()
+        .find(|cluster| cluster.default.unwrap_or(false))
+        .or_else(|| (clusters.len() == 1).then(|| &clusters[0]))
+}
+
+impl std::fmt::Debug for ClusterConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ClusterConfig")
+            .field("name", &self.name)
+            .field("namesrv_addr", &"[REDACTED]")
+            .field("default", &self.default)
+            .field("rocketmq_cluster_name", &self.rocketmq_cluster_name)
+            .field("tenant", &self.tenant)
+            .field("credentials", &self.credentials)
+            .field("proxies", &self.proxies)
+            .field("controllers", &self.controllers)
+            .finish()
+    }
+}
+
+#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProxyAlias {
+    pub name: String,
+    pub endpoint: String,
+}
+
+#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ControllerAlias {
+    pub name: String,
+    pub endpoint: String,
+}
+
+impl std::fmt::Debug for ControllerAlias {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ControllerAlias")
+            .field("name", &self.name)
+            .field("endpoint", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for ProxyAlias {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProxyAlias")
+            .field("name", &self.name)
+            .field("endpoint", &"[REDACTED]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ClusterCredentialReference {
+    #[serde(default)]
+    pub access_key_env: Option<String>,
+    #[serde(default)]
+    pub secret_key_env: Option<String>,
+    #[serde(default)]
+    pub security_token_env: Option<String>,
+    /// Mounted YAML secret containing `access_key`, `secret_key`, and an
+    /// optional `security_token`.
+    #[serde(default)]
+    pub file: Option<String>,
+}
+
+impl std::fmt::Debug for ClusterCredentialReference {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let source = if self.file.is_some() {
+            "mounted_file"
+        } else {
+            "environment"
+        };
+        formatter
+            .debug_struct("ClusterCredentialReference")
+            .field("source", &source)
+            .field("reference", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl ClusterCredentialReference {
+    fn validate_reference(&self, cluster: &str) -> crate::error::McpResult<()> {
+        let has_file = self.file.is_some();
+        let has_environment =
+            self.access_key_env.is_some() || self.secret_key_env.is_some() || self.security_token_env.is_some();
+        if has_file == has_environment {
+            return Err(cluster_credentials_error(
+                cluster,
+                "configure exactly one source: file or access_key_env/secret_key_env",
+            ));
+        }
+        if let Some(file) = &self.file {
+            if file.trim().is_empty() {
+                return Err(cluster_credentials_error(cluster, "file reference must not be empty"));
+            }
+            return Ok(());
+        }
+
+        let access_key_env = self.access_key_env.as_deref().ok_or_else(|| {
+            cluster_credentials_error(cluster, "access_key_env and secret_key_env must be configured together")
+        })?;
+        let secret_key_env = self.secret_key_env.as_deref().ok_or_else(|| {
+            cluster_credentials_error(cluster, "access_key_env and secret_key_env must be configured together")
+        })?;
+        validate_credential_env_name(cluster, "access_key_env", access_key_env)?;
+        validate_credential_env_name(cluster, "secret_key_env", secret_key_env)?;
+        if let Some(security_token_env) = self.security_token_env.as_deref() {
+            validate_credential_env_name(cluster, "security_token_env", security_token_env)?;
+        }
+        Ok(())
+    }
+
+    fn resolve_paths(&mut self, config_dir: &Path, cluster: &str) -> crate::error::McpResult<()> {
+        let Some(file) = self.file.as_deref() else {
+            return Ok(());
+        };
+        if file.trim().is_empty() {
+            return Err(cluster_credentials_error(cluster, "file reference must not be empty"));
+        }
+        let resolved = resolve_config_relative(config_dir, file);
+        let canonical = resolved.canonicalize().map_err(McpError::from_source)?;
+        self.file = Some(canonical.to_string_lossy().into_owned());
+        Ok(())
+    }
+
+    /// Whether resolving this reference reads a mounted file rather than the environment.
+    pub(crate) fn reads_file(&self) -> bool {
+        self.file.is_some()
+    }
+
+    /// Reads the referenced credentials. Nothing is cached, so a rotated secret is seen by the
+    /// next call.
+    ///
+    /// A mounted file is read synchronously: async callers run this on a blocking executor when
+    /// [`Self::reads_file`] is true.
+    pub(crate) fn resolve(&self, cluster: &str) -> crate::error::McpResult<AdminCredentials> {
+        self.validate_reference(cluster)?;
+        let (access_key, secret_key, security_token) = if let Some(file) = self.file.as_deref() {
+            resolve_credential_file(cluster, Path::new(file))?
+        } else {
+            let access_key_env = self.access_key_env.as_deref().ok_or_else(|| {
+                cluster_credentials_error(cluster, "access_key_env and secret_key_env must be configured together")
+            })?;
+            let secret_key_env = self.secret_key_env.as_deref().ok_or_else(|| {
+                cluster_credentials_error(cluster, "access_key_env and secret_key_env must be configured together")
+            })?;
+            let access_key = read_credential_env(cluster, access_key_env)?;
+            let secret_key = read_credential_env(cluster, secret_key_env)?;
+            let security_token = self
+                .security_token_env
+                .as_deref()
+                .map(|name| read_credential_env(cluster, name))
+                .transpose()?;
+            (access_key, secret_key, security_token)
+        };
+
+        AdminCredentials::try_new(access_key, secret_key, security_token)
+            .map_err(|_| cluster_credentials_error(cluster, "resolved credentials contain an empty required value"))
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClusterCredentialFile {
+    access_key: String,
+    secret_key: String,
+    #[serde(default)]
+    security_token: Option<String>,
+}
+
+fn resolve_credential_file(cluster: &str, path: &Path) -> crate::error::McpResult<(String, String, Option<String>)> {
+    let metadata = std::fs::metadata(path).map_err(McpError::from_source)?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_CLUSTER_CREDENTIAL_BYTES as u64 {
+        return Err(cluster_credentials_error(
+            cluster,
+            "credential file must be a non-empty regular file no larger than 64 KiB",
+        ));
+    }
+    let bytes = std::fs::read(path).map_err(McpError::from_source)?;
+    let credentials: ClusterCredentialFile = serde_yaml::from_slice(&bytes).map_err(McpError::from_source)?;
+    Ok((
+        credentials.access_key,
+        credentials.secret_key,
+        credentials.security_token,
+    ))
+}
+
+fn read_credential_env(_cluster: &str, name: &str) -> crate::error::McpResult<String> {
+    std::env::var(name).map_err(McpError::from_source)
+}
+
+fn validate_credential_env_name(cluster: &str, field: &str, name: &str) -> crate::error::McpResult<()> {
+    if name.trim().is_empty() || name.contains('=') || name.contains('\0') {
+        return Err(cluster_credentials_error(
+            cluster,
+            format!("{field} must contain a valid environment variable name"),
+        ));
+    }
+    Ok(())
+}
+
+fn cluster_credentials_error(cluster: &str, reason: impl std::fmt::Display) -> McpError {
+    McpError::invalid_config(format!("clusters `{cluster}` credentials: {reason}"))
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SecurityConfig {
+    pub profile: String,
+    pub allow_change_planning: bool,
+    pub sanitize_output: bool,
+    pub rate_limit_per_minute: u32,
+    pub permissions_file: String,
+    pub max_concurrent_requests_per_cluster: usize,
+    /// Name of the environment variable that holds the key for client and message pseudonyms.
+    ///
+    /// Replicas that share the key report the same pseudonym for the same identifier. Without
+    /// it every process draws its own key, and pseudonyms change when it restarts.
+    #[serde(default)]
+    pub pseudonym_key_env: Option<String>,
+    /// Requests per minute that one principal may send over HTTP, whatever they ask for.
+    ///
+    /// It is counted apart from `rate_limit_per_minute`, which is the budget of one operation on
+    /// one cluster. Unset, it is ten times that budget: with one budget for both, a caller could
+    /// never use up the budget of a single Tool.
+    #[serde(default)]
+    pub http_rate_limit_per_minute: Option<u32>,
+}
+
+/// How many times the budget of one operation the HTTP budget of a principal is by default.
+const DEFAULT_HTTP_RATE_LIMIT_FACTOR: u32 = 10;
+
+/// A shared pseudonym key read from the environment.
+pub(crate) struct PseudonymKey(String);
+
+impl PseudonymKey {
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
+impl std::fmt::Debug for PseudonymKey {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("PseudonymKey([REDACTED])")
+    }
+}
+
+impl SecurityConfig {
+    /// Returns the requests per minute that one principal may send over HTTP.
+    pub fn http_rate_limit(&self) -> u32 {
+        self.http_rate_limit_per_minute.unwrap_or_else(|| {
+            self.rate_limit_per_minute
+                .saturating_mul(DEFAULT_HTTP_RATE_LIMIT_FACTOR)
+        })
+    }
+
+    /// Reads the shared pseudonym key that `pseudonym_key_env` names, if one is configured.
+    ///
+    /// Whitespace around the value is ignored, so that a key mounted with a trailing newline
+    /// matches the same key set without one.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the variable name is not usable, the variable is not set, or the key is
+    /// shorter than 32 bytes or longer than 1024.
+    pub(crate) fn resolve_pseudonym_key(&self) -> crate::error::McpResult<Option<PseudonymKey>> {
+        self.pseudonym_key_from(|name| std::env::var(name))
+    }
+
+    fn pseudonym_key_from(
+        &self,
+        read_variable: impl FnOnce(&str) -> Result<String, std::env::VarError>,
+    ) -> crate::error::McpResult<Option<PseudonymKey>> {
+        let Some(name) = self.pseudonym_key_env.as_deref() else {
+            return Ok(None);
+        };
+        if name.trim().is_empty() || name.contains('=') || name.contains('\0') {
+            return Err(McpError::invalid_config(
+                "security.pseudonym_key_env must contain a valid environment variable name".to_string(),
+            ));
+        }
+        let value = read_variable(name).map_err(McpError::from_source)?;
+        let key = value.trim();
+        if !(MIN_PSEUDONYM_KEY_BYTES..=MAX_PSEUDONYM_KEY_BYTES).contains(&key.len()) {
+            return Err(McpError::invalid_config(
+                "the shared pseudonym key must be between 32 and 1024 bytes long".to_string(),
+            ));
+        }
+        Ok(Some(PseudonymKey(key.to_owned())))
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AuditConfig {
+    pub enabled: bool,
+    pub sink: String,
+    pub path: String,
+    pub queue_capacity: usize,
+    #[serde(default = "default_audit_max_record_bytes")]
+    pub max_record_bytes: usize,
+    #[serde(default = "default_audit_queue_max_bytes")]
+    pub queue_max_bytes: usize,
+    /// The size at which the file sink seals the audit file and starts a new one. Zero keeps
+    /// one file, whatever its size.
+    #[serde(default = "default_audit_max_file_bytes")]
+    pub max_file_bytes: u64,
+}
+
+const fn default_audit_max_record_bytes() -> usize {
+    16 * 1024
+}
+
+const fn default_audit_queue_max_bytes() -> usize {
+    1024 * 1024
+}
+
+const fn default_audit_max_file_bytes() -> u64 {
+    64 * 1024 * 1024
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CacheConfig {
+    pub enabled: bool,
+    pub max_entries: usize,
+    #[serde(default = "default_cursor_snapshot_max_entries")]
+    pub cursor_snapshot_max_entries: usize,
+    #[serde(default = "default_cursor_snapshot_ttl_ms")]
+    pub cursor_snapshot_ttl_ms: u64,
+    pub cluster_overview_ttl_ms: u64,
+    pub topic_list_ttl_ms: u64,
+    pub broker_metrics_ttl_ms: u64,
+    pub consumer_lag_ttl_ms: u64,
+    /// How long a Broker configuration summary is current. `broker_metrics_ttl_ms` when not set.
+    #[serde(default)]
+    pub broker_config_ttl_ms: Option<u64>,
+    /// How long the metadata of a message is current. `broker_metrics_ttl_ms` when not set.
+    #[serde(default)]
+    pub message_metadata_ttl_ms: Option<u64>,
+    /// How long the state read from a Proxy is current. `broker_metrics_ttl_ms` when not set.
+    #[serde(default)]
+    pub proxy_state_ttl_ms: Option<u64>,
+    /// How long a result that is no longer current still answers when its source is unavailable
+    /// or does not answer in time. Such a result carries the warning `stale_cache_value` and
+    /// reports its real age. `0`, the default, never serves one; the maximum is 300000.
+    #[serde(default)]
+    pub stale_if_error_ms: u64,
+}
+
+impl CacheConfig {
+    pub(crate) fn broker_config_ttl(&self) -> Duration {
+        Duration::from_millis(self.broker_config_ttl_ms.unwrap_or(self.broker_metrics_ttl_ms))
+    }
+
+    pub(crate) fn message_metadata_ttl(&self) -> Duration {
+        Duration::from_millis(self.message_metadata_ttl_ms.unwrap_or(self.broker_metrics_ttl_ms))
+    }
+
+    pub(crate) fn proxy_state_ttl(&self) -> Duration {
+        Duration::from_millis(self.proxy_state_ttl_ms.unwrap_or(self.broker_metrics_ttl_ms))
+    }
+
+    pub(crate) fn stale_if_error(&self) -> Duration {
+        Duration::from_millis(self.stale_if_error_ms)
+    }
+}
+
+const fn default_cursor_snapshot_max_entries() -> usize {
+    256
+}
+
+const fn default_cursor_snapshot_ttl_ms() -> u64 {
+    60_000
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosisConfig {
+    pub consumer_lag_policy_profile: String,
+    /// Backlog, in messages, up to which a Consumer Group is healthy.
+    pub consumer_lag_threshold: i64,
+    /// How far behind production a Consumer Group may be before its backlog counts as delayed.
+    #[serde(default = "default_consume_delay_threshold_ms")]
+    pub consume_delay_threshold_ms: u64,
+    /// In-flight messages from which a POP Consumer Group counts as holding too many unacknowledged.
+    #[serde(default = "default_pop_inflight_threshold")]
+    pub pop_inflight_threshold: i64,
+    /// How recently a retry or dead-letter Topic must have received a message to count as growing.
+    #[serde(default = "default_retry_activity_window_ms")]
+    pub retry_activity_window_ms: u64,
+    /// Thresholds for single Topics and Consumer Groups; see [`DiagnosisOverride`].
+    #[serde(default)]
+    pub overrides: Vec<DiagnosisOverride>,
+}
+
+/// Replaces diagnosis thresholds for one Topic, one Consumer Group, or one Topic and Consumer Group
+/// pair. A threshold the override leaves out keeps the value it would otherwise have.
+///
+/// Every override that selects a diagnosis applies, the least specific first: a Topic override,
+/// then a Consumer Group override, then the override that names both.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosisOverride {
+    #[serde(default)]
+    pub topic: Option<String>,
+    #[serde(default)]
+    pub consumer_group: Option<String>,
+    #[serde(default)]
+    pub consumer_lag_threshold: Option<i64>,
+    #[serde(default)]
+    pub consume_delay_threshold_ms: Option<u64>,
+    #[serde(default)]
+    pub pop_inflight_threshold: Option<i64>,
+    #[serde(default)]
+    pub retry_activity_window_ms: Option<u64>,
+}
+
+/// A diagnosis looks every override up, so the list stays short enough to scan.
+const MAX_DIAGNOSIS_OVERRIDES: usize = 1_000;
+
+const fn default_consume_delay_threshold_ms() -> u64 {
+    5 * 60 * 1_000
+}
+
+const fn default_pop_inflight_threshold() -> i64 {
+    1_000
+}
+
+const fn default_retry_activity_window_ms() -> u64 {
+    10 * 60 * 1_000
+}
+
+impl Default for DiagnosisConfig {
+    fn default() -> Self {
+        Self {
+            consumer_lag_policy_profile: "production-default".to_string(),
+            consumer_lag_threshold: 1_000,
+            consume_delay_threshold_ms: default_consume_delay_threshold_ms(),
+            pop_inflight_threshold: default_pop_inflight_threshold(),
+            retry_activity_window_ms: default_retry_activity_window_ms(),
+            overrides: Vec::new(),
+        }
+    }
+}
+
+impl DiagnosisConfig {
+    fn validate(&self) -> crate::error::McpResult<()> {
+        validate_non_empty(
+            "diagnosis.consumer_lag_policy_profile",
+            &self.consumer_lag_policy_profile,
+        )?;
+        validate_diagnosis_thresholds(
+            "diagnosis",
+            Some(self.consumer_lag_threshold),
+            Some(self.consume_delay_threshold_ms),
+            Some(self.pop_inflight_threshold),
+            Some(self.retry_activity_window_ms),
+        )?;
+        if self.overrides.len() > MAX_DIAGNOSIS_OVERRIDES {
+            return Err(McpError::invalid_config(format!(
+                "diagnosis.overrides must not hold more than {MAX_DIAGNOSIS_OVERRIDES} entries"
+            )));
+        }
+        let mut selectors = std::collections::BTreeSet::new();
+        for (index, entry) in self.overrides.iter().enumerate() {
+            let field = format!("diagnosis.overrides[{index}]");
+            for (name, value) in [("topic", &entry.topic), ("consumer_group", &entry.consumer_group)] {
+                if value
+                    .as_deref()
+                    .is_some_and(|value| value.is_empty() || value != value.trim())
+                {
+                    return Err(McpError::invalid_config(format!(
+                        "{field}.{name} must be a name without surrounding whitespace"
+                    )));
+                }
+            }
+            if entry.topic.is_none() && entry.consumer_group.is_none() {
+                return Err(McpError::invalid_config(format!(
+                    "{field} must name a topic, a consumer_group, or both"
+                )));
+            }
+            if entry.consumer_lag_threshold.is_none()
+                && entry.consume_delay_threshold_ms.is_none()
+                && entry.pop_inflight_threshold.is_none()
+                && entry.retry_activity_window_ms.is_none()
+            {
+                return Err(McpError::invalid_config(format!(
+                    "{field} must set at least one threshold"
+                )));
+            }
+            validate_diagnosis_thresholds(
+                &field,
+                entry.consumer_lag_threshold,
+                entry.consume_delay_threshold_ms,
+                entry.pop_inflight_threshold,
+                entry.retry_activity_window_ms,
+            )?;
+            if !selectors.insert((entry.topic.as_deref(), entry.consumer_group.as_deref())) {
+                return Err(McpError::invalid_config(format!(
+                    "{field} selects the same topic and consumer_group as an earlier entry"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_diagnosis_thresholds(
+    field: &str,
+    consumer_lag_threshold: Option<i64>,
+    consume_delay_threshold_ms: Option<u64>,
+    pop_inflight_threshold: Option<i64>,
+    retry_activity_window_ms: Option<u64>,
+) -> crate::error::McpResult<()> {
+    if consumer_lag_threshold.is_some_and(|threshold| threshold < 0) {
+        return Err(McpError::invalid_config(format!(
+            "{field}.consumer_lag_threshold must not be negative"
+        )));
+    }
+    if consume_delay_threshold_ms == Some(0) {
+        return Err(McpError::invalid_config(format!(
+            "{field}.consume_delay_threshold_ms must be greater than zero"
+        )));
+    }
+    if pop_inflight_threshold.is_some_and(|threshold| threshold < 1) {
+        return Err(McpError::invalid_config(format!(
+            "{field}.pop_inflight_threshold must be greater than zero"
+        )));
+    }
+    if retry_activity_window_ms == Some(0) {
+        return Err(McpError::invalid_config(format!(
+            "{field}.retry_activity_window_ms must be greater than zero"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_non_empty(field: &str, value: &str) -> crate::error::McpResult<()> {
+    if value.trim().is_empty() {
+        return Err(McpError::invalid_config(format!("{field} must not be empty")));
+    }
+    Ok(())
+}
+
+fn validate_logical_alias(field: &str, value: &str) -> crate::error::McpResult<()> {
+    if value != value.trim()
+        || value.is_empty()
+        || value.len() > 100
+        || value.parse::<std::net::IpAddr>().is_ok()
+        || value.parse::<std::net::SocketAddr>().is_ok()
+        || value.contains([':', '/', '\\', '@', '=', '&', '?'])
+        || value.chars().any(char::is_control)
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
+    {
+        Err(McpError::invalid_config(format!(
+            "{field} must be a logical identifier of at most 100 bytes"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_jwks_ca_file(path: &Path) -> crate::error::McpResult<()> {
+    let bytes = std::fs::read(path).map_err(McpError::from_source)?;
+    if bytes.is_empty() || bytes.len() > MAX_JWKS_CA_BYTES {
+        return Err(McpError::invalid_config(
+            "server.http.auth.jwks_ca_path must contain a bounded PEM CA bundle".to_string(),
+        ));
+    }
+    let pem = std::str::from_utf8(&bytes).map_err(McpError::from_source)?;
+    let certificate_count = pem.matches("-----BEGIN CERTIFICATE-----").count();
+    let contains_other_pem_section = pem.lines().map(str::trim).any(|line| {
+        (line.starts_with("-----BEGIN ") && line != "-----BEGIN CERTIFICATE-----")
+            || (line.starts_with("-----END ") && line != "-----END CERTIFICATE-----")
+    });
+    if certificate_count == 0
+        || certificate_count != pem.matches("-----END CERTIFICATE-----").count()
+        || contains_other_pem_section
+    {
+        return Err(McpError::invalid_config(
+            "server.http.auth.jwks_ca_path must contain only PEM certificates".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_security_profile(profile: &str) -> crate::error::McpResult<()> {
+    match profile.trim().to_ascii_lowercase().as_str() {
+        "read_only" | "readonly" | "read-only" | "diagnose" | "diagnostic" | "operator" => Ok(()),
+        other => Err(McpError::invalid_config(format!(
+            "unsupported security.profile `{other}`"
+        ))),
+    }
+}
+
+fn validate_audit_sink(sink: &str) -> crate::error::McpResult<()> {
+    match sink.trim().to_ascii_lowercase().as_str() {
+        "memory" | "file" | "tracing" => Ok(()),
+        other => Err(McpError::invalid_config(format!("unsupported audit.sink `{other}`"))),
+    }
+}
+
+fn trimmed_override(field: &str, value: Option<&str>) -> crate::error::McpResult<Option<String>> {
+    match value.map(str::trim) {
+        Some("") => Err(McpError::invalid_config(format!("{field} must not be empty"))),
+        Some(value) => Ok(Some(value.to_string())),
+        None => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use super::*;
+
+    const CONFIGURATION_ERROR: &str = "MCP configuration is invalid";
+    const OPERATIONAL_ERROR: &str = "MCP operation failed";
+
+    fn assert_fixed_error(error: &McpError, expected: &str) {
+        assert_eq!(error.to_string(), expected);
+        assert_eq!(format!("{error:?}"), format!("McpError(\"{expected}\")"));
+    }
+
+    fn assert_configuration_error(error: &McpError) {
+        assert_fixed_error(error, CONFIGURATION_ERROR);
+    }
+
+    fn assert_operational_error(error: &McpError) {
+        assert_fixed_error(error, OPERATIONAL_ERROR);
+    }
+
+    #[test]
+    fn transport_accepts_documented_values() {
+        assert_eq!(TransportKind::from_str("stdio").unwrap(), TransportKind::Stdio);
+        assert_eq!(
+            TransportKind::from_str("streamable-http").unwrap(),
+            TransportKind::StreamableHttp
+        );
+        assert_eq!(TransportKind::from_str("http").unwrap(), TransportKind::StreamableHttp);
+        assert!(TransportKind::from_str("sse").is_err());
+    }
+
+    #[test]
+    fn load_parses_example_config() {
+        let config = McpConfig::load(example_config_path()).unwrap();
+
+        assert_eq!(config.server.name, "rocketmq-mcp");
+        assert_eq!(config.server.transport, TransportKind::Stdio);
+        assert_eq!(config.clusters.len(), 1);
+        assert_eq!(config.clusters[0].namesrv_addr, "127.0.0.1:9876");
+        assert_eq!(config.diagnosis.consumer_lag_policy_profile, "production-default");
+        assert_eq!(config.diagnosis.consumer_lag_threshold, 1_000);
+        assert_eq!(config.audit.max_record_bytes, 16 * 1024);
+        assert_eq!(config.audit.queue_max_bytes, 1024 * 1024);
+        assert_eq!(config.audit.max_file_bytes, 64 * 1024 * 1024);
+        assert_eq!(config.logging.filter.as_deref(), Some("info"));
+        assert!(config.server.log_level.is_none());
+        assert_eq!(config.clusters[0].proxies.len(), 1);
+        assert_eq!(config.clusters[0].proxy_endpoint("proxy-local"), Some("127.0.0.1:8081"));
+        assert_eq!(config.clusters[0].controllers.len(), 1);
+    }
+
+    #[test]
+    fn cluster_proxy_aliases_are_optional_validated_and_cluster_scoped() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::copy(
+            example_config_path()
+                .parent()
+                .expect("example config has a parent")
+                .join("permissions.example.toml"),
+            temp.path().join("permissions.example.toml"),
+        )
+        .unwrap();
+        let example = std::fs::read_to_string(example_config_path()).unwrap();
+        let (prefix, proxy_and_suffix) = example.split_once("[[clusters.proxies]]").unwrap();
+        let (_, suffix) = proxy_and_suffix.split_once("[security]").unwrap();
+        let legacy_path = temp.path().join("legacy-mcp.toml");
+        std::fs::write(&legacy_path, format!("{prefix}[security]{suffix}")).unwrap();
+        let legacy = McpConfig::load(&legacy_path).expect("legacy TOML without proxies must deserialize");
+        assert!(legacy.clusters[0].proxies.is_empty());
+
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.clusters[0].proxies.clear();
+        config
+            .validate()
+            .expect("legacy configurations without proxies remain valid");
+        assert_eq!(config.clusters[0].proxy_endpoint("proxy-local"), None);
+
+        config.clusters[0].proxies = vec![
+            ProxyAlias {
+                name: "proxy-a".to_string(),
+                endpoint: "internal-a:8081".to_string(),
+            },
+            ProxyAlias {
+                name: "proxy-a".to_string(),
+                endpoint: "internal-b:8081".to_string(),
+            },
+        ];
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
+
+        config.clusters[0].proxies[1].name = "proxy-b".to_string();
+        config.clusters[0].proxies[1].endpoint.clear();
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
+
+        config.clusters[0].proxies[1].endpoint = "https://internal-b:8081/path".to_string();
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
+
+        config.clusters[0].proxies[1].endpoint = "internal-b:8081".to_string();
+        config.clusters[0].proxies[1].name = " proxy-b ".to_string();
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
+
+        config.clusters[0].proxies[1].name = "proxy-b".to_string();
+        config.clusters[0].proxies[1].endpoint = "internal-b:8081".to_string();
+        let mut secondary = config.clusters[0].clone();
+        secondary.name = "secondary".to_string();
+        secondary.namesrv_addr = "127.0.0.2:9876".to_string();
+        secondary.default = Some(false);
+        secondary.controllers.clear();
+        secondary.proxies = vec![ProxyAlias {
+            name: "proxy-a".to_string(),
+            endpoint: "secondary-internal:8081".to_string(),
+        }];
+        config.clusters.push(secondary);
+        config.validate().unwrap();
+        assert_eq!(config.clusters[0].proxy_endpoint("proxy-a"), Some("internal-a:8081"));
+        assert_eq!(
+            config.clusters[1].proxy_endpoint("proxy-a"),
+            Some("secondary-internal:8081")
+        );
+    }
+
+    #[test]
+    fn proxy_alias_debug_and_validation_never_expose_endpoints() {
+        const ENDPOINT_SENTINEL: &str = "private-proxy-endpoint.example:18081";
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.clusters[0].proxies = vec![ProxyAlias {
+            name: "proxy-a".to_string(),
+            endpoint: ENDPOINT_SENTINEL.to_string(),
+        }];
+        let debug = format!("{config:?}");
+        assert!(debug.contains("proxy-a"));
+        assert!(!debug.contains(ENDPOINT_SENTINEL));
+
+        config.clusters[0].proxies[0].name = "127.0.0.1:8081".to_string();
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
+    }
+
+    #[test]
+    fn infrastructure_targets_are_bounded_unique_and_debug_redacted() {
+        const CONTROLLER_SENTINEL: &str = "private-controller.example:19878";
+        const NAMESERVER_SENTINEL: &str = "private-nameserver.example:19876";
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.clusters[0].controllers = vec![ControllerAlias {
+            name: "controller-a".to_string(),
+            endpoint: CONTROLLER_SENTINEL.to_string(),
+        }];
+        config.clusters[0].namesrv_addr = NAMESERVER_SENTINEL.to_string();
+        config.validate().unwrap();
+        let debug = format!("{config:?}");
+        assert!(debug.contains("controller-a"));
+        assert!(!debug.contains(CONTROLLER_SENTINEL));
+        assert!(!debug.contains(NAMESERVER_SENTINEL));
+
+        config.clusters[0].controllers = (0..=32)
+            .map(|index| ControllerAlias {
+                name: format!("controller-{index}"),
+                endpoint: format!("controller-{index}.internal:9878"),
+            })
+            .collect();
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
+
+        config.clusters[0].controllers = vec![
+            ControllerAlias {
+                name: "controller-a".to_string(),
+                endpoint: "controller-a.internal:9878".to_string(),
+            },
+            ControllerAlias {
+                name: "controller-a".to_string(),
+                endpoint: "controller-b.internal:9878".to_string(),
+            },
+        ];
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
+
+        config.clusters[0].controllers.clear();
+        config.clusters[0].namesrv_addr = (0..16)
+            .map(|index| format!("nameserver-{index}.internal:9876"))
+            .collect::<Vec<_>>()
+            .join(";");
+        config.validate().unwrap();
+        config.clusters[0].namesrv_addr.push_str(";nameserver-16.internal:9876");
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
+    }
+
+    #[test]
+    fn infrastructure_endpoint_ownership_is_global_canonical_and_redacted() {
+        fn two_clusters() -> McpConfig {
+            let mut config = McpConfig::load(example_config_path()).unwrap();
+            let mut second = config.clusters[0].clone();
+            second.name = "cluster-b".to_string();
+            second.default = Some(false);
+            second.namesrv_addr = "nameserver-b.internal:9876".to_string();
+            second.controllers = vec![ControllerAlias {
+                name: "controller-b".to_string(),
+                endpoint: "controller-b.internal:9878".to_string(),
+            }];
+            config.clusters.push(second);
+            config
+        }
+
+        let mut shared_controller = two_clusters();
+        shared_controller.clusters[0].controllers[0].endpoint = "SHARED.internal:9878".to_string();
+        shared_controller.clusters[1].controllers[0].endpoint = "shared.INTERNAL:9878".to_string();
+        assert_redacted_ownership_error(shared_controller, "SHARED.internal:9878");
+
+        let mut shared_nameserver = two_clusters();
+        shared_nameserver.clusters[0].namesrv_addr = "NS.Shared.internal:9876".to_string();
+        shared_nameserver.clusters[1].namesrv_addr = "ns.shared.INTERNAL:9876".to_string();
+        assert_redacted_ownership_error(shared_nameserver, "NS.Shared.internal:9876");
+
+        let mut equivalent_ipv6 = two_clusters();
+        equivalent_ipv6.clusters[0].namesrv_addr = "[2001:0db8:0:0:0:0:0:1]:9876".to_string();
+        equivalent_ipv6.clusters[1].namesrv_addr = "[2001:db8::1]:9876".to_string();
+        assert_redacted_ownership_error(equivalent_ipv6, "2001:db8");
+
+        let mut cross_kind = two_clusters();
+        cross_kind.clusters[0].namesrv_addr = "shared-kind.internal:9876".to_string();
+        cross_kind.clusters[1].controllers[0].endpoint = "SHARED-KIND.internal:9876".to_string();
+        assert_redacted_ownership_error(cross_kind, "shared-kind.internal:9876");
+
+        let mut duplicate_cluster = two_clusters();
+        duplicate_cluster.clusters[0].name = "Local-Dev".to_string();
+        duplicate_cluster.clusters[1].name = " local-dev ".to_string();
+        let error = duplicate_cluster.validate().unwrap_err();
+        assert_configuration_error(&error);
+    }
+
+    fn assert_redacted_ownership_error(config: McpConfig, endpoint: &str) {
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
+        let rendered = format!("{error:?} {error}");
+        assert!(!rendered.to_ascii_lowercase().contains(&endpoint.to_ascii_lowercase()));
+    }
+
+    #[test]
+    fn load_preserves_file_observability_overrides() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_path = temp.path().join("mcp.toml");
+        std::fs::copy(
+            example_config_path()
+                .parent()
+                .expect("example config has a parent")
+                .join("permissions.example.toml"),
+            temp.path().join("permissions.example.toml"),
+        )
+        .unwrap();
+        let mut contents = std::fs::read_to_string(example_config_path()).unwrap();
+        contents.push_str(
+            r#"
+
+[observability.traces]
+exporter = "otlp_grpc"
+sampleRatio = 0.4
+
+[observability.otlp]
+endpoint = "http://file-collector:4317"
+protocol = "grpc"
+"#,
+        );
+        std::fs::write(&config_path, contents).unwrap();
+
+        let config = McpConfig::load(&config_path).unwrap();
+
+        assert_eq!(
+            config.observability.traces.exporter,
+            Some(rocketmq_observability::TraceExporter::OtlpGrpc)
+        );
+        assert_eq!(config.observability.traces.sample_ratio, Some(0.4));
+        assert_eq!(
+            config.observability.otlp.endpoint.as_deref(),
+            Some("http://file-collector:4317")
+        );
+        assert_eq!(
+            config.observability.otlp.protocol,
+            Some(rocketmq_observability::OtlpProtocol::Grpc)
+        );
+    }
+
+    #[test]
+    fn observability_deserialization_errors_redact_configured_values() {
+        const ENDPOINT_SENTINEL: &str = "secret-endpoint-sentinel";
+        const HEADER_SENTINEL: &str = "secret-header-sentinel";
+        const RESOURCE_SENTINEL: &str = "secret-resource-sentinel";
+        const INVALID_TYPE_SENTINEL: &str = "secret-invalid-sample-ratio-sentinel";
+        let invalid_overrides = [
+            (
+                format!(r#"resourceAttributes = {{ resource = "{RESOURCE_SENTINEL}" }}"#),
+                format!(
+                    r#"
+
+[observability.otlp]
+endpoint = ["{ENDPOINT_SENTINEL}"]
+headers = {{ authorization = "{HEADER_SENTINEL}" }}
+"#
+                ),
+            ),
+            (
+                format!(r#"resourceAttributes = {{ resource = "{RESOURCE_SENTINEL}" }}"#),
+                format!(
+                    r#"
+
+[observability.otlp]
+endpoint = "{ENDPOINT_SENTINEL}"
+headers = "{HEADER_SENTINEL}"
+"#
+                ),
+            ),
+            (
+                format!(r#"resourceAttributes = "{RESOURCE_SENTINEL}""#),
+                format!(
+                    r#"
+
+[observability.otlp]
+endpoint = "{ENDPOINT_SENTINEL}"
+headers = {{ authorization = "{HEADER_SENTINEL}" }}
+"#
+                ),
+            ),
+            (
+                format!(r#"resourceAttributes = {{ resource = "{RESOURCE_SENTINEL}" }}"#),
+                format!(
+                    r#"
+
+[observability.metrics]
+sampleRatio = "{INVALID_TYPE_SENTINEL}"
+
+[observability.otlp]
+endpoint = "{ENDPOINT_SENTINEL}"
+headers = {{ authorization = "{HEADER_SENTINEL}" }}
+"#
+                ),
+            ),
+        ];
+
+        for (observability_root, invalid_override) in invalid_overrides {
+            let (_temp, config_path) = write_example_config_with(&observability_root, &invalid_override);
+            let error = McpConfig::load(&config_path).expect_err("invalid observability types must be rejected");
+            assert_configuration_error(&error);
+            assert!(error.source().is_some_and(|source| source.is::<config::ConfigError>()));
+            for output in [error.to_string(), format!("{error:?}")] {
+                assert!(!output.contains(ENDPOINT_SENTINEL));
+                assert!(!output.contains(HEADER_SENTINEL));
+                assert!(!output.contains(RESOURCE_SENTINEL));
+                assert!(!output.contains(INVALID_TYPE_SENTINEL));
+            }
+        }
+    }
+
+    #[test]
+    fn nested_observability_map_type_errors_redact_custom_keys() {
+        const HEADER_KEY_SENTINEL: &str = "secret-header-key-sentinel";
+        const RESOURCE_KEY_SENTINEL: &str = "secret-resource-key-sentinel";
+        const INVALID_VALUE_SENTINEL: &str = "secret-nested-value-sentinel";
+        let cases = [
+            (
+                String::new(),
+                format!(
+                    r#"
+
+[observability.otlp]
+headers = {{ "{HEADER_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}
+"#
+                ),
+                HEADER_KEY_SENTINEL,
+            ),
+            (
+                format!(r#"resourceAttributes = {{ "{RESOURCE_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}"#),
+                String::new(),
+                RESOURCE_KEY_SENTINEL,
+            ),
+        ];
+
+        for (observability_root, nested_override, key_sentinel) in cases {
+            let (_temp, config_path) = write_example_config_with(&observability_root, &nested_override);
+            let error = McpConfig::load(&config_path).expect_err("non-string observability map values must fail");
+            assert_configuration_error(&error);
+            assert!(error.source().is_some_and(|source| source.is::<config::ConfigError>()));
+            for output in [error.to_string(), format!("{error:?}")] {
+                assert!(!output.contains(key_sentinel));
+                assert!(!output.contains(INVALID_VALUE_SENTINEL));
+            }
+        }
+    }
+
+    #[test]
+    fn config_debug_redacts_observability_and_cluster_references() {
+        const ENDPOINT_SENTINEL: &str = "secret-endpoint-sentinel";
+        const HEADER_KEY_SENTINEL: &str = "secret-header-key-sentinel";
+        const HEADER_VALUE_SENTINEL: &str = "secret-header-value-sentinel";
+        const RESOURCE_KEY_SENTINEL: &str = "secret-resource-key-sentinel";
+        const RESOURCE_VALUE_SENTINEL: &str = "secret-resource-value-sentinel";
+        const CREDENTIAL_SENTINEL: &str = "SECRET_CREDENTIAL_REFERENCE_SENTINEL";
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.observability.otlp.endpoint = Some(ENDPOINT_SENTINEL.to_string());
+        config.observability.otlp.headers = Some(std::collections::HashMap::from([(
+            HEADER_KEY_SENTINEL.to_string(),
+            HEADER_VALUE_SENTINEL.to_string(),
+        )]));
+        config.observability.resource_attributes = Some(std::collections::HashMap::from([(
+            RESOURCE_KEY_SENTINEL.to_string(),
+            RESOURCE_VALUE_SENTINEL.to_string(),
+        )]));
+        config.clusters[0].credentials = Some(ClusterCredentialReference {
+            access_key_env: Some(CREDENTIAL_SENTINEL.to_string()),
+            secret_key_env: Some(CREDENTIAL_SENTINEL.to_string()),
+            security_token_env: None,
+            file: None,
+        });
+
+        let debug = format!("{config:?}");
+
+        assert!(debug.contains("observability"));
+        for sentinel in [
+            ENDPOINT_SENTINEL,
+            HEADER_KEY_SENTINEL,
+            HEADER_VALUE_SENTINEL,
+            RESOURCE_KEY_SENTINEL,
+            RESOURCE_VALUE_SENTINEL,
+            CREDENTIAL_SENTINEL,
+        ] {
+            assert!(!debug.contains(sentinel));
+        }
+    }
+
+    #[test]
+    fn logging_filter_accepts_legacy_alias_but_rejects_conflicts() {
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.server.log_level = Some("info".to_string());
+        config
+            .validate()
+            .expect("equal modern and legacy values should be accepted");
+
+        config.server.log_level = Some("debug".to_string());
+        let error = config.validate().unwrap_err();
+        assert_operational_error(&error);
+        assert!(error
+            .source()
+            .is_some_and(|source| source.is::<rocketmq_observability::ObservabilityError>()));
+
+        config.logging.filter = None;
+        config
+            .validate()
+            .expect("legacy-only configuration should remain compatible");
+    }
+
+    #[test]
+    fn oauth_auth_mode_accepts_the_documented_kebab_case_value() {
+        assert_eq!(
+            serde_json::from_str::<HttpAuthMode>(r#""oauth-jwt""#).unwrap(),
+            HttpAuthMode::OAuthJwt
+        );
+        assert_eq!(
+            serde_json::from_str::<HttpAuthMode>(r#""o-auth-jwt""#).unwrap(),
+            HttpAuthMode::OAuthJwt,
+            "retain the previously derived acronym spelling as a compatibility alias"
+        );
+    }
+
+    #[test]
+    fn load_rejects_empty_cluster_list() {
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.clusters.clear();
+        let err = config.validate().unwrap_err();
+        assert_configuration_error(&err);
+    }
+
+    #[test]
+    fn diagnosis_thresholds_default_when_a_configuration_predates_them() {
+        let diagnosis = serde_json::from_value::<DiagnosisConfig>(serde_json::json!({
+            "consumer_lag_policy_profile": "production-default",
+            "consumer_lag_threshold": 1000,
+        }))
+        .unwrap();
+
+        assert_eq!(diagnosis, DiagnosisConfig::default());
+        assert_eq!(diagnosis.consume_delay_threshold_ms, 300_000);
+        assert_eq!(diagnosis.pop_inflight_threshold, 1_000);
+        assert_eq!(diagnosis.retry_activity_window_ms, 600_000);
+        assert!(diagnosis.overrides.is_empty());
+        // The example spells the defaults out.
+        assert_eq!(McpConfig::load(example_config_path()).unwrap().diagnosis, diagnosis);
+    }
+
+    #[test]
+    fn diagnosis_thresholds_and_overrides_are_read_from_the_file_and_validated() {
+        for (valid, invalid) in [
+            ("consume_delay_threshold_ms = 300000", "consume_delay_threshold_ms = 0"),
+            ("pop_inflight_threshold = 1000", "pop_inflight_threshold = 0"),
+            ("retry_activity_window_ms = 600000", "retry_activity_window_ms = 0"),
+        ] {
+            assert_configuration_error(&load_example_with(valid, invalid).expect_err(invalid));
+        }
+
+        let with_override = |entry: &str| {
+            load_example_with(
+                "retry_activity_window_ms = 600000",
+                &format!("retry_activity_window_ms = 600000\n\n[[diagnosis.overrides]]\n{entry}\n"),
+            )
+        };
+        let config = with_override("topic = \"orders\"\nconsumer_lag_threshold = 50000").unwrap();
+        assert_eq!(
+            config.diagnosis.overrides,
+            [DiagnosisOverride {
+                topic: Some("orders".to_string()),
+                consumer_lag_threshold: Some(50_000),
+                ..DiagnosisOverride::default()
+            }]
+        );
+        with_override("topic = \"orders\"\nlag_threshold = 50000").expect_err("an unknown key must be rejected");
+    }
+
+    #[test]
+    fn diagnosis_overrides_must_select_a_target_and_set_a_valid_threshold() {
+        let validate = |entry: DiagnosisOverride| {
+            let mut config = McpConfig::load(example_config_path()).unwrap();
+            config.diagnosis.overrides.push(entry);
+            config.validate()
+        };
+        let orders = || DiagnosisOverride {
+            topic: Some("orders".to_string()),
+            ..DiagnosisOverride::default()
+        };
+
+        validate(DiagnosisOverride {
+            consumer_lag_threshold: Some(0),
+            ..orders()
+        })
+        .unwrap();
+        validate(DiagnosisOverride {
+            consumer_group: Some("order-service".to_string()),
+            consume_delay_threshold_ms: Some(1),
+            ..orders()
+        })
+        .unwrap();
+
+        for invalid in [
+            // Selects nothing.
+            DiagnosisOverride {
+                consumer_lag_threshold: Some(1),
+                ..DiagnosisOverride::default()
+            },
+            // Sets nothing.
+            orders(),
+            DiagnosisOverride {
+                topic: Some(" orders".to_string()),
+                consumer_lag_threshold: Some(1),
+                ..DiagnosisOverride::default()
+            },
+            DiagnosisOverride {
+                consumer_group: Some(String::new()),
+                consumer_lag_threshold: Some(1),
+                ..orders()
+            },
+            DiagnosisOverride {
+                consumer_lag_threshold: Some(-1),
+                ..orders()
+            },
+            DiagnosisOverride {
+                consume_delay_threshold_ms: Some(0),
+                ..orders()
+            },
+            DiagnosisOverride {
+                pop_inflight_threshold: Some(0),
+                ..orders()
+            },
+            DiagnosisOverride {
+                retry_activity_window_ms: Some(0),
+                ..orders()
+            },
+        ] {
+            let error = validate(invalid.clone()).expect_err(&format!("{invalid:?}"));
+            assert_configuration_error(&error);
+        }
+    }
+
+    #[test]
+    fn diagnosis_overrides_may_not_select_the_same_target_twice() {
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        let orders = DiagnosisOverride {
+            topic: Some("orders".to_string()),
+            consumer_lag_threshold: Some(5),
+            ..DiagnosisOverride::default()
+        };
+        config.diagnosis.overrides = vec![
+            orders.clone(),
+            DiagnosisOverride {
+                consumer_group: Some("order-service".to_string()),
+                ..orders.clone()
+            },
+        ];
+        config.validate().unwrap();
+
+        config.diagnosis.overrides.push(orders);
+        assert_configuration_error(&config.validate().unwrap_err());
+    }
+
+    #[test]
+    fn mounted_cluster_credentials_resolve_without_exposing_secret_values() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("rocketmq-reader.yml");
+        std::fs::write(
+            &path,
+            "access_key: reader-access-value\nsecret_key: reader-secret-value\n",
+        )
+        .unwrap();
+        let reference = ClusterCredentialReference {
+            access_key_env: None,
+            secret_key_env: None,
+            security_token_env: None,
+            file: Some(path.to_string_lossy().into_owned()),
+        };
+        let reference_debug = format!("{reference:?}");
+        assert!(reference_debug.contains("mounted_file"));
+        assert!(reference_debug.contains("[REDACTED]"));
+        assert!(!reference_debug.contains("rocketmq-reader.yml"));
+
+        let credentials = reference.resolve("local-dev").unwrap();
+        let debug = format!("{credentials:?}");
+
+        assert!(!debug.contains("reader-access-value"));
+        assert!(!debug.contains("reader-secret-value"));
+        assert!(debug.contains("<redacted>"));
+    }
+
+    #[test]
+    fn cluster_credentials_reject_inline_and_ambiguous_secret_sources() {
+        assert!(serde_json::from_value::<ClusterCredentialReference>(serde_json::json!({
+            "access_key": "inline-access",
+            "secret_key": "inline-secret"
+        }))
+        .is_err());
+
+        let reference = ClusterCredentialReference {
+            access_key_env: Some("PRIVATE_READER_ACCESS_REFERENCE".to_string()),
+            secret_key_env: Some("PRIVATE_READER_SECRET_REFERENCE".to_string()),
+            security_token_env: None,
+            file: Some("private-reader-reference.yml".to_string()),
+        };
+        let debug = format!("{reference:?}");
+        assert!(!debug.contains("PRIVATE_READER_ACCESS_REFERENCE"));
+        assert!(!debug.contains("PRIVATE_READER_SECRET_REFERENCE"));
+        assert!(!debug.contains("private-reader-reference.yml"));
+        let error = reference.validate_reference("local-dev").unwrap_err();
+        assert_configuration_error(&error);
+
+        let missing_path = std::path::Path::new("private").join("credential").join("reference.yml");
+        let missing = ClusterCredentialReference {
+            access_key_env: None,
+            secret_key_env: None,
+            security_token_env: None,
+            file: Some(missing_path.to_string_lossy().into_owned()),
+        };
+        let error = missing.resolve("local-dev").unwrap_err();
+        assert_operational_error(&error);
+        assert!(error.source().is_some_and(|source| source.is::<std::io::Error>()));
+    }
+
+    #[test]
+    fn credential_yaml_and_environment_failures_retain_typed_sources_without_public_details() {
+        const CLUSTER_SENTINEL: &str = "private-cluster-sentinel";
+        const YAML_SENTINEL: &str = "private-yaml-secret-sentinel";
+        const ENV_SENTINEL: &str = "ROCKETMQ_MCP_PRIVATE_ENV_SENTINEL_DO_NOT_SET";
+        let temp = tempfile::tempdir().unwrap();
+        let credential_path = temp.path().join("private-credentials.yml");
+        std::fs::write(&credential_path, format!("access_key: [{YAML_SENTINEL}")).unwrap();
+
+        let error = resolve_credential_file(CLUSTER_SENTINEL, &credential_path).unwrap_err();
+        assert_operational_error(&error);
+        assert!(error.source().is_some_and(|source| source.is::<serde_yaml::Error>()));
+
+        let error = read_credential_env(CLUSTER_SENTINEL, ENV_SENTINEL).unwrap_err();
+        assert_operational_error(&error);
+        assert!(error.source().is_some_and(|source| source.is::<std::env::VarError>()));
+
+        for output in [error.to_string(), format!("{error:?}")] {
+            assert!(!output.contains(CLUSTER_SENTINEL));
+            assert!(!output.contains(YAML_SENTINEL));
+            assert!(!output.contains(ENV_SENTINEL));
+        }
+    }
+
+    #[test]
+    fn command_line_overrides_update_effective_config() {
+        let args = Args::try_parse_from([
+            "rocketmq-mcp",
+            "--config",
+            "conf/mcp.example.toml",
+            "--transport",
+            "stdio",
+            "--bind",
+            "127.0.0.1:9090",
+            "--endpoint",
+            "/custom-mcp",
+        ])
+        .unwrap();
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+
+        config.apply_overrides(&args).unwrap();
+
+        assert_eq!(config.server.transport, TransportKind::Stdio);
+        assert_eq!(config.server.http.bind, "127.0.0.1:9090");
+        assert_eq!(config.server.http.endpoint, "/custom-mcp");
+    }
+
+    #[test]
+    fn relative_paths_are_config_owned() {
+        let config = McpConfig::load(example_config_path()).unwrap();
+        assert!(Path::new(&config.security.permissions_file).is_absolute());
+        assert!(Path::new(&config.server.http.tls.cert_path).is_absolute());
+        assert!(Path::new(&config.server.http.tls.key_path).is_absolute());
+        assert!(Path::new(&config.audit.path).is_absolute());
+    }
+
+    #[test]
+    fn endpoint_override_must_be_absolute_path() {
+        let args =
+            Args::try_parse_from(["rocketmq-mcp", "--config", "conf/mcp.example.toml", "--endpoint", "mcp"]).unwrap();
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+
+        let err = config.apply_overrides(&args).unwrap_err();
+
+        assert_configuration_error(&err);
+    }
+
+    #[test]
+    fn enabled_cache_requires_positive_capacity() {
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.cache.max_entries = 0;
+
+        let error = config.validate().unwrap_err();
+
+        assert_configuration_error(&error);
+    }
+
+    #[test]
+    fn cursor_snapshot_policy_defaults_and_requires_positive_bounds() {
+        let source = std::fs::read_to_string(example_config_path()).unwrap();
+        let source = source
+            .lines()
+            .filter(|line| {
+                !line.starts_with("cursor_snapshot_max_entries") && !line.starts_with("cursor_snapshot_ttl_ms")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parsed = config::Config::builder()
+            .add_source(config::File::from_str(&source, config::FileFormat::Toml))
+            .build()
+            .unwrap()
+            .try_deserialize::<McpConfig>()
+            .unwrap();
+        assert_eq!(parsed.cache.cursor_snapshot_max_entries, 256);
+        assert_eq!(parsed.cache.cursor_snapshot_ttl_ms, 60_000);
+
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.cache.enabled = false;
+        config.cache.cursor_snapshot_ttl_ms = 0;
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
+
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.cache.cursor_snapshot_max_entries = 0;
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
+    }
+
+    #[test]
+    fn cache_policy_keys_default_to_the_shared_ttl_and_to_no_stale_results() {
+        let example = McpConfig::load(example_config_path()).unwrap();
+        let shared = Duration::from_millis(example.cache.broker_metrics_ttl_ms);
+        assert_eq!(example.cache.broker_config_ttl(), shared);
+        assert_eq!(example.cache.message_metadata_ttl(), shared);
+        assert_eq!(example.cache.proxy_state_ttl(), shared);
+        assert_eq!(example.cache.stale_if_error(), Duration::ZERO);
+
+        let overrides = [
+            "broker_config_ttl_ms = 30000",
+            "message_metadata_ttl_ms = 0",
+            "proxy_state_ttl_ms = 500",
+            "stale_if_error_ms = 60000",
+        ];
+        let source = std::fs::read_to_string(example_config_path()).unwrap();
+        let source = source
+            .lines()
+            .flat_map(|line| {
+                let added: &[&str] = if line == "[cache]" { &overrides } else { &[] };
+                std::iter::once(line).chain(added.iter().copied())
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parsed = config::Config::builder()
+            .add_source(config::File::from_str(&source, config::FileFormat::Toml))
+            .build()
+            .unwrap()
+            .try_deserialize::<McpConfig>()
+            .unwrap();
+        assert_eq!(parsed.cache.broker_config_ttl(), Duration::from_secs(30));
+        assert_eq!(parsed.cache.message_metadata_ttl(), Duration::ZERO);
+        assert_eq!(parsed.cache.proxy_state_ttl(), Duration::from_millis(500));
+        assert_eq!(parsed.cache.stale_if_error(), Duration::from_secs(60));
+        assert_eq!(parsed.cache.broker_metrics_ttl_ms, example.cache.broker_metrics_ttl_ms);
+
+        let mut config = example;
+        config.cache.stale_if_error_ms = 300_000;
+        config.validate().unwrap();
+        config.cache.stale_if_error_ms = 300_001;
+        assert_configuration_error(&config.validate().unwrap_err());
+    }
+
+    #[test]
+    fn shared_pseudonym_key_is_read_from_the_named_variable_and_bounded() {
+        const KEY: &str = "0123456789abcdef0123456789abcdef";
+        let mut security = McpConfig::load(example_config_path()).unwrap().security;
+        let unreachable = |_: &str| -> Result<String, std::env::VarError> { panic!("no variable is configured") };
+        assert!(security.pseudonym_key_from(unreachable).unwrap().is_none());
+
+        security.pseudonym_key_env = Some("ROCKETMQ_MCP_PSEUDONYM_KEY".to_string());
+        let key = security
+            .pseudonym_key_from(|name| {
+                assert_eq!(name, "ROCKETMQ_MCP_PSEUDONYM_KEY");
+                // A mounted secret often ends with a newline.
+                Ok(format!("  {KEY}\n"))
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(key.as_bytes(), KEY.as_bytes());
+        assert_eq!(format!("{key:?}"), "PseudonymKey([REDACTED])");
+
+        for rejected in ["", "too-short", &"k".repeat(31), &"k".repeat(1_025)] {
+            let error = security.pseudonym_key_from(|_| Ok(rejected.to_string())).unwrap_err();
+            assert_configuration_error(&error);
+        }
+        security.pseudonym_key_from(|_| Ok("k".repeat(1_024))).unwrap().unwrap();
+
+        // The variable is not set.
+        let error = security
+            .pseudonym_key_from(|_| Err(std::env::VarError::NotPresent))
+            .unwrap_err();
+        assert_operational_error(&error);
+
+        for name in ["", " ", "KEY=VALUE"] {
+            security.pseudonym_key_env = Some(name.to_string());
+            let error = security.pseudonym_key_from(unreachable).unwrap_err();
+            assert_configuration_error(&error);
+        }
+    }
+
+    #[test]
+    fn request_timeout_defaults_to_25_seconds_and_stays_below_the_http_timeout() {
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.server.request_timeout_ms = None;
+        assert_eq!(config.server.request_timeout(), Duration::from_secs(25));
+        config.validate().unwrap();
+
+        for accepted in [1_000, 29_999] {
+            config.server.request_timeout_ms = Some(accepted);
+            config.validate().unwrap();
+            assert_eq!(config.server.request_timeout(), Duration::from_millis(accepted));
+        }
+        // 30 is seconds written as milliseconds; 30000 would race the HTTP timeout itself.
+        for rejected in [0, 30, 999, 30_000, u64::MAX] {
+            config.server.request_timeout_ms = Some(rejected);
+            assert_configuration_error(&config.validate().unwrap_err());
+        }
+    }
+
+    #[test]
+    fn audit_capacity_requires_one_bounded_record_and_u32_byte_accounting() {
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.audit.max_record_bytes = 0;
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
+
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.audit.queue_max_bytes = config.audit.max_record_bytes - 1;
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
+
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.audit.queue_max_bytes = u32::MAX as usize + 1;
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
+    }
+
+    #[test]
+    fn an_audit_file_is_sealed_at_a_size_that_holds_a_record_or_never() {
+        // A file that is sealed has room for at least the largest record.
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.audit.max_file_bytes = config.audit.max_record_bytes as u64 - 1;
+        assert_configuration_error(&config.validate().unwrap_err());
+
+        config.audit.max_file_bytes = config.audit.max_record_bytes as u64;
+        config.validate().unwrap();
+
+        // Zero keeps one file, as before the file was sealed at all.
+        config.audit.max_file_bytes = 0;
+        config.validate().unwrap();
+        let never = load_example_with(
+            "max_record_bytes = 16384",
+            "max_record_bytes = 16384\nmax_file_bytes = 0",
+        )
+        .unwrap();
+        assert_eq!(never.audit.max_file_bytes, 0);
+    }
+
+    #[cfg(feature = "streamable-http")]
+    #[test]
+    fn streamable_http_requires_https_origin_tls_material_and_loopback_development_auth() {
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.server.transport = TransportKind::StreamableHttp;
+        config.server.http.public_base_url = "http://mcp.example.test".to_string();
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
+
+        config.server.http.public_base_url = "https://mcp.example.test".to_string();
+        config.server.http.tls.cert_path.clear();
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
+
+        config.server.http.tls.cert_path = "server-cert.pem".to_string();
+        config.server.http.bind = "0.0.0.0:8089".to_string();
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
+    }
+
+    #[test]
+    fn oauth_requires_rs256_and_https_jwks_without_static_key_fallback() {
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.server.http.auth.mode = HttpAuthMode::OAuthJwt;
+        config.server.http.auth.issuer = "https://issuer.example.test".to_string();
+        config.server.http.auth.audience = "rocketmq-mcp".to_string();
+        config.server.http.auth.jwt_algorithm = JwtAlgorithm::Hs256;
+        config.server.http.auth.jwt_key_env = "LEGACY_STATIC_KEY".to_string();
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
+
+        config.server.http.auth.jwt_algorithm = JwtAlgorithm::Rs256;
+        config.server.http.auth.jwks_url = "http://issuer.example.test/jwks".to_string();
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
+    }
+
+    #[test]
+    fn custom_jwks_ca_requires_oauth_and_a_readable_pem_certificate() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let ca_path = temp_dir.path().join("issuer-ca.pem");
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.server.http.auth.jwks_ca_path = Some(ca_path.to_string_lossy().into_owned());
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
+
+        config.server.http.auth.mode = HttpAuthMode::OAuthJwt;
+        config.server.http.auth.issuer = "https://issuer.example.test".to_string();
+        config.server.http.auth.audience = "rocketmq-mcp".to_string();
+        config.server.http.auth.jwt_algorithm = JwtAlgorithm::Rs256;
+        config.server.http.auth.jwks_url = "https://issuer.example.test/jwks".to_string();
+        let error = config.validate().unwrap_err();
+        assert_operational_error(&error);
+        assert!(error.source().is_some_and(|source| source.is::<std::io::Error>()));
+
+        std::fs::write(&ca_path, b"not a certificate").unwrap();
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
+
+        let rcgen::CertifiedKey { cert, .. } =
+            rcgen::generate_simple_self_signed(vec!["issuer.example.test".to_string()]).unwrap();
+        std::fs::write(&ca_path, cert.pem()).unwrap();
+        config.validate().unwrap();
+    }
+
+    fn example_config_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("conf")
+            .join("mcp.example.toml")
+    }
+
+    /// Loads the example configuration after replacing `from` with `to` once.
+    fn load_example_with(from: &str, to: &str) -> crate::error::McpResult<McpConfig> {
+        let (_temp, config_path) = write_example_config_with("", "");
+        let contents = std::fs::read_to_string(&config_path).unwrap();
+        let replaced = contents.replacen(from, to, 1);
+        assert_ne!(replaced, contents, "{from} is missing from the example");
+        std::fs::write(&config_path, replaced).unwrap();
+        McpConfig::load(&config_path)
+    }
+
+    #[test]
+    fn the_http_budget_is_ten_tool_budgets_unless_it_is_set_and_it_is_never_zero() {
+        let example = McpConfig::load(example_config_path()).unwrap();
+        assert_eq!(example.security.http_rate_limit_per_minute, None);
+        assert_eq!(
+            example.security.http_rate_limit(),
+            10 * example.security.rate_limit_per_minute
+        );
+
+        let set = load_example_with("[security]", "[security]\nhttp_rate_limit_per_minute = 90").unwrap();
+        assert_eq!(set.security.http_rate_limit(), 90);
+
+        let zero = load_example_with("[security]", "[security]\nhttp_rate_limit_per_minute = 0")
+            .expect_err("an HTTP budget of zero would refuse every request");
+        assert_configuration_error(&zero);
+        // One request a minute is the smallest budget, below even the budget of one Tool.
+        let one = load_example_with("[security]", "[security]\nhttp_rate_limit_per_minute = 1").unwrap();
+        assert_eq!(one.security.http_rate_limit(), 1);
+    }
+
+    #[test]
+    fn unknown_keys_are_rejected_for_every_config_section() {
+        const VALUE_SENTINEL: &str = "unknown-value-sentinel";
+        for (header, section) in [
+            ("[server]", "server"),
+            ("[server.stdio]", "server.stdio"),
+            ("[server.http]", "server.http"),
+            ("[server.http.tls]", "server.http.tls"),
+            ("[server.http.auth]", "server.http.auth"),
+            ("[[clusters]]", "clusters[0]"),
+            ("[security]", "security"),
+            ("[audit]", "audit"),
+            ("[cache]", "cache"),
+            ("[diagnosis]", "diagnosis"),
+        ] {
+            let error = load_example_with(header, &format!("{header}\nunknown_key = \"{VALUE_SENTINEL}\""))
+                .expect_err("an unknown key must be rejected");
+            assert_eq!(
+                error.to_string(),
+                format!("{CONFIGURATION_ERROR}: unknown key `unknown_key` in `{section}`"),
+                "{header}"
+            );
+            assert!(!format!("{error:?}").contains(VALUE_SENTINEL));
+        }
+
+        let top_level = load_example_with("[server]", &format!("unknown_key = \"{VALUE_SENTINEL}\"\n\n[server]"))
+            .expect_err("an unknown top-level key must be rejected");
+        assert_eq!(
+            top_level.to_string(),
+            format!("{CONFIGURATION_ERROR}: unknown key `unknown_key`")
+        );
+    }
+
+    #[test]
+    fn misspelled_tenant_is_rejected_instead_of_dropping_the_tenant_binding() {
+        let error = load_example_with("[[clusters]]", "[[clusters]]\ntenent = \"team-a\"")
+            .expect_err("a misspelled tenant binding must not load as an unbound cluster");
+        assert_eq!(
+            error.to_string(),
+            format!("{CONFIGURATION_ERROR}: unknown key `tenent` in `clusters[0]`")
+        );
+        assert!(!format!("{error:?}").contains("team-a"));
+    }
+
+    #[test]
+    fn unknown_key_text_is_withheld_unless_it_is_a_plain_name() {
+        let error = load_example_with("[security]", "[security]\n\"https://user:secret@10.0.0.9/\" = 1")
+            .expect_err("a quoted unknown key must be rejected");
+        assert_configuration_error(&error);
+    }
+
+    /// Returns the dedented text of a `key: |-` block scalar in a Kubernetes manifest.
+    fn manifest_block(manifest: &str, key: &str) -> String {
+        let indent = |line: &str| line.len() - line.trim_start().len();
+        let mut lines = manifest.lines();
+        let header = lines
+            .by_ref()
+            .find(|line| {
+                line.trim_start()
+                    .strip_prefix(key)
+                    .is_some_and(|rest| rest.starts_with(": |"))
+            })
+            .unwrap_or_else(|| panic!("the {key} block is missing"));
+        let body = lines
+            .take_while(|line| line.trim().is_empty() || indent(line) > indent(header))
+            .collect::<Vec<_>>();
+        let width = body
+            .iter()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| indent(line))
+            .min()
+            .unwrap_or_default();
+        body.iter()
+            .map(|line| line.get(width..).unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Strict parsing turns a stale key in a shipped configuration into a startup failure, so
+    /// every configuration this repository deploys is parsed with the real types.
+    #[test]
+    fn repository_deployment_configs_have_no_unknown_keys() {
+        fn parse<T: serde::de::DeserializeOwned>(source: &str, origin: &str) {
+            config::Config::builder()
+                .add_source(config::File::from_str(source, config::FileFormat::Toml))
+                .build()
+                .and_then(|config| config.try_deserialize::<T>())
+                .map(drop)
+                .unwrap_or_else(|error| panic!("{origin}: {error}"));
+        }
+
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let read = |relative: &str| {
+            std::fs::read_to_string(repository.join(relative)).unwrap_or_else(|error| panic!("{relative}: {error}"))
+        };
+
+        for directory in ["docker/smoke-config", "rocketmq-ai/rocketmq-sre/deploy/dev/config"] {
+            parse::<McpConfig>(&read(&format!("{directory}/mcp.toml")), directory);
+            parse::<crate::guard::policy::PermissionConfig>(&read(&format!("{directory}/permissions.toml")), directory);
+        }
+        // The static manifest is the canonical render of the Helm chart and stands in for its templates.
+        for manifest in [
+            "rocketmq-ai/rocketmq-sre/deploy/kind/mcp-config.yaml",
+            "rocketmq-ai/rocketmq-sre/deploy/kind/mcp-readiness-config.yaml",
+            "distribution/kubernetes/base/manifest.yaml",
+        ] {
+            let source = read(manifest);
+            parse::<McpConfig>(&manifest_block(&source, "mcp.toml"), manifest);
+            parse::<crate::guard::policy::PermissionConfig>(&manifest_block(&source, "permissions.toml"), manifest);
+        }
+    }
+
+    fn write_example_config_with(observability_root: &str, extra: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::copy(
+            example_config_path()
+                .parent()
+                .expect("example config has a parent")
+                .join("permissions.example.toml"),
+            temp.path().join("permissions.example.toml"),
+        )
+        .unwrap();
+        let config_path = temp.path().join("mcp.toml");
+        let mut contents = std::fs::read_to_string(example_config_path()).unwrap().replacen(
+            "[observability]",
+            &format!("[observability]\n{observability_root}"),
+            1,
+        );
+        contents.push_str(extra);
+        std::fs::write(&config_path, contents).unwrap();
+        (temp, config_path)
+    }
+}

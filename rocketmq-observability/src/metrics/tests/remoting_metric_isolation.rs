@@ -20,9 +20,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::metrics::remoting::RemotingMetrics;
+use crate::metrics::remoting::RemotingRequestEvent;
 use crate::metrics::remoting::RequestCodeClass;
 use crate::metrics::remoting::RequestMetricsGuard;
-use crate::metrics::remoting::RequestOutcome;
 use crate::metrics::remoting::ResponseAbandonedReason;
 use crate::metrics::remoting::ResponseMode;
 use crate::metrics::remoting::ResponseResult;
@@ -219,7 +219,7 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
     second.record_deferred_terminal("other", "service_stopping");
 
     let mut success = RequestMetricsGuard::start(first.clone(), 10, 5, false, RequestCodeClass::Other);
-    success.complete(0, RequestOutcome::ReplyEmpty);
+    success.complete(0, RemotingRequestEvent::ReplyEmpty);
     success.complete_cancelled();
     drop(success);
 
@@ -234,13 +234,13 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
     let mut deferred = RequestMetricsGuard::start(first.clone(), 11, 13, true, RequestCodeClass::PullMessage);
     deferred.record_deferred_registered();
     deferred.record_deferred_registered();
-    deferred.complete(0, RequestOutcome::DeferredResumed);
-    deferred.complete(1, RequestOutcome::Failed);
+    deferred.complete(0, RemotingRequestEvent::DeferredResumed);
+    deferred.complete(1, RemotingRequestEvent::Failed);
     drop(deferred);
 
     let mut failure = RequestMetricsGuard::start(first, 13, 11, false, RequestCodeClass::Other);
     failure.complete_process_request_failed(1);
-    failure.complete(0, RequestOutcome::ReplyEmpty);
+    failure.complete(0, RemotingRequestEvent::ReplyEmpty);
     drop(failure);
 
     let mut isolated = RequestMetricsGuard::start(second, 20, 17, false, RequestCodeClass::Other);
@@ -406,7 +406,7 @@ fn noop_handle_never_reads_global_meter_provider() {
 
     let metrics = RemotingMetrics::from_handle(&TelemetryHandle::noop());
     let mut guard = RequestMetricsGuard::start(metrics.clone(), 10, 128, false, RequestCodeClass::Other);
-    guard.complete(0, RequestOutcome::ReplyEmpty);
+    guard.complete(0, RemotingRequestEvent::ReplyEmpty);
     metrics.record_outbound_attempted_plaintext_bytes(256);
     metrics.record_outbound_accepted_plaintext_bytes(256);
     metrics.record_outbound_written_plaintext_bytes(256);

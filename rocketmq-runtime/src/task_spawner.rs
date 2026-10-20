@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::future::Future;
-use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
@@ -64,7 +63,7 @@ impl TaskSpawner {
     /// # Errors
     ///
     /// Returns an error when the parent group is shutting down or closed.
-    pub fn spawn<F>(&self, name: impl Into<Arc<str>>, kind: TaskKind, future: F) -> RuntimeResult<TaskId>
+    pub fn spawn<F>(&self, name: impl Into<crate::TaskName>, kind: TaskKind, future: F) -> RuntimeResult<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -80,7 +79,7 @@ impl TaskSpawner {
     /// # Errors
     ///
     /// Returns an error when the parent group is shutting down or closed.
-    pub fn spawn_service<F>(&self, name: impl Into<Arc<str>>, future: F) -> RuntimeResult<TaskId>
+    pub fn spawn_service<F>(&self, name: impl Into<crate::TaskName>, future: F) -> RuntimeResult<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -92,7 +91,7 @@ impl TaskSpawner {
     /// # Errors
     ///
     /// Returns an error when the parent group is shutting down or closed.
-    pub fn spawn_cancellable_service<F>(&self, name: impl Into<Arc<str>>, future: F) -> RuntimeResult<TaskId>
+    pub fn spawn_cancellable_service<F>(&self, name: impl Into<crate::TaskName>, future: F) -> RuntimeResult<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -109,7 +108,7 @@ impl TaskSpawner {
     /// Returns an error when the parent group is shutting down or closed.
     pub fn spawn_critical<F>(
         &self,
-        name: impl Into<Arc<str>>,
+        name: impl Into<crate::TaskName>,
         kind: TaskKind,
         failures: CriticalFailureState,
         future: F,
@@ -130,7 +129,7 @@ impl TaskSpawner {
     /// Returns an error when the parent group is shutting down or closed.
     pub fn spawn_critical_service<F>(
         &self,
-        name: impl Into<Arc<str>>,
+        name: impl Into<crate::TaskName>,
         failures: CriticalFailureState,
         future: F,
     ) -> RuntimeResult<TaskId>

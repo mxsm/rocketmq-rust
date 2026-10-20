@@ -14,6 +14,7 @@
 
 use std::fs;
 use std::hint::black_box;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -26,9 +27,11 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
+use rocketmq_runtime::MissedTickPolicy;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ScheduleMode;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
@@ -64,20 +67,25 @@ fn run_scheduled_case(mode: ScheduleMode, period: Duration, run_for: Duration) -
             ScheduleMode::FixedDelay => {
                 let runs = observed_runs.clone();
                 scheduled
-                    .schedule_fixed_delay(ScheduledTaskConfig::fixed_delay("fixed-delay", period), move || {
-                        let runs = runs.clone();
-                        async move {
-                            runs.fetch_add(1, Ordering::Relaxed);
-                            tokio::task::yield_now().await;
-                        }
-                    })
+                    .schedule(
+                        ScheduledTaskConfig::fixed_delay("fixed-delay", period),
+                        ScheduledExecutionPolicy::default(),
+                        move || {
+                            let runs = runs.clone();
+                            async move {
+                                runs.fetch_add(1, Ordering::Relaxed);
+                                tokio::task::yield_now().await;
+                            }
+                        },
+                    )
                     .expect("fixed-delay scheduled task should start");
             }
             ScheduleMode::FixedRateNoOverlap => {
                 let runs = observed_runs.clone();
                 scheduled
-                    .schedule_fixed_rate_no_overlap(
+                    .schedule(
                         ScheduledTaskConfig::fixed_rate_no_overlap("fixed-rate-no-overlap", period),
+                        ScheduledExecutionPolicy::default(),
                         move || {
                             let runs = runs.clone();
                             async move {
@@ -90,9 +98,11 @@ fn run_scheduled_case(mode: ScheduleMode, period: Duration, run_for: Duration) -
             }
             ScheduleMode::FixedRateAllowOverlap => {
                 let runs = observed_runs.clone();
+                // Each run lasts four periods, so at most five overlap; eight never skips.
                 scheduled
-                    .schedule_fixed_rate(
+                    .schedule(
                         ScheduledTaskConfig::fixed_rate("fixed-rate-overlap", period),
+                        ScheduledExecutionPolicy::bounded(NonZeroUsize::new(8).unwrap(), MissedTickPolicy::Skip),
                         move || {
                             let runs = runs.clone();
                             async move {
@@ -165,24 +175,28 @@ fn run_stalled_ticks_recovery(period: Duration) -> StalledTicksOutput {
         let stalls_remaining = Arc::new(AtomicUsize::new(1));
         let runs = Arc::new(AtomicUsize::new(0));
         scheduled
-            .schedule_fixed_rate_no_overlap(ScheduledTaskConfig::fixed_rate_no_overlap("stalled", period), {
-                let release = release.clone();
-                let stalls_remaining = stalls_remaining.clone();
-                let runs = runs.clone();
-                move || {
+            .schedule(
+                ScheduledTaskConfig::fixed_rate_no_overlap("stalled", period),
+                ScheduledExecutionPolicy::default(),
+                {
                     let release = release.clone();
                     let stalls_remaining = stalls_remaining.clone();
                     let runs = runs.clone();
-                    async move {
-                        runs.fetch_add(1, Ordering::Relaxed);
-                        // Only the first run starts stalled, so recovery is
-                        // observable inside one scenario.
-                        if stalls_remaining.fetch_sub(1, Ordering::AcqRel) == 1 {
-                            release.notified().await;
+                    move || {
+                        let release = release.clone();
+                        let stalls_remaining = stalls_remaining.clone();
+                        let runs = runs.clone();
+                        async move {
+                            runs.fetch_add(1, Ordering::Relaxed);
+                            // Only the first run starts stalled, so recovery is
+                            // observable inside one scenario.
+                            if stalls_remaining.fetch_sub(1, Ordering::AcqRel) == 1 {
+                                release.notified().await;
+                            }
                         }
                     }
-                }
-            })
+                },
+            )
             .expect("stalled scheduled task should start");
 
         tokio::time::sleep(period * 8).await;

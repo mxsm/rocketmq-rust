@@ -69,6 +69,40 @@ async fn assert_runtime_closed(client_runtime: &ClientRuntime) {
 }
 
 #[test]
+fn commands_are_polled_by_runtime_workers_instead_of_the_interface_thread() {
+    run_local_test(async {
+        let parent = test_client_runtime();
+        let mut app = RocketmqTuiApp::new(parent.clone());
+        let interface_thread = std::thread::current().id();
+        let (polled_tx, polled_rx) = oneshot::channel();
+        let facade = app.command_facade(1).unwrap();
+        let client_runtime = facade.client_runtime();
+        app.apply_action(Action::CommandStarted {
+            execution_id: 1,
+            command_id: "test".to_string(),
+        });
+        app.spawn_command_task(1, "test".to_string(), client_runtime.clone(), async move {
+            let thread = std::thread::current();
+            let _ = polled_tx.send((thread.id(), thread.name().map(str::to_owned)));
+            Ok(CommandResultViewModel::operation_success("Done", Vec::new()))
+        });
+
+        // The interface thread's stack is the platform's choice and too small for the
+        // admin call graph of an unoptimized build; a runtime worker's is configured.
+        let (command_thread, command_thread_name) = polled_rx.await.unwrap();
+        assert_ne!(command_thread, interface_thread);
+        assert_eq!(command_thread_name.as_deref(), Some("rocketmq-admin-tui-test"));
+
+        let completion = app.command_tasks.join_next().await.unwrap();
+        app.complete_command_task(completion);
+        assert!(matches!(app.state.execution, CommandExecutionState::Succeeded { .. }));
+        assert!(app.running_task.is_none());
+        assert_runtime_closed(&client_runtime).await;
+        assert!(parent.shutdown().await.is_healthy());
+    });
+}
+
+#[test]
 fn cancelling_query_releases_its_pool_without_stopping_the_next_command() {
     run_local_test(async {
         let parent = test_client_runtime();

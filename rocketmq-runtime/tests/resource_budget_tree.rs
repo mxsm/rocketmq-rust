@@ -28,8 +28,8 @@ use rocketmq_runtime::DynamicKeyAdmissionRejection;
 use rocketmq_runtime::DynamicKeyRegistrationFailure;
 use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::MonotonicClock;
-use rocketmq_runtime::PermitRebindOutcome;
-use rocketmq_runtime::QueuePushOutcome;
+use rocketmq_runtime::PermitBudgetTransferStatus;
+use rocketmq_runtime::QueueEnqueueStatus;
 use rocketmq_runtime::QueuePushRejection;
 use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudgetTree;
@@ -59,17 +59,95 @@ fn limit(count: usize, bytes: usize, policy: FullPolicy) -> BudgetLimit {
     BudgetLimit::new(count, bytes, policy)
 }
 
-fn accepted<T>(outcome: QueuePushOutcome<T>) -> QueuePushOutcome<T> {
+#[test]
+fn resizing_a_permit_reserves_only_bytes_and_rolls_back_a_child_rejection() {
+    let root = ResourceBudgetTree::new(
+        "resize",
+        limit(1, 100, FullPolicy::Reject).with_rate(RateLimit::new(1, 1)),
+    )
+    .unwrap()
+    .root();
+    let child = root
+        .child(
+            "child",
+            limit(1, 60, FullPolicy::Reject).with_rate(RateLimit::new(1, 1)),
+        )
+        .unwrap();
+    let mut permit = child.try_acquire_data(40).unwrap();
+    permit.try_resize(60).unwrap();
+    assert_eq!(root.snapshot().current_count, 1);
+    assert_eq!(root.snapshot().admitted_count, 1);
+    assert_eq!(root.snapshot().current_bytes, 60);
+    let rejection = permit.try_resize(70).unwrap_err();
+    assert_eq!(rejection.exhausted_path(), child.path());
+    assert_eq!(permit.bytes(), 60);
+    assert_eq!(root.snapshot().current_bytes, 60);
+    assert_eq!(child.snapshot().current_bytes, 60);
+    permit.try_resize(0).unwrap();
+    assert_eq!(root.snapshot().current_bytes, 0);
+    assert_eq!(root.snapshot().current_count, 1);
+    drop(permit);
+    assert_eq!(root.snapshot().current_count, 0);
+    assert_eq!(root.snapshot().released_count, 1);
+}
+
+#[test]
+fn resizing_preserves_control_reserves_and_supports_growth_after_rebind() {
+    let root = ResourceBudgetTree::new(
+        "resize",
+        limit(4, 100, FullPolicy::Reject).with_control_reserve(BudgetCapacity::new(1, 20)),
+    )
+    .unwrap()
+    .root();
+    let key = root
+        .register_dynamic_child("old", limit(2, 80, FullPolicy::Reject))
+        .unwrap();
+    let mut permit = key.budget().try_acquire_data(40).unwrap();
+    key.close();
+    assert!(permit.try_resize(50).unwrap_err().is_closed());
+    permit.try_resize(20).unwrap();
+    assert_eq!(permit.try_rebind(&root).unwrap(), PermitBudgetTransferStatus::Rebound);
+    permit.try_resize(80).unwrap();
+    assert!(permit.try_resize(81).is_err());
+    assert_eq!(root.snapshot().current_bytes, 80);
+    let control = root.try_acquire_control(20).unwrap();
+    assert_eq!(root.snapshot().current_bytes, 100);
+    drop((permit, control));
+    assert_eq!(root.snapshot().current_bytes, 0);
+}
+
+#[test]
+fn resizing_a_rebound_permit_observes_the_new_dynamic_gate() {
+    let root = ResourceBudgetTree::new("resize", limit(4, 100, FullPolicy::Reject))
+        .unwrap()
+        .root();
+    let key = root
+        .register_dynamic_child("new", limit(2, 80, FullPolicy::Reject))
+        .unwrap();
+    let mut permit = root.try_acquire_data(20).unwrap();
+    assert_eq!(
+        permit.try_rebind(&key.budget()).unwrap(),
+        PermitBudgetTransferStatus::Rebound
+    );
+    key.close();
+    assert!(permit.try_resize(21).unwrap_err().is_closed());
+    permit.try_resize(10).unwrap();
+    assert_eq!(root.snapshot().current_bytes, 10);
+    drop(permit);
+    assert_eq!(root.snapshot().current_bytes, 0);
+}
+
+fn accepted<T>(outcome: QueueEnqueueStatus<T>) -> QueueEnqueueStatus<T> {
     assert!(
-        !matches!(&outcome, QueuePushOutcome::Rejected { .. }),
+        !matches!(&outcome, QueueEnqueueStatus::Rejected { .. }),
         "queue item should be admitted"
     );
     outcome
 }
 
-fn rejected<T>(outcome: QueuePushOutcome<T>) -> (T, QueuePushRejection) {
+fn rejected<T>(outcome: QueueEnqueueStatus<T>) -> (T, QueuePushRejection) {
     match outcome {
-        QueuePushOutcome::Rejected { item, rejection } => (item, rejection),
+        QueueEnqueueStatus::Rejected { item, rejection } => (item, rejection),
         _ => panic!("queue item should be rejected"),
     }
 }
@@ -165,7 +243,7 @@ fn rebind_between_siblings_preserves_common_ancestor_accounting() {
 
     assert_eq!(
         permit.try_rebind(&target).expect("same-tree rebind"),
-        PermitRebindOutcome::Rebound
+        PermitBudgetTransferStatus::Rebound
     );
 
     assert_eq!(tree.root().snapshot().current_count, 1);
@@ -220,7 +298,7 @@ fn failed_rebind_keeps_the_source_permit_valid() {
         .expect("same-tree rebind must return an outcome");
     assert!(matches!(
         outcome,
-        PermitRebindOutcome::Rejected(ref error) if error.dimension() == Some(BudgetDimension::Count)
+        PermitBudgetTransferStatus::Rejected(ref error) if error.dimension() == Some(BudgetDimension::Count)
     ));
     assert_eq!(source.snapshot().current_count, 1);
     assert_eq!(source.snapshot().current_bytes, 8);
@@ -335,7 +413,7 @@ fn reject_policy_keeps_depth_and_bytes_bounded_at_two_times_overload() {
     let mut rejected = Vec::new();
 
     for item in 0..8 {
-        if let QueuePushOutcome::Rejected { item, .. } = queue.try_push_data(item, 10) {
+        if let QueueEnqueueStatus::Rejected { item, .. } = queue.try_push_data(item, 10) {
             rejected.push(item);
         }
     }
@@ -354,11 +432,11 @@ fn coalesce_latest_replaces_pending_state_and_releases_old_permits() {
 
     assert!(matches!(
         accepted(queue.try_push_data("old", 8)),
-        QueuePushOutcome::Enqueued
+        QueueEnqueueStatus::Enqueued
     ));
     assert!(matches!(
         accepted(queue.try_push_data("new", 8)),
-        QueuePushOutcome::Coalesced { replaced: 1 }
+        QueueEnqueueStatus::Coalesced { replaced: 1 }
     ));
     assert_eq!(queue.try_pop(), Some("new"));
     assert_eq!(queue.snapshot().coalesced_count, 1);
@@ -429,7 +507,7 @@ fn drop_stale_policy_uses_virtual_time_and_reports_oldest_age() {
     clock.advance(Duration::from_secs(6));
     assert!(matches!(
         accepted(queue.try_push_data("fresh", 8)),
-        QueuePushOutcome::DroppedStale { dropped: 1 }
+        QueueEnqueueStatus::DroppedStale { dropped: 1 }
     ));
     assert_eq!(queue.try_pop(), Some("fresh"));
     assert_eq!(queue.snapshot().dropped_count, 1);
@@ -535,7 +613,7 @@ async fn wait_until_deadline_observes_item_capacity_release() {
     assert_eq!(queue.try_pop(), Some("held"));
     assert!(matches!(
         accepted(waiter.await.expect("join waiter")),
-        QueuePushOutcome::Enqueued
+        QueueEnqueueStatus::Enqueued
     ));
     assert_eq!(queue.try_pop(), Some("waiting"));
     assert_eq!(queue.snapshot().reserved_count, 0);
@@ -912,7 +990,7 @@ async fn retired_generation_closes_escaped_budgets_descendants_and_rebinds() {
         }
     }
     for result in [same.try_rebind(&old).unwrap(), sibling.try_rebind(&right).unwrap()] {
-        assert!(matches!(result, PermitRebindOutcome::Rejected(error) if error.is_closed()));
+        assert!(matches!(result, PermitBudgetTransferStatus::Rejected(error) if error.is_closed()));
     }
     assert_eq!(root.snapshot().current_count, 2);
     assert_eq!(old.snapshot().current_bytes, 16);
@@ -928,7 +1006,7 @@ async fn retired_generation_closes_escaped_budgets_descendants_and_rebinds() {
         .is_closed());
     assert!(!key.retire_until(tokio::time::Instant::now()).await.released);
     // Migration out preserves the root reservation while draining the old key.
-    assert_eq!(same.try_rebind(&root).unwrap(), PermitRebindOutcome::Rebound);
+    assert_eq!(same.try_rebind(&root).unwrap(), PermitBudgetTransferStatus::Rebound);
     drop(sibling);
     assert!(key.retire_until(tokio::time::Instant::now()).await.released);
     let next = root
@@ -1081,7 +1159,7 @@ fn coalesced_item_destructors_can_close_the_dynamic_key_after_admission_unlocks(
         accepted(queue.try_push_data(CloseOnDrop(Some(key.clone())), 8));
         assert!(matches!(
             queue.try_push_data(CloseOnDrop(None), 8),
-            QueuePushOutcome::Coalesced { replaced: 1 }
+            QueueEnqueueStatus::Coalesced { replaced: 1 }
         ));
         assert!(key.is_closed());
         assert_eq!(queue.len(), 1);

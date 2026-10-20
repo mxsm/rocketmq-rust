@@ -1,26 +1,30 @@
 import {
   Activity,
   CalendarDays,
+  CircleAlert,
   Database,
+  Info,
   Layers,
   RadioTower,
   Send,
   Server,
+  TriangleAlert,
   Users
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { dashboardApi } from '../api/dashboard_api';
 import { userErrorMessage } from '../api/client';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
+import HealthSignal from '../components/HealthSignal';
 import LoadingState from '../components/LoadingState';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import RankingTable from '../components/RankingTable';
 import RefreshButton from '../components/RefreshButton';
 import StatusBadge from '../components/StatusBadge';
-import TrendAreaChart from '../components/TrendAreaChart';
+import TrendAreaChart, { type TrendSeries } from '../components/TrendAreaChart';
 import { buttonVariants } from '../components/ui/Button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/Card';
 import type { DashboardHistorySeries, DashboardOverview, DashboardTopicCurrent } from '../types/dashboard';
@@ -184,10 +188,10 @@ export default function DashboardPage() {
 
       <div className="metric-grid dashboard-metrics dashboard-metrics-flat">
         <MetricCard label="Brokers" value={overview.brokerCount} detail="Visible broker instances" icon={<RadioTower size={18} />} />
-        <MetricCard label="Topics" value={overview.topicCount} detail="Current route inventory" icon={<Database size={18} />} />
-        <MetricCard label="Consumers" value={overview.consumerGroupCount} detail="Known consumer groups" icon={<Users size={18} />} />
-        <MetricCard label="Backlog" value={formatDashboardMetric(overview.messageBacklog)} detail="Messages awaiting consumption" icon={<Layers size={18} />} />
-        <MetricCard label="Producers" value={overview.producerCount} detail="Known producer groups" icon={<Send size={18} />} />
+        <MetricCard label="Topics" value={overview.topicCount} detail="Current route inventory" icon={<Database size={18} />} accent="blue" />
+        <MetricCard label="Consumers" value={overview.consumerGroupCount} detail="Known consumer groups" icon={<Users size={18} />} accent="pink" />
+        <MetricCard label="Backlog" value={formatDashboardMetric(overview.messageBacklog)} detail="Messages awaiting consumption" icon={<Layers size={18} />} accent="amber" />
+        <MetricCard label="Producers" value={overview.producerCount} detail="Known producer groups" icon={<Send size={18} />} accent="cyan" />
       </div>
 
       <div className="dashboard-main-grid">
@@ -206,6 +210,9 @@ export default function DashboardPage() {
               <div className="advisory-list">
                 {advisories.map((advisory) => (
                   <article className={`advisory-item advisory-${advisory.tone}`} key={advisory.id}>
+                    <span className="advisory-icon" aria-hidden="true">
+                      {advisory.tone === 'warning' ? <TriangleAlert size={18} /> : advisory.tone === 'destructive' ? <CircleAlert size={18} /> : <Info size={18} />}
+                    </span>
                     <div>
                       <strong>{advisory.title}</strong>
                       <p>{advisory.detail}</p>
@@ -249,7 +256,7 @@ export default function DashboardPage() {
           loading={historyLoading}
           errorTitle="Broker history unavailable"
           data={brokerHistoryData}
-          color="var(--info)"
+          chartSeries={2}
           label="Broker count"
         />
 
@@ -285,7 +292,7 @@ export default function DashboardPage() {
             ) : topicHistory?.collected ? (
               <TrendAreaChart
                 data={topicHistoryData}
-                color="var(--primary)"
+                series={1}
                 label={selectedTopic ? 'Total messages' : 'Topic count'}
                 emptyTitle="No topic samples"
                 emptyDetail="No collected topic points match these filters."
@@ -300,23 +307,6 @@ export default function DashboardPage() {
   );
 }
 
-interface HealthSignalProps {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  tone?: 'success' | 'warning' | 'danger';
-}
-
-function HealthSignal({ icon, label, value, tone }: HealthSignalProps) {
-  return (
-    <div className={`health-signal${tone ? ` health-${tone}` : ''}`}>
-      <span className="health-signal-icon" aria-hidden="true">{icon}</span>
-      <span>{label}</span>
-      <strong title={value}>{value}</strong>
-    </div>
-  );
-}
-
 interface HistoryCardProps {
   title: string;
   description: string;
@@ -325,11 +315,11 @@ interface HistoryCardProps {
   loading: boolean;
   errorTitle: string;
   data: Array<{ time: string; value: number }>;
-  color: string;
+  chartSeries: TrendSeries;
   label: string;
 }
 
-function HistoryCard({ title, description, series, error, loading, errorTitle, data, color, label }: HistoryCardProps) {
+function HistoryCard({ title, description, series, error, loading, errorTitle, data, chartSeries, label }: HistoryCardProps) {
   return (
     <Card className="dashboard-history-card">
       <CardHeader>
@@ -350,7 +340,7 @@ function HistoryCard({ title, description, series, error, loading, errorTitle, d
         ) : series?.collected ? (
           <TrendAreaChart
             data={data}
-            color={color}
+            series={chartSeries}
             label={label}
             emptyTitle="No samples"
             emptyDetail="No collected points match the selected date."

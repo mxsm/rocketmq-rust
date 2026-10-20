@@ -1,0 +1,751 @@
+/**
+ * Reading experience for Markdown content: documentation pages and release notes.
+ *
+ * Colour tokens (--rmq-*, --ifm-*) are defined per colour mode in custom.css.
+ * Where Infima exposes a variable, the variable is set instead of restating the
+ * rule, so component styles keep working as Docusaurus evolves.
+ *
+ * The production build reorders CSS: component styles can land after this file,
+ * and every media query lands last. A rule here that competes with a Docusaurus
+ * rule therefore carries higher specificity instead of relying on source order.
+ */
+
+::selection {
+  background: rgba(152, 114, 255, 0.3);
+}
+
+/* ============================================================
+ * Article typography
+ * ============================================================ */
+
+.markdown {
+  /* Paragraph rhythm: Infima spaces blocks by multiples of this value. */
+  --ifm-leading: 1.2rem;
+  --ifm-list-item-margin: 0.4rem;
+
+  color: var(--ifm-color-content);
+  font-size: 1rem;
+  /* Generous leading: the article column reaches about 960px on large monitors. */
+  line-height: 1.78;
+  overflow-wrap: break-word;
+}
+
+.markdown > p,
+.markdown li > p {
+  text-wrap: pretty;
+}
+
+/* Chinese text needs more leading than Latin text at the same size. */
+html[lang='zh-CN'] .markdown {
+  line-height: 1.9;
+  letter-spacing: 0.01em;
+}
+
+/* ---------- Headings ---------- */
+
+/*
+ * Sizes are set as font-size, not through --ifm-hN-font-size: Docusaurus resets
+ * those variables in a phone-width media query, and the production build moves
+ * media queries behind every other rule.
+ */
+.markdown h1:first-child {
+  margin-bottom: 1.35rem;
+  font-size: clamp(1.85rem, 1.45rem + 1.5vw, 2.35rem);
+  line-height: 1.18;
+  letter-spacing: -0.028em;
+  text-wrap: balance;
+}
+
+.markdown > h2 {
+  margin-top: 3rem;
+  margin-bottom: 0.9rem;
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.018em;
+}
+
+.markdown > h3 {
+  margin-top: 2.1rem;
+  margin-bottom: 0.7rem;
+  font-size: 1.2rem;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+}
+
+.markdown > h4 {
+  margin-top: 1.7rem;
+  margin-bottom: 0.5rem;
+  font-size: 1.02rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.markdown > h5,
+.markdown > h6 {
+  margin-top: 1.5rem;
+  margin-bottom: 0.4rem;
+  color: var(--rmq-text-muted);
+  font-size: 0.86rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Negative tracking is tuned for Latin display type; it crowds CJK glyphs. */
+html[lang='zh-CN'] .markdown h1:first-child,
+html[lang='zh-CN'] .markdown > h2,
+html[lang='zh-CN'] .markdown > h3 {
+  letter-spacing: 0;
+}
+
+.hash-link {
+  color: var(--rmq-text-muted);
+  font-weight: 400;
+}
+
+.hash-link:hover {
+  color: var(--ifm-link-color);
+  text-decoration: none;
+}
+
+/* ---------- Links ---------- */
+
+/*
+ * Links written in Markdown carry no class name: external ones have no class
+ * attribute and internal ones an empty one. Component links (cards, tags,
+ * heading anchors) are named and keep their own look. A soft underline keeps
+ * prose links identifiable without relying on colour alone.
+ */
+.markdown a:is(:not([class]), [class='']) {
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-color: var(--rmq-link-underline);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.22em;
+  transition:
+    color 0.15s ease,
+    text-decoration-color 0.15s ease;
+}
+
+.markdown a:is(:not([class]), [class='']):hover {
+  text-decoration-color: currentColor;
+}
+
+/* ---------- Lists ---------- */
+
+.markdown ul,
+.markdown ol {
+  padding-left: 1.45rem;
+}
+
+.markdown li::marker {
+  color: var(--rmq-text-muted);
+}
+
+.markdown li > ul,
+.markdown li > ol {
+  margin-top: 0.4rem;
+}
+
+/* ---------- Inline code ---------- */
+
+:not(pre) > code {
+  --ifm-code-border-radius: 6px;
+  --ifm-code-padding-vertical: 0.14em;
+  --ifm-code-padding-horizontal: 0.4em;
+
+  border-color: transparent;
+  color: inherit;
+  vertical-align: baseline;
+  /* Long identifiers may wrap, but never shrink a table column below a whole word. */
+  overflow-wrap: break-word;
+}
+
+.markdown a:is(:not([class]), [class='']) > code {
+  color: inherit;
+}
+
+/* ---------- Quotes, rules, media ---------- */
+
+.markdown blockquote {
+  --ifm-blockquote-border-left-width: 3px;
+  --ifm-blockquote-border-color: var(--ifm-link-color);
+  --ifm-blockquote-color: var(--ifm-color-content);
+  --ifm-blockquote-padding-vertical: 0.85rem;
+  --ifm-blockquote-padding-horizontal: 1.1rem;
+
+  border-radius: 0 10px 10px 0;
+  background: var(--rmq-accent-soft);
+}
+
+.markdown blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown hr {
+  height: 1px;
+  margin: 2.6rem 0;
+  border: 0;
+  background: linear-gradient(90deg, transparent, var(--rmq-border-strong) 18%, var(--rmq-border-strong) 82%, transparent);
+}
+
+.markdown img {
+  border-radius: 10px;
+}
+
+/* A paragraph that holds only an image is a figure: centre it and give it a frame. */
+.markdown p > img:only-child {
+  display: block;
+  margin: 0.4rem auto;
+  border: 1px solid var(--rmq-border);
+}
+
+/* ============================================================
+ * Tables (wrapped by src/theme/MDXComponents.tsx)
+ * ============================================================ */
+
+.rmq-table-wrap {
+  /* Row dividers and a hover tint replace Infima's zebra striping. */
+  --ifm-table-stripe-background: transparent;
+
+  margin: 1.6rem 0;
+  overflow-x: auto;
+  border: 1px solid var(--rmq-border);
+  border-radius: 12px;
+}
+
+.rmq-table-wrap > table {
+  /* Infima renders tables as scrollable blocks; the wrapper scrolls instead, so the table can fill it. */
+  display: table;
+  width: 100%;
+  margin: 0;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+  line-height: 1.6;
+}
+
+.rmq-table-wrap tr {
+  border: 0;
+  background: none;
+}
+
+.rmq-table-wrap th,
+.rmq-table-wrap td {
+  padding: 0.7rem 1rem;
+  border: 0;
+  border-bottom: 1px solid var(--rmq-border);
+  vertical-align: top;
+}
+
+.rmq-table-wrap th {
+  background: var(--rmq-surface);
+  color: var(--ifm-heading-color);
+  font-size: 0.84rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  /* Markdown leaves alignment unset, which browsers centre; an explicit `:---:` still wins inline. */
+  text-align: left;
+  white-space: nowrap;
+}
+
+.rmq-table-wrap tbody tr:last-child > td {
+  border-bottom: 0;
+}
+
+.rmq-table-wrap tbody tr {
+  transition: background-color 0.15s ease;
+}
+
+.rmq-table-wrap tbody tr:hover {
+  background: var(--rmq-surface-hover);
+}
+
+/* The first column usually names the row; make it the easiest to scan. */
+.rmq-table-wrap td:first-child {
+  color: var(--ifm-heading-color);
+  font-weight: 550;
+}
+
+/* ============================================================
+ * Code blocks
+ * ============================================================ */
+
+.theme-code-block {
+  --ifm-pre-line-height: 1.7;
+  --ifm-pre-border-radius: 12px;
+  --rmq-code-size: 0.86rem;
+}
+
+/* The extra class outranks Docusaurus's own container rule wherever the bundle places it. */
+.markdown .theme-code-block {
+  position: relative;
+  margin: 1.5rem 0;
+  border: 1px solid var(--rmq-border);
+  border-radius: 12px;
+  box-shadow: none;
+}
+
+.theme-code-block pre {
+  font-size: var(--rmq-code-size);
+}
+
+.theme-code-block [class*='codeBlockTitle'] {
+  border-bottom: 1px solid var(--rmq-border);
+  color: var(--rmq-text-muted);
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+/*
+ * Language chip at the end of the first line. Docusaurus puts a `language-*`
+ * class on the block; each rule below turns it into the chip text. The chip
+ * shares the first line's box, so a long line fades out under it instead of
+ * colliding with it, and it yields to the copy button on hover.
+ */
+.theme-code-block::after {
+  position: absolute;
+  top: var(--ifm-pre-padding);
+  right: 0;
+  padding: 0 0.8rem 0 1.8rem;
+  background: linear-gradient(90deg, transparent, var(--prism-background-color) 1.3rem);
+  color: var(--rmq-text-muted);
+  content: var(--rmq-code-language);
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  /* Exactly one line of code tall. */
+  line-height: calc(var(--rmq-code-size) * var(--ifm-pre-line-height));
+  pointer-events: none;
+  text-transform: uppercase;
+  transition: opacity 0.15s ease;
+}
+
+.theme-code-block:hover::after,
+.theme-code-block:focus-within::after {
+  opacity: 0;
+}
+
+/* A titled block starts with its title bar, where the chip would sit on top of the title. */
+.theme-code-block:has(> [class*='codeBlockTitle'])::after {
+  display: none;
+}
+
+.language-bash,
+.language-sh,
+.language-shell {
+  --rmq-code-language: 'bash';
+}
+
+.language-powershell {
+  --rmq-code-language: 'powershell';
+}
+
+.language-rust {
+  --rmq-code-language: 'rust';
+}
+
+.language-toml {
+  --rmq-code-language: 'toml';
+}
+
+.language-yaml {
+  --rmq-code-language: 'yaml';
+}
+
+.language-json {
+  --rmq-code-language: 'json';
+}
+
+.language-java {
+  --rmq-code-language: 'java';
+}
+
+/* ============================================================
+ * Callouts
+ * ============================================================ */
+
+.markdown .theme-admonition {
+  --ifm-alert-border-width: 1px;
+  --ifm-alert-border-left-width: 3px;
+  --ifm-alert-border-radius: 12px;
+  --ifm-alert-padding-vertical: 0.9rem;
+  --ifm-alert-padding-horizontal: 1.1rem;
+  --ifm-alert-foreground-color: var(--ifm-color-content);
+  --ifm-alert-background-color: rgba(var(--rmq-callout), 0.08);
+  --ifm-alert-border-color: rgba(var(--rmq-callout), 0.5);
+  --ifm-alert-shadow: none;
+  --ifm-link-color: var(--ifm-heading-color);
+  /* Channel triplet so each kind derives its fill and border from one colour. */
+  --rmq-callout: 126, 138, 163;
+
+  margin: 1.6rem 0;
+}
+
+.markdown .theme-admonition-tip {
+  --rmq-callout: 34, 170, 110;
+}
+
+.markdown .theme-admonition-info {
+  --rmq-callout: 59, 130, 246;
+}
+
+.markdown .theme-admonition-warning,
+.markdown .theme-admonition-caution {
+  --rmq-callout: 217, 141, 22;
+}
+
+.markdown .theme-admonition-danger {
+  --rmq-callout: 229, 72, 96;
+}
+
+.markdown .theme-admonition [class*='admonitionHeading'] {
+  color: rgb(var(--rmq-callout));
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+}
+
+/* ============================================================
+ * Mermaid diagrams
+ * ============================================================ */
+
+.docusaurus-mermaid-container {
+  /*
+   * A diagram shrinks to fit the column down to the fit scale. One that would
+   * have to shrink further is drawn at the scroll scale instead and scrolls
+   * sideways, so a diagram either fits or scrolls by a useful amount. Mermaid
+   * sets its labels at 16px, which makes these 10.4px and 12px.
+   */
+  --rmq-diagram-fit-scale: 0.65;
+  --rmq-diagram-scroll-scale: 0.75;
+
+  display: flex;
+  margin: 1.6rem 0;
+  overflow-x: auto;
+  padding: 1.25rem 1rem;
+  border: 1px solid var(--rmq-border);
+  border-radius: 12px;
+  background: var(--rmq-surface);
+}
+
+/*
+ * --rmq-diagram-width is the natural width, published by src/theme/Mermaid.tsx.
+ * The clamp acts as a step. Its middle term falls below the column width while
+ * the diagram fits at the fit scale, which leaves the minimum, 100%; once the
+ * diagram no longer fits, the term jumps far above the maximum, which leaves
+ * the scroll-scale width. Mermaid's inline max-width still caps the diagram at
+ * its natural size. `margin: auto` centres a diagram that fits and lets a wider
+ * one scroll from its start.
+ */
+.docusaurus-mermaid-container > svg {
+  width: clamp(
+    100%,
+    (var(--rmq-diagram-width, 0px) * var(--rmq-diagram-fit-scale) - 100%) * 9999 + 100%,
+    var(--rmq-diagram-width, 0px) * var(--rmq-diagram-scroll-scale)
+  );
+  flex: 0 0 auto;
+  margin: 0 auto;
+}
+
+/* Firefox: tables and diagrams that scroll sideways get the slim bar code blocks already have. */
+@supports not selector(::-webkit-scrollbar) {
+  .rmq-table-wrap,
+  .docusaurus-mermaid-container {
+    scrollbar-width: thin;
+  }
+}
+
+/* ============================================================
+ * Documentation chrome: sidebar, outline, breadcrumbs, footer
+ * ============================================================ */
+
+/* ---------- Sidebar ---------- */
+
+.theme-doc-sidebar-container {
+  --ifm-menu-color: var(--rmq-text-muted);
+  --ifm-menu-color-active: var(--ifm-link-color);
+  --ifm-menu-color-background-active: var(--rmq-accent-soft);
+  --ifm-menu-color-background-hover: var(--rmq-surface-hover);
+  --ifm-menu-link-padding-vertical: 0.42rem;
+  --ifm-menu-link-padding-horizontal: 0.72rem;
+}
+
+.theme-doc-sidebar-container .menu {
+  font-size: 0.9rem;
+}
+
+.theme-doc-sidebar-container .menu__link {
+  border-radius: 8px;
+  line-height: 1.4;
+}
+
+.theme-doc-sidebar-container .menu__link--active:not(.menu__link--sublist) {
+  font-weight: 600;
+}
+
+/* Category labels read as section headings. */
+.theme-doc-sidebar-container .menu__list-item-collapsible .menu__link {
+  color: var(--ifm-heading-color);
+  font-weight: 600;
+}
+
+.theme-doc-sidebar-container .menu__list-item-collapsible {
+  border-radius: 8px;
+}
+
+/* A guide line ties nested pages to their category. */
+.theme-doc-sidebar-container .menu__list .menu__list {
+  margin-left: 0.72rem;
+  padding-left: 0.5rem;
+  border-left: 1px solid var(--rmq-border);
+}
+
+/* ---------- Outline ---------- */
+
+.table-of-contents {
+  --ifm-toc-link-color: var(--rmq-text-muted);
+  --ifm-toc-padding-vertical: 0.42rem;
+
+  position: relative;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.table-of-contents .table-of-contents__link:hover {
+  color: var(--ifm-heading-color);
+}
+
+.table-of-contents .table-of-contents__link--active,
+.table-of-contents .table-of-contents__link--active:hover {
+  color: var(--ifm-link-color);
+  font-weight: 600;
+}
+
+/*
+ * Marker on the outline's left border. `left` is measured from the list, while the
+ * vertical position stays where the link sits in the flow.
+ */
+.table-of-contents__left-border .table-of-contents__link--active::before {
+  position: absolute;
+  left: -1px;
+  width: 2px;
+  height: 1.45em;
+  border-radius: 2px;
+  background: var(--ifm-link-color);
+  content: '';
+}
+
+/* ---------- Breadcrumbs and version badge ---------- */
+
+nav.theme-doc-breadcrumbs {
+  --ifm-breadcrumb-size-multiplier: 0.86;
+  --ifm-breadcrumb-color-active: var(--ifm-heading-color);
+  --ifm-breadcrumb-item-background-active: transparent;
+
+  margin-bottom: 1rem;
+}
+
+.theme-doc-breadcrumbs .breadcrumbs__link {
+  color: var(--rmq-text-muted);
+}
+
+.theme-doc-breadcrumbs .breadcrumbs__link:hover,
+.theme-doc-breadcrumbs .breadcrumbs__item--active .breadcrumbs__link {
+  color: var(--ifm-heading-color);
+}
+
+.badge.theme-doc-version-badge {
+  padding: 0.28rem 0.65rem;
+  border: 1px solid var(--rmq-link-underline);
+  border-radius: 999px;
+  background: var(--rmq-accent-soft);
+  color: var(--ifm-link-color);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* ---------- Footer and page navigation ---------- */
+
+.theme-doc-footer {
+  margin-top: 3rem;
+  padding-top: 1.2rem;
+  border-top: 1px solid var(--rmq-border);
+}
+
+.theme-edit-this-page {
+  color: var(--rmq-text-muted);
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+.theme-edit-this-page:hover {
+  color: var(--ifm-link-color);
+  text-decoration: none;
+}
+
+.pagination-nav {
+  --ifm-pagination-nav-border-radius: 14px;
+  --ifm-pagination-nav-color-hover: var(--ifm-link-color);
+}
+
+.pagination-nav__link {
+  padding: 0.95rem 1.15rem;
+  border-color: var(--rmq-border);
+  transition:
+    border-color 0.2s ease,
+    background-color 0.2s ease;
+}
+
+.pagination-nav__link:hover {
+  background: var(--rmq-accent-soft);
+}
+
+.pagination-nav__sublabel {
+  color: var(--rmq-text-muted);
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.pagination-nav__label {
+  color: var(--ifm-heading-color);
+  font-family: var(--ifm-font-family-base);
+  font-size: 0.98rem;
+  font-weight: 650;
+}
+
+.pagination-nav__link:hover .pagination-nav__label {
+  color: var(--ifm-link-color);
+}
+
+.pagination-nav__link--prev .pagination-nav__label::before {
+  content: '\2190\00a0';
+}
+
+.pagination-nav__link--next .pagination-nav__label::after {
+  content: '\00a0\2192';
+}
+
+/* ============================================================
+ * Release notes (the blog plugin serves them under /releases)
+ * ============================================================ */
+
+/*
+ * Docusaurus styles these pages with hashed class names, so the rules below
+ * select by element and by the stable part of the class name.
+ */
+
+/* Post title: the same scale as a documentation page title. */
+.blog-wrapper article > header > h1 {
+  margin-bottom: 0.6rem;
+  font-size: clamp(1.85rem, 1.45rem + 1.5vw, 2.35rem);
+  line-height: 1.18;
+  letter-spacing: -0.028em;
+  text-wrap: balance;
+}
+
+/* In a list of releases the titles are entries, not page titles. */
+.blog-wrapper article > header > h2 {
+  margin-bottom: 0.5rem;
+  font-size: 1.7rem;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+
+.blog-wrapper article > header > h2 > a {
+  color: var(--ifm-heading-color);
+}
+
+.blog-wrapper article > header > h2 > a:hover {
+  color: var(--ifm-link-color);
+  text-decoration: none;
+}
+
+/* Date and reading time. */
+.blog-wrapper article > header > div:has(> time) {
+  color: var(--rmq-text-muted);
+  font-size: 0.86rem;
+}
+
+.blog-list-page article + article {
+  padding-top: 3rem;
+  border-top: 1px solid var(--rmq-border);
+}
+
+.blog-wrapper aside [class*='sidebarItemTitle'] {
+  font-size: 1rem;
+}
+
+.blog-wrapper aside [class*='yearGroupHeading'] {
+  color: var(--rmq-text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.blog-wrapper aside [class*='sidebarItemLink'] {
+  color: var(--rmq-text-muted);
+}
+
+.blog-wrapper aside [class*='sidebarItemLink']:hover {
+  color: var(--ifm-heading-color);
+}
+
+/* Docusaurus marks its own colour for the current post !important, so this has to as well. */
+.blog-wrapper aside [class*='sidebarItemLinkActive'] {
+  color: var(--ifm-link-color) !important;
+  font-weight: 600;
+}
+
+/*
+ * Release notes are long change lists, so the article gets more of the row than
+ * the stock 3/7/2 split gives it. Below this width the columns stack.
+ */
+@media (min-width: 997px) {
+  html.blog-wrapper {
+    --ifm-container-width-xl: 1440px;
+  }
+
+  .blog-wrapper aside.col--3 {
+    --ifm-col-width: 20%;
+  }
+
+  .blog-wrapper main.col--7 {
+    --ifm-col-width: 63.3333%;
+  }
+}
+
+/* ============================================================
+ * Small screens
+ * ============================================================ */
+
+@media (max-width: 768px) {
+  .markdown > h2 {
+    margin-top: 2.5rem;
+    font-size: 1.36rem;
+  }
+
+  .markdown > h3 {
+    font-size: 1.12rem;
+  }
+
+  /* Keep columns readable and let the wrapper scroll instead of crushing them. */
+  .rmq-table-wrap th,
+  .rmq-table-wrap td {
+    min-width: 7.5rem;
+    padding: 0.6rem 0.8rem;
+  }
+
+  .theme-code-block {
+    --rmq-code-size: 0.8rem;
+  }
+
+  /* A phone trades a little label size for less sideways scrolling. */
+  .docusaurus-mermaid-container {
+    --rmq-diagram-fit-scale: 0.55;
+    --rmq-diagram-scroll-scale: 0.62;
+  }
+}

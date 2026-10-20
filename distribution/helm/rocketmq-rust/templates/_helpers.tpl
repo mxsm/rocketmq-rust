@@ -144,9 +144,10 @@ rocketmqrust.com/service: {{ .service }}
 rocketmqrust.com/architecture-milestone: P0-05
 {{- end -}}
 
-{{/* Shared pre-bind lifecycle and security contract. The health port is kubelet-only and is not exposed by Services. */}}
+{{/* Shared pre-bind lifecycle and security contract. The health port is kubelet-only and is not exposed by Services. The preStop httpGet hook can only send GET, so /drainz opts in to GET. */}}
 {{- define "rocketmq.lifecycleEnv" -}}
 - {name: ROCKETMQ_HEALTH_BIND_ADDR, value: "0.0.0.0:8088"}
+- {name: ROCKETMQ_HEALTH_DRAIN_METHODS, value: "GET,POST"}
 - {name: ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS, value: "45"}
 - {name: ROCKETMQ_LIVENESS_STALE_SECONDS, value: "30"}
 - {name: ROCKETMQ_SECURITY_PROFILE, value: "secure-enforced"}

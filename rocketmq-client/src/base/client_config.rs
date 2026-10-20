@@ -762,7 +762,7 @@ impl ClientConfig {
     ///     .instance_name("my_producer")
     ///     .enable_tls(true)
     ///     .build()?;
-    /// # Ok::<(), crate::ClientError>(())
+    /// # Ok::<(), rocketmq_client_rust::ClientError>(())
     /// ```
     #[inline]
     pub fn builder() -> crate::base::client_config_builder::ClientConfigBuilder {

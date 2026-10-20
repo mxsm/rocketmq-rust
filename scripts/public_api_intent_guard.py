@@ -130,7 +130,7 @@ def inventory_source(relative: str, source: str, owner: str) -> list[dict[str, s
         declaration = re.sub(r"\s+", " ", source[match.start():end].strip())
         identity = f"{relative}:{declaration}"
         prefix = source[max(0, match.start() - 160):match.start()]
-        if "compat" in declaration.lower() or "legacy" in declaration.lower() or "RocketMQRuntime" in declaration:
+        if "compat" in declaration.lower() or "legacy" in declaration.lower():
             category = "compat"
             rationale = "temporary source-level adapter; no new behavior may be added"
             removal_condition = "remove at the 2.0.0 source-compatibility boundary"

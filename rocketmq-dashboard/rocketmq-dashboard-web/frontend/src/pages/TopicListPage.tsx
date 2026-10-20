@@ -452,13 +452,13 @@ export default function TopicListPage() {
 
       <div className="metric-grid entity-metrics">
         <MetricCard label="Total topics" value={metrics.total} detail="Visible API inventory" icon={<Database size={18} />} />
-        <MetricCard label="Application" value={metrics.application} detail="Non-system workloads" icon={<Layers3 size={18} />} />
-        <MetricCard label="Retry" value={metrics.retry} detail="Retry delivery topics" icon={<RotateCcw size={18} />} />
-        <MetricCard label="DLQ" value={metrics.dlq} detail="Dead-letter topics" icon={<ShieldAlert size={18} />} />
-        <MetricCard label="System" value={metrics.system} detail="RocketMQ internal topics" icon={<Database size={18} />} />
+        <MetricCard label="Application" value={metrics.application} detail="Non-system workloads" icon={<Layers3 size={18} />} accent="blue" />
+        <MetricCard label="Retry" value={metrics.retry} detail="Retry delivery topics" icon={<RotateCcw size={18} />} accent="amber" />
+        <MetricCard label="DLQ" value={metrics.dlq} detail="Dead-letter topics" icon={<ShieldAlert size={18} />} accent="pink" />
+        <MetricCard label="System" value={metrics.system} detail="RocketMQ internal topics" icon={<Database size={18} />} accent="cyan" />
       </div>
 
-      <section className="entity-table-card">
+      <section className="entity-table-card" data-surface="panel">
         <TopicFilterToolbar
           filters={filters}
           clusterOptions={clusterOptions}

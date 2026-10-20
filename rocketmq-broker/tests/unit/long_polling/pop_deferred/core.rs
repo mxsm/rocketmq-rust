@@ -128,8 +128,8 @@ fn criteria_key(queue_id: i32) -> PopCriteriaKey {
 
 fn deadline_after(base: tokio::time::Instant, millis: u64) -> LongPollingDeadline {
     match LongPollingDeadline::checked(0, millis + 49, 0, base).expect("test deadline") {
-        LongPollingDeadlineOutcome::Pending(deadline) => deadline,
-        LongPollingDeadlineOutcome::Immediate => panic!("test deadline must remain pending"),
+        PopWaitDecision::Pending(deadline) => deadline,
+        PopWaitDecision::Immediate => panic!("test deadline must remain pending"),
     }
 }
 
@@ -183,22 +183,22 @@ impl MessageFilter for CountingFilter {
 fn deadline_preserves_legacy_strict_fifty_millisecond_formula() {
     let monotonic_now = tokio::time::Instant::now();
     let deadline = match LongPollingDeadline::checked(1_000, 100, 1_049, monotonic_now).expect("live deadline") {
-        LongPollingDeadlineOutcome::Pending(deadline) => deadline,
-        LongPollingDeadlineOutcome::Immediate => panic!("deadline must remain live"),
+        PopWaitDecision::Pending(deadline) => deadline,
+        PopWaitDecision::Immediate => panic!("deadline must remain live"),
     };
     assert_eq!(deadline.protocol_millis(), 1_051);
     assert_eq!(deadline.protocol_at(), monotonic_now + Duration::from_millis(2));
 
     let boundary =
         match LongPollingDeadline::checked(1_000, 100, 1_050, monotonic_now).expect("strict boundary is live") {
-            LongPollingDeadlineOutcome::Pending(deadline) => deadline,
-            LongPollingDeadlineOutcome::Immediate => panic!("strict boundary must remain live"),
+            PopWaitDecision::Pending(deadline) => deadline,
+            PopWaitDecision::Immediate => panic!("strict boundary must remain live"),
         };
     assert_eq!(boundary.protocol_at(), monotonic_now + Duration::from_millis(1));
 
     let expired = LongPollingDeadline::checked(1_000, 100, 1_051, monotonic_now)
         .expect("strictly later is a normal immediate outcome");
-    assert_eq!(expired, LongPollingDeadlineOutcome::Immediate);
+    assert_eq!(expired, PopWaitDecision::Immediate);
 }
 
 #[test]
@@ -206,7 +206,7 @@ fn deadline_returns_immediate_for_zero_and_errors_on_protocol_overflow() {
     assert_eq!(
         LongPollingDeadline::checked(1, 0, 0, tokio::time::Instant::now())
             .expect("zero polling is a normal immediate outcome"),
-        LongPollingDeadlineOutcome::Immediate
+        PopWaitDecision::Immediate
     );
     assert_eq!(
         LongPollingDeadline::checked(u64::MAX, 1, 0, tokio::time::Instant::now())
@@ -232,12 +232,12 @@ fn index_reservations_enforce_both_limits_and_drop_to_zero() {
     let first = index.reserve(first_key.clone()).expect("first reservation");
     assert!(matches!(
         index.reserve(first_key),
-        Ok(PopIndexReserveOutcome::Rejected(PopIndexRejection::BucketCapacity))
+        Ok(PopIndexReservationStatus::Rejected(PopIndexRejection::BucketCapacity))
     ));
     let second = index.reserve(second_key.clone()).expect("second reservation");
     assert!(matches!(
         index.reserve(second_key),
-        Ok(PopIndexReserveOutcome::Rejected(PopIndexRejection::GlobalCapacity))
+        Ok(PopIndexReservationStatus::Rejected(PopIndexRejection::GlobalCapacity))
     ));
     assert_eq!(index.snapshot().reserved(), 2);
     drop((first, second));
@@ -383,8 +383,8 @@ fn prepared_registration_owns_index_and_wait_capacity_until_drop() {
         )
         .expect("prepare before responder transfer")
     {
-        PopDeferredPrepareOutcome::Prepared(prepared) => prepared,
-        PopDeferredPrepareOutcome::Rejected(_) => panic!("live request must be prepared"),
+        PopDeferredPreparationStatus::Prepared(prepared) => prepared,
+        PopDeferredPreparationStatus::Rejected(_) => panic!("live request must be prepared"),
     };
     assert!(prepared.retained_bytes() > 0);
     assert_eq!(
@@ -411,8 +411,8 @@ fn shutdown_rejects_prepare_before_reserving_business_or_wait_capacity() {
         10_100,
         tokio::time::Instant::now(),
     ) {
-        Ok(PopDeferredPrepareOutcome::Rejected(rejection)) => rejection,
-        Ok(PopDeferredPrepareOutcome::Prepared(_)) => panic!("closed service must reject preparation"),
+        Ok(PopDeferredPreparationStatus::Rejected(rejection)) => rejection,
+        Ok(PopDeferredPreparationStatus::Prepared(_)) => panic!("closed service must reject preparation"),
         Err(_) => panic!("closed service is a source-free rejection"),
     };
     assert_eq!(rejection.kind(), PopDeferredPrepareRejectionKind::ServiceClosed);

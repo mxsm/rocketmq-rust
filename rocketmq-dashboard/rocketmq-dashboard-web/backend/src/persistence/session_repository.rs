@@ -17,7 +17,7 @@ use crate::model::NewSession;
 use crate::model::SessionRecord;
 use crate::model::SessionTokenHash;
 use crate::persistence::DashboardPersistence;
-use crate::persistence::backend::PersistenceBackend;
+use crate::persistence::backend::DashboardDataStore;
 use crate::persistence::error::PersistenceError;
 use serde::Deserialize;
 use serde::Serialize;
@@ -71,9 +71,9 @@ pub trait SessionRepository {
 impl DashboardPersistence {
     pub async fn create_session(&self, session: NewSession) -> Result<(), PersistenceError> {
         validate_new_session(&session)?;
-        match &self.backend {
-            PersistenceBackend::File(store) => store.create_session(session).await,
-            PersistenceBackend::Sql(store) => store.create_session(session).await,
+        match &self.store {
+            DashboardDataStore::File(store) => store.create_session(session).await,
+            DashboardDataStore::Sql(store) => store.create_session(session).await,
         }
     }
 
@@ -83,9 +83,9 @@ impl DashboardPersistence {
         audit: AuditEvent,
     ) -> Result<(), PersistenceError> {
         validate_new_session(&session)?;
-        match &self.backend {
-            PersistenceBackend::File(store) => store.create_session_with_audit(session, audit).await,
-            PersistenceBackend::Sql(store) => store.create_session_with_audit(session, audit).await,
+        match &self.store {
+            DashboardDataStore::File(store) => store.create_session_with_audit(session, audit).await,
+            DashboardDataStore::Sql(store) => store.create_session_with_audit(session, audit).await,
         }
     }
 
@@ -104,13 +104,13 @@ impl DashboardPersistence {
                 "maximum active sessions must be between 1 and 32".to_string(),
             ));
         }
-        match &self.backend {
-            PersistenceBackend::File(store) => {
+        match &self.store {
+            DashboardDataStore::File(store) => {
                 store
                     .create_session_with_audit_capped(session, audit, max_active_sessions, now_ms)
                     .await
             }
-            PersistenceBackend::Sql(store) => {
+            DashboardDataStore::Sql(store) => {
                 store
                     .create_session_with_audit_capped(session, audit, max_active_sessions, now_ms)
                     .await
@@ -119,9 +119,9 @@ impl DashboardPersistence {
     }
 
     pub async fn find_session(&self, token_hash: &SessionTokenHash) -> Result<Option<SessionRecord>, PersistenceError> {
-        match &self.backend {
-            PersistenceBackend::File(store) => store.find_session(token_hash).await,
-            PersistenceBackend::Sql(store) => store.find_session(token_hash).await,
+        match &self.store {
+            DashboardDataStore::File(store) => store.find_session(token_hash).await,
+            DashboardDataStore::Sql(store) => store.find_session(token_hash).await,
         }
     }
 
@@ -132,9 +132,9 @@ impl DashboardPersistence {
         token_hash: &SessionTokenHash,
         observed_at_ms: i64,
     ) -> Result<bool, PersistenceError> {
-        match &self.backend {
-            PersistenceBackend::File(store) => store.touch_session(token_hash, observed_at_ms).await,
-            PersistenceBackend::Sql(store) => store.touch_session(token_hash, observed_at_ms).await,
+        match &self.store {
+            DashboardDataStore::File(store) => store.touch_session(token_hash, observed_at_ms).await,
+            DashboardDataStore::Sql(store) => store.touch_session(token_hash, observed_at_ms).await,
         }
     }
 
@@ -143,9 +143,9 @@ impl DashboardPersistence {
         token_hash: &SessionTokenHash,
         revoked_at_ms: i64,
     ) -> Result<bool, PersistenceError> {
-        match &self.backend {
-            PersistenceBackend::File(store) => store.revoke_session(token_hash, revoked_at_ms).await,
-            PersistenceBackend::Sql(store) => store.revoke_session(token_hash, revoked_at_ms).await,
+        match &self.store {
+            DashboardDataStore::File(store) => store.revoke_session(token_hash, revoked_at_ms).await,
+            DashboardDataStore::Sql(store) => store.revoke_session(token_hash, revoked_at_ms).await,
         }
     }
 
@@ -155,17 +155,17 @@ impl DashboardPersistence {
         revoked_at_ms: i64,
         audit: AuditEvent,
     ) -> Result<bool, PersistenceError> {
-        match &self.backend {
-            PersistenceBackend::File(store) => store.revoke_session_with_audit(token_hash, revoked_at_ms, audit).await,
-            PersistenceBackend::Sql(store) => store.revoke_session_with_audit(token_hash, revoked_at_ms, audit).await,
+        match &self.store {
+            DashboardDataStore::File(store) => store.revoke_session_with_audit(token_hash, revoked_at_ms, audit).await,
+            DashboardDataStore::Sql(store) => store.revoke_session_with_audit(token_hash, revoked_at_ms, audit).await,
         }
     }
 
     pub async fn revoke_all_sessions(&self, username: &str, revoked_at_ms: i64) -> Result<u64, PersistenceError> {
         validate_username(username)?;
-        match &self.backend {
-            PersistenceBackend::File(store) => store.revoke_all_sessions(username, revoked_at_ms).await,
-            PersistenceBackend::Sql(store) => store.revoke_all_sessions(username, revoked_at_ms).await,
+        match &self.store {
+            DashboardDataStore::File(store) => store.revoke_all_sessions(username, revoked_at_ms).await,
+            DashboardDataStore::Sql(store) => store.revoke_all_sessions(username, revoked_at_ms).await,
         }
     }
 
@@ -176,13 +176,13 @@ impl DashboardPersistence {
         audit: AuditEvent,
     ) -> Result<u64, PersistenceError> {
         validate_username(username)?;
-        match &self.backend {
-            PersistenceBackend::File(store) => {
+        match &self.store {
+            DashboardDataStore::File(store) => {
                 store
                     .revoke_all_sessions_with_audit(username, revoked_at_ms, audit)
                     .await
             }
-            PersistenceBackend::Sql(store) => {
+            DashboardDataStore::Sql(store) => {
                 store
                     .revoke_all_sessions_with_audit(username, revoked_at_ms, audit)
                     .await
@@ -192,9 +192,9 @@ impl DashboardPersistence {
 
     pub async fn list_sessions(&self, query: SessionQuery) -> Result<SessionPage, PersistenceError> {
         validate_session_query(&query)?;
-        match &self.backend {
-            PersistenceBackend::File(store) => store.list_sessions(query).await,
-            PersistenceBackend::Sql(store) => store.list_sessions(query).await,
+        match &self.store {
+            DashboardDataStore::File(store) => store.list_sessions(query).await,
+            DashboardDataStore::Sql(store) => store.list_sessions(query).await,
         }
     }
 
@@ -204,9 +204,9 @@ impl DashboardPersistence {
                 "session cleanup batch must be between 1 and 1000".to_string(),
             ));
         }
-        match &self.backend {
-            PersistenceBackend::File(store) => store.delete_sessions_before(cutoff_ms, limit).await,
-            PersistenceBackend::Sql(store) => store.delete_sessions_before(cutoff_ms, limit).await,
+        match &self.store {
+            DashboardDataStore::File(store) => store.delete_sessions_before(cutoff_ms, limit).await,
+            DashboardDataStore::Sql(store) => store.delete_sessions_before(cutoff_ms, limit).await,
         }
     }
 }

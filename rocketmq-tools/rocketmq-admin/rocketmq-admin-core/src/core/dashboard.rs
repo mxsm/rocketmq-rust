@@ -193,9 +193,14 @@ pub struct DashboardConsumerResetRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DashboardProducerInfo {
+    /// Empty when unknown: broker producer tables do not record the topics a group sends to.
     pub topic: String,
     pub producer_group: String,
+    /// Producer clients of the group, each counted once however many brokers it is registered with.
     pub connection_count: usize,
+    /// Sorted names of the brokers the group's clients are registered with.
+    #[serde(default)]
+    pub broker_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -421,7 +426,7 @@ pub trait DashboardAdmin: Send + Sync {
 
     fn dashboard_consumer_brokers<'a>(&'a self, _group: &'a str) -> AdminFuture<'a, DashboardConsumerBrokerList> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "dashboard_consumer_brokers",
                 "Consumer broker discovery is not implemented by this adapter",
             ))
@@ -492,7 +497,7 @@ pub trait DashboardAdmin: Send + Sync {
     ) -> AdminFuture<'a, AdminMutationResult> {
         Box::pin(async move {
             request.validate()?;
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "delete_acl_entry",
                 "Typed ACL entry deletion is not supported by this adapter",
             ))

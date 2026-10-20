@@ -247,69 +247,6 @@ impl DefaultFlushManager {
         self.sync_flush_stats.snapshot()
     }
 
-    pub(crate) async fn handle_disk_flush_shared(
-        &self,
-        result: &AppendMessageResult,
-        message_ext: &MessageExtBrokerInner,
-    ) -> PutMessageStatus {
-        match self.message_store_config.flush_disk_type {
-            FlushDiskType::SyncFlush => {
-                if message_ext.is_wait_store_msg_ok() {
-                    let (commit_request, flush_ok_receiver) = GroupCommitRequest::new(
-                        result.wrote_offset + result.wrote_bytes as i64,
-                        self.message_store_config.sync_flush_timeout,
-                    );
-
-                    time::timeout(
-                        time::Duration::from_millis(self.message_store_config.sync_flush_timeout),
-                        async {
-                            let Some(group_commit_service) = self.group_commit_service.as_ref() else {
-                                return PutMessageStatus::FlushDiskTimeout;
-                            };
-                            if !group_commit_service.put_request(commit_request).await {
-                                return PutMessageStatus::FlushDiskTimeout;
-                            }
-                            match flush_ok_receiver.await {
-                                Ok(Ok(GroupCommitStatus::Flushed)) => PutMessageStatus::PutOk,
-                                Ok(Ok(GroupCommitStatus::TimedOut)) => PutMessageStatus::FlushDiskTimeout,
-                                Ok(Err(error)) => {
-                                    warn!(error = %error, "sync flush failed");
-                                    PutMessageStatus::FlushDiskTimeout
-                                }
-                                Err(_) => PutMessageStatus::FlushDiskTimeout,
-                            }
-                        },
-                    )
-                    .await
-                    .unwrap_or(PutMessageStatus::FlushDiskTimeout)
-                } else {
-                    let Some(group_commit_service) = self.group_commit_service.as_ref() else {
-                        warn!("Sync flush requested but GroupCommitService is not initialized");
-                        return PutMessageStatus::FlushDiskTimeout;
-                    };
-                    group_commit_service.wakeup();
-                    PutMessageStatus::PutOk
-                }
-            }
-            FlushDiskType::AsyncFlush => {
-                if self.message_store_config.transient_store_pool_enable {
-                    let Some(commit_real_time_service) = self.commit_real_time_service.as_ref() else {
-                        warn!("Async flush requested but CommitRealTimeService is not initialized");
-                        return PutMessageStatus::FlushDiskTimeout;
-                    };
-                    commit_real_time_service.wakeup();
-                } else {
-                    let Some(flush_real_time_service) = self.flush_real_time_service.as_ref() else {
-                        warn!("Async flush requested but FlushRealTimeService is not initialized");
-                        return PutMessageStatus::FlushDiskTimeout;
-                    };
-                    flush_real_time_service.wakeup();
-                }
-                PutMessageStatus::PutOk
-            }
-        }
-    }
-
     pub(crate) async fn shutdown_gracefully(&mut self) -> Result<FlushProgress, StoreError> {
         if let Some(ref mut group_commit_service) = self.group_commit_service {
             group_commit_service.shutdown_gracefully().await;
@@ -397,11 +334,66 @@ impl FlushManager for DefaultFlushManager {
     }
 
     async fn handle_disk_flush(
-        &mut self,
+        &self,
         result: &AppendMessageResult,
         message_ext: &MessageExtBrokerInner,
     ) -> PutMessageStatus {
-        self.handle_disk_flush_shared(result, message_ext).await
+        match self.message_store_config.flush_disk_type {
+            FlushDiskType::SyncFlush => {
+                if message_ext.is_wait_store_msg_ok() {
+                    let (commit_request, flush_ok_receiver) = GroupCommitRequest::new(
+                        result.wrote_offset + result.wrote_bytes as i64,
+                        self.message_store_config.sync_flush_timeout,
+                    );
+
+                    time::timeout(
+                        time::Duration::from_millis(self.message_store_config.sync_flush_timeout),
+                        async {
+                            let Some(group_commit_service) = self.group_commit_service.as_ref() else {
+                                return PutMessageStatus::FlushDiskTimeout;
+                            };
+                            if !group_commit_service.put_request(commit_request).await {
+                                return PutMessageStatus::FlushDiskTimeout;
+                            }
+                            match flush_ok_receiver.await {
+                                Ok(Ok(GroupCommitStatus::Flushed)) => PutMessageStatus::PutOk,
+                                Ok(Ok(GroupCommitStatus::TimedOut)) => PutMessageStatus::FlushDiskTimeout,
+                                Ok(Err(error)) => {
+                                    warn!(error = %error, "sync flush failed");
+                                    PutMessageStatus::FlushDiskTimeout
+                                }
+                                Err(_) => PutMessageStatus::FlushDiskTimeout,
+                            }
+                        },
+                    )
+                    .await
+                    .unwrap_or(PutMessageStatus::FlushDiskTimeout)
+                } else {
+                    let Some(group_commit_service) = self.group_commit_service.as_ref() else {
+                        warn!("Sync flush requested but GroupCommitService is not initialized");
+                        return PutMessageStatus::FlushDiskTimeout;
+                    };
+                    group_commit_service.wakeup();
+                    PutMessageStatus::PutOk
+                }
+            }
+            FlushDiskType::AsyncFlush => {
+                if self.message_store_config.transient_store_pool_enable {
+                    let Some(commit_real_time_service) = self.commit_real_time_service.as_ref() else {
+                        warn!("Async flush requested but CommitRealTimeService is not initialized");
+                        return PutMessageStatus::FlushDiskTimeout;
+                    };
+                    commit_real_time_service.wakeup();
+                } else {
+                    let Some(flush_real_time_service) = self.flush_real_time_service.as_ref() else {
+                        warn!("Async flush requested but FlushRealTimeService is not initialized");
+                        return PutMessageStatus::FlushDiskTimeout;
+                    };
+                    flush_real_time_service.wakeup();
+                }
+                PutMessageStatus::PutOk
+            }
+        }
     }
 }
 
@@ -438,7 +430,7 @@ impl GroupCommitService {
             .record_enqueue(enqueue_time_millis, retained_bytes);
         tokio::select! {
             result = request_queue.push_until(request, retained_bytes, BudgetClass::Data, deadline) => {
-                let sent = !matches!(result, rocketmq_runtime::QueuePushOutcome::Rejected { .. });
+                let sent = !matches!(result, rocketmq_runtime::QueueEnqueueStatus::Rejected { .. });
                 if !sent {
                     self.sync_flush_stats.rollback_enqueue(enqueue_time_millis, retained_bytes);
                     self.sync_flush_stats.record_rejected();
@@ -955,6 +947,18 @@ mod tests {
 
     #[tokio::test]
     async fn handle_disk_flush_returns_timeout_when_sync_service_missing() {
+        async fn flush_from_shared_manager<T: FlushManager>(manager: &T) -> PutMessageStatus {
+            fn assert_send<T: Send>(value: T) -> T {
+                value
+            }
+
+            let result = AppendMessageResult::default();
+            let message_ext = MessageExtBrokerInner::default();
+            let manager = assert_send(manager);
+            let flush = manager.handle_disk_flush(&result, &message_ext);
+            assert_send(flush).await
+        }
+
         let temp_dir = tempdir().unwrap();
         let store_checkpoint = Arc::new(StoreCheckpoint::new(temp_dir.path().join("checkpoint")).unwrap());
         let mapped_file_queue = MappedFileQueue::default().flush_handle();
@@ -969,10 +973,7 @@ mod tests {
         );
         manager.start();
 
-        let shared_manager: &DefaultFlushManager = &manager;
-        let status = shared_manager
-            .handle_disk_flush_shared(&AppendMessageResult::default(), &MessageExtBrokerInner::default())
-            .await;
+        let status = flush_from_shared_manager(&manager).await;
         assert_eq!(status, PutMessageStatus::PutOk);
 
         manager.shutdown_gracefully().await.unwrap();

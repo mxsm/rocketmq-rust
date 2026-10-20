@@ -371,15 +371,16 @@ pub enum IndexBuildKeyKind {
     Tag,
 }
 
-/// Result of visiting every indexable key in legacy order.
+/// Result of building the index keys of one message: every unique, normal and tag key is visited
+/// in legacy order until a unique or normal key fails.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IndexBuildKeysOutcome {
+pub enum IndexKeyBuildResult {
     Completed,
     Aborted(IndexBuildKeyKind),
     TagFailed,
 }
 
-impl IndexBuildKeysOutcome {
+impl IndexKeyBuildResult {
     pub const fn advances_safe_offset(self) -> bool {
         matches!(self, Self::Completed | Self::TagFailed)
     }
@@ -394,26 +395,26 @@ pub fn drive_index_build_keys<'a, Visit>(
     unique_type: &'a str,
     tag_type: &'a str,
     mut visit: Visit,
-) -> IndexBuildKeysOutcome
+) -> IndexKeyBuildResult
 where
     Visit: FnMut(IndexBuildKeyKind, &'a str, Option<&'a str>) -> bool,
 {
     if let Some(unique_key) = unique_key {
         if !visit(IndexBuildKeyKind::Unique, unique_key, Some(unique_type)) {
-            return IndexBuildKeysOutcome::Aborted(IndexBuildKeyKind::Unique);
+            return IndexKeyBuildResult::Aborted(IndexBuildKeyKind::Unique);
         }
     }
     for key in keys.split(key_separator).filter(|key| !key.is_empty()) {
         if !visit(IndexBuildKeyKind::Normal, key, None) {
-            return IndexBuildKeysOutcome::Aborted(IndexBuildKeyKind::Normal);
+            return IndexKeyBuildResult::Aborted(IndexBuildKeyKind::Normal);
         }
     }
     if let Some(tags) = tags {
         if !visit(IndexBuildKeyKind::Tag, tags, Some(tag_type)) {
-            return IndexBuildKeysOutcome::TagFailed;
+            return IndexKeyBuildResult::TagFailed;
         }
     }
-    IndexBuildKeysOutcome::Completed
+    IndexKeyBuildResult::Completed
 }
 
 /// Returns whether a request contains any unique, normal, or tag key.

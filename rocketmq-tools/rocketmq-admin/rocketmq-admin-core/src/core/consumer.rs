@@ -787,9 +787,9 @@ fn canonical_exact_targets(
     Ok(targets)
 }
 
-/// Outcome of one broker mutation or one internal-topic cleanup target.
+/// Result of one broker mutation or one internal-topic cleanup target.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DashboardConsumerTargetOutcome {
+pub struct DashboardConsumerTargetResult {
     pub target: String,
     pub kind: String,
     pub success: bool,
@@ -801,7 +801,7 @@ pub struct DashboardConsumerTargetOutcome {
 pub struct DashboardConsumerBatchResult {
     pub consumer_group: String,
     pub success: bool,
-    pub targets: Vec<DashboardConsumerTargetOutcome>,
+    pub targets: Vec<DashboardConsumerTargetResult>,
 }
 
 fn canonical_names<Names, Name>(names: Names) -> Vec<String>
@@ -907,7 +907,7 @@ impl DeleteSubscriptionGroupsRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConsumerBatchMutationOutcome {
+pub struct ConsumerBatchMutationReport {
     pub message: String,
     pub broker_count: usize,
 }
@@ -1051,7 +1051,7 @@ impl PatchSubscriptionGroupConfigRequest {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum PatchSubscriptionGroupConfigOutcome {
+pub enum SubscriptionGroupConfigPatchResult {
     Applied { previous_version: u64, version: u64 },
     VersionConflict { expected_version: u64, actual_version: u64 },
 }
@@ -1084,7 +1084,7 @@ pub trait ConsumerAdmin: Send {
         _request: &'a ListConsumerGroupsRequest,
     ) -> AdminFuture<'a, AdminQueryResult<ConsumerGroupInventoryResult>> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "list_consumer_group_inventory_with_evidence",
                 "cheap consumer group inventory is not implemented by this adapter",
             ))
@@ -1101,7 +1101,7 @@ pub trait ConsumerAdmin: Send {
         _request: &'a ExactConsumerGroupEnrichmentRequest,
     ) -> AdminFuture<'a, AdminQueryResult<ListConsumerGroupsResult>> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "enrich_consumer_groups_exact_with_evidence",
                 "bounded exact consumer group enrichment is not implemented by this adapter",
             ))
@@ -1148,7 +1148,7 @@ pub trait ConsumerAdmin: Send {
     fn delete_subscription_groups<'a>(
         &'a mut self,
         request: &'a DeleteSubscriptionGroupsRequest,
-    ) -> AdminFuture<'a, ConsumerBatchMutationOutcome>;
+    ) -> AdminFuture<'a, ConsumerBatchMutationReport>;
 
     fn set_consumer_request_mode<'a>(
         &'a mut self,
@@ -1163,7 +1163,7 @@ pub trait ConsumerQueryAdmin: Send {
         _request: &'a QuerySubscriptionGroupConfigCasRequest,
     ) -> AdminFuture<'a, SubscriptionGroupConfigCasState> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "query_subscription_group_config_cas_state",
                 "Subscription Group config CAS state is not implemented by this adapter",
             ))
@@ -1195,7 +1195,7 @@ pub trait ConsumerQueryAdmin: Send {
         _request: &'a ListConsumerGroupsRequest,
     ) -> AdminFuture<'a, AdminQueryResult<ConsumerGroupInventoryResult>> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "list_consumer_group_inventory_with_evidence",
                 "cheap consumer group inventory is not implemented by this adapter",
             ))
@@ -1211,7 +1211,7 @@ pub trait ConsumerQueryAdmin: Send {
         _request: &'a ExactConsumerGroupEnrichmentRequest,
     ) -> AdminFuture<'a, AdminQueryResult<ListConsumerGroupsResult>> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "enrich_consumer_groups_exact_with_evidence",
                 "bounded exact consumer group enrichment is not implemented by this adapter",
             ))
@@ -1287,9 +1287,9 @@ pub trait ConsumerMutationAdmin: Send {
     fn patch_config_if_version<'a>(
         &'a mut self,
         _request: &'a PatchSubscriptionGroupConfigRequest,
-    ) -> AdminFuture<'a, PatchSubscriptionGroupConfigOutcome> {
+    ) -> AdminFuture<'a, SubscriptionGroupConfigPatchResult> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "patch_subscription_group_config_if_version",
                 "Subscription Group config CAS is not implemented by this adapter",
             ))
@@ -1307,7 +1307,7 @@ pub trait ConsumerMutationAdmin: Send {
     fn delete_subscription_groups<'a>(
         &'a mut self,
         request: &'a DeleteSubscriptionGroupsRequest,
-    ) -> AdminFuture<'a, ConsumerBatchMutationOutcome>;
+    ) -> AdminFuture<'a, ConsumerBatchMutationReport>;
     fn set_consumer_request_mode<'a>(
         &'a mut self,
         request: &'a SetConsumerRequestModeRequest,
@@ -1393,7 +1393,7 @@ impl<T: ConsumerAdmin + ?Sized> ConsumerMutationAdmin for T {
     fn delete_subscription_groups<'a>(
         &'a mut self,
         request: &'a DeleteSubscriptionGroupsRequest,
-    ) -> AdminFuture<'a, ConsumerBatchMutationOutcome> {
+    ) -> AdminFuture<'a, ConsumerBatchMutationReport> {
         ConsumerAdmin::delete_subscription_groups(self, request)
     }
     fn set_consumer_request_mode<'a>(
@@ -1494,13 +1494,13 @@ mod tests {
         query_dashboard_consumer_config: DashboardConsumerConfigRequest => DashboardConsumerConfig;
         upsert_dashboard_consumer_group: DashboardConsumerUpsertRequest => DashboardConsumerMutationResult;
         delete_dashboard_consumer_group: DashboardConsumerDeleteRequest => DashboardConsumerMutationResult;
-        delete_subscription_groups: DeleteSubscriptionGroupsRequest => ConsumerBatchMutationOutcome;
+        delete_subscription_groups: DeleteSubscriptionGroupsRequest => ConsumerBatchMutationReport;
         set_consumer_request_mode: SetConsumerRequestModeRequest => SetConsumerRequestModeResult;
     }
 
     fn unused_admin_future<'a, T>() -> AdminFuture<'a, T> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "compile_only_consumer_admin",
                 "compile-only consumer admin fake must not be called",
             ))
@@ -1583,7 +1583,7 @@ mod tests {
             ConsumerAdmin::list_consumer_group_inventory_with_evidence(&mut admin, &ListConsumerGroupsRequest)
                 .await
                 .unwrap_err();
-        assert_eq!(inventory.failure(), crate::core::AdminFailure::Backend);
+        assert_eq!(inventory.failure(), crate::core::AdminFailure::OperationFailed);
         assert_eq!(
             inventory.operation(),
             Some("list_consumer_group_inventory_with_evidence")
@@ -1593,7 +1593,7 @@ mod tests {
         let enrichment = ConsumerQueryAdmin::enrich_consumer_groups_exact_with_evidence(&mut admin, &exact)
             .await
             .unwrap_err();
-        assert_eq!(enrichment.failure(), crate::core::AdminFailure::Backend);
+        assert_eq!(enrichment.failure(), crate::core::AdminFailure::OperationFailed);
         assert_eq!(
             enrichment.operation(),
             Some("enrich_consumer_groups_exact_with_evidence")

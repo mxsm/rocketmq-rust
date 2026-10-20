@@ -22,15 +22,20 @@
 
 #![recursion_limit = "256"]
 
+#[cfg(any(feature = "write-tools", test))]
+mod argument_locator;
 pub mod audit;
 mod auth;
 pub mod catalog;
 pub mod config;
+mod emergency_stop;
+pub mod entrypoint;
 pub mod error;
 pub mod guard;
 pub mod model;
 pub mod server;
 pub mod session;
+pub mod telemetry;
 #[cfg(feature = "write-tools")]
 mod tool_runtime;
 pub mod tools;

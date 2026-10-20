@@ -25,7 +25,10 @@ keywords               = ["rocketmq-rust", "async", "rocketmq-client", "futures"
 categories             = ["api-bindings", "asynchronous"]
 readme                 = "README.md"
 description            = "Rust implementation of Apache rocketmq client"
+autobenches            = false
 rust-version.workspace = true
+autoexamples           = false
+autotests              = false
 
 [features]
 default = ["admin-full"]
@@ -77,7 +80,10 @@ hickory-resolver = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
-rocketmq-namesrv   = { workspace = true }
+# Path-only on purpose: cargo drops path-only dev-dependencies when packaging.
+# A versioned entry must already be on crates.io, and cargo does not order
+# workspace publishing by dev-dependencies.
+rocketmq-namesrv   = { path = "../rocketmq-namesrv" }
 rocketmq-transport = { workspace = true, features = ["socks", "test-support", "tls"] }
 criterion = { version = "0.8.2", features = ["async_tokio"] }
 pkcs8.workspace = true
@@ -238,6 +244,84 @@ required-features = ["test-support"]
 [[test]]
 name = "rebalance_concurrent_safety_test"
 required-features = ["test-support"]
+
+[[test]]
+name = "admin_capability_compile_tests"
+
+[[test]]
+name = "admin_mutation_trait_compat"
+
+[[test]]
+name = "batch_admin_delete"
+
+[[test]]
+name = "broker_backed_smoke"
+
+[[test]]
+name = "classic_pull_equivalence"
+
+[[test]]
+name = "client_capability_boundaries"
+
+[[test]]
+name = "client_config_behavior"
+
+[[test]]
+name = "client_runtime_ownership"
+
+[[test]]
+name = "client_runtime_scope_compile_fail"
+
+[[test]]
+name = "lite_pull_capability_tests"
+
+[[test]]
+name = "model_type_identity"
+
+[[test]]
+name = "nameserver_dns_discovery"
+
+[[test]]
+name = "pop_retry_policy"
+
+[[test]]
+name = "producer_capability_tests"
+
+[[test]]
+name = "producer_oneway_egress"
+
+[[test]]
+name = "public_api_contract"
+
+[[test]]
+name = "public_api_exports_test"
+
+[[test]]
+name = "remoting_defaults_startup"
+
+[[test]]
+name = "send_oneway_tests"
+
+[[test]]
+name = "socks_proxy_config"
+
+[[test]]
+name = "target_recursion_limit_contract"
+
+[[test]]
+name = "thread_local_index_test"
+
+[[test]]
+name = "transaction_producer_test"
+
+[[test]]
+name = "transport_security_profiles"
+
+[[test]]
+name = "typed_error_client_flow_tests"
+
+[[test]]
+name = "windows_consumer_process_startup"
 
 [[example]]
 name = "simple-producer"

@@ -161,7 +161,7 @@ pub(crate) struct PullArrivalContinuation {
 }
 
 #[must_use]
-pub(crate) enum PullContinuationOutcome {
+pub(crate) enum PullContinuationAdmissionStatus {
     Admitted(PullArrivalContinuation),
     Rejected(PullContinuationRejection),
 }
@@ -171,29 +171,37 @@ impl PullArrivalContinuation {
         admission: &Arc<PullContinuationAdmission>,
         arrival: PullArrivalView<'_>,
         cursor: PullScanCursor,
-    ) -> Result<PullContinuationOutcome, PullContinuationError> {
+    ) -> Result<PullContinuationAdmissionStatus, PullContinuationError> {
         let pending = PullPendingArrival::arrival(arrival, cursor)?;
         let retained_bytes = pending.retained_bytes();
         match admission.reserve(retained_bytes)? {
-            PullContinuationReserveOutcome::Reserved(permit) => Ok(PullContinuationOutcome::Admitted(Self {
-                pending,
-                _permit: permit,
-            })),
-            PullContinuationReserveOutcome::Rejected(rejection) => Ok(PullContinuationOutcome::Rejected(rejection)),
+            PullContinuationReservationStatus::Reserved(permit) => {
+                Ok(PullContinuationAdmissionStatus::Admitted(Self {
+                    pending,
+                    _permit: permit,
+                }))
+            }
+            PullContinuationReservationStatus::Rejected(rejection) => {
+                Ok(PullContinuationAdmissionStatus::Rejected(rejection))
+            }
         }
     }
 
     pub(super) fn forced(
         admission: &Arc<PullContinuationAdmission>,
         cursor: PullScanCursor,
-    ) -> Result<PullContinuationOutcome, PullContinuationError> {
+    ) -> Result<PullContinuationAdmissionStatus, PullContinuationError> {
         let pending = PullPendingArrival::forced(cursor);
         match admission.reserve(pending.retained_bytes())? {
-            PullContinuationReserveOutcome::Reserved(permit) => Ok(PullContinuationOutcome::Admitted(Self {
-                pending,
-                _permit: permit,
-            })),
-            PullContinuationReserveOutcome::Rejected(rejection) => Ok(PullContinuationOutcome::Rejected(rejection)),
+            PullContinuationReservationStatus::Reserved(permit) => {
+                Ok(PullContinuationAdmissionStatus::Admitted(Self {
+                    pending,
+                    _permit: permit,
+                }))
+            }
+            PullContinuationReservationStatus::Rejected(rejection) => {
+                Ok(PullContinuationAdmissionStatus::Rejected(rejection))
+            }
         }
     }
 
@@ -229,12 +237,12 @@ impl PullContinuationAdmission {
     pub(super) fn reserve(
         self: &Arc<Self>,
         bytes: usize,
-    ) -> Result<PullContinuationReserveOutcome, PullContinuationError> {
+    ) -> Result<PullContinuationReservationStatus, PullContinuationError> {
         let count = self.count.fetch_add(1, Ordering::AcqRel);
         if count >= self.max_count {
             self.count.fetch_sub(1, Ordering::AcqRel);
             self.rejected.fetch_add(1, Ordering::Relaxed);
-            return Ok(PullContinuationReserveOutcome::Rejected(
+            return Ok(PullContinuationReservationStatus::Rejected(
                 PullContinuationRejection::CountFull,
             ));
         }
@@ -246,7 +254,7 @@ impl PullContinuationAdmission {
             };
             if next > self.max_bytes {
                 self.reject_count();
-                return Ok(PullContinuationReserveOutcome::Rejected(
+                return Ok(PullContinuationReservationStatus::Rejected(
                     PullContinuationRejection::BytesFull,
                 ));
             }
@@ -258,7 +266,7 @@ impl PullContinuationAdmission {
                 Err(observed) => current = observed,
             }
         }
-        Ok(PullContinuationReserveOutcome::Reserved(PullContinuationPermit {
+        Ok(PullContinuationReservationStatus::Reserved(PullContinuationPermit {
             admission: Arc::clone(self),
             bytes,
         }))
@@ -283,7 +291,7 @@ pub(super) struct PullContinuationPermit {
     bytes: usize,
 }
 
-pub(super) enum PullContinuationReserveOutcome {
+pub(super) enum PullContinuationReservationStatus {
     Reserved(PullContinuationPermit),
     Rejected(PullContinuationRejection),
 }

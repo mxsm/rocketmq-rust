@@ -19,12 +19,14 @@ use rocketmq_admin_core::core::supervised_mutation as admin;
 use super::{broker_patch_changes, dry_status, map_broker_patch, map_broker_state, status_from_failures};
 use crate::error::ControlError;
 use crate::tool_runtime::admin_session::SupervisedMutationBackend;
-use crate::tool_runtime::{map_failure, map_persistence, map_verification};
+use crate::tool_runtime::plan_binding::PlanBinding;
+use crate::tool_runtime::{map_failure, map_persistence, map_verification, MutationToolResponse};
 use crate::tools;
 
 pub(crate) async fn run_broker<B: SupervisedMutationBackend>(
     backend: &mut B,
     args: tools::PatchBrokerConfigArgs,
+    binding: &PlanBinding,
 ) -> Result<tools::BrokerConfigMutationToolResponse, ControlError> {
     let patch = args.properties.typed()?;
     let admin_patch = map_broker_patch(patch);
@@ -34,6 +36,9 @@ pub(crate) async fn run_broker<B: SupervisedMutationBackend>(
     if args.dry_run {
         return Ok(broker_dry_run(&args, patch, targets, failures));
     }
+    binding.admit(|| {
+        MutationToolResponse::BrokerConfig(broker_dry_run(&args, patch, targets.clone(), failures.clone()))
+    })?;
     let before = targets;
     let outcome = backend.execute_broker(&plan, admin_patch).await?;
     Ok(broker_executed(&args, patch, before, outcome))
@@ -91,7 +96,7 @@ fn broker_executed(
     args: &tools::PatchBrokerConfigArgs,
     patch: tools::BrokerConfigPatch,
     before_targets: Vec<admin::BrokerMutationConfigTarget>,
-    outcome: admin::BrokerMutationConfigOutcome,
+    outcome: admin::BrokerConfigMutationReport,
 ) -> tools::BrokerConfigMutationToolResponse {
     let before = before_targets
         .into_iter()

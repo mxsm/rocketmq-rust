@@ -97,8 +97,8 @@ impl Fixture {
             .submit(request, MetadataDeadline::after(Duration::from_secs(30)))
             .unwrap()
         {
-            MetadataIoAdmissionOutcome::Accepted(receipt) => receipt,
-            MetadataIoAdmissionOutcome::TargetConflict(_) => panic!("distinct or same-resource targets"),
+            MetadataWriteSubmissionStatus::Accepted(receipt) => receipt,
+            MetadataWriteSubmissionStatus::TargetConflict(_) => panic!("distinct or same-resource targets"),
         }
     }
     fn finish(self) {

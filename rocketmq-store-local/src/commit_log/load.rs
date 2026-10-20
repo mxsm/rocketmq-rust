@@ -322,15 +322,17 @@ impl CommitLogMappingEntry {
     }
 }
 
-/// Result of attempting one platform-specific recovery hint.
+/// Report of one optional, platform-specific recovery hint (mmap advice or file
+/// prefetch): whether it was attempted, whether it succeeded, and how long it took.
+/// A failed hint is non-fatal and does not mean loading or recovery failed.
 #[derive(Debug)]
-pub struct HintOutcome {
+pub struct RecoveryHintReport {
     attempted: bool,
     succeeded: bool,
     elapsed: Duration,
 }
 
-impl HintOutcome {
+impl RecoveryHintReport {
     /// Reports that the hint was disabled, unsupported, or intentionally skipped.
     pub fn not_attempted() -> Self {
         Self {
@@ -410,36 +412,36 @@ fn duration_to_millis(duration: Duration) -> u64 {
     duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
-/// Records one mmap-advice outcome in the canonical load statistics.
-pub fn record_mmap_advice(statistics: &mut LoadStatistics, outcome: HintOutcome) {
-    if !outcome.attempted {
+/// Records one mmap-advice report in the canonical load statistics.
+pub fn record_mmap_advice(statistics: &mut LoadStatistics, report: RecoveryHintReport) {
+    if !report.attempted {
         return;
     }
     statistics.mmap_advice_attempts = statistics.mmap_advice_attempts.saturating_add(1);
-    if outcome.succeeded {
+    if report.succeeded {
         statistics.mmap_advice_successes = statistics.mmap_advice_successes.saturating_add(1);
     } else {
         statistics.mmap_advice_failures = statistics.mmap_advice_failures.saturating_add(1);
     }
     statistics.mmap_advice_elapsed_ms = statistics
         .mmap_advice_elapsed_ms
-        .saturating_add(duration_to_millis(outcome.elapsed));
+        .saturating_add(duration_to_millis(report.elapsed));
 }
 
-/// Records one file-prefetch outcome in the canonical load statistics.
-pub fn record_file_prefetch(statistics: &mut LoadStatistics, outcome: HintOutcome) {
-    if !outcome.attempted {
+/// Records one file-prefetch report in the canonical load statistics.
+pub fn record_file_prefetch(statistics: &mut LoadStatistics, report: RecoveryHintReport) {
+    if !report.attempted {
         return;
     }
     statistics.file_prefetch_attempts = statistics.file_prefetch_attempts.saturating_add(1);
-    if outcome.succeeded {
+    if report.succeeded {
         statistics.file_prefetch_successes = statistics.file_prefetch_successes.saturating_add(1);
     } else {
         statistics.file_prefetch_failures = statistics.file_prefetch_failures.saturating_add(1);
     }
     statistics.file_prefetch_elapsed_ms = statistics
         .file_prefetch_elapsed_ms
-        .saturating_add(duration_to_millis(outcome.elapsed));
+        .saturating_add(duration_to_millis(report.elapsed));
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -476,11 +478,11 @@ impl RecoveryFilePrefetch {
 
 /// Applies the configured recovery mmap advice to an initialized mapping.
 ///
-/// Unsupported platforms and disabled advice return a not-attempted outcome.
-/// Platform failures are logged and returned as non-fatal failure outcomes.
-pub fn apply_recovery_mmap_advice(advice: RecoveryMmapAdvice, mmap: &[u8], file_name: &str) -> HintOutcome {
+/// Unsupported platforms and disabled advice return a not-attempted report.
+/// Platform failures are logged and returned as non-fatal failure reports.
+pub fn apply_recovery_mmap_advice(advice: RecoveryMmapAdvice, mmap: &[u8], file_name: &str) -> RecoveryHintReport {
     match advice {
-        RecoveryMmapAdvice::Disabled => HintOutcome::not_attempted(),
+        RecoveryMmapAdvice::Disabled => RecoveryHintReport::not_attempted(),
         RecoveryMmapAdvice::Sequential => {
             #[cfg(unix)]
             {
@@ -494,7 +496,7 @@ pub fn apply_recovery_mmap_advice(advice: RecoveryMmapAdvice, mmap: &[u8], file_
                         file_name,
                         error
                     );
-                    HintOutcome::failure(elapsed)
+                    RecoveryHintReport::failure(elapsed)
                 } else {
                     #[cfg(debug_assertions)]
                     tracing::debug!(
@@ -502,7 +504,7 @@ pub fn apply_recovery_mmap_advice(advice: RecoveryMmapAdvice, mmap: &[u8], file_
                         "Applied MADV_SEQUENTIAL hint to {}",
                         file_name
                     );
-                    HintOutcome::success(elapsed)
+                    RecoveryHintReport::success(elapsed)
                 }
             }
 
@@ -510,18 +512,18 @@ pub fn apply_recovery_mmap_advice(advice: RecoveryMmapAdvice, mmap: &[u8], file_
             {
                 let _ = mmap;
                 let _ = file_name;
-                HintOutcome::not_attempted()
+                RecoveryHintReport::not_attempted()
             }
         }
     }
 }
 
 #[cfg(any(windows, test))]
-fn prefetch_outcome_from_result(result: io::Result<bool>, elapsed: Duration) -> HintOutcome {
+fn prefetch_report_from_result(result: io::Result<bool>, elapsed: Duration) -> RecoveryHintReport {
     match result {
-        Ok(true) => HintOutcome::success(elapsed),
-        Ok(false) => HintOutcome::not_attempted(),
-        Err(_) => HintOutcome::failure(elapsed),
+        Ok(true) => RecoveryHintReport::success(elapsed),
+        Ok(false) => RecoveryHintReport::not_attempted(),
+        Err(_) => RecoveryHintReport::failure(elapsed),
     }
 }
 
@@ -537,10 +539,14 @@ fn prefetch_virtual_memory(mmap: &[u8]) -> io::Result<bool> {
 /// Applies the configured recovery file-prefetch hint to an initialized mapping.
 ///
 /// Unsupported platforms, disabled prefetch, and an unavailable Windows operation return a
-/// not-attempted outcome. Platform failures are logged and returned as non-fatal failure outcomes.
-pub fn apply_recovery_file_prefetch(prefetch: RecoveryFilePrefetch, mmap: &[u8], file_name: &str) -> HintOutcome {
+/// not-attempted report. Platform failures are logged and returned as non-fatal failure reports.
+pub fn apply_recovery_file_prefetch(
+    prefetch: RecoveryFilePrefetch,
+    mmap: &[u8],
+    file_name: &str,
+) -> RecoveryHintReport {
     match prefetch {
-        RecoveryFilePrefetch::Disabled => HintOutcome::not_attempted(),
+        RecoveryFilePrefetch::Disabled => RecoveryHintReport::not_attempted(),
         RecoveryFilePrefetch::Sequential => {
             #[cfg(windows)]
             {
@@ -555,14 +561,14 @@ pub fn apply_recovery_file_prefetch(prefetch: RecoveryFilePrefetch, mmap: &[u8],
                         error
                     );
                 }
-                prefetch_outcome_from_result(result, elapsed)
+                prefetch_report_from_result(result, elapsed)
             }
 
             #[cfg(not(windows))]
             {
                 let _ = mmap;
                 let _ = file_name;
-                HintOutcome::not_attempted()
+                RecoveryHintReport::not_attempted()
             }
         }
     }
@@ -590,17 +596,17 @@ mod tests {
 
     #[test]
     fn prefetch_result_mapper_distinguishes_success_skip_and_failure() {
-        let success = prefetch_outcome_from_result(Ok(true), Duration::from_millis(3));
+        let success = prefetch_report_from_result(Ok(true), Duration::from_millis(3));
         assert!(success.attempted);
         assert!(success.succeeded);
         assert_eq!(success.elapsed, Duration::from_millis(3));
 
-        let skipped = prefetch_outcome_from_result(Ok(false), Duration::from_millis(5));
+        let skipped = prefetch_report_from_result(Ok(false), Duration::from_millis(5));
         assert!(!skipped.attempted);
         assert!(!skipped.succeeded);
         assert_eq!(skipped.elapsed, Duration::ZERO);
 
-        let failure = prefetch_outcome_from_result(Err(io::Error::other("platform failure")), Duration::from_millis(7));
+        let failure = prefetch_report_from_result(Err(io::Error::other("platform failure")), Duration::from_millis(7));
         assert!(failure.attempted);
         assert!(!failure.succeeded);
         assert_eq!(failure.elapsed, Duration::from_millis(7));

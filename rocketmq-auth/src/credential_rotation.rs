@@ -225,9 +225,12 @@ pub enum CredentialAuditAction {
     BreakGlassDisabled,
 }
 
+/// Decision recorded for a credential-management change before any new state is published.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CredentialAuditOutcome {
-    Authorized,
+pub enum CredentialChangeDecision {
+    /// The manager accepted the proposed change for publication, subject to successful audit recording.
+    Approved,
+    /// The manager rejected the proposed change; the current snapshot is retained.
     Rejected,
 }
 
@@ -235,7 +238,7 @@ pub enum CredentialAuditOutcome {
 #[derive(Clone, PartialEq, Eq)]
 pub struct CredentialAuditEvent {
     action: CredentialAuditAction,
-    outcome: CredentialAuditOutcome,
+    decision: CredentialChangeDecision,
     generation: u64,
     credential_id: Option<CredentialId>,
     related_credential_id: Option<CredentialId>,
@@ -246,7 +249,7 @@ impl fmt::Debug for CredentialAuditEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CredentialAuditEvent")
             .field("action", &self.action)
-            .field("outcome", &self.outcome)
+            .field("decision", &self.decision)
             .field("generation", &self.generation)
             .field("credential_id", &self.credential_id.as_ref().map(|_| "[REDACTED]"))
             .field(
@@ -263,8 +266,8 @@ impl CredentialAuditEvent {
         self.action
     }
 
-    pub const fn outcome(&self) -> CredentialAuditOutcome {
-        self.outcome
+    pub const fn decision(&self) -> CredentialChangeDecision {
+        self.decision
     }
 
     pub const fn generation(&self) -> u64 {
@@ -466,7 +469,7 @@ impl CredentialRotationManager {
         let generation = next_generation(state.generation)?;
         self.record_audit(CredentialAuditEvent {
             action: CredentialAuditAction::RotationStarted,
-            outcome: CredentialAuditOutcome::Authorized,
+            decision: CredentialChangeDecision::Approved,
             generation,
             credential_id: Some(candidate.descriptor.id.clone()),
             related_credential_id: Some(state.active.descriptor.id.clone()),
@@ -502,7 +505,7 @@ impl CredentialRotationManager {
         let generation = next_generation(state.generation)?;
         self.record_audit(CredentialAuditEvent {
             action: CredentialAuditAction::RetiringCredentialRevoked,
-            outcome: CredentialAuditOutcome::Authorized,
+            decision: CredentialChangeDecision::Approved,
             generation,
             credential_id: Some(retiring.credential.descriptor.id.clone()),
             related_credential_id: Some(state.active.descriptor.id.clone()),
@@ -538,7 +541,7 @@ impl CredentialRotationManager {
         let generation = next_generation(state.generation)?;
         self.record_audit(CredentialAuditEvent {
             action: CredentialAuditAction::RotationRolledBack,
-            outcome: CredentialAuditOutcome::Authorized,
+            decision: CredentialChangeDecision::Approved,
             generation,
             credential_id: Some(retiring.credential.descriptor.id.clone()),
             related_credential_id: Some(state.active.descriptor.id.clone()),
@@ -586,7 +589,7 @@ impl CredentialRotationManager {
         let generation = next_generation(state.generation)?;
         self.record_audit(CredentialAuditEvent {
             action: CredentialAuditAction::BreakGlassEnabled,
-            outcome: CredentialAuditOutcome::Authorized,
+            decision: CredentialChangeDecision::Approved,
             generation,
             credential_id: Some(break_glass.credential.descriptor.id.clone()),
             related_credential_id: None,
@@ -625,7 +628,7 @@ impl CredentialRotationManager {
         let generation = next_generation(state.generation)?;
         self.record_audit(CredentialAuditEvent {
             action: CredentialAuditAction::BreakGlassDisabled,
-            outcome: CredentialAuditOutcome::Authorized,
+            decision: CredentialChangeDecision::Approved,
             generation,
             credential_id: Some(break_glass.credential.descriptor.id.clone()),
             related_credential_id: None,
@@ -698,7 +701,7 @@ impl CredentialRotationManager {
         let state = self.state.load();
         self.record_audit(CredentialAuditEvent {
             action: CredentialAuditAction::ReloadRejected,
-            outcome: CredentialAuditOutcome::Rejected,
+            decision: CredentialChangeDecision::Rejected,
             generation: state.generation,
             credential_id: None,
             related_credential_id: Some(state.active.descriptor.id.clone()),

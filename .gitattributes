@@ -5,4 +5,5 @@ scripts/tests/fixtures/m11-fault-matrix/pass/** text eol=lf
 scripts/tests/fixtures/m11-slo/pass/** text eol=lf
 scripts/tests/fixtures/architecture-evidence-bundle/** text eol=lf
 docker/Dockerfile* text eol=lf
+rocketmq-ai/rocketmq-sre/deploy/docker/40-sre-runtime-config.sh text eol=lf
 distribution/helm/rocketmq-rust/files/maintenance-policy.json text eol=lf

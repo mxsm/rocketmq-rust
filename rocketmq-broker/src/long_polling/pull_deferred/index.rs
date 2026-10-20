@@ -210,14 +210,14 @@ where
     pub(crate) fn reserve(
         &self,
         key: PullCriteriaKey,
-    ) -> Result<PullIndexReserveOutcome<I>, PullIndexOperationalError> {
+    ) -> Result<PullIndexReservationStatus<I>, PullIndexOperationalError> {
         let mut state = self.inner.state.lock();
         let occupied = state
             .live
             .checked_add(state.reserved)
             .ok_or_else(|| PullIndexOperationalError::new(PullIndexOperationalErrorKind::AccountingOverflow))?;
         if occupied >= self.inner.limits.max_entries.get() {
-            return Ok(PullIndexReserveOutcome::Rejected(PullIndexRejection::GlobalCapacity));
+            return Ok(PullIndexReservationStatus::Rejected(PullIndexRejection::GlobalCapacity));
         }
         let per_key = state.buckets.get(&key).map_or(0, VecDeque::len);
         let reserved_for_key = state.reserved_keys.get(&key).copied().unwrap_or_default();
@@ -225,7 +225,7 @@ where
             .checked_add(reserved_for_key)
             .ok_or_else(|| PullIndexOperationalError::new(PullIndexOperationalErrorKind::AccountingOverflow))?;
         if occupied_for_key >= self.inner.limits.max_entries_per_key.get() {
-            return Ok(PullIndexReserveOutcome::Rejected(PullIndexRejection::BucketCapacity));
+            return Ok(PullIndexReservationStatus::Rejected(PullIndexRejection::BucketCapacity));
         }
         let sequence = state.next_sequence;
         state.next_sequence = sequence
@@ -262,7 +262,7 @@ where
             .reserved
             .checked_add(1)
             .ok_or_else(|| PullIndexOperationalError::new(PullIndexOperationalErrorKind::AccountingOverflow))?;
-        Ok(PullIndexReserveOutcome::Reserved(PullIndexReservation {
+        Ok(PullIndexReservationStatus::Reserved(PullIndexReservation {
             inner: Some(Arc::clone(&self.inner)),
             key: Some(key),
             sequence,
@@ -771,7 +771,7 @@ impl PullIndexSnapshot {
 }
 
 #[must_use]
-pub(crate) enum PullIndexReserveOutcome<I>
+pub(crate) enum PullIndexReservationStatus<I>
 where
     I: Copy + Eq,
 {
@@ -780,7 +780,7 @@ where
 }
 
 #[cfg(test)]
-impl<I> PullIndexReserveOutcome<I>
+impl<I> PullIndexReservationStatus<I>
 where
     I: Copy + Eq,
 {

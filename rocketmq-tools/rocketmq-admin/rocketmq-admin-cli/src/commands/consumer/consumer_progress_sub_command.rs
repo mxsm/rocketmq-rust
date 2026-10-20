@@ -16,7 +16,7 @@ use clap::Parser;
 use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::mq_version::RocketMqVersion;
 use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
-use rocketmq_runtime::common::util_all;
+use rocketmq_runtime::common::time_utils;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::consumer::ConsumerProgressRequest;
@@ -103,7 +103,7 @@ impl ConsumerProgressSubCommand {
                     let last_time = if row.last_timestamp == 0 {
                         "N/A".to_string()
                     } else {
-                        util_all::time_millis_to_human_string2(row.last_timestamp)
+                        time_utils::time_millis_to_human_string2(row.last_timestamp)
                     };
                     if group.show_client_ip {
                         println!(

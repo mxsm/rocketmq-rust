@@ -49,6 +49,7 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_runtime::MetadataIoConfig;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ServiceLifecycle;
@@ -503,12 +504,7 @@ impl NameServerRuntime {
                 .inner
                 .controller_config()
                 .expect("controller config should exist when embedded controller is enabled");
-            let controller_context = self
-                .inner
-                .service_context
-                .as_ref()
-                .expect("NameServerRuntime always has an injected ChildServiceContext")
-                .component("namesrv.embedded-controller");
+            let controller_context = self.inner.service_context.component("namesrv.embedded-controller");
             let controller_manager = Arc::new(
                 ControllerManager::new_with_remoting_command_factory(
                     (*controller_config).clone(),
@@ -544,12 +540,7 @@ impl NameServerRuntime {
         if auth_config.cluster_name.trim().is_empty() {
             auth_config.cluster_name = CheetahString::from_string(namesrv_config.product_env_name.clone());
         }
-        let service_context = self
-            .inner
-            .service_context
-            .as_ref()
-            .expect("NameServerRuntime always has an injected ChildServiceContext")
-            .component("namesrv.auth");
+        let service_context = self.inner.service_context.component("namesrv.auth");
         let mut builder = AuthRuntimeBuilder::new(auth_config, service_context);
         if let Some(Ok(metadata_io)) = self.inner.config_metadata_io.as_ref() {
             builder = builder.with_metadata_io_actor(metadata_io.clone());
@@ -570,11 +561,7 @@ impl NameServerRuntime {
     /// Initialize network server for handling client requests
     fn initialize_network_components(&mut self) {
         let config = self.inner.server_config();
-        let context = self
-            .inner
-            .service_context
-            .as_ref()
-            .expect("NameServerRuntime always has an injected ChildServiceContext");
+        let context = &self.inner.service_context;
         let mut server = TransportServer::new_with_telemetry(
             config,
             context.component("namesrv.remoting-server"),
@@ -622,7 +609,7 @@ impl NameServerRuntime {
         config.initial_delay = Duration::from_secs(5);
 
         scheduled_tasks
-            .schedule_fixed_rate_no_overlap(config, move || {
+            .schedule(config, ScheduledExecutionPolicy::default(), move || {
                 let name_server_runtime_inner = name_server_runtime_inner.clone();
                 async move {
                     debug!("Running scheduled broker health check");
@@ -918,14 +905,12 @@ impl NameServerRuntime {
         }
         shutdown_report.remoting_client = Some(remoting_client_report);
 
-        if let Some(task_group) = self.inner.task_group.get().cloned() {
-            let report = task_group.shutdown_until(deadline).await;
-            self.diagnostics_sources.retain_shutdown(&report);
-            if let Err(error) = report.assert_no_task_leak() {
-                warn!("NameServer task group shutdown report is unhealthy: {error}");
-            }
-            shutdown_report.root = Some(report);
+        let report = self.inner.task_group().shutdown_until(deadline).await;
+        self.diagnostics_sources.retain_shutdown(&report);
+        if let Err(error) = report.assert_no_task_leak() {
+            warn!("NameServer task group shutdown report is unhealthy: {error}");
         }
+        shutdown_report.root = Some(report);
 
         // Transition to Stopped state
         if self.current_state() != RuntimeState::Stopped {
@@ -1308,8 +1293,7 @@ impl Builder {
                 #[cfg(feature = "embedded-controller")]
                 controller_manager: OnceLock::new(),
                 cluster_test_route_lookup,
-                service_context: Some(service_context),
-                task_group: OnceLock::new(),
+                service_context,
                 in_flight_requests: Arc::new(InFlightRequestTracker::default()),
                 namesrv_metrics: namesrv_metrics.clone(),
                 #[cfg(feature = "embedded-controller")]
@@ -1366,8 +1350,7 @@ pub(crate) struct NameServerRuntimeInner {
     transport_principal: Option<Principal>,
     command_factory: RemotingCommandFactory,
     cluster_test_route_lookup: Option<Arc<dyn ClusterTestRouteLookup>>,
-    service_context: Option<ChildServiceContext>,
-    task_group: OnceLock<TaskGroup>,
+    service_context: ChildServiceContext,
     in_flight_requests: Arc<InFlightRequestTracker>,
     namesrv_metrics: NameServerMetrics,
 }
@@ -1433,7 +1416,7 @@ impl NameServerRuntimeHandle {
         self.runtime().kvconfig_manager()
     }
 
-    pub(crate) fn task_group(&self) -> Option<TaskGroup> {
+    pub(crate) fn task_group(&self) -> TaskGroup {
         self.runtime().task_group()
     }
 
@@ -1473,26 +1456,12 @@ impl NameServerRuntimeInner {
         Arc::clone(&self.config.load().name_server_config)
     }
 
-    pub(crate) fn task_group(&self) -> Option<TaskGroup> {
-        if let Some(task_group) = self.task_group.get() {
-            return Some(task_group.clone());
-        }
-
-        let service_context = self
-            .service_context
-            .as_ref()
-            .expect("NameServerRuntime always has an injected ChildServiceContext");
-        let _ = self.task_group.set(service_context.task_group().clone());
-        self.task_group.get().cloned()
+    pub(crate) fn task_group(&self) -> TaskGroup {
+        self.service_context.task_group().clone()
     }
 
     pub(crate) fn component_task_group(&self, scope: &'static str) -> TaskGroup {
-        self.service_context
-            .as_ref()
-            .expect("NameServerRuntime always has an injected ChildServiceContext")
-            .component(scope)
-            .task_group()
-            .clone()
+        self.service_context.component(scope).task_group().clone()
     }
 
     pub(crate) fn in_flight_request_tracker(&self) -> Arc<InFlightRequestTracker> {
@@ -1979,13 +1948,13 @@ mod tests {
     use rocketmq_security_api::Principal;
     use rocketmq_security_api::SecurityBootstrap;
     use rocketmq_security_api::SecurityBootstrapConfig;
-    use rocketmq_security_api::SecurityBootstrapOutcome;
     use rocketmq_security_api::SecurityBootstrapProfile;
+    use rocketmq_security_api::SecurityBootstrapValidation;
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
     use rocketmq_transport::api::ConnectionState;
-    use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::RPCHook;
     use rocketmq_transport::api::ServerConfig;
     use rocketmq_transport::api::SessionEvent;
@@ -2028,8 +1997,8 @@ mod tests {
     }
     use crate::processor::default_request_processor::DefaultRequestProcessor;
     use crate::processor::ClientRequestProcessor;
-    use crate::processor::ClusterTestTopicRouteOutcome;
-    use crate::route::route_info_manager::TopicRouteLookupOutcome;
+    use crate::processor::ClusterTestTopicRouteResolution;
+    use crate::route::route_info_manager::TopicRouteLookupStatus;
     use crate::route::types::BrokerSession;
 
     fn test_broker_session(remote_addr: SocketAddr) -> (BrokerSession, SessionId) {
@@ -2087,11 +2056,11 @@ mod tests {
     async fn layered_dispatch_fixture(
         runtime: &RuntimeContext,
         name: &'static str,
-        security_outcome: SecurityBootstrapOutcome,
+        security_validation: SecurityBootstrapValidation,
         namesrv_config: NamesrvConfig,
     ) -> LayeredDispatchFixture {
         let service = runtime.service_context(name);
-        let transport_security = crate::security::build_namesrv_transport_security(security_outcome);
+        let transport_security = crate::security::build_namesrv_transport_security(security_validation);
         let bootstrap = Builder::new(service.clone(), TelemetryHandle::noop())
             .set_name_server_config(namesrv_config)
             .set_transport_security(Arc::clone(&transport_security), None)
@@ -2145,7 +2114,7 @@ mod tests {
             .await
             .expect("layered dispatch should return a response");
         match outcome {
-            EmbeddedDispatchOutcome::Reply(plan) => plan,
+            EmbeddedDispatchResult::Reply(plan) => plan,
             _ => panic!("layered NameServer request must reply"),
         }
     }
@@ -2164,17 +2133,17 @@ mod tests {
         drop(fixture.bootstrap);
     }
 
-    fn test_security_outcome(bootstrap: SecurityBootstrap, listener: SocketAddr) -> SecurityBootstrapOutcome {
+    fn test_security_validation(bootstrap: SecurityBootstrap, listener: SocketAddr) -> SecurityBootstrapValidation {
         bootstrap
             .validate(&[listener])
             .expect("test security bootstrap should validate its listener")
     }
 
-    fn secure_test_security_outcome() -> SecurityBootstrapOutcome {
+    fn secure_test_security_validation() -> SecurityBootstrapValidation {
         let root = tempfile::tempdir().expect("temporary security root");
         let material = root.path().join("material.pem");
         std::fs::write(&material, "test-material").expect("security material should be written");
-        let outcome = test_security_outcome(
+        let validation = test_security_validation(
             SecurityBootstrap::Enabled(
                 SecurityBootstrapConfig::new(SecurityBootstrapProfile::SecureEnforced)
                     .with_trust_anchor(&material)
@@ -2186,27 +2155,27 @@ mod tests {
             SocketAddr::from(([0, 0, 0, 0], 9876)),
         );
         assert!(matches!(
-            outcome,
-            SecurityBootstrapOutcome::Validated(validated)
+            validation,
+            SecurityBootstrapValidation::Validated(validated)
                 if validated.profile() == SecurityBootstrapProfile::SecureEnforced && validated.listener_count() == 1
         ));
-        outcome
+        validation
     }
 
-    fn development_test_security_outcome() -> SecurityBootstrapOutcome {
-        let outcome = test_security_outcome(
+    fn development_test_security_validation() -> SecurityBootstrapValidation {
+        let validation = test_security_validation(
             SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(
                 SecurityBootstrapProfile::DevelopmentInsecureLoopback,
             )),
             SocketAddr::from(([127, 0, 0, 1], 9876)),
         );
         assert!(matches!(
-            outcome,
-            SecurityBootstrapOutcome::Validated(validated)
+            validation,
+            SecurityBootstrapValidation::Validated(validated)
                 if validated.profile() == SecurityBootstrapProfile::DevelopmentInsecureLoopback
                     && validated.listener_count() == 1
         ));
-        outcome
+        validation
     }
 
     #[tokio::test]
@@ -2216,7 +2185,7 @@ mod tests {
         let secure_without_auth = layered_dispatch_fixture(
             &runtime,
             "secure-without-auth",
-            secure_test_security_outcome(),
+            secure_test_security_validation(),
             NamesrvConfig::default(),
         )
         .await;
@@ -2241,7 +2210,7 @@ mod tests {
         let secure_with_whitelist = layered_dispatch_fixture(
             &runtime,
             "secure-with-whitelist",
-            secure_test_security_outcome(),
+            secure_test_security_validation(),
             NamesrvConfig {
                 auth_config: AuthConfig {
                     authentication_enabled: true,
@@ -2264,7 +2233,7 @@ mod tests {
         let disabled = layered_dispatch_fixture(
             &runtime,
             "disabled-compatibility",
-            test_security_outcome(SecurityBootstrap::Disabled, SocketAddr::from(([0, 0, 0, 0], 9876))),
+            test_security_validation(SecurityBootstrap::Disabled, SocketAddr::from(([0, 0, 0, 0], 9876))),
             NamesrvConfig {
                 allow_insecure_public_listener: true,
                 ..NamesrvConfig::default()
@@ -2281,7 +2250,7 @@ mod tests {
         let development = layered_dispatch_fixture(
             &runtime,
             "development-loopback",
-            development_test_security_outcome(),
+            development_test_security_validation(),
             NamesrvConfig::default(),
         )
         .await;
@@ -2331,8 +2300,8 @@ mod tests {
         fn lookup_topic_route(
             &self,
             _topic: &CheetahString,
-        ) -> TestRouteLookupFuture<'_, ClusterTestTopicRouteOutcome> {
-            Box::pin(async { Ok(ClusterTestTopicRouteOutcome::NotFound) })
+        ) -> TestRouteLookupFuture<'_, ClusterTestTopicRouteResolution> {
+            Box::pin(async { Ok(ClusterTestTopicRouteResolution::NotFound) })
         }
 
         fn shutdown(&self) -> TestRouteLookupFuture<'_, ()> {
@@ -2592,11 +2561,7 @@ mod tests {
         let service = context.service_context("namesrv-service");
         let bootstrap = Builder::new(service.clone(), TelemetryHandle::noop()).build();
 
-        let task_group = bootstrap
-            .name_server_runtime
-            .inner
-            .task_group()
-            .expect("service context should provide namesrv task group");
+        let task_group = bootstrap.name_server_runtime.inner.task_group();
 
         assert_eq!(task_group.parent_id(), Some(service.task_group().id()));
         assert_eq!(task_group.name(), "rocketmq-namesrv");
@@ -3435,7 +3400,7 @@ mod tests {
                     .inner
                     .route_info_manager()
                     .pickup_topic_route_data(&registered_topic),
-                Ok(TopicRouteLookupOutcome::Found(_))
+                Ok(TopicRouteLookupStatus::Found(_))
             ),
             "registered topic should be visible through route manager"
         );
@@ -3455,7 +3420,7 @@ mod tests {
                     .inner
                     .route_info_manager()
                     .pickup_topic_route_data(&registered_topic),
-                Ok(TopicRouteLookupOutcome::NotFound)
+                Ok(TopicRouteLookupStatus::NotFound)
             ),
             "deleted topic should no longer have route data"
         );
@@ -3582,7 +3547,7 @@ mod tests {
                     .inner
                     .route_info_manager()
                     .pickup_topic_route_data(&topic_name),
-                Ok(TopicRouteLookupOutcome::Found(_))
+                Ok(TopicRouteLookupStatus::Found(_))
             ),
             "registered topic route should exist before unregister"
         );
@@ -3610,7 +3575,7 @@ mod tests {
                     .inner
                     .route_info_manager()
                     .pickup_topic_route_data(&topic_name),
-                Ok(TopicRouteLookupOutcome::NotFound)
+                Ok(TopicRouteLookupStatus::NotFound)
             )
         })
         .await;
@@ -3838,7 +3803,7 @@ mod tests {
         )
         .await;
 
-        let TopicRouteLookupOutcome::Found(topic_route_data) = bootstrap
+        let TopicRouteLookupStatus::Found(topic_route_data) = bootstrap
             .name_server_runtime
             .inner
             .route_info_manager()
@@ -3906,7 +3871,7 @@ mod tests {
 
             matches!(
                 route_manager.pickup_topic_route_data(&topic_name),
-                Ok(TopicRouteLookupOutcome::NotFound)
+                Ok(TopicRouteLookupStatus::NotFound)
             ) && route_manager
                 .query_broker_topic_config(cluster_name.clone(), broker_addr.clone())
                 .is_none()
@@ -4012,7 +3977,7 @@ mod tests {
 
             matches!(
                 route_manager.pickup_topic_route_data(&topic_name),
-                Ok(TopicRouteLookupOutcome::NotFound)
+                Ok(TopicRouteLookupStatus::NotFound)
             ) && route_manager
                 .query_broker_topic_config(cluster_name.clone(), broker_addr.clone())
                 .is_none()
@@ -4099,7 +4064,7 @@ mod tests {
         wait_until("duplicate unregister cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
-            let Ok(TopicRouteLookupOutcome::Found(route_data)) = route_manager.pickup_topic_route_data(&topic_name)
+            let Ok(TopicRouteLookupStatus::Found(route_data)) = route_manager.pickup_topic_route_data(&topic_name)
             else {
                 return false;
             };
@@ -4198,7 +4163,7 @@ mod tests {
         wait_until("channel destroy cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
-            let Ok(TopicRouteLookupOutcome::Found(route_data)) = route_manager.pickup_topic_route_data(&topic_name)
+            let Ok(TopicRouteLookupStatus::Found(route_data)) = route_manager.pickup_topic_route_data(&topic_name)
             else {
                 return false;
             };
@@ -4299,7 +4264,7 @@ mod tests {
         wait_until("acting master cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
-            let Ok(TopicRouteLookupOutcome::Found(route_data)) = route_manager.pickup_topic_route_data(&topic_name)
+            let Ok(TopicRouteLookupStatus::Found(route_data)) = route_manager.pickup_topic_route_data(&topic_name)
             else {
                 return false;
             };
@@ -4701,7 +4666,7 @@ mod tests {
             .expect("first broker session should publish connect");
         assert!(matches!(
             runtime.route_info_manager().pickup_topic_route_data(&topic_name),
-            Ok(TopicRouteLookupOutcome::Found(_))
+            Ok(TopicRouteLookupStatus::Found(_))
         ));
 
         let mut replacement = connect(&addr).await;
@@ -4729,7 +4694,7 @@ mod tests {
         assert!(
             matches!(
                 runtime.route_info_manager().pickup_topic_route_data(&topic_name),
-                Ok(TopicRouteLookupOutcome::Found(_))
+                Ok(TopicRouteLookupStatus::Found(_))
             ),
             "an old session disconnect must not remove its replacement registration"
         );
@@ -4748,7 +4713,7 @@ mod tests {
         wait_until("replacement disconnect route cleanup", || {
             matches!(
                 runtime.route_info_manager().pickup_topic_route_data(&topic_name),
-                Ok(TopicRouteLookupOutcome::NotFound)
+                Ok(TopicRouteLookupStatus::NotFound)
             )
         })
         .await;

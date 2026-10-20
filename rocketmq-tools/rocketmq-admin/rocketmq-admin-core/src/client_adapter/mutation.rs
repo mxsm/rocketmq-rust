@@ -13,6 +13,8 @@
 
 //! Mutation-only public adapter over the explicit client mutation capability.
 
+#[path = "mutation/operation.rs"]
+mod operation;
 #[path = "mutation/supervised.rs"]
 mod supervised;
 
@@ -23,7 +25,7 @@ use std::ops::DerefMut;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::BrokerConfigPatchOutcome as ClientBrokerConfigPatchOutcome;
+use rocketmq_client_rust::BrokerConfigPatchResult as ClientBrokerConfigPatchResult;
 use rocketmq_client_rust::BrokerMutationConfigState as ClientBrokerMutationConfigState;
 use rocketmq_client_rust::MQAdminMutationExt;
 use rocketmq_client_rust::MutationExpectedMessageRequestMode as ClientExpectedMessageRequestMode;
@@ -34,9 +36,9 @@ use rocketmq_client_rust::MutationSubscriptionGroupConfig as ClientSubscriptionG
 use rocketmq_client_rust::MutationTopicConfig as ClientTopicConfig;
 use rocketmq_client_rust::MutationTopicMessageType as ClientTopicMessageType;
 use rocketmq_client_rust::SubscriptionGroupConfigPatch as ClientSubscriptionGroupConfigPatch;
-use rocketmq_client_rust::SubscriptionGroupConfigPatchOutcome as ClientSubscriptionGroupConfigPatchOutcome;
+use rocketmq_client_rust::SubscriptionGroupConfigPatchResult as ClientSubscriptionGroupConfigPatchResult;
 use rocketmq_client_rust::TopicConfigPatch as ClientTopicConfigPatch;
-use rocketmq_client_rust::TopicConfigPatchOutcome as ClientTopicConfigPatchOutcome;
+use rocketmq_client_rust::TopicConfigPatchResult as ClientTopicConfigPatchResult;
 use rocketmq_client_rust::TopicOffsetMutationFailureCode as ClientTopicOffsetMutationFailureCode;
 use rocketmq_error::Error as CanonicalError;
 use rocketmq_model::common::message::message_ext::MessageExt;
@@ -50,8 +52,8 @@ use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 
 use crate::client_adapter::producer::*;
+use crate::core::broker::BrokerConfigPatchResult;
 use crate::core::broker::BrokerMutationAdmin;
-use crate::core::broker::PatchBrokerConfigOutcome;
 use crate::core::broker::PatchBrokerConfigRequest;
 use crate::core::broker::QueryBrokerConfigGenerationRequest;
 use crate::core::broker::QueryBrokerConfigGenerationResult;
@@ -60,7 +62,7 @@ use crate::core::broker::SetBrokerLogFilterTtlRequest;
 use crate::core::clock::Clock;
 use crate::core::consumer;
 use crate::core::consumer::ConsumerBatchMutationAdmin;
-use crate::core::consumer::ConsumerBatchMutationOutcome;
+use crate::core::consumer::ConsumerBatchMutationReport;
 use crate::core::consumer::ConsumerExactBatchDeleteRequest;
 use crate::core::consumer::ConsumerExactBatchDeleteTarget;
 use crate::core::consumer::ConsumerExactBatchMutationAdmin;
@@ -87,28 +89,28 @@ use crate::core::security::AdminCredentials;
 use crate::core::supervised_mutation::*;
 use crate::core::topic::DeleteTopicAdminRequest;
 use crate::core::topic::DeleteTopicsInBrokerRequest;
-use crate::core::topic::PatchTopicConfigOutcome;
 use crate::core::topic::PatchTopicConfigRequest;
 use crate::core::topic::QueryTopicConfigCasRequest;
 use crate::core::topic::ResetTopicConsumerOffsetRequest;
 use crate::core::topic::SkipTopicAccumulatedRequest;
 use crate::core::topic::TopicBatchDeleteAdmin;
-use crate::core::topic::TopicBatchDeleteOutcome;
+use crate::core::topic::TopicBatchDeleteReport;
 use crate::core::topic::TopicBatchDeleteRequest;
 use crate::core::topic::TopicBatchMutationAdmin;
-use crate::core::topic::TopicBatchMutationOutcome;
-use crate::core::topic::TopicBatchOrderConfigOutcome;
-use crate::core::topic::TopicBatchTargetOutcome;
+use crate::core::topic::TopicBatchMutationReport;
+use crate::core::topic::TopicBatchTargetResult;
 use crate::core::topic::TopicBatchUpsertRequest;
 use crate::core::topic::TopicConfigCasState;
+use crate::core::topic::TopicConfigPatchResult;
 use crate::core::topic::TopicMutationAdmin;
-use crate::core::topic::TopicMutationOutcome;
 use crate::core::topic::TopicMutationPreflightAdmin;
+use crate::core::topic::TopicMutationSummary;
 use crate::core::topic::TopicOffsetMutationAdmin;
 use crate::core::topic::TopicOffsetMutationFailureCode;
-use crate::core::topic::TopicOffsetMutationOutcome;
+use crate::core::topic::TopicOffsetMutationReport;
 use crate::core::topic::TopicOffsetMutationRequest;
-use crate::core::topic::TopicOffsetTargetOutcome;
+use crate::core::topic::TopicOffsetTargetResult;
+use crate::core::topic::TopicOrderConfigMutationResult;
 use crate::core::topic::TopicSendRequest;
 use crate::core::topic::TopicSendResult;
 use crate::core::topic::TopicSkipMutationAdmin;
@@ -245,7 +247,7 @@ impl TopicMutationAdmin for MutationAdminSession {
     fn patch_config_if_version<'a>(
         &'a mut self,
         request: &'a PatchTopicConfigRequest,
-    ) -> AdminFuture<'a, PatchTopicConfigOutcome> {
+    ) -> AdminFuture<'a, TopicConfigPatchResult> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             let request = PatchTopicConfigRequest::try_new(
@@ -268,19 +270,19 @@ impl TopicMutationAdmin for MutationAdminSession {
                     },
                 )
                 .await
-                .map_err(|error| backend_error("patch_topic_config_if_version", error))?;
+                .map_err(|source| promote_to_admin_error("patch_topic_config_if_version", source))?;
             Ok(match outcome {
-                ClientTopicConfigPatchOutcome::Applied {
+                ClientTopicConfigPatchResult::Applied {
                     previous_version,
                     version,
-                } => PatchTopicConfigOutcome::Applied {
+                } => TopicConfigPatchResult::Applied {
                     previous_version,
                     version,
                 },
-                ClientTopicConfigPatchOutcome::VersionConflict {
+                ClientTopicConfigPatchResult::VersionConflict {
                     expected_version,
                     actual_version,
-                } => PatchTopicConfigOutcome::VersionConflict {
+                } => TopicConfigPatchResult::VersionConflict {
                     expected_version,
                     actual_version,
                 },
@@ -288,7 +290,7 @@ impl TopicMutationAdmin for MutationAdminSession {
         })
     }
 
-    fn upsert_topic<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationOutcome> {
+    fn upsert_topic<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationSummary> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             let topic = require_non_empty("topic", &request.topic)?;
@@ -304,7 +306,7 @@ impl TopicMutationAdmin for MutationAdminSession {
                 .inner
                 .mutation_cluster_info()
                 .await
-                .map_err(|error| backend_error("mutation_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
             let mut target_addrs = HashSet::new();
             let mut target_broker_names = HashSet::new();
             for cluster_name in &request.cluster_names {
@@ -349,7 +351,7 @@ impl TopicMutationAdmin for MutationAdminSession {
                     .inner
                     .upsert_topic_config(broker_addr.clone(), topic_config.clone())
                     .await
-                    .map_err(|error| backend_error("upsert_topic_config", error))?;
+                    .map_err(|source| promote_to_admin_error("upsert_topic_config", source))?;
             }
             if request.order {
                 self.inner
@@ -360,10 +362,10 @@ impl TopicMutationAdmin for MutationAdminSession {
                         true,
                     )
                     .await
-                    .map_err(|error| backend_error("upsert_order_topic_config", error))?;
+                    .map_err(|source| promote_to_admin_error("upsert_order_topic_config", source))?;
             }
 
-            Ok(TopicMutationOutcome {
+            Ok(TopicMutationSummary {
                 message: format!("Topic `{topic}` was saved successfully."),
                 target_count: target_addrs.len(),
             })
@@ -373,7 +375,7 @@ impl TopicMutationAdmin for MutationAdminSession {
     fn delete_topics_in_broker<'a>(
         &'a mut self,
         request: &'a DeleteTopicsInBrokerRequest,
-    ) -> AdminFuture<'a, TopicMutationOutcome> {
+    ) -> AdminFuture<'a, TopicMutationSummary> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             self.inner
@@ -387,8 +389,8 @@ impl TopicMutationAdmin for MutationAdminSession {
                         .collect(),
                 )
                 .await
-                .map_err(|error| backend_error("remove_topics_from_broker", error))?;
-            Ok(TopicMutationOutcome {
+                .map_err(|source| promote_to_admin_error("remove_topics_from_broker", source))?;
+            Ok(TopicMutationSummary {
                 message: format!(
                     "deleted {} topics through one broker batch request",
                     request.topics.len()
@@ -398,7 +400,7 @@ impl TopicMutationAdmin for MutationAdminSession {
         })
     }
 
-    fn delete_topic<'a>(&'a mut self, request: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationOutcome> {
+    fn delete_topic<'a>(&'a mut self, request: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationSummary> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             let topic = require_non_empty("topic", &request.topic)?;
@@ -408,7 +410,7 @@ impl TopicMutationAdmin for MutationAdminSession {
                     .inner
                     .mutation_cluster_info()
                     .await
-                    .map_err(|error| backend_error("mutation_cluster_info", error))?;
+                    .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
                 let broker_addr = find_master_addr_by_broker_name(&cluster_info, broker_name).ok_or_else(|| {
                     AdminError::invalid_argument(
                         "brokerName",
@@ -419,8 +421,8 @@ impl TopicMutationAdmin for MutationAdminSession {
                     .inner
                     .remove_topic_from_brokers(HashSet::from([broker_addr]), CheetahString::from(topic))
                     .await
-                    .map_err(|error| backend_error("remove_topic_from_brokers", error))?;
-                return Ok(TopicMutationOutcome {
+                    .map_err(|source| promote_to_admin_error("remove_topic_from_brokers", source))?;
+                return Ok(TopicMutationSummary {
                     message: format!("Topic `{topic}` was deleted from broker `{broker_name}`."),
                     target_count: 1,
                 });
@@ -451,9 +453,9 @@ impl TopicMutationAdmin for MutationAdminSession {
                     .inner
                     .remove_topic(CheetahString::from(topic), CheetahString::from(cluster_name.as_str()))
                     .await
-                    .map_err(|error| backend_error("remove_topic", error))?;
+                    .map_err(|source| promote_to_admin_error("remove_topic", source))?;
             }
-            Ok(TopicMutationOutcome {
+            Ok(TopicMutationSummary {
                 message: format!("Topic `{topic}` was deleted from {} cluster(s).", clusters.len()),
                 target_count: clusters.len(),
             })
@@ -463,7 +465,7 @@ impl TopicMutationAdmin for MutationAdminSession {
     fn reset_topic_consumer_offset<'a>(
         &'a mut self,
         request: &'a ResetTopicConsumerOffsetRequest,
-    ) -> AdminFuture<'a, TopicMutationOutcome> {
+    ) -> AdminFuture<'a, TopicMutationSummary> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             let offsets = self
@@ -490,11 +492,11 @@ impl TopicMutationAdmin for MutationAdminSession {
                         request.force,
                     )
                     .await
-                    .map_err(|error| backend_error("reset_consumer_offset_legacy", error))?
+                    .map_err(|source| promote_to_admin_error("reset_consumer_offset_legacy", source))?
                     .len(),
-                Err(error) => return Err(backend_error("reset_consumer_offset", error)),
+                Err(source) => return Err(promote_to_admin_error("reset_consumer_offset", source)),
             };
-            Ok(TopicMutationOutcome {
+            Ok(TopicMutationSummary {
                 message: format!(
                     "Consumer group `{}` offset was reset for {affected_queues} queue(s).",
                     request.consumer_group
@@ -524,7 +526,7 @@ impl TopicMutationAdmin for MutationAdminSession {
                 .inner
                 .mutation_topic_config(master_addr, request.topic.as_str().into())
                 .await
-                .map_err(|error| backend_error("mutation_topic_config", error))?;
+                .map_err(|source| promote_to_admin_error("mutation_topic_config", source))?;
             let transactional = config.get_topic_message_type().to_string() == "TRANSACTION";
             let producer_group = unique_producer_group(self.inner.clock.now_millis(), transactional);
             let client_config = self.inner.inner.client_config().clone_client_config();
@@ -567,7 +569,7 @@ impl TopicMutationPreflightAdmin for MutationAdminSession {
                     CheetahString::from(request.topic),
                 )
                 .await
-                .map_err(|error| backend_error("query_topic_config_cas_state", error))?;
+                .map_err(|source| promote_to_admin_error("query_topic_config_cas_state", source))?;
             Ok(TopicConfigCasState {
                 version: snapshot.version,
                 read_queue_nums: snapshot.config.read_queue_nums,
@@ -582,7 +584,7 @@ impl TopicBatchMutationAdmin for MutationAdminSession {
     fn upsert_topic_batch<'a>(
         &'a mut self,
         request: &'a TopicBatchUpsertRequest,
-    ) -> AdminFuture<'a, TopicBatchMutationOutcome> {
+    ) -> AdminFuture<'a, TopicBatchMutationReport> {
         Box::pin(async move { self.upsert_topic_batch_inner(request).await })
     }
 }
@@ -591,7 +593,7 @@ impl TopicBatchDeleteAdmin for MutationAdminSession {
     fn delete_topic_batch<'a>(
         &'a mut self,
         request: &'a TopicBatchDeleteRequest,
-    ) -> AdminFuture<'a, TopicBatchDeleteOutcome> {
+    ) -> AdminFuture<'a, TopicBatchDeleteReport> {
         Box::pin(async move { self.delete_topic_batch_inner(request).await })
     }
 }
@@ -600,7 +602,7 @@ impl TopicSkipMutationAdmin for MutationAdminSession {
     fn skip_accumulated<'a>(
         &'a mut self,
         request: &'a SkipTopicAccumulatedRequest,
-    ) -> AdminFuture<'a, TopicMutationOutcome> {
+    ) -> AdminFuture<'a, TopicMutationSummary> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             let affected_queues = self
@@ -613,8 +615,8 @@ impl TopicSkipMutationAdmin for MutationAdminSession {
                     request.force(),
                 )
                 .await
-                .map_err(|error| backend_error("skip_accumulated_message", error))?;
-            Ok(TopicMutationOutcome {
+                .map_err(|source| promote_to_admin_error("skip_accumulated_message", source))?;
+            Ok(TopicMutationSummary {
                 message: "Accumulated messages were skipped to the latest offsets.".to_string(),
                 target_count: affected_queues,
             })
@@ -626,7 +628,7 @@ impl TopicOffsetMutationAdmin for MutationAdminSession {
     fn reset_consumer_offset_detailed<'a>(
         &'a mut self,
         request: &'a TopicOffsetMutationRequest,
-    ) -> AdminFuture<'a, TopicOffsetMutationOutcome> {
+    ) -> AdminFuture<'a, TopicOffsetMutationReport> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             let timestamp = request
@@ -643,15 +645,15 @@ impl TopicOffsetMutationAdmin for MutationAdminSession {
                     request.force(),
                 )
                 .await
-                .map_err(|error| backend_error("reset_consumer_offset_detailed", error))?;
-            Ok(map_offset_outcome(outcome))
+                .map_err(|source| promote_to_admin_error("reset_consumer_offset_detailed", source))?;
+            Ok(map_consumer_offset_report(outcome))
         })
     }
 
     fn skip_accumulated_detailed<'a>(
         &'a mut self,
         request: &'a TopicOffsetMutationRequest,
-    ) -> AdminFuture<'a, TopicOffsetMutationOutcome> {
+    ) -> AdminFuture<'a, TopicOffsetMutationReport> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             if request.timestamp().is_some() {
@@ -667,8 +669,8 @@ impl TopicOffsetMutationAdmin for MutationAdminSession {
                     request.force(),
                 )
                 .await
-                .map_err(|error| backend_error("skip_accumulated_message_detailed", error))?;
-            Ok(map_offset_outcome(outcome))
+                .map_err(|source| promote_to_admin_error("skip_accumulated_message_detailed", source))?;
+            Ok(map_consumer_offset_report(outcome))
         })
     }
 }
@@ -677,7 +679,7 @@ impl MutationAdminSession {
     async fn upsert_topic_batch_inner(
         &mut self,
         request: &TopicBatchUpsertRequest,
-    ) -> AdminResult<TopicBatchMutationOutcome> {
+    ) -> AdminResult<TopicBatchMutationReport> {
         self.inner.ensure_open()?;
         let request = request.canonical_for_execution()?;
         let cluster_info = self
@@ -685,7 +687,7 @@ impl MutationAdminSession {
             .inner
             .mutation_cluster_info()
             .await
-            .map_err(|error| backend_error("mutation_cluster_info", error))?;
+            .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
         let mut attributes = HashMap::new();
         attributes.insert(
             CheetahString::from(format!("+{MESSAGE_TYPE_ATTRIBUTE}")),
@@ -708,19 +710,19 @@ impl MutationAdminSession {
                     .inner
                     .upsert_topic_config(address, topic_config.clone())
                     .await
-                    .map_err(|error| backend_error("upsert_topic_config", error)),
+                    .map_err(|source| promote_to_admin_error("upsert_topic_config", source)),
                 None => Err(AdminError::invalid_argument(
                     "brokerNames",
                     format!("broker `{broker_name}` has no reachable master"),
                 )),
             };
             targets.push(match result {
-                Ok(()) => TopicBatchTargetOutcome {
+                Ok(()) => TopicBatchTargetResult {
                     broker_name: broker_name.clone(),
                     success: true,
                     message: "Topic configuration saved".to_string(),
                 },
-                Err(error) => TopicBatchTargetOutcome {
+                Err(error) => TopicBatchTargetResult {
                     broker_name: broker_name.clone(),
                     success: false,
                     message: crate::core::stable_error_message(&error),
@@ -747,32 +749,32 @@ impl MutationAdminSession {
                         true,
                     )
                     .await
-                    .map_err(|error| backend_error("upsert_order_topic_config", error))
+                    .map_err(|source| promote_to_admin_error("upsert_order_topic_config", source))
             } else {
                 self.inner
                     .inner
                     .delete_order_topic_config(CheetahString::from(request.topic.as_str()))
                     .await
-                    .map_err(|error| backend_error("delete_order_topic_config", error))
+                    .map_err(|source| promote_to_admin_error("delete_order_topic_config", source))
             };
             Some(match result {
-                Ok(()) => TopicBatchOrderConfigOutcome {
+                Ok(()) => TopicOrderConfigMutationResult {
                     success: true,
                     message: "Order topic configuration reconciled".to_string(),
                 },
-                Err(error) => TopicBatchOrderConfigOutcome {
+                Err(error) => TopicOrderConfigMutationResult {
                     success: false,
                     message: crate::core::stable_error_message(&error),
                 },
             })
         };
-        Ok(TopicBatchMutationOutcome { targets, order_config })
+        Ok(TopicBatchMutationReport { targets, order_config })
     }
 
     async fn delete_topic_batch_inner(
         &mut self,
         request: &TopicBatchDeleteRequest,
-    ) -> AdminResult<TopicBatchDeleteOutcome> {
+    ) -> AdminResult<TopicBatchDeleteReport> {
         self.inner.ensure_open()?;
         let request = request.canonical_for_execution()?;
         let mut targets = Vec::with_capacity(request.cluster_names().len());
@@ -785,14 +787,14 @@ impl MutationAdminSession {
                     CheetahString::from(cluster_name.as_str()),
                 )
                 .await
-                .map_err(|error| backend_error("remove_topic", error));
+                .map_err(|source| promote_to_admin_error("remove_topic", source));
             targets.push(match result {
-                Ok(()) => TopicBatchTargetOutcome {
+                Ok(()) => TopicBatchTargetResult {
                     broker_name: cluster_name.clone(),
                     success: true,
                     message: "Topic deleted from cluster".to_string(),
                 },
-                Err(error) => TopicBatchTargetOutcome {
+                Err(error) => TopicBatchTargetResult {
                     broker_name: cluster_name.clone(),
                     success: false,
                     message: crate::core::stable_error_message(&error),
@@ -805,17 +807,17 @@ impl MutationAdminSession {
                 .inner
                 .mutation_topic_route(CheetahString::from(request.topic()))
                 .await
-                .map_err(|error| backend_error("mutation_topic_route_after_delete", error));
+                .map_err(|source| promote_to_admin_error("mutation_topic_route_after_delete", source));
             Some(match route_check {
                 Ok(route) if topic_route_is_absent(route.as_ref()) => {
                     self.delete_order_config_after_route_absent(request.topic()).await
                 }
-                Ok(_) => TopicBatchOrderConfigOutcome {
+                Ok(_) => TopicOrderConfigMutationResult {
                     success: false,
                     message: "authoritative Topic route still contains targets; order configuration was retained"
                         .to_string(),
                 },
-                Err(error) => TopicBatchOrderConfigOutcome {
+                Err(error) => TopicOrderConfigMutationResult {
                     success: false,
                     message: crate::core::stable_error_message(&error),
                 },
@@ -823,22 +825,22 @@ impl MutationAdminSession {
         } else {
             None
         };
-        Ok(TopicBatchDeleteOutcome { targets, order_config })
+        Ok(TopicBatchDeleteReport { targets, order_config })
     }
 
-    async fn delete_order_config_after_route_absent(&self, topic: &str) -> TopicBatchOrderConfigOutcome {
+    async fn delete_order_config_after_route_absent(&self, topic: &str) -> TopicOrderConfigMutationResult {
         match self
             .inner
             .inner
             .delete_order_topic_config(CheetahString::from(topic))
             .await
-            .map_err(|error| backend_error("delete_order_topic_config", error))
+            .map_err(|source| promote_to_admin_error("delete_order_topic_config", source))
         {
-            Ok(()) => TopicBatchOrderConfigOutcome {
+            Ok(()) => TopicOrderConfigMutationResult {
                 success: true,
                 message: "Order topic configuration deleted".to_string(),
             },
-            Err(error) => TopicBatchOrderConfigOutcome {
+            Err(error) => TopicOrderConfigMutationResult {
                 success: false,
                 message: crate::core::stable_error_message(&error),
             },
@@ -850,7 +852,7 @@ impl ConsumerMutationAdmin for MutationAdminSession {
     fn patch_config_if_version<'a>(
         &'a mut self,
         request: &'a consumer::PatchSubscriptionGroupConfigRequest,
-    ) -> AdminFuture<'a, consumer::PatchSubscriptionGroupConfigOutcome> {
+    ) -> AdminFuture<'a, consumer::SubscriptionGroupConfigPatchResult> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             let request = consumer::PatchSubscriptionGroupConfigRequest::try_new(
@@ -873,19 +875,19 @@ impl ConsumerMutationAdmin for MutationAdminSession {
                     },
                 )
                 .await
-                .map_err(|error| backend_error("patch_subscription_group_config_if_version", error))?;
+                .map_err(|source| promote_to_admin_error("patch_subscription_group_config_if_version", source))?;
             Ok(match outcome {
-                ClientSubscriptionGroupConfigPatchOutcome::Applied {
+                ClientSubscriptionGroupConfigPatchResult::Applied {
                     previous_version,
                     version,
-                } => consumer::PatchSubscriptionGroupConfigOutcome::Applied {
+                } => consumer::SubscriptionGroupConfigPatchResult::Applied {
                     previous_version,
                     version,
                 },
-                ClientSubscriptionGroupConfigPatchOutcome::VersionConflict {
+                ClientSubscriptionGroupConfigPatchResult::VersionConflict {
                     expected_version,
                     actual_version,
-                } => consumer::PatchSubscriptionGroupConfigOutcome::VersionConflict {
+                } => consumer::SubscriptionGroupConfigPatchResult::VersionConflict {
                     expected_version,
                     actual_version,
                 },
@@ -906,7 +908,7 @@ impl ConsumerMutationAdmin for MutationAdminSession {
                 .inner
                 .mutation_cluster_info()
                 .await
-                .map_err(|error| backend_error("mutation_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
             let broker_names = resolve_consumer_target_broker_names(
                 &cluster_info,
                 &request.cluster_name_list,
@@ -936,7 +938,7 @@ impl ConsumerMutationAdmin for MutationAdminSession {
                     .inner
                     .upsert_subscription_group(broker_addr, config.clone())
                     .await
-                    .map_err(|error| backend_error("upsert_subscription_group", error))?;
+                    .map_err(|source| promote_to_admin_error("upsert_subscription_group", source))?;
             }
             Ok(DashboardConsumerMutationResult {
                 consumer_group: group,
@@ -949,7 +951,7 @@ impl ConsumerMutationAdmin for MutationAdminSession {
     fn delete_subscription_groups<'a>(
         &'a mut self,
         request: &'a DeleteSubscriptionGroupsRequest,
-    ) -> AdminFuture<'a, ConsumerBatchMutationOutcome> {
+    ) -> AdminFuture<'a, ConsumerBatchMutationReport> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             self.inner
@@ -964,8 +966,8 @@ impl ConsumerMutationAdmin for MutationAdminSession {
                     request.clean_offset,
                 )
                 .await
-                .map_err(|error| backend_error("remove_subscription_groups", error))?;
-            Ok(ConsumerBatchMutationOutcome {
+                .map_err(|source| promote_to_admin_error("remove_subscription_groups", source))?;
+            Ok(ConsumerBatchMutationReport {
                 message: format!(
                     "deleted {} subscription groups through one broker batch request",
                     request.group_names.len()
@@ -1001,7 +1003,7 @@ impl ConsumerMutationAdmin for MutationAdminSession {
                 .inner
                 .mutation_cluster_info()
                 .await
-                .map_err(|error| backend_error("mutation_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
             for broker_name in &broker_names {
                 let broker_addr = find_master_addr_by_broker_name(&cluster_info, broker_name).ok_or_else(|| {
                     AdminError::invalid_argument(
@@ -1013,13 +1015,13 @@ impl ConsumerMutationAdmin for MutationAdminSession {
                     .inner
                     .remove_subscription_group(broker_addr.clone(), group.as_str().into(), Some(true))
                     .await
-                    .map_err(|error| backend_error("remove_subscription_group", error))?;
+                    .map_err(|source| promote_to_admin_error("remove_subscription_group", source))?;
                 for topic in consumer_internal_topics(&group) {
                     self.inner
                         .inner
                         .remove_topic_from_brokers(HashSet::from([broker_addr.clone()]), CheetahString::from(topic))
                         .await
-                        .map_err(|error| backend_error("remove_topic_from_brokers", error))?;
+                        .map_err(|source| promote_to_admin_error("remove_topic_from_brokers", source))?;
                 }
             }
             Ok(DashboardConsumerMutationResult {
@@ -1065,7 +1067,7 @@ impl ConsumerMutationAdmin for MutationAdminSession {
                         request.timeout_millis,
                     )
                     .await
-                    .map_err(|error| backend_error("configure_message_request_mode", error))?;
+                    .map_err(|source| promote_to_admin_error("configure_message_request_mode", source))?;
             }
             Ok(SetConsumerRequestModeResult {
                 broker_addrs: broker_addrs.into_iter().map(|addr| addr.to_string()).collect(),
@@ -1087,7 +1089,7 @@ impl ConsumerBatchMutationAdmin for MutationAdminSession {
                 .inner
                 .mutation_cluster_info()
                 .await
-                .map_err(|error| backend_error("mutation_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
             let targets = resolve_consumer_target_broker_names(
                 &cluster_info,
                 &request.inner().cluster_name_list,
@@ -1104,7 +1106,7 @@ impl ConsumerBatchMutationAdmin for MutationAdminSession {
                         .inner
                         .upsert_subscription_group(address, config.clone())
                         .await
-                        .map_err(|error| backend_error("upsert_subscription_group", error)),
+                        .map_err(|source| promote_to_admin_error("upsert_subscription_group", source)),
                     None => Err(AdminError::invalid_argument(
                         "brokerNameList",
                         format!("Broker `{target}` does not have a reachable master address."),
@@ -1142,7 +1144,7 @@ impl ConsumerBatchMutationAdmin for MutationAdminSession {
                 .inner
                 .mutation_cluster_info()
                 .await
-                .map_err(|error| backend_error("mutation_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
             let mut authoritative_addresses = HashSet::with_capacity(request.all_broker_names().len());
             for target in request.all_broker_names() {
                 let address = find_master_addr_by_broker_name(&cluster_info, target).ok_or_else(|| {
@@ -1162,7 +1164,7 @@ impl ConsumerBatchMutationAdmin for MutationAdminSession {
                         .inner
                         .remove_subscription_group(address, CheetahString::from(request.consumer_group()), Some(true))
                         .await
-                        .map_err(|error| backend_error("remove_subscription_group", error)),
+                        .map_err(|source| promote_to_admin_error("remove_subscription_group", source)),
                     None => Err(AdminError::invalid_argument(
                         "selectedBrokerNames",
                         format!("Broker `{target}` does not have a reachable master address."),
@@ -1184,7 +1186,7 @@ impl ConsumerBatchMutationAdmin for MutationAdminSession {
                     .inner
                     .mutation_name_server_addresses()
                     .await
-                    .map_err(|error| backend_error("mutation_name_server_addresses", error))?
+                    .map_err(|source| promote_to_admin_error("mutation_name_server_addresses", source))?
                     .into_iter()
                     .collect::<HashSet<_>>();
                 for topic in consumer_internal_topics(request.consumer_group()) {
@@ -1193,7 +1195,7 @@ impl ConsumerBatchMutationAdmin for MutationAdminSession {
                         .inner
                         .remove_topic_from_brokers(authoritative_addresses.clone(), CheetahString::from(&topic))
                         .await
-                        .map_err(|error| backend_error("remove_topic_from_brokers", error));
+                        .map_err(|source| promote_to_admin_error("remove_topic_from_brokers", source));
                     let result = match broker_result {
                         Ok(()) => self
                             .inner
@@ -1204,7 +1206,7 @@ impl ConsumerBatchMutationAdmin for MutationAdminSession {
                                 CheetahString::from(topic.as_str()),
                             )
                             .await
-                            .map_err(|error| backend_error("remove_topic_from_name_servers", error)),
+                            .map_err(|source| promote_to_admin_error("remove_topic_from_name_servers", source)),
                         Err(error) => Err(error),
                     };
                     outcomes.push(consumer_batch_target_outcome(
@@ -1239,7 +1241,7 @@ impl ConsumerExactBatchUpsertMutationAdmin for MutationAdminSession {
                 .inner
                 .mutation_cluster_info()
                 .await
-                .map_err(|error| backend_error("mutation_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
             validate_exact_upsert_targets(&cluster_info, request.targets())?;
 
             let inner = request.inner();
@@ -1251,7 +1253,7 @@ impl ConsumerExactBatchUpsertMutationAdmin for MutationAdminSession {
                     .inner
                     .upsert_subscription_group(CheetahString::from(target.broker_address()), config.clone())
                     .await
-                    .map_err(|error| backend_error("upsert_subscription_group", error));
+                    .map_err(|source| promote_to_admin_error("upsert_subscription_group", source));
                 outcomes.push(consumer_batch_target_outcome(
                     exact_target_label(target),
                     "BROKER",
@@ -1303,7 +1305,7 @@ impl ConsumerExactBatchMutationAdmin for MutationAdminSession {
                 .inner
                 .mutation_cluster_info()
                 .await
-                .map_err(|error| backend_error("mutation_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("mutation_cluster_info", source))?;
             validate_exact_delete_targets(&cluster_info, request.authoritative_targets())?;
 
             let mut outcomes = Vec::with_capacity(request.selected_targets().len() + 2);
@@ -1317,7 +1319,7 @@ impl ConsumerExactBatchMutationAdmin for MutationAdminSession {
                         Some(true),
                     )
                     .await
-                    .map_err(|error| backend_error("remove_subscription_group", error));
+                    .map_err(|source| promote_to_admin_error("remove_subscription_group", source));
                 outcomes.push(consumer_batch_target_outcome(
                     exact_target_label(target),
                     "BROKER",
@@ -1334,7 +1336,7 @@ impl ConsumerExactBatchMutationAdmin for MutationAdminSession {
                     .inner
                     .mutation_name_server_addresses()
                     .await
-                    .map_err(|error| backend_error("mutation_name_server_addresses", error))?
+                    .map_err(|source| promote_to_admin_error("mutation_name_server_addresses", source))?
                     .into_iter()
                     .collect::<HashSet<_>>();
                 let authoritative_addresses = request
@@ -1348,7 +1350,7 @@ impl ConsumerExactBatchMutationAdmin for MutationAdminSession {
                         .inner
                         .remove_topic_from_brokers(authoritative_addresses.clone(), CheetahString::from(&topic))
                         .await
-                        .map_err(|error| backend_error("remove_topic_from_brokers", error));
+                        .map_err(|source| promote_to_admin_error("remove_topic_from_brokers", source));
                     let result = match broker_result {
                         Ok(()) => self
                             .inner
@@ -1359,7 +1361,7 @@ impl ConsumerExactBatchMutationAdmin for MutationAdminSession {
                                 CheetahString::from(topic.as_str()),
                             )
                             .await
-                            .map_err(|error| backend_error("remove_topic_from_name_servers", error)),
+                            .map_err(|source| promote_to_admin_error("remove_topic_from_name_servers", source)),
                         Err(error) => Err(error),
                     };
                     outcomes.push(consumer_batch_target_outcome(
@@ -1465,15 +1467,15 @@ fn consumer_batch_target_outcome(
     kind: &str,
     success_message: &str,
     result: AdminResult<()>,
-) -> consumer::DashboardConsumerTargetOutcome {
+) -> consumer::DashboardConsumerTargetResult {
     match result {
-        Ok(()) => consumer::DashboardConsumerTargetOutcome {
+        Ok(()) => consumer::DashboardConsumerTargetResult {
             target,
             kind: kind.to_owned(),
             success: true,
             message: success_message.to_owned(),
         },
-        Err(error) => consumer::DashboardConsumerTargetOutcome {
+        Err(error) => consumer::DashboardConsumerTargetResult {
             target,
             kind: kind.to_owned(),
             success: false,
@@ -1507,7 +1509,7 @@ impl MessageMutationAdmin for MutationAdminSession {
                     require_non_empty("messageId", &request.message_id)?.into(),
                 )
                 .await
-                .map_err(|error| backend_error("view_message_for_mutation", error))?;
+                .map_err(|source| promote_to_admin_error("view_message_for_mutation", source))?;
             let topic = message_property(&message, PROPERTY_RETRY_TOPIC).ok_or_else(|| {
                 AdminError::invalid_argument(
                     "message",
@@ -1554,7 +1556,7 @@ impl BrokerMutationAdmin for MutationAdminSession {
                 .inner
                 .broker_config_generation(CheetahString::from(broker_addr))
                 .await
-                .map_err(|error| backend_error("broker_config_generation", error))?;
+                .map_err(|source| promote_to_admin_error("broker_config_generation", source))?;
             Ok(QueryBrokerConfigGenerationResult { generation })
         })
     }
@@ -1562,7 +1564,7 @@ impl BrokerMutationAdmin for MutationAdminSession {
     fn patch_config_if_generation<'a>(
         &'a mut self,
         request: &'a PatchBrokerConfigRequest,
-    ) -> AdminFuture<'a, PatchBrokerConfigOutcome> {
+    ) -> AdminFuture<'a, BrokerConfigPatchResult> {
         Box::pin(async move {
             self.inner.ensure_open()?;
             let broker_addr = require_non_empty("brokerAddr", &request.broker_addr)?;
@@ -1591,19 +1593,19 @@ impl BrokerMutationAdmin for MutationAdminSession {
                     properties,
                 )
                 .await
-                .map_err(|error| backend_error("patch_broker_config_if_generation", error))?;
+                .map_err(|source| promote_to_admin_error("patch_broker_config_if_generation", source))?;
             Ok(match outcome {
-                ClientBrokerConfigPatchOutcome::Applied {
+                ClientBrokerConfigPatchResult::Applied {
                     previous_generation,
                     generation,
-                } => PatchBrokerConfigOutcome::Applied {
+                } => BrokerConfigPatchResult::Applied {
                     previous_generation,
                     generation,
                 },
-                ClientBrokerConfigPatchOutcome::GenerationConflict {
+                ClientBrokerConfigPatchResult::GenerationConflict {
                     expected_generation,
                     actual_generation,
-                } => PatchBrokerConfigOutcome::GenerationConflict {
+                } => BrokerConfigPatchResult::GenerationConflict {
                     expected_generation,
                     actual_generation,
                 },
@@ -1631,7 +1633,7 @@ impl BrokerMutationAdmin for MutationAdminSession {
                     CheetahString::from(request.operation_id.as_str()),
                 )
                 .await
-                .map_err(|error| backend_error("set_log_filter_ttl", error))
+                .map_err(|source| promote_to_admin_error("set_log_filter_ttl", source))
         })
     }
 
@@ -1647,7 +1649,7 @@ impl BrokerMutationAdmin for MutationAdminSession {
                     CheetahString::from(request.operation_id.as_str()),
                 )
                 .await
-                .map_err(|error| backend_error("restore_log_filter", error))
+                .map_err(|source| promote_to_admin_error("restore_log_filter", source))
         })
     }
 }
@@ -1663,7 +1665,7 @@ impl ProxyMutationAdmin for MutationAdminSession {
                 .inner
                 .begin_proxy_drain(CheetahString::from(proxy_addr), CheetahString::from(operation_id))
                 .await
-                .map_err(|error| backend_error("begin_proxy_drain", error))?;
+                .map_err(|source| promote_to_admin_error("begin_proxy_drain", source))?;
             map_proxy_drain_state(state)
         })
     }
@@ -1678,7 +1680,7 @@ impl ProxyMutationAdmin for MutationAdminSession {
                 .inner
                 .cancel_proxy_drain(CheetahString::from(proxy_addr), CheetahString::from(operation_id))
                 .await
-                .map_err(|error| backend_error("cancel_proxy_drain", error))?;
+                .map_err(|source| promote_to_admin_error("cancel_proxy_drain", source))?;
             map_proxy_drain_state(state)
         })
     }
@@ -1691,7 +1693,7 @@ async fn require_topic_route<A: MQAdminMutationExt + ?Sized>(
     admin
         .mutation_topic_route(CheetahString::from(topic))
         .await
-        .map_err(|error| backend_error("mutation_topic_route", error))?
+        .map_err(|source| promote_to_admin_error("mutation_topic_route", source))?
         .ok_or_else(|| AdminError::invalid_argument("topic", format!("topic `{topic}` was not found")))
 }
 
@@ -1720,11 +1722,11 @@ fn master_targets_by_cluster_name(
     let cluster_table = cluster_info
         .cluster_addr_table
         .as_ref()
-        .ok_or_else(|| AdminError::backend("mutation_cluster_info", "missing cluster address data"))?;
+        .ok_or_else(|| AdminError::operation_failed("mutation_cluster_info", "missing cluster address data"))?;
     let broker_table = cluster_info
         .broker_addr_table
         .as_ref()
-        .ok_or_else(|| AdminError::backend("mutation_cluster_info", "missing broker address data"))?;
+        .ok_or_else(|| AdminError::operation_failed("mutation_cluster_info", "missing broker address data"))?;
     let broker_names = cluster_table.get(cluster_name).ok_or_else(|| {
         AdminError::invalid_argument(
             "clusterName",
@@ -1732,7 +1734,7 @@ fn master_targets_by_cluster_name(
         )
     })?;
     if broker_names.is_empty() {
-        return Err(AdminError::backend(
+        return Err(AdminError::operation_failed(
             "mutation_cluster_info",
             "selected cluster has no broker members",
         ));
@@ -1741,23 +1743,22 @@ fn master_targets_by_cluster_name(
     let mut endpoints = HashSet::with_capacity(broker_names.len());
     for broker_name in broker_names {
         let broker = broker_table.get(broker_name).ok_or_else(|| {
-            AdminError::backend(
+            AdminError::operation_failed(
                 "mutation_cluster_info",
                 "selected cluster membership references a missing broker",
             )
         })?;
         if broker.broker_name() != broker_name || broker.cluster() != cluster_name {
-            return Err(AdminError::backend(
+            return Err(AdminError::operation_failed(
                 "mutation_cluster_info",
                 "selected cluster broker identity is inconsistent",
             ));
         }
-        let master_addr = broker
-            .broker_addrs()
-            .get(&MASTER_ID)
-            .ok_or_else(|| AdminError::backend("mutation_cluster_info", "selected cluster broker has no master"))?;
+        let master_addr = broker.broker_addrs().get(&MASTER_ID).ok_or_else(|| {
+            AdminError::operation_failed("mutation_cluster_info", "selected cluster broker has no master")
+        })?;
         if !endpoints.insert(master_addr.clone()) {
-            return Err(AdminError::backend(
+            return Err(AdminError::operation_failed(
                 "mutation_cluster_info",
                 "selected cluster has duplicate master endpoints",
             ));
@@ -1785,7 +1786,7 @@ pub fn create_mutation_client_runtime(
         ClientRuntimeConfig::default(),
         rocketmq_observability::TelemetryHandle::noop(),
     )
-    .map_err(|_| AdminError::backend("mutation_client_runtime", "client runtime initialization failed"))
+    .map_err(|_| AdminError::operation_failed("mutation_client_runtime", "client runtime initialization failed"))
 }
 
 fn select_metadata_targets(
@@ -1933,7 +1934,7 @@ async fn consume_directly(
             require_non_empty("messageId", &request.message_id)?.into(),
         )
         .await
-        .map_err(|error| backend_error("consume_directly", error))?;
+        .map_err(|source| promote_to_admin_error("consume_directly", source))?;
     Ok(DirectConsumeResult {
         success: matches!(result.consume_result(), Some(value) if *value == CMResult::CRSuccess),
         consume_result: result.consume_result().map(ToString::to_string),
@@ -1970,12 +1971,14 @@ fn topic_route_is_absent(route: Option<&TopicRouteData>) -> bool {
     route.is_none_or(|route| route.broker_datas.is_empty() && route.queue_datas.is_empty())
 }
 
-fn map_offset_outcome(outcome: rocketmq_client_rust::TopicOffsetMutationOutcome) -> TopicOffsetMutationOutcome {
-    TopicOffsetMutationOutcome {
+fn map_consumer_offset_report(
+    outcome: rocketmq_client_rust::ConsumerOffsetMutationReport,
+) -> TopicOffsetMutationReport {
+    TopicOffsetMutationReport {
         targets: outcome
             .targets
             .into_iter()
-            .map(|target| TopicOffsetTargetOutcome {
+            .map(|target| TopicOffsetTargetResult {
                 broker_name: target.broker_name,
                 queue_id: target.queue_id,
                 applied: target.applied,
@@ -1989,8 +1992,11 @@ fn map_offset_outcome(outcome: rocketmq_client_rust::TopicOffsetMutationOutcome)
     }
 }
 
-fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
-    AdminError::from_error(operation, error.into_canonical_error())
+/// Promotes a failure while preserving canonical metadata and typed sources.
+///
+/// The operation name labels the Admin error without replacing canonical context.
+fn promote_to_admin_error(operation_name: &'static str, source: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation_name, source.into_canonical_error())
 }
 
 fn map_proxy_drain_state(
@@ -2166,9 +2172,9 @@ mod tests {
 
     #[test]
     fn detailed_offset_mapping_retains_applied_and_failed_targets_without_backend_text() {
-        let outcome = map_offset_outcome(rocketmq_client_rust::TopicOffsetMutationOutcome {
+        let outcome = map_consumer_offset_report(rocketmq_client_rust::ConsumerOffsetMutationReport {
             targets: vec![
-                rocketmq_client_rust::TopicOffsetMutationTargetOutcome {
+                rocketmq_client_rust::ConsumerOffsetTargetReport {
                     broker_name: "broker-a".into(),
                     queue_id: Some(0),
                     applied: true,
@@ -2176,7 +2182,7 @@ mod tests {
                     failure: None,
                     retryable: false,
                 },
-                rocketmq_client_rust::TopicOffsetMutationTargetOutcome {
+                rocketmq_client_rust::ConsumerOffsetTargetReport {
                     broker_name: "broker-a".into(),
                     queue_id: Some(1),
                     applied: false,

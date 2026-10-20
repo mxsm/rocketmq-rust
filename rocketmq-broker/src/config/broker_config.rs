@@ -204,6 +204,10 @@ mod defaults {
         0
     }
 
+    pub const fn metadata_io_max_pending_bytes() -> u64 {
+        64 * 1024 * 1024
+    }
+
     pub fn lite_event_full_dispatch_delay_time() -> u64 {
         10_000
     }
@@ -695,6 +699,10 @@ mod defaults {
         10 * 1000
     }
 
+    pub const fn check_sync_state_set_period() -> u64 {
+        5 * 1000
+    }
+
     pub const fn broker_election_priority() -> i32 {
         i32::MAX
     }
@@ -763,6 +771,11 @@ pub struct BrokerConfig {
     /// Interval, in milliseconds, between syncs of controller metadata.
     #[serde(default = "defaults::sync_controller_metadata_period")]
     pub sync_controller_metadata_period: u64,
+
+    /// Interval, in milliseconds, at which a controller-mode master drops replicas that stopped
+    /// catching up from its sync state set and reports the change to the controller.
+    #[serde(default = "defaults::check_sync_state_set_period")]
+    pub check_sync_state_set_period: u64,
 
     /// Region identifier stamped into messages for region routing / tracing.
     #[serde(default = "defaults::region_id")]
@@ -979,6 +992,17 @@ pub struct BrokerConfig {
     /// Zero selects environment/cgroup/host auto-detection.
     #[serde(default = "defaults::process_memory_limit_bytes")]
     pub process_memory_limit_bytes: u64,
+
+    /// Snapshot bytes the Broker metadata actor may retain before it refuses
+    /// new metadata writes.
+    ///
+    /// Queued and in-flight snapshots of every metadata resource, such as
+    /// topics, subscription groups, and consumer offsets, count together and
+    /// are also charged to the runtime process budget. A resource can hold one
+    /// in-flight and one queued snapshot, so allow at least twice the largest
+    /// snapshot. Must be positive.
+    #[serde(default = "defaults::metadata_io_max_pending_bytes")]
+    pub metadata_io_max_pending_bytes: u64,
 
     #[serde(default = "defaults::lite_event_full_dispatch_delay_time")]
     pub lite_event_full_dispatch_delay_time: u64,
@@ -1412,6 +1436,7 @@ impl Default for BrokerConfig {
             controller_addr: CheetahString::new(),
             sync_broker_metadata_period: 5_000,
             sync_controller_metadata_period: 10_000,
+            check_sync_state_set_period: 5_000,
             region_id: CheetahString::from_static_str(mix_all::DEFAULT_TRACE_REGION_ID),
             trace_on: true,
             broker_permission: PermName::PERM_WRITE | PermName::PERM_READ,
@@ -1469,6 +1494,7 @@ impl Default for BrokerConfig {
             enable_lite_pop_log: defaults::enable_lite_pop_log(),
             max_client_event_count: defaults::max_client_event_count(),
             process_memory_limit_bytes: defaults::process_memory_limit_bytes(),
+            metadata_io_max_pending_bytes: defaults::metadata_io_max_pending_bytes(),
             lite_event_full_dispatch_delay_time: defaults::lite_event_full_dispatch_delay_time(),
             lite_event_full_dispatch_delay_time_for_wildcard_group:
                 defaults::lite_event_full_dispatch_delay_time_for_wildcard_group(),
@@ -1720,6 +1746,10 @@ impl BrokerConfig {
             "syncControllerMetadataPeriod".into(),
             self.sync_controller_metadata_period.to_string().into(),
         );
+        properties.insert(
+            "checkSyncStateSetPeriod".into(),
+            self.check_sync_state_set_period.to_string().into(),
+        );
         properties.insert("regionId".into(), self.region_id.clone());
         properties.insert("brokerName".into(), self.broker_identity.broker_name.clone());
         properties.insert("traceOn".into(), self.trace_on.to_string().into());
@@ -1905,6 +1935,10 @@ impl BrokerConfig {
         properties.insert(
             "processMemoryLimitBytes".into(),
             self.process_memory_limit_bytes.to_string().into(),
+        );
+        properties.insert(
+            "metadataIoMaxPendingBytes".into(),
+            self.metadata_io_max_pending_bytes.to_string().into(),
         );
         properties.insert(
             "liteEventFullDispatchDelayTime".into(),
@@ -2386,6 +2420,10 @@ mod tests {
         assert_eq!(
             properties.get("maxClientEventCount").map(|value| value.as_str()),
             Some("100")
+        );
+        assert_eq!(
+            properties.get("metadataIoMaxPendingBytes").map(|value| value.as_str()),
+            Some("67108864")
         );
         assert_eq!(
             properties

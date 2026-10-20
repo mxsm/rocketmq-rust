@@ -1,4 +1,4 @@
-import type { KeyboardEvent, ReactNode } from 'react';
+import { useState, type AnimationEvent, type KeyboardEvent, type ReactNode } from 'react';
 import EmptyState from './EmptyState';
 import ErrorState from './ErrorState';
 import LoadingState from './LoadingState';
@@ -11,6 +11,9 @@ export interface AppDataTableColumn<T> {
   width?: string;
   align?: 'left' | 'right' | 'center';
 }
+
+/** Rows that fade in one after another the first time a table shows data. */
+const ENTRANCE_ROW_COUNT = 12;
 
 interface AppDataTableProps<T> {
   ariaLabel: string;
@@ -59,6 +62,14 @@ export default function AppDataTable<T>({
   const firstRow = total === 0 ? 0 : (currentPage - 1) * pageSize + 1;
   const lastRow = total === 0 ? 0 : Math.min(firstRow + rows.length - 1, total);
 
+  // The entrance plays once per table. After the last staggered row lands the marker goes
+  // away, so paging, filtering and refreshes swap rows without replaying it.
+  const [entered, setEntered] = useState(false);
+  const handleRowEntranceEnd = (event: AnimationEvent<HTMLTableSectionElement>) => {
+    const body = event.currentTarget;
+    if (event.target === body.rows[Math.min(body.rows.length, ENTRANCE_ROW_COUNT) - 1]) setEntered(true);
+  };
+
   const handleKeyDown = (event: KeyboardEvent<HTMLTableRowElement>, row: T) => {
     if (!onRowActivate || event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
     event.preventDefault();
@@ -81,13 +92,13 @@ export default function AppDataTable<T>({
             <thead>
               <tr>
                 {columns.map((column) => (
-                  <th key={column.id} scope="col" style={{ width: column.width, textAlign: column.align }}>
+                  <th key={column.id} scope="col" data-align={column.align} style={{ width: column.width, textAlign: column.align }}>
                     {column.header}
                   </th>
                 ))}
               </tr>
             </thead>
-            <tbody>
+            <tbody data-entering={entered ? undefined : 'true'} onAnimationEnd={handleRowEntranceEnd}>
               {rows.map((row) => (
                 <tr
                   key={getRowId(row)}
@@ -99,7 +110,7 @@ export default function AppDataTable<T>({
                   onKeyDown={(event) => handleKeyDown(event, row)}
                 >
                   {columns.map((column) => (
-                    <td key={column.id} style={{ textAlign: column.align }}>
+                    <td key={column.id} data-align={column.align} style={{ textAlign: column.align }}>
                       {column.cell(row)}
                     </td>
                   ))}

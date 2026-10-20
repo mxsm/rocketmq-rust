@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use rocketmq_observability::metrics::mcp::McpCacheEvent;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -51,14 +52,19 @@ impl IdempotencyIdentity {
         cluster: &ClusterName,
         request: &MutationToolRequest,
     ) -> Result<Self, ControlError> {
-        let mut targets = request.target_names();
-        targets.sort();
-        let key = request.request_key().map(|request_key| IdempotencyKey {
-            principal: principal.subject.clone(),
-            operation: request.operation(),
-            cluster: cluster.clone(),
-            targets,
-            request_key: request_key.to_owned(),
+        // A dry run writes nothing, so it has no outcome to replay: every dry run reads the
+        // cluster again, and the execute call that follows a plan may carry the same key.
+        let request_key = request.request_key().filter(|_| !request.dry_run());
+        let key = request_key.map(|request_key| {
+            let mut targets = request.target_names();
+            targets.sort();
+            IdempotencyKey {
+                principal: principal.subject.clone(),
+                operation: request.operation(),
+                cluster: cluster.clone(),
+                targets,
+                request_key: request_key.to_owned(),
+            }
         });
         Ok(Self {
             key,
@@ -91,6 +97,18 @@ pub(super) enum CacheAdmission {
     Follower(oneshot::Receiver<Result<MutationToolResponse, ControlError>>),
     Hit(Box<Result<MutationToolResponse, ControlError>>),
     Uncached,
+}
+
+impl CacheAdmission {
+    /// Returns the cache event that this admission counts as.
+    pub(super) const fn event(&self) -> McpCacheEvent {
+        match self {
+            Self::Leader => McpCacheEvent::Miss,
+            Self::Follower(_) => McpCacheEvent::CoalescedWaiter,
+            Self::Hit(_) => McpCacheEvent::Hit,
+            Self::Uncached => McpCacheEvent::Bypass,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -239,6 +257,12 @@ pub(super) async fn abort_cache_reservation(
     }
 }
 
+/// Ends the leader's reservation and hands its result to the followers that waited for it.
+///
+/// Only a settled outcome is kept for later calls. An attempt that timed out, was cancelled,
+/// failed or could not be verified leaves open what happened, so its entry is removed and the
+/// next call with the key runs preflight again. The leader calls this only after its session has
+/// been shut down, which keeps at most one attempt per key in flight.
 pub(super) async fn complete_cache(
     cache: &Mutex<IdempotencyState>,
     key: IdempotencyKey,
@@ -250,17 +274,19 @@ pub(super) async fn complete_cache(
         Some(IdempotencyEntry::InFlight { followers, .. }) => followers,
         _ => Vec::new(),
     };
-    state.sequence = state.sequence.saturating_add(1);
-    let sequence = state.sequence;
-    state.entries.insert(
-        key,
-        IdempotencyEntry::Completed {
-            payload,
-            result: Box::new(result.clone()),
-            expires_at: tokio::time::Instant::now() + IDEMPOTENCY_TTL,
-            sequence,
-        },
-    );
+    if super::is_settled(&result) {
+        state.sequence = state.sequence.saturating_add(1);
+        let sequence = state.sequence;
+        state.entries.insert(
+            key,
+            IdempotencyEntry::Completed {
+                payload,
+                result: Box::new(result.clone()),
+                expires_at: tokio::time::Instant::now() + IDEMPOTENCY_TTL,
+                sequence,
+            },
+        );
+    }
     drop(state);
     for follower in followers {
         let _ = follower.send(result.clone());

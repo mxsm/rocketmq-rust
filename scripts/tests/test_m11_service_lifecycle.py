@@ -91,6 +91,15 @@ class ServiceLifecycleGuardTests(unittest.TestCase):
         result = self.run_guard()
         self.assertIn("tcpSocket:", result.stderr)
 
+    def test_pre_stop_drain_without_get_opt_in_is_rejected(self) -> None:
+        self.mutate_text(
+            "distribution/kubernetes/base/manifest.yaml",
+            '- {name: ROCKETMQ_HEALTH_DRAIN_METHODS, value: "GET,POST"}',
+            '- {name: ROCKETMQ_HEALTH_DRAIN_METHODS, value: "POST"}',
+        )
+        result = self.run_guard()
+        self.assertIn("ROCKETMQ_HEALTH_DRAIN_METHODS=GET,POST", result.stderr)
+
     def test_wrong_readiness_path_is_rejected(self) -> None:
         self.mutate_text(
             "distribution/kubernetes/base/manifest.yaml",

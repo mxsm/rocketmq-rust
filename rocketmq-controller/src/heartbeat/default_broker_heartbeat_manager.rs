@@ -25,6 +25,7 @@ use parking_lot::Mutex;
 use parking_lot::RwLock;
 use rocketmq_protocol::protocol::header::namesrv::broker_request::MAX_BROKER_HEARTBEAT_TIMEOUT_MILLIS;
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -320,7 +321,7 @@ impl DefaultBrokerHeartbeatManager {
         );
         config.initial_delay = Duration::from_millis(scan_interval_ms);
 
-        if let Err(error) = scheduled_tasks.schedule_fixed_delay(config, move || {
+        if let Err(error) = scheduled_tasks.schedule(config, ScheduledExecutionPolicy::default(), move || {
             let broker_live_table = broker_live_table.clone();
             let broker_session_high_water = broker_session_high_water.clone();
             let broker_session_high_water_count = broker_session_high_water_count.clone();

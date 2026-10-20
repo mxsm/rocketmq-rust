@@ -28,6 +28,8 @@ use rocketmq_runtime::ProcessMemoryLimit;
 use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_runtime::ResourcePermit;
+use rocketmq_runtime::ShutdownDeadline;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_store_api::AckPolicy;
 use rocketmq_store_api::ReplicationDecision;
 use tracing::error;
@@ -50,22 +52,17 @@ pub struct GroupTransferService {
 }
 
 impl GroupTransferService {
-    /// Builds the HA acknowledgement queue from the process memory limit.
+    /// Builds the HA acknowledgement queue from the process memory limit and
+    /// runs the transfer loop under `parent_task_group`.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics when the process memory limit cannot be detected. Production
-    /// composition should prefer [`Self::try_new`].
-    pub fn new(ha_service: GeneralHAServiceReference) -> Self {
-        Self::try_new(ha_service)
-            .unwrap_or_else(|error| panic!("failed to build GroupTransferService resource budget: {error}"))
-    }
-
-    pub fn try_new(ha_service: GeneralHAServiceReference) -> Result<Self, HAError> {
+    /// Returns an error when the process memory limit cannot be detected.
+    pub fn try_new(ha_service: GeneralHAServiceReference, parent_task_group: TaskGroup) -> Result<Self, HAError> {
         let inner = Arc::new(GroupTransferServiceInner::try_new(ha_service)?);
         Ok(GroupTransferService {
             inner: inner.clone(),
-            service_manager: ServiceManager::new_arc_legacy_compatibility(inner),
+            service_manager: ServiceManager::new_arc_with_task_group(inner, parent_task_group),
         })
     }
 
@@ -78,6 +75,11 @@ impl GroupTransferService {
 
     pub async fn shutdown(&self) {
         let _ = self.service_manager.shutdown().await;
+    }
+
+    /// Stops the transfer loop, aborting it if it is still running at `deadline`.
+    pub async fn shutdown_until(&self, deadline: ShutdownDeadline) {
+        let _ = self.service_manager.shutdown_until(deadline).await;
     }
 
     pub async fn put_request(&self, request: GroupCommitRequest) {
@@ -155,7 +157,7 @@ impl GroupTransferServiceInner {
         if matches!(
             self.pending_requests
                 .try_push_data(PendingGroupTransfer::new(request), retained_bytes),
-            rocketmq_runtime::QueuePushOutcome::Rejected { .. }
+            rocketmq_runtime::QueueEnqueueStatus::Rejected { .. }
         ) {
             warn!("HA group-transfer queue rejected a request");
         }
@@ -335,6 +337,15 @@ mod tests {
     use crate::ha::general_ha_service::GeneralHAService;
     use crate::ha::test_support::new_test_message_store;
 
+    fn new_test_service(reference: GeneralHAServiceReference) -> GroupTransferService {
+        let scope = crate::runtime::test_scope("group-transfer-service-test");
+        GroupTransferService::try_new(
+            reference,
+            crate::runtime::task_group(&scope, "rocketmq-store.ha.group-transfer"),
+        )
+        .expect("build group transfer service")
+    }
+
     fn new_test_ha_service() -> GeneralHAService {
         let temp_root = tempfile::tempdir().expect("create temp root dir");
         let store = new_test_message_store(temp_root.path(), false);
@@ -351,7 +362,7 @@ mod tests {
         let ha_service = new_test_ha_service();
         let reference = GeneralHAServiceReference::new();
         reference.bind(&ha_service).expect("bind general ha service");
-        let service = GroupTransferService::new(reference);
+        let service = new_test_service(reference);
         let (request, _response) = GroupCommitRequest::with_ack_nums(128, 5_000, 2);
 
         service.put_request(request).await;
@@ -369,7 +380,7 @@ mod tests {
         let ha_service = new_test_ha_service();
         let reference = GeneralHAServiceReference::new();
         reference.bind(&ha_service).expect("bind general ha service");
-        let service = GroupTransferService::new(reference);
+        let service = new_test_service(reference);
         service.start().await.expect("start group transfer service");
         let (request, response) = GroupCommitRequest::with_ack_nums(0, 5_000, 1);
 
@@ -390,7 +401,7 @@ mod tests {
         let ha_service = new_test_ha_service();
         let reference = GeneralHAServiceReference::new();
         reference.bind(&ha_service).expect("bind general ha service");
-        let service = GroupTransferService::new(reference);
+        let service = new_test_service(reference);
         service.start().await.expect("start group transfer service");
         let (request, response) = GroupCommitRequest::with_ack_nums(128, 5_000, 2);
         service.put_request(request).await;
@@ -523,6 +534,60 @@ mod tests {
                 .expect("low offset status"),
             PutMessageStatus::PutOk
         );
+    }
+
+    #[tokio::test]
+    async fn async_flush_counts_the_master_copy_before_the_background_flush() {
+        use rocketmq_store_api::MasterEpoch;
+        use rocketmq_store_api::ReplicaCount;
+        use rocketmq_store_api::WriteAuthority;
+
+        use crate::base::backend_ops::BackendOps;
+        use crate::config::flush_disk_type::FlushDiskType;
+        use crate::ha::test_support::new_test_message_store_with_flush;
+
+        let authority =
+            WriteAuthority::try_new(0, MasterEpoch::try_from(1).expect("positive epoch")).expect("valid authority");
+        let policy = AckPolicy::ReplicaCount(ReplicaCount::try_new(2).expect("two replicas"));
+        for (flush_disk_type, acknowledged) in [(FlushDiskType::AsyncFlush, true), (FlushDiskType::SyncFlush, false)] {
+            let temp_root = tempfile::tempdir().expect("create temp root dir");
+            let mut store = new_test_message_store_with_flush(temp_root.path(), false, flush_disk_type);
+            store.init().await.expect("init message store");
+            store
+                .get_commit_log_mut()
+                .append_data(0, &[1, 2, 3, 4], 0, 4)
+                .await
+                .expect("append data");
+            assert!(
+                store.get_flushed_where() < 4,
+                "the appended bytes must still be unflushed"
+            );
+            let mut ha_service = GeneralHAService::new_with_default_ha_service(DefaultHAService::new(
+                store.ha_replica_store_handle(),
+                crate::runtime::test_scope("group-transfer-flush-policy-test"),
+            ));
+            ha_service.init().expect("init default ha service");
+
+            let frontier = AckFrontier::from_snapshots(
+                Some(authority),
+                Some(std::collections::HashSet::from([0, 1])),
+                ha_service.local_durable_watermark(),
+                &[crate::ha::ha_service::HAAckedReplicaSnapshot {
+                    slave_broker_id: Some(1),
+                    slave_ack_offset: 4,
+                }],
+                true,
+            );
+
+            assert_eq!(
+                matches!(
+                    frontier.decide(Some(authority), policy, 4),
+                    ReplicationDecision::Acknowledge(_)
+                ),
+                acknowledged,
+                "{flush_disk_type:?}"
+            );
+        }
     }
 
     #[test]

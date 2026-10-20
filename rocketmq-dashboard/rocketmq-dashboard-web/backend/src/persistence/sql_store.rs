@@ -20,7 +20,7 @@ use crate::model::EndpointId;
 use crate::model::EndpointRole;
 use crate::model::EndpointType;
 use crate::model::EnvironmentId;
-use crate::model::StorageBackend;
+use crate::model::StorageEngine;
 use crate::persistence::Revision;
 use crate::persistence::StorageHealth;
 use crate::persistence::StorageMode;
@@ -65,15 +65,17 @@ pub enum DatabasePool {
     Postgres(PgPool),
 }
 
-pub struct SqlPersistence {
+/// Stores durable Dashboard data using SQLite, MySQL, or PostgreSQL.
+/// Owns the selected connection pool and schema metadata.
+pub struct SqlDashboardStore {
     pool: DatabasePool,
-    backend: StorageBackend,
+    backend: StorageEngine,
     schema_version: i64,
     sqlite_storage_path: Option<PathBuf>,
     sqlite_storage_context: Option<ChildServiceContext>,
 }
 
-impl SqlPersistence {
+impl SqlDashboardStore {
     pub async fn initialize(
         config: &StorageConfig,
         service_context: ChildServiceContext,
@@ -82,16 +84,16 @@ impl SqlPersistence {
             .validate()
             .map_err(|error| PersistenceError::InvalidConfig(error.to_string()))?;
         match config.backend {
-            StorageBackend::Sqlite => Self::initialize_sqlite(config, service_context).await,
-            StorageBackend::MySql => Self::initialize_mysql(config).await,
-            StorageBackend::Postgres => Self::initialize_postgres(config).await,
-            StorageBackend::File => Err(PersistenceError::InvalidConfig(
+            StorageEngine::Sqlite => Self::initialize_sqlite(config, service_context).await,
+            StorageEngine::MySql => Self::initialize_mysql(config).await,
+            StorageEngine::Postgres => Self::initialize_postgres(config).await,
+            StorageEngine::File => Err(PersistenceError::InvalidConfig(
                 "File storage does not use a SQL pool".to_string(),
             )),
         }
     }
 
-    pub const fn storage_backend(&self) -> StorageBackend {
+    pub const fn storage_backend(&self) -> StorageEngine {
         self.backend
     }
 
@@ -126,20 +128,20 @@ impl SqlPersistence {
         let available_bytes = self.sqlite_safe_available_bytes().await;
         let status = match (schema_version, self.backend, available_bytes) {
             (None, _, _) => StorageStatus::Unavailable,
-            (Some(_), StorageBackend::Sqlite, Some(bytes)) if bytes < MIN_SAFE_AVAILABLE_BYTES => {
+            (Some(_), StorageEngine::Sqlite, Some(bytes)) if bytes < MIN_SAFE_AVAILABLE_BYTES => {
                 StorageStatus::Degraded
             }
-            (Some(_), StorageBackend::Sqlite, Some(_)) => StorageStatus::Available,
-            (Some(_), StorageBackend::Sqlite, None) => StorageStatus::Unavailable,
-            (Some(_), StorageBackend::MySql | StorageBackend::Postgres, _) => StorageStatus::Available,
-            (Some(_), StorageBackend::File, _) => StorageStatus::Unavailable,
+            (Some(_), StorageEngine::Sqlite, Some(_)) => StorageStatus::Available,
+            (Some(_), StorageEngine::Sqlite, None) => StorageStatus::Unavailable,
+            (Some(_), StorageEngine::MySql | StorageEngine::Postgres, _) => StorageStatus::Available,
+            (Some(_), StorageEngine::File, _) => StorageStatus::Unavailable,
         };
         StorageHealth {
             backend: self.backend,
             mode: match self.backend {
-                StorageBackend::Sqlite => StorageMode::SingleNode,
-                StorageBackend::MySql | StorageBackend::Postgres => StorageMode::MultiNode,
-                StorageBackend::File => StorageMode::SingleNode,
+                StorageEngine::Sqlite => StorageMode::SingleNode,
+                StorageEngine::MySql | StorageEngine::Postgres => StorageMode::MultiNode,
+                StorageEngine::File => StorageMode::SingleNode,
             },
             status,
             schema_version,
@@ -193,7 +195,7 @@ impl SqlPersistence {
         let schema_version = migration::migrate_sqlite(&pool).await?;
         let persistence = Self {
             pool: DatabasePool::Sqlite(pool),
-            backend: StorageBackend::Sqlite,
+            backend: StorageEngine::Sqlite,
             schema_version,
             sqlite_storage_path: Some(config.data_path.clone()),
             sqlite_storage_context: Some(service_context),
@@ -215,7 +217,7 @@ impl SqlPersistence {
         let schema_version = migration::migrate_mysql(&pool).await?;
         let persistence = Self {
             pool: DatabasePool::MySql(pool),
-            backend: StorageBackend::MySql,
+            backend: StorageEngine::MySql,
             schema_version,
             sqlite_storage_path: None,
             sqlite_storage_context: None,
@@ -237,7 +239,7 @@ impl SqlPersistence {
         let schema_version = migration::migrate_postgres(&pool).await?;
         let persistence = Self {
             pool: DatabasePool::Postgres(pool),
-            backend: StorageBackend::Postgres,
+            backend: StorageEngine::Postgres,
             schema_version,
             sqlite_storage_path: None,
             sqlite_storage_context: None,
@@ -353,7 +355,7 @@ async fn connect_with_timeout<T>(
         .map_err(map_connection_error)
 }
 
-impl SqlPersistence {
+impl SqlDashboardStore {
     pub(crate) async fn load_environment(
         &self,
         environment_id: &EnvironmentId,
@@ -1375,7 +1377,7 @@ mod tests {
 
     fn sqlite_config(path: PathBuf) -> StorageConfig {
         StorageConfig {
-            backend: StorageBackend::Sqlite,
+            backend: StorageEngine::Sqlite,
             data_path: path,
             database_url: None,
             pool: SqlPoolConfig::default(),
@@ -1389,7 +1391,7 @@ mod tests {
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let config = sqlite_config(database_path.clone());
-            let first = SqlPersistence::initialize(&config, owner.root_context().component("sqlite-first"))
+            let first = SqlDashboardStore::initialize(&config, owner.root_context().component("sqlite-first"))
                 .await
                 .expect("first SQLite initialization");
             assert_eq!(first.schema_version(), 4);
@@ -1400,7 +1402,7 @@ mod tests {
             assert!(health.idle_connections.is_some());
             assert_schema_metadata(&first).await;
             drop(first);
-            let second = SqlPersistence::initialize(&config, owner.root_context().component("sqlite-second"))
+            let second = SqlDashboardStore::initialize(&config, owner.root_context().component("sqlite-second"))
                 .await
                 .expect("second SQLite initialization");
             assert_eq!(second.schema_version(), 4);
@@ -1414,7 +1416,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("temp dir");
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
-            let store = SqlPersistence::initialize(
+            let store = SqlDashboardStore::initialize(
                 &sqlite_config(directory.path().join("dashboard.db")),
                 owner.root_context().component("sqlite-health"),
             )
@@ -1431,7 +1433,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("temp dir");
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
-            let store = SqlPersistence::initialize(
+            let store = SqlDashboardStore::initialize(
                 &sqlite_config(directory.path().join("dashboard.db")),
                 owner.root_context().component("sqlite-migration-health"),
             )
@@ -1453,7 +1455,7 @@ mod tests {
         create_legacy_sqlite_table(&database_path);
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
-            let result = SqlPersistence::initialize(
+            let result = SqlDashboardStore::initialize(
                 &sqlite_config(database_path),
                 owner.root_context().component("legacy-sqlite"),
             )
@@ -1468,7 +1470,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary directory");
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
-            let store = SqlPersistence::initialize(
+            let store = SqlDashboardStore::initialize(
                 &sqlite_config(directory.path().join("dashboard.db")),
                 owner.root_context().component("sqlite-snapshot"),
             )
@@ -1541,7 +1543,7 @@ mod tests {
         let path = std::env::var("ROCKETMQ_DASHBOARD_STORAGE_TEST_SQLITE_PATH")
             .expect("ROCKETMQ_DASHBOARD_STORAGE_TEST_SQLITE_PATH must be set by the storage test runner");
         initialize_docker_backend(StorageConfig {
-            backend: StorageBackend::Sqlite,
+            backend: StorageEngine::Sqlite,
             data_path: path.into(),
             database_url: None,
             pool: SqlPoolConfig::default(),
@@ -1554,7 +1556,7 @@ mod tests {
         let url = std::env::var("ROCKETMQ_DASHBOARD_STORAGE_TEST_MYSQL_URL")
             .expect("ROCKETMQ_DASHBOARD_STORAGE_TEST_MYSQL_URL must be set by the storage test runner");
         initialize_docker_backend(StorageConfig {
-            backend: StorageBackend::MySql,
+            backend: StorageEngine::MySql,
             data_path: "unused".into(),
             database_url: Some(url),
             pool: SqlPoolConfig::default(),
@@ -1567,7 +1569,7 @@ mod tests {
         let url = std::env::var("ROCKETMQ_DASHBOARD_STORAGE_TEST_POSTGRES_URL")
             .expect("ROCKETMQ_DASHBOARD_STORAGE_TEST_POSTGRES_URL must be set by the storage test runner");
         initialize_docker_backend(StorageConfig {
-            backend: StorageBackend::Postgres,
+            backend: StorageEngine::Postgres,
             data_path: "unused".into(),
             database_url: Some(url),
             pool: SqlPoolConfig::default(),
@@ -1578,7 +1580,7 @@ mod tests {
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let first =
-                SqlPersistence::initialize(&config, owner.root_context().component("docker-storage-test-first"))
+                SqlDashboardStore::initialize(&config, owner.root_context().component("docker-storage-test-first"))
                     .await
                     .expect("first storage initialization");
             assert_eq!(first.schema_version(), 4);
@@ -1586,19 +1588,19 @@ mod tests {
             assert_schema_metadata(&first).await;
             drop(first);
             let second =
-                SqlPersistence::initialize(&config, owner.root_context().component("docker-storage-test-second"))
+                SqlDashboardStore::initialize(&config, owner.root_context().component("docker-storage-test-second"))
                     .await
                     .expect("second storage initialization");
             assert_eq!(second.schema_version(), 4);
             assert_eq!(second.storage_health().await.status, StorageStatus::Available);
         });
-        if config.backend == StorageBackend::Sqlite {
+        if config.backend == StorageEngine::Sqlite {
             assert!(config.data_path.exists(), "SQLite must initialize a real database file");
         }
         owner.shutdown_runtime_blocking().expect("runtime shutdown");
     }
 
-    async fn assert_schema_metadata(persistence: &SqlPersistence) {
+    async fn assert_schema_metadata(persistence: &SqlDashboardStore) {
         match &persistence.pool {
             DatabasePool::Sqlite(pool) => {
                 let environment_name: i64 = sqlx::query_scalar(

@@ -25,7 +25,7 @@ use crate::StoreError;
     clippy::large_enum_variant,
     reason = "the public checkpoint outcome contract requires an inline manifest payload"
 )]
-pub enum ReleaseCheckpointCreateOutcome {
+pub enum ReleaseCheckpointCreationResult {
     /// The checkpoint was created successfully.
     Created(CheckpointManifest),
     /// The request was rejected without an operational storage failure.
@@ -52,7 +52,7 @@ pub enum ReleaseCheckpointCreateRejection {
 
 /// Result of verifying a release checkpoint for restoration.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ReleaseCheckpointRestoreOutcome {
+pub enum ReleaseCheckpointRestoreVerificationResult {
     /// The checkpoint was verified successfully.
     Verified(CheckpointRestoreVerification),
     /// The request was rejected without an operational storage failure.
@@ -85,7 +85,7 @@ pub trait ReleaseCheckpointStore: Send + Sync {
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         request: CheckpointRequest,
-    ) -> Result<ReleaseCheckpointCreateOutcome, StoreError>;
+    ) -> Result<ReleaseCheckpointCreationResult, StoreError>;
 
     /// Verifies that a checkpoint can be restored without replacing its WAL or
     /// persistent volume identity.
@@ -99,5 +99,5 @@ pub trait ReleaseCheckpointStore: Send + Sync {
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         manifest: &CheckpointManifest,
-    ) -> Result<ReleaseCheckpointRestoreOutcome, StoreError>;
+    ) -> Result<ReleaseCheckpointRestoreVerificationResult, StoreError>;
 }

@@ -85,7 +85,7 @@ async fn custom_factory_is_resolved_once_at_startup() {
     let context = RuntimeContext::from_current("tiered-provider-factory-test");
     let factory = CountingMemoryFactory::new(indexed_memory_descriptor("test-memory"));
     let config = TieredStoreConfig {
-        backend_provider: "test-memory".to_owned(),
+        storage_provider_id: "test-memory".to_owned(),
         ..TieredStoreConfig::default()
     };
 
@@ -105,7 +105,7 @@ async fn provider_id_mismatch_is_rejected_before_construction() {
     let context = RuntimeContext::from_current("tiered-provider-id-test");
     let factory = CountingMemoryFactory::new(indexed_memory_descriptor("test-memory"));
     let config = TieredStoreConfig {
-        backend_provider: "other-provider".to_owned(),
+        storage_provider_id: "other-provider".to_owned(),
         ..TieredStoreConfig::default()
     };
 
@@ -127,7 +127,7 @@ async fn indexed_store_requires_provider_publication_capabilities() {
     );
     let factory = CountingMemoryFactory::new(descriptor);
     let config = TieredStoreConfig {
-        backend_provider: "minimal-memory".to_owned(),
+        storage_provider_id: "minimal-memory".to_owned(),
         message_index_enable: true,
         ..TieredStoreConfig::default()
     };
@@ -150,7 +150,7 @@ async fn non_indexed_store_still_requires_provider_publication_capabilities() {
     );
     let factory = CountingMemoryFactory::new(descriptor);
     let config = TieredStoreConfig {
-        backend_provider: "minimal-memory".to_owned(),
+        storage_provider_id: "minimal-memory".to_owned(),
         message_index_enable: false,
         ..TieredStoreConfig::default()
     };
@@ -166,7 +166,7 @@ async fn non_indexed_store_still_requires_provider_publication_capabilities() {
 async fn posix_factory_rejects_an_empty_provider_root_at_startup() {
     let context = RuntimeContext::from_current("tiered-provider-empty-root-test");
     let config = TieredStoreConfig {
-        backend_provider: "posix".to_owned(),
+        storage_provider_id: "posix".to_owned(),
         store_path_root_dir: PathBuf::new(),
         ..TieredStoreConfig::default()
     };
@@ -180,7 +180,7 @@ async fn posix_factory_rejects_an_empty_provider_root_at_startup() {
 #[test]
 fn open_plan_debug_redacts_raw_configuration() {
     let config = TieredStoreConfig {
-        backend_provider: "secret-provider-id".to_owned(),
+        storage_provider_id: "secret-provider-id".to_owned(),
         store_path_root_dir: PathBuf::from("sensitive-provider-root"),
         ..TieredStoreConfig::default()
     };
@@ -195,7 +195,7 @@ fn open_plan_debug_redacts_raw_configuration() {
 #[test]
 fn provider_plan_rejects_cross_factory_configuration() {
     let config = TieredStoreConfig {
-        backend_provider: "posix".to_owned(),
+        storage_provider_id: "posix".to_owned(),
         ..TieredStoreConfig::default()
     };
 
@@ -205,7 +205,7 @@ fn provider_plan_rejects_cross_factory_configuration() {
 #[test]
 fn custom_configuration_cannot_bind_a_builtin_factory() {
     let config = TieredStoreConfig {
-        backend_provider: "custom-memory".to_owned(),
+        storage_provider_id: "custom-memory".to_owned(),
         ..TieredStoreConfig::default()
     };
 
@@ -217,7 +217,7 @@ async fn planned_open_consumes_the_factory_that_validated_the_plan() {
     let context = RuntimeContext::from_current("tiered-provider-bound-plan-test");
     let factory = CountingMemoryFactory::new(indexed_memory_descriptor("bound-memory"));
     let config = TieredStoreConfig {
-        backend_provider: "bound-memory".to_owned(),
+        storage_provider_id: "bound-memory".to_owned(),
         ..TieredStoreConfig::default()
     };
     let plan = TieredProviderOpenPlan::try_new(config, factory.clone()).expect("valid bound plan");

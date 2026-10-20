@@ -28,9 +28,9 @@ fn state_cas_response_binds_status_to_typed_body() {
         .expect("applied body"),
     );
     assert_eq!(
-        state_cas_outcome_from_response(&applied, MutationExpectedState::Present { version: 9 })
+        metadata_cas_report_from_response(&applied, MutationExpectedState::Present { version: 9 })
             .expect("applied outcome"),
-        MutationStateCasOutcome {
+        MetadataCasReport {
             applied: true,
             changed: true,
             state: MutationExpectedState::Present { version: 10 },
@@ -49,9 +49,9 @@ fn state_cas_response_binds_status_to_typed_body() {
         .expect("conflict body"),
     );
     assert_eq!(
-        state_cas_outcome_from_response(&conflict, MutationExpectedState::Present { version: 10 })
+        metadata_cas_report_from_response(&conflict, MutationExpectedState::Present { version: 10 })
             .expect("conflict outcome"),
-        MutationStateCasOutcome {
+        MetadataCasReport {
             applied: false,
             changed: false,
             state: MutationExpectedState::Absent,
@@ -70,9 +70,9 @@ fn state_cas_response_binds_status_to_typed_body() {
         .expect("persistence failure body"),
     );
     assert_eq!(
-        state_cas_outcome_from_response(&persistence_failed, MutationExpectedState::Present { version: 10 },)
+        metadata_cas_report_from_response(&persistence_failed, MutationExpectedState::Present { version: 10 },)
             .expect("applied failure outcome"),
-        MutationStateCasOutcome {
+        MetadataCasReport {
             applied: true,
             changed: true,
             state: MutationExpectedState::Present { version: 11 },
@@ -92,9 +92,9 @@ fn state_cas_response_binds_status_to_typed_body() {
             .expect("unconfirmed persistence body"),
         );
     assert_eq!(
-        state_cas_outcome_from_response(&persistence_unconfirmed, MutationExpectedState::Present { version: 10 })
+        metadata_cas_report_from_response(&persistence_unconfirmed, MutationExpectedState::Present { version: 10 })
             .expect("applied unconfirmed outcome"),
-        MutationStateCasOutcome {
+        MetadataCasReport {
             applied: true,
             changed: true,
             state: MutationExpectedState::Present { version: 11 },
@@ -112,7 +112,7 @@ fn state_cas_response_binds_status_to_typed_body() {
         .encode()
         .expect("mismatched body"),
     );
-    assert!(state_cas_outcome_from_response(&disagree, MutationExpectedState::Absent).is_err());
+    assert!(metadata_cas_report_from_response(&disagree, MutationExpectedState::Absent).is_err());
 }
 
 #[cfg(feature = "admin-mutation")]
@@ -159,7 +159,7 @@ fn state_cas_response_accepts_only_the_closed_code_body_matrix() {
                         .encode()
                         .expect("matrix body"),
                     );
-                    let accepted = state_cas_outcome_from_response(&command, expected).is_ok();
+                    let accepted = metadata_cas_report_from_response(&command, expected).is_ok();
                     let should_accept = match code {
                         ResponseCode::Success => {
                             applied
@@ -209,7 +209,7 @@ fn request_mode_cas_response_retains_applied_persistence_failure() {
         pop_share_queue_num: 4,
     };
     let outcome =
-        request_mode_cas_outcome_from_response(&failed, MutationExpectedMessageRequestMode::Absent, replacement)
+        request_mode_cas_report_from_response(&failed, MutationExpectedMessageRequestMode::Absent, replacement)
             .expect("applied failure");
     assert!(outcome.applied);
     assert!(outcome.changed);
@@ -227,7 +227,7 @@ fn request_mode_cas_response_retains_applied_persistence_failure() {
         .expect("body"),
     );
     assert!(
-        request_mode_cas_outcome_from_response(&disagree, MutationExpectedMessageRequestMode::Absent, replacement,)
+        request_mode_cas_report_from_response(&disagree, MutationExpectedMessageRequestMode::Absent, replacement,)
             .is_err()
     );
 }
@@ -286,7 +286,7 @@ fn request_mode_response_accepts_only_closed_matrix_and_exact_current() {
                         .encode()
                         .expect("matrix body"),
                     );
-                    let accepted = request_mode_cas_outcome_from_response(&command, expected, pop).is_ok();
+                    let accepted = request_mode_cas_report_from_response(&command, expected, pop).is_ok();
                     let should_accept = match code {
                         ResponseCode::Success => {
                             applied
@@ -326,12 +326,12 @@ fn conditional_offset_response_accepts_only_success_or_conflict_relations() {
         response
     }
 
-    let applied = conditional_offset_outcome_from_response(&response(ResponseCode::Success, Some(3)), 7, 3)
+    let applied = consumer_offset_cas_result_from_response(&response(ResponseCode::Success, Some(3)), 7, 3)
         .expect("exact success");
     assert!(applied.applied);
     assert_eq!(applied.actual_offset, 3);
 
-    let conflict = conditional_offset_outcome_from_response(&response(ResponseCode::InvalidParameter, Some(8)), 7, 3)
+    let conflict = consumer_offset_cas_result_from_response(&response(ResponseCode::InvalidParameter, Some(8)), 7, 3)
         .expect("exact conflict");
     assert!(!conflict.applied);
     assert_eq!(conflict.actual_offset, 8);
@@ -344,10 +344,10 @@ fn conditional_offset_response_accepts_only_success_or_conflict_relations() {
         response(ResponseCode::Success, None),
         response(ResponseCode::InvalidParameter, Some(-2)),
     ] {
-        assert!(conditional_offset_outcome_from_response(&invalid, 7, 3).is_err());
+        assert!(consumer_offset_cas_result_from_response(&invalid, 7, 3).is_err());
     }
-    assert!(conditional_offset_outcome_from_response(&response(ResponseCode::Success, Some(3)), -2, 3).is_err());
-    assert!(conditional_offset_outcome_from_response(&response(ResponseCode::Success, Some(3)), 7, -1).is_err());
+    assert!(consumer_offset_cas_result_from_response(&response(ResponseCode::Success, Some(3)), -2, 3).is_err());
+    assert!(consumer_offset_cas_result_from_response(&response(ResponseCode::Success, Some(3)), 7, -1).is_err());
 }
 
 #[cfg(feature = "admin-mutation")]

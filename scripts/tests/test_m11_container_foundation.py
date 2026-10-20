@@ -146,6 +146,11 @@ class ContainerFoundationTests(unittest.TestCase):
         self.assertTrue(any("if: always()" in finding for finding in findings))
 
     def test_publication_requires_immutable_signed_digest_outputs(self) -> None:
+        release_publish = self.publication_workflow.replace(
+            "  workflow_dispatch:", "  release:\n    types: [published]\n  workflow_dispatch:", 1,
+        )
+        self.assertTrue(any("must be manual" in finding
+                            for finding in self.audit(publication_workflow=release_publish)))
         pull_request_publish = self.publication_workflow.replace(
             "  workflow_dispatch:",
             "  pull_request:\n  workflow_dispatch:",
@@ -383,6 +388,33 @@ class ContainerFoundationTests(unittest.TestCase):
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertEqual(matching, json.loads(matched_path.read_text(encoding="utf-8")))
 
+            for statement_type in (
+                "https://in-toto.io/Statement/v0.1",
+                "https://in-toto.io/Statement/v1",
+            ):
+                with self.subTest(statement_type=statement_type):
+                    supported = {**matching, "_type": statement_type}
+                    verification.write_text(envelope(supported) + "\n", encoding="utf-8")
+                    matched_path.unlink()
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            "-",
+                            str(verification),
+                            str(predicate_path),
+                            digest,
+                            predicate_type,
+                            repository,
+                            str(matched_path),
+                        ],
+                        input=matcher,
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertEqual(supported, json.loads(matched_path.read_text(encoding="utf-8")))
+
             predicate_path.write_text(json.dumps({**predicate, "service": "namesrv"}), encoding="utf-8")
             rejected_path = root / "rejected.json"
             rejected = subprocess.run(
@@ -408,7 +440,7 @@ class ContainerFoundationTests(unittest.TestCase):
             for label, statement, payload_type in (
                 (
                     "wrong-statement-type",
-                    {**matching, "_type": "https://in-toto.io/Statement/v0.1"},
+                    {**matching, "_type": "https://in-toto.io/Statement/v2"},
                     "application/vnd.in-toto+json",
                 ),
                 (
@@ -461,7 +493,7 @@ class ContainerFoundationTests(unittest.TestCase):
                     self.assertFalse(rejected_path.exists())
 
     def test_publication_isolates_scanners_and_never_uploads_partial_pass(self) -> None:
-        implicit_scanner_config = self.publication_workflow.replace("--config /dev/null", "", 1)
+        implicit_scanner_config = self.publication_workflow.replace('--config "$scan_config"', "", 1)
         self.assertTrue(
             any(
                 "explicit empty configuration" in finding
@@ -500,6 +532,51 @@ class ContainerFoundationTests(unittest.TestCase):
                 for finding in self.audit(publication_workflow=no_error_cleanup)
             )
         )
+
+    def test_publication_rejects_untyped_or_uninitialized_scanner_config(self) -> None:
+        for original, replacement in (
+            ('--config "$scan_config"', "--config /dev/null"),
+            ('scan_config="$scan_workdir/scanners.yaml"', 'scan_config="$scan_workdir/scanners"'),
+            ("printf '{}\\n' > \"$scan_config\"", ""),
+        ):
+            with self.subTest(original=original):
+                workflow = self.publication_workflow.replace(original, replacement, 1)
+                findings = self.audit(publication_workflow=workflow)
+                self.assertTrue(any("explicit empty configuration in a YAML file" in finding for finding in findings))
+
+    def test_publication_version_tag_requires_the_exact_tagged_commit(self) -> None:
+        lines = self.publication_workflow.splitlines()
+        marker = next(index for index, line in enumerate(lines) if 'version_tag="$(python - ' in line)
+        end = next(index for index in range(marker + 1, len(lines)) if lines[index].strip() == "PY")
+        resolver = "\n".join(line[10:] for line in lines[marker + 1:end])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def git(*arguments):
+                return subprocess.run(["git", *arguments], cwd=root, capture_output=True, text=True, check=True).stdout.strip()
+
+            def resolve(commit, version="1.0.0"):
+                return subprocess.run(
+                    [sys.executable, "-", commit, version], input=resolver,
+                    cwd=root, capture_output=True, text=True, check=True,
+                ).stdout.strip()
+
+            git("init", "--quiet")
+            git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                "commit", "--quiet", "--allow-empty", "--no-gpg-sign", "-m", "release source")
+            release_commit = git("rev-parse", "HEAD")
+            self.assertEqual("", resolve(release_commit))
+            git("tag", "v1.0.0")
+            self.assertEqual("1.0.0", resolve(release_commit))
+            self.assertEqual("", resolve(release_commit, "0.9.0"))
+            git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                "commit", "--quiet", "--allow-empty", "--no-gpg-sign", "-m", "later main commit")
+            self.assertEqual("", resolve(git("rev-parse", "HEAD")))
+
+        unchecked_source = self.publication_workflow.replace(
+            "tagged.returncode == 0 and tagged.stdout.strip() == commit", "tagged.returncode == 0", 1,
+        )
+        self.assertTrue(any("version tags must match" in finding for finding in self.audit(publication_workflow=unchecked_source)))
 
     def test_publication_manifest_is_bundle_compatible_and_hashes_raw_artifacts(self) -> None:
         wrong_category = self.publication_workflow.replace(

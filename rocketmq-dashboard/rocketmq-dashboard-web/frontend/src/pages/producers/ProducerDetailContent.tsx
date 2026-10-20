@@ -24,7 +24,7 @@ export default function ProducerDetailContent({ connection, topic, producerGroup
 
   return (
     <div className="entity-detail-content producer-detail-content">
-      <dl className="entity-description-grid producer-client-description">
+      <dl className="entity-description-grid producer-client-description" data-surface="inset">
         <div className="detail-copy-row">
           <dt>Client ID</dt>
           <dd className="mono">{connection.clientId || '-'}</dd>

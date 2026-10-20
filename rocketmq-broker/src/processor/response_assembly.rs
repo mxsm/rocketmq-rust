@@ -31,9 +31,9 @@ use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::FileRegion;
 use rocketmq_transport::api::FileRegionLease;
 use rocketmq_transport::api::FileRegionSequence;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingResponse;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::TransportContractViolation;
 
 const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
@@ -141,8 +141,8 @@ impl BrokerResponseParts {
         result.map_err(|error| BrokerResponseBuildError::ResponseConstruction(error).into())
     }
 
-    pub(crate) fn into_handler_outcome(self) -> Result<HandlerOutcome> {
-        self.into_remoting_response().map(HandlerOutcome::Reply)
+    pub(crate) fn into_response_action(self) -> Result<ResponseAction> {
+        self.into_remoting_response().map(ResponseAction::Reply)
     }
 
     #[cfg(test)]
@@ -158,7 +158,7 @@ pub(crate) fn immediate_outcome_from_command_result(
     result: Result<Option<RemotingCommand>>,
     original_opaque: i32,
     missing_response: &'static str,
-) -> Result<HandlerOutcome> {
+) -> Result<ResponseAction> {
     let command = match result {
         Ok(Some(command)) => command,
         Ok(None) => return Err(crate::broker_error::invariant_violated(missing_response)),
@@ -176,7 +176,7 @@ pub(crate) fn immediate_outcome_from_command_result(
         }
         Err(error) => return Err(error),
     };
-    BrokerResponseParts::from_command(command)?.into_handler_outcome()
+    BrokerResponseParts::from_command(command)?.into_response_action()
 }
 
 fn validate_head(head: &RemotingCommand) -> std::result::Result<(), BrokerResponseBuildError> {

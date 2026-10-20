@@ -40,13 +40,13 @@ use crate::admission::AdmissionController;
 use crate::admission::AdmissionLimits;
 use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::base::pending_request_table::materialize_and_estimate_remoting_command_retained_bytes;
-use crate::base::pending_request_table::PendingRegistrationOutcome;
 use crate::base::pending_request_table::PendingRequestCompletion;
 use crate::base::pending_request_table::PendingRequestOwner;
+use crate::base::pending_request_table::PendingRequestRegistrationResult;
 use crate::base::pending_request_table::PendingRequestTable;
-use crate::base::pending_request_table::PendingResponseOutcome;
+use crate::base::pending_request_table::PendingResponseDisposition;
 use crate::codec::remoting_command_codec::FrameLimits;
-use crate::connection::CommandSendOutcome;
+use crate::connection::CommandWriteResult;
 use crate::connection::Connection;
 use crate::connection::ConnectionStateHandle;
 use crate::deadline::RequestDeadline;
@@ -62,8 +62,8 @@ use crate::error_helpers::response_timeout_caused_by_for_remote;
 use crate::error_helpers::TransportStage;
 use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
-use crate::request_outcome::OutboundRequestOutcome;
 use crate::request_outcome::OutboundRequestRejection;
+use crate::request_outcome::OutboundRequestResult;
 use crate::request_outcome::OutboundRequestStage;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
@@ -267,19 +267,19 @@ where
             .pending_requests
             .complete_response_for_owner(&state.pending_owner, opaque, command)
         {
-            PendingResponseOutcome::Completed => {}
+            PendingResponseDisposition::Completed => {}
             // The caller already has its answer, because the request timed out,
             // was cancelled, or was retired with its session while the response
             // was still in flight. That is ordinary client behaviour, not a
             // fault, and it happens systematically while a connection drains.
-            PendingResponseOutcome::Late => {
+            PendingResponseDisposition::Late => {
                 tracing::debug!(
                     code,
                     session_id = session.session_id(),
                     "late client response for a request that already settled",
                 );
             }
-            PendingResponseOutcome::ForeignOwner => {
+            PendingResponseDisposition::ForeignOwner => {
                 tracing::warn!(
                     code,
                     session_id = session.session_id(),
@@ -678,17 +678,17 @@ impl<PR> TransportSession<PR> {
         &mut self,
         mut request: RemotingCommand,
         deadline: RequestDeadline,
-    ) -> Result<OutboundRequestOutcome, TransportError> {
+    ) -> Result<OutboundRequestResult, TransportError> {
         const REMOTE_ADDR_PRESENT: bool = true;
 
         if !self.accepting_requests.load(Ordering::Acquire) {
-            return Ok(OutboundRequestOutcome::Rejected(
+            return Ok(OutboundRequestResult::Rejected(
                 OutboundRequestRejection::session_closed(OutboundRequestStage::BeforeWrite, REMOTE_ADDR_PRESENT),
             ));
         }
         self.last_used_millis.store(current_millis(), Ordering::Release);
         if deadline.is_expired() {
-            return Ok(OutboundRequestOutcome::Rejected(
+            return Ok(OutboundRequestResult::Rejected(
                 OutboundRequestRejection::deadline_expired(
                     OutboundRequestStage::BeforeWrite,
                     deadline.budget_millis(),
@@ -705,7 +705,7 @@ impl<PR> TransportSession<PR> {
             ));
         }
         if deadline.is_expired() {
-            return Ok(OutboundRequestOutcome::Rejected(
+            return Ok(OutboundRequestResult::Rejected(
                 OutboundRequestRejection::deadline_expired(
                     OutboundRequestStage::BeforeWrite,
                     deadline.budget_millis(),
@@ -724,9 +724,9 @@ impl<PR> TransportSession<PR> {
             retained_bytes,
             tx,
         ) {
-            PendingRegistrationOutcome::Registered(guard) => guard,
-            PendingRegistrationOutcome::DeadlineExpired => {
-                return Ok(OutboundRequestOutcome::Rejected(
+            PendingRequestRegistrationResult::Registered(guard) => guard,
+            PendingRequestRegistrationResult::DeadlineExpired => {
+                return Ok(OutboundRequestResult::Rejected(
                     OutboundRequestRejection::deadline_expired(
                         OutboundRequestStage::BeforeWrite,
                         deadline.budget_millis(),
@@ -734,17 +734,17 @@ impl<PR> TransportSession<PR> {
                     ),
                 ));
             }
-            PendingRegistrationOutcome::QueueSaturated => {
-                return Ok(OutboundRequestOutcome::Rejected(
+            PendingRequestRegistrationResult::QueueSaturated => {
+                return Ok(OutboundRequestResult::Rejected(
                     OutboundRequestRejection::queue_saturated(OutboundRequestStage::BeforeWrite, REMOTE_ADDR_PRESENT),
                 ));
             }
-            PendingRegistrationOutcome::SessionClosed => {
-                return Ok(OutboundRequestOutcome::Rejected(
+            PendingRequestRegistrationResult::SessionClosed => {
+                return Ok(OutboundRequestResult::Rejected(
                     OutboundRequestRejection::session_closed(OutboundRequestStage::BeforeWrite, REMOTE_ADDR_PRESENT),
                 ));
             }
-            PendingRegistrationOutcome::OperationalFailure(error) => {
+            PendingRequestRegistrationResult::OperationalFailure(error) => {
                 return Err(TransportError::request(
                     RequestOperation::Register,
                     OutboundRequestStage::BeforeWrite,
@@ -759,9 +759,9 @@ impl<PR> TransportSession<PR> {
             .send_command_outcome_with_deadline(request, deadline, target)
             .await
         {
-            CommandSendOutcome::Written => {}
-            CommandSendOutcome::DeadlineExpired => {
-                return Ok(OutboundRequestOutcome::Rejected(
+            CommandWriteResult::Written => {}
+            CommandWriteResult::DeadlineExpired => {
+                return Ok(OutboundRequestResult::Rejected(
                     OutboundRequestRejection::deadline_expired(
                         OutboundRequestStage::BeforeWrite,
                         deadline.budget_millis(),
@@ -769,30 +769,30 @@ impl<PR> TransportSession<PR> {
                     ),
                 ));
             }
-            CommandSendOutcome::SessionClosed => {
-                return Ok(OutboundRequestOutcome::Rejected(
+            CommandWriteResult::SessionClosed => {
+                return Ok(OutboundRequestResult::Rejected(
                     OutboundRequestRejection::session_closed(OutboundRequestStage::BeforeWrite, REMOTE_ADDR_PRESENT),
                 ));
             }
-            CommandSendOutcome::Cancelled => {
-                return Ok(OutboundRequestOutcome::Rejected(OutboundRequestRejection::cancelled(
+            CommandWriteResult::Cancelled => {
+                return Ok(OutboundRequestResult::Rejected(OutboundRequestRejection::cancelled(
                     OutboundRequestStage::BeforeWrite,
                     REMOTE_ADDR_PRESENT,
                 )));
             }
-            CommandSendOutcome::QueueSaturated => {
-                return Ok(OutboundRequestOutcome::Rejected(
+            CommandWriteResult::QueueSaturated => {
+                return Ok(OutboundRequestResult::Rejected(
                     OutboundRequestRejection::queue_saturated(OutboundRequestStage::BeforeWrite, REMOTE_ADDR_PRESENT),
                 ));
             }
-            CommandSendOutcome::EncodingFailed(error) => {
+            CommandWriteResult::EncodingFailed(error) => {
                 return Err(TransportError::request(
                     RequestOperation::Write,
                     OutboundRequestStage::BeforeWrite,
                     error,
                 ));
             }
-            CommandSendOutcome::OperationalFailure { progress, error } => {
+            CommandWriteResult::OperationalFailure { progress, error } => {
                 let stage = match progress {
                     WriteProgress::NotStarted => OutboundRequestStage::BeforeWrite,
                     WriteProgress::PossiblyPartial => OutboundRequestStage::Writing,
@@ -802,18 +802,18 @@ impl<PR> TransportSession<PR> {
         }
 
         match deadline.timeout(rx).await {
-            Ok(Ok(PendingRequestCompletion::Response(response))) => Ok(OutboundRequestOutcome::Response(response)),
-            Ok(Ok(PendingRequestCompletion::DeadlineExpired)) => Ok(OutboundRequestOutcome::Rejected(
+            Ok(Ok(PendingRequestCompletion::Response(response))) => Ok(OutboundRequestResult::Response(response)),
+            Ok(Ok(PendingRequestCompletion::DeadlineExpired)) => Ok(OutboundRequestResult::Rejected(
                 OutboundRequestRejection::deadline_expired(
                     OutboundRequestStage::AwaitingResponse,
                     deadline.budget_millis(),
                     REMOTE_ADDR_PRESENT,
                 ),
             )),
-            Ok(Ok(PendingRequestCompletion::Cancelled)) => Ok(OutboundRequestOutcome::Rejected(
+            Ok(Ok(PendingRequestCompletion::Cancelled)) => Ok(OutboundRequestResult::Rejected(
                 OutboundRequestRejection::cancelled(OutboundRequestStage::AwaitingResponse, REMOTE_ADDR_PRESENT),
             )),
-            Ok(Ok(PendingRequestCompletion::SessionClosed)) => Ok(OutboundRequestOutcome::Rejected(
+            Ok(Ok(PendingRequestCompletion::SessionClosed)) => Ok(OutboundRequestResult::Rejected(
                 OutboundRequestRejection::session_closed(OutboundRequestStage::AwaitingResponse, REMOTE_ADDR_PRESENT),
             )),
             Ok(Ok(PendingRequestCompletion::OperationalFailure(error))) => Err(TransportError::request(
@@ -861,11 +861,11 @@ impl<PR> TransportSession<PR> {
             retained_bytes,
             tx,
         ) {
-            PendingRegistrationOutcome::Registered(guard) => guard,
-            PendingRegistrationOutcome::DeadlineExpired
-            | PendingRegistrationOutcome::SessionClosed
-            | PendingRegistrationOutcome::QueueSaturated
-            | PendingRegistrationOutcome::OperationalFailure(_) => return,
+            PendingRequestRegistrationResult::Registered(guard) => guard,
+            PendingRequestRegistrationResult::DeadlineExpired
+            | PendingRequestRegistrationResult::SessionClosed
+            | PendingRequestRegistrationResult::QueueSaturated
+            | PendingRequestRegistrationResult::OperationalFailure(_) => return,
         };
         if self.send_prepared_transport(request, deadline).await.is_err() {
             return;
@@ -965,18 +965,18 @@ impl<PR> TransportSession<PR> {
                 retained_bytes,
                 tx,
             ) {
-                PendingRegistrationOutcome::Registered(guard) => guard,
-                PendingRegistrationOutcome::DeadlineExpired => return Err(deadline.elapsed_error()),
-                PendingRegistrationOutcome::SessionClosed => {
+                PendingRequestRegistrationResult::Registered(guard) => guard,
+                PendingRequestRegistrationResult::DeadlineExpired => return Err(deadline.elapsed_error()),
+                PendingRequestRegistrationResult::SessionClosed => {
                     return Err(connection_failed_without_source_for_remote(
                         self.peer.address().to_string(),
                         TransportStage::Closed,
                     ));
                 }
-                PendingRegistrationOutcome::QueueSaturated => {
+                PendingRequestRegistrationResult::QueueSaturated => {
                     return Err(crate::error_helpers::admission_queue_saturated("pending_request"));
                 }
-                PendingRegistrationOutcome::OperationalFailure(error) => {
+                PendingRequestRegistrationResult::OperationalFailure(error) => {
                     return Err(error);
                 }
             };
@@ -1128,9 +1128,9 @@ mod inbound_tests {
     use rocketmq_runtime::RuntimeContext;
 
     use super::*;
-    use crate::dispatch::HandlerOutcome;
     use crate::dispatch::RemotingRequest;
     use crate::dispatch::RemotingResponse;
+    use crate::dispatch::ResponseAction;
 
     #[derive(Clone)]
     struct EchoProcessor;
@@ -1139,11 +1139,11 @@ mod inbound_tests {
         async fn process(
             &mut self,
             request: &mut RemotingRequest,
-        ) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+        ) -> Result<ResponseAction, rocketmq_error::SharedError> {
             let response = RemotingCommand::create_response_command_with_code(request.command().code() + 1);
             let response = RemotingResponse::bytes(response, Bytes::from_static(b"client-inbound"))
                 .map_err(|_| crate::error_helpers::protocol_response_failed("client_inbound_test.remoting_response"))?;
-            Ok(HandlerOutcome::Reply(response))
+            Ok(ResponseAction::Reply(response))
         }
     }
 

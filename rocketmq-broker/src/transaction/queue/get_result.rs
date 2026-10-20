@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use rocketmq_model::common::message::message_ext::MessageExt;
-use rocketmq_store_api::ReadOutcome;
+use rocketmq_store_api::DecodedReadResult;
 
 pub(crate) struct GetResult {
     pub(crate) msg: Option<MessageExt>,
-    pub(crate) pull_result: Option<ReadOutcome<MessageExt>>,
+    pub(crate) pull_result: Option<DecodedReadResult<MessageExt>>,
 }
 
 impl GetResult {
@@ -28,11 +28,11 @@ impl GetResult {
         }
     }
 
-    pub fn get_pull_result(&self) -> Option<&ReadOutcome<MessageExt>> {
+    pub fn get_pull_result(&self) -> Option<&DecodedReadResult<MessageExt>> {
         self.pull_result.as_ref()
     }
 
-    pub fn set_pull_result(&mut self, pull_result: Option<ReadOutcome<MessageExt>>) {
+    pub fn set_pull_result(&mut self, pull_result: Option<DecodedReadResult<MessageExt>>) {
         self.pull_result = pull_result;
     }
 

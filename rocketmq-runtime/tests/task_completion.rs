@@ -182,6 +182,41 @@ async fn abort_keeps_the_record_while_the_user_destructor_is_running() {
 }
 
 #[tokio::test]
+async fn a_task_id_from_another_group_is_never_treated_as_local() {
+    let context = RuntimeContext::from_current("foreign-task-id");
+    let first = context.service_context("first").task_group().clone();
+    let second = context.service_context("second").task_group().clone();
+    let first_id = first.spawn_service("pending", std::future::pending::<()>()).unwrap();
+    let second_id = second.spawn_service("pending", std::future::pending::<()>()).unwrap();
+
+    // Both groups number their tasks from the same start, but ids stay distinct.
+    assert_eq!(first_id.as_u64(), second_id.as_u64());
+    assert_ne!(first_id, second_id);
+    assert_eq!(first_id.group_id(), first.id());
+    assert!(first.owns_task(first_id));
+    assert!(!second.owns_task(first_id));
+
+    // The foreign id must neither reach the same-numbered local task nor be
+    // reported as finished while its owner still runs it.
+    assert!(!second.contains_task(first_id));
+    assert!(!second.abort_task(first_id));
+    assert!(second.contains_task(second_id));
+    let foreign_wait = tokio::time::timeout(
+        Duration::from_secs(5),
+        second.wait_task(first_id, Duration::from_secs(60)),
+    )
+    .await;
+    assert_eq!(foreign_wait, Ok(false));
+    assert!(!second.abort_task_and_wait(first_id, Duration::from_secs(1)).await);
+    assert!(first.contains_task(first_id));
+
+    assert!(first.abort_task_and_wait(first_id, Duration::from_secs(1)).await);
+    assert!(first.wait_task(first_id, Duration::ZERO).await);
+    assert!(!second.wait_task(first_id, Duration::ZERO).await);
+    assert!(second.abort_task_and_wait(second_id, Duration::from_secs(1)).await);
+}
+
+#[tokio::test]
 async fn repeated_abort_and_normal_completion_each_settle_once() {
     let context = RuntimeContext::from_current("single-settlement");
     let group = context.service_context("service").task_group().clone();

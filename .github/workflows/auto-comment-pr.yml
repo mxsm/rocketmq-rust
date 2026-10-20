@@ -26,12 +26,6 @@ jobs:
             
             const commentBody = `
             🔊@${prCreator} 🚀Thanks for your contribution🎉！
-            
-            💡CodeRabbit(AI) will review your code first🔥！
-
-            > [!NOTE]
-            > 
-            > 🚨The code review suggestions from CodeRabbit are to be used as a reference only, and the PR submitter can decide whether to make changes based on their own judgment. Ultimately, the project management personnel will conduct the final code review💥.
             `;
             github.rest.issues.createComment({
               owner,
@@ -43,5 +37,5 @@ jobs:
                 owner,
                 repo,
                 issue_number,
-                labels: ['ready to review','waiting-review','AI review first','auto merge']
+                labels: ['ready to review','waiting-review','auto merge']
               });

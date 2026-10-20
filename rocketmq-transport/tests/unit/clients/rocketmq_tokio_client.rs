@@ -28,8 +28,8 @@ use tokio::net::TcpListener;
 use super::*;
 use crate::connection::Connection;
 use crate::deadline::RequestDeadline;
-use crate::request_outcome::OutboundRequestOutcome;
 use crate::request_outcome::OutboundRequestRejectionReason;
+use crate::request_outcome::OutboundRequestResult;
 use crate::request_outcome::OutboundRequestStage;
 use crate::request_processor::default_request_processor::DefaultRequestProcessor;
 use crate::runtime::config::client_config::TransportClientConfig;
@@ -40,17 +40,17 @@ use tokio::time;
 
 use self::runtime_test_support::test_service_context;
 
-fn expect_response(outcome: OutboundRequestOutcome) -> RemotingCommand {
+fn expect_response(outcome: OutboundRequestResult) -> RemotingCommand {
     match outcome {
-        OutboundRequestOutcome::Response(response) => response,
-        OutboundRequestOutcome::Rejected(rejection) => {
+        OutboundRequestResult::Response(response) => response,
+        OutboundRequestResult::Rejected(rejection) => {
             panic!(
                 "request was rejected at {:?}: {:?}",
                 rejection.stage(),
                 rejection.reason()
             )
         }
-        OutboundRequestOutcome::Contract(contract) => {
+        OutboundRequestResult::Contract(contract) => {
             panic!(
                 "request contract failed at {:?}: {:?}",
                 contract.stage(),
@@ -954,7 +954,7 @@ async fn deadline_after_response_is_a_response_received_rejection() {
         .expect("response deadline invocation task")
         .expect("post-response deadline is a normal rejection");
     let rejection = match outcome {
-        OutboundRequestOutcome::Rejected(rejection) => rejection,
+        OutboundRequestResult::Rejected(rejection) => rejection,
         other => panic!("expected response deadline rejection, got {other:?}"),
     };
 
@@ -1450,7 +1450,7 @@ async fn removed_endpoint_rejects_new_work_and_closes_after_drain_timeout() {
         .expect("drained request task")
         .expect("expected drain is a normal rejection");
     let rejection = match outcome {
-        OutboundRequestOutcome::Rejected(rejection) => rejection,
+        OutboundRequestResult::Rejected(rejection) => rejection,
         other => panic!("expected a typed session-close rejection, got {other:?}"),
     };
     assert_eq!(rejection.reason(), OutboundRequestRejectionReason::SessionClosed);

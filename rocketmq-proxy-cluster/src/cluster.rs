@@ -345,12 +345,12 @@ trait ClusterClientIo: Send + Sync {
 
     async fn broker_name_for_queue(&self, queue: &MessageQueue) -> CheetahString;
 
-    async fn pull_outcome_from_broker(
+    async fn pull_response_from_broker(
         &self,
         broker_addr: &str,
         request: PullMessageRequestHeader,
         timeout_millis: u64,
-    ) -> Result<rocketmq_model::result::PullOutcome<MessageExt>, CanonicalError>;
+    ) -> Result<rocketmq_model::result::PullResponse<MessageExt>, CanonicalError>;
 
     #[allow(clippy::too_many_arguments, reason = "mirrors the RocketMQ send-back wire contract")]
     async fn consumer_send_message_back(
@@ -635,13 +635,13 @@ impl ClusterClientIo for ClientInstanceHandle {
         self.broker_name_for_queue(queue).await
     }
 
-    async fn pull_outcome_from_broker(
+    async fn pull_response_from_broker(
         &self,
         broker_addr: &str,
         request: PullMessageRequestHeader,
         timeout_millis: u64,
-    ) -> Result<rocketmq_model::result::PullOutcome<MessageExt>, CanonicalError> {
-        self.pull_outcome_from_broker(broker_addr, request, timeout_millis)
+    ) -> Result<rocketmq_model::result::PullResponse<MessageExt>, CanonicalError> {
+        self.pull_response_from_broker(broker_addr, request, timeout_millis)
             .await
             .map_err(ClientError::into_error)
     }
@@ -930,12 +930,18 @@ impl ClusterProducerFactory for DefaultClusterProducerFactory {
     }
 }
 
-pub struct RocketmqClusterClient {
+/// Proxy entry point for cluster operations, implementing [`ClusterClient`] by submitting
+/// commands through an owned `ClusterTaskExecutor`.
+///
+/// The gateway covers route and metadata queries, messaging, consumption, transactions, and
+/// Remoting forwarding. Queue admission, keyed scheduling, cancellation, and remote I/O are
+/// handled by the execution layer; the gateway only builds requests and maps typed responses.
+pub struct ClusterCommandGateway {
     executor: ClusterTaskExecutor,
     producer_group_prefix: String,
 }
 
-impl RocketmqClusterClient {
+impl ClusterCommandGateway {
     pub fn new(
         config: ClusterConfig,
         signer: Option<Arc<dyn OutboundSigner>>,
@@ -975,7 +981,7 @@ impl RocketmqClusterClient {
 }
 
 #[async_trait]
-impl ClusterClient for RocketmqClusterClient {
+impl ClusterClient for ClusterCommandGateway {
     fn transaction_producer_group(&self, context: &ProxyContext) -> Option<String> {
         let prefix = sanitize_group_component(self.producer_group_prefix.as_str());
         let identity = sanitize_group_component(context.client_id().unwrap_or(context.request_id()));
@@ -2115,7 +2121,7 @@ async fn pull_message_inner(
     );
     let request_header = build_pull_request_header(&broker_target.broker_name, &request);
     let pull_result = client
-        .pull_outcome_from_broker(broker_target.broker_addr.as_str(), request_header, timeout_ms)
+        .pull_response_from_broker(broker_target.broker_addr.as_str(), request_header, timeout_ms)
         .await?;
     Ok(build_pull_plan(pull_result))
 }
@@ -2829,7 +2835,7 @@ fn build_receive_plan(pop_result: PopResult) -> ReceiveMessagePlan {
     }
 }
 
-fn build_pull_plan(pull_result: rocketmq_model::result::PullOutcome<MessageExt>) -> PullMessagePlan {
+fn build_pull_plan(pull_result: rocketmq_model::result::PullResponse<MessageExt>) -> PullMessagePlan {
     let next_offset = pull_result.next_begin_offset() as i64;
     let min_offset = pull_result.min_offset() as i64;
     let max_offset = pull_result.max_offset() as i64;
@@ -3214,12 +3220,12 @@ mod tests {
     use super::test_client_runtime;
     use super::CachedValue;
     use super::ClusterCommand;
+    use super::ClusterCommandGateway;
     use super::ClusterExecutionLanes;
     use super::ClusterExecutionPolicy;
     use super::ClusterTaskExecutor;
     use super::ClusterWorkerState;
     use super::MessageIdDecodeError;
-    use super::RocketmqClusterClient;
     use super::TelemetryHandle;
     use crate::cluster::cluster_admission::ClusterCommandClass;
     use crate::config::ClusterConfig;
@@ -3818,7 +3824,7 @@ mod tests {
         queued.queue_deadline = Duration::from_millis(1);
         assert!(matches!(
             registration.queue.try_push_control(queued, size_of::<ClusterCommand>()),
-            rocketmq_runtime::QueuePushOutcome::Enqueued
+            rocketmq_runtime::QueueEnqueueStatus::Enqueued
         ));
         registration.queue.close();
 
@@ -3868,7 +3874,7 @@ mod tests {
         let runtime =
             rocketmq_runtime::RuntimeContext::try_from_current("proxy-cluster-test").expect("test runtime context");
         let service = runtime.service_context("proxy-cluster-test.service");
-        let client = RocketmqClusterClient::new(ClusterConfig::default(), None, &service, TelemetryHandle::noop())
+        let client = ClusterCommandGateway::new(ClusterConfig::default(), None, &service, TelemetryHandle::noop())
             .expect("managed client builds");
         assert_eq!(service.task_group().task_count(), 0);
         assert_eq!(service.task_group().component_count(), 1);

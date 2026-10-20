@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - "rocketmq-ai/rocketmq-mcp/**"
+      - "rocketmq-ai/rocketmq-mcp-query/**"
+      - "rocketmq-ai/rocketmq-mcp-auth/**"
+      - "rocketmq-ai/rocketmq-mcp-control/**"
       - "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/**"
       - "rocketmq-auth/**"
       - "rocketmq-client/**"
@@ -24,6 +27,9 @@ on:
   pull_request:
     paths:
       - "rocketmq-ai/rocketmq-mcp/**"
+      - "rocketmq-ai/rocketmq-mcp-query/**"
+      - "rocketmq-ai/rocketmq-mcp-auth/**"
+      - "rocketmq-ai/rocketmq-mcp-control/**"
       - "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/**"
       - "rocketmq-auth/**"
       - "rocketmq-client/**"
@@ -49,7 +55,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validate:
+  query:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rocketmq-ai/rocketmq-mcp-query
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rocketmq-ai/rocketmq-mcp-query
+      - run: cargo fmt --all -- --check
+      - run: python scripts/check_read_only_boundary.py
+      - run: cargo test --locked
+      - run: cargo test --locked --all-features
+      - run: cargo clippy --locked --all-targets --features streamable-http -- -D warnings
+      - if: github.event_name != 'pull_request'
+        run: cargo doc --locked --no-deps
+
+  entrypoint:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -63,9 +90,53 @@ jobs:
         with:
           workspaces: rocketmq-ai/rocketmq-mcp
       - run: cargo fmt --all -- --check
-      - run: python scripts/check_read_only_boundary.py
       - run: cargo test --locked
+      - run: cargo test --locked --no-default-features
+      - run: cargo test --locked --no-default-features --features auth
+      - run: cargo test --locked --no-default-features --features query
+      - run: cargo test --locked --no-default-features --features streamable-http
+      - run: cargo test --locked --no-default-features --features control
+      - run: cargo test --locked --no-default-features --features write-tools,otlp
+      - run: cargo test --locked --features write-tools
       - run: cargo test --locked --all-features
-      - run: cargo clippy --locked --all-targets --features streamable-http -- -D warnings
-      - if: github.event_name != 'pull_request'
-        run: cargo doc --locked --no-deps
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+  control:
+    runs-on: ubuntu-latest
+    env:
+      INSTA_UPDATE: "no"
+    defaults:
+      run:
+        working-directory: rocketmq-ai/rocketmq-mcp-control
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            rocketmq-ai/rocketmq-mcp-control
+            rocketmq-ai/rocketmq-mcp-query
+      - run: cargo fmt --all -- --check
+      - run: cargo test --locked
+      - run: cargo test --locked --features write-tools
+      - run: python scripts/check_control_boundary.py
+
+  # The JWKS crate shared with the control MCP has its own workspace, so its tests run here.
+  shared-auth:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rocketmq-ai/rocketmq-mcp-auth
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rocketmq-ai/rocketmq-mcp-auth
+      - run: cargo fmt --all -- --check
+      - run: cargo test --locked
+      - run: cargo clippy --locked --all-targets -- -D warnings

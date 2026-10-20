@@ -12,6 +12,10 @@ import sys
 
 
 PROJECT = pathlib.Path(__file__).resolve().parents[1]
+# JWKS retrieval and key selection live in a crate shared with the query MCP. It is production code
+# of this service, so the source rules below apply to it as well.
+SHARED_AUTH = PROJECT.parent / "rocketmq-mcp-auth"
+SHARED_AUTH_PACKAGE = "rocketmq-mcp-auth"
 
 
 def fail(message: str) -> None:
@@ -44,7 +48,7 @@ def node_features(document: dict, package_name: str) -> set[str]:
 
 
 def run_query_contract(command: list[str]) -> None:
-    query_project = PROJECT.parent / "rocketmq-mcp"
+    query_project = PROJECT.parent / "rocketmq-mcp-query"
     environment = os.environ.copy()
     environment["INSTA_UPDATE"] = "no"
     environment.pop("RUST_MIN_STACK", None)
@@ -74,6 +78,15 @@ for forbidden in ("rocketmq-admin-core", "rocketmq-client-rust"):
     if forbidden in default_names:
         fail(f"default dependency closure contains {forbidden}")
 
+if SHARED_AUTH_PACKAGE not in default_names:
+    fail(f"default dependency closure is missing {SHARED_AUTH_PACKAGE}")
+for package in default_metadata["packages"]:
+    if package["name"] != SHARED_AUTH_PACKAGE:
+        continue
+    for dependency in package["dependencies"]:
+        if dependency["name"].startswith("rocketmq-") or dependency["name"] == "axum":
+            fail(f"{SHARED_AUTH_PACKAGE} must not depend on {dependency['name']}")
+
 write_metadata = metadata(["write-tools"])
 write_names = package_names(write_metadata)
 for required in ("rocketmq-admin-core", "rocketmq-client-rust"):
@@ -97,7 +110,11 @@ source = "\n".join(path.read_text(encoding="utf-8") for path in source_paths)
 
 def is_test_only_source(path: pathlib.Path) -> bool:
     relative = path.relative_to(PROJECT / "src")
-    return path.name == "tests.rs" or relative.parts[:2] == ("transport", "real_cluster_e2e")
+    return (
+        path.name == "tests.rs"
+        or relative.parts == ("transport", "real_cluster_e2e.rs")
+        or relative.parts[:2] == ("transport", "real_cluster_e2e")
+    )
 
 
 # Dedicated test source may own explicit E2E process orchestration. It must not
@@ -105,6 +122,15 @@ def is_test_only_source(path: pathlib.Path) -> bool:
 production_units = []
 for path in source_paths:
     if is_test_only_source(path):
+        continue
+    unit = path.read_text(encoding="utf-8")
+    unit = unit.split("#[cfg(test)]\nmod tests", maxsplit=1)[0]
+    production_units.append(unit)
+shared_auth_paths = sorted((SHARED_AUTH / "src").glob("**/*.rs"))
+if not shared_auth_paths:
+    fail(f"{SHARED_AUTH_PACKAGE} source is missing")
+for path in shared_auth_paths:
+    if path.name == "test_support.rs":
         continue
     unit = path.read_text(encoding="utf-8")
     unit = unit.split("#[cfg(test)]\nmod tests", maxsplit=1)[0]
@@ -143,9 +169,29 @@ for required in (
     "rocketmq_reset_consumer_offset",
     "rocketmq_patch_broker_config",
     "rocketmq_set_consumer_request_mode",
+    "rocketmq_begin_proxy_drain",
+    "rocketmq_cancel_proxy_drain",
+    "rocketmq_set_broker_log_filter_ttl",
+    "rocketmq_restore_broker_log_filter",
 ):
     if required not in source:
         fail(f"reviewed write catalog is missing {required}")
+
+# A drain names a Proxy by a configured alias. No Tool argument may carry an address.
+for tool_arguments in ("proxy_drain.rs", "log_filter.rs"):
+    unit = (PROJECT / "src" / "tools" / "remaining" / tool_arguments).read_text(encoding="utf-8")
+    unit = unit.split("#[cfg(test)]\nmod tests", maxsplit=1)[0]
+    for forbidden in ("_addr", "endpoint", "namesrv"):
+        if forbidden in unit:
+            fail(f"{tool_arguments} declares an address-shaped member through {forbidden}")
+
+# The one read-only Tool. It reads the audit trail and must not reach the mutation session.
+if "rocketmq_get_mutation_result" not in source:
+    fail("reviewed read-only catalog is missing rocketmq_get_mutation_result")
+result_lookup = (PROJECT / "src" / "tool_runtime" / "result_lookup.rs").read_text(encoding="utf-8")
+for forbidden in ("MutationToolSession", "supervised_mutation", "admin_session", "rocketmq_admin_core"):
+    if forbidden in result_lookup:
+        fail(f"the result lookup reaches the mutation session through {forbidden}")
 
 for forbidden in (
     "rocketmq_delete_",

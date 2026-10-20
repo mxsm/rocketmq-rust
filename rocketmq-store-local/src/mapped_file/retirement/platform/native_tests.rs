@@ -22,11 +22,11 @@ use super::apply_namespace_transition;
 use super::physical_file_key;
 #[cfg(any(target_os = "linux", windows))]
 use super::NamespaceMutationAuthorization;
+#[cfg(any(target_os = "linux", windows))]
+use super::NamespaceOperationResult;
 use super::NamespaceRetirementRequest;
 use super::NamespaceTicketBinding;
 use super::NamespaceTransition;
-#[cfg(any(target_os = "linux", windows))]
-use super::NamespaceTransitionOutcome;
 use super::VerifiedNamespaceRoot;
 use crate::mapped_file::retirement::codec::RetirementReason;
 use crate::mapped_file::retirement::identity::FileIncarnationId;
@@ -107,7 +107,7 @@ impl Fixture {
         &self,
         request: NamespaceRetirementRequest,
         transition: NamespaceTransition,
-    ) -> NamespaceTransitionOutcome {
+    ) -> NamespaceOperationResult {
         let authorization = NamespaceMutationAuthorization::for_test(&request, transition);
         let reservation = self
             .root
@@ -263,8 +263,8 @@ mod windows_tests {
 
     use super::*;
     use crate::mapped_file::retirement::platform::NamespaceFailureClass;
+    use crate::mapped_file::retirement::platform::NamespaceOperationResult;
     use crate::mapped_file::retirement::platform::NamespacePolicyViolation;
-    use crate::mapped_file::retirement::platform::NamespaceTransitionOutcome;
 
     #[test]
     fn unique_tombstone_rename_and_removal_retry_idempotently() {
@@ -283,26 +283,23 @@ mod windows_tests {
 
         let moved = fixture.advance(request(key), NamespaceTransition::MoveToTombstone);
         assert!(
-            matches!(moved, NamespaceTransitionOutcome::Tombstoned(_)),
+            matches!(moved, NamespaceOperationResult::Tombstoned(_)),
             "unexpected move outcome: {moved:?}"
         );
         assert!(!fixture.canonical.exists());
         assert!(fixture.tombstone.exists());
 
         let repeated_move = fixture.advance(request(key), NamespaceTransition::MoveToTombstone);
-        assert!(matches!(repeated_move, NamespaceTransitionOutcome::Tombstoned(_)));
+        assert!(matches!(repeated_move, NamespaceOperationResult::Tombstoned(_)));
 
         let removed = fixture.advance(request(key), NamespaceTransition::RemoveTombstone);
-        assert!(matches!(
-            removed,
-            NamespaceTransitionOutcome::NamespaceAbsentVerified(_)
-        ));
+        assert!(matches!(removed, NamespaceOperationResult::NamespaceAbsentVerified(_)));
         assert!(!fixture.tombstone.exists());
 
         let repeated_remove = fixture.advance(request(key), NamespaceTransition::RemoveTombstone);
         assert!(matches!(
             repeated_remove,
-            NamespaceTransitionOutcome::NamespaceAbsentVerified(_)
+            NamespaceOperationResult::NamespaceAbsentVerified(_)
         ));
         assert!(!fixture.tombstone.exists());
         assert_eq!(std::fs::read(&unknown).expect("read unknown sibling"), b"preserve");
@@ -325,7 +322,7 @@ mod windows_tests {
 
         let result = fixture.advance(request(original_key), NamespaceTransition::RemoveTombstone);
         assert!(
-            matches!(result, NamespaceTransitionOutcome::NamespaceAbsentVerified(_)),
+            matches!(result, NamespaceOperationResult::NamespaceAbsentVerified(_)),
             "unexpected removal outcome: {result:?}"
         );
         assert_eq!(
@@ -352,7 +349,7 @@ mod windows_tests {
         let blocked = fixture.advance(request(key), NamespaceTransition::MoveToTombstone);
         assert!(matches!(
             blocked,
-            NamespaceTransitionOutcome::Retryable(ref failure)
+            NamespaceOperationResult::Retryable(ref failure)
                 if failure.class() == NamespaceFailureClass::SharingViolation
         ));
         assert!(fixture.canonical.exists());
@@ -360,12 +357,9 @@ mod windows_tests {
 
         drop(blocker);
         let moved = fixture.advance(request(key), NamespaceTransition::MoveToTombstone);
-        assert!(matches!(moved, NamespaceTransitionOutcome::Tombstoned(_)));
+        assert!(matches!(moved, NamespaceOperationResult::Tombstoned(_)));
         let removed = fixture.advance(request(key), NamespaceTransition::RemoveTombstone);
-        assert!(matches!(
-            removed,
-            NamespaceTransitionOutcome::NamespaceAbsentVerified(_)
-        ));
+        assert!(matches!(removed, NamespaceOperationResult::NamespaceAbsentVerified(_)));
     }
 
     #[test]
@@ -380,7 +374,7 @@ mod windows_tests {
             .reserve(request(original_key), NamespaceTransition::DirectUnlink);
         assert!(matches!(
             rejected,
-            Err(NamespaceTransitionOutcome::Rejected(
+            Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::UnsupportedTransition {
                     transition: NamespaceTransition::DirectUnlink
                 }
@@ -408,24 +402,21 @@ mod linux_tests {
         drop(target);
 
         let moved = fixture.advance(request(key), NamespaceTransition::MoveToTombstone);
-        assert!(matches!(moved, NamespaceTransitionOutcome::Tombstoned(_)));
+        assert!(matches!(moved, NamespaceOperationResult::Tombstoned(_)));
         assert!(!fixture.canonical.exists());
         assert!(fixture.tombstone.exists());
 
         let repeated_move = fixture.advance(request(key), NamespaceTransition::MoveToTombstone);
-        assert!(matches!(repeated_move, NamespaceTransitionOutcome::Tombstoned(_)));
+        assert!(matches!(repeated_move, NamespaceOperationResult::Tombstoned(_)));
 
         let removed = fixture.advance(request(key), NamespaceTransition::RemoveTombstone);
-        assert!(matches!(
-            removed,
-            NamespaceTransitionOutcome::NamespaceAbsentVerified(_)
-        ));
+        assert!(matches!(removed, NamespaceOperationResult::NamespaceAbsentVerified(_)));
         assert!(!fixture.tombstone.exists());
 
         let repeated_remove = fixture.advance(request(key), NamespaceTransition::RemoveTombstone);
         assert!(matches!(
             repeated_remove,
-            NamespaceTransitionOutcome::NamespaceAbsentVerified(_)
+            NamespaceOperationResult::NamespaceAbsentVerified(_)
         ));
     }
 
@@ -443,10 +434,7 @@ mod linux_tests {
 
         let outcome = fixture.advance(request(key), NamespaceTransition::DirectUnlink);
 
-        assert!(matches!(
-            outcome,
-            NamespaceTransitionOutcome::NamespaceAbsentVerified(_)
-        ));
+        assert!(matches!(outcome, NamespaceOperationResult::NamespaceAbsentVerified(_)));
         assert!(!fixture.canonical.exists());
         owner.rewind().expect("rewind live owner");
         let mut bytes = Vec::new();
@@ -471,7 +459,7 @@ mod linux_tests {
 
         assert!(matches!(
             outcome,
-            NamespaceTransitionOutcome::Rejected(NamespacePolicyViolation::UnexpectedEntryType { .. })
+            NamespaceOperationResult::Rejected(NamespacePolicyViolation::UnexpectedEntryType { .. })
         ));
         assert!(fixture.canonical.is_symlink());
         assert_eq!(std::fs::read(outside).expect("read referent"), b"preserve");
@@ -486,6 +474,6 @@ fn unsupported_targets_fail_before_constructing_a_root_capability() {
 
     assert!(matches!(
         VerifiedNamespaceRoot::open(handle, store_uuid()),
-        Err(super::NamespaceTransitionOutcome::Unsupported { .. })
+        Err(super::NamespaceOperationResult::Unsupported { .. })
     ));
 }

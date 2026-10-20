@@ -60,7 +60,6 @@ impl RuntimeDiagnosticsSources {
         summary.timed_out = report.timed_out;
         summary.leaked = report.leaked;
         summary.blocking_still_running = report.blocking_still_running;
-        summary.detached_still_running = report.detached_still_running;
         self.inner.lock().shutdown = Some(summary);
     }
 }

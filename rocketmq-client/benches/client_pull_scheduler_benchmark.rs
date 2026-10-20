@@ -14,7 +14,7 @@
 
 #![recursion_limit = "256"]
 
-#[path = "support/mod.rs"]
+#[path = "support.rs"]
 mod support;
 
 use std::hint::black_box;

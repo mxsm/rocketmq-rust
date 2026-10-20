@@ -621,7 +621,7 @@ pub trait BrokerAdmin: Send {
         _request: &'a ProbeBrokerRuntimeTargetRequest,
     ) -> AdminFuture<'a, BrokerRuntimeTargetStatus> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "probe_broker_runtime_target",
                 "exact Broker target probing is not implemented by this adapter",
             ))
@@ -643,7 +643,7 @@ pub trait BrokerAdmin: Send {
         _request: &'a QueryBrokerDiagnosticsTargetRequest,
     ) -> AdminFuture<'a, AdminQueryResult<QueryBrokerDiagnosticsResult>> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "query_broker_diagnostics_target",
                 "exact Broker diagnostics are not implemented by this adapter",
             ))
@@ -665,7 +665,7 @@ pub trait BrokerAdmin: Send {
         _request: &'a QueryBrokerAllowlistedConfigTargetRequest,
     ) -> AdminFuture<'a, AdminQueryResult<Vec<BrokerAllowlistedConfigTarget>>> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "query_allowlisted_config_target",
                 "exact Broker configuration query is not implemented by this adapter",
             ))
@@ -677,7 +677,7 @@ pub trait BrokerAdmin: Send {
         _request: &'a QueryBrokerLogFilterStateRequest,
     ) -> AdminFuture<'a, BrokerLogFilterState> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "query_log_filter_state",
                 "typed Broker log-filter query is not implemented by this adapter",
             ))
@@ -694,7 +694,7 @@ pub trait BrokerAdmin: Send {
         _request: &'a QueryBrokerLogFilterStateTargetRequest,
     ) -> AdminFuture<'a, AdminQueryResult<Vec<BrokerLogFilterStateTarget>>> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "query_log_filter_state_target",
                 "exact Broker log-filter query is not implemented by this adapter",
             ))
@@ -726,7 +726,7 @@ pub trait BrokerQueryAdmin: Send {
         _request: &'a ProbeBrokerRuntimeTargetRequest,
     ) -> AdminFuture<'a, BrokerRuntimeTargetStatus> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "probe_broker_runtime_target",
                 "exact Broker target probing is not implemented by this adapter",
             ))
@@ -748,7 +748,7 @@ pub trait BrokerQueryAdmin: Send {
         _request: &'a QueryBrokerDiagnosticsTargetRequest,
     ) -> AdminFuture<'a, AdminQueryResult<QueryBrokerDiagnosticsResult>> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "query_broker_diagnostics_target",
                 "exact Broker diagnostics are not implemented by this adapter",
             ))
@@ -770,7 +770,7 @@ pub trait BrokerQueryAdmin: Send {
         _request: &'a QueryBrokerAllowlistedConfigTargetRequest,
     ) -> AdminFuture<'a, AdminQueryResult<Vec<BrokerAllowlistedConfigTarget>>> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "query_allowlisted_config_target",
                 "exact Broker configuration query is not implemented by this adapter",
             ))
@@ -782,7 +782,7 @@ pub trait BrokerQueryAdmin: Send {
         _request: &'a QueryBrokerLogFilterStateRequest,
     ) -> AdminFuture<'a, BrokerLogFilterState> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "query_log_filter_state",
                 "typed Broker log-filter query is not implemented by this adapter",
             ))
@@ -799,7 +799,7 @@ pub trait BrokerQueryAdmin: Send {
         _request: &'a QueryBrokerLogFilterStateTargetRequest,
     ) -> AdminFuture<'a, AdminQueryResult<Vec<BrokerLogFilterStateTarget>>> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "query_log_filter_state_target",
                 "exact Broker log-filter query is not implemented by this adapter",
             ))
@@ -895,7 +895,7 @@ pub struct PatchBrokerConfigRequest {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum PatchBrokerConfigOutcome {
+pub enum BrokerConfigPatchResult {
     Applied {
         previous_generation: u64,
         generation: u64,
@@ -916,11 +916,11 @@ pub trait BrokerMutationAdmin: Send {
     fn patch_config_if_generation<'a>(
         &'a mut self,
         request: &'a PatchBrokerConfigRequest,
-    ) -> AdminFuture<'a, PatchBrokerConfigOutcome>;
+    ) -> AdminFuture<'a, BrokerConfigPatchResult>;
 
     fn set_log_filter_ttl<'a>(&'a mut self, _request: &'a SetBrokerLogFilterTtlRequest) -> AdminFuture<'a, ()> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "set_log_filter_ttl",
                 "typed Broker log-filter mutation is not implemented by this adapter",
             ))
@@ -929,7 +929,7 @@ pub trait BrokerMutationAdmin: Send {
 
     fn restore_log_filter<'a>(&'a mut self, _request: &'a RestoreBrokerLogFilterRequest) -> AdminFuture<'a, ()> {
         Box::pin(async {
-            Err(crate::core::AdminError::backend(
+            Err(crate::core::AdminError::operation_failed(
                 "restore_log_filter",
                 "typed Broker log-filter mutation is not implemented by this adapter",
             ))
@@ -1110,8 +1110,8 @@ fn bounded_runtime_identifier(runtime: &KVTable, key: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-#[cfg(any(feature = "read-client-adapter", test))]
-fn effective_log_level(filter: &str, logger: &str) -> Option<BrokerLogLevel> {
+#[cfg(any(feature = "read-client-adapter", feature = "mutation-client-adapter", test))]
+pub(crate) fn effective_log_level(filter: &str, logger: &str) -> Option<BrokerLogLevel> {
     let mut selected = None;
     let mut selected_target_len = 0usize;
     for directive in filter.split(',').map(str::trim).filter(|value| !value.is_empty()) {

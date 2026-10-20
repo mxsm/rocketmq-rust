@@ -20,7 +20,7 @@ pub(super) async fn broker_addresses(
     let cluster_info = admin
         .examine_broker_cluster_info()
         .await
-        .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
     Ok(broker_addresses_from_cluster(&cluster_info))
 }
 
@@ -34,6 +34,19 @@ pub(super) fn broker_addresses_from_cluster(cluster_info: &ClusterInfo) -> Vec<S
     addresses.into_iter().collect()
 }
 
+/// Every broker address in the cluster, masters and slaves, with the name of its broker group.
+pub(super) fn broker_names_by_address(cluster_info: &ClusterInfo) -> BTreeMap<String, String> {
+    let mut names = BTreeMap::new();
+    if let Some(table) = cluster_info.broker_addr_table.as_ref() {
+        for broker_data in table.values() {
+            for address in broker_data.broker_addrs().values() {
+                names.insert(address.to_string(), broker_data.broker_name().to_string());
+            }
+        }
+    }
+    names
+}
+
 pub(super) async fn resolve_broker_address(
     admin: &rocketmq_client_rust::DefaultMQAdminExt,
     broker_name: &str,
@@ -44,7 +57,7 @@ pub(super) async fn resolve_broker_address(
     let cluster_info = admin
         .examine_broker_cluster_info()
         .await
-        .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+        .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
     cluster_info
         .broker_addr_table
         .as_ref()
@@ -84,6 +97,43 @@ pub(super) fn select_consume_tps_value(entries: &BTreeMap<String, String>) -> Op
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
+
+    #[test]
+    fn broker_names_cover_master_and_slave_addresses() {
+        let broker = |name: &str, addresses: &[(u64, &str)]| {
+            BrokerData::new(
+                CheetahString::from("cluster-a"),
+                CheetahString::from(name),
+                addresses
+                    .iter()
+                    .map(|(id, address)| (*id, CheetahString::from(*address)))
+                    .collect(),
+                None,
+            )
+        };
+        let table = HashMap::from([
+            (
+                CheetahString::from("broker-a"),
+                broker("broker-a", &[(MASTER_ID, "10.0.0.1:10911"), (1, "10.0.0.2:10911")]),
+            ),
+            (
+                CheetahString::from("broker-b"),
+                broker("broker-b", &[(MASTER_ID, "10.0.0.3:10911")]),
+            ),
+        ]);
+
+        let names = broker_names_by_address(&ClusterInfo::new(Some(table), None));
+
+        assert_eq!(
+            names,
+            BTreeMap::from([
+                ("10.0.0.1:10911".to_string(), "broker-a".to_string()),
+                ("10.0.0.2:10911".to_string(), "broker-a".to_string()),
+                ("10.0.0.3:10911".to_string(), "broker-b".to_string()),
+            ])
+        );
+    }
 
     #[test]
     fn corrected_consume_tps_key_is_used_when_legacy_value_is_blank() {

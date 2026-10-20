@@ -285,6 +285,7 @@ mod tests {
             probe_bind_addr: None,
             shutdown_timeout: Duration::from_secs(45),
             liveness_stale_after: Duration::from_secs(30),
+            drain_request_methods: rocketmq_runtime::DrainRequestMethods::PostOnly,
         });
         lifecycle.mark_ready().unwrap();
         lifecycle
@@ -331,6 +332,7 @@ mod tests {
             probe_bind_addr: None,
             shutdown_timeout: Duration::from_secs(45),
             liveness_stale_after: Duration::from_secs(30),
+            drain_request_methods: rocketmq_runtime::DrainRequestMethods::PostOnly,
         });
         controller.attach_lifecycle(lifecycle).unwrap();
         let error = controller.begin("restart-1").expect_err("unready lifecycle");

@@ -46,8 +46,8 @@ struct FileReplyProcessor {
 }
 
 impl RequestProcessor for FileReplyProcessor {
-    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
-        Ok(HandlerOutcome::Reply(
+    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
+        Ok(ResponseAction::Reply(
             self.state
                 .plan
                 .lock()
@@ -90,7 +90,7 @@ async fn admitted_reply_uses_body_free_hooks_resolve_bind_writer_and_one_observa
         .dispatch(&harness.authorized, session, harness.context(None), command, 256, None)
         .await
         .expect("dispatch submission");
-    assert!(matches!(outcome, DispatchOutcome::Accepted(_)));
+    assert!(matches!(outcome, DispatchSubmissionResult::Accepted(_)));
     let response = harness.receive().await;
     wait_for_observation_count(&state, 1).await;
 
@@ -133,8 +133,8 @@ async fn admitted_reply_uses_body_free_hooks_resolve_bind_writer_and_one_observa
     assert_eq!(observation.body_kind(), ResponseBodyKind::Bytes);
     assert_eq!(observation.path(), ResponseWritePath::Inline);
     assert!(matches!(
-        observation.outcome(),
-        ResponseWriteOutcome::Written(receipt)
+        observation.event(),
+        ResponseDeliveryEvent::DeliveryCompleted(receipt)
             if receipt.request_id() == original.request_id()
                 && receipt.disposition() == ResponseDisposition::TransportWritten
     ));
@@ -185,7 +185,7 @@ async fn file_region_crosses_hooks_and_metric_projection_without_entering_the_ob
         .dispatch(&harness.authorized, session, harness.context(None), command, 256, None)
         .await
         .expect("dispatch file response");
-    assert!(matches!(outcome, DispatchOutcome::Accepted(_)));
+    assert!(matches!(outcome, DispatchSubmissionResult::Accepted(_)));
     writer_barrier.wait_reached().await;
 
     assert_eq!(
@@ -225,8 +225,8 @@ async fn file_region_crosses_hooks_and_metric_projection_without_entering_the_ob
     assert_eq!(observation.body_kind(), ResponseBodyKind::FileRegions);
     assert_eq!(observation.path(), ResponseWritePath::Inline);
     assert!(matches!(
-        observation.outcome(),
-        ResponseWriteOutcome::Written(receipt)
+        observation.event(),
+        ResponseDeliveryEvent::DeliveryCompleted(receipt)
             if receipt.request_id() == original.request_id()
                 && receipt.disposition() == ResponseDisposition::TransportWritten
     ));
@@ -395,8 +395,8 @@ async fn possibly_partial_flush_failure_is_observed_once_and_never_retried() {
         let observations = state.observations.lock().expect("observation lock");
         assert_eq!(observations.len(), 1);
         assert_eq!(
-            observations[0].outcome(),
-            ResponseWriteOutcome::Failed {
+            observations[0].event(),
+            ResponseDeliveryEvent::Failed {
                 completion: None,
                 progress: Some(WriteProgress::PossiblyPartial),
             }

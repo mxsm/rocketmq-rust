@@ -27,6 +27,67 @@ reviewed post-freeze approval.
 
 ## Direct source migrations
 
+### Administrative RPC trait consolidation (unreleased)
+
+The next source update removes `rocketmq_client_rust::MqClientAdminInner`
+without a compatibility alias. Use `rocketmq_client_rust::MqClientAdmin` in
+imports, generic bounds, and implementation headers (`impl MqClientAdmin for T`).
+
+This is a source-breaking migration: the retired trait required only `Sync`,
+whereas `MqClientAdmin` requires `Send + Sync` and `Send` futures from every
+asynchronous method. Downstream implementations with non-`Send` state or
+futures must adapt their state and async code; renaming the trait alone is
+insufficient. Method arguments, results, and the existing `admin-full`
+implementation gate for `MQClientAPIImpl` are unchanged.
+
+### Transport RPC trait consolidation (unreleased)
+
+The next source update removes `rocketmq_transport::api::RpcClientLocal`
+without a compatibility alias. Use `rocketmq_transport::api::RpcClient` in
+imports, generic bounds, and implementation headers (`impl RpcClient for T`).
+
+This is a source-breaking migration: `RpcClient` requires implementations and
+their returned futures to be `Send`, unlike the retired Local contract.
+Non-`Send` implementations or futures must be adapted; changing the name alone
+is insufficient, and an alias would not preserve the old contract.
+
+### Operation task exit type names
+
+`OperationOutcome` was renamed to `OperationTaskExitReason`, and
+`OperationOutcomeObserver` was renamed to `OperationTaskExitObserver`. Update
+imports, type references, and observer implementations to use the new names.
+No compatibility aliases are provided.
+
+The enum variants, numeric discriminants, snapshot ordering, and diagnostic
+labels are unchanged. The observer callback remains `on_outcome`, and the
+`rocketmq_runtime_operation_outcomes_total` metric retains its existing name
+and bounded label values.
+### `MetadataWriteSubmissionStatus` rename
+
+The public enum `MetadataIoAdmissionOutcome` has been renamed to `MetadataWriteSubmissionStatus`.
+Consumers must update their imports and type references. No compatibility alias is provided.
+
+### Operation drain status name
+
+`OperationWaitOutcome` has been removed. Use `OperationDrainStatus` in imports
+and type references. Its variants and task-draining behavior are unchanged.
+### Metadata target registry status names
+
+Update `MetadataTargetRetirementOutcome` to
+`MetadataTargetRetirementStatus` and update internal references to
+`MetadataTargetRegistrationStatus` for the crate-private registration result.
+Only `MetadataTargetRetirementStatus` remains crate-root exported. The retirement
+variants, registration ownership, identity and history checks, reconciliation
+fences, and retained read-only receipts are unchanged. No old-name aliases or
+additional public registration API are provided.
+
+### Metadata write status names
+
+Update `MetadataIoDurabilityOutcome` to `MetadataWriteDurabilityStatus` and
+`MetadataIoCommitAdmissionOutcome` to `MetadataWriteCompletionStatus`.
+Durability, completion classifications, conflict handling, and reconciliation
+behavior are unchanged. No compatibility aliases are provided.
+
 ### Request-header derive migration
 
 The historical V1 implementation of `rocketmq_macros::RequestHeaderCodec` and
@@ -43,6 +104,24 @@ protocol source contains no V1 or V2 derive use, so this source-compatibility
 break does not change the registered request-header wire contracts.
 Repository-owner approval for the original V1/V2 retirement is recorded in
 [#10790](https://github.com/mxsm/rocketmq-rust/issues/10790).
+
+### Obsolete `RemotingSerializable` derive
+
+Proposed removal: `rocketmq_macros::RemotingSerializable`.
+For current protocol types, derive `serde::Serialize` and import
+`rocketmq_protocol::protocol::RemotingSerializable`. Users of the historical
+local trait must implement it directly.
+
+### No-op producer backpressure locks
+
+Remove calls to these four no-op `DefaultMQProducer` methods:
+
+- `acquire_back_pressure_for_async_send_num_lock`
+- `release_back_pressure_for_async_send_num_lock`
+- `acquire_back_pressure_for_async_send_size_lock`
+- `release_back_pressure_for_async_send_size_lock`
+
+They provided no locking; applications must synchronize their own shared state.
 
 ### Auth security-contract ownership and policy models
 
@@ -79,13 +158,12 @@ let runtime = ClientRuntime::try_new(service_context, config, telemetry_handle)?
 
 ### Tokio client cached-session reconciliation
 
-`TransportClient::is_address_reachable` is retained as a deprecated
-compatibility facade, but it has never performed a DNS, socket, or network
-reachability probe. It only inspected the direct cached session and removed an
-unhealthy entry.
-
-Use `reconcile_cached_connection` when application logic needs the typed cache
-result:
+`TransportClient::is_address_reachable`, deprecated in 1.0.0, has been removed.
+Use `reconcile_cached_connection` for the same direct-cache inspection and
+unhealthy-entry cleanup, or `let _ = client.reconcile_cached_connection(&address);`
+when the result is not needed. Neither API performs a network reachability probe.
+The returned state lets callers reproduce the old facade's logging or decide
+whether to reconnect:
 
 ```rust,ignore
 use rocketmq_transport::api::CachedConnectionState;
@@ -105,25 +183,19 @@ Request processors are fixed when a client is built. Replace the deprecated
 Applications own the runtime and pass an `Arc<ClientRuntime>` to producers and
 consumers. Client APIs do not create hidden Tokio runtimes.
 
-### `RocketMQRuntime` legacy runtime boundary
+### Removed `RocketMQRuntime` API
 
-`RocketMQRuntime` remains a public, deprecated compatibility API throughout
-the 1.x line. This guide does not remove it, change any of its public methods,
-or announce a 2.0 release. Its removal is only intended for a future 2.0
-source-compatibility boundary, after downstream applications have migrated to
-the explicit ownership and shutdown APIs below. Any future removal remains
-subject to the full release cycle, a 2.0 breaking window, and an exact,
-reviewed post-freeze repository-owner approval record for every affected frozen
-public item (package, profile, item path, and change kind). This change creates
-no approval record and does not authorize a removal.
+`RocketMQRuntime` and its root and `compat` re-exports have been removed.
+This is a source compatibility break: downstream applications
+must migrate to the explicit ownership and shutdown APIs below before upgrading.
 
-| Legacy 1.x API | Migration target | Required ownership or policy decision |
+| Removed API or usage | Migration target | Required ownership or policy decision |
 |---|---|---|
 | `RocketMQRuntime::new_multi(threads, name)` | `RuntimeOwner::plan(RuntimeConfig { .. })?.build()?` | Put the worker count and thread name in `RuntimeConfig`; validate the plan before building the owner and propagate its typed results instead of relying on an infallible constructor. |
 | `get_handle()` | `RuntimeOwner::root_context().component(...)` or a child derived from `RuntimeContext` | Pass `ChildServiceContext` (or a narrower capability) to a library. Do not replace this call with a raw Tokio handle. |
 | `get_runtime()` | `RuntimeOwner::block_on(...)` at an owned synchronous entrypoint, or context-owned task operations | Keep the Tokio runtime private to its owner. Libraries receive a context and use its task group, blocking lanes, and diagnostics rather than a raw runtime reference. |
-| `schedule_at_fixed_rate(task, initial_delay, period)` (`Fn`) | `ScheduledTaskGroup::schedule_fixed_rate_no_overlap` | Set `config.initial_delay = initial_delay.unwrap_or(Duration::ZERO)`. The legacy callback was serial, so preserve that non-overlap policy explicitly; a tick is skipped while an async run is active. Choose `schedule_fixed_rate` only when overlapping runs are intentional and reentrant. |
-| `schedule_at_fixed_rate_mut(task, initial_delay, period)` (`FnMut`) | `ScheduledTaskGroup::schedule_fixed_delay` | Set `config.initial_delay = initial_delay.unwrap_or(Duration::ZERO)`. This accepts mutable callback state while keeping runs serial. If fixed-rate cadence is required, make the callback state safe for the chosen explicit no-overlap or allow-overlap policy. |
+| `schedule_at_fixed_rate(task, initial_delay, period)` (`Fn`) | `ScheduledTaskGroup::schedule` with `ScheduledTaskConfig::fixed_rate_no_overlap` and `ScheduledExecutionPolicy::default()` | Pass `initial_delay.unwrap_or(Duration::ZERO)` to `with_initial_delay`. The legacy callback was serial, so keep the non-overlap policy; a tick is skipped while a run is active. Use `ScheduledTaskConfig::fixed_rate` with `ScheduledExecutionPolicy::bounded(n, ..)` only when overlapping runs are intentional and reentrant. |
+| `schedule_at_fixed_rate_mut(task, initial_delay, period)` (`FnMut`) | `ScheduledTaskGroup::schedule` with `ScheduledTaskConfig::fixed_delay` and `ScheduledExecutionPolicy::default()` | Pass `initial_delay.unwrap_or(Duration::ZERO)` to `with_initial_delay`. The task is an `FnMut`, so it can keep mutable state while runs stay serial. |
 | `shutdown()` | `RuntimeOwner::shutdown_background(self)` | Cancels tracked RocketMQ work, returns an immediate `ShutdownReport`, and asks Tokio to finish runtime shutdown in the background. |
 | `shutdown_timeout(timeout)` at a synchronous runtime-owning boundary | `RuntimeOwner::shutdown_runtime_blocking_with_timeout(timeout)?` | Shuts down tracked work and then the owned Tokio runtime within the timeout. It returns a catalog-backed runtime failure with the `Unavailable` condition when called from Tokio. |
 | async shutdown that must retain the host Tokio runtime | `RuntimeOwner::shutdown_tasks().await` or `RuntimeContext::shutdown_tasks(timeout).await` | Shuts down only tracked RocketMQ work and returns `ShutdownReport`; it does not close the owned or host Tokio runtime. |
@@ -156,22 +228,18 @@ contracts, normal outcomes, and catalog-backed operational failures. It is an
 `approved-break`: callers must not retain the former runtime, metadata, budget,
 queue, or scheduler error enums as compatibility shims.
 
-Use `RuntimeOwner::plan(config)?.build()?` and the corresponding
-`FuturesExecutorPlan`, `TokioExecutorServicePlan`, and
-`ScheduledExecutorServicePlan` build steps for process-owned executors. Build a
+Use `RuntimeOwner::plan(config)?.build()?` for a process-owned runtime. Build a
 `MetadataIoPlan` from `MetadataIoConfig::into_plan()?` and start it with the
 owned child service context. Configuration and invariant failures return
 `RuntimeContractViolation` with the closed `RuntimeContractPolicy` identifier;
 callers cannot supply arbitrary policy text.
 
-Budget exhaustion, queue admission, scheduler start/control/execution, trigger
-validation, and scheduled-task registration are normal typed outcomes
-(`BudgetRejection`, `QueuePushOutcome`, `SchedulerStartOutcome`,
-`ScheduleRegistrationOutcome`, `ScheduleControlOutcome`,
-`ScheduleExecutionOutcome`, and `ScheduledTaskRegistrationOutcome`). Match
-those outcomes directly. Reserve `RuntimeError` for catalog-backed operational
-failure, preserving its closed operation and typed source rather than parsing a
-rendered message.
+Budget exhaustion, queue admission and scheduled-task registration are normal
+typed outcomes (`BudgetRejection`, `QueueEnqueueStatus` and
+`ScheduledTaskRegistrationStatus`). Match those outcomes directly. Reserve
+`RuntimeError` for catalog-backed operational failure, preserving its closed
+operation and typed source rather than parsing a rendered message; branch on
+`RuntimeError::kind()` rather than inferring the reason from `operation()`.
 
 Dynamic budget closure is a distinct normal outcome. `BudgetRejection::reason()`
 returns `BudgetRejectionReason::Capacity(dimension)` or `Closed`, and
@@ -189,15 +257,12 @@ both the driver and any run it owns.
 ```rust,ignore
 use std::time::Duration;
 
-use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::{ScheduledExecutionPolicy, ScheduledTaskConfig};
 
 let scheduled = service.scheduled_tasks("consumer-maintenance");
-let mut config = ScheduledTaskConfig::fixed_rate_no_overlap(
-    "consumer-maintenance.refresh",
-    period,
-);
-config.initial_delay = initial_delay.unwrap_or(Duration::ZERO);
-scheduled.schedule_fixed_rate_no_overlap(config, || async {
+let config = ScheduledTaskConfig::fixed_rate_no_overlap("consumer-maintenance.refresh", period)
+    .with_initial_delay(initial_delay.unwrap_or(Duration::ZERO));
+scheduled.schedule(config, ScheduledExecutionPolicy::default(), || async {
     refresh_routes().await;
 })?;
 ```
@@ -207,12 +272,9 @@ overlap policy has been deliberately designed and documented:
 
 ```rust,ignore
 let mut generation = 0_u64;
-let mut config = ScheduledTaskConfig::fixed_delay(
-    "consumer-maintenance.persist",
-    period,
-);
-config.initial_delay = initial_delay.unwrap_or(Duration::ZERO);
-scheduled.schedule_fixed_delay(config, move || {
+let config = ScheduledTaskConfig::fixed_delay("consumer-maintenance.persist", period)
+    .with_initial_delay(initial_delay.unwrap_or(Duration::ZERO));
+scheduled.schedule(config, ScheduledExecutionPolicy::default(), move || {
     generation += 1;
     async move {
         persist_generation(generation).await;
@@ -230,6 +292,79 @@ only; the latter returns a typed error if invoked from inside Tokio.
 let report = owner.shutdown_runtime_blocking_with_timeout(timeout)?;
 report.assert_no_task_leak().map_err(|message| anyhow::anyhow!(message))?;
 ```
+
+### Runtime convergence
+
+The runtime keeps one owner model: `RuntimeOwner`, `ChildServiceContext`,
+`TaskGroup`, `ScheduledTaskGroup` and `ServiceManager`. The executor services
+and their plans, the `schedule` module (`TaskScheduler`, `TaskExecutor`,
+triggers and their outcomes), `ScheduledTaskManager`, `ActorRuntime`, the
+`compat` module, `tokio_lock`, `Shutdown`, `common::util_all`,
+`common::thread`, `common::future`, `DetachedTaskPolicy` and the legacy
+`ServiceManager` constructors were removed. This is an `approved-break`. The
+[runtime migration notes](../../../../rocketmq-runtime/MIGRATION.md#runtime-convergence)
+map each removed API to its replacement and list the changed contracts,
+including `/drainz` accepting only `POST` by default, `TaskId` recording its
+group and `RuntimeError::kind()`.
+
+### Metadata write persistence status
+
+`MetadataIoCommitOutcome` is now `MetadataWritePersistenceStatus`. This is an
+`approved-break`: external callers must update imports and type references to
+`rocketmq_runtime::MetadataWritePersistenceStatus`. No compatibility alias or
+wrapper is provided. The variants (`Durable`, `FailedBeforeCommit`, and
+`CommitOutcomeUnknown`) and their payloads are unchanged. Receipt completion,
+generation ordering, and reconciliation behavior are unchanged;
+`MetadataIoCommitObservation::Unobserved` still allows accepted work to complete
+later and is not a definite persistence failure
+([#11088](https://github.com/mxsm/rocketmq-rust/issues/11088)).
+### Scheduled-task registration status
+
+`ScheduledTaskRegistrationOutcome` is now `ScheduledTaskRegistrationStatus`.
+This is an `approved-break`: external callers must update imports and type
+references to `rocketmq_runtime::ScheduledTaskRegistrationStatus`. No
+compatibility alias or wrapper is provided. `Scheduled(TaskId)` still identifies
+the newly started schedule driver; `AlreadyPresent` leaves the existing
+registration, driver, and metrics unchanged. Registration failures still use
+`RuntimeResult`, and scheduling behavior is unchanged
+([#11089](https://github.com/mxsm/rocketmq-rust/issues/11089)).
+
+### Permit transfer status
+
+`PermitRebindOutcome` is now `PermitBudgetTransferStatus`, because the type
+reports a permit moving its reservations from a source budget to a target
+budget in the same tree. This is an `approved-break`: external callers must
+replace the old name in imports and type references, for example
+`rocketmq_runtime::PermitBudgetTransferStatus` or
+`rocketmq_runtime::resource_budget::PermitBudgetTransferStatus`. No alias or
+wrapper under the old name is provided. The `ResourcePermit::try_rebind` method
+and status variants (`Rebound`, `Unchanged`, `Rejected`) and their payloads are
+unchanged ([#11067](https://github.com/mxsm/rocketmq-rust/issues/11067)).
+
+### Mapped-file removal status
+
+`MappedFileDestroyOutcome` is now `MappedFileRemovalStatus`, because the type
+reports one attempt to remove a mapped-file path from the filesystem namespace,
+not a broader destroy. This is an `approved-break`: external callers must
+replace the old name in imports and type references, for example
+`rocketmq_store_local::mapped_file::MappedFileRemovalStatus`. No alias or
+wrapper under the old name is provided. `try_destroy`, the variants
+(`NamespaceRemoved`, `CleanupPending`, `DeleteFailed`) and their fields are
+unchanged, and `NamespaceRemoved` still does not claim the mapping or file
+owners have been dropped.
+
+### Credential change decision
+
+`CredentialAuditOutcome` is now `CredentialChangeDecision`, because the type
+records the decision about a credential-management change before any new state
+is published, not the result of the audit sink. The `Authorized` variant is now
+`Approved`; `Rejected` is unchanged. `CredentialAuditEvent::outcome()` is now
+`CredentialAuditEvent::decision()`. This is an `approved-break`: external
+callers must replace the old names in imports, type references, matches, and
+accessor calls, for example `rocketmq_auth::CredentialChangeDecision`. No alias
+or wrapper under the old names is provided. Audit actions, event fields other
+than the renamed one, and the audit-before-publication ordering are unchanged
+([#11117](https://github.com/mxsm/rocketmq-rust/issues/11117)).
 
 ### Typed filter compilation
 
@@ -368,9 +503,7 @@ return a complete immutable policy for the request lifetime.
 ## Feature-profile compatibility
 
 Validate the affected default, no-default, selected-feature, and combined-feature
-behavior using the owning crate's tests. The maintained `m09_compatibility_matrix.py`
-runner remains available for full release compatibility exercises across Protocol,
-Transport, Store, Admin, and Proxy; it is not a required snapshot refresh.
+behavior using the owning crate's tests.
 
 Notable 1.0 defaults include:
 

@@ -6,7 +6,7 @@ title: "从 Java RocketMQ 迁移"
 
 变更部署前，先确定迁移边界。替换应用客户端、引入 Rust Broker 集群、搬迁存储数据是不同操作。本文为已有 RocketMQ 工作负载提供实施流程，不宣称存在通用的 Java 进程或数据目录原地转换方案。
 
-当前能力清单以 Java RocketMQ 5.5.0 为比较基准，并列出明确排除项。结合实际版本和工作负载阅读[协议兼容性](../reference/protocol-compatibility.md)。基准声明不能证明所有 Java SDK 版本、Controller 配置或高级消息模式均可互换。
+1.0 核心范围以 Java RocketMQ 5.5.0 为比较基准，并列出明确排除项。结合实际版本和工作负载阅读[协议兼容性](../reference/protocol-compatibility.md)。基准声明不能证明所有 Java SDK 版本、Controller 配置或高级消息模式均可互换。
 
 ## 选择迁移路径
 
@@ -99,4 +99,4 @@ cargo run -p rocketmq-broker -- -c /path/to/broker.properties --config-format pr
 
 切换后保留正常运维记录：精确版本、所选 feature/模式、配置差异、测试场景、观察到的限制和未完成迁移工作的责任人，使后续故障可诊断，同时不宣称超出依据的兼容性。
 
-来源：[能力范围](https://github.com/mxsm/rocketmq-rust/blob/main/scripts/v1-capability-manifest.json)、[Broker 入口](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-broker/src/bin/broker_bootstrap_server.rs)、[客户端公共 API](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/public_api.rs)、[HA 契约](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-store-api/src/ha_contract.rs)。
+来源：[Broker 入口](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-broker/src/bin/broker_bootstrap_server.rs)、[客户端公共 API](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/public_api.rs)、[HA 契约](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-store-api/src/ha_contract.rs)。

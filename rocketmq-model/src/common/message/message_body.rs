@@ -137,3 +137,41 @@ impl From<&[u8]> for MessageBody {
         Self::new(Bytes::copy_from_slice(data))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_body_exposes_uncompressed_bytes() {
+        let raw = Bytes::from_static(b"message body");
+        let body = MessageBody::new(raw.clone());
+
+        assert_eq!(body.as_slice(), raw.as_ref());
+        assert!(!body.is_empty());
+        assert!(!body.is_compressed());
+        assert_eq!(body.compressed(), None);
+        assert_eq!(body.into_bytes(), raw);
+    }
+
+    #[test]
+    fn compressed_body_keeps_independent_buffers() {
+        let raw = Bytes::from_static(b"message body");
+        let compressed = Bytes::from_static(b"compressed");
+        let mut body = MessageBody::from_compressed(raw.clone(), compressed.clone());
+
+        assert_eq!(body.raw(), Some(&raw));
+        assert_eq!(body.compressed(), Some(&compressed));
+        assert_eq!(body.len(), raw.len());
+        assert!(body.is_compressed());
+
+        *body.raw_mut() = Some(Bytes::new());
+        assert_eq!(body.compressed(), Some(&compressed));
+        assert!(!body.is_empty());
+
+        *body.compressed_mut() = None;
+        assert_eq!(body.raw(), Some(&Bytes::new()));
+        assert!(body.is_empty());
+        assert!(MessageBody::empty().is_empty());
+    }
+}

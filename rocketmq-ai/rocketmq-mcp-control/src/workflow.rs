@@ -25,7 +25,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::audit::AuditContext;
 use crate::audit::AuditInvocation;
+use crate::audit::AuditOutcome;
 use crate::audit::AuditResult;
+use crate::audit::AuditSubject;
 use crate::audit::AuditTrail;
 use crate::error::ControlError;
 use crate::guard::AuthorizedMutation;
@@ -78,10 +80,12 @@ impl WorkflowEngine {
     /// Runs one already-authorized synthetic or future registered operation.
     ///
     /// The durable `started` record precedes session creation. Every acquired session is shut down exactly once.
+    /// `subject` names the object of the operation for its audit records.
     pub async fn execute(
         &self,
         authorized: &AuthorizedMutation,
         arguments: &MutationArguments,
+        subject: &AuditSubject,
         cancellation: &CancellationToken,
     ) -> Result<MutationResult, ControlError> {
         arguments.validate()?;
@@ -93,6 +97,7 @@ impl WorkflowEngine {
                 authorized.operation(),
                 authorized.cluster(),
                 arguments.dry_run,
+                subject,
             )
             .await?;
         let (sender, receiver) = oneshot::channel();
@@ -192,7 +197,8 @@ async fn persist_terminal(
         }
         Err(error) => (AuditResult::Failed, Some(error.code())),
     };
-    match AssertUnwindSafe(audit.terminal(invocation, audit_result, error_code))
+    // The generic steps report no per-target truth, so the record claims none.
+    match AssertUnwindSafe(audit.terminal(invocation, audit_result, error_code, &AuditOutcome::default()))
         .catch_unwind()
         .await
     {
@@ -527,7 +533,12 @@ mod tests {
             .clone();
         let engine = WorkflowEngine::new(AuditTrail::new(sink), factory, Duration::from_secs(1), owner);
         let error = engine
-            .execute(&authorized(), &arguments(false), &CancellationToken::new())
+            .execute(
+                &authorized(),
+                &arguments(false),
+                &AuditSubject::sample(ControlOperation::TopicUpsert),
+                &CancellationToken::new(),
+            )
             .await
             .unwrap_err();
         assert_eq!(error, ControlError::audit_unavailable());
@@ -544,7 +555,12 @@ mod tests {
     async fn synthetic_success_uses_one_session_and_ordered_audit() {
         let (engine, counters, sink, _) = engine(Behavior::Success, Duration::from_secs(1));
         let result = engine
-            .execute(&authorized(), &arguments(false), &CancellationToken::new())
+            .execute(
+                &authorized(),
+                &arguments(false),
+                &AuditSubject::sample(ControlOperation::TopicUpsert),
+                &CancellationToken::new(),
+            )
             .await
             .unwrap();
         assert_eq!(result.outcome, MutationOutcome::Completed);
@@ -566,7 +582,12 @@ mod tests {
     async fn dry_run_never_executes_or_verifies() {
         let (engine, counters, sink, _) = engine(Behavior::Success, Duration::from_secs(1));
         let result = engine
-            .execute(&authorized(), &arguments(true), &CancellationToken::new())
+            .execute(
+                &authorized(),
+                &arguments(true),
+                &AuditSubject::sample(ControlOperation::TopicUpsert),
+                &CancellationToken::new(),
+            )
             .await
             .unwrap();
         assert_eq!(result.outcome, MutationOutcome::DryRunCompleted);
@@ -586,7 +607,12 @@ mod tests {
         ] {
             let (engine, counters, sink, _) = engine(behavior, Duration::from_secs(1));
             let error = engine
-                .execute(&authorized(), &arguments(false), &CancellationToken::new())
+                .execute(
+                    &authorized(),
+                    &arguments(false),
+                    &AuditSubject::sample(ControlOperation::TopicUpsert),
+                    &CancellationToken::new(),
+                )
                 .await
                 .unwrap_err();
             assert_eq!(error.code(), expected);
@@ -601,7 +627,12 @@ mod tests {
     async fn timeout_and_cancellation_shutdown_exactly_once() {
         let (timeout_engine, timeout_counters, _, _) = engine(Behavior::Block, Duration::from_millis(10));
         let timeout_error = timeout_engine
-            .execute(&authorized(), &arguments(false), &CancellationToken::new())
+            .execute(
+                &authorized(),
+                &arguments(false),
+                &AuditSubject::sample(ControlOperation::TopicUpsert),
+                &CancellationToken::new(),
+            )
             .await
             .unwrap_err();
         assert_eq!(timeout_error.code(), ControlErrorCode::Timeout);
@@ -612,7 +643,12 @@ mod tests {
         let task_cancellation = cancellation.clone();
         let task = tokio::spawn(async move {
             cancel_engine
-                .execute(&authorized(), &arguments(false), &task_cancellation)
+                .execute(
+                    &authorized(),
+                    &arguments(false),
+                    &AuditSubject::sample(ControlOperation::TopicUpsert),
+                    &task_cancellation,
+                )
                 .await
         });
         tokio::time::timeout(Duration::from_secs(1), async {
@@ -656,7 +692,16 @@ mod tests {
             let task_cancellation = cancellation.clone();
             let task = tokio::spawn({
                 let cluster = cluster.clone();
-                async move { engine.execute(&cluster, &arguments(false), &task_cancellation).await }
+                async move {
+                    engine
+                        .execute(
+                            &cluster,
+                            &arguments(false),
+                            &AuditSubject::sample(ControlOperation::TopicUpsert),
+                            &task_cancellation,
+                        )
+                        .await
+                }
             });
             wait_for(&counters.opens, 1).await;
             if owner_cancel {
@@ -688,7 +733,12 @@ mod tests {
         ] {
             let (engine, counters, sink, _) = engine(behavior, Duration::from_secs(1));
             let error = engine
-                .execute(&authorized(), &arguments(false), &CancellationToken::new())
+                .execute(
+                    &authorized(),
+                    &arguments(false),
+                    &AuditSubject::sample(ControlOperation::TopicUpsert),
+                    &CancellationToken::new(),
+                )
                 .await
                 .unwrap_err();
             assert_eq!(error.code(), ControlErrorCode::ExecutionFailed);
@@ -710,7 +760,12 @@ mod tests {
         for behavior in [Behavior::ShutdownHang, Behavior::ShutdownFail, Behavior::PanicShutdown] {
             let (engine, counters, sink, _) = engine(behavior, Duration::from_secs(10));
             let error = engine
-                .execute(&authorized(), &arguments(false), &CancellationToken::new())
+                .execute(
+                    &authorized(),
+                    &arguments(false),
+                    &AuditSubject::sample(ControlOperation::TopicUpsert),
+                    &CancellationToken::new(),
+                )
                 .await
                 .unwrap_err();
             assert_eq!(error.code(), ControlErrorCode::ShutdownFailed);
@@ -730,7 +785,12 @@ mod tests {
             let engine = engine.clone();
             async move {
                 engine
-                    .execute(&authorized(), &arguments(false), &CancellationToken::new())
+                    .execute(
+                        &authorized(),
+                        &arguments(false),
+                        &AuditSubject::sample(ControlOperation::TopicUpsert),
+                        &CancellationToken::new(),
+                    )
                     .await
             }
         });
@@ -754,7 +814,12 @@ mod tests {
         let (engine, counters, sink, _) = engine(Behavior::Block, Duration::from_millis(25));
         let outer = tokio::time::timeout(
             Duration::from_millis(5),
-            engine.execute(&authorized(), &arguments(false), &CancellationToken::new()),
+            engine.execute(
+                &authorized(),
+                &arguments(false),
+                &AuditSubject::sample(ControlOperation::TopicUpsert),
+                &CancellationToken::new(),
+            ),
         )
         .await;
         assert!(outer.is_err());
@@ -788,7 +853,12 @@ mod tests {
             .clone();
         let engine = WorkflowEngine::new(AuditTrail::new(sink.clone()), factory, Duration::from_secs(1), owner);
         let error = engine
-            .execute(&authorized(), &arguments(false), &CancellationToken::new())
+            .execute(
+                &authorized(),
+                &arguments(false),
+                &AuditSubject::sample(ControlOperation::TopicUpsert),
+                &CancellationToken::new(),
+            )
             .await
             .unwrap_err();
         assert_eq!(error, ControlError::audit_unavailable());
@@ -812,7 +882,12 @@ mod tests {
             .clone();
         let engine = WorkflowEngine::new(AuditTrail::new(sink.clone()), factory, Duration::from_secs(1), owner);
         let error = engine
-            .execute(&authorized(), &arguments(false), &CancellationToken::new())
+            .execute(
+                &authorized(),
+                &arguments(false),
+                &AuditSubject::sample(ControlOperation::TopicUpsert),
+                &CancellationToken::new(),
+            )
             .await
             .unwrap_err();
         assert_eq!(error, ControlError::audit_unavailable());
@@ -846,7 +921,12 @@ mod tests {
             let engine = engine.clone();
             async move {
                 engine
-                    .execute(&authorized(), &arguments(false), &CancellationToken::new())
+                    .execute(
+                        &authorized(),
+                        &arguments(false),
+                        &AuditSubject::sample(ControlOperation::TopicUpsert),
+                        &CancellationToken::new(),
+                    )
                     .await
             }
         });
@@ -860,7 +940,12 @@ mod tests {
         assert!(audit.records().await.is_err());
         assert_eq!(
             engine
-                .execute(&authorized(), &arguments(false), &CancellationToken::new())
+                .execute(
+                    &authorized(),
+                    &arguments(false),
+                    &AuditSubject::sample(ControlOperation::TopicUpsert),
+                    &CancellationToken::new()
+                )
                 .await
                 .unwrap_err()
                 .code(),

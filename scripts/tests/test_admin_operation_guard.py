@@ -27,8 +27,6 @@ GUARD = ROOT / "scripts" / "admin_operation_guard.py"
 MATRIX = ROOT / "scripts" / "admin-operation-matrix.json"
 JAVA_INVENTORY = ROOT / "scripts" / "fixtures" / "java-5.5-core-inventory.json"
 OPERATION_MAP = ROOT / "rocketmq-doc" / "en" / "admin" / "java-55-operation-map.md"
-CAPABILITY_MANIFEST = ROOT / "scripts" / "v1-capability-manifest.json"
-FUNCTIONAL_MATRIX = ROOT / "scripts" / "v1-functional-test-matrix.json"
 GOLDENS = ROOT / "scripts" / "fixtures" / "admin-java-55" / "operation-goldens.json"
 GENERATOR = ROOT / "scripts" / "generate_admin_operation_goldens.py"
 
@@ -171,57 +169,6 @@ class AdminOperationGuardTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("code=golden-scenario-id-duplicate", result.stdout)
 
-    def test_g05_capability_route_runs_the_structural_guard(self) -> None:
-        manifest = json.loads(CAPABILITY_MANIFEST.read_text(encoding="utf-8"))
-        capability = next(item for item in manifest["capabilities"] if item["capability_id"] == "G-05")
-        self.assertEqual(
-            capability["test_ids"],
-            [
-                "G05-ADMIN-OPERATION-GOLDEN-CORE",
-                "G05-ADMIN-OPERATION-EXIT-CODES",
-                "G05-ADMIN-OPERATION-GUARD",
-            ],
-        )
-        self.assertEqual(
-            capability["commands"],
-            [
-                "cargo test -p rocketmq-admin-core --test java_operation_golden",
-                "cargo test -p rocketmq-admin-cli --test operation_exit_codes",
-                "python scripts/admin_operation_guard.py --require-complete",
-            ],
-        )
-        self.assertIn("scripts/admin-operation-matrix.json", capability["rust_surfaces"])
-        self.assertIn("scripts/fixtures/admin-java-55/operation-goldens.json", capability["rust_surfaces"])
-        self.assertIn("rocketmq-doc/en/admin/java-55-operation-map.md", capability["rust_surfaces"])
-        self.assertEqual(
-            capability["artifacts"],
-            [
-                {
-                    "path": "scripts/v1-capability-freeze.json",
-                    "run_id": "phase6-freeze-2026-08-16",
-                }
-            ],
-        )
-
-        routes = json.loads(FUNCTIONAL_MATRIX.read_text(encoding="utf-8"))
-        g05_routes = [item for item in routes["capability_routes"] if item["capability_id"] == "G-05"]
-        self.assertEqual(
-            [(route["test_id"], route["argv"]) for route in g05_routes],
-            [
-                (
-                    "G05-ADMIN-OPERATION-GOLDEN-CORE",
-                    ["cargo", "test", "-p", "rocketmq-admin-core", "--test", "java_operation_golden"],
-                ),
-                (
-                    "G05-ADMIN-OPERATION-EXIT-CODES",
-                    ["cargo", "test", "-p", "rocketmq-admin-cli", "--test", "operation_exit_codes"],
-                ),
-                (
-                    "G05-ADMIN-OPERATION-GUARD",
-                    ["python", "scripts/admin_operation_guard.py", "--require-complete"],
-                ),
-            ],
-        )
 
 if __name__ == "__main__":
     unittest.main()

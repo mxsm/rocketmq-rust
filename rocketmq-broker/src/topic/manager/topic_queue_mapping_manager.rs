@@ -37,7 +37,7 @@ use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
-use rocketmq_runtime::MetadataIoAdmissionOutcome;
+use rocketmq_runtime::MetadataWriteSubmissionStatus;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -92,8 +92,8 @@ impl TopicQueueMappingManager {
             content.into_bytes(),
             MetadataDeadline::after(Duration::from_secs(5)),
         ) {
-            Ok(MetadataIoAdmissionOutcome::Accepted(_)) => {}
-            Ok(MetadataIoAdmissionOutcome::TargetConflict(_request)) => {
+            Ok(MetadataWriteSubmissionStatus::Accepted(_)) => {}
+            Ok(MetadataWriteSubmissionStatus::TargetConflict(_request)) => {
                 warn!(
                     operation,
                     "Metadata target conflict rejected topic queue mapping snapshot"

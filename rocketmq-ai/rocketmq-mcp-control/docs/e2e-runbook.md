@@ -1,8 +1,8 @@
 # RocketMQ MCP Control real-cluster E2E runbook
 
-This runbook operates the checked-in ignored real-cluster test. It validates the five reviewed
-Control MCP mutations against an ephemeral local Rust NameServer and Broker. It is not a production
-deployment procedure and it does not add a delete MCP Tool.
+This runbook operates the checked-in ignored real-cluster test. It validates five of the nine reviewed
+Control MCP mutations against an ephemeral local Rust NameServer and Broker; [Not covered](#not-covered)
+names the other four. It is not a production deployment procedure and it does not add a delete MCP Tool.
 
 ## Preconditions
 
@@ -40,7 +40,7 @@ ignored test with `--test-threads=1`. The test remains ignored unless the runner
 
 The harness starts and owns an isolated Rust NameServer and Broker on dynamically reserved loopback ports. It
 then starts the real TLS Streamable HTTP Control MCP server with the real Admin mutation factory and a
-test-only RS256/JWK identity seam. It exercises all five reviewed tools over TLS MCP:
+test-only RS256/JWK identity seam. It exercises five reviewed tools over TLS MCP:
 
 1. Topic upsert: dry-run, execute, and idempotent execution.
 2. Consumer Group upsert: dry-run, execute, and idempotent execution.
@@ -50,11 +50,30 @@ test-only RS256/JWK identity seam. It exercises all five reviewed tools over TLS
 5. Consumer request mode: baseline dry-run/execute, changed dry-run/execute, idempotent execution, and exact
    baseline restoration.
 
-The scenario makes 22 authenticated TLS MCP calls and verifies 44 durable
-`rocketmq-mcp-control.audit.v2` records: one `started` and one terminal record per call. It checks closed
+The scenario makes 22 authenticated TLS MCP mutation calls and verifies 44 durable
+`rocketmq-mcp-control.audit.v3` records: one `started` and one terminal record per call. It checks closed
 operation, mode, result/error-code relationship, safe cluster/operator/reason evidence, sequence ordering, and
 terminal duration. It also exercises a Broker outage and restart, a Control restart with audit recovery, and a
 post-restart successful dry-run.
+
+It also calls `rocketmq_get_mutation_result` four times: for the Topic execution by its `invocation_id` and by
+its request key, for a key that was never sent, and for the Topic execution again after the Control restart.
+These lookups are not among the 22 calls, so the 44-record check fails if a lookup writes an audit record.
+
+## Not covered
+
+The harness does not call `rocketmq_begin_proxy_drain`, `rocketmq_cancel_proxy_drain`,
+`rocketmq_set_broker_log_filter_ttl`, or `rocketmq_restore_broker_log_filter`. It starts no Proxy, and its
+NameServer and Broker run without authentication, while a Proxy answers drain requests only for an
+authenticated principal and a Broker applies a remote log filter only with authentication, authorization, and
+`[logging.reload] enabled = true`. Its Control configuration allows only the five operations listed above, so
+`tools/list` shows exactly those five mutation tools.
+
+Unit tests cover the four tools against a fake Proxy and Broker that follow the real begin, cancel, set, and
+restore rules, and the protocol acceptance matrix runs them through the MCP transport. No test in this
+repository runs them against a real Proxy or Broker. Before you allowlist one of the four operations in a
+deployment, run the begin and cancel pair and the set and restore pair once as dry runs and once as executions
+against a non-production target, following the operations runbook.
 
 ## State restoration and failure handling
 

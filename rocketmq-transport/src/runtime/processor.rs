@@ -17,13 +17,13 @@
 use std::time::Duration;
 
 use crate::dispatch::DeferredTerminalReason;
-use crate::dispatch::HandlerOutcome;
 use crate::dispatch::IngressRequestView;
 use crate::dispatch::RemotingRequest;
 use crate::dispatch::RemotingResponse;
 use crate::dispatch::RequestId;
+use crate::dispatch::ResponseAction;
 use crate::dispatch::ResponseBodyKind;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseOperationalFailure;
 use crate::dispatch::ResponseReceipt;
 use crate::dispatch::WriteProgress;
@@ -77,9 +77,9 @@ pub enum ResponseObservationMode {
 
 /// One typed response lifecycle event.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum ResponseObservationOutcome {
+pub enum ResponseLifecycleEvent {
     /// The canonical response owner reached its transport disposition.
-    Written(ResponseReceipt),
+    DeliveryCompleted(ResponseReceipt),
     /// The immutable ingress request was one-way.
     Oneway,
     /// Protocol policy explicitly permits no response.
@@ -89,7 +89,7 @@ pub enum ResponseObservationOutcome {
     /// Response processing or delivery failed with redacted metadata.
     Failed {
         /// Source-free completion state when the failure was a normal rejection.
-        completion: Option<ResponseCompletionOutcome>,
+        completion: Option<ResponseCompletionResult>,
         /// Socket-write progress, when known.
         progress: Option<WriteProgress>,
     },
@@ -103,7 +103,7 @@ pub struct ResponseMetadata {
     response_code: Option<i32>,
     body_kind: Option<ResponseBodyKind>,
     mode: ResponseObservationMode,
-    outcome: ResponseObservationOutcome,
+    event: ResponseLifecycleEvent,
 }
 
 impl ResponseMetadata {
@@ -113,7 +113,7 @@ impl ResponseMetadata {
         response_code: Option<i32>,
         body_kind: Option<ResponseBodyKind>,
         mode: ResponseObservationMode,
-        outcome: ResponseObservationOutcome,
+        event: ResponseLifecycleEvent,
     ) -> Self {
         Self {
             request_id,
@@ -121,7 +121,7 @@ impl ResponseMetadata {
             response_code,
             body_kind,
             mode,
-            outcome,
+            event,
         }
     }
 
@@ -155,10 +155,10 @@ impl ResponseMetadata {
         self.mode
     }
 
-    /// Returns the typed response lifecycle outcome.
+    /// Returns the typed response lifecycle event.
     #[must_use]
-    pub const fn outcome(self) -> ResponseObservationOutcome {
-        self.outcome
+    pub const fn event(self) -> ResponseLifecycleEvent {
+        self.event
     }
 }
 
@@ -211,14 +211,14 @@ impl ResponseObservation {
             ResponseObservationMode::Deferred => ResponseWritePath::Deferred,
             ResponseObservationMode::NoResponse => return None,
         };
-        let outcome = match self.metadata.outcome {
-            ResponseObservationOutcome::Written(receipt) => ResponseWriteOutcome::Written(receipt),
-            ResponseObservationOutcome::Failed { completion, progress } => {
-                ResponseWriteOutcome::Failed { completion, progress }
+        let event = match self.metadata.event {
+            ResponseLifecycleEvent::DeliveryCompleted(receipt) => ResponseDeliveryEvent::DeliveryCompleted(receipt),
+            ResponseLifecycleEvent::Failed { completion, progress } => {
+                ResponseDeliveryEvent::Failed { completion, progress }
             }
-            ResponseObservationOutcome::Oneway
-            | ResponseObservationOutcome::ProtocolNoResponse
-            | ResponseObservationOutcome::Cancelled(_) => return None,
+            ResponseLifecycleEvent::Oneway
+            | ResponseLifecycleEvent::ProtocolNoResponse
+            | ResponseLifecycleEvent::Cancelled(_) => return None,
         };
         Some(ResponseWriteObservation {
             request_id: self.metadata.request_id,
@@ -228,7 +228,7 @@ impl ResponseObservation {
             path,
             write_elapsed: self.write_elapsed.unwrap_or(Duration::ZERO),
             end_to_end_elapsed: self.end_to_end_elapsed,
-            outcome,
+            event,
         })
     }
 
@@ -240,19 +240,19 @@ impl ResponseObservation {
         path: ResponseWritePath,
         write_elapsed: Duration,
         end_to_end_elapsed: Duration,
-        result: &Result<ResponseCompletionOutcome, ResponseOperationalFailure>,
+        result: &Result<ResponseCompletionResult, ResponseOperationalFailure>,
     ) -> Self {
         let mode = match path {
             ResponseWritePath::Inline => ResponseObservationMode::Inline,
             ResponseWritePath::Deferred => ResponseObservationMode::Deferred,
         };
-        let outcome = match result {
-            Ok(ResponseCompletionOutcome::Completed(receipt)) => ResponseObservationOutcome::Written(*receipt),
-            Ok(outcome) => ResponseObservationOutcome::Failed {
+        let event = match result {
+            Ok(ResponseCompletionResult::Completed(receipt)) => ResponseLifecycleEvent::DeliveryCompleted(*receipt),
+            Ok(outcome) => ResponseLifecycleEvent::Failed {
                 completion: Some(*outcome),
                 progress: response_completion_progress(*outcome),
             },
-            Err(error) => ResponseObservationOutcome::Failed {
+            Err(error) => ResponseLifecycleEvent::Failed {
                 completion: None,
                 progress: Some(error.write_progress()),
             },
@@ -264,7 +264,7 @@ impl ResponseObservation {
                 Some(response_code),
                 Some(body_kind),
                 mode,
-                outcome,
+                event,
             ),
             Some(write_elapsed),
             end_to_end_elapsed,
@@ -272,29 +272,29 @@ impl ResponseObservation {
     }
 }
 
-/// Typed result recorded at the canonical response-write boundary.
+/// Body-free event recorded at the canonical response-delivery boundary.
 ///
 /// Failure values retain only a stable error category and optional write
 /// progress. Source errors and their messages are discarded before an
 /// observation is created.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum ResponseWriteOutcome {
+pub enum ResponseDeliveryEvent {
     /// The canonical response path reached its transport-specific disposition.
-    Written(ResponseReceipt),
+    DeliveryCompleted(ResponseReceipt),
     /// Response delivery failed with stable, body-free metadata.
     Failed {
         /// Source-free completion state when the failure was a normal rejection.
-        completion: Option<ResponseCompletionOutcome>,
+        completion: Option<ResponseCompletionResult>,
         /// Socket-write progress, when the failure describes a write attempt.
         progress: Option<WriteProgress>,
     },
 }
 
-impl ResponseWriteOutcome {
+impl ResponseDeliveryEvent {
     #[cfg(test)]
-    fn from_result(result: Result<ResponseCompletionOutcome, ResponseOperationalFailure>) -> Self {
+    fn from_result(result: Result<ResponseCompletionResult, ResponseOperationalFailure>) -> Self {
         match result {
-            Ok(ResponseCompletionOutcome::Completed(receipt)) => Self::Written(receipt),
+            Ok(ResponseCompletionResult::Completed(receipt)) => Self::DeliveryCompleted(receipt),
             Ok(outcome) => Self::Failed {
                 completion: Some(outcome),
                 progress: response_completion_progress(outcome),
@@ -307,13 +307,13 @@ impl ResponseWriteOutcome {
     }
 }
 
-const fn response_completion_progress(outcome: ResponseCompletionOutcome) -> Option<WriteProgress> {
+const fn response_completion_progress(outcome: ResponseCompletionResult) -> Option<WriteProgress> {
     match outcome {
-        ResponseCompletionOutcome::Completed(_) | ResponseCompletionOutcome::AlreadyCompleted(_) => None,
-        ResponseCompletionOutcome::DeadlineExpired
-        | ResponseCompletionOutcome::Cancelled
-        | ResponseCompletionOutcome::SessionClosed
-        | ResponseCompletionOutcome::QueueSaturated => Some(WriteProgress::NotStarted),
+        ResponseCompletionResult::Completed(_) | ResponseCompletionResult::AlreadyCompleted(_) => None,
+        ResponseCompletionResult::DeadlineExpired
+        | ResponseCompletionResult::Cancelled
+        | ResponseCompletionResult::SessionClosed
+        | ResponseCompletionResult::QueueSaturated => Some(WriteProgress::NotStarted),
     }
 }
 
@@ -333,16 +333,16 @@ const fn response_completion_progress(outcome: ResponseCompletionOutcome) -> Opt
 ///
 /// ```compile_fail
 /// use rocketmq_transport::api::{
-///    RequestId, ResponseBodyKind, ResponseWriteObservation, ResponseWriteOutcome,
+///     RequestId, ResponseBodyKind, ResponseDeliveryEvent, ResponseWriteObservation,
 ///     ResponseWritePath,
 /// };
 /// use std::time::Duration;
 ///
 /// fn observations_cannot_be_forged(
 ///     request_id: RequestId,
-///    outcome: ResponseWriteOutcome,
+///     event: ResponseDeliveryEvent,
 /// ) -> ResponseWriteObservation {
-///    ResponseWriteObservation {
+///     ResponseWriteObservation {
 ///         request_id,
 ///         original_code: 39,
 ///         response_code: 0,
@@ -350,7 +350,7 @@ const fn response_completion_progress(outcome: ResponseCompletionOutcome) -> Opt
 ///         path: ResponseWritePath::Inline,
 ///         write_elapsed: Duration::ZERO,
 ///         end_to_end_elapsed: Duration::ZERO,
-///         outcome,
+///         event,
 ///     }
 /// }
 /// ```
@@ -363,7 +363,7 @@ pub struct ResponseWriteObservation {
     path: ResponseWritePath,
     write_elapsed: Duration,
     end_to_end_elapsed: Duration,
-    outcome: ResponseWriteOutcome,
+    event: ResponseDeliveryEvent,
 }
 
 impl ResponseWriteObservation {
@@ -376,7 +376,7 @@ impl ResponseWriteObservation {
         path: ResponseWritePath,
         write_elapsed: Duration,
         end_to_end_elapsed: Duration,
-        result: Result<ResponseCompletionOutcome, ResponseOperationalFailure>,
+        result: Result<ResponseCompletionResult, ResponseOperationalFailure>,
     ) -> Self {
         Self {
             request_id,
@@ -386,7 +386,7 @@ impl ResponseWriteObservation {
             path,
             write_elapsed,
             end_to_end_elapsed,
-            outcome: ResponseWriteOutcome::from_result(result),
+            event: ResponseDeliveryEvent::from_result(result),
         }
     }
 
@@ -432,10 +432,10 @@ impl ResponseWriteObservation {
         self.end_to_end_elapsed
     }
 
-    /// Returns the typed, body-free response-write result.
+    /// Returns the typed, body-free response-delivery event.
     #[must_use]
-    pub const fn outcome(&self) -> ResponseWriteOutcome {
-        self.outcome
+    pub const fn event(&self) -> ResponseDeliveryEvent {
+        self.event
     }
 }
 
@@ -452,7 +452,7 @@ const fn default_request_ordering() -> RequestOrdering {
 ///
 /// ```
 /// use rocketmq_transport::api::{
-///    HandlerOutcome, LocalRequestProcessor, RemotingRequest,
+///    ResponseAction, LocalRequestProcessor, RemotingRequest,
 /// };
 ///
 /// struct Processor;
@@ -461,7 +461,7 @@ const fn default_request_ordering() -> RequestOrdering {
 ///     async fn process(
 ///         &mut self,
 ///         _request: &mut RemotingRequest,
-///     ) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+///     ) -> Result<ResponseAction, rocketmq_error::SharedError> {
 ///         Err(std::sync::Arc::new(
 ///             rocketmq_error::Error::new(&rocketmq_error::CORE_ARGUMENT_INVALID).with_context(
 ///                 rocketmq_error::ErrorContext::new()
@@ -476,7 +476,7 @@ const fn default_request_ordering() -> RequestOrdering {
 /// use std::rc::Rc;
 ///
 /// use rocketmq_transport::api::{
-///    HandlerOutcome, RemotingRequest, RequestProcessor,
+///    ResponseAction, RemotingRequest, RequestProcessor,
 /// };
 ///
 /// struct NonSendFutureProcessor;
@@ -485,7 +485,7 @@ const fn default_request_ordering() -> RequestOrdering {
 ///     async fn process(
 ///         &mut self,
 ///         _request: &mut RemotingRequest,
-///     ) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+///     ) -> Result<ResponseAction, rocketmq_error::SharedError> {
 ///         let local = Rc::new(());
 ///         std::future::ready(()).await;
 ///         drop(local);
@@ -503,13 +503,13 @@ pub trait LocalRequestProcessor {
     /// Asynchronously processes one owned mutable request aggregate.
     ///
     /// This method does not block the calling thread. The returned
-    /// [`HandlerOutcome`] is the only handler response contract.
+    /// [`ResponseAction`] is the only handler response contract.
     ///
     /// # Errors
     ///
     /// Returns [`rocketmq_error::SharedError`] when request processing
     /// cannot produce a terminal handler outcome.
-    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError>;
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError>;
 
     /// Decides whether a raw request code should enter processor execution.
     ///
@@ -547,7 +547,7 @@ mod tests {
         async fn process(
             &mut self,
             _request: &mut RemotingRequest,
-        ) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+        ) -> Result<ResponseAction, rocketmq_error::SharedError> {
             let local = Rc::new(());
             std::future::ready(()).await;
             drop(local);
@@ -574,7 +574,7 @@ mod tests {
             ResponseWritePath::Inline,
             Duration::from_millis(2),
             Duration::from_millis(5),
-            &Ok(ResponseCompletionOutcome::Completed(ResponseReceipt::new(
+            &Ok(ResponseCompletionResult::Completed(ResponseReceipt::new(
                 request_id,
                 ResponseDisposition::TransportWritten,
             ))),
@@ -618,7 +618,7 @@ mod tests {
             ResponseWritePath::Deferred,
             Duration::from_millis(3),
             Duration::from_millis(8),
-            Ok(ResponseCompletionOutcome::Completed(receipt)),
+            Ok(ResponseCompletionResult::Completed(receipt)),
         );
 
         assert_eq!(observation.request_id(), request_id);
@@ -628,7 +628,7 @@ mod tests {
         assert_eq!(observation.path(), ResponseWritePath::Deferred);
         assert_eq!(observation.write_elapsed(), Duration::from_millis(3));
         assert_eq!(observation.end_to_end_elapsed(), Duration::from_millis(8));
-        assert_eq!(observation.outcome(), ResponseWriteOutcome::Written(receipt));
+        assert_eq!(observation.event(), ResponseDeliveryEvent::DeliveryCompleted(receipt));
     }
 
     #[test]
@@ -651,8 +651,8 @@ mod tests {
             }),
         );
         assert_eq!(
-            observation.outcome(),
-            ResponseWriteOutcome::Failed {
+            observation.event(),
+            ResponseDeliveryEvent::Failed {
                 completion: None,
                 progress: Some(WriteProgress::PossiblyPartial),
             }
@@ -667,14 +667,14 @@ mod tests {
             ResponseWritePath::Inline,
             Duration::ZERO,
             Duration::ZERO,
-            Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            Ok(ResponseCompletionResult::AlreadyCompleted(
                 ResponseTerminalState::Completed,
             )),
         );
         assert_eq!(
-            already_completed.outcome(),
-            ResponseWriteOutcome::Failed {
-                completion: Some(ResponseCompletionOutcome::AlreadyCompleted(
+            already_completed.event(),
+            ResponseDeliveryEvent::Failed {
+                completion: Some(ResponseCompletionResult::AlreadyCompleted(
                     ResponseTerminalState::Completed,
                 )),
                 progress: None,

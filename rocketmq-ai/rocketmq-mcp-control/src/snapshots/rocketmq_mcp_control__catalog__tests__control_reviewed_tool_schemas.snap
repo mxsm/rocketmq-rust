@@ -6,7 +6,7 @@ expression: catalog.list_tools().tools
   {
     "name": "rocketmq_upsert_topic",
     "title": "Upsert RocketMQ topic",
-    "description": "Dry-run or conditionally replace a complete Topic configuration on selected cluster masters.",
+    "description": "Dry-run or conditionally replace a complete Topic configuration on selected cluster masters. After an execution, a read through the RocketMQ query MCP server can still return the earlier state for a few seconds.",
     "inputSchema": {
       "$defs": {
         "TopicMessageType": {
@@ -24,6 +24,7 @@ expression: catalog.list_tools().tools
       "additionalProperties": false,
       "properties": {
         "broker_names": {
+          "description": "Logical names of the master Brokers to change, 1 to 64 distinct names; never addresses. Each must belong to the selected cluster.",
           "items": {
             "maxLength": 127,
             "minLength": 1,
@@ -35,6 +36,7 @@ expression: catalog.list_tools().tools
           "type": "array"
         },
         "cluster": {
+          "description": "Logical cluster name from the server configuration, never a NameServer or Broker address. Both the caller and the server policy must allow it.",
           "maxLength": 64,
           "minLength": 1,
           "pattern": "^[a-zA-Z0-9_-]+$",
@@ -42,25 +44,42 @@ expression: catalog.list_tools().tools
         },
         "confirm": {
           "default": false,
+          "description": "Explicit confirmation. Must be true to execute, that is when `dry_run` is false; a dry run does not need it.",
           "type": "boolean"
         },
         "dry_run": {
           "default": true,
+          "description": "Plan only: read the current state and report what would change, without writing. When omitted, the server's configured default applies, which is a dry run unless the operator changed it.",
           "type": "boolean"
         },
+        "expected_plan_digest": {
+          "default": null,
+          "description": "Digest of the plan to execute: the `plan_digest` that a dry run with the same arguments returned. With it, the server writes only if the plan it reads now is that one, and otherwise ends the call with `precondition_conflict`. A dry run ignores it; the server policy can require it to execute.",
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "message_type": {
-          "$ref": "#/$defs/TopicMessageType"
+          "$ref": "#/$defs/TopicMessageType",
+          "description": "Message type of the Topic."
         },
         "order": {
+          "description": "Whether the Topic is ordered. This Tool never edits the cluster's order configuration, which must already agree with the value.",
           "type": "boolean"
         },
         "perm": {
+          "description": "Permission bits: 2 allows writing, 4 allows reading, 6 allows both, and 1 marks the permission as inherited. At least one of reading or writing must be allowed.",
           "format": "uint32",
           "maximum": 7,
           "minimum": 1,
           "type": "integer"
         },
         "read_queue_nums": {
+          "description": "Number of read queues on each Broker, 1 to 127.",
           "format": "uint32",
           "maximum": 127,
           "minimum": 1,
@@ -68,6 +87,7 @@ expression: catalog.list_tools().tools
         },
         "reason": {
           "default": null,
+          "description": "Why the change is made; kept only in the durable audit log. Required to execute. 5 to 256 characters of letters, digits, spaces and `._,#-`, without addresses, host names or tokens.",
           "maxLength": 256,
           "minLength": 5,
           "type": [
@@ -77,6 +97,7 @@ expression: catalog.list_tools().tools
         },
         "request_key": {
           "default": null,
+          "description": "Optional idempotency key of 8 to 64 letters, digits and `._:-`. An execute call that repeats a key with the same arguments returns the outcome already recorded for it instead of writing again; the same key with different arguments is rejected.",
           "maxLength": 64,
           "minLength": 8,
           "pattern": "^[a-zA-Z0-9._:-]+$",
@@ -86,16 +107,19 @@ expression: catalog.list_tools().tools
           ]
         },
         "schema_version": {
+          "description": "Version of this argument schema. Always `rocketmq-mcp-control.arguments.v1`.",
           "pattern": "^rocketmq-mcp-control\\.arguments\\.v1$",
           "type": "string"
         },
         "topic": {
+          "description": "Topic to create or replace: letters, digits, `%`, `|`, `_` and `-`, at most 127 characters. System Topics, retry Topics and dead-letter Topics are rejected.",
           "maxLength": 127,
           "minLength": 1,
           "pattern": "^[%|a-zA-Z0-9_-]+$",
           "type": "string"
         },
         "write_queue_nums": {
+          "description": "Number of write queues on each Broker, 1 to 127.",
           "format": "uint32",
           "maximum": 127,
           "minimum": 1,
@@ -127,6 +151,7 @@ expression: catalog.list_tools().tools
             "operation_not_allowed",
             "mutation_disabled",
             "operation_unavailable",
+            "rate_limited",
             "confirmation_required",
             "invalid_argument",
             "audit_unavailable",
@@ -286,24 +311,29 @@ expression: catalog.list_tools().tools
           "additionalProperties": false,
           "properties": {
             "message_type": {
-              "$ref": "#/$defs/TopicMessageType"
+              "$ref": "#/$defs/TopicMessageType",
+              "description": "Message type of the Topic."
             },
             "order": {
+              "description": "Whether the Topic is ordered. This Tool never edits the cluster's order configuration, which must already agree with the value.",
               "type": "boolean"
             },
             "perm": {
+              "description": "Permission bits: 2 allows writing, 4 allows reading, 6 allows both, and 1 marks the permission as inherited. At least one of reading or writing must be allowed.",
               "format": "uint32",
               "maximum": 7,
               "minimum": 1,
               "type": "integer"
             },
             "read_queue_nums": {
+              "description": "Number of read queues on each Broker, 1 to 127.",
               "format": "uint32",
               "maximum": 127,
               "minimum": 1,
               "type": "integer"
             },
             "write_queue_nums": {
+              "description": "Number of write queues on each Broker, 1 to 127.",
               "format": "uint32",
               "maximum": 127,
               "minimum": 1,
@@ -410,11 +440,25 @@ expression: catalog.list_tools().tools
             }
           ]
         },
+        "invocation_id": {
+          "description": "Identifies this call in the durable audit log. Pass it to rocketmq_get_mutation_result to read how the call ended.",
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
         "mode": {
           "$ref": "#/$defs/MutationMode"
         },
         "operation": {
           "$ref": "#/$defs/TopicUpsertOperation"
+        },
+        "plan_digest": {
+          "description": "Digest of the plan that a dry run reports: what was asked of which target, the state that was read, and what each target would get. Pass it as expected_plan_digest to execute this plan and no other. Null in the response of an execution.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "requested": {
           "$ref": "#/$defs/TopicReplacement"
@@ -453,7 +497,9 @@ expression: catalog.list_tools().tools
         "requested",
         "after",
         "targets",
-        "warnings"
+        "warnings",
+        "invocation_id",
+        "plan_digest"
       ],
       "type": "object"
     },
@@ -468,17 +514,19 @@ expression: catalog.list_tools().tools
   {
     "name": "rocketmq_upsert_consumer_group",
     "title": "Upsert RocketMQ consumer group",
-    "description": "Dry-run or conditionally replace a complete Consumer Group configuration on selected cluster masters.",
+    "description": "Dry-run or conditionally replace a complete Consumer Group configuration on selected cluster masters. After an execution, a read through the RocketMQ query MCP server can still return the earlier state for a few seconds.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "broker_id": {
+          "description": "Id of the Broker the group normally consumes from; 0 is the master.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
         },
         "broker_names": {
+          "description": "Logical names of the master Brokers to change, 1 to 64 distinct names; never addresses. Each must belong to the selected cluster.",
           "items": {
             "maxLength": 127,
             "minLength": 1,
@@ -490,6 +538,7 @@ expression: catalog.list_tools().tools
           "type": "array"
         },
         "cluster": {
+          "description": "Logical cluster name from the server configuration, never a NameServer or Broker address. Both the caller and the server policy must allow it.",
           "maxLength": 64,
           "minLength": 1,
           "pattern": "^[a-zA-Z0-9_-]+$",
@@ -497,27 +546,34 @@ expression: catalog.list_tools().tools
         },
         "confirm": {
           "default": false,
+          "description": "Explicit confirmation. Must be true to execute, that is when `dry_run` is false; a dry run does not need it.",
           "type": "boolean"
         },
         "consume_broadcast_enable": {
+          "description": "Whether the group may consume in broadcast mode.",
           "type": "boolean"
         },
         "consume_enable": {
+          "description": "Whether the group may consume messages.",
           "type": "boolean"
         },
         "consume_from_min_enable": {
+          "description": "Whether the group may start consuming from the minimum offset of a queue.",
           "type": "boolean"
         },
         "consume_message_orderly": {
+          "description": "Whether the group consumes messages in order.",
           "type": "boolean"
         },
         "consume_timeout_minute": {
+          "description": "Minutes after which an unacknowledged message counts as timed out, 1 to 10080.",
           "format": "int32",
           "maximum": 10080,
           "minimum": 1,
           "type": "integer"
         },
         "consumer_group": {
+          "description": "Consumer Group to create or replace: letters, digits, `%`, `|`, `_` and `-`, at most 255 characters. RocketMQ's built-in system groups are rejected.",
           "maxLength": 255,
           "minLength": 1,
           "pattern": "^[%|a-zA-Z0-9_-]+$",
@@ -525,17 +581,32 @@ expression: catalog.list_tools().tools
         },
         "dry_run": {
           "default": true,
+          "description": "Plan only: read the current state and report what would change, without writing. When omitted, the server's configured default applies, which is a dry run unless the operator changed it.",
           "type": "boolean"
         },
+        "expected_plan_digest": {
+          "default": null,
+          "description": "Digest of the plan to execute: the `plan_digest` that a dry run with the same arguments returned. With it, the server writes only if the plan it reads now is that one, and otherwise ends the call with `precondition_conflict`. A dry run ignores it; the server policy can require it to execute.",
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "group_sys_flag": {
+          "description": "System flag bits of the group; 0 for an ordinary group.",
           "format": "int32",
           "type": "integer"
         },
         "notify_consumer_ids_changed_enable": {
+          "description": "Whether consumers are notified when the membership of the group changes.",
           "type": "boolean"
         },
         "reason": {
           "default": null,
+          "description": "Why the change is made; kept only in the durable audit log. Required to execute. 5 to 256 characters of letters, digits, spaces and `._,#-`, without addresses, host names or tokens.",
           "maxLength": 256,
           "minLength": 5,
           "type": [
@@ -545,6 +616,7 @@ expression: catalog.list_tools().tools
         },
         "request_key": {
           "default": null,
+          "description": "Optional idempotency key of 8 to 64 letters, digits and `._:-`. An execute call that repeats a key with the same arguments returns the outcome already recorded for it instead of writing again; the same key with different arguments is rejected.",
           "maxLength": 64,
           "minLength": 8,
           "pattern": "^[a-zA-Z0-9._:-]+$",
@@ -554,22 +626,26 @@ expression: catalog.list_tools().tools
           ]
         },
         "retry_max_times": {
+          "description": "Maximum number of redeliveries of a message, -1 to 10000.",
           "format": "int32",
           "maximum": 10000,
           "minimum": -1,
           "type": "integer"
         },
         "retry_queue_nums": {
+          "description": "Number of retry queues, 0 to 127.",
           "format": "int32",
           "maximum": 127,
           "minimum": 0,
           "type": "integer"
         },
         "schema_version": {
+          "description": "Version of this argument schema. Always `rocketmq-mcp-control.arguments.v1`.",
           "pattern": "^rocketmq-mcp-control\\.arguments\\.v1$",
           "type": "string"
         },
         "which_broker_when_consume_slowly": {
+          "description": "Id of the Broker that consumers are redirected to when consuming from the master is slow.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -619,48 +695,59 @@ expression: catalog.list_tools().tools
           "additionalProperties": false,
           "properties": {
             "broker_id": {
+              "description": "Id of the Broker the group normally consumes from; 0 is the master.",
               "format": "uint64",
               "minimum": 0,
               "type": "integer"
             },
             "consume_broadcast_enable": {
+              "description": "Whether the group may consume in broadcast mode.",
               "type": "boolean"
             },
             "consume_enable": {
+              "description": "Whether the group may consume messages.",
               "type": "boolean"
             },
             "consume_from_min_enable": {
+              "description": "Whether the group may start consuming from the minimum offset of a queue.",
               "type": "boolean"
             },
             "consume_message_orderly": {
+              "description": "Whether the group consumes messages in order.",
               "type": "boolean"
             },
             "consume_timeout_minute": {
+              "description": "Minutes after which an unacknowledged message counts as timed out, 1 to 10080.",
               "format": "int32",
               "maximum": 10080,
               "minimum": 1,
               "type": "integer"
             },
             "group_sys_flag": {
+              "description": "System flag bits of the group; 0 for an ordinary group.",
               "format": "int32",
               "type": "integer"
             },
             "notify_consumer_ids_changed_enable": {
+              "description": "Whether consumers are notified when the membership of the group changes.",
               "type": "boolean"
             },
             "retry_max_times": {
+              "description": "Maximum number of redeliveries of a message, -1 to 10000.",
               "format": "int32",
               "maximum": 10000,
               "minimum": -1,
               "type": "integer"
             },
             "retry_queue_nums": {
+              "description": "Number of retry queues, 0 to 127.",
               "format": "int32",
               "maximum": 127,
               "minimum": 0,
               "type": "integer"
             },
             "which_broker_when_consume_slowly": {
+              "description": "Id of the Broker that consumers are redirected to when consuming from the master is slow.",
               "format": "uint64",
               "minimum": 0,
               "type": "integer"
@@ -695,6 +782,7 @@ expression: catalog.list_tools().tools
             "operation_not_allowed",
             "mutation_disabled",
             "operation_unavailable",
+            "rate_limited",
             "confirmation_required",
             "invalid_argument",
             "audit_unavailable",
@@ -908,11 +996,25 @@ expression: catalog.list_tools().tools
             }
           ]
         },
+        "invocation_id": {
+          "description": "Identifies this call in the durable audit log. Pass it to rocketmq_get_mutation_result to read how the call ended.",
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
         "mode": {
           "$ref": "#/$defs/MutationMode"
         },
         "operation": {
           "$ref": "#/$defs/ConsumerGroupUpsertOperation"
+        },
+        "plan_digest": {
+          "description": "Digest of the plan that a dry run reports: what was asked of which target, the state that was read, and what each target would get. Pass it as expected_plan_digest to execute this plan and no other. Null in the response of an execution.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "requested": {
           "$ref": "#/$defs/ConsumerGroupReplacement"
@@ -951,7 +1053,9 @@ expression: catalog.list_tools().tools
         "requested",
         "after",
         "targets",
-        "warnings"
+        "warnings",
+        "invocation_id",
+        "plan_digest"
       ],
       "type": "object"
     },
@@ -966,12 +1070,13 @@ expression: catalog.list_tools().tools
   {
     "name": "rocketmq_reset_consumer_offset",
     "title": "Reset RocketMQ consumer offset",
-    "description": "Dry-run or conditionally reset exact consumer queue offsets from a sealed RFC3339 preview.",
+    "description": "Dry-run or conditionally reset exact consumer queue offsets from a sealed RFC3339 preview. After an execution, a read through the RocketMQ query MCP server can still return the earlier state for a few seconds.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name from the server configuration, never a NameServer or Broker address. Both the caller and the server policy must allow it.",
           "maxLength": 64,
           "minLength": 1,
           "pattern": "^[a-zA-Z0-9_-]+$",
@@ -979,9 +1084,11 @@ expression: catalog.list_tools().tools
         },
         "confirm": {
           "default": false,
+          "description": "Explicit confirmation. Must be true to execute, that is when `dry_run` is false; a dry run does not need it.",
           "type": "boolean"
         },
         "consumer_group": {
+          "description": "Consumer Group whose offsets are reset. Built-in system groups are rejected.",
           "maxLength": 255,
           "minLength": 1,
           "pattern": "^[%|a-zA-Z0-9_-]+$",
@@ -989,14 +1096,28 @@ expression: catalog.list_tools().tools
         },
         "dry_run": {
           "default": true,
+          "description": "Plan only: read the current state and report what would change, without writing. When omitted, the server's configured default applies, which is a dry run unless the operator changed it.",
           "type": "boolean"
+        },
+        "expected_plan_digest": {
+          "default": null,
+          "description": "Digest of the plan to execute: the `plan_digest` that a dry run with the same arguments returned. With it, the server writes only if the plan it reads now is that one, and otherwise ends the call with `precondition_conflict`. A dry run ignores it; the server policy can require it to execute.",
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "force": {
           "default": false,
+          "description": "Whether an offset may move forward. When false, a queue whose reset would advance its offset, or that has no offset yet, is left unchanged.",
           "type": "boolean"
         },
         "reason": {
           "default": null,
+          "description": "Why the change is made; kept only in the durable audit log. Required to execute. 5 to 256 characters of letters, digits, spaces and `._,#-`, without addresses, host names or tokens.",
           "maxLength": 256,
           "minLength": 5,
           "type": [
@@ -1006,6 +1127,7 @@ expression: catalog.list_tools().tools
         },
         "request_key": {
           "default": null,
+          "description": "Optional idempotency key of 8 to 64 letters, digits and `._:-`. An execute call that repeats a key with the same arguments returns the outcome already recorded for it instead of writing again; the same key with different arguments is rejected.",
           "maxLength": 64,
           "minLength": 8,
           "pattern": "^[a-zA-Z0-9._:-]+$",
@@ -1015,15 +1137,18 @@ expression: catalog.list_tools().tools
           ]
         },
         "schema_version": {
+          "description": "Version of this argument schema. Always `rocketmq-mcp-control.arguments.v1`.",
           "pattern": "^rocketmq-mcp-control\\.arguments\\.v1$",
           "type": "string"
         },
         "timestamp": {
+          "description": "Time to reset to, in RFC 3339 with a time zone, for example `2026-08-30T08:00:00+08:00`. Each queue is planned at the offset stored for that time.",
           "maxLength": 40,
           "minLength": 20,
           "type": "string"
         },
         "topic": {
+          "description": "Topic whose consumer offsets are reset. System Topics are rejected.",
           "maxLength": 127,
           "minLength": 1,
           "pattern": "^[%|a-zA-Z0-9_-]+$",
@@ -1055,6 +1180,7 @@ expression: catalog.list_tools().tools
             "operation_not_allowed",
             "mutation_disabled",
             "operation_unavailable",
+            "rate_limited",
             "confirmation_required",
             "invalid_argument",
             "audit_unavailable",
@@ -1297,11 +1423,25 @@ expression: catalog.list_tools().tools
             }
           ]
         },
+        "invocation_id": {
+          "description": "Identifies this call in the durable audit log. Pass it to rocketmq_get_mutation_result to read how the call ended.",
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
         "mode": {
           "$ref": "#/$defs/MutationMode"
         },
         "operation": {
           "$ref": "#/$defs/ConsumerOffsetResetOperation"
+        },
+        "plan_digest": {
+          "description": "Digest of the plan that a dry run reports: what was asked of which target, the state that was read, and what each target would get. Pass it as expected_plan_digest to execute this plan and no other. Null in the response of an execution.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "requested": {
           "$ref": "#/$defs/OffsetRequested"
@@ -1340,7 +1480,9 @@ expression: catalog.list_tools().tools
         "requested",
         "after",
         "targets",
-        "warnings"
+        "warnings",
+        "invocation_id",
+        "plan_digest"
       ],
       "type": "object"
     },
@@ -1355,7 +1497,7 @@ expression: catalog.list_tools().tools
   {
     "name": "rocketmq_patch_broker_config",
     "title": "Patch RocketMQ Broker configuration",
-    "description": "Dry-run or generation-conditionally patch six allowlisted settings on one logical Broker.",
+    "description": "Dry-run or generation-conditionally patch six allowlisted settings on one logical Broker. After an execution, a read through the RocketMQ query MCP server can still return the earlier state for a few seconds.",
     "inputSchema": {
       "$defs": {
         "BrokerConfigProperties": {
@@ -1363,26 +1505,32 @@ expression: catalog.list_tools().tools
           "properties": {
             "autoCreateSubscriptionGroup": {
               "default": null,
+              "description": "`true` or `false`: whether the Broker creates a missing Consumer Group on first use.",
               "type": "string"
             },
             "autoCreateTopicEnable": {
               "default": null,
+              "description": "`true` or `false`: whether the Broker creates a missing Topic on first use.",
               "type": "string"
             },
             "brokerPermission": {
               "default": null,
+              "description": "Permission bits as a decimal string from `1` to `7`: 2 allows writing, 4 allows reading, 6 allows both. At least one of reading or writing must be allowed.",
               "type": "string"
             },
             "defaultTopicQueueNums": {
               "default": null,
+              "description": "Queue count of automatically created Topics, as a decimal string from `1` to `128`.",
               "type": "string"
             },
             "messageIndexEnable": {
               "default": null,
+              "description": "`true` or `false`: whether the Broker builds the message index.",
               "type": "string"
             },
             "traceTopicEnable": {
               "default": null,
+              "description": "`true` or `false`: whether the Broker hosts the system message-trace Topic.",
               "type": "string"
             }
           },
@@ -1393,12 +1541,14 @@ expression: catalog.list_tools().tools
       "additionalProperties": false,
       "properties": {
         "broker_name": {
+          "description": "Logical name of the one Broker to patch; never an address.",
           "maxLength": 127,
           "minLength": 1,
           "pattern": "^[%|a-zA-Z0-9_-]+$",
           "type": "string"
         },
         "cluster": {
+          "description": "Logical cluster name from the server configuration, never a NameServer or Broker address. Both the caller and the server policy must allow it.",
           "maxLength": 64,
           "minLength": 1,
           "pattern": "^[a-zA-Z0-9_-]+$",
@@ -1406,17 +1556,32 @@ expression: catalog.list_tools().tools
         },
         "confirm": {
           "default": false,
+          "description": "Explicit confirmation. Must be true to execute, that is when `dry_run` is false; a dry run does not need it.",
           "type": "boolean"
         },
         "dry_run": {
           "default": true,
+          "description": "Plan only: read the current state and report what would change, without writing. When omitted, the server's configured default applies, which is a dry run unless the operator changed it.",
           "type": "boolean"
         },
+        "expected_plan_digest": {
+          "default": null,
+          "description": "Digest of the plan to execute: the `plan_digest` that a dry run with the same arguments returned. With it, the server writes only if the plan it reads now is that one, and otherwise ends the call with `precondition_conflict`. A dry run ignores it; the server policy can require it to execute.",
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "properties": {
-          "$ref": "#/$defs/BrokerConfigProperties"
+          "$ref": "#/$defs/BrokerConfigProperties",
+          "description": "Settings to change, at least one. Each value is a string, and a setting left out keeps its current value."
         },
         "reason": {
           "default": null,
+          "description": "Why the change is made; kept only in the durable audit log. Required to execute. 5 to 256 characters of letters, digits, spaces and `._,#-`, without addresses, host names or tokens.",
           "maxLength": 256,
           "minLength": 5,
           "type": [
@@ -1426,6 +1591,7 @@ expression: catalog.list_tools().tools
         },
         "request_key": {
           "default": null,
+          "description": "Optional idempotency key of 8 to 64 letters, digits and `._:-`. An execute call that repeats a key with the same arguments returns the outcome already recorded for it instead of writing again; the same key with different arguments is rejected.",
           "maxLength": 64,
           "minLength": 8,
           "pattern": "^[a-zA-Z0-9._:-]+$",
@@ -1435,6 +1601,7 @@ expression: catalog.list_tools().tools
           ]
         },
         "schema_version": {
+          "description": "Version of this argument schema. Always `rocketmq-mcp-control.arguments.v1`.",
           "pattern": "^rocketmq-mcp-control\\.arguments\\.v1$",
           "type": "string"
         }
@@ -1632,6 +1799,7 @@ expression: catalog.list_tools().tools
             "operation_not_allowed",
             "mutation_disabled",
             "operation_unavailable",
+            "rate_limited",
             "confirmation_required",
             "invalid_argument",
             "audit_unavailable",
@@ -1730,11 +1898,25 @@ expression: catalog.list_tools().tools
             }
           ]
         },
+        "invocation_id": {
+          "description": "Identifies this call in the durable audit log. Pass it to rocketmq_get_mutation_result to read how the call ended.",
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
         "mode": {
           "$ref": "#/$defs/MutationMode"
         },
         "operation": {
           "$ref": "#/$defs/BrokerConfigPatchOperation"
+        },
+        "plan_digest": {
+          "description": "Digest of the plan that a dry run reports: what was asked of which target, the state that was read, and what each target would get. Pass it as expected_plan_digest to execute this plan and no other. Null in the response of an execution.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "requested": {
           "$ref": "#/$defs/BrokerConfigPatch"
@@ -1773,7 +1955,9 @@ expression: catalog.list_tools().tools
         "requested",
         "after",
         "targets",
-        "warnings"
+        "warnings",
+        "invocation_id",
+        "plan_digest"
       ],
       "type": "object"
     },
@@ -1788,7 +1972,7 @@ expression: catalog.list_tools().tools
   {
     "name": "rocketmq_set_consumer_request_mode",
     "title": "Set RocketMQ consumer request mode",
-    "description": "Dry-run or conditionally set pull/pop request mode on validated cluster masters.",
+    "description": "Dry-run or conditionally set pull/pop request mode on validated cluster masters. After an execution, a read through the RocketMQ query MCP server can still return the earlier state for a few seconds.",
     "inputSchema": {
       "$defs": {
         "ConsumerRequestMode": {
@@ -1803,6 +1987,7 @@ expression: catalog.list_tools().tools
       "additionalProperties": false,
       "properties": {
         "cluster": {
+          "description": "Logical cluster name from the server configuration, never a NameServer or Broker address. Both the caller and the server policy must allow it.",
           "maxLength": 64,
           "minLength": 1,
           "pattern": "^[a-zA-Z0-9_-]+$",
@@ -1810,9 +1995,11 @@ expression: catalog.list_tools().tools
         },
         "confirm": {
           "default": false,
+          "description": "Explicit confirmation. Must be true to execute, that is when `dry_run` is false; a dry run does not need it.",
           "type": "boolean"
         },
         "consumer_group": {
+          "description": "Consumer Group that the request mode applies to. Built-in system groups are rejected.",
           "maxLength": 255,
           "minLength": 1,
           "pattern": "^[%|a-zA-Z0-9_-]+$",
@@ -1820,18 +2007,33 @@ expression: catalog.list_tools().tools
         },
         "dry_run": {
           "default": true,
+          "description": "Plan only: read the current state and report what would change, without writing. When omitted, the server's configured default applies, which is a dry run unless the operator changed it.",
           "type": "boolean"
         },
+        "expected_plan_digest": {
+          "default": null,
+          "description": "Digest of the plan to execute: the `plan_digest` that a dry run with the same arguments returned. With it, the server writes only if the plan it reads now is that one, and otherwise ends the call with `precondition_conflict`. A dry run ignores it; the server policy can require it to execute.",
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "mode": {
-          "$ref": "#/$defs/ConsumerRequestMode"
+          "$ref": "#/$defs/ConsumerRequestMode",
+          "description": "How the group fetches messages of the Topic: `pull` or `pop`."
         },
         "pop_share_queue_num": {
+          "description": "Number of queues that pop consumers share, 0 or more.",
           "format": "int32",
           "minimum": 0,
           "type": "integer"
         },
         "reason": {
           "default": null,
+          "description": "Why the change is made; kept only in the durable audit log. Required to execute. 5 to 256 characters of letters, digits, spaces and `._,#-`, without addresses, host names or tokens.",
           "maxLength": 256,
           "minLength": 5,
           "type": [
@@ -1841,6 +2043,7 @@ expression: catalog.list_tools().tools
         },
         "request_key": {
           "default": null,
+          "description": "Optional idempotency key of 8 to 64 letters, digits and `._:-`. An execute call that repeats a key with the same arguments returns the outcome already recorded for it instead of writing again; the same key with different arguments is rejected.",
           "maxLength": 64,
           "minLength": 8,
           "pattern": "^[a-zA-Z0-9._:-]+$",
@@ -1850,16 +2053,19 @@ expression: catalog.list_tools().tools
           ]
         },
         "schema_version": {
+          "description": "Version of this argument schema. Always `rocketmq-mcp-control.arguments.v1`.",
           "pattern": "^rocketmq-mcp-control\\.arguments\\.v1$",
           "type": "string"
         },
         "timeout_millis": {
+          "description": "Timeout of the change request sent to each Broker, 1 to 24000 milliseconds.",
           "format": "uint64",
           "maximum": 24000,
           "minimum": 1,
           "type": "integer"
         },
         "topic": {
+          "description": "Topic that the request mode applies to. System Topics are rejected.",
           "maxLength": 127,
           "minLength": 1,
           "pattern": "^[%|a-zA-Z0-9_-]+$",
@@ -1900,6 +2106,7 @@ expression: catalog.list_tools().tools
             "operation_not_allowed",
             "mutation_disabled",
             "operation_unavailable",
+            "rate_limited",
             "confirmation_required",
             "invalid_argument",
             "audit_unavailable",
@@ -2145,11 +2352,25 @@ expression: catalog.list_tools().tools
             }
           ]
         },
+        "invocation_id": {
+          "description": "Identifies this call in the durable audit log. Pass it to rocketmq_get_mutation_result to read how the call ended.",
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
         "mode": {
           "$ref": "#/$defs/MutationMode"
         },
         "operation": {
           "$ref": "#/$defs/ConsumerRequestModeOperation"
+        },
+        "plan_digest": {
+          "description": "Digest of the plan that a dry run reports: what was asked of which target, the state that was read, and what each target would get. Pass it as expected_plan_digest to execute this plan and no other. Null in the response of an execution.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "requested": {
           "$ref": "#/$defs/RequestModeRequested"
@@ -2188,7 +2409,9 @@ expression: catalog.list_tools().tools
         "requested",
         "after",
         "targets",
-        "warnings"
+        "warnings",
+        "invocation_id",
+        "plan_digest"
       ],
       "type": "object"
     },
@@ -2198,6 +2421,2299 @@ expression: catalog.list_tools().tools
       "destructiveHint": true,
       "idempotentHint": true,
       "openWorldHint": true
+    }
+  },
+  {
+    "name": "rocketmq_begin_proxy_drain",
+    "title": "Begin RocketMQ Proxy drain",
+    "description": "Dry-run or begin a drain of one configured Proxy: it stops admitting new work so that it can be restarted once nothing is pending. The drain lasts until rocketmq_cancel_proxy_drain is called with the same operation_id. After an execution, a read through the RocketMQ query MCP server can still return the earlier state for a few seconds.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "cluster": {
+          "description": "Logical cluster name from the server configuration, never a NameServer or Broker address. Both the caller and the server policy must allow it.",
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "type": "string"
+        },
+        "confirm": {
+          "default": false,
+          "description": "Explicit confirmation. Must be true to execute, that is when `dry_run` is false; a dry run does not need it.",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "default": true,
+          "description": "Plan only: read the current state and report what would change, without writing. When omitted, the server's configured default applies, which is a dry run unless the operator changed it.",
+          "type": "boolean"
+        },
+        "expected_plan_digest": {
+          "default": null,
+          "description": "Digest of the plan to execute: the `plan_digest` that a dry run with the same arguments returned. With it, the server writes only if the plan it reads now is that one, and otherwise ends the call with `precondition_conflict`. A dry run ignores it; the server policy can require it to execute.",
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation_id": {
+          "description": "Identifier of the drain: 8 to 64 letters, digits, `_` and `-`. The call that begins a drain chooses it and the Proxy keeps it while it drains; a call that cancels the drain must pass the same one.",
+          "maxLength": 64,
+          "minLength": 8,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "type": "string"
+        },
+        "proxy_name": {
+          "description": "Alias of the Proxy as the server configuration names it for this cluster; never an address.",
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "type": "string"
+        },
+        "reason": {
+          "default": null,
+          "description": "Why the change is made; kept only in the durable audit log. Required to execute. 5 to 256 characters of letters, digits, spaces and `._,#-`, without addresses, host names or tokens.",
+          "maxLength": 256,
+          "minLength": 5,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_key": {
+          "default": null,
+          "description": "Optional idempotency key of 8 to 64 letters, digits and `._:-`. An execute call that repeats a key with the same arguments returns the outcome already recorded for it instead of writing again; the same key with different arguments is rejected.",
+          "maxLength": 64,
+          "minLength": 8,
+          "pattern": "^[a-zA-Z0-9._:-]+$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema_version": {
+          "description": "Version of this argument schema. Always `rocketmq-mcp-control.arguments.v1`.",
+          "pattern": "^rocketmq-mcp-control\\.arguments\\.v1$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "cluster",
+        "proxy_name",
+        "operation_id"
+      ],
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "ControlErrorCode": {
+          "enum": [
+            "invalid_config",
+            "request_rejected",
+            "unauthorized",
+            "permission_denied",
+            "cluster_not_allowed",
+            "operation_not_allowed",
+            "mutation_disabled",
+            "operation_unavailable",
+            "rate_limited",
+            "confirmation_required",
+            "invalid_argument",
+            "audit_unavailable",
+            "precondition_conflict",
+            "partial_apply",
+            "verification_failed",
+            "timeout",
+            "cancelled",
+            "execution_failed",
+            "shutdown_failed"
+          ],
+          "type": "string"
+        },
+        "FailureCode": {
+          "enum": [
+            "conflict",
+            "invalid_data",
+            "unavailable",
+            "persistence_failed",
+            "verification_failed",
+            "order_reconciliation_failed"
+          ],
+          "type": "string"
+        },
+        "MutationMode": {
+          "enum": [
+            "dry_run",
+            "execute"
+          ],
+          "type": "string"
+        },
+        "MutationResultSchemaVersion": {
+          "const": "rocketmq-mcp-mutation.v1",
+          "type": "string"
+        },
+        "MutationStatus": {
+          "enum": [
+            "planned",
+            "applied",
+            "partial",
+            "conflict",
+            "failed"
+          ],
+          "type": "string"
+        },
+        "OperationHolder": {
+          "description": "Which operation holds a target, told without its identifier.\n\nThe identifier of an operation that another call started is that caller's text, so a response never repeats it.",
+          "oneOf": [
+            {
+              "const": "none",
+              "description": "No operation holds the target.",
+              "type": "string"
+            },
+            {
+              "const": "this_operation",
+              "description": "The operation that this call names by its `operation_id`.",
+              "type": "string"
+            },
+            {
+              "const": "other_operation",
+              "description": "An operation with another identifier.",
+              "type": "string"
+            }
+          ]
+        },
+        "ProxyDrainAction": {
+          "enum": [
+            "begin",
+            "cancel"
+          ],
+          "type": "string"
+        },
+        "ProxyDrainOperation": {
+          "const": "proxy_drain_begin",
+          "type": "string"
+        },
+        "ProxyDrainPending": {
+          "additionalProperties": false,
+          "description": "Work that a Proxy still holds; every member is zero once it is drained.",
+          "properties": {
+            "active_connections": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "prepared_transactions": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "receipt_handles": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "remoting_channels": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rpc_in_flight": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sessions": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "telemetry_commands": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "telemetry_links": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "active_connections",
+            "sessions",
+            "receipt_handles",
+            "prepared_transactions",
+            "telemetry_links",
+            "remoting_channels",
+            "telemetry_commands",
+            "rpc_in_flight"
+          ],
+          "type": "object"
+        },
+        "ProxyDrainPhase": {
+          "oneOf": [
+            {
+              "const": "accepting",
+              "description": "The Proxy admits work.",
+              "type": "string"
+            },
+            {
+              "const": "draining",
+              "description": "The Proxy admits no new work and still has work pending.",
+              "type": "string"
+            },
+            {
+              "const": "drained",
+              "description": "The Proxy admits no new work and has none pending, so it can be restarted.",
+              "type": "string"
+            }
+          ]
+        },
+        "ProxyDrainRequested": {
+          "additionalProperties": false,
+          "properties": {
+            "action": {
+              "$ref": "#/$defs/ProxyDrainAction"
+            }
+          },
+          "required": [
+            "action"
+          ],
+          "type": "object"
+        },
+        "ProxyDrainResource": {
+          "additionalProperties": false,
+          "properties": {
+            "proxy_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "proxy_name"
+          ],
+          "type": "object"
+        },
+        "ProxyDrainState": {
+          "additionalProperties": false,
+          "properties": {
+            "admission_open": {
+              "type": "boolean"
+            },
+            "held_by": {
+              "$ref": "#/$defs/OperationHolder",
+              "description": "Whether a drain holds the Proxy, and whether the `operation_id` of this call began it."
+            },
+            "pending": {
+              "$ref": "#/$defs/ProxyDrainPending"
+            },
+            "phase": {
+              "$ref": "#/$defs/ProxyDrainPhase"
+            },
+            "readiness_published": {
+              "type": "boolean"
+            },
+            "routing_open": {
+              "type": "boolean"
+            },
+            "zero_pending": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "phase",
+            "held_by",
+            "admission_open",
+            "routing_open",
+            "readiness_published",
+            "zero_pending",
+            "pending"
+          ],
+          "type": "object"
+        },
+        "ProxyDrainTarget": {
+          "additionalProperties": false,
+          "properties": {
+            "after": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ProxyDrainState"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "State read after an execution; null for a dry run and when the Proxy could not be read again."
+            },
+            "applied": {
+              "description": "Whether the Proxy acknowledged the action or already was in the requested state.",
+              "type": "boolean"
+            },
+            "before": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ProxyDrainState"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "State read before the call changed anything; null when the Proxy could not be read."
+            },
+            "changed": {
+              "description": "For a dry run, whether executing would change the Proxy; otherwise whether it changed.",
+              "type": "boolean"
+            },
+            "failure": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/FailureCode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "proxy_name": {
+              "type": "string"
+            },
+            "requested": {
+              "$ref": "#/$defs/ProxyDrainRequested"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "verification": {
+              "$ref": "#/$defs/VerificationState"
+            }
+          },
+          "required": [
+            "proxy_name",
+            "before",
+            "requested",
+            "after",
+            "applied",
+            "changed",
+            "verification",
+            "failure",
+            "retryable"
+          ],
+          "type": "object"
+        },
+        "VerificationState": {
+          "enum": [
+            "not_performed",
+            "verified",
+            "failed"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/ProxyDrainState"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "before": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ProxyDrainState"
+          },
+          "description": "State before the call, by Proxy alias; empty when the Proxy could not be read.",
+          "type": "object"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ControlErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "invocation_id": {
+          "description": "Identifies this call in the durable audit log. Pass it to rocketmq_get_mutation_result to read how the call ended.",
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "mode": {
+          "$ref": "#/$defs/MutationMode"
+        },
+        "operation": {
+          "$ref": "#/$defs/ProxyDrainOperation"
+        },
+        "plan_digest": {
+          "description": "Digest of the plan that a dry run reports: what was asked of which target, the state that was read, and what each target would get. Pass it as expected_plan_digest to execute this plan and no other. Null in the response of an execution.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requested": {
+          "$ref": "#/$defs/ProxyDrainRequested"
+        },
+        "schema_version": {
+          "$ref": "#/$defs/MutationResultSchemaVersion"
+        },
+        "status": {
+          "$ref": "#/$defs/MutationStatus"
+        },
+        "target": {
+          "$ref": "#/$defs/ProxyDrainResource"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/ProxyDrainTarget"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation",
+        "cluster",
+        "mode",
+        "status",
+        "error_code",
+        "target",
+        "before",
+        "requested",
+        "after",
+        "targets",
+        "warnings",
+        "invocation_id",
+        "plan_digest"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "title": "Begin RocketMQ Proxy drain",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "rocketmq_cancel_proxy_drain",
+    "title": "Cancel RocketMQ Proxy drain",
+    "description": "Dry-run or cancel the drain of one configured Proxy that rocketmq_begin_proxy_drain began with the same operation_id, so that the Proxy admits work again. A drain that another operation holds is left alone. After an execution, a read through the RocketMQ query MCP server can still return the earlier state for a few seconds.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "cluster": {
+          "description": "Logical cluster name from the server configuration, never a NameServer or Broker address. Both the caller and the server policy must allow it.",
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "type": "string"
+        },
+        "confirm": {
+          "default": false,
+          "description": "Explicit confirmation. Must be true to execute, that is when `dry_run` is false; a dry run does not need it.",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "default": true,
+          "description": "Plan only: read the current state and report what would change, without writing. When omitted, the server's configured default applies, which is a dry run unless the operator changed it.",
+          "type": "boolean"
+        },
+        "expected_plan_digest": {
+          "default": null,
+          "description": "Digest of the plan to execute: the `plan_digest` that a dry run with the same arguments returned. With it, the server writes only if the plan it reads now is that one, and otherwise ends the call with `precondition_conflict`. A dry run ignores it; the server policy can require it to execute.",
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation_id": {
+          "description": "Identifier of the drain: 8 to 64 letters, digits, `_` and `-`. The call that begins a drain chooses it and the Proxy keeps it while it drains; a call that cancels the drain must pass the same one.",
+          "maxLength": 64,
+          "minLength": 8,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "type": "string"
+        },
+        "proxy_name": {
+          "description": "Alias of the Proxy as the server configuration names it for this cluster; never an address.",
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "type": "string"
+        },
+        "reason": {
+          "default": null,
+          "description": "Why the change is made; kept only in the durable audit log. Required to execute. 5 to 256 characters of letters, digits, spaces and `._,#-`, without addresses, host names or tokens.",
+          "maxLength": 256,
+          "minLength": 5,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_key": {
+          "default": null,
+          "description": "Optional idempotency key of 8 to 64 letters, digits and `._:-`. An execute call that repeats a key with the same arguments returns the outcome already recorded for it instead of writing again; the same key with different arguments is rejected.",
+          "maxLength": 64,
+          "minLength": 8,
+          "pattern": "^[a-zA-Z0-9._:-]+$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema_version": {
+          "description": "Version of this argument schema. Always `rocketmq-mcp-control.arguments.v1`.",
+          "pattern": "^rocketmq-mcp-control\\.arguments\\.v1$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "cluster",
+        "proxy_name",
+        "operation_id"
+      ],
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "ControlErrorCode": {
+          "enum": [
+            "invalid_config",
+            "request_rejected",
+            "unauthorized",
+            "permission_denied",
+            "cluster_not_allowed",
+            "operation_not_allowed",
+            "mutation_disabled",
+            "operation_unavailable",
+            "rate_limited",
+            "confirmation_required",
+            "invalid_argument",
+            "audit_unavailable",
+            "precondition_conflict",
+            "partial_apply",
+            "verification_failed",
+            "timeout",
+            "cancelled",
+            "execution_failed",
+            "shutdown_failed"
+          ],
+          "type": "string"
+        },
+        "FailureCode": {
+          "enum": [
+            "conflict",
+            "invalid_data",
+            "unavailable",
+            "persistence_failed",
+            "verification_failed",
+            "order_reconciliation_failed"
+          ],
+          "type": "string"
+        },
+        "MutationMode": {
+          "enum": [
+            "dry_run",
+            "execute"
+          ],
+          "type": "string"
+        },
+        "MutationResultSchemaVersion": {
+          "const": "rocketmq-mcp-mutation.v1",
+          "type": "string"
+        },
+        "MutationStatus": {
+          "enum": [
+            "planned",
+            "applied",
+            "partial",
+            "conflict",
+            "failed"
+          ],
+          "type": "string"
+        },
+        "OperationHolder": {
+          "description": "Which operation holds a target, told without its identifier.\n\nThe identifier of an operation that another call started is that caller's text, so a response never repeats it.",
+          "oneOf": [
+            {
+              "const": "none",
+              "description": "No operation holds the target.",
+              "type": "string"
+            },
+            {
+              "const": "this_operation",
+              "description": "The operation that this call names by its `operation_id`.",
+              "type": "string"
+            },
+            {
+              "const": "other_operation",
+              "description": "An operation with another identifier.",
+              "type": "string"
+            }
+          ]
+        },
+        "ProxyDrainAction": {
+          "enum": [
+            "begin",
+            "cancel"
+          ],
+          "type": "string"
+        },
+        "ProxyDrainOperation": {
+          "const": "proxy_drain_cancel",
+          "type": "string"
+        },
+        "ProxyDrainPending": {
+          "additionalProperties": false,
+          "description": "Work that a Proxy still holds; every member is zero once it is drained.",
+          "properties": {
+            "active_connections": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "prepared_transactions": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "receipt_handles": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "remoting_channels": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rpc_in_flight": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sessions": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "telemetry_commands": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "telemetry_links": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "active_connections",
+            "sessions",
+            "receipt_handles",
+            "prepared_transactions",
+            "telemetry_links",
+            "remoting_channels",
+            "telemetry_commands",
+            "rpc_in_flight"
+          ],
+          "type": "object"
+        },
+        "ProxyDrainPhase": {
+          "oneOf": [
+            {
+              "const": "accepting",
+              "description": "The Proxy admits work.",
+              "type": "string"
+            },
+            {
+              "const": "draining",
+              "description": "The Proxy admits no new work and still has work pending.",
+              "type": "string"
+            },
+            {
+              "const": "drained",
+              "description": "The Proxy admits no new work and has none pending, so it can be restarted.",
+              "type": "string"
+            }
+          ]
+        },
+        "ProxyDrainRequested": {
+          "additionalProperties": false,
+          "properties": {
+            "action": {
+              "$ref": "#/$defs/ProxyDrainAction"
+            }
+          },
+          "required": [
+            "action"
+          ],
+          "type": "object"
+        },
+        "ProxyDrainResource": {
+          "additionalProperties": false,
+          "properties": {
+            "proxy_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "proxy_name"
+          ],
+          "type": "object"
+        },
+        "ProxyDrainState": {
+          "additionalProperties": false,
+          "properties": {
+            "admission_open": {
+              "type": "boolean"
+            },
+            "held_by": {
+              "$ref": "#/$defs/OperationHolder",
+              "description": "Whether a drain holds the Proxy, and whether the `operation_id` of this call began it."
+            },
+            "pending": {
+              "$ref": "#/$defs/ProxyDrainPending"
+            },
+            "phase": {
+              "$ref": "#/$defs/ProxyDrainPhase"
+            },
+            "readiness_published": {
+              "type": "boolean"
+            },
+            "routing_open": {
+              "type": "boolean"
+            },
+            "zero_pending": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "phase",
+            "held_by",
+            "admission_open",
+            "routing_open",
+            "readiness_published",
+            "zero_pending",
+            "pending"
+          ],
+          "type": "object"
+        },
+        "ProxyDrainTarget": {
+          "additionalProperties": false,
+          "properties": {
+            "after": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ProxyDrainState"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "State read after an execution; null for a dry run and when the Proxy could not be read again."
+            },
+            "applied": {
+              "description": "Whether the Proxy acknowledged the action or already was in the requested state.",
+              "type": "boolean"
+            },
+            "before": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ProxyDrainState"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "State read before the call changed anything; null when the Proxy could not be read."
+            },
+            "changed": {
+              "description": "For a dry run, whether executing would change the Proxy; otherwise whether it changed.",
+              "type": "boolean"
+            },
+            "failure": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/FailureCode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "proxy_name": {
+              "type": "string"
+            },
+            "requested": {
+              "$ref": "#/$defs/ProxyDrainRequested"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "verification": {
+              "$ref": "#/$defs/VerificationState"
+            }
+          },
+          "required": [
+            "proxy_name",
+            "before",
+            "requested",
+            "after",
+            "applied",
+            "changed",
+            "verification",
+            "failure",
+            "retryable"
+          ],
+          "type": "object"
+        },
+        "VerificationState": {
+          "enum": [
+            "not_performed",
+            "verified",
+            "failed"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/ProxyDrainState"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "before": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ProxyDrainState"
+          },
+          "description": "State before the call, by Proxy alias; empty when the Proxy could not be read.",
+          "type": "object"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ControlErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "invocation_id": {
+          "description": "Identifies this call in the durable audit log. Pass it to rocketmq_get_mutation_result to read how the call ended.",
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "mode": {
+          "$ref": "#/$defs/MutationMode"
+        },
+        "operation": {
+          "$ref": "#/$defs/ProxyDrainOperation"
+        },
+        "plan_digest": {
+          "description": "Digest of the plan that a dry run reports: what was asked of which target, the state that was read, and what each target would get. Pass it as expected_plan_digest to execute this plan and no other. Null in the response of an execution.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requested": {
+          "$ref": "#/$defs/ProxyDrainRequested"
+        },
+        "schema_version": {
+          "$ref": "#/$defs/MutationResultSchemaVersion"
+        },
+        "status": {
+          "$ref": "#/$defs/MutationStatus"
+        },
+        "target": {
+          "$ref": "#/$defs/ProxyDrainResource"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/ProxyDrainTarget"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation",
+        "cluster",
+        "mode",
+        "status",
+        "error_code",
+        "target",
+        "before",
+        "requested",
+        "after",
+        "targets",
+        "warnings",
+        "invocation_id",
+        "plan_digest"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "title": "Cancel RocketMQ Proxy drain",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "rocketmq_set_broker_log_filter_ttl",
+    "title": "Set temporary RocketMQ Broker log level",
+    "description": "Dry-run or set one rocketmq_broker:: logger of one Broker master to INFO or DEBUG for 60 to 900 seconds. The Broker returns to its startup log filter by itself when the time is up; rocketmq_restore_broker_log_filter ends the override earlier. After an execution, a read through the RocketMQ query MCP server can still return the earlier state for a few seconds.",
+    "inputSchema": {
+      "$defs": {
+        "BrokerLogLevel": {
+          "description": "The levels a temporary override can give a logger.",
+          "enum": [
+            "INFO",
+            "DEBUG"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "broker_name": {
+          "description": "Logical name of the Broker whose master gets the override; never an address.",
+          "maxLength": 127,
+          "minLength": 1,
+          "pattern": "^[%|a-zA-Z0-9_-]+$",
+          "type": "string"
+        },
+        "cluster": {
+          "description": "Logical cluster name from the server configuration, never a NameServer or Broker address. Both the caller and the server policy must allow it.",
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "type": "string"
+        },
+        "confirm": {
+          "default": false,
+          "description": "Explicit confirmation. Must be true to execute, that is when `dry_run` is false; a dry run does not need it.",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "default": true,
+          "description": "Plan only: read the current state and report what would change, without writing. When omitted, the server's configured default applies, which is a dry run unless the operator changed it.",
+          "type": "boolean"
+        },
+        "expected_plan_digest": {
+          "default": null,
+          "description": "Digest of the plan to execute: the `plan_digest` that a dry run with the same arguments returned. With it, the server writes only if the plan it reads now is that one, and otherwise ends the call with `precondition_conflict`. A dry run ignores it; the server policy can require it to execute.",
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "$ref": "#/$defs/BrokerLogLevel",
+          "description": "Level the logger gets until the override ends."
+        },
+        "logger": {
+          "description": "Logger to change: a lower-case `rocketmq_broker::` module path such as `rocketmq_broker::processor`, at most 128 characters. Loggers of modules that handle message content, credentials or storage are rejected.",
+          "maxLength": 128,
+          "minLength": 18,
+          "pattern": "^rocketmq_broker(::[a-z_][a-z0-9_]*)+$",
+          "type": "string"
+        },
+        "operation_id": {
+          "description": "Identifier you choose for this override: 8 to 64 letters, digits, `_` and `-`. The Broker keeps it while the override is active, and `rocketmq_restore_broker_log_filter` must pass the same one.",
+          "maxLength": 64,
+          "minLength": 8,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "type": "string"
+        },
+        "reason": {
+          "default": null,
+          "description": "Why the change is made; kept only in the durable audit log. Required to execute. 5 to 256 characters of letters, digits, spaces and `._,#-`, without addresses, host names or tokens.",
+          "maxLength": 256,
+          "minLength": 5,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_key": {
+          "default": null,
+          "description": "Optional idempotency key of 8 to 64 letters, digits and `._:-`. An execute call that repeats a key with the same arguments returns the outcome already recorded for it instead of writing again; the same key with different arguments is rejected.",
+          "maxLength": 64,
+          "minLength": 8,
+          "pattern": "^[a-zA-Z0-9._:-]+$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema_version": {
+          "description": "Version of this argument schema. Always `rocketmq-mcp-control.arguments.v1`.",
+          "pattern": "^rocketmq-mcp-control\\.arguments\\.v1$",
+          "type": "string"
+        },
+        "ttl_seconds": {
+          "description": "Seconds after which the Broker ends the override by itself, 60 to 900.",
+          "format": "uint32",
+          "maximum": 900,
+          "minimum": 60,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "cluster",
+        "broker_name",
+        "logger",
+        "level",
+        "ttl_seconds",
+        "operation_id"
+      ],
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "BrokerLogFilterOperation": {
+          "const": "broker_log_filter_set",
+          "type": "string"
+        },
+        "BrokerLogFilterRequested": {
+          "oneOf": [
+            {
+              "properties": {
+                "action": {
+                  "const": "set",
+                  "type": "string"
+                },
+                "level": {
+                  "$ref": "#/$defs/BrokerLogLevel"
+                },
+                "logger": {
+                  "type": "string"
+                },
+                "ttl_seconds": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "action",
+                "logger",
+                "level",
+                "ttl_seconds"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "action": {
+                  "const": "restore",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "BrokerLogFilterResource": {
+          "additionalProperties": false,
+          "properties": {
+            "broker_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "broker_name"
+          ],
+          "type": "object"
+        },
+        "BrokerLogFilterState": {
+          "additionalProperties": false,
+          "properties": {
+            "expires_at_millis": {
+              "anyOf": [
+                {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Unix time in milliseconds at which the Broker ends the active override by itself; null when none is active."
+            },
+            "held_by": {
+              "$ref": "#/$defs/OperationHolder",
+              "description": "Whether an override is active, and whether the `operation_id` of this call set it."
+            },
+            "level": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BrokerLogLevel"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Effective level of the logger a set names. Null for a restore, which names no logger, and when the level is neither `INFO` nor `DEBUG`."
+            }
+          },
+          "required": [
+            "level",
+            "held_by",
+            "expires_at_millis"
+          ],
+          "type": "object"
+        },
+        "BrokerLogFilterTarget": {
+          "additionalProperties": false,
+          "properties": {
+            "after": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BrokerLogFilterState"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "State read after an execution; null for a dry run and when the Broker could not be read again."
+            },
+            "applied": {
+              "description": "Whether the Broker acknowledged the action or already was in the requested state.",
+              "type": "boolean"
+            },
+            "before": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BrokerLogFilterState"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "State read before the call changed anything; null when the Broker could not be read."
+            },
+            "broker_name": {
+              "type": "string"
+            },
+            "changed": {
+              "description": "For a dry run, whether executing would change the Broker; otherwise whether it changed.",
+              "type": "boolean"
+            },
+            "failure": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/FailureCode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "requested": {
+              "$ref": "#/$defs/BrokerLogFilterRequested"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "verification": {
+              "$ref": "#/$defs/VerificationState"
+            }
+          },
+          "required": [
+            "broker_name",
+            "before",
+            "requested",
+            "after",
+            "applied",
+            "changed",
+            "verification",
+            "failure",
+            "retryable"
+          ],
+          "type": "object"
+        },
+        "BrokerLogLevel": {
+          "description": "The levels a temporary override can give a logger.",
+          "enum": [
+            "INFO",
+            "DEBUG"
+          ],
+          "type": "string"
+        },
+        "ControlErrorCode": {
+          "enum": [
+            "invalid_config",
+            "request_rejected",
+            "unauthorized",
+            "permission_denied",
+            "cluster_not_allowed",
+            "operation_not_allowed",
+            "mutation_disabled",
+            "operation_unavailable",
+            "rate_limited",
+            "confirmation_required",
+            "invalid_argument",
+            "audit_unavailable",
+            "precondition_conflict",
+            "partial_apply",
+            "verification_failed",
+            "timeout",
+            "cancelled",
+            "execution_failed",
+            "shutdown_failed"
+          ],
+          "type": "string"
+        },
+        "FailureCode": {
+          "enum": [
+            "conflict",
+            "invalid_data",
+            "unavailable",
+            "persistence_failed",
+            "verification_failed",
+            "order_reconciliation_failed"
+          ],
+          "type": "string"
+        },
+        "MutationMode": {
+          "enum": [
+            "dry_run",
+            "execute"
+          ],
+          "type": "string"
+        },
+        "MutationResultSchemaVersion": {
+          "const": "rocketmq-mcp-mutation.v1",
+          "type": "string"
+        },
+        "MutationStatus": {
+          "enum": [
+            "planned",
+            "applied",
+            "partial",
+            "conflict",
+            "failed"
+          ],
+          "type": "string"
+        },
+        "OperationHolder": {
+          "description": "Which operation holds a target, told without its identifier.\n\nThe identifier of an operation that another call started is that caller's text, so a response never repeats it.",
+          "oneOf": [
+            {
+              "const": "none",
+              "description": "No operation holds the target.",
+              "type": "string"
+            },
+            {
+              "const": "this_operation",
+              "description": "The operation that this call names by its `operation_id`.",
+              "type": "string"
+            },
+            {
+              "const": "other_operation",
+              "description": "An operation with another identifier.",
+              "type": "string"
+            }
+          ]
+        },
+        "VerificationState": {
+          "enum": [
+            "not_performed",
+            "verified",
+            "failed"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/BrokerLogFilterState"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "before": {
+          "additionalProperties": {
+            "$ref": "#/$defs/BrokerLogFilterState"
+          },
+          "description": "State before the call, by Broker name; empty when the Broker could not be read.",
+          "type": "object"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ControlErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "invocation_id": {
+          "description": "Identifies this call in the durable audit log. Pass it to rocketmq_get_mutation_result to read how the call ended.",
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "mode": {
+          "$ref": "#/$defs/MutationMode"
+        },
+        "operation": {
+          "$ref": "#/$defs/BrokerLogFilterOperation"
+        },
+        "plan_digest": {
+          "description": "Digest of the plan that a dry run reports: what was asked of which target, the state that was read, and what each target would get. Pass it as expected_plan_digest to execute this plan and no other. Null in the response of an execution.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requested": {
+          "$ref": "#/$defs/BrokerLogFilterRequested"
+        },
+        "schema_version": {
+          "$ref": "#/$defs/MutationResultSchemaVersion"
+        },
+        "status": {
+          "$ref": "#/$defs/MutationStatus"
+        },
+        "target": {
+          "$ref": "#/$defs/BrokerLogFilterResource"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/BrokerLogFilterTarget"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation",
+        "cluster",
+        "mode",
+        "status",
+        "error_code",
+        "target",
+        "before",
+        "requested",
+        "after",
+        "targets",
+        "warnings",
+        "invocation_id",
+        "plan_digest"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "title": "Set temporary RocketMQ Broker log level",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "rocketmq_restore_broker_log_filter",
+    "title": "Restore RocketMQ Broker log level",
+    "description": "Dry-run or end the temporary log level that rocketmq_set_broker_log_filter_ttl set on one Broker master with the same operation_id, returning the Broker to its startup log filter. An override that another operation holds is left alone. After an execution, a read through the RocketMQ query MCP server can still return the earlier state for a few seconds.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "broker_name": {
+          "description": "Logical name of the Broker whose master holds the override; never an address.",
+          "maxLength": 127,
+          "minLength": 1,
+          "pattern": "^[%|a-zA-Z0-9_-]+$",
+          "type": "string"
+        },
+        "cluster": {
+          "description": "Logical cluster name from the server configuration, never a NameServer or Broker address. Both the caller and the server policy must allow it.",
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "type": "string"
+        },
+        "confirm": {
+          "default": false,
+          "description": "Explicit confirmation. Must be true to execute, that is when `dry_run` is false; a dry run does not need it.",
+          "type": "boolean"
+        },
+        "dry_run": {
+          "default": true,
+          "description": "Plan only: read the current state and report what would change, without writing. When omitted, the server's configured default applies, which is a dry run unless the operator changed it.",
+          "type": "boolean"
+        },
+        "expected_plan_digest": {
+          "default": null,
+          "description": "Digest of the plan to execute: the `plan_digest` that a dry run with the same arguments returned. With it, the server writes only if the plan it reads now is that one, and otherwise ends the call with `precondition_conflict`. A dry run ignores it; the server policy can require it to execute.",
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation_id": {
+          "description": "Identifier the override was set with: 8 to 64 letters, digits, `_` and `-`. An override that another identifier holds is left alone.",
+          "maxLength": 64,
+          "minLength": 8,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "type": "string"
+        },
+        "reason": {
+          "default": null,
+          "description": "Why the change is made; kept only in the durable audit log. Required to execute. 5 to 256 characters of letters, digits, spaces and `._,#-`, without addresses, host names or tokens.",
+          "maxLength": 256,
+          "minLength": 5,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_key": {
+          "default": null,
+          "description": "Optional idempotency key of 8 to 64 letters, digits and `._:-`. An execute call that repeats a key with the same arguments returns the outcome already recorded for it instead of writing again; the same key with different arguments is rejected.",
+          "maxLength": 64,
+          "minLength": 8,
+          "pattern": "^[a-zA-Z0-9._:-]+$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema_version": {
+          "description": "Version of this argument schema. Always `rocketmq-mcp-control.arguments.v1`.",
+          "pattern": "^rocketmq-mcp-control\\.arguments\\.v1$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "cluster",
+        "broker_name",
+        "operation_id"
+      ],
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "BrokerLogFilterOperation": {
+          "const": "broker_log_filter_restore",
+          "type": "string"
+        },
+        "BrokerLogFilterRequested": {
+          "oneOf": [
+            {
+              "properties": {
+                "action": {
+                  "const": "set",
+                  "type": "string"
+                },
+                "level": {
+                  "$ref": "#/$defs/BrokerLogLevel"
+                },
+                "logger": {
+                  "type": "string"
+                },
+                "ttl_seconds": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "action",
+                "logger",
+                "level",
+                "ttl_seconds"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "action": {
+                  "const": "restore",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "BrokerLogFilterResource": {
+          "additionalProperties": false,
+          "properties": {
+            "broker_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "broker_name"
+          ],
+          "type": "object"
+        },
+        "BrokerLogFilterState": {
+          "additionalProperties": false,
+          "properties": {
+            "expires_at_millis": {
+              "anyOf": [
+                {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Unix time in milliseconds at which the Broker ends the active override by itself; null when none is active."
+            },
+            "held_by": {
+              "$ref": "#/$defs/OperationHolder",
+              "description": "Whether an override is active, and whether the `operation_id` of this call set it."
+            },
+            "level": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BrokerLogLevel"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Effective level of the logger a set names. Null for a restore, which names no logger, and when the level is neither `INFO` nor `DEBUG`."
+            }
+          },
+          "required": [
+            "level",
+            "held_by",
+            "expires_at_millis"
+          ],
+          "type": "object"
+        },
+        "BrokerLogFilterTarget": {
+          "additionalProperties": false,
+          "properties": {
+            "after": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BrokerLogFilterState"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "State read after an execution; null for a dry run and when the Broker could not be read again."
+            },
+            "applied": {
+              "description": "Whether the Broker acknowledged the action or already was in the requested state.",
+              "type": "boolean"
+            },
+            "before": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BrokerLogFilterState"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "State read before the call changed anything; null when the Broker could not be read."
+            },
+            "broker_name": {
+              "type": "string"
+            },
+            "changed": {
+              "description": "For a dry run, whether executing would change the Broker; otherwise whether it changed.",
+              "type": "boolean"
+            },
+            "failure": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/FailureCode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "requested": {
+              "$ref": "#/$defs/BrokerLogFilterRequested"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "verification": {
+              "$ref": "#/$defs/VerificationState"
+            }
+          },
+          "required": [
+            "broker_name",
+            "before",
+            "requested",
+            "after",
+            "applied",
+            "changed",
+            "verification",
+            "failure",
+            "retryable"
+          ],
+          "type": "object"
+        },
+        "BrokerLogLevel": {
+          "description": "The levels a temporary override can give a logger.",
+          "enum": [
+            "INFO",
+            "DEBUG"
+          ],
+          "type": "string"
+        },
+        "ControlErrorCode": {
+          "enum": [
+            "invalid_config",
+            "request_rejected",
+            "unauthorized",
+            "permission_denied",
+            "cluster_not_allowed",
+            "operation_not_allowed",
+            "mutation_disabled",
+            "operation_unavailable",
+            "rate_limited",
+            "confirmation_required",
+            "invalid_argument",
+            "audit_unavailable",
+            "precondition_conflict",
+            "partial_apply",
+            "verification_failed",
+            "timeout",
+            "cancelled",
+            "execution_failed",
+            "shutdown_failed"
+          ],
+          "type": "string"
+        },
+        "FailureCode": {
+          "enum": [
+            "conflict",
+            "invalid_data",
+            "unavailable",
+            "persistence_failed",
+            "verification_failed",
+            "order_reconciliation_failed"
+          ],
+          "type": "string"
+        },
+        "MutationMode": {
+          "enum": [
+            "dry_run",
+            "execute"
+          ],
+          "type": "string"
+        },
+        "MutationResultSchemaVersion": {
+          "const": "rocketmq-mcp-mutation.v1",
+          "type": "string"
+        },
+        "MutationStatus": {
+          "enum": [
+            "planned",
+            "applied",
+            "partial",
+            "conflict",
+            "failed"
+          ],
+          "type": "string"
+        },
+        "OperationHolder": {
+          "description": "Which operation holds a target, told without its identifier.\n\nThe identifier of an operation that another call started is that caller's text, so a response never repeats it.",
+          "oneOf": [
+            {
+              "const": "none",
+              "description": "No operation holds the target.",
+              "type": "string"
+            },
+            {
+              "const": "this_operation",
+              "description": "The operation that this call names by its `operation_id`.",
+              "type": "string"
+            },
+            {
+              "const": "other_operation",
+              "description": "An operation with another identifier.",
+              "type": "string"
+            }
+          ]
+        },
+        "VerificationState": {
+          "enum": [
+            "not_performed",
+            "verified",
+            "failed"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/BrokerLogFilterState"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "before": {
+          "additionalProperties": {
+            "$ref": "#/$defs/BrokerLogFilterState"
+          },
+          "description": "State before the call, by Broker name; empty when the Broker could not be read.",
+          "type": "object"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ControlErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "invocation_id": {
+          "description": "Identifies this call in the durable audit log. Pass it to rocketmq_get_mutation_result to read how the call ended.",
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "mode": {
+          "$ref": "#/$defs/MutationMode"
+        },
+        "operation": {
+          "$ref": "#/$defs/BrokerLogFilterOperation"
+        },
+        "plan_digest": {
+          "description": "Digest of the plan that a dry run reports: what was asked of which target, the state that was read, and what each target would get. Pass it as expected_plan_digest to execute this plan and no other. Null in the response of an execution.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requested": {
+          "$ref": "#/$defs/BrokerLogFilterRequested"
+        },
+        "schema_version": {
+          "$ref": "#/$defs/MutationResultSchemaVersion"
+        },
+        "status": {
+          "$ref": "#/$defs/MutationStatus"
+        },
+        "target": {
+          "$ref": "#/$defs/BrokerLogFilterResource"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/BrokerLogFilterTarget"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation",
+        "cluster",
+        "mode",
+        "status",
+        "error_code",
+        "target",
+        "before",
+        "requested",
+        "after",
+        "targets",
+        "warnings",
+        "invocation_id",
+        "plan_digest"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "title": "Restore RocketMQ Broker log level",
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "rocketmq_get_mutation_result",
+    "title": "Get RocketMQ mutation result",
+    "description": "Reads how one of your own mutation calls on a cluster ended: finished with its status, still in progress, interrupted by a server restart, or not found. Use it when a mutation response was lost or timed out, selecting the call by the invocation_id of a response or by the request_key you sent. It changes nothing and never returns who made a call or why.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "cluster": {
+          "description": "Logical cluster name the mutation was called with, never a NameServer or Broker address. Both the caller and the server policy must allow it.",
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "type": "string"
+        },
+        "invocation_id": {
+          "default": null,
+          "description": "The `invocation_id` of the mutation response. Give it, `request_key`, or both; with both, the invocation must also have carried that key.",
+          "format": "uint64",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "request_key": {
+          "default": null,
+          "description": "The `request_key` the mutation was called with: 8 to 64 letters, digits and `._:-`. It selects the newest of your calls that carried it, which is how to find a call whose response never arrived.",
+          "maxLength": 64,
+          "minLength": 8,
+          "pattern": "^[a-zA-Z0-9._:-]+$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema_version": {
+          "description": "Version of this argument schema. Always `rocketmq-mcp-control.arguments.v1`.",
+          "pattern": "^rocketmq-mcp-control\\.arguments\\.v1$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "cluster"
+      ],
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "ControlErrorCode": {
+          "enum": [
+            "invalid_config",
+            "request_rejected",
+            "unauthorized",
+            "permission_denied",
+            "cluster_not_allowed",
+            "operation_not_allowed",
+            "mutation_disabled",
+            "operation_unavailable",
+            "rate_limited",
+            "confirmation_required",
+            "invalid_argument",
+            "audit_unavailable",
+            "precondition_conflict",
+            "partial_apply",
+            "verification_failed",
+            "timeout",
+            "cancelled",
+            "execution_failed",
+            "shutdown_failed"
+          ],
+          "type": "string"
+        },
+        "ControlOperation": {
+          "enum": [
+            "topic_upsert",
+            "consumer_group_upsert",
+            "consumer_offset_reset",
+            "broker_config_patch",
+            "consumer_request_mode",
+            "proxy_drain_begin",
+            "proxy_drain_cancel",
+            "broker_log_filter_set",
+            "broker_log_filter_restore"
+          ],
+          "type": "string"
+        },
+        "MutationLookupSchemaVersion": {
+          "const": "rocketmq-mcp-mutation-result.v1",
+          "type": "string"
+        },
+        "MutationMode": {
+          "enum": [
+            "dry_run",
+            "execute"
+          ],
+          "type": "string"
+        },
+        "MutationResultCounts": {
+          "additionalProperties": false,
+          "description": "How many targets of the mutation ended in each state.",
+          "properties": {
+            "applied": {
+              "description": "Written and changed.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "conflict": {
+              "description": "Refused because the state read before the change had changed.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "failed": {
+              "description": "Failed for any other reason, including an unverified write.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "unchanged": {
+              "description": "Left as they were: already in the requested state, or only planned by a dry run.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "applied",
+            "unchanged",
+            "conflict",
+            "failed"
+          ],
+          "type": "object"
+        },
+        "MutationResultState": {
+          "description": "What the server knows about the selected invocation.",
+          "oneOf": [
+            {
+              "const": "finished",
+              "description": "The mutation ended; `status` says how.",
+              "type": "string"
+            },
+            {
+              "const": "in_progress",
+              "description": "The mutation is still running. Ask again later.",
+              "type": "string"
+            },
+            {
+              "const": "interrupted",
+              "description": "The server stopped while the mutation was running, so its outcome was never recorded. The cluster may or may not have changed: read its current state before repeating the call.",
+              "type": "string"
+            },
+            {
+              "const": "not_found",
+              "description": "None of your recent calls on this cluster matches. The call may never have started, or it is older than what the server remembers.",
+              "type": "string"
+            }
+          ]
+        },
+        "MutationResultTarget": {
+          "additionalProperties": false,
+          "description": "The logical object of the mutation: names only, never addresses.",
+          "properties": {
+            "broker": {
+              "description": "The one Broker of a Broker configuration patch or of a temporary log filter.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "broker_count": {
+              "description": "How many Brokers a Topic or Consumer Group upsert selected.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "broker_names": {
+              "description": "Their sorted names, when the list is short enough to be kept.",
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "consumer_group": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "proxy": {
+              "description": "The Proxy of a drain, by its configured alias.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "topic": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "MutationStatus": {
+          "enum": [
+            "planned",
+            "applied",
+            "partial",
+            "conflict",
+            "failed"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "changed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Whether at least one target was written; null when the mutation ended without reporting it, for example after a timeout. Null does not mean that nothing changed."
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "duration_millis": {
+          "anyOf": [
+            {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How long it ran, in milliseconds; null unless `state` is `finished`."
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ControlErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The error code of a mutation that did not end as planned or applied; null otherwise."
+        },
+        "invocation_id": {
+          "anyOf": [
+            {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The invocation this answer is about; null when `state` is `not_found`."
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MutationMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Whether it was a dry run or an execution; null when `state` is `not_found`."
+        },
+        "operation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ControlOperation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Which mutation it was; null when `state` is `not_found`."
+        },
+        "schema_version": {
+          "$ref": "#/$defs/MutationLookupSchemaVersion"
+        },
+        "state": {
+          "$ref": "#/$defs/MutationResultState"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MutationStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How it ended; null unless `state` is `finished`."
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MutationResultTarget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What it was aimed at; null when `state` is `not_found` or the object was not recorded."
+        },
+        "target_results": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MutationResultCounts"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Per-target outcome counts; null when the mutation ended without reporting them."
+        }
+      },
+      "required": [
+        "schema_version",
+        "cluster",
+        "state",
+        "invocation_id",
+        "operation",
+        "mode",
+        "target",
+        "status",
+        "error_code",
+        "duration_millis",
+        "changed",
+        "target_results"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "title": "Get RocketMQ mutation result",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
     }
   }
 ]

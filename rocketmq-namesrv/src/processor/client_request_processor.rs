@@ -20,7 +20,7 @@ use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_error::PublicErrorView;
 use rocketmq_model::version::RocketMqVersion;
-use rocketmq_observability::metrics::namesrv::NameServerRouteCacheOutcome;
+use rocketmq_observability::metrics::namesrv::NameServerRouteCacheEvent;
 use rocketmq_observability::metrics::namesrv::NameServerRouteStage;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -31,10 +31,10 @@ use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils;
 use rocketmq_transport::api::error_response;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use tracing::debug;
 use tracing::warn;
 
@@ -44,7 +44,7 @@ use crate::route::response_cache::JsonEncoding;
 use crate::route::response_cache::RouteCacheKey;
 use crate::route::response_cache::RouteCacheOutcomeKind;
 use crate::route::response_cache::RouteCachePolicy;
-use crate::route::route_info_manager::TopicRouteLookupOutcome;
+use crate::route::route_info_manager::TopicRouteLookupStatus;
 use crate::route::zone_filter::filter_route_by_zone;
 use crate::route::zone_filter::ZoneRequest;
 use crate::route::zone_filter::TYPED_ZONE_ROUTE_ENABLED;
@@ -66,7 +66,7 @@ pub struct ClientRequestProcessor {
 
 impl RequestProcessor for ClientRequestProcessor {
     #[inline]
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::NameServerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::NameServerResult<ResponseAction> {
         let response = self.handle_request(request.command_mut()).await?;
         crate::processor::response_outcome(response)
     }
@@ -142,8 +142,8 @@ impl ClientRequestProcessor {
             .route_info_manager()
             .load_topic_route_view(request_header.topic.as_ref())
         {
-            Ok(TopicRouteLookupOutcome::Found(data)) => data,
-            Ok(TopicRouteLookupOutcome::NotFound) => {
+            Ok(TopicRouteLookupStatus::Found(data)) => data,
+            Ok(TopicRouteLookupStatus::NotFound) => {
                 route_span.record("result", "not_found");
                 return Ok(Some(error_response(
                     PublicErrorView::descriptor_only(&rocketmq_error::ROUTE_TOPIC_NOT_FOUND),
@@ -230,19 +230,19 @@ impl ClientRequestProcessor {
             let cache = self.name_server_runtime_inner.route_response_cache();
             cache.get_or_try_insert_with(key, encode).map(|outcome| {
                 if metrics.is_enabled() {
-                    let metric_outcome = match outcome.kind {
-                        RouteCacheOutcomeKind::Hit => NameServerRouteCacheOutcome::Hit,
-                        RouteCacheOutcomeKind::Miss => NameServerRouteCacheOutcome::Miss,
-                        RouteCacheOutcomeKind::Oversize => NameServerRouteCacheOutcome::Oversize,
+                    let cache_event = match outcome.kind {
+                        RouteCacheOutcomeKind::Hit => NameServerRouteCacheEvent::Hit,
+                        RouteCacheOutcomeKind::Miss => NameServerRouteCacheEvent::Miss,
+                        RouteCacheOutcomeKind::Oversize => NameServerRouteCacheEvent::Oversize,
                     };
-                    metrics.record_route_cache(metric_outcome, cache.stats().weighted_size);
+                    metrics.record_route_cache(cache_event, cache.stats().weighted_size);
                 }
                 outcome.body
             })
         } else {
             if metrics.is_enabled() {
                 metrics.record_route_cache(
-                    NameServerRouteCacheOutcome::Bypass,
+                    NameServerRouteCacheEvent::Bypass,
                     self.name_server_runtime_inner
                         .route_response_cache()
                         .stats()

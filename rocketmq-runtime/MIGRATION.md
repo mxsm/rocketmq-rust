@@ -5,6 +5,43 @@ Consumers must migrate with this batch; the budget accessor change is a source
 compatibility break and must not be published as a compatible patch to an API
 that returns a mandatory capacity dimension.
 
+## Explicit resource and completion boundaries
+
+The APIs in this section are additive. Existing constructor capacity, boolean
+wait results, default metadata write concurrency, and V1/V2 diagnostic schemas
+remain compatible.
+
+- `BlockingExecutor::new_isolated` makes independent capacity explicit; `new`
+  delegates to it. `stop_admission` and `shutdown_until` affect only that executor
+  and its clones. Inspect `BlockingExecutorShutdownReport::completed` and
+  `pending_operations`; a timeout cannot interrupt an executing closure.
+  Managed lane handles reject these methods and use their service lifecycle.
+- `ResourcePermit::try_resize` adjusts bytes without a second count/rate charge.
+  Growth is transactional across ancestors and respects dynamic closure;
+  shrinking requires the caller to release removed payload first. Metadata
+  coalescing uses this to replace a queued snapshot at capacity. Its real
+  blocking closure retains the shared charge after actor cancellation.
+- `OperationContext::wait_with_policy(owner, OperationWaitPolicy::new(graceful,
+  confirmation))` closes operation admission and reports `Completed`,
+  `AbortConfirmed`, or `Unconfirmed { remaining_tasks }`. Both inputs are absolute
+  deadlines; an earlier confirmation deadline also tightens the grace period.
+  Call `cancel()` first when cooperative cancellation is required. Existing
+  `wait`/`cancel_and_wait` still allow an additional one-second confirmation
+  window; their `false` result does not establish destruction. The `_until`
+  forms request abort at the deadline without an extra confirmation allowance.
+  None of these timers can preempt synchronous code that stalls a runtime thread.
+- `TaskGroup::diagnostics_task_details` samples sanitized details without a
+  full-tree aggregate. Its scan budget covers task enumeration, descendant
+  registrations (including stale weak entries), and temporary group storage.
+  It reports task/group scan counts and truncation through a new result type;
+  existing V1/V2 aggregate collection remains proportional to the whole subtree.
+
+The existing removal of `async_fs` and the atomic-file replacements below remain
+in force. A metadata observer timing out does not prove failure or rollback:
+the operation may later commit. Preserve receipts or target reconciliation as
+required by the application; ordinary file-write completion is not a substitute
+for the metadata durability contract.
+
 ## Closed dynamic budgets
 
 `BudgetRejection::dimension()` now returns `Option<BudgetDimension>`.
@@ -45,7 +82,7 @@ full or age policy. `try_push_budgeted` still releases a permit on a normal
 rejection; only `ForeignPermit` returns the item and unchanged charge together.
 
 The workspace consumers migrate in the same change. Transport pending requests
-report `SessionClosed`; `DeferredAdmissionAcquireOutcome` gains `Closed` rather
+report `SessionClosed`; `DeferredWaitAdmissionResult` gains `Closed` rather
 than reporting parent capacity exhaustion. Telemetry reports a closed buffer.
 Broker capacity rejection messages retain their existing dimension text and
 can accurately describe closure.
@@ -79,3 +116,150 @@ unchanged.
 Lifecycle shutdown requests preserve `Failed` and `Stopped` through conditional
 atomic transitions. Repeated requests keep the first reason and absolute
 deadline.
+
+## Runtime convergence
+
+This batch removes the parallel executor, scheduler and service-thread APIs and
+leaves one owner model: `RuntimeOwner`, `ChildServiceContext`, `TaskGroup`,
+`ScheduledTaskGroup` and `ServiceManager`. It is a source compatibility break.
+The workspace consumers migrate in the same change.
+
+### Removed APIs
+
+| Removed | Replacement |
+| --- | --- |
+| `TokioExecutorService`, `ScheduledExecutorService`, `FuturesExecutorService`, their plans and `FuturesExecutorServiceBuilder` | Spawn on a `ChildServiceContext` or its `TaskGroup`; use `ScheduledTaskGroup` for periodic work and the managed blocking lanes for blocking work. |
+| `schedule` module: `TaskScheduler`, `TaskExecutor`, `ExecutorPool`, `ExecutorConfig`, `SchedulerConfig`, `Task`, `TaskContext`, `TaskStatus`, `LegacyTaskResult`, the `Trigger` types and the `Schedule*Outcome` types | `ScheduledTaskGroup::schedule(config, policy, task)`. Cron triggers have no direct replacement: run a service task that sleeps until the next due time. |
+| `ScheduledTaskManager` | `ScheduledTaskGroup` from `context.scheduled_tasks(name)`. |
+| `ActorRuntime` | A service task on the owning `TaskGroup`. |
+| `compat` module | The owner and context APIs above. |
+| `tokio_lock` | `tokio::sync` directly. |
+| `Shutdown<T>` | `tokio_util::sync::CancellationToken`, or the owning group's cancellation token. |
+| `common::util_all` | Time helpers moved to `common::time_utils` with the same names; Store path helpers moved into `rocketmq-store`. Helpers without workspace callers, such as `get_ip`, `get_ip_str`, `YYYY_MM_DD_HH_MM_SS` and the byte and hex converters, were removed. |
+| `time_utils::get_current_millis` and `get_current_nano` (deprecated since 0.8.0) | `current_millis` and `current_nano`. |
+| `common::thread` and `common::future` | `ServiceManager` for service loops; `tokio::sync::oneshot` or task handles for completion. |
+| `DetachedTaskPolicy`, `TaskSnapshot::detached`, `TaskSnapshot::detached_policy`, `ShutdownReport::detached_still_running` | Nothing: every task belongs to a group and is counted by the ordinary report fields. |
+| `ScheduledTaskGroup::schedule_fixed_delay`, `schedule_fixed_rate`, `schedule_fixed_rate_no_overlap`, `schedule_fixed_rate_allow_overlap`, `schedule_bounded` and their `_operation` and `_controlled` forms | `schedule`, `schedule_operation` and `schedule_controlled`; the configuration selects the timing mode (see the table below). |
+| `ScheduledTaskConfig::shutdown_timeout` | The shutdown call's timeout or deadline; the field was never read. |
+| `ServiceManager::new`, `new_arc`, the `_legacy_compatibility` constructors and the `service_manager!` macro | `ServiceManager::new_with_task_group(service, group)` or `new_arc_with_task_group`. |
+| `ServiceManager::is_daemon`, `set_daemon`, `is_started`, `is_stopped`, `wait_for_running`, `task_count` | `get_lifecycle_state()`; the service loop uses `ServiceTaskContext`. |
+| `ServiceLifecycle` (the `ServiceManager` state enum) | `ServiceTaskState`. |
+| `ServiceManagerLifecycleProbe` and `run_service_manager_lifecycle_probe` | `last_task_group_shutdown_report()`. |
+| `RuntimeOperation` and `RuntimeContractPolicy` variants that only the removed APIs used | Nothing. |
+
+`ScheduledTaskGroup` timing modes:
+
+| Previous method | Configuration | Policy |
+| --- | --- | --- |
+| `schedule_fixed_delay` | `ScheduledTaskConfig::fixed_delay(name, period)` | `ScheduledExecutionPolicy::serial(..)` |
+| `schedule_fixed_rate_no_overlap` | `ScheduledTaskConfig::fixed_rate_no_overlap(name, period)` | `ScheduledExecutionPolicy::serial(..)` |
+| `schedule_fixed_rate`, `schedule_fixed_rate_allow_overlap`, `schedule_bounded` | `ScheduledTaskConfig::fixed_rate(name, period)` | `ScheduledExecutionPolicy::bounded(n, ..)` |
+
+A policy that contradicts the configuration is rejected as unsupported.
+`ScheduledExecutionPolicy::default()` runs one execution at a time and skips
+ticks that arrive during it.
+
+```rust,ignore
+use rocketmq_runtime::{ScheduledExecutionPolicy, ScheduledTaskConfig};
+
+let scheduled = context.scheduled_tasks("maintenance");
+scheduled.schedule(
+    ScheduledTaskConfig::fixed_delay("maintenance.persist", period).with_initial_delay(delay),
+    ScheduledExecutionPolicy::default(),
+    move || async move { persist().await },
+)?;
+```
+
+### Changed contracts
+
+- Task names are `TaskName`. A `&'static str` name does not allocate; `String`,
+  `&String`, `Arc<str>`, `Box<str>` and `Cow<'static, str>` are accepted
+  unchanged. A borrowed `&str` that is not `'static` no longer converts; pass
+  `name.to_owned()` instead.
+- `TaskGroupId` values are unique within the process, across owners.
+- A `TaskId` records the group that issued it; its JSON form is still the
+  sequence number. A group returns `false` for another group's id from
+  `wait_task`, `abort_task`, `abort_task_and_wait` and `contains_task` instead
+  of reporting it finished or reaching its own task with the same number. Use
+  `TaskId::group_id` or `TaskGroup::owns_task` to tell the cases apart.
+- `RuntimeError::kind()` returns a `RuntimeErrorKind` to match on instead of
+  inferring the reason from `operation()`. A submission to a closing or closed
+  group, a closed operation, lane or metadata worker reports `Closed`; a
+  poisoned group reports `Poisoned`. Both keep the
+  `runtime.context.unavailable` code. `ServiceManager::start` on a closed
+  owner now reports the cause's kind and code instead of an internal failure.
+- `ShutdownReport::timed_out` counts only tasks that this shutdown's deadline
+  aborted or left behind; an abort requested earlier through `abort_task` is
+  not a timeout. `remaining_tasks` lists at most
+  `ShutdownReport::REMAINING_TASKS_LIMIT` (64) tasks and counts the rest in
+  `remaining_tasks_omitted`; `leaked` still includes them.
+- A shutdown moves a group through `Closing`, `Closed` and `ShutdownCompleted`.
+  A closing group reports `Closed` as soon as its cancellation token is
+  cancelled, so a task woken by the shutdown already observes `Closed`.
+- Poisoning a group and answering a component request with a closed child each
+  log a warning and increment `TaskGroup::event_counts()`; diagnostics
+  snapshots carry the same counts in `events`.
+- `ServiceManager` runs its loop as a service task of the group passed to
+  `new_with_task_group`. `shutdown_until(deadline)` returns no later than the
+  earlier of the requested deadline and the parent group's installed deadline;
+  without either it uses 30 seconds instead of 90.
+- `OperationContext::wait` waits until no operation task is active and the
+  owner has settled them, including tasks accepted during the wait. Close
+  admission first when new tasks may still arrive.
+- Blocking lanes admit waiters in arrival order, and a release wakes at most one
+  waiter. The Tokio blocking pool has `RuntimeConfig::tokio_blocking_threads()`
+  threads: the managed capacity plus `max(2, capacity / 8)` for direct
+  `spawn_blocking`, DNS resolution and `tokio::fs`.
+- Each budget level reserves count and bytes with atomic operations, and a
+  request that a later level rejects rolls back the levels it already
+  reserved, so no level exceeds its limit. The chain as a whole is not reserved
+  atomically: near capacity, a request that races with another request's
+  rollback can be rejected although the capacity is returned immediately
+  afterwards; callers that retry on rejection are unaffected.
+- `/drainz` accepts only `POST` by default and answers `GET` with `405` and
+  `Allow: POST`. Kubernetes `preStop.httpGet` hooks set
+  `ROCKETMQ_HEALTH_DRAIN_METHODS=GET,POST`; the repository charts and manifests
+  already do. `ServiceLifecycleConfig` gains `drain_request_methods`.
+- Health probes run each connection as a bounded lifecycle task (at most 64),
+  read until the end of the request headers, and back off on `accept` failures
+  caused by resource exhaustion.
+- Broker and NameServer components take a mandatory `ChildServiceContext`
+  instead of an optional one, so a missing owner is a compile error rather
+  than a shutdown failure, and their shutdown always produces a report.
+
+## Public surface before 1.0
+
+### Removed APIs
+
+| Removed | Replacement |
+| --- | --- |
+| `RuntimeOperation` variants owned by other crates: `TransportListener`, `SessionExecutor`, `AuthMetadataIoLane`, `HaRuntime`, `InitializeBroker`, `StartBroker`, `ShutdownBroker`, `KvMutationWorker`, `AdmitKvMutation`, `AdmitKvMutationBytes`, `KvPersistenceFault`, `TieredStoreRuntime`, `CleanupTaskGroup` and `DispatcherTaskGroup`, and the test-only `TestFailure` and `PersistRuntimeMetadata` | A constant in the owning crate, such as `const INITIALIZE_BROKER: RuntimeOperation = RuntimeOperation::external("initialize-broker");`. The workspace consumers keep their previous labels. |
+| `RuntimeOperation::CheckFile`, `CopyFileBackup`, `CreateFileParent`, `CreateFile`, `WriteFile` and `FlushFile` | Nothing; only the removed asynchronous file helpers used them. |
+| The `async_fs` feature, `common::file_utils::string_to_file_async` and `file_to_string_async` | `string_to_file` and `file_to_string` run through a blocking lane such as `ChildServiceContext::metadata_io`, or a `MetadataIoActor`. The asynchronous writer truncated the target in place without synchronizing it, while `string_to_file` replaces it atomically. `file_to_string` returns an empty string for a missing file, where the asynchronous reader returned an error. |
+
+### Changed contracts
+
+- `RuntimeOperation` and `RuntimeContractPolicy` are `#[non_exhaustive]`; a
+  `match` outside the crate needs a wildcard arm. `RuntimeOperation::External`
+  carries an `ExternalOperation` label of lowercase ASCII letters, digits and
+  inner hyphens, at most 64 bytes. Define labels as constants so an invalid
+  label fails compilation instead of panicking.
+- The shutdown report of a `RuntimeOwner` or `RuntimeContext` counts closures
+  still running on isolated executors created by `BlockingExecutor::new` for a
+  group of its tree. A report that was healthy while such a closure outlived
+  its caller is now unhealthy until the closure exits. The still-running
+  annotation is added once per report.
+- `MetadataIoActor` charges each queued or in-flight snapshot to the owner's
+  process budget until its write completes, including after its observer
+  times out. A snapshot the process budget cannot take is refused with the
+  `AdmitMetadataBytes` capacity error, like one above `max_pending_bytes`.
+- `MetadataIoPlan::with_max_concurrent_writes` lets writes of different
+  resources overlap, capped by the metadata lane's concurrency; the default
+  stays one. `MetadataIoActorLimitsProfile` gains `max_concurrent_writes`, so a
+  struct literal of it must set the field.
+- `OperationContext::wait_until` and `cancel_and_wait_until` take a
+  `ShutdownDeadline` and never wait past it. `wait` and `cancel_and_wait` keep
+  their relative timeout and at most one second of abort confirmation after it.
+- A V2 detail scan counts the descendant groups it visits against
+  `detail_scan_budget` as well as the tasks it examines, and reports
+  `truncated` when either bound stops it.

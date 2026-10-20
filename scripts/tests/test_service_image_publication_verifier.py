@@ -206,6 +206,24 @@ def attestation_line(publication: dict[str, Any], service: str, **overrides: Any
 
 
 class ServiceImagePublicationVerifierTests(unittest.TestCase):
+    def test_publication_accepts_both_supported_statement_versions(self) -> None:
+        publication = build_publication()
+        for statement_type in (
+            "https://in-toto.io/Statement/v0.1",
+            "https://in-toto.io/Statement/v1",
+        ):
+            with self.subTest(statement_type=statement_type):
+                def runner(arguments) -> str:  # type: ignore[no-untyped-def]
+                    service = arguments[-1].split("/")[-1].split("@")[0]
+                    if arguments[0] == "verify":
+                        return '{"verified":true}\n'
+                    return attestation_line(publication, service, _type=statement_type) + "\n"
+
+                self.assertEqual(
+                    publication["images"],
+                    verifier.verify_publication(publication, CANDIDATE, runner),
+                )
+
     def test_valid_publication_verifies_all_services_and_annotations(self) -> None:
         publication = build_publication()
         calls: list[tuple[str, ...]] = []
@@ -316,7 +334,7 @@ class ServiceImagePublicationVerifierTests(unittest.TestCase):
             ("predicate__image__digest", digest("different")),
             ("predicateType", "https://example.invalid/predicate"),
             ("subject", [{"digest": {"sha256": sha256("different")}}]),
-            ("_type", "https://in-toto.io/Statement/v0.1"),
+            ("_type", "https://in-toto.io/Statement/v2"),
             ("predicate__sbom__format", DELETE),
             ("predicate__vulnerability_scan__critical_findings", False),
             ("extra", "untrusted"),
@@ -330,7 +348,7 @@ class ServiceImagePublicationVerifierTests(unittest.TestCase):
                         return '{"verified":true}\n'
                     return attestation_line(publication, service, **{override: value}) + "\n"
 
-                with self.assertRaisesRegex(verifier.VerificationError, "no verified Statement/v1 matches"):
+                with self.assertRaisesRegex(verifier.VerificationError, "no verified supported in-toto statement matches"):
                     verifier.verify_publication(publication, CANDIDATE, runner)
 
     def test_every_dsse_jsonl_line_must_decode(self) -> None:

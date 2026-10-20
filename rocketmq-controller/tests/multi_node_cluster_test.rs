@@ -44,7 +44,7 @@ use rocketmq_controller::Node;
 use rocketmq_controller::RaftMetrics;
 use rocketmq_controller::RaftNodeManager;
 use rocketmq_controller::RaftPeer;
-use rocketmq_controller::StorageBackendType;
+use rocketmq_controller::StorageEngineType;
 #[cfg(feature = "dev-single")]
 use rocketmq_protocol::code::response_code::ResponseCode;
 #[cfg(feature = "dev-single")]
@@ -312,7 +312,7 @@ fn persistent_config(
         .with_election_timeout_ms(1000)
         .with_heartbeat_interval_ms(300)
         .with_raft_peers(peers)
-        .with_storage_backend(StorageBackendType::File)
+        .with_storage_engine_type(StorageEngineType::File)
         .with_storage_path(storage_path.to_string_lossy().into_owned())
 }
 
@@ -643,7 +643,7 @@ async fn start_node(
         .with_node_info(node_id, addr)
         .with_election_timeout_ms(1000)
         .with_heartbeat_interval_ms(300)
-        .with_storage_backend(StorageBackendType::Memory)
+        .with_storage_engine_type(StorageEngineType::Memory)
         .with_raft_peers(peers);
 
     let node = Arc::new(

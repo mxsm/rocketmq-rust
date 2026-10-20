@@ -65,7 +65,7 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_security_api::OutboundSigner;
 
 use crate::cluster::ClusterClient;
-use crate::cluster::RocketmqClusterClient;
+use crate::cluster::ClusterCommandGateway;
 use crate::config::ClusterConfig;
 
 pub struct ClusterRouteService {
@@ -364,7 +364,7 @@ impl ClusterServiceManager {
         service_context: &ChildServiceContext,
         telemetry_handle: rocketmq_client_rust::TelemetryHandle,
     ) -> rocketmq_proxy_core::ProxyResult<Self> {
-        Ok(Self::from_cluster_client(Arc::new(RocketmqClusterClient::new(
+        Ok(Self::from_cluster_client(Arc::new(ClusterCommandGateway::new(
             config,
             signer,
             service_context,

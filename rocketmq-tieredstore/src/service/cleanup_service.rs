@@ -15,6 +15,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::TaskGroup;
@@ -70,12 +71,13 @@ where
         let cleanup_error_on_error = cleanup_error.clone();
 
         scheduled_tasks
-            .schedule_fixed_rate_no_overlap_operation(
+            .schedule_operation(
                 owner.operation(),
                 ScheduledTaskConfig::fixed_rate_no_overlap(
                     "tieredstore.cleanup.expired-files",
                     self.config.delete_file_interval,
                 ),
+                ScheduledExecutionPolicy::default(),
                 move || {
                     let flat_file_store = flat_file_store.clone();
                     let operation_on_error = operation_on_error.clone();
@@ -181,7 +183,9 @@ mod tests {
     fn cleanup_startup_failed_uses_service_error_kind() {
         let error = cleanup_startup_failed(
             "schedule test",
-            rocketmq_runtime::RuntimeError::internal_failure(rocketmq_runtime::RuntimeOperation::CleanupTaskGroup),
+            rocketmq_runtime::RuntimeError::internal_failure(rocketmq_runtime::RuntimeOperation::external(
+                "cleanup-task-group",
+            )),
         );
 
         assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);
@@ -201,7 +205,7 @@ mod tests {
         })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             commit_log_segment_size: 8,
             consume_queue_segment_size: CONSUME_QUEUE_UNIT_SIZE as u64,
             file_reserved_time: Duration::from_millis(1),

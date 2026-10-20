@@ -6,6 +6,8 @@ title: "AI SRE 部署与开发"
 
 ## 准备环境与端口
 
+生产 TLS 边界及按命名空间分离的 Connector 通道 Secret 参阅 [SRE TLS 指南](../deployment/tls.md#sre)。
+
 安装带 Compose 的 Docker、Git 和 PowerShell；本地源码开发需要宿主 Rust 1.95.0 与 Node/npm。PostgreSQL 在 Docker 中运行，无需宿主安装。确认 Docker 能构建仓库 Linux 容器镜像，并且预期开发端口可用。
 
 | 服务 | 开发访问 | 含义 |

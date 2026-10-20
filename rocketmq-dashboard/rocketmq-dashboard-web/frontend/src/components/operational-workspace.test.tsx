@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useRef, useState } from 'react';
 import { vi } from 'vitest';
@@ -65,6 +65,35 @@ describe('operational workspace components', () => {
 
     rerender(<RefreshButton refreshing onRefresh={onRefresh} />);
     expect(screen.getByRole('button', { name: 'Refreshing' })).toBeDisabled();
+  });
+
+  it('lets the refresh icon finish its current turn after a refresh settles', () => {
+    vi.useFakeTimers();
+    try {
+      const { container, rerender } = render(<RefreshButton refreshing onRefresh={vi.fn()} />);
+      const icon = container.querySelector('.refresh-icon') as Element;
+      expect(icon).toHaveClass('is-spinning');
+
+      // A turn that ends while the refresh is still running starts the next one.
+      fireEvent.animationIteration(icon);
+      expect(icon).toHaveClass('is-spinning');
+
+      rerender(<RefreshButton onRefresh={vi.fn()} />);
+      expect(icon).toHaveClass('is-spinning');
+      fireEvent.animationIteration(icon);
+      expect(icon).not.toHaveClass('is-spinning');
+
+      // Without animation events, as with reduced motion, the fallback timer stops the icon.
+      rerender(<RefreshButton refreshing onRefresh={vi.fn()} />);
+      rerender(<RefreshButton onRefresh={vi.fn()} />);
+      expect(icon).toHaveClass('is-spinning');
+      act(() => {
+        vi.runOnlyPendingTimers();
+      });
+      expect(icon).not.toHaveClass('is-spinning');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('frames contextual details with an accessible title and keyboard tabs', async () => {
@@ -198,6 +227,35 @@ describe('operational workspace components', () => {
     );
     await user.click(screen.getByRole('button', { name: 'Next page' }));
     expect(onPageChange).toHaveBeenLastCalledWith(2);
+  });
+
+  it('plays the row entrance once and ends it when the last staggered row lands', () => {
+    const rows = Array.from({ length: 14 }, (_, index) => ({ id: `b${index}`, name: `broker-${index}` }));
+    const renderTable = (tableRows: BrokerRow[]) => (
+      <AppDataTable
+        ariaLabel="Broker inventory"
+        rows={tableRows}
+        columns={columns}
+        getRowId={(row) => row.id}
+        page={1}
+        pageSize={20}
+        total={tableRows.length}
+        onPageChange={vi.fn()}
+      />
+    );
+    const { container, rerender } = render(renderTable(rows));
+    const body = container.querySelector('tbody') as HTMLTableSectionElement;
+    expect(body).toHaveAttribute('data-entering', 'true');
+
+    // Only the twelfth row, the last one with a staggered entrance, ends it.
+    fireEvent.animationEnd(body.rows[0]);
+    fireEvent.animationEnd(body.rows[13]);
+    expect(body).toHaveAttribute('data-entering', 'true');
+    fireEvent.animationEnd(body.rows[11]);
+    expect(body).not.toHaveAttribute('data-entering');
+
+    rerender(renderTable([...rows].reverse()));
+    expect(body).not.toHaveAttribute('data-entering');
   });
 
   it('clamps exact-total callers when the requested page exceeds the new page count', () => {

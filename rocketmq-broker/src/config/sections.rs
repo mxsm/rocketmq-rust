@@ -190,6 +190,7 @@ pub struct ResourceConfig {
     max_client_events: i32,
     max_pop_polling_requests: u64,
     compaction_threads: usize,
+    metadata_io_max_pending_bytes: usize,
     process_memory_limit: ProcessMemoryLimit,
     managed_memory_bytes: u64,
     control_reserve_bytes: u64,
@@ -214,6 +215,12 @@ impl ResourceConfig {
     #[must_use]
     pub const fn compaction_threads(&self) -> usize {
         self.compaction_threads
+    }
+
+    /// Snapshot bytes the Broker metadata actor may retain; always positive.
+    #[must_use]
+    pub const fn metadata_io_max_pending_bytes(&self) -> usize {
+        self.metadata_io_max_pending_bytes
     }
 
     #[must_use]
@@ -764,6 +771,16 @@ fn validate_resources(broker: &BrokerConfig, store: &MessageStoreConfig) -> Resu
             "must be in [1, 1024]",
         ));
     }
+    let metadata_io_max_pending_bytes = usize::try_from(broker.metadata_io_max_pending_bytes)
+        .ok()
+        .filter(|bytes| *bytes > 0)
+        .ok_or_else(|| {
+            BrokerConfigError::invalid(
+                ConfigSection::Resources,
+                "broker.metadataIoMaxPendingBytes",
+                "must be greater than zero and fit the platform address space",
+            )
+        })?;
     if store.compaction_thread_num == 0 {
         return Err(BrokerConfigError::invalid(
             ConfigSection::Resources,
@@ -830,6 +847,7 @@ fn validate_resources(broker: &BrokerConfig, store: &MessageStoreConfig) -> Resu
         max_client_events: broker.max_client_event_count,
         max_pop_polling_requests: broker.max_pop_polling_size,
         compaction_threads: store.compaction_thread_num,
+        metadata_io_max_pending_bytes,
         process_memory_limit,
         managed_memory_bytes,
         control_reserve_bytes,

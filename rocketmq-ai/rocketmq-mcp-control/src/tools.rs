@@ -26,6 +26,9 @@ use crate::model::MutationArguments;
 #[path = "tools/remaining.rs"]
 mod remaining;
 pub use remaining::*;
+#[path = "tools/result.rs"]
+mod result;
+pub use result::*;
 
 pub const MUTATION_RESULT_SCHEMA_VERSION: &str = "rocketmq-mcp-mutation.v1";
 pub const UPSERT_TOPIC_TOOL: &str = "rocketmq_upsert_topic";
@@ -97,31 +100,49 @@ pub enum TopicMessageType {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TopicReplacement {
+    /// Number of read queues on each Broker, 1 to 127.
     #[schemars(range(min = 1, max = 127))]
     pub read_queue_nums: u32,
+    /// Number of write queues on each Broker, 1 to 127.
     #[schemars(range(min = 1, max = 127))]
     pub write_queue_nums: u32,
+    /// Permission bits: 2 allows writing, 4 allows reading, 6 allows both, and 1 marks the permission as
+    /// inherited. At least one of reading or writing must be allowed.
     #[schemars(range(min = 1, max = 7))]
     pub perm: u32,
+    /// Whether the Topic is ordered. This Tool never edits the cluster's order configuration, which must
+    /// already agree with the value.
     pub order: bool,
+    /// Message type of the Topic.
     pub message_type: TopicMessageType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConsumerGroupReplacement {
+    /// Whether the group may consume messages.
     pub consume_enable: bool,
+    /// Whether the group may start consuming from the minimum offset of a queue.
     pub consume_from_min_enable: bool,
+    /// Whether the group may consume in broadcast mode.
     pub consume_broadcast_enable: bool,
+    /// Whether the group consumes messages in order.
     pub consume_message_orderly: bool,
+    /// Number of retry queues, 0 to 127.
     #[schemars(range(min = 0, max = 127))]
     pub retry_queue_nums: i32,
+    /// Maximum number of redeliveries of a message, -1 to 10000.
     #[schemars(range(min = -1, max = 10_000))]
     pub retry_max_times: i32,
+    /// Id of the Broker the group normally consumes from; 0 is the master.
     pub broker_id: u64,
+    /// Id of the Broker that consumers are redirected to when consuming from the master is slow.
     pub which_broker_when_consume_slowly: u64,
+    /// Whether consumers are notified when the membership of the group changes.
     pub notify_consumer_ids_changed_enable: bool,
+    /// System flag bits of the group; 0 for an ordinary group.
     pub group_sys_flag: i32,
+    /// Minutes after which an unacknowledged message counts as timed out, 1 to 10080.
     #[schemars(range(min = 1, max = 10_080))]
     pub consume_timeout_minute: i32,
 }
@@ -129,12 +150,19 @@ pub struct ConsumerGroupReplacement {
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpsertTopicArgs {
+    /// Version of this argument schema. Always `rocketmq-mcp-control.arguments.v1`.
     #[schemars(regex(pattern = "^rocketmq-mcp-control\\.arguments\\.v1$"))]
     pub schema_version: String,
+    /// Logical cluster name from the server configuration, never a NameServer or Broker address. Both the
+    /// caller and the server policy must allow it.
     #[schemars(length(min = 1, max = 64), regex(pattern = "^[a-zA-Z0-9_-]+$"))]
     pub cluster: String,
+    /// Topic to create or replace: letters, digits, `%`, `|`, `_` and `-`, at most 127 characters. System
+    /// Topics, retry Topics and dead-letter Topics are rejected.
     #[schemars(length(min = 1, max = 127), regex(pattern = "^[%|a-zA-Z0-9_-]+$"))]
     pub topic: String,
+    /// Logical names of the master Brokers to change, 1 to 64 distinct names; never addresses. Each must
+    /// belong to the selected cluster.
     #[schemars(
         length(min = 1, max = 64),
         inner(length(min = 1, max = 127), regex(pattern = "^[%|a-zA-Z0-9_-]+$"))
@@ -142,27 +170,49 @@ pub struct UpsertTopicArgs {
     pub broker_names: Vec<String>,
     #[serde(flatten)]
     pub replacement: TopicReplacement,
+    /// Plan only: read the current state and report what would change, without writing. When omitted, the
+    /// server's configured default applies, which is a dry run unless the operator changed it.
     #[serde(default = "default_dry_run")]
     pub dry_run: bool,
+    /// Explicit confirmation. Must be true to execute, that is when `dry_run` is false; a dry run does not
+    /// need it.
     #[serde(default)]
     pub confirm: bool,
+    /// Why the change is made; kept only in the durable audit log. Required to execute. 5 to 256 characters of
+    /// letters, digits, spaces and `._,#-`, without addresses, host names or tokens.
     #[serde(default)]
     #[schemars(length(min = 5, max = 256))]
     pub reason: Option<String>,
+    /// Optional idempotency key of 8 to 64 letters, digits and `._:-`. An execute call that repeats a key with
+    /// the same arguments returns the outcome already recorded for it instead of writing again; the same key
+    /// with different arguments is rejected.
     #[serde(default)]
     #[schemars(length(min = 8, max = 64), regex(pattern = "^[a-zA-Z0-9._:-]+$"))]
     pub request_key: Option<String>,
+    /// Digest of the plan to execute: the `plan_digest` that a dry run with the same arguments returned. With
+    /// it, the server writes only if the plan it reads now is that one, and otherwise ends the call with
+    /// `precondition_conflict`. A dry run ignores it; the server policy can require it to execute.
+    #[serde(default)]
+    #[schemars(length(min = 64, max = 64), regex(pattern = "^[0-9a-f]{64}$"))]
+    pub expected_plan_digest: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpsertConsumerGroupArgs {
+    /// Version of this argument schema. Always `rocketmq-mcp-control.arguments.v1`.
     #[schemars(regex(pattern = "^rocketmq-mcp-control\\.arguments\\.v1$"))]
     pub schema_version: String,
+    /// Logical cluster name from the server configuration, never a NameServer or Broker address. Both the
+    /// caller and the server policy must allow it.
     #[schemars(length(min = 1, max = 64), regex(pattern = "^[a-zA-Z0-9_-]+$"))]
     pub cluster: String,
+    /// Consumer Group to create or replace: letters, digits, `%`, `|`, `_` and `-`, at most 255 characters.
+    /// RocketMQ's built-in system groups are rejected.
     #[schemars(length(min = 1, max = 255), regex(pattern = "^[%|a-zA-Z0-9_-]+$"))]
     pub consumer_group: String,
+    /// Logical names of the master Brokers to change, 1 to 64 distinct names; never addresses. Each must
+    /// belong to the selected cluster.
     #[schemars(
         length(min = 1, max = 64),
         inner(length(min = 1, max = 127), regex(pattern = "^[%|a-zA-Z0-9_-]+$"))
@@ -170,16 +220,31 @@ pub struct UpsertConsumerGroupArgs {
     pub broker_names: Vec<String>,
     #[serde(flatten)]
     pub replacement: ConsumerGroupReplacement,
+    /// Plan only: read the current state and report what would change, without writing. When omitted, the
+    /// server's configured default applies, which is a dry run unless the operator changed it.
     #[serde(default = "default_dry_run")]
     pub dry_run: bool,
+    /// Explicit confirmation. Must be true to execute, that is when `dry_run` is false; a dry run does not
+    /// need it.
     #[serde(default)]
     pub confirm: bool,
+    /// Why the change is made; kept only in the durable audit log. Required to execute. 5 to 256 characters of
+    /// letters, digits, spaces and `._,#-`, without addresses, host names or tokens.
     #[serde(default)]
     #[schemars(length(min = 5, max = 256))]
     pub reason: Option<String>,
+    /// Optional idempotency key of 8 to 64 letters, digits and `._:-`. An execute call that repeats a key with
+    /// the same arguments returns the outcome already recorded for it instead of writing again; the same key
+    /// with different arguments is rejected.
     #[serde(default)]
     #[schemars(length(min = 8, max = 64), regex(pattern = "^[a-zA-Z0-9._:-]+$"))]
     pub request_key: Option<String>,
+    /// Digest of the plan to execute: the `plan_digest` that a dry run with the same arguments returned. With
+    /// it, the server writes only if the plan it reads now is that one, and otherwise ends the call with
+    /// `precondition_conflict`. A dry run ignores it; the server policy can require it to execute.
+    #[serde(default)]
+    #[schemars(length(min = 64, max = 64), regex(pattern = "^[0-9a-f]{64}$"))]
+    pub expected_plan_digest: Option<String>,
 }
 
 impl std::fmt::Debug for UpsertTopicArgs {
@@ -218,6 +283,7 @@ impl UpsertTopicArgs {
             self.confirm,
             self.reason.as_deref(),
             self.request_key.as_deref(),
+            self.expected_plan_digest.as_deref(),
         )?;
         validate_target_set(&self.broker_names)?;
         validate_user_name(&self.topic, NameKind::Topic)?;
@@ -252,6 +318,7 @@ impl UpsertConsumerGroupArgs {
             self.confirm,
             self.reason.as_deref(),
             self.request_key.as_deref(),
+            self.expected_plan_digest.as_deref(),
         )?;
         validate_target_set(&self.broker_names)?;
         validate_user_name(&self.consumer_group, NameKind::ConsumerGroup)?;
@@ -286,6 +353,7 @@ pub(super) fn validate_common(
     confirm: bool,
     reason: Option<&str>,
     request_key: Option<&str>,
+    expected_plan_digest: Option<&str>,
 ) -> Result<(), ControlError> {
     MutationArguments {
         schema_version: schema_version.to_owned(),
@@ -294,7 +362,22 @@ pub(super) fn validate_common(
         reason: reason.map(ToOwned::to_owned),
         request_key: request_key.map(ToOwned::to_owned),
     }
-    .validate()
+    .validate()?;
+    if expected_plan_digest.is_some_and(|digest| !is_plan_digest(digest)) {
+        return Err(ControlError::invalid_argument());
+    }
+    Ok(())
+}
+
+/// The pattern that the schemas declare for a plan digest.
+pub(crate) const PLAN_DIGEST_PATTERN: &str = "^[0-9a-f]{64}$";
+
+/// Returns whether `value` matches [`PLAN_DIGEST_PATTERN`]: a SHA-256 in lower-case hexadecimal.
+pub(crate) fn is_plan_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn validate_target_set(broker_names: &[String]) -> Result<(), ControlError> {
@@ -361,6 +444,34 @@ pub(super) fn validate_user_name(value: &str, kind: NameKind) -> Result<(), Cont
     Ok(())
 }
 
+/// Validates the alias of a configured target, such as a Proxy.
+///
+/// An alias has the grammar of a cluster name. It therefore cannot be an address or a host name,
+/// and may be kept in a durable audit record.
+pub(super) fn validate_alias(alias: &str) -> Result<(), ControlError> {
+    validate_identifier(alias, 1)
+}
+
+/// Validates the identifier of an operation that one call starts and a later call ends.
+///
+/// The identifier is the caller's text: it is sent to the target and digested for the audit
+/// record, and no response, log or record carries it.
+pub(super) fn validate_operation_id(operation_id: &str) -> Result<(), ControlError> {
+    validate_identifier(operation_id, 8)
+}
+
+fn validate_identifier(value: &str, min_length: usize) -> Result<(), ControlError> {
+    let valid = (min_length..=64).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
+    if valid {
+        Ok(())
+    } else {
+        Err(ControlError::invalid_argument())
+    }
+}
+
 fn contains_encoded_octet(value: &str) -> bool {
     value
         .as_bytes()
@@ -415,6 +526,32 @@ pub enum FailureCode {
     PersistenceFailed,
     VerificationFailed,
     OrderReconciliationFailed,
+}
+
+/// Name of the member that carries the invocation of a mutation response.
+pub const INVOCATION_ID_MEMBER: &str = "invocation_id";
+/// Name of the member that carries the digest of the plan that a dry run reports.
+pub const PLAN_DIGEST_MEMBER: &str = "plan_digest";
+/// Name of the argument that names the plan an execution expects to find.
+pub const EXPECTED_PLAN_DIGEST_ARGUMENT: &str = "expected_plan_digest";
+
+/// Renders a mutation response as it is sent: with the invocation of the call that returns it
+/// and, for a dry run, the digest of its plan.
+///
+/// The response types hold neither. A response replayed from the request-key cache was built for
+/// another call, and every call is recorded under an invocation of its own. A plan digest also
+/// covers what the request asks for, which a response does not repeat.
+#[cfg(any(feature = "write-tools", test))]
+pub(crate) fn response_as_sent(
+    response: &impl Serialize,
+    invocation_id: u64,
+    plan_digest: Option<&str>,
+) -> Option<serde_json::Value> {
+    let mut rendered = serde_json::to_value(response).ok()?;
+    let members = rendered.as_object_mut()?;
+    members.insert(INVOCATION_ID_MEMBER.to_owned(), serde_json::Value::from(invocation_id));
+    members.insert(PLAN_DIGEST_MEMBER.to_owned(), serde_json::Value::from(plan_digest));
+    Some(rendered)
 }
 
 #[cfg(any(feature = "write-tools", test))]
@@ -854,6 +991,11 @@ mod tests {
             }],
             warnings: vec!["topic order configuration was not reconciled".to_owned()],
         };
-        insta::assert_json_snapshot!("control_mutation_response", response);
+        // The snapshot is the response as it is sent: with the invocation of the call, and
+        // without a plan digest, which only a dry run reports.
+        let sent = response_as_sent(&response, 42, None).unwrap();
+        assert_eq!(sent[INVOCATION_ID_MEMBER], 42);
+        assert_eq!(sent[PLAN_DIGEST_MEMBER], serde_json::Value::Null);
+        insta::assert_json_snapshot!("control_mutation_response", sent);
     }
 }

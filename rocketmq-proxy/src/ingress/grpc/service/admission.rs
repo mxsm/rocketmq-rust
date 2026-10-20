@@ -461,16 +461,16 @@ mod tests {
 
         assert!(matches!(
             slow.try_push_control(command(), 1),
-            rocketmq_runtime::QueuePushOutcome::Enqueued
+            rocketmq_runtime::QueueEnqueueStatus::Enqueued
         ));
         assert!(matches!(
             slow.try_push_control(command(), 1),
-            rocketmq_runtime::QueuePushOutcome::Rejected { .. }
+            rocketmq_runtime::QueueEnqueueStatus::Rejected { .. }
         ));
         assert!(slow.is_closed());
         assert!(matches!(
             fast.try_push_control(command(), 1),
-            rocketmq_runtime::QueuePushOutcome::Enqueued
+            rocketmq_runtime::QueueEnqueueStatus::Enqueued
         ));
         assert!(!fast.is_closed());
     }

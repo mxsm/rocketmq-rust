@@ -48,7 +48,7 @@ use rocketmq_controller::MembershipChange;
 use rocketmq_controller::MembershipChangeRequest;
 use rocketmq_controller::Node;
 use rocketmq_controller::RaftPeer;
-use rocketmq_controller::StorageBackendType;
+use rocketmq_controller::StorageEngineType;
 use rocketmq_model::common::attribute::subscription_group_attributes::LITE_BIND_TOPIC_ATTRIBUTE_NAME;
 use rocketmq_model::common::attribute::topic_attributes;
 use rocketmq_model::common::attribute::Attribute;
@@ -158,7 +158,7 @@ use rocketmq_store_api::TimerStoreMode;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::DefaultRequestProcessor;
-use rocketmq_transport::api::OutboundRequestOutcome;
+use rocketmq_transport::api::OutboundRequestResult;
 use rocketmq_transport::api::ServerConfig;
 use rocketmq_transport::api::TransportClient;
 use rocketmq_transport::api::TransportClientConfig;
@@ -744,31 +744,22 @@ async fn broker_runtime_service_context_parents_probe_task_groups() {
     assert!(report.timed_out_component_names().is_empty());
     assert!(report.component_names().contains(&"scheduled_tasks"));
 
-    let scheduled_task_group_report = runtime
-        .lifecycle
-        .scheduled_task_manager
-        .last_task_group_shutdown_report()
-        .expect("scheduled task group shutdown report should be retained by its owner");
-    assert!(
-        scheduled_task_group_report.is_healthy(),
-        "{}",
-        scheduled_task_group_report.to_json()
-    );
-    assert_eq!(
-        scheduled_task_group_report.name,
-        rocketmq_runtime::schedule::simple_scheduler::LEGACY_SCHEDULED_TASK_MANAGER_BOUNDARY
+    assert!(report.scheduled_tasks.present && report.scheduled_tasks.healthy);
+    let scheduled_group = runtime.lifecycle.scheduled_tasks.group().clone();
+    assert_eq!(scheduled_group.parent_id(), Some(service.task_group().id()));
+    assert_ne!(
+        scheduled_group.lifecycle_state(),
+        rocketmq_runtime::TaskGroupLifecycleState::Open
     );
 
+    // The owner's later shutdown reuses the report retained by the scheduled group.
     let service_report = service.task_group().shutdown(Duration::from_secs(1)).await;
-    assert!(
-        !service_report
-            .children
-            .iter()
-            .any(|child| child.name
-                == rocketmq_runtime::schedule::simple_scheduler::LEGACY_SCHEDULED_TASK_MANAGER_BOUNDARY),
-        "{}",
-        service_report.to_json()
-    );
+    let scheduled_report = service_report
+        .children
+        .iter()
+        .find(|child| child.name == scheduled_group.name())
+        .expect("the broker scheduled group should report under its owner");
+    assert!(scheduled_report.is_healthy(), "{}", service_report.to_json());
 }
 
 #[tokio::test]
@@ -1013,7 +1004,7 @@ fn broker_store_shutdown_failure_preserves_typed_cause_and_remains_unfinished() 
     record_message_store_shutdown_outcome(
         &mut report,
         &progress,
-        MessageStoreShutdownOutcome::Failed(error),
+        MessageStoreShutdownStatus::Failed(error),
         Duration::from_millis(3),
     );
 
@@ -1187,45 +1178,146 @@ async fn shutdown_scheduled_tasks_waits_for_running_task_drop() {
         }
     }
 
+    let context = RuntimeContext::from_current("broker-scheduled-shutdown-test");
     let broker_config = Arc::new(BrokerConfig::default());
     let message_store_config = Arc::new(MessageStoreConfig::default());
-    let runtime = BrokerRuntime::new(broker_config, message_store_config);
-    let started = Arc::new(AtomicBool::new(false));
+    let runtime =
+        BrokerRuntime::new_with_service_context(broker_config, message_store_config, context.service_context("broker"));
+    let token = runtime.lifecycle.scheduled_tasks.group().cancellation_token();
+    let (started_tx, started_rx) = oneshot::channel();
+    let (cleaning_tx, cleaning_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
     let dropped = Arc::new(AtomicBool::new(false));
     runtime
         .lifecycle
-        .scheduled_task_manager
-        .add_fixed_delay_task(Duration::ZERO, Duration::from_secs(60), {
-            let started = Arc::clone(&started);
-            let dropped = Arc::clone(&dropped);
-            move |_token| {
-                let started = Arc::clone(&started);
+        .scheduled_tasks
+        .schedule(
+            rocketmq_runtime::ScheduledTaskConfig::fixed_delay("broker.test.pending-run", Duration::from_secs(60)),
+            rocketmq_runtime::ScheduledExecutionPolicy::default(),
+            {
                 let dropped = Arc::clone(&dropped);
-                async move {
-                    let _marker = DropMarker(dropped);
-                    started.store(true, Ordering::Release);
-                    future::pending::<rocketmq_runtime::RuntimeResult<()>>().await
+                let mut signals = Some((started_tx, cleaning_tx, release_rx));
+                move || {
+                    let token = token.clone();
+                    let dropped = Arc::clone(&dropped);
+                    let (started, cleaning, release) = signals.take().expect("only one scheduled run");
+                    async move {
+                        let _marker = DropMarker(dropped);
+                        started.send(()).expect("start observer");
+                        token.cancelled().await;
+                        cleaning.send(()).expect("cleanup observer");
+                        release.await.expect("release scheduled cleanup");
+                    }
                 }
-            }
-        })
+            },
+        )
         .expect("scheduled shutdown test task should start");
-    tokio::time::timeout(Duration::from_secs(1), async {
-        while !started.load(Ordering::Acquire) {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("scheduled task should start");
+    tokio::time::timeout(Duration::from_secs(5), started_rx)
+        .await
+        .expect("scheduled task start deadline")
+        .expect("scheduled task should start");
 
-    runtime
-        .shutdown_scheduled_tasks_with_timeout(Duration::from_millis(10))
-        .await;
+    // A pending run must cooperate with cancellation to finish before the
+    // shared deadline. Hold its cleanup to prove shutdown actually awaits it.
+    let shutdown = runtime.shutdown_scheduled_tasks_with_timeout(Duration::from_secs(5));
+    tokio::pin!(shutdown);
+    assert!(futures::poll!(&mut shutdown).is_pending());
+    tokio::time::timeout(Duration::from_secs(5), cleaning_rx)
+        .await
+        .expect("scheduled cleanup start deadline")
+        .expect("scheduled cleanup should start");
+    assert!(futures::poll!(&mut shutdown).is_pending());
+    assert_eq!(runtime.lifecycle.scheduled_tasks.group().task_count(), 1);
+    assert!(!dropped.load(Ordering::Acquire));
 
-    assert_eq!(runtime.lifecycle.scheduled_task_manager.task_count(), 0);
+    release_tx.send(()).expect("release scheduled cleanup");
+    let report = shutdown.await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+    assert_eq!(report.cancelled, 1);
+    assert_eq!(report.timed_out, 0);
+    assert_eq!(report.aborted, 0);
+    assert_eq!(runtime.lifecycle.scheduled_tasks.group().task_count(), 0);
     assert!(
         dropped.load(Ordering::Acquire),
-        "broker scheduled shutdown should wait until aborted tasks release their running future"
+        "broker scheduled shutdown should wait until completed tasks release their running future"
     );
+}
+
+#[tokio::test]
+async fn shutdown_scheduled_tasks_reports_unconfirmed_drop_at_deadline() {
+    struct GatedDrop {
+        release: std::sync::mpsc::Receiver<()>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl Drop for GatedDrop {
+        fn drop(&mut self) {
+            // The test runs on a separate runtime from this scheduled task.
+            // Channel disconnection also releases the gate if an assertion fails.
+            let _ = self.release.recv();
+            self.dropped.store(true, Ordering::Release);
+        }
+    }
+
+    let runtime = BrokerRuntime::new(
+        Arc::new(BrokerConfig::default()),
+        Arc::new(MessageStoreConfig::default()),
+    );
+    let (started_tx, started_rx) = oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let task_dropped = Arc::clone(&dropped);
+    let mut run = Some((started_tx, release_rx));
+    runtime
+        .lifecycle
+        .scheduled_tasks
+        .schedule(
+            rocketmq_runtime::ScheduledTaskConfig::fixed_delay("broker.test.unconfirmed-drop", Duration::from_secs(60)),
+            rocketmq_runtime::ScheduledExecutionPolicy::default(),
+            move || {
+                let (started, release) = run.take().expect("only one scheduled run");
+                let dropped = Arc::clone(&task_dropped);
+                async move {
+                    let _marker = GatedDrop { release, dropped };
+                    started.send(()).expect("start observer");
+                    future::pending::<()>().await;
+                }
+            },
+        )
+        .expect("scheduled deadline test task should start");
+    tokio::time::timeout(Duration::from_secs(5), started_rx)
+        .await
+        .expect("scheduled task start deadline")
+        .expect("scheduled task should start");
+
+    // Keep destruction blocked past the deadline, independent of how quickly
+    // the worker observes abort. A bounded shutdown must report remaining work.
+    let report = tokio::time::timeout(
+        Duration::from_secs(5),
+        runtime.shutdown_scheduled_tasks_with_timeout(Duration::ZERO),
+    )
+    .await
+    .expect("shutdown must not wait indefinitely for destruction");
+    assert!(!report.is_healthy(), "{}", report.to_json());
+    assert_eq!(report.timed_out, 1);
+    assert_eq!(report.leaked, 1);
+    assert_eq!(report.aborted, 0, "abort has not been confirmed");
+    assert_eq!(report.remaining_tasks.len(), 1);
+    assert_eq!(runtime.lifecycle.scheduled_tasks.group().task_count(), 1);
+    assert!(!dropped.load(Ordering::Acquire));
+
+    release_tx.send(()).expect("release scheduled task destruction");
+    assert!(
+        runtime
+            .lifecycle
+            .scheduled_tasks
+            .group()
+            .wait_task(report.remaining_tasks[0].id, Duration::from_secs(5))
+            .await,
+        "aborted task should finish destruction after release"
+    );
+    assert_eq!(runtime.lifecycle.scheduled_tasks.group().task_count(), 0);
+    assert!(dropped.load(Ordering::Acquire));
 }
 
 #[tokio::test]
@@ -1255,22 +1347,27 @@ async fn broker_shutdown_cancels_scheduled_store_lease_before_store_lock_release
 
     let store = runtime.composition.data_plane.escape_bridge_owner.store_capability();
     let lease_started = Arc::new(AtomicBool::new(false));
+    let token = runtime.lifecycle.scheduled_tasks.group().cancellation_token();
     runtime
         .lifecycle
-        .scheduled_task_manager
-        .add_fixed_delay_task(Duration::ZERO, Duration::from_secs(60), {
-            let lease_started = Arc::clone(&lease_started);
-            move |token| {
-                let store = store.clone();
+        .scheduled_tasks
+        .schedule(
+            rocketmq_runtime::ScheduledTaskConfig::fixed_delay("broker.test.store-lease", Duration::from_secs(60)),
+            rocketmq_runtime::ScheduledExecutionPolicy::default(),
+            {
                 let lease_started = Arc::clone(&lease_started);
-                async move {
-                    let _lease = store.read_lease().expect("scheduled task should acquire a Store lease");
-                    lease_started.store(true, Ordering::Release);
-                    token.cancelled().await;
-                    Ok(())
+                move || {
+                    let store = store.clone();
+                    let lease_started = Arc::clone(&lease_started);
+                    let token = token.clone();
+                    async move {
+                        let _lease = store.read_lease().expect("scheduled task should acquire a Store lease");
+                        lease_started.store(true, Ordering::Release);
+                        token.cancelled().await;
+                    }
                 }
-            }
-        })
+            },
+        )
         .expect("scheduled Store lease task should start");
     tokio::time::timeout(Duration::from_secs(1), async {
         while !lease_started.load(Ordering::Acquire) {
@@ -1856,13 +1953,20 @@ fn tieredstore_message_store_config(root: &Path) -> MessageStoreConfig {
         "timerWheelEnable": false,
         "tieredStoreConfig": {
             "storageLevel": "force",
-            "backendProvider": "memory",
+            "storageProviderId": "memory",
             "metadataProvider": "json",
             "storePathRootDir": root.join("tieredstore").to_string_lossy(),
             "maxPendingTasks": 16
         }
     }))
     .expect("deserialize tieredstore-enabled message store config")
+}
+
+#[cfg(feature = "tieredstore")]
+#[test]
+fn tieredstore_storage_provider_id_deserializes() {
+    let config = tieredstore_message_store_config(Path::new("store"));
+    assert_eq!(config.tiered_store_config.unwrap().storage_provider_id, "memory");
 }
 
 #[cfg(feature = "tieredstore")]
@@ -2159,11 +2263,11 @@ async fn sync_namesrv_member_group(
     let request_header = GetBrokerMemberGroupRequestHeader::new(cluster_name.clone(), broker_name.clone());
     let request = RemotingCommand::create_request_command(RequestCode::GetBrokerMemberGroup, request_header);
     let mut response = match client.invoke_request(Some(namesrv_addr), request, 3000).await {
-        Ok(OutboundRequestOutcome::Response(response)) => response,
-        Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+        Ok(OutboundRequestResult::Response(response)) => response,
+        Ok(OutboundRequestResult::Rejected(rejection)) => {
             panic!("broker member-group request was rejected: {rejection:?}")
         }
-        Ok(OutboundRequestOutcome::Contract(contract)) => {
+        Ok(OutboundRequestResult::Contract(contract)) => {
             panic!("broker member-group request contract failed: {contract:?}")
         }
         Err(error) => panic!("broker member-group request failed: {error:?}"),
@@ -2226,31 +2330,71 @@ where
     }
 }
 
-async fn wait_for_controller_learner_to_reach_committed_frontier(
+async fn promote_controller_learner(
     manager: &TestControllerManager,
     node_id: u64,
+    membership_version: u64,
     timeout: Duration,
-) -> u64 {
-    let start = std::time::Instant::now();
-    loop {
-        let membership = manager
-            .raft()
-            .consensus_membership()
-            .await
-            .expect("read controller membership while waiting for learner replication");
-        if membership.caught_up().contains(&node_id) {
-            return membership.version();
+) {
+    let mut expected_version = Some(membership_version);
+    let mut last_membership = None;
+    let mut last_rejection = None;
+    let result = tokio::time::timeout(timeout, async {
+        loop {
+            let membership = manager
+                .raft()
+                .consensus_membership()
+                .await
+                .expect("read controller membership while waiting for learner replication");
+            last_membership = Some(membership.clone());
+            if membership.caught_up().contains(&node_id) {
+                let request = MembershipChangeRequest::new(
+                    format!("broker-runtime-promote-controller-voter-{node_id}"),
+                    expected_version.take().unwrap_or_else(|| membership.version()),
+                    MembershipChange::PromoteVoter { node_id },
+                    "form broker runtime Controller voting set",
+                )
+                .expect("valid promote-voter request");
+                match manager
+                    .raft()
+                    .apply_membership_change(&controller_membership_authorization(), request)
+                    .await
+                {
+                    Ok(_) => return,
+                    Err(error) => {
+                        // Readiness is a snapshot: membership commits can advance before admission.
+                        // Only retry pre-mutation rejections; uncertain outcomes must fail immediately.
+                        let precondition_changed = error.descriptor() == &rocketmq_error::CONTROLLER_REQUEST_INVALID
+                            && error.diagnostic_view().is_ok_and(|view| {
+                                view.fields().any(|field| {
+                                    field.name() == "operation"
+                                        && matches!(
+                                            field.value(),
+                                            rocketmq_error::ViewValueRef::Text(
+                                                "validate membership version"
+                                                    | "promote uncaught-up Controller learner"
+                                            )
+                                        )
+                                })
+                            });
+                        assert!(
+                            precondition_changed,
+                            "promote controller learner {node_id} to voter: {:?}",
+                            error.diagnostic_view()
+                        );
+                        last_rejection = Some(error);
+                    }
+                }
+            }
+            sleep(Duration::from_millis(50)).await;
         }
-        if start.elapsed() >= timeout {
-            panic!(
-                "Timed out waiting for controller learner {node_id} to reach the committed log frontier; \
-                 membership_version={}, caught_up={:?}",
-                membership.version(),
-                membership.caught_up()
-            );
-        }
-        sleep(Duration::from_millis(50)).await;
-    }
+    })
+    .await;
+    assert!(
+        result.is_ok(),
+        "Timed out promoting controller learner {node_id}; membership={last_membership:?}, last_rejection={:?}",
+        last_rejection.as_ref().map(|error| error.diagnostic_view())
+    );
 }
 
 async fn wait_for_tcp_listener(addr: std::net::SocketAddr, context: &str) {
@@ -2273,7 +2417,7 @@ async fn new_test_controller_manager(
         .with_node_info(node_id, controller_peer.addr)
         .with_controller_peers(controller_peers)
         .with_raft_peers(raft_peers)
-        .with_storage_backend(StorageBackendType::Memory)
+        .with_storage_engine_type(StorageEngineType::Memory)
         .with_storage_path(
             root.join(format!("controller-{node_id}"))
                 .to_string_lossy()
@@ -2342,7 +2486,7 @@ fn controller_membership_authorization() -> MaintenanceAuthorizationGrant {
         .expect("controller membership authorization")
 }
 
-async fn start_controller_cluster(base_port: u16, root: &Path) -> (Vec<Arc<TestControllerManager>>, Vec<RaftPeer>) {
+async fn start_controller_learners(base_port: u16, root: &Path) -> (Vec<Arc<TestControllerManager>>, Vec<RaftPeer>) {
     let controller_peers = vec![
         RaftPeer {
             id: 1,
@@ -2463,44 +2607,26 @@ async fn start_controller_cluster(base_port: u16, root: &Path) -> (Vec<Arc<TestC
             .expect("add controller learner");
     }
 
+    (managers, controller_peers)
+}
+
+async fn start_controller_cluster(base_port: u16, root: &Path) -> (Vec<Arc<TestControllerManager>>, Vec<RaftPeer>) {
+    let (managers, controller_peers) = start_controller_learners(base_port, root).await;
+    let bootstrap_manager = &managers[0];
     for controller_peer in controller_peers.iter().skip(1) {
-        let membership_version = wait_for_controller_learner_to_reach_committed_frontier(
+        let membership_version = bootstrap_manager
+            .raft()
+            .consensus_membership()
+            .await
+            .expect("read controller membership before promoting learner")
+            .version();
+        promote_controller_learner(
             bootstrap_manager.as_ref(),
             controller_peer.id,
+            membership_version,
             Duration::from_secs(20),
         )
         .await;
-        let request = MembershipChangeRequest::new(
-            format!("broker-runtime-promote-controller-voter-{}", controller_peer.id),
-            membership_version,
-            MembershipChange::PromoteVoter {
-                node_id: controller_peer.id,
-            },
-            "form broker runtime Controller voting set",
-        )
-        .expect("valid promote-voter request");
-        match tokio::time::timeout(
-            Duration::from_secs(20),
-            bootstrap_manager
-                .raft()
-                .apply_membership_change(&controller_membership_authorization(), request),
-        )
-        .await
-        {
-            Ok(result) => {
-                result.expect("promote controller learner to voter");
-            }
-            Err(_) => {
-                panic!(
-                    "Timed out promoting controller learner {}; states={:?}",
-                    controller_peer.id,
-                    managers
-                        .iter()
-                        .map(|manager| (manager.is_leader(), manager.raft().has_committed_log().unwrap_or(false)))
-                        .collect::<Vec<_>>()
-                );
-            }
-        }
     }
 
     wait_until(
@@ -2535,6 +2661,59 @@ async fn start_controller_cluster(base_port: u16, root: &Path) -> (Vec<Arc<TestC
     .await;
 
     (managers, controller_peers)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn controller_bootstrap_refreshes_stale_learner_promotion_version() {
+    let _controller_test_guard = CONTROLLER_INTEGRATION_TEST_LOCK.lock().await;
+    let base_port = allocate_controller_test_base_port();
+    let root = controller_cluster_root("controller-stale-promotion");
+    let (controllers, controller_peers) = start_controller_learners(base_port, &root).await;
+    let leader = &controllers[0];
+    let observed_version = leader
+        .raft()
+        .consensus_membership()
+        .await
+        .expect("observe membership before promotions")
+        .version();
+
+    promote_controller_learner(
+        leader,
+        controller_peers[1].id,
+        observed_version,
+        Duration::from_secs(20),
+    )
+    .await;
+    let membership = leader
+        .raft()
+        .consensus_membership()
+        .await
+        .expect("membership after first promotion");
+    assert!(membership.version() > observed_version);
+
+    // The first promotion invalidates the snapshot retained for the second learner.
+    promote_controller_learner(
+        leader,
+        controller_peers[2].id,
+        observed_version,
+        Duration::from_secs(20),
+    )
+    .await;
+    let membership = leader
+        .raft()
+        .consensus_membership()
+        .await
+        .expect("membership after both promotions");
+    assert_eq!(membership.voters(), &BTreeSet::from([1, 2, 3]));
+    assert!(membership.learners().is_empty());
+
+    for controller in &controllers {
+        controller
+            .shutdown()
+            .await
+            .expect("shutdown bootstrap regression controller");
+    }
+    let _ = std::fs::remove_dir_all(root);
 }
 
 fn new_controller_mode_runtime(
@@ -2584,6 +2763,7 @@ fn new_controller_mode_runtime_with_store_key(
         controller_addr: controller_addrs,
         sync_broker_metadata_period: 500,
         sync_controller_metadata_period: 500,
+        check_sync_state_set_period: 500,
         broker_heartbeat_interval: 500,
         send_heartbeat_timeout_millis: 1000,
         controller_heartbeat_timeout_mills: 2000,
@@ -3878,16 +4058,7 @@ async fn broker_composition_owns_and_installs_one_deferred_lifecycle() {
         .expect("deferred producer task group should be retained by its lifecycle owner");
     assert_eq!(
         producer_task_group.parent_id(),
-        Some(
-            runtime
-                .composition
-                .state
-                .service_context
-                .as_ref()
-                .expect("phase3 runtime should retain a service context")
-                .task_group()
-                .id()
-        )
+        Some(runtime.composition.state.service_context.task_group().id())
     );
     assert!(
         producer_task_group.task_count() >= 2,
@@ -6696,6 +6867,26 @@ async fn three_controller_two_broker_controller_mode_bootstrap() {
         "brokers to finish controller bootstrap",
     )
     .await;
+    // The caught-up slave joins the sync state set right after bootstrap; compare the broker and
+    // controller views only after that change has settled.
+    wait_until(
+        Duration::from_secs(30),
+        || match (
+            broker_a.composition.state.replicas_manager(),
+            broker_b.composition.state.replicas_manager(),
+        ) {
+            (Some(manager_a), Some(manager_b)) => {
+                let both_brokers = HashSet::from([
+                    manager_a.broker_controller_id() as i64,
+                    manager_b.broker_controller_id() as i64,
+                ]);
+                manager_a.sync_state_set() == &both_brokers && manager_b.sync_state_set() == &both_brokers
+            }
+            _ => false,
+        },
+        "both brokers to observe the caught-up slave in the sync state set",
+    )
+    .await;
 
     let manager_a = broker_a
         .composition
@@ -6803,6 +6994,219 @@ async fn three_controller_two_broker_controller_mode_bootstrap() {
     }
 
     let ((), ()) = tokio::join!(broker_a.shutdown(), broker_b.shutdown());
+    shutdown_controller_cluster(&controllers).await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+fn replicas_sync_state_view(runtime: &BrokerRuntime) -> Option<(HashSet<i64>, i32)> {
+    runtime
+        .composition
+        .state
+        .replicas_manager()
+        .map(|manager| (manager.sync_state_set().clone(), manager.sync_state_set_epoch()))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn three_controller_two_broker_controller_mode_sync_state_set_follows_replica_catch_up() {
+    let _controller_test_guard = CONTROLLER_INTEGRATION_TEST_LOCK.lock().await;
+    let base_port = allocate_controller_test_base_port();
+    let root = controller_cluster_root("controller-mode-sync-state-set");
+
+    let (controllers, controller_peers) = start_controller_cluster(base_port, &root).await;
+    let controller_addrs = controller_addr_list(&controller_peers);
+    let controller_leader_manager = controllers
+        .iter()
+        .find(|manager| manager.is_leader())
+        .expect("controller cluster should elect a leader")
+        .clone();
+
+    let mut broker_a = new_controller_mode_runtime(
+        &root,
+        "controller-mode-broker",
+        base_port + 21,
+        base_port + 22,
+        controller_addrs.clone(),
+    );
+    let mut broker_b = new_controller_mode_runtime(
+        &root,
+        "controller-mode-broker",
+        base_port + 31,
+        base_port + 32,
+        controller_addrs,
+    );
+
+    initialize_controller_mode_broker(&mut broker_a, "broker A").await;
+    initialize_controller_mode_broker(&mut broker_b, "broker B").await;
+    broker_a.start().await.expect("broker A should start");
+    broker_b.start().await.expect("broker B should start");
+    bootstrap_broker_against_controller(&mut broker_a, &controller_leader_manager).await;
+    broker_a
+        .composition
+        .state
+        .build_controller_runtime()
+        .send_heartbeat()
+        .await;
+    let broker_a_controller_id = broker_a
+        .composition
+        .state
+        .replicas_manager()
+        .expect("broker A replicas manager should exist after bootstrap")
+        .broker_controller_id();
+    wait_until(
+        Duration::from_secs(5),
+        || {
+            controller_leader_manager.heartbeat_manager().is_broker_active(
+                "controller-test-cluster",
+                "controller-mode-broker",
+                broker_a_controller_id as i64,
+            )
+        },
+        "controller leader to mark broker A active",
+    )
+    .await;
+    bootstrap_broker_against_controller(&mut broker_b, &controller_leader_manager).await;
+
+    wait_until(
+        Duration::from_secs(10),
+        || {
+            let manager_a = broker_a.composition.state.replicas_manager();
+            let manager_b = broker_b.composition.state.replicas_manager();
+            match (manager_a, manager_b) {
+                (Some(manager_a), Some(manager_b)) => {
+                    manager_a.register_state() == RegisterState::Registered
+                        && manager_b.register_state() == RegisterState::Registered
+                        && manager_a.master_broker_id().is_some()
+                        && manager_a.master_broker_id() == manager_b.master_broker_id()
+                }
+                _ => false,
+            }
+        },
+        "brokers to finish controller bootstrap",
+    )
+    .await;
+
+    let manager_a = broker_a
+        .composition
+        .state
+        .replicas_manager()
+        .expect("broker A replicas manager should exist");
+    let manager_b = broker_b
+        .composition
+        .state
+        .replicas_manager()
+        .expect("broker B replicas manager should exist");
+    let master_broker_id = manager_a.master_broker_id().expect("controller should elect a master");
+    let broker_a_is_master = manager_a.broker_controller_id() == master_broker_id;
+    let slave_broker_id = if broker_a_is_master {
+        manager_b.broker_controller_id()
+    } else {
+        manager_a.broker_controller_id()
+    };
+    let master_only_sync_state_set = HashSet::from([master_broker_id as i64]);
+    let expanded_sync_state_set = HashSet::from([master_broker_id as i64, slave_broker_id as i64]);
+
+    // Election installs {master}; only the master's AlterSyncStateSet report can add the
+    // caught-up slave, and the Controller commits it under a new sync-state-set epoch.
+    wait_until(
+        Duration::from_secs(30),
+        || match (replicas_sync_state_view(&broker_a), replicas_sync_state_view(&broker_b)) {
+            (Some(view_a), Some(view_b)) => view_a.0 == expanded_sync_state_set && view_a == view_b,
+            _ => false,
+        },
+        "the master to report the caught-up slave into the controller sync state set",
+    )
+    .await;
+    let (_, expanded_epoch) = replicas_sync_state_view(&broker_a).expect("broker A sync state view");
+    assert!(
+        expanded_epoch >= 2,
+        "adding the slave must advance the sync-state-set epoch committed by the election, got {expanded_epoch}"
+    );
+
+    let master_broker = if broker_a_is_master { &broker_a } else { &broker_b };
+    let controller_leader = master_broker
+        .composition
+        .state
+        .replicas_manager()
+        .and_then(|manager| manager.controller_leader_address().cloned())
+        .expect("master should know the controller leader");
+    let (replica_header, replica_body) = master_broker
+        .composition
+        .state
+        .broker_outer_api
+        .get_replica_info(
+            &controller_leader,
+            CheetahString::from_static_str("controller-mode-broker"),
+        )
+        .await
+        .expect("query controller replica info after expansion");
+    assert_eq!(replica_header.master_broker_id, Some(master_broker_id as i64));
+    assert_eq!(
+        replica_body.get_sync_state_set().cloned().unwrap_or_default(),
+        expanded_sync_state_set,
+        "the controller should commit the caught-up slave"
+    );
+    assert_eq!(replica_body.get_sync_state_set_epoch(), expanded_epoch);
+    {
+        let master_store = master_broker
+            .composition
+            .state
+            .message_store()
+            .expect("master message store should exist");
+        let master_ha_info = master_store
+            .get_ha_service()
+            .expect("controller mode master should run an HA service")
+            .get_runtime_info(0);
+        assert!(master_ha_info.master);
+        assert_eq!(master_ha_info.in_sync_slave_nums, 1);
+        assert!(
+            master_ha_info
+                .ha_connection_info
+                .iter()
+                .any(|connection| connection.in_sync),
+            "the master HA view should mark the slave connection in sync: {master_ha_info:?}"
+        );
+    }
+
+    // A stopped slave no longer catches up; the master reports it out of the sync state set.
+    if broker_a_is_master {
+        shutdown_controller_mode_broker_for_rejoin(&mut broker_b, "slave broker B").await;
+    } else {
+        shutdown_controller_mode_broker_for_rejoin(&mut broker_a, "slave broker A").await;
+    }
+    let master_broker = if broker_a_is_master { &broker_a } else { &broker_b };
+    wait_until(
+        Duration::from_secs(45),
+        || {
+            replicas_sync_state_view(master_broker).is_some_and(|(sync_state_set, epoch)| {
+                sync_state_set == master_only_sync_state_set && epoch > expanded_epoch
+            })
+        },
+        "the master to report the stopped slave out of the controller sync state set",
+    )
+    .await;
+    let (_, shrunk_epoch) = replicas_sync_state_view(master_broker).expect("master sync state view");
+    let (_, replica_body) = master_broker
+        .composition
+        .state
+        .broker_outer_api
+        .get_replica_info(
+            &controller_leader,
+            CheetahString::from_static_str("controller-mode-broker"),
+        )
+        .await
+        .expect("query controller replica info after shrink");
+    assert_eq!(
+        replica_body.get_sync_state_set().cloned().unwrap_or_default(),
+        master_only_sync_state_set,
+        "the controller should drop the stopped slave"
+    );
+    assert_eq!(replica_body.get_sync_state_set_epoch(), shrunk_epoch);
+
+    if broker_a_is_master {
+        broker_a.shutdown().await;
+    } else {
+        broker_b.shutdown().await;
+    }
     shutdown_controller_cluster(&controllers).await;
     let _ = std::fs::remove_dir_all(root);
 }
@@ -7036,9 +7440,12 @@ async fn three_controller_two_broker_controller_mode_failover_and_rejoin() {
         .send_heartbeat()
         .await;
 
+    // Once the returning broker catches up, the surviving master adds it to the sync state set.
+    let rejoined_sync_state_set = HashSet::from([surviving_controller_id as i64, old_master_controller_id as i64]);
     wait_until(
         Duration::from_secs(30),
         || {
+            let surviving_broker = if broker_a_is_master { &broker_b } else { &broker_a };
             rejoining_broker
                 .composition
                 .state
@@ -7047,8 +7454,13 @@ async fn three_controller_two_broker_controller_mode_failover_and_rejoin() {
                     manager.register_state() == RegisterState::Registered
                         && manager.broker_controller_id() == old_master_controller_id
                         && manager.master_broker_id() == Some(surviving_controller_id)
-                        && manager.sync_state_set().contains(&(surviving_controller_id as i64))
+                        && manager.sync_state_set() == &rejoined_sync_state_set
                 })
+                && surviving_broker
+                    .composition
+                    .state
+                    .replicas_manager()
+                    .is_some_and(|manager| manager.sync_state_set() == &rejoined_sync_state_set)
                 && rejoining_broker.composition.state.message_store_config().broker_role == BrokerRole::Slave
         },
         "old master to rejoin as slave",
@@ -7479,18 +7891,26 @@ async fn three_controller_two_broker_controller_leader_failover_keeps_broker_vie
     bootstrap_broker_against_controller(&mut broker_b, &controller_leader_manager).await;
 
     wait_until(
-        Duration::from_secs(10),
+        Duration::from_secs(30),
         || {
             let manager_a = broker_a.composition.state.replicas_manager();
             let manager_b = broker_b.composition.state.replicas_manager();
             match (manager_a, manager_b) {
                 (Some(manager_a), Some(manager_b)) => {
+                    // Wait for the caught-up slave to join the sync state set, so that the
+                    // membership is stable across the controller leader failover.
+                    let both_brokers = HashSet::from([
+                        manager_a.broker_controller_id() as i64,
+                        manager_b.broker_controller_id() as i64,
+                    ]);
                     manager_a.register_state() == RegisterState::Registered
                         && manager_b.register_state() == RegisterState::Registered
                         && manager_a.master_broker_id().is_some()
                         && manager_b.master_broker_id().is_some()
                         && manager_a.controller_leader_address().is_some()
                         && manager_b.controller_leader_address().is_some()
+                        && manager_a.sync_state_set() == &both_brokers
+                        && manager_b.sync_state_set() == &both_brokers
                 }
                 _ => false,
             }

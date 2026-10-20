@@ -22,12 +22,11 @@ use std::time::Instant;
 
 use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::RuntimeError;
-use rocketmq_runtime::RuntimeOperation;
+use rocketmq_runtime::RuntimeErrorKind;
 use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_runtime::TaskGroupLifecycleState;
 use rocketmq_runtime::TaskId;
 use rocketmq_runtime::TaskKind;
 
@@ -36,7 +35,7 @@ use crate::admission::AdmissionRejection;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScopeHandle;
 use crate::admission::PartialFramePermit;
-use crate::dispatch::deferred_resume::DeferredResumeEnqueueOutcome;
+use crate::dispatch::deferred_resume::DeferredResumeSubmissionResult;
 use crate::dispatch::deferred_resume::ResumeJobCell;
 use crate::request_ordering::RequestOrdering;
 use crate::request_ordering::RequestSequencer;
@@ -179,13 +178,7 @@ impl SessionExecutor {
             },
         ) {
             Ok(task_id) => Ok(SessionDispatchAttempt::Accepted(task_id)),
-            Err(error) if error.operation() == RuntimeOperation::SpawnOperation => {
-                Ok(SessionDispatchAttempt::SessionClosed { retained_partial: None })
-            }
-            Err(error)
-                if error.operation() == RuntimeOperation::SpawnTaskGroupTask
-                    && self.inner.request_group.lifecycle_state() != TaskGroupLifecycleState::Open =>
-            {
+            Err(error) if session_stopped_admission(&error) => {
                 Ok(SessionDispatchAttempt::SessionClosed { retained_partial: None })
             }
             Err(error) => Err(error),
@@ -322,12 +315,12 @@ impl DeferredResumeExecutor {
         Self { inner: Weak::new() }
     }
 
-    pub(crate) fn try_execute_resume(&self, cell: Arc<ResumeJobCell>) -> DeferredResumeEnqueueOutcome {
+    pub(crate) fn try_execute_resume(&self, cell: Arc<ResumeJobCell>) -> DeferredResumeSubmissionResult {
         let Some(inner) = self.inner.upgrade() else {
-            return DeferredResumeEnqueueOutcome::ExecutorClosing { cell };
+            return DeferredResumeSubmissionResult::ExecutorClosing { cell };
         };
         if !inner.accepting.load(Ordering::Acquire) {
-            return DeferredResumeEnqueueOutcome::ExecutorClosing { cell };
+            return DeferredResumeSubmissionResult::ExecutorClosing { cell };
         }
         let retained_bytes = cell.retained_bytes();
         let class = cell.class();
@@ -337,14 +330,14 @@ impl DeferredResumeExecutor {
             .try_acquire(AdmissionResource::Queued, retained_bytes, class)
         {
             Ok(permit) => permit,
-            Err(error) => return DeferredResumeEnqueueOutcome::AdmissionRejected { error, cell },
+            Err(error) => return DeferredResumeSubmissionResult::AdmissionRejected { error, cell },
         };
         let inflight = match inner
             .admission
             .try_acquire(AdmissionResource::Inflight, retained_bytes, class)
         {
             Ok(permit) => permit,
-            Err(error) => return DeferredResumeEnqueueOutcome::AdmissionRejected { error, cell },
+            Err(error) => return DeferredResumeSubmissionResult::AdmissionRejected { error, cell },
         };
         let admission = inner.admission.clone();
         let sequencer = inner.sequencer.clone();
@@ -418,17 +411,18 @@ impl DeferredResumeExecutor {
                 job.execute(operation_for_task).await;
             },
         ) {
-            Ok(task_id) => DeferredResumeEnqueueOutcome::Submitted(task_id),
-            Err(source) if source.operation() == RuntimeOperation::SpawnOperation => {
-                DeferredResumeEnqueueOutcome::ExecutorClosing { cell }
+            Ok(task_id) => DeferredResumeSubmissionResult::Submitted(task_id),
+            Err(source) if session_stopped_admission(&source) => {
+                DeferredResumeSubmissionResult::ExecutorClosing { cell }
             }
-            Err(source)
-                if source.operation() == RuntimeOperation::SpawnTaskGroupTask
-                    && inner.request_group.lifecycle_state() != TaskGroupLifecycleState::Open =>
-            {
-                DeferredResumeEnqueueOutcome::ExecutorClosing { cell }
-            }
-            Err(source) => DeferredResumeEnqueueOutcome::OperationalFailure { source, cell },
+            Err(source) => DeferredResumeSubmissionResult::OperationalFailure { source, cell },
         }
     }
+}
+
+/// Returns whether a submission failed because the session's request
+/// operation or task group stopped admitting work, rather than failing
+/// operationally.
+fn session_stopped_admission(error: &RuntimeError) -> bool {
+    matches!(error.kind(), RuntimeErrorKind::Closed | RuntimeErrorKind::Poisoned)
 }

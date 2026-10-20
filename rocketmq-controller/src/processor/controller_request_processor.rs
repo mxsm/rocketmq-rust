@@ -50,10 +50,10 @@ use rocketmq_protocol::protocol::header::controller::get_replica_info_request_he
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::RemotingDeserializable;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::SessionView;
 use tracing::warn;
 
@@ -291,19 +291,19 @@ impl ControllerRequestProcessor {
         }
     }
 
-    fn response_outcome(mut response: RemotingCommand) -> ControllerResult<HandlerOutcome> {
+    fn response_outcome(mut response: RemotingCommand) -> ControllerResult<ResponseAction> {
         let body = response.take_body();
         let response = match body {
             Some(body) => RemotingResponse::bytes(response, body),
             None => RemotingResponse::command(response),
         }
         .map_err(controller_response_failed)?;
-        Ok(HandlerOutcome::Reply(response))
+        Ok(ResponseAction::Reply(response))
     }
 }
 
 impl RequestProcessor for ControllerRequestProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         let owner_id = request.original_identity().request_id().owner_id();
         let channel_identity = match request.session() {
             SessionView::Network { .. } => format!("transport-session-{owner_id}"),

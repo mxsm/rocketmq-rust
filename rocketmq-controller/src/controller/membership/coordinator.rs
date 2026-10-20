@@ -41,12 +41,12 @@ use crate::error::request_invalid;
 use super::ConsensusMembership;
 use super::ConsensusMembershipPort;
 use super::ConsensusNode;
-use super::MembershipAuditOutcome;
 use super::MembershipAuditRecord;
 use super::MembershipAuditSink;
+use super::MembershipAuditStatus;
 use super::MembershipChange;
 use super::MembershipChangeDisposition;
-use super::MembershipChangeOutcome;
+use super::MembershipChangeReport;
 use super::MembershipChangeRequest;
 
 const MAX_COMPLETED_MEMBERSHIP_OPERATIONS: usize = 4_096;
@@ -169,7 +169,7 @@ impl MembershipChangeCoordinator {
         port: &P,
         authorization: &MaintenanceAuthorizationGrant,
         request: MembershipChangeRequest,
-    ) -> ControllerResult<MembershipChangeOutcome> {
+    ) -> ControllerResult<MembershipChangeReport> {
         if let Err(error) = request.validate() {
             return self.reject_invalid_request(authorization, &request, error);
         }
@@ -193,11 +193,11 @@ impl MembershipChangeCoordinator {
                         &request,
                         Some(membership.version),
                         Some(membership.version),
-                        MembershipAuditOutcome::Replayed,
+                        MembershipAuditStatus::Replayed,
                         "idempotent_replay",
                     );
                     self.audit_sink.record(&audit);
-                    return Ok(MembershipChangeOutcome {
+                    return Ok(MembershipChangeReport {
                         disposition: MembershipChangeDisposition::Replayed,
                         membership,
                         audit,
@@ -218,7 +218,7 @@ impl MembershipChangeCoordinator {
                                 authorization,
                                 &request,
                                 None,
-                                MembershipAuditOutcome::Pending,
+                                MembershipAuditStatus::Pending,
                                 "pending_state_read_failed",
                                 error,
                             );
@@ -237,11 +237,11 @@ impl MembershipChangeCoordinator {
                             &request,
                             Some(membership.version),
                             Some(membership.version),
-                            MembershipAuditOutcome::Replayed,
+                            MembershipAuditStatus::Replayed,
                             "recovered_after_uncertain_commit",
                         );
                         self.audit_sink.record(&audit);
-                        return Ok(MembershipChangeOutcome {
+                        return Ok(MembershipChangeReport {
                             disposition: MembershipChangeDisposition::Replayed,
                             membership,
                             audit,
@@ -251,7 +251,7 @@ impl MembershipChangeCoordinator {
                         authorization,
                         &request,
                         Some(membership.version),
-                        MembershipAuditOutcome::Pending,
+                        MembershipAuditStatus::Pending,
                         "operation_still_pending",
                         controller_internal("reconcile pending Controller membership"),
                     );
@@ -280,7 +280,7 @@ impl MembershipChangeCoordinator {
                     authorization,
                     &request,
                     None,
-                    MembershipAuditOutcome::Rejected,
+                    MembershipAuditStatus::Rejected,
                     "membership_read_failed",
                     error,
                 );
@@ -314,7 +314,7 @@ impl MembershipChangeCoordinator {
                 authorization,
                 &request,
                 Some(before.version),
-                MembershipAuditOutcome::Pending,
+                MembershipAuditStatus::Pending,
                 "mutation_outcome_unknown",
                 error,
             );
@@ -334,7 +334,7 @@ impl MembershipChangeCoordinator {
                         authorization,
                         &request,
                         Some(before.version),
-                        MembershipAuditOutcome::Pending,
+                        MembershipAuditStatus::Pending,
                         "verification_read_failed",
                         error,
                     );
@@ -347,7 +347,7 @@ impl MembershipChangeCoordinator {
                         authorization,
                         &request,
                         Some(observed.version),
-                        MembershipAuditOutcome::Pending,
+                        MembershipAuditStatus::Pending,
                         "verification_pending",
                         error,
                     );
@@ -361,7 +361,7 @@ impl MembershipChangeCoordinator {
             &request,
             Some(before.version),
             Some(after.version),
-            MembershipAuditOutcome::Applied,
+            MembershipAuditStatus::Applied,
             "applied",
         );
         self.audit_sink.record(&audit);
@@ -372,7 +372,7 @@ impl MembershipChangeCoordinator {
                 membership: after.clone(),
             },
         );
-        Ok(MembershipChangeOutcome {
+        Ok(MembershipChangeReport {
             disposition: MembershipChangeDisposition::Applied,
             membership: after,
             audit,
@@ -436,7 +436,7 @@ impl MembershipChangeCoordinator {
             authorization,
             request,
             observed_version,
-            MembershipAuditOutcome::Rejected,
+            MembershipAuditStatus::Rejected,
             decision,
             error,
         )
@@ -459,7 +459,7 @@ impl MembershipChangeCoordinator {
             observed_membership_version: None,
             resulting_membership_version: None,
             reason_sha256: INVALID_REQUEST_REASON_SHA256.to_string(),
-            outcome: MembershipAuditOutcome::Rejected,
+            outcome: MembershipAuditStatus::Rejected,
             decision: "invalid_request".to_string(),
         };
         self.audit_sink.record(&audit);
@@ -471,7 +471,7 @@ impl MembershipChangeCoordinator {
         authorization: &MaintenanceAuthorizationGrant,
         request: &MembershipChangeRequest,
         observed_version: Option<u64>,
-        outcome: MembershipAuditOutcome,
+        outcome: MembershipAuditStatus,
         decision: &'static str,
         error: Error,
     ) -> ControllerResult<T> {
@@ -486,7 +486,7 @@ impl MembershipChangeCoordinator {
         request: &MembershipChangeRequest,
         observed_membership_version: Option<u64>,
         resulting_membership_version: Option<u64>,
-        outcome: MembershipAuditOutcome,
+        outcome: MembershipAuditStatus,
         decision: &'static str,
     ) -> MembershipAuditRecord {
         MembershipAuditRecord {

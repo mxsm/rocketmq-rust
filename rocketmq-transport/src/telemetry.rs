@@ -27,15 +27,15 @@ use crate::dispatch::DeferredTerminalReason;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestOrigin;
 use crate::dispatch::ResponseBodyKind;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 #[cfg(any(test, feature = "observability"))]
 use crate::dispatch::ResponseDisposition;
 use crate::dispatch::ResponseReceipt;
 use crate::dispatch::WriteProgress;
+use crate::runtime::processor::ResponseLifecycleEvent;
 use crate::runtime::processor::ResponseMetadata;
 use crate::runtime::processor::ResponseObservation;
 use crate::runtime::processor::ResponseObservationMode;
-use crate::runtime::processor::ResponseObservationOutcome;
 
 #[cfg(feature = "observability")]
 const NO_RESPONSE_CODE: i32 = -1;
@@ -224,7 +224,7 @@ impl Drop for RequestObservationInner {
             None,
             None,
             ResponseObservationMode::NoResponse,
-            ResponseObservationOutcome::Failed {
+            ResponseLifecycleEvent::Failed {
                 completion: None,
                 progress: Some(WriteProgress::NotStarted),
             },
@@ -342,11 +342,11 @@ impl RequestObservation {
         response_code: i32,
         body_kind: ResponseBodyKind,
         write_elapsed: Duration,
-        result: Result<ResponseReceipt, (Option<ResponseCompletionOutcome>, Option<WriteProgress>)>,
+        result: Result<ResponseReceipt, (Option<ResponseCompletionResult>, Option<WriteProgress>)>,
     ) {
         let outcome = match result {
-            Ok(receipt) => ResponseObservationOutcome::Written(receipt),
-            Err((completion, progress)) => ResponseObservationOutcome::Failed { completion, progress },
+            Ok(receipt) => ResponseLifecycleEvent::DeliveryCompleted(receipt),
+            Err((completion, progress)) => ResponseLifecycleEvent::Failed { completion, progress },
         };
         self.complete(
             ResponseMetadata::new(
@@ -367,7 +367,7 @@ impl RequestObservation {
         response_code: Option<i32>,
         body_kind: Option<ResponseBodyKind>,
         write_elapsed: Option<Duration>,
-        outcome: ResponseObservationOutcome,
+        outcome: ResponseLifecycleEvent,
     ) {
         self.complete_with_rejection(
             ResponseMetadata::new(
@@ -387,7 +387,7 @@ impl RequestObservation {
         );
     }
 
-    pub(crate) fn complete_no_response(&self, outcome: ResponseObservationOutcome) {
+    pub(crate) fn complete_no_response(&self, outcome: ResponseLifecycleEvent) {
         self.complete(
             ResponseMetadata::new(
                 self.inner.original.request_id(),
@@ -415,7 +415,7 @@ impl RequestObservation {
                 response_code,
                 body_kind,
                 mode,
-                ResponseObservationOutcome::Failed {
+                ResponseLifecycleEvent::Failed {
                     completion: None,
                     progress,
                 },
@@ -425,7 +425,7 @@ impl RequestObservation {
     }
 
     pub(crate) fn complete_cancelled(&self, reason: DeferredTerminalReason) {
-        self.complete_no_response(ResponseObservationOutcome::Cancelled(reason));
+        self.complete_no_response(ResponseLifecycleEvent::Cancelled(reason));
     }
 
     pub(crate) fn complete_request_failed(&self, response_code: i32) {
@@ -492,18 +492,18 @@ impl RequestObservation {
         self.inner.telemetry.record_response(metadata);
         self.inner.span.record(
             "outcome",
-            rejection.map_or_else(|| observation_outcome_label(metadata.outcome()), |_| "rejected"),
+            rejection.map_or_else(|| observation_outcome_label(metadata.event()), |_| "rejected"),
         );
         if let Some(body_kind) = metadata.body_kind() {
             self.inner.span.record("response_body_kind", body_kind.as_str());
         }
-        match metadata.outcome() {
-            ResponseObservationOutcome::Written(receipt) => {
+        match metadata.event() {
+            ResponseLifecycleEvent::DeliveryCompleted(receipt) => {
                 self.inner
                     .span
                     .record("response_disposition", receipt.disposition().as_str());
             }
-            ResponseObservationOutcome::Failed { completion, progress } => {
+            ResponseLifecycleEvent::Failed { completion, progress } => {
                 if rejection.is_none() {
                     if let Some(completion) = completion {
                         self.inner.span.record("error_kind", completion.as_str());
@@ -513,13 +513,13 @@ impl RequestObservation {
                     self.inner.span.record("write_progress", progress.as_str());
                 }
             }
-            ResponseObservationOutcome::Cancelled(reason) => {
+            ResponseLifecycleEvent::Cancelled(reason) => {
                 self.inner.span.record("error_kind", reason.as_str());
                 self.inner
                     .span
                     .record("write_progress", WriteProgress::NotStarted.as_str());
             }
-            ResponseObservationOutcome::Oneway | ResponseObservationOutcome::ProtocolNoResponse => {}
+            ResponseLifecycleEvent::Oneway | ResponseLifecycleEvent::ProtocolNoResponse => {}
         }
         if let Some(reason) = rejection {
             self.inner.span.record("error_kind", reason.as_str());
@@ -552,23 +552,23 @@ fn take_or_defer_response_observation(
 }
 
 fn complete_request_metrics(metrics: &mut TransportRequestMetricsGuard, metadata: ResponseMetadata) {
-    match metadata.outcome() {
-        ResponseObservationOutcome::Written(_) if metadata.mode() == ResponseObservationMode::Deferred => {
+    match metadata.event() {
+        ResponseLifecycleEvent::DeliveryCompleted(_) if metadata.mode() == ResponseObservationMode::Deferred => {
             metrics.complete_deferred_resumed(metadata.response_code().unwrap_or(-1));
         }
-        ResponseObservationOutcome::Written(_) => {
+        ResponseLifecycleEvent::DeliveryCompleted(_) => {
             if let (Some(response_code), Some(body_kind)) = (metadata.response_code(), metadata.body_kind()) {
                 metrics.complete_reply(response_code, body_kind);
             } else {
                 metrics.complete_process_request_failed(metadata.response_code().unwrap_or(-1));
             }
         }
-        ResponseObservationOutcome::Oneway => metrics.complete_oneway(),
-        ResponseObservationOutcome::ProtocolNoResponse => {
+        ResponseLifecycleEvent::Oneway => metrics.complete_oneway(),
+        ResponseLifecycleEvent::ProtocolNoResponse => {
             metrics.complete_protocol_no_response();
         }
-        ResponseObservationOutcome::Cancelled(_) => metrics.complete_cancelled(),
-        ResponseObservationOutcome::Failed { .. } => {
+        ResponseLifecycleEvent::Cancelled(_) => metrics.complete_cancelled(),
+        ResponseLifecycleEvent::Failed { .. } => {
             metrics.complete_process_request_failed(metadata.response_code().unwrap_or(-1));
         }
     }
@@ -578,13 +578,13 @@ fn retained_bytes_delta(retained_bytes: usize) -> i64 {
     retained_bytes.min(i64::MAX as usize) as i64
 }
 
-const fn observation_outcome_label(outcome: ResponseObservationOutcome) -> &'static str {
+const fn observation_outcome_label(outcome: ResponseLifecycleEvent) -> &'static str {
     match outcome {
-        ResponseObservationOutcome::Written(_) => "written",
-        ResponseObservationOutcome::Oneway => "oneway",
-        ResponseObservationOutcome::ProtocolNoResponse => "protocol_no_response",
-        ResponseObservationOutcome::Cancelled(_) => "cancelled",
-        ResponseObservationOutcome::Failed { .. } => "failed",
+        ResponseLifecycleEvent::DeliveryCompleted(_) => "written",
+        ResponseLifecycleEvent::Oneway => "oneway",
+        ResponseLifecycleEvent::ProtocolNoResponse => "protocol_no_response",
+        ResponseLifecycleEvent::Cancelled(_) => "cancelled",
+        ResponseLifecycleEvent::Failed { .. } => "failed",
     }
 }
 
@@ -598,16 +598,16 @@ const fn response_mode_label(mode: ResponseObservationMode) -> &'static str {
 }
 
 #[cfg(test)]
-const fn response_result_label(outcome: ResponseObservationOutcome) -> &'static str {
+const fn response_result_label(outcome: ResponseLifecycleEvent) -> &'static str {
     match outcome {
-        ResponseObservationOutcome::Written(receipt) => match receipt.disposition() {
+        ResponseLifecycleEvent::DeliveryCompleted(receipt) => match receipt.disposition() {
             ResponseDisposition::TransportWritten => "transport_written",
             ResponseDisposition::InProcessAccepted => "in_process_accepted",
         },
-        ResponseObservationOutcome::Oneway => "oneway",
-        ResponseObservationOutcome::ProtocolNoResponse => "protocol_no_response",
-        ResponseObservationOutcome::Cancelled(_) => "cancelled",
-        ResponseObservationOutcome::Failed { .. } => "failed",
+        ResponseLifecycleEvent::Oneway => "oneway",
+        ResponseLifecycleEvent::ProtocolNoResponse => "protocol_no_response",
+        ResponseLifecycleEvent::Cancelled(_) => "cancelled",
+        ResponseLifecycleEvent::Failed { .. } => "failed",
     }
 }
 
@@ -933,7 +933,7 @@ impl TransportTelemetry {
             capture.responses.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             capture.response_events.lock().push((
                 response_mode_label(metadata.mode()),
-                response_result_label(metadata.outcome()),
+                response_result_label(metadata.event()),
             ));
         }
 
@@ -948,14 +948,14 @@ impl TransportTelemetry {
                 ResponseObservationMode::Deferred => ResponseMode::Deferred,
                 ResponseObservationMode::NoResponse => ResponseMode::NoResponse,
             };
-            let result = match metadata.outcome() {
-                ResponseObservationOutcome::Written(receipt) => match receipt.disposition() {
+            let result = match metadata.event() {
+                ResponseLifecycleEvent::DeliveryCompleted(receipt) => match receipt.disposition() {
                     ResponseDisposition::TransportWritten => ResponseResult::TransportWritten,
                     ResponseDisposition::InProcessAccepted => ResponseResult::InProcessAccepted,
                 },
-                ResponseObservationOutcome::Oneway => ResponseResult::Oneway,
-                ResponseObservationOutcome::ProtocolNoResponse => ResponseResult::ProtocolNoResponse,
-                ResponseObservationOutcome::Cancelled(reason) => {
+                ResponseLifecycleEvent::Oneway => ResponseResult::Oneway,
+                ResponseLifecycleEvent::ProtocolNoResponse => ResponseResult::ProtocolNoResponse,
+                ResponseLifecycleEvent::Cancelled(reason) => {
                     let reason = match reason {
                         DeferredTerminalReason::Explicit => ResponseAbandonedReason::Explicit,
                         DeferredTerminalReason::ReceiverDropped => ResponseAbandonedReason::ReceiverDropped,
@@ -970,7 +970,7 @@ impl TransportTelemetry {
                     self.remoting.record_response_abandoned(reason);
                     ResponseResult::Cancelled
                 }
-                ResponseObservationOutcome::Failed { .. } => ResponseResult::Failed,
+                ResponseLifecycleEvent::Failed { .. } => ResponseResult::Failed,
             };
             self.remoting.record_response(mode, result);
         }
@@ -988,7 +988,7 @@ impl TransportTelemetry {
                 "failed",
                 "rejected",
                 response_mode_label(metadata.mode()),
-                response_result_label(metadata.outcome()),
+                response_result_label(metadata.event()),
             ));
         }
 
@@ -1083,8 +1083,8 @@ impl TransportTelemetry {
     }
 
     #[inline]
-    pub(crate) fn record_go_away(&self, outcome: TransportGoAwayOutcome) {
-        self.record_lifecycle_event("go_away", outcome.as_str());
+    pub(crate) fn record_go_away_received(&self) {
+        self.record_lifecycle_event("go_away", "received");
     }
 
     #[inline]
@@ -1138,19 +1138,6 @@ pub(crate) enum TransportNameServerFailoverReason {
     Draining,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum TransportGoAwayOutcome {
-    Received,
-}
-
-impl TransportGoAwayOutcome {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Received => "received",
-        }
-    }
-}
-
 pub(crate) struct TransportRequestMetricsGuard {
     #[cfg(feature = "observability")]
     inner: rocketmq_observability::metrics::remoting::RequestMetricsGuard,
@@ -1169,11 +1156,13 @@ impl TransportRequestMetricsGuard {
         self.inner.complete(
             response_code,
             match body_kind {
-                ResponseBodyKind::Empty => rocketmq_observability::metrics::remoting::RequestOutcome::ReplyEmpty,
-                ResponseBodyKind::Bytes => rocketmq_observability::metrics::remoting::RequestOutcome::ReplyBytes,
-                ResponseBodyKind::Segments => rocketmq_observability::metrics::remoting::RequestOutcome::ReplySegments,
+                ResponseBodyKind::Empty => rocketmq_observability::metrics::remoting::RemotingRequestEvent::ReplyEmpty,
+                ResponseBodyKind::Bytes => rocketmq_observability::metrics::remoting::RemotingRequestEvent::ReplyBytes,
+                ResponseBodyKind::Segments => {
+                    rocketmq_observability::metrics::remoting::RemotingRequestEvent::ReplySegments
+                }
                 ResponseBodyKind::FileRegions => {
-                    rocketmq_observability::metrics::remoting::RequestOutcome::ReplyFileRegions
+                    rocketmq_observability::metrics::remoting::RemotingRequestEvent::ReplyFileRegions
                 }
             },
         );
@@ -1193,7 +1182,7 @@ impl TransportRequestMetricsGuard {
         #[cfg(feature = "observability")]
         self.inner.complete(
             response_code,
-            rocketmq_observability::metrics::remoting::RequestOutcome::DeferredResumed,
+            rocketmq_observability::metrics::remoting::RemotingRequestEvent::DeferredResumed,
         );
 
         #[cfg(not(feature = "observability"))]
@@ -1205,7 +1194,7 @@ impl TransportRequestMetricsGuard {
         #[cfg(feature = "observability")]
         self.inner.complete(
             NO_RESPONSE_CODE,
-            rocketmq_observability::metrics::remoting::RequestOutcome::ProtocolNoResponse,
+            rocketmq_observability::metrics::remoting::RemotingRequestEvent::ProtocolNoResponse,
         );
     }
 
@@ -1255,14 +1244,13 @@ mod tests {
     use tracing::Subscriber;
 
     use super::request_span;
-    use super::TransportGoAwayOutcome;
     use super::TransportNameServerFailoverReason;
     use super::TransportRequestCodeClass;
     use super::TransportTelemetry;
     use crate::dispatch::AuthenticationState;
     use crate::dispatch::DeferredTerminalReason;
     use crate::dispatch::RequestOrigin;
-    use crate::runtime::processor::ResponseObservationOutcome;
+    use crate::runtime::processor::ResponseLifecycleEvent;
 
     struct FieldCapture<'a> {
         fields: &'a mut BTreeMap<String, String>,
@@ -1324,7 +1312,7 @@ mod tests {
         telemetry.record_lifecycle_event("connected", "queued");
         telemetry.record_deferred_terminal("other", "abandoned");
         telemetry.record_nameserver_failover(TransportNameServerFailoverReason::ConnectFailure);
-        telemetry.record_go_away(TransportGoAwayOutcome::Received);
+        telemetry.record_go_away_received();
     }
 
     #[test]
@@ -1428,13 +1416,13 @@ mod tests {
         observation.record_deferred_registered();
         assert!(observed.lock().expect("observation capture").is_empty());
 
-        observation.complete_no_response(ResponseObservationOutcome::ProtocolNoResponse);
+        observation.complete_no_response(ResponseLifecycleEvent::ProtocolNoResponse);
         observation.complete_cancelled(DeferredTerminalReason::Abandoned);
         let observed = observed.lock().expect("observation capture");
         assert_eq!(observed.len(), 1);
         assert_eq!(
-            observed[0].metadata().outcome(),
-            ResponseObservationOutcome::ProtocolNoResponse
+            observed[0].metadata().event(),
+            ResponseLifecycleEvent::ProtocolNoResponse
         );
     }
 
@@ -1456,7 +1444,7 @@ mod tests {
             None,
             0,
         );
-        observation.complete_no_response(ResponseObservationOutcome::ProtocolNoResponse);
+        observation.complete_no_response(ResponseLifecycleEvent::ProtocolNoResponse);
 
         let observed = Arc::new(Mutex::new(Vec::new()));
         let callback_observed = Arc::clone(&observed);
@@ -1468,8 +1456,8 @@ mod tests {
         let observed = observed.lock().expect("observation capture");
         assert_eq!(observed.len(), 1);
         assert_eq!(
-            observed[0].metadata().outcome(),
-            ResponseObservationOutcome::ProtocolNoResponse
+            observed[0].metadata().event(),
+            ResponseLifecycleEvent::ProtocolNoResponse
         );
     }
 }

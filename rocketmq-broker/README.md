@@ -23,14 +23,14 @@ This list does not imply complete Java broker feature parity.
 
 ## Architecture
 
-![Broker configuration, lifecycle, request dispatch, and storage architecture](../resources/broker-runtime-architecture.png)
+![Broker configuration, lifecycle, request dispatch, and storage architecture](../resources/rocketmq-broker-architecture.svg)
 
 The binary resolves configuration into `ValidatedBrokerConfig` and passes runtime and telemetry handles to `Builder`.
 `BrokerBootstrap` advances through `Configured`, `Initialized`, and `Running` states. Startup failures trigger rollback
 of completed startup work. The binary uses `boot_with_lifecycle` to publish readiness and shut down services under the
 shared process deadline.
 
-Normal and fast remoting listeners use the same dispatcher as the embedded `ProxyBrokerFacade`. The dispatcher applies
+Normal and fast remoting listeners use the same dispatcher as `EmbeddedBroker`. The dispatcher applies
 configured security checks and routes requests to processors backed by storage and metadata services. NameServer
 registration and optional controller coordination are separate from client request dispatch.
 
@@ -40,7 +40,7 @@ registration and optional controller coordination are separate from client reque
 | `BrokerBootstrap::initialize` / `start` | Consume the preceding state and return the next state or `BrokerStartupError`. |
 | `BrokerBootstrap<Running>` | Exposes `readiness()` and an asynchronous, consuming `shutdown()`. |
 | `BrokerBootstrap::boot_with_lifecycle` | Runs under `ServiceLifecycle` and returns lifecycle/startup errors to the caller. |
-| `ProxyBrokerFacade` | Provides embedded proxy access to broker request processing. |
+| `EmbeddedBroker` | Owns the embedded Broker lifecycle and dispatches in-process requests. |
 | `config` | Exposes raw loading, Java-properties conversion, typed sections, and validated configuration APIs. |
 
 The convenience `boot()` method logs startup failures and returns `()`; callers that need to handle errors should use
@@ -258,6 +258,9 @@ exporter configuration.
 Set `ROCKETMQ_HEALTH_BIND_ADDR` to an address such as `127.0.0.1:5558` to enable the shared lifecycle HTTP listener.
 `/readyz` reports readiness and `/livez` reports liveness using HTTP `200` or `503`. No probe listener is started when
 the variable is absent. This listener also exposes the shutdown-triggering `/drainz` route; restrict access accordingly.
+`/drainz` accepts only `POST` by default and answers `GET` with `405`. Set
+`ROCKETMQ_HEALTH_DRAIN_METHODS=GET,POST` when a Kubernetes `preStop.httpGet` hook calls it; the repository charts
+and manifests already set it.
 
 Broker readiness checks the normal and fast listeners, storage readiness, installed processors, resolved security
 state, and registration readiness. The storage readiness field is not a guarantee that the current role/controller
@@ -266,6 +269,27 @@ lease permits producer writes.
 Signal handling and lifecycle shutdown share a deadline configured by `ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS`
 (default `45`, accepted range `1..=300`). Startup rollback and shutdown reports account for owned services;
 an unhealthy shutdown result propagates to a nonzero binary exit status.
+
+### Transaction Maintenance
+
+Transaction checks and operation batching use an injected parent task group.
+Cancellation stops new operation admission even if the batch task is aborted
+before its first poll. Cooperative shutdown closes the existing queues, waits
+for active batches, and writes remaining partial batches while the Store is
+still available. Queue retirement is permanent for that service instance.
+Compatibility constructors remain available; production composition supplies
+the owner. See the [transaction service](src/transaction/queue/default_transactional_message_service.rs).
+
+A failed append retains its body and resource reservations. The Broker shutdown
+report remains unhealthy, and the service is retained for inspection or retry.
+The shared Broker deadline bounds the drain; aborting at that deadline cannot
+establish durability. The [lifecycle coordinator](src/broker_runtime/lifecycle.rs)
+enforces this order before releasing the Store.
+
+Transaction-metrics persistence uses the bounded serial scheduler with explicit
+`MissedTickPolicy::Skip`: a delayed flush neither replays missed ticks nor
+overlaps another flush. Shutdown also performs a final dirty-metrics persist.
+This consumer policy does not change the runtime's legacy scheduler defaults.
 
 ## Feature Flags
 

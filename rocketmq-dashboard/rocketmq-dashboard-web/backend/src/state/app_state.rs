@@ -407,7 +407,7 @@ mod tests {
     use crate::model::DashboardConfigView;
     use crate::model::DashboardEnvironment;
     use crate::model::PublishedEnvironment;
-    use crate::model::StorageBackend;
+    use crate::model::StorageEngine;
     use crate::persistence::Revision;
     use crate::persistence::StorageHealth;
     use crate::persistence::StorageMode;
@@ -429,7 +429,7 @@ mod tests {
                 port: 0,
             },
             storage: StorageConfig {
-                backend: StorageBackend::File,
+                backend: StorageEngine::File,
                 data_path: root,
                 database_url: None,
                 pool: SqlPoolConfig::default(),
@@ -465,7 +465,7 @@ mod tests {
     #[test]
     fn startup_rejects_unavailable_persistence_before_serving_http() {
         let result = ensure_persistence_ready(StorageHealth {
-            backend: StorageBackend::Sqlite,
+            backend: StorageEngine::Sqlite,
             mode: StorageMode::SingleNode,
             status: StorageStatus::Unavailable,
             schema_version: None,
@@ -485,10 +485,10 @@ mod tests {
     fn delayed_refresh_cannot_publish_an_older_environment_revision() {
         let mut current_environment = DashboardEnvironment::bootstrap(&DashboardConfigView::default(), 2);
         current_environment.revision = Revision(2);
-        let mut current = PublishedEnvironment::from_environment(current_environment, StorageBackend::MySql);
+        let mut current = PublishedEnvironment::from_environment(current_environment, StorageEngine::MySql);
         let older = PublishedEnvironment::from_environment(
             DashboardEnvironment::bootstrap(&DashboardConfigView::default(), 1),
-            StorageBackend::MySql,
+            StorageEngine::MySql,
         );
 
         assert!(!publish_if_current_or_newer(&mut current, older));

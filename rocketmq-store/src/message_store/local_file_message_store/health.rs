@@ -15,12 +15,12 @@
 use super::*;
 
 impl LocalFileMessageStore {
-    pub(super) fn store_health_snapshot(&self) -> BackendHealthSnapshot {
+    pub(super) fn collect_health_indicators(&self) -> StoreHealthIndicators {
         let ha_runtime_info = self
             .ha_service
             .as_ref()
             .map_or_else(Default::default, GeneralHAService::group_transfer_runtime_info);
-        BackendHealthSnapshot {
+        StoreHealthIndicators {
             writeable: self.store_health_recorder.writeable(),
             last_flush_error: self.store_health_recorder.last_flush_error(),
             os_page_cache_busy: self.is_os_page_cache_busy(),
@@ -243,7 +243,7 @@ impl CleanCommitLogService {
             .saturating_mul(60)
             .saturating_mul(60)
             .saturating_mul(1000);
-        let is_time_up = util_all::is_it_time_to_do(&self.message_store_config.delete_when);
+        let is_time_up = rocketmq_runtime::common::time_utils::is_it_time_to_do(&self.message_store_config.delete_when);
         let disk_decision = self.is_space_to_delete();
         let is_manual_delete = self.consume_manual_delete_request();
         let clean_at_once = self.cleanup_policy.clean_file_forcibly_enabled() && disk_decision.clean_immediately;
@@ -252,7 +252,7 @@ impl CleanCommitLogService {
             .as_ref()
             .and_then(|minimum_pinned_wal_segment| minimum_pinned_wal_segment());
         if is_time_up || disk_decision.should_delete || is_manual_delete {
-            let outcome = self.commit_log.delete_expired_files_by_time_before(
+            let cleanup_report = self.commit_log.delete_expired_files_by_time_before(
                 expired_time,
                 self.message_store_config.delete_commit_log_files_interval as i32,
                 self.message_store_config.destroy_mapped_file_interval_forcibly as i64,
@@ -260,9 +260,9 @@ impl CleanCommitLogService {
                 self.message_store_config.delete_file_batch_max as i32,
                 minimum_pinned_wal_segment,
             );
-            use crate::consume_queue::mapped_file_queue::CleanupOutcome;
-            match outcome {
-                CleanupOutcome::ManagedSubmitted { selected, submitted } => {
+            use crate::consume_queue::mapped_file_queue::MappedFileCleanupReport;
+            match cleanup_report {
+                MappedFileCleanupReport::ManagedSubmitted { selected, submitted } => {
                     if selected > 0 {
                         info!(
                             selected,
@@ -270,7 +270,7 @@ impl CleanCommitLogService {
                         );
                     }
                 }
-                CleanupOutcome::LegacyCompleted { namespace_removed } => {
+                MappedFileCleanupReport::LegacyCompleted { namespace_removed } => {
                     if namespace_removed > 0 {
                         info!(namespace_removed, "expired commitlog namespace entries removed; physical free space requires a new disk sample");
                     } else if disk_decision.should_delete {

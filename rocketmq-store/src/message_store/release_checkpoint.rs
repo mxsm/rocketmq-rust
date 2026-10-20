@@ -27,15 +27,15 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_security_api::MaintenanceAuthorizationGrant;
-use rocketmq_store_api::checkpoint::CheckpointBackend as ReleaseCheckpointBackend;
 use rocketmq_store_api::checkpoint::CheckpointManifest as StoreReleaseCheckpointManifest;
 use rocketmq_store_api::checkpoint::CheckpointOffsets as ReleaseCheckpointOffsets;
 use rocketmq_store_api::checkpoint::CheckpointRequest as StoreReleaseCheckpointRequest;
 use rocketmq_store_api::checkpoint::CheckpointStorageIdentity as ReleaseCheckpointStorageIdentity;
-use rocketmq_store_api::ReleaseCheckpointCreateOutcome;
+use rocketmq_store_api::checkpoint::CheckpointStoreKind;
 use rocketmq_store_api::ReleaseCheckpointCreateRejection;
-use rocketmq_store_api::ReleaseCheckpointRestoreOutcome;
+use rocketmq_store_api::ReleaseCheckpointCreationResult;
 use rocketmq_store_api::ReleaseCheckpointRestoreRejection;
+use rocketmq_store_api::ReleaseCheckpointRestoreVerificationResult;
 use rocketmq_store_api::ReleaseCheckpointStore;
 use rocketmq_store_api::StoreComponent;
 use rocketmq_store_api::StoreError;
@@ -46,18 +46,18 @@ use rocketmq_store_local::release_checkpoint::LocalReleaseCheckpointSnapshot;
 use tokio::sync::OnceCell;
 use uuid::Uuid;
 
-use super::StorePorts;
+use super::MessageStore;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::message_store::local_file_message_store::LocalReleaseCheckpointWriteLease;
 
 const STORAGE_IDENTITY_FILE: &str = ".rocketmq-storage-identity.json";
 
-/// Release-checkpoint service bound to the Broker-owned Store backend.
+/// Release-checkpoint service bound to the Broker-owned Store.
 ///
 /// The service retains only a weak Store reference, so it cannot extend the
 /// Store lifecycle beyond the Broker composition root.
 pub struct StoreReleaseCheckpointService {
-    store: Weak<StorePorts>,
+    store: Weak<MessageStore>,
     checkpoint_root: PathBuf,
     storage_io: BlockingExecutor,
     service_context: ChildServiceContext,
@@ -65,7 +65,7 @@ pub struct StoreReleaseCheckpointService {
 }
 
 impl StoreReleaseCheckpointService {
-    pub fn new(store: Weak<StorePorts>, checkpoint_root: PathBuf, service_context: ChildServiceContext) -> Self {
+    pub fn new(store: Weak<MessageStore>, checkpoint_root: PathBuf, service_context: ChildServiceContext) -> Self {
         Self {
             store,
             checkpoint_root,
@@ -75,21 +75,21 @@ impl StoreReleaseCheckpointService {
         }
     }
 
-    /// Returns the currently selected Store backend.
+    /// Returns the currently selected Store implementation kind.
     ///
     /// # Errors
     ///
     /// Returns an unavailable error after the Broker detaches its Store.
-    pub fn backend(&self) -> Result<ReleaseCheckpointBackend, StoreError> {
+    pub fn store_kind(&self) -> Result<CheckpointStoreKind, StoreError> {
         match self
             .store
             .upgrade()
             .ok_or_else(|| store_unavailable(StoreOperation::Admin))?
             .as_ref()
         {
-            StorePorts::LocalFileStore(_) => Ok(ReleaseCheckpointBackend::Local),
+            MessageStore::LocalFileStore(_) => Ok(CheckpointStoreKind::Local),
             #[cfg(feature = "rocksdb_store")]
-            StorePorts::RocksDBStore(_) => Ok(ReleaseCheckpointBackend::RocksDb),
+            MessageStore::RocksDBStore(_) => Ok(CheckpointStoreKind::RocksDb),
         }
     }
 
@@ -133,9 +133,9 @@ impl StoreReleaseCheckpointService {
     fn source_root(&self, operation: StoreOperation) -> Result<PathBuf, StoreError> {
         let store = self.store.upgrade().ok_or_else(|| store_unavailable(operation))?;
         let local_store = match store.as_ref() {
-            StorePorts::LocalFileStore(local_store) => local_store.as_ref(),
+            MessageStore::LocalFileStore(local_store) => local_store.as_ref(),
             #[cfg(feature = "rocksdb_store")]
-            StorePorts::RocksDBStore(rocksdb_store) => rocksdb_store.local_file_store(),
+            MessageStore::RocksDBStore(rocksdb_store) => rocksdb_store.local_file_store(),
         };
         Ok(PathBuf::from(
             local_store.message_store_config_ref().store_path_root_dir.as_str(),
@@ -148,11 +148,11 @@ impl ReleaseCheckpointStore for StoreReleaseCheckpointService {
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         request: StoreReleaseCheckpointRequest,
-    ) -> Result<ReleaseCheckpointCreateOutcome, StoreError> {
+    ) -> Result<ReleaseCheckpointCreationResult, StoreError> {
         let storage_identity = match self.storage_identity_for(authorization, StoreOperation::Flush).await? {
             Some(identity) => identity,
             None => {
-                return Ok(ReleaseCheckpointCreateOutcome::Rejected(
+                return Ok(ReleaseCheckpointCreationResult::Rejected(
                     ReleaseCheckpointCreateRejection::AuthorizationExpired,
                 ));
             }
@@ -165,7 +165,7 @@ impl ReleaseCheckpointStore for StoreReleaseCheckpointService {
             .upgrade()
             .ok_or_else(|| store_unavailable(StoreOperation::Flush))?;
         match store.as_ref() {
-            StorePorts::LocalFileStore(_) => {
+            MessageStore::LocalFileStore(_) => {
                 let barrier = Arc::new(OwnedLocalCheckpointBarrier {
                     store: Arc::downgrade(&store),
                     storage_identity,
@@ -181,7 +181,7 @@ impl ReleaseCheckpointStore for StoreReleaseCheckpointService {
                 .await
             }
             #[cfg(feature = "rocksdb_store")]
-            StorePorts::RocksDBStore(rocksdb_message_store) => {
+            MessageStore::RocksDBStore(rocksdb_message_store) => {
                 let service = rocketmq_store_rocksdb::release_checkpoint::RocksDbReleaseCheckpointService::new(
                     rocksdb_message_store.rocksdb_store(),
                     rocketmq_store_rocksdb::runtime::RocksDbRuntimeScope::new(
@@ -200,11 +200,11 @@ impl ReleaseCheckpointStore for StoreReleaseCheckpointService {
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         manifest: &StoreReleaseCheckpointManifest,
-    ) -> Result<ReleaseCheckpointRestoreOutcome, StoreError> {
+    ) -> Result<ReleaseCheckpointRestoreVerificationResult, StoreError> {
         let storage_identity = match self.storage_identity_for(authorization, StoreOperation::Read).await? {
             Some(identity) => identity,
             None => {
-                return Ok(ReleaseCheckpointRestoreOutcome::Rejected(
+                return Ok(ReleaseCheckpointRestoreVerificationResult::Rejected(
                     ReleaseCheckpointRestoreRejection::AuthorizationExpired,
                 ));
             }
@@ -217,7 +217,7 @@ impl ReleaseCheckpointStore for StoreReleaseCheckpointService {
             .upgrade()
             .ok_or_else(|| store_unavailable(StoreOperation::Read))?;
         match store.as_ref() {
-            StorePorts::LocalFileStore(_) => {
+            MessageStore::LocalFileStore(_) => {
                 let barrier = Arc::new(OwnedLocalCheckpointBarrier {
                     store: Arc::downgrade(&store),
                     storage_identity,
@@ -233,7 +233,7 @@ impl ReleaseCheckpointStore for StoreReleaseCheckpointService {
                 .await
             }
             #[cfg(feature = "rocksdb_store")]
-            StorePorts::RocksDBStore(rocksdb_message_store) => {
+            MessageStore::RocksDBStore(rocksdb_message_store) => {
                 let service = rocketmq_store_rocksdb::release_checkpoint::RocksDbReleaseCheckpointService::new(
                     rocksdb_message_store.rocksdb_store(),
                     rocketmq_store_rocksdb::runtime::RocksDbRuntimeScope::new(
@@ -250,7 +250,7 @@ impl ReleaseCheckpointStore for StoreReleaseCheckpointService {
 }
 
 struct OwnedLocalCheckpointBarrier {
-    store: Weak<StorePorts>,
+    store: Weak<MessageStore>,
     storage_identity: ReleaseCheckpointStorageIdentity,
     storage_io: BlockingExecutor,
 }
@@ -268,9 +268,9 @@ impl LocalReleaseCheckpointBarrier for OwnedLocalCheckpointBarrier {
             .upgrade()
             .ok_or_else(|| store_unavailable(StoreOperation::Flush))?;
         let local_store = match store.as_ref() {
-            StorePorts::LocalFileStore(local_store) => local_store.as_ref(),
+            MessageStore::LocalFileStore(local_store) => local_store.as_ref(),
             #[cfg(feature = "rocksdb_store")]
-            StorePorts::RocksDBStore(_) => {
+            MessageStore::RocksDBStore(_) => {
                 return Err(request_invalid(StoreOperation::Flush));
             }
         };
@@ -312,7 +312,7 @@ impl LocalReleaseCheckpointBarrier for OwnedLocalCheckpointBarrier {
 }
 
 struct LocalSnapshotLease {
-    _store: Arc<StorePorts>,
+    _store: Arc<MessageStore>,
     _write_lease: LocalReleaseCheckpointWriteLease,
 }
 
@@ -435,7 +435,7 @@ fn runtime_error_descriptor(source: &RuntimeError) -> &'static rocketmq_error::E
     }
     match source.condition() {
         rocketmq_error::CanonicalCondition::InvalidArgument => &rocketmq_error::STORAGE_REQUEST_INVALID,
-        rocketmq_error::CanonicalCondition::Unavailable => &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+        rocketmq_error::CanonicalCondition::Unavailable => &rocketmq_error::STORAGE_UNAVAILABLE,
         rocketmq_error::CanonicalCondition::ResourceExhausted => &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
         rocketmq_error::CanonicalCondition::DeadlineExceeded => &rocketmq_error::STORAGE_OPERATION_TIMED_OUT,
         rocketmq_error::CanonicalCondition::Unimplemented => &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED,

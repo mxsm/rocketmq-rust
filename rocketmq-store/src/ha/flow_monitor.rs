@@ -38,10 +38,15 @@ impl FlowMonitor {
     }
 
     pub async fn shutdown(&self) {
-        self.server_manager.shutdown().await.unwrap();
+        if let Err(error) = self.server_manager.shutdown().await {
+            tracing::warn!(%error, "HA flow monitor shutdown failed");
+        }
     }
+
     pub async fn shutdown_with_interrupt(&self, interrupt: bool) {
-        self.server_manager.shutdown_with_interrupt(interrupt).await.unwrap();
+        if let Err(error) = self.server_manager.shutdown_with_interrupt(interrupt).await {
+            tracing::warn!(%error, "HA flow monitor shutdown failed");
+        }
     }
 
     pub fn get_transferred_byte_in_second(&self) -> i64 {

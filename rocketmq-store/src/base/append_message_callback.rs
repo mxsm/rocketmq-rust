@@ -702,12 +702,12 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
 mod tests {
     use super::*;
 
+    use crate::utils::store_util::offset_to_file_name;
     use bytes::Buf;
     use bytes::BufMut;
     use bytes::Bytes;
     use rocketmq_model::common::message::MessageTrait;
     use rocketmq_model::common::message::MessageVersion;
-    use rocketmq_runtime::common::util_all::offset_to_file_name;
     use tempfile::tempdir;
 
     use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;

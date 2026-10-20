@@ -32,7 +32,6 @@ use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_store::BrokerStorePort;
 use rocketmq_transport::api::error_response;
-use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::IngressRequestView;
 use rocketmq_transport::api::RejectRequestDecision;
 use rocketmq_transport::api::RemotingErrorTarget;
@@ -40,6 +39,7 @@ use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestOrdering;
 use rocketmq_transport::api::RequestProcessor;
+use rocketmq_transport::api::ResponseAction;
 use rocketmq_transport::api::ResponseObservation;
 use tracing::warn;
 
@@ -159,7 +159,7 @@ where
     MS: BrokerStorePort + Send + Sync + 'static,
     TS: TransactionalMessageService + Send + Sync + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         match self {
             Self::Send(processor) => processor.process_shared(request).await,
             Self::Pull(processor) => processor.process_shared(request).await,
@@ -407,7 +407,7 @@ impl<P> RequestProcessor for BrokerRequestProcessor<P>
 where
     P: RequestProcessor + Clone + Sync + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let original = request.original_identity();
         let request_code = original.original_code();
         let opaque = original.original_opaque();
@@ -425,7 +425,7 @@ where
                     opaque,
                 },
             );
-            return BrokerResponseParts::from_command(response)?.into_handler_outcome();
+            return BrokerResponseParts::from_command(response)?.into_response_action();
         }
 
         if !is_privileged_maintenance_request(RequestCode::from(request_code)) {
@@ -442,7 +442,7 @@ where
                             opaque,
                         },
                     );
-                    return BrokerResponseParts::from_command(response)?.into_handler_outcome();
+                    return BrokerResponseParts::from_command(response)?.into_response_action();
                 }
                 BrokerAuthState::DisabledByValidatedConfig => {}
                 BrokerAuthState::Runtime(auth_runtime) => {
@@ -459,7 +459,7 @@ where
                                     opaque,
                                 },
                             );
-                            return BrokerResponseParts::from_command(response)?.into_handler_outcome();
+                            return BrokerResponseParts::from_command(response)?.into_response_action();
                         }
                     };
                     if let Err(error) = auth_runtime
@@ -476,7 +476,7 @@ where
                                 opaque,
                             },
                         );
-                        return BrokerResponseParts::from_command(response)?.into_handler_outcome();
+                        return BrokerResponseParts::from_command(response)?.into_response_action();
                     }
                 }
             }
@@ -494,7 +494,7 @@ where
                             opaque,
                         },
                     );
-                    return BrokerResponseParts::from_command(response)?.into_handler_outcome();
+                    return BrokerResponseParts::from_command(response)?.into_response_action();
                 }
             },
         };
@@ -548,7 +548,7 @@ where
         queue_kind: Option<crate::latency::broker_fast_failure::FastFailureQueueKind>,
         mut processor: P,
         request: &mut RemotingRequest,
-    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<ResponseAction> {
         let Some(queue_kind) = queue_kind else {
             return processor.process(request).await;
         };
@@ -566,7 +566,7 @@ where
             Err(rejection) => {
                 return rejection
                     .into_remoting_response()
-                    .map(HandlerOutcome::Reply)
+                    .map(ResponseAction::Reply)
                     .map_err(|error| crate::broker_error::internal("broker-fast-failure", error));
             }
         };
@@ -578,7 +578,7 @@ where
             Err(fast_failure_dispatch::FastFailureAwaitError::Rejected(rejection)) => {
                 return rejection
                     .into_remoting_response()
-                    .map(HandlerOutcome::Reply)
+                    .map(ResponseAction::Reply)
                     .map_err(|error| crate::broker_error::internal("broker-fast-failure", error));
             }
             Err(fast_failure_dispatch::FastFailureAwaitError::LifecycleStopped) => {
@@ -602,7 +602,7 @@ where
                         opaque,
                     },
                 );
-                BrokerResponseParts::from_command(response)?.into_handler_outcome()
+                BrokerResponseParts::from_command(response)?.into_response_action()
             }
         }
     }
@@ -610,9 +610,9 @@ where
 
 fn map_request_header_error(
     command_factory: &RemotingCommandFactory,
-    result: crate::broker_error::BrokerResult<HandlerOutcome>,
+    result: crate::broker_error::BrokerResult<ResponseAction>,
     opaque: i32,
-) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+) -> crate::broker_error::BrokerResult<ResponseAction> {
     match result {
         Err(error) if error.descriptor() == &rocketmq_error::PROTOCOL_HEADER_INVALID => {
             let context = error.context();
@@ -625,7 +625,7 @@ fn map_request_header_error(
                     opaque,
                 },
             );
-            BrokerResponseParts::from_command(response)?.into_handler_outcome()
+            BrokerResponseParts::from_command(response)?.into_response_action()
         }
         result => result,
     }

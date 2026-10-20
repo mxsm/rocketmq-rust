@@ -47,7 +47,7 @@ struct PerRequestFilterProcessor {
 }
 
 impl RequestProcessor for PerRequestFilterProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<ResponseAction> {
         let header = request
             .command()
             .decode_command_custom_header::<NotificationRequestHeader>()?;
@@ -64,7 +64,7 @@ impl RequestProcessor for PerRequestFilterProcessor {
         ))?;
         let registration = registration_or_test_error(self.service.register(prepared, request))?;
         let _ = self.registrations.send(());
-        Ok(HandlerOutcome::Deferred(registration))
+        Ok(ResponseAction::Deferred(registration))
     }
 
     fn request_ordering(&self, _ingress: rocketmq_transport::api::IngressRequestView<'_>) -> RequestOrdering {
@@ -114,8 +114,8 @@ async fn notification_deferred_miss_prefix_beyond_callback_batch_continuation_cl
     assert_eq!(service.snapshot().admission().waiting_count(), 2);
 
     let continuation = match service.admit_continuation(arrival, cursor) {
-        Ok(NotificationContinuationOutcome::Continued(continuation)) => continuation,
-        Ok(NotificationContinuationOutcome::Rejected(rejection)) => {
+        Ok(NotificationContinuationDecision::Ready(continuation)) => continuation,
+        Ok(NotificationContinuationDecision::Rejected(rejection)) => {
             panic!("admit miss-prefix continuation: {rejection:?}")
         }
         Err(error) => panic!("admit miss-prefix continuation: {error:?}"),
@@ -150,7 +150,7 @@ async fn notification_deferred_miss_prefix_beyond_callback_batch_continuation_cl
             .await
             .expect("continuation resumes matching waiter")
             .expect("matching continuation writes canonically"),
-        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        rocketmq_transport::api::DeferredResumeResult::Completed(_)
     ));
     let response = client
         .receive_command()
@@ -216,7 +216,7 @@ async fn notification_deferred_properties_absent_matches_and_one_arrival_claims_
                 )
                 .await
                 .expect("wildcard/exact canonical resume"),
-            rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+            rocketmq_transport::api::DeferredResumeResult::Completed(_)
         ));
     }
     let mut opaque = BTreeSet::new();

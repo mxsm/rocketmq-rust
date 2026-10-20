@@ -14,6 +14,7 @@
 
 use super::*;
 use crate::error::controller_internal;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 
 impl ControllerManager {
     pub(super) async fn start_leadership_watch_loop(self: &Arc<Self>) -> Result<()> {
@@ -25,7 +26,7 @@ impl ControllerManager {
         let task_config = ScheduledTaskConfig::fixed_delay("controller.leadership-watch", interval);
 
         scheduled_tasks
-            .schedule_fixed_delay(task_config, move || {
+            .schedule(task_config, ScheduledExecutionPolicy::default(), move || {
                 let weak_manager = weak_manager.clone();
                 async move {
                     let Some(manager) = weak_manager.upgrade() else {
@@ -217,10 +218,13 @@ impl ControllerManager {
             let broker_id = task.key.broker_id;
             let broker_name = task.key.broker_name.clone();
             let broker_addr = task.broker_addr.clone();
-            let outcome = self.broker_role_notifier.submit(task);
-            if matches!(outcome, SubmitOutcome::Full | SubmitOutcome::Closed) {
+            let status = self.broker_role_notifier.submit(task);
+            if matches!(
+                status,
+                BrokerRoleNotificationSubmissionStatus::Full | BrokerRoleNotificationSubmissionStatus::Closed
+            ) {
                 warn!(
-                    ?outcome,
+                    outcome = ?status,
                     target = %broker_addr,
                     broker_id,
                     broker = %broker_name,

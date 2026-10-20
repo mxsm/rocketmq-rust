@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use crate::model::EnvironmentId;
-use crate::model::StorageBackend;
+use crate::model::StorageEngine;
 use crate::persistence::DashboardPersistence;
-use crate::persistence::backend::PersistenceBackend;
+use crate::persistence::backend::DashboardDataStore;
 use crate::persistence::error::PersistenceError;
 
 /// Opaque authority granted by the SQL task lease. The holder identity is
@@ -87,9 +87,9 @@ impl DashboardPersistence {
         ttl_ms: i64,
     ) -> Result<Option<HistoryLease>, PersistenceError> {
         validate_lease_request(environment_id, holder_id, ttl_ms)?;
-        match &self.backend {
-            PersistenceBackend::File(_) => Ok(None),
-            PersistenceBackend::Sql(store) => store.acquire_history_lease(environment_id, holder_id, ttl_ms).await,
+        match &self.store {
+            DashboardDataStore::File(_) => Ok(None),
+            DashboardDataStore::Sql(store) => store.acquire_history_lease(environment_id, holder_id, ttl_ms).await,
         }
     }
 
@@ -99,30 +99,30 @@ impl DashboardPersistence {
         ttl_ms: i64,
     ) -> Result<Option<HistoryLease>, PersistenceError> {
         validate_lease_request(&lease.environment_id, &lease.holder_id, ttl_ms)?;
-        match &self.backend {
-            PersistenceBackend::File(_) => Ok(Some(lease.clone())),
-            PersistenceBackend::Sql(store) => store.renew_history_lease(lease, ttl_ms).await,
+        match &self.store {
+            DashboardDataStore::File(_) => Ok(Some(lease.clone())),
+            DashboardDataStore::Sql(store) => store.renew_history_lease(lease, ttl_ms).await,
         }
     }
 
     pub async fn release_history_lease(&self, lease: &HistoryLease) -> Result<bool, PersistenceError> {
-        match &self.backend {
-            PersistenceBackend::File(_) => Ok(true),
-            PersistenceBackend::Sql(store) => store.release_history_lease(lease).await,
+        match &self.store {
+            DashboardDataStore::File(_) => Ok(true),
+            DashboardDataStore::Sql(store) => store.release_history_lease(lease).await,
         }
     }
 
     pub fn history_uses_sql_lease(&self) -> bool {
         matches!(
             self.storage_backend(),
-            StorageBackend::Sqlite | StorageBackend::MySql | StorageBackend::Postgres
+            StorageEngine::Sqlite | StorageEngine::MySql | StorageEngine::Postgres
         )
     }
 
     /// SQLite is single-node by deployment contract. Only MySQL and
     /// PostgreSQL need a durable fenced leader for cleanup.
     pub fn session_audit_cleanup_uses_sql_lease(&self) -> bool {
-        matches!(self.storage_backend(), StorageBackend::MySql | StorageBackend::Postgres)
+        matches!(self.storage_backend(), StorageEngine::MySql | StorageEngine::Postgres)
     }
 
     pub async fn acquire_session_audit_cleanup_lease(

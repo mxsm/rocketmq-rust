@@ -17,7 +17,7 @@ use super::MySqlPool;
 use super::PersistenceError;
 use super::PgPool;
 use super::Row;
-use super::SqlPersistence;
+use super::SqlDashboardStore;
 use super::SqlitePool;
 use super::map_query_error;
 use crate::model::AuditEvent;
@@ -29,7 +29,7 @@ use crate::persistence::session_repository::SessionPage;
 use crate::persistence::session_repository::SessionQuery;
 use sqlx::mysql::MySqlRow;
 
-impl SqlPersistence {
+impl SqlDashboardStore {
     pub(crate) async fn create_session_with_audit(
         &self,
         session: NewSession,

@@ -21,9 +21,9 @@
 pub use super::span_names::PROXY_AUTH;
 pub use super::span_names::PROXY_FORWARD;
 
-/// Stable terminal outcomes allowed on Proxy diagnostic spans.
+/// Stable terminal statuses recorded on Proxy diagnostic spans.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProxySpanOutcome {
+pub enum ProxySpanStatus {
     Success,
     PayloadFailure,
     TransportFailure,
@@ -69,14 +69,14 @@ pub fn auth_span(parent: &tracing::Span, rpc: &'static str) -> tracing::Span {
     }
 }
 
-/// Records one stable terminal outcome on a Proxy diagnostic span.
-pub fn record_outcome(span: &tracing::Span, outcome: ProxySpanOutcome) {
-    let result = match outcome {
-        ProxySpanOutcome::Success => "success",
-        ProxySpanOutcome::PayloadFailure => "payload_failure",
-        ProxySpanOutcome::TransportFailure => "transport_failure",
-        ProxySpanOutcome::Denied => "denied",
-        ProxySpanOutcome::Bypassed => "bypassed",
+/// Records one stable terminal status on a Proxy diagnostic span.
+pub fn record_status(span: &tracing::Span, status: ProxySpanStatus) {
+    let result = match status {
+        ProxySpanStatus::Success => "success",
+        ProxySpanStatus::PayloadFailure => "payload_failure",
+        ProxySpanStatus::TransportFailure => "transport_failure",
+        ProxySpanStatus::Denied => "denied",
+        ProxySpanStatus::Bypassed => "bypassed",
     };
     span.record(crate::semantic::labels::RESULT, result);
 }
@@ -91,7 +91,7 @@ mod tests {
         let forward = forward_span(&parent, "SendMessage");
         let auth = auth_span(&parent, "SendMessage");
 
-        record_outcome(&forward, ProxySpanOutcome::Success);
-        record_outcome(&auth, ProxySpanOutcome::Bypassed);
+        record_status(&forward, ProxySpanStatus::Success);
+        record_status(&auth, ProxySpanStatus::Bypassed);
     }
 }

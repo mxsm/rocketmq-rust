@@ -68,7 +68,6 @@
     "promotion_gate",
     "cleanup",
     "leaked",
-    "detached_still_running",
     "artifacts",
     "checksums"
   ],
@@ -84,7 +83,6 @@
   "completion": {
     "cleanup_must_be_complete": true,
     "leaked_must_equal": 0,
-    "detached_still_running_must_equal": 0,
     "artifact_hash": "sha256",
     "commit_and_image_digest_match_required": true
   },

@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 
 use crate::mapped_file::retirement::codec::crc32;
 use crate::mapped_file::retirement::codec::decode_next_frame;
-use crate::mapped_file::retirement::codec::DecodeOutcome;
+use crate::mapped_file::retirement::codec::LedgerFrameDecodeResult;
 use crate::mapped_file::retirement::codec::LedgerRecord;
 use crate::mapped_file::retirement::codec::OpenReason;
 use crate::mapped_file::retirement::codec::MAX_SEALED_RECORD_UNIT_LENGTH;
@@ -226,8 +226,8 @@ pub(super) fn validate_required_tail_evidence(
         let frame = match decode_next_frame(&generation.log, expected_sequence, generation.generation)
             .map_err(map_codec_error)?
         {
-            DecodeOutcome::Frame(frame) => frame,
-            DecodeOutcome::EndOfInput | DecodeOutcome::TrailingPartial(_) => {
+            LedgerFrameDecodeResult::Frame(frame) => frame,
+            LedgerFrameDecodeResult::EndOfInput | LedgerFrameDecodeResult::TrailingPartial(_) => {
                 return Err(corruption(
                     "tail-repair generation does not contain its complete LogOpened frame",
                 ));

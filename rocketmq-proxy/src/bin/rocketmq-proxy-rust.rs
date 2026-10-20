@@ -42,8 +42,8 @@ use rocketmq_runtime::ShutdownReason;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_security_api::SecurityBootstrap;
 use rocketmq_security_api::SecurityBootstrapConfig;
-use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
+use rocketmq_security_api::SecurityBootstrapValidation;
 use rocketmq_security_api::SecurityContractViolation;
 use rocketmq_security_api::SecurityProviderError;
 use tracing::info;
@@ -175,7 +175,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     )
     .map_err(proxy_observability_error)?;
     let security_bootstrap = SecurityBootstrapConfig::from_env().map_err(proxy_security_contract_error)?;
-    let validated_security = validate_proxy_security(
+    let security_validation = validate_proxy_security(
         &security_bootstrap,
         &config,
         prometheus_listener_addr,
@@ -198,7 +198,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         &resolved_filter,
         telemetry_guard.subscriber_install_status(),
     );
-    log_security_bootstrap(validated_security);
+    log_security_bootstrap(security_validation);
 
     let diagnostics_sources = rocketmq_observability::RuntimeDiagnosticsSources::default();
     lifecycle
@@ -209,6 +209,8 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
             ),
         ))
         .map_err(proxy_runtime_error("bind Proxy lifecycle observer"))?;
+    // Reserve the final flush lease before ProxyRuntime closes the service scope.
+    let telemetry_flush_lease = rocketmq_observability::reserve_telemetry_flush_lease(&service_context, None);
     if let Err(error) = lifecycle.start(&service_context).await {
         lifecycle.mark_failed();
         let request = lifecycle.request_shutdown(ShutdownReason::Internal);
@@ -216,6 +218,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         return complete_proxy_process_shutdown(
             Err(primary_error),
             telemetry_guard,
+            telemetry_flush_lease,
             &service_context,
             request.deadline,
             &diagnostics_sources,
@@ -274,6 +277,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     let shutdown_result = complete_proxy_process_shutdown(
         primary_result,
         telemetry_guard,
+        telemetry_flush_lease,
         &service_context,
         shutdown_request.deadline,
         &diagnostics_sources,
@@ -288,11 +292,11 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
 async fn complete_proxy_process_shutdown(
     primary_result: ProxyResult<()>,
     telemetry_guard: rocketmq_observability::TelemetryRuntimeGuard,
+    flush_lease: Option<rocketmq_runtime::BlockingDrainLease>,
     service_context: &ChildServiceContext,
     deadline: ShutdownDeadline,
     diagnostics_sources: &rocketmq_observability::RuntimeDiagnosticsSources,
 ) -> ProxyResult<()> {
-    let flush_lease = rocketmq_observability::reserve_telemetry_flush_lease(service_context, Some(deadline));
     let primary_result = finish_proxy_process_shutdown(
         primary_result,
         service_context.task_group(),
@@ -300,16 +304,16 @@ async fn complete_proxy_process_shutdown(
         diagnostics_sources,
     )
     .await;
-    use rocketmq_observability::metrics::runtime::{RuntimeBusinessDrainOutcome, RuntimeMetricsRecorder};
-    let outcome = if deadline.is_expired() {
-        RuntimeBusinessDrainOutcome::DeadlineExceeded
+    use rocketmq_observability::metrics::runtime::{RuntimeBusinessDrainStatus, RuntimeMetricsRecorder};
+    let business_status = if deadline.is_expired() {
+        RuntimeBusinessDrainStatus::DeadlineExceeded
     } else if primary_result.is_ok() {
-        RuntimeBusinessDrainOutcome::Drained
+        RuntimeBusinessDrainStatus::Drained
     } else {
-        RuntimeBusinessDrainOutcome::Failed
+        RuntimeBusinessDrainStatus::Failed
     };
     RuntimeMetricsRecorder::from_handle(&telemetry_guard.handle(), RuntimeComponent::Proxy)
-        .record_business_drain(outcome);
+        .record_business_drain(business_status);
     let telemetry_report = match flush_lease {
         Some(lease) => {
             telemetry_guard
@@ -375,7 +379,7 @@ fn validate_proxy_security(
     config: &ProxyConfig,
     prometheus_bind_addr: Option<std::net::SocketAddr>,
     probe_bind_addr: Option<std::net::SocketAddr>,
-) -> ProxyResult<SecurityBootstrapOutcome> {
+) -> ProxyResult<SecurityBootstrapValidation> {
     if security_bootstrap.requires_authentication()
         && (!config.auth.authentication_enabled || !config.auth.authorization_enabled)
     {
@@ -403,12 +407,12 @@ fn validate_proxy_security(
         .map_err(proxy_security_provider_error)
 }
 
-fn log_security_bootstrap(outcome: SecurityBootstrapOutcome) {
-    match outcome {
-        SecurityBootstrapOutcome::Disabled => {
+fn log_security_bootstrap(validation: SecurityBootstrapValidation) {
+    match validation {
+        SecurityBootstrapValidation::Disabled => {
             tracing::warn!("Proxy security bootstrap is disabled because no security profile is configured")
         }
-        SecurityBootstrapOutcome::Validated(validated) => match validated.profile() {
+        SecurityBootstrapValidation::Validated(validated) => match validated.profile() {
             SecurityBootstrapProfile::DevelopmentInsecureLoopback => tracing::warn!(
                 profile = validated.profile().as_str(),
                 listener_count = validated.listener_count(),
@@ -564,8 +568,12 @@ impl Args {
                 "--namesrvAddr" | "-n" => parsed.namesrv_addr = Some(next_value(&mut args, arg.as_str())?),
                 "--printConfig" => parsed.print_config = true,
                 "--log-filter" => parsed.log_filter = Some(next_value(&mut args, arg.as_str())?),
-                "--help" | "-h" => {
-                    print_usage();
+                "-h" => {
+                    print_usage(false);
+                    std::process::exit(0);
+                }
+                "--help" => {
+                    print_usage(true);
                     std::process::exit(0);
                 }
                 _ => {
@@ -640,12 +648,51 @@ fn apply_overrides(config: &mut ProxyConfig, args: &Args) -> ProxyResult<()> {
     Ok(())
 }
 
-fn print_usage() {
-    println!(
-        "rocketmq-proxy-rust [-c <proxy.toml>] [--mode cluster|local] [--grpcListenAddr <host:port>] \
-         [--enableRemoting] [--remotingListenAddr <host:port>] [--namesrvAddr <host:port>] [--log-filter <directive>] \
-         [--printConfig]"
+const PROXY_COMMAND_NAME: &str = "rocketmq-proxy-rust";
+const PROXY_ABOUT: &str = "RocketMQ-Rust Proxy";
+const PROXY_LONG_ABOUT: &str = "Proxy for RocketMQ-Rust, a Rust implementation of Apache RocketMQ.
+
+Provides the Apache RocketMQ v2 gRPC MessagingService and routes requests to
+RocketMQ clusters or an embedded local broker, depending on enabled features.
+Supports optional remoting ingress.
+
+Project: https://github.com/mxsm/rocketmq-rust";
+
+/// Renders the help text. `-h` passes `detailed = false` for the concise form;
+/// `--help` adds the detailed description and project URL.
+fn usage_text(detailed: bool) -> String {
+    let mut text = format!("{PROXY_COMMAND_NAME} {}\n{PROXY_ABOUT}", env!("CARGO_PKG_VERSION"));
+    if detailed {
+        text.push_str("\n\n");
+        text.push_str(PROXY_LONG_ABOUT);
+    }
+    text.push_str(
+        "
+
+Usage: rocketmq-proxy-rust [OPTIONS]
+
+Options:
+  -c, --config <FILE>                Proxy configuration file (TOML)
+      --mode <MODE>                  Proxy mode: cluster or local (each requires its build feature)
+      --grpcListenAddr <HOST:PORT>   gRPC listen address, overrides grpc.listenAddr
+      --enableRemoting               Enable the remoting ingress
+      --remotingListenAddr <HOST:PORT>
+                                     Remoting listen address, overrides remoting.listenAddr
+  -n, --namesrvAddr <HOST:PORT>      NameServer address for cluster mode (requires 'cluster-mode')
+      --log-filter <DIRECTIVE>       Override the process log filter for this startup
+      --printConfig                  Print the effective configuration and exit
+  -h, --help                         Print help (see more with '--help')
+
+Release information:
+      --version                      Print the release version and exit
+      --version --verbose            Also print the artifact id and build features
+",
     );
+    text
+}
+
+fn print_usage(detailed: bool) {
+    print!("{}", usage_text(detailed));
 }
 
 fn print_config(config: &ProxyConfig) {
@@ -706,7 +753,7 @@ mod tests {
 
     #[test]
     fn disabled_security_bootstrap_allows_default_proxy_listeners() {
-        let outcome = validate_proxy_security(
+        let validation = validate_proxy_security(
             &rocketmq_security_api::SecurityBootstrap::Disabled,
             &ProxyConfig::default(),
             None,
@@ -714,7 +761,7 @@ mod tests {
         )
         .expect("disabled security bootstrap should not restrict Proxy listeners");
 
-        assert_eq!(outcome, rocketmq_security_api::SecurityBootstrapOutcome::Disabled);
+        assert_eq!(validation, rocketmq_security_api::SecurityBootstrapValidation::Disabled);
     }
 
     #[test]

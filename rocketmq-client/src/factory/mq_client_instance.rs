@@ -69,10 +69,11 @@ use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
-use rocketmq_runtime::tokio_lock::RocketMQTokioMutex;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ResourceBudget;
+use rocketmq_runtime::ScheduledExecutionPolicy;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_transport::api::ConnectionNetEvent;
 use rocketmq_transport::api::RPCHook;
 use rocketmq_transport::api::RequestDeadline;
@@ -97,7 +98,7 @@ use crate::consumer::pull_result::PullResult;
 use crate::consumer::pull_status::PullStatus;
 use crate::factory::client_tables::*;
 use crate::factory::route_update::RouteUpdateCoordinator;
-use crate::factory::route_update::TopicRouteApplyOutcome;
+use crate::factory::route_update::TopicRouteApplyStatus;
 use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::implementation::find_broker_result::FindBrokerResult;
@@ -244,9 +245,9 @@ pub struct MQClientInstance {
     pub(crate) mq_admin_impl: Arc<MQAdminImpl>,
     pub(crate) topic_route_table: SharedTopicRouteTable,
     topic_end_points_table: SharedTopicEndPointsTable,
-    lock_namesrv: Arc<RocketMQTokioMutex<()>>,
+    lock_namesrv: Arc<tokio::sync::Mutex<()>>,
     route_update_coordinator: RouteUpdateCoordinator,
-    lock_heartbeat: Arc<RocketMQTokioMutex<()>>,
+    lock_heartbeat: Arc<tokio::sync::Mutex<()>>,
 
     lifecycle_transition: Mutex<()>,
     service_state: StdRwLock<ServiceState>,
@@ -256,7 +257,7 @@ pub struct MQClientInstance {
     broker_addr_table: SharedBrokerAddrTable,
     broker_version_table: SharedBrokerVersionTable,
     send_heartbeat_times_total: Arc<AtomicI64>,
-    scheduled_task_manager: ScheduledTaskManager,
+    scheduled_tasks: ScheduledTaskGroup,
     /// HeartbeatV2: Cache of broker address -> last fingerprint
     broker_heartbeat_fingerprint_table: SharedBrokerHeartbeatFingerprintTable,
     /// HeartbeatV2: Set of brokers that support V2 protocol
@@ -414,7 +415,7 @@ impl MQClientInstance {
         let broker_version_table = Arc::new(DashMap::default());
         let broker_heartbeat_fingerprint_table = Arc::new(DashMap::default());
         let broker_support_v2_heartbeat_set = Arc::new(DashMap::default());
-        let lock_namesrv: Arc<RocketMQTokioMutex<()>> = Arc::default();
+        let lock_namesrv: Arc<tokio::sync::Mutex<()>> = Arc::default();
         let route_refresh_state = Arc::new(TopicRouteRefreshState::default());
         let route_update_coordinator = RouteUpdateCoordinator::new(
             producer_table.clone(),
@@ -474,7 +475,7 @@ impl MQClientInstance {
             broker_addr_table,
             broker_version_table,
             send_heartbeat_times_total: Arc::new(AtomicI64::new(0)),
-            scheduled_task_manager: ScheduledTaskManager::new_legacy_compatibility(),
+            scheduled_tasks: service_context.scheduled_tasks("client-instance-schedules"),
             broker_heartbeat_fingerprint_table,
             broker_support_v2_heartbeat_set,
             route_refresh_state,
@@ -647,14 +648,6 @@ impl MQClientInstance {
         .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQProducerImpl"))?;
         producer_impl.send(message).await
     }
-
-    pub fn on_channel_connect(&self, _remote_addr: &str) {}
-
-    pub fn on_channel_close(&self, _remote_addr: &str) {}
-
-    pub fn on_channel_exception(&self, _remote_addr: &str) {}
-
-    pub fn on_channel_idle(&self, _remote_addr: &str) {}
 
     pub async fn on_channel_active(&self, remote_addr: &str) {
         let matched_brokers: Vec<_> = self
@@ -841,19 +834,14 @@ impl MQClientInstance {
         self.shutdown_rebalance_delay_tasks(Duration::from_secs(1)).await;
 
         info!("MQClientInstance[{}] shutting down scheduled tasks", self.client_id);
-        let scheduled_report = self
-            .scheduled_task_manager
-            .shutdown_all(SCHEDULED_TASK_SHUTDOWN_TIMEOUT)
-            .await;
+        let scheduled_report = self.scheduled_tasks.shutdown(SCHEDULED_TASK_SHUTDOWN_TIMEOUT).await;
         if scheduled_report.is_healthy() {
-            info!(
-                "MQClientInstance[{}] scheduled tasks stopped: {:?}",
-                self.client_id, scheduled_report
-            );
+            info!("MQClientInstance[{}] scheduled tasks stopped", self.client_id);
         } else {
             warn!(
-                "MQClientInstance[{}] scheduled task shutdown unhealthy: {:?}",
-                self.client_id, scheduled_report
+                "MQClientInstance[{}] scheduled task shutdown unhealthy: {}",
+                self.client_id,
+                scheduled_report.to_json()
             );
         }
 
@@ -1073,19 +1061,26 @@ impl MQClientInstance {
     }
 
     fn start_scheduled_task(&self, this: Arc<Self>) -> crate::ClientResult<()> {
-        info!("Starting scheduled tasks with ScheduledTaskManager");
+        info!("Starting client instance scheduled tasks");
 
         if self.client_config.namesrv_addr.is_none() {
             if let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() {
-                self.scheduled_task_manager
-                    .add_fixed_rate_task_async(Duration::from_secs(10), Duration::from_secs(120), move |_token| {
-                        let mq_client_api_impl = Arc::clone(&mq_client_api_impl);
-                        async move {
-                            info!("ScheduledTask: fetchNameServerAddr");
-                            mq_client_api_impl.fetch_name_server_addr().await;
-                            Ok(())
-                        }
-                    })
+                self.scheduled_tasks
+                    .schedule(
+                        ScheduledTaskConfig::fixed_rate_no_overlap(
+                            "client.fetch-name-server-addr",
+                            Duration::from_secs(120),
+                        )
+                        .with_initial_delay(Duration::from_secs(10)),
+                        ScheduledExecutionPolicy::default(),
+                        move || {
+                            let mq_client_api_impl = Arc::clone(&mq_client_api_impl);
+                            async move {
+                                info!("ScheduledTask: fetchNameServerAddr");
+                                mq_client_api_impl.fetch_name_server_addr().await;
+                            }
+                        },
+                    )
                     .map_err(|error| client_scheduled_task_startup_failed("fetchNameServerAddr", error))?;
             } else {
                 warn!(
@@ -1097,16 +1092,19 @@ impl MQClientInstance {
 
         let client_instance = this.clone();
         let poll_name_server_interval = self.client_config.poll_name_server_interval;
-        self.scheduled_task_manager
-            .add_fixed_rate_task_async(
-                Duration::from_millis(10),
-                Duration::from_millis(poll_name_server_interval as u64),
-                move |_token| {
+        self.scheduled_tasks
+            .schedule(
+                ScheduledTaskConfig::fixed_rate_no_overlap(
+                    "client.update-topic-route",
+                    Duration::from_millis(poll_name_server_interval as u64),
+                )
+                .with_initial_delay(Duration::from_millis(10)),
+                ScheduledExecutionPolicy::default(),
+                move || {
                     let instance = Arc::clone(&client_instance);
                     async move {
                         info!("ScheduledTask: update_topic_route_info_from_name_server");
                         instance.update_topic_route_info_from_name_server().await;
-                        Ok(())
                     }
                 },
             )
@@ -1114,17 +1112,20 @@ impl MQClientInstance {
 
         let client_instance = this.clone();
         let heartbeat_broker_interval = self.client_config.heartbeat_broker_interval;
-        self.scheduled_task_manager
-            .add_fixed_rate_task_async(
-                Duration::from_secs(1),
-                Duration::from_millis(heartbeat_broker_interval as u64),
-                move |_token| {
+        self.scheduled_tasks
+            .schedule(
+                ScheduledTaskConfig::fixed_rate_no_overlap(
+                    "client.heartbeat",
+                    Duration::from_millis(heartbeat_broker_interval as u64),
+                )
+                .with_initial_delay(Duration::from_secs(1)),
+                ScheduledExecutionPolicy::default(),
+                move || {
                     let instance = Arc::clone(&client_instance);
                     async move {
                         info!("ScheduledTask: clean_offline_broker and send_heartbeat");
                         instance.clean_offline_broker().await;
                         instance.send_heartbeat_to_all_broker_with_lock().await;
-                        Ok(())
                     }
                 },
             )
@@ -1132,16 +1133,19 @@ impl MQClientInstance {
 
         let client_instance = this;
         let persist_consumer_offset_interval = self.client_config.persist_consumer_offset_interval as u64;
-        self.scheduled_task_manager
-            .add_fixed_rate_task_async(
-                Duration::from_secs(10),
-                Duration::from_millis(persist_consumer_offset_interval),
-                move |_token| {
+        self.scheduled_tasks
+            .schedule(
+                ScheduledTaskConfig::fixed_rate_no_overlap(
+                    "client.persist-consumer-offset",
+                    Duration::from_millis(persist_consumer_offset_interval),
+                )
+                .with_initial_delay(Duration::from_secs(10)),
+                ScheduledExecutionPolicy::default(),
+                move || {
                     let instance = Arc::clone(&client_instance);
                     async move {
                         info!("ScheduledTask: persistAllConsumerOffset");
                         instance.persist_all_consumer_offset().await;
-                        Ok(())
                     }
                 },
             )
@@ -1149,7 +1153,7 @@ impl MQClientInstance {
 
         info!(
             "All scheduled tasks started, total tasks: {}",
-            self.scheduled_task_manager.task_count()
+            self.scheduled_tasks.snapshot().len()
         );
         Ok(())
     }
@@ -1276,7 +1280,7 @@ impl MQClientInstance {
             self.record_topic_route_refresh_finish(
                 TopicRouteRefreshKind::RouteMiss,
                 started,
-                TopicRouteApplyOutcome::Unchanged,
+                TopicRouteApplyStatus::Unchanged,
             );
             return Err(RetryInput::BusinessError(ClientError::not_started()));
         };
@@ -1358,7 +1362,7 @@ impl MQClientInstance {
         self.record_topic_route_refresh_finish(
             TopicRouteRefreshKind::RouteMiss,
             started,
-            TopicRouteApplyOutcome::Unchanged,
+            TopicRouteApplyStatus::Unchanged,
         );
     }
 
@@ -1376,13 +1380,13 @@ impl MQClientInstance {
             .await;
         self.record_topic_route_refresh_finish(TopicRouteRefreshKind::RouteMiss, started, outcome);
         match outcome {
-            TopicRouteApplyOutcome::Applied => self.route_refresh_state.metrics.record_success(),
-            TopicRouteApplyOutcome::Unchanged | TopicRouteApplyOutcome::Stale => {
+            TopicRouteApplyStatus::Applied => self.route_refresh_state.metrics.record_success(),
+            TopicRouteApplyStatus::Unchanged | TopicRouteApplyStatus::Stale => {
                 self.route_refresh_state.metrics.record_skip()
             }
         }
 
-        if matches!(outcome, TopicRouteApplyOutcome::Stale) {
+        if matches!(outcome, TopicRouteApplyStatus::Stale) {
             let current_route = self
                 .topic_route_table
                 .get(topic)
@@ -1414,7 +1418,7 @@ impl MQClientInstance {
                 "updateTopicRouteInfoFromNameServer skipped because mq_client_api_impl is None, Topic: {}. [{}]",
                 topic, self.client_id
             );
-            self.record_topic_route_refresh_finish(refresh_kind, started, TopicRouteApplyOutcome::Unchanged);
+            self.record_topic_route_refresh_finish(refresh_kind, started, TopicRouteApplyStatus::Unchanged);
             self.route_refresh_state.metrics.record_failure();
             return false;
         };
@@ -1458,11 +1462,11 @@ impl MQClientInstance {
                 .await;
             self.record_topic_route_refresh_finish(refresh_kind, started, outcome);
             match outcome {
-                TopicRouteApplyOutcome::Applied => {
+                TopicRouteApplyStatus::Applied => {
                     self.route_refresh_state.metrics.record_success();
                     return true;
                 }
-                TopicRouteApplyOutcome::Unchanged | TopicRouteApplyOutcome::Stale => {
+                TopicRouteApplyStatus::Unchanged | TopicRouteApplyStatus::Stale => {
                     self.route_refresh_state.metrics.record_skip();
                     return false;
                 }
@@ -1475,7 +1479,7 @@ impl MQClientInstance {
             self.route_refresh_state.metrics.record_failure();
         }
 
-        self.record_topic_route_refresh_finish(refresh_kind, started, TopicRouteApplyOutcome::Unchanged);
+        self.record_topic_route_refresh_finish(refresh_kind, started, TopicRouteApplyStatus::Unchanged);
         false
     }
 
@@ -1528,7 +1532,7 @@ impl MQClientInstance {
         &self,
         refresh_kind: TopicRouteRefreshKind,
         started: Instant,
-        _outcome: TopicRouteApplyOutcome,
+        _outcome: TopicRouteApplyStatus,
     ) {
         if matches!(refresh_kind, TopicRouteRefreshKind::RouteMiss) {
             self.route_refresh_state
@@ -1542,7 +1546,7 @@ impl MQClientInstance {
         topic: &CheetahString,
         topic_route_data: &mut TopicRouteData,
         request_version: u64,
-    ) -> TopicRouteApplyOutcome {
+    ) -> TopicRouteApplyStatus {
         self.route_update_coordinator
             .apply_if_fresh(topic, topic_route_data, request_version)
             .await
@@ -1580,11 +1584,8 @@ impl MQClientInstance {
     }
 
     pub async fn clean_offline_broker(&self) {
-        let lock = self
-            .lock_namesrv
-            .try_lock_timeout(Duration::from_millis(LOCK_TIMEOUT_MILLIS))
-            .await;
-        if let Some(_lock) = lock {
+        let lock = tokio::time::timeout(Duration::from_millis(LOCK_TIMEOUT_MILLIS), self.lock_namesrv.lock()).await;
+        if let Ok(_lock) = lock {
             let mut updated_table = HashMap::new();
             let mut broker_name_set = HashSet::new();
 
@@ -1617,7 +1618,7 @@ impl MQClientInstance {
         }
     }
     pub async fn send_heartbeat_to_all_broker_with_lock(&self) -> bool {
-        let _guard = match self.lock_heartbeat.try_lock().await {
+        let _guard = match self.lock_heartbeat.try_lock().ok() {
             Some(g) => g,
             None => {
                 warn!("lock heartBeat, but failed. [{}]", self.client_id);
@@ -1635,7 +1636,10 @@ impl MQClientInstance {
     }
 
     pub async fn send_heartbeat_to_all_broker_with_lock_v2(&self, is_rebalance: bool) -> bool {
-        let _guard = match self.lock_heartbeat.try_lock_timeout(Duration::from_secs(2)).await {
+        let _guard = match tokio::time::timeout(Duration::from_secs(2), self.lock_heartbeat.lock())
+            .await
+            .ok()
+        {
             Some(g) => g,
             None => {
                 warn!("lock heartBeat, but failed. [{}]", self.client_id);
@@ -2121,7 +2125,7 @@ impl MQClientInstance {
         addr: &CheetahString,
         strict_lock_mode: bool,
     ) -> bool {
-        let _guard = match self.lock_heartbeat.try_lock().await {
+        let _guard = match self.lock_heartbeat.try_lock().ok() {
             Some(g) => g,
             None => {
                 if strict_lock_mode {
@@ -2895,7 +2899,7 @@ pub async fn run_route_refresh_concurrent_stale_guard_probe(
         .get(&topic)
         .and_then(|entry| entry.value().order_topic_conf.clone());
     let route_version = instance.topic_route_version(&topic);
-    let stale_skipped = matches!(outcome, TopicRouteApplyOutcome::Stale);
+    let stale_skipped = matches!(outcome, TopicRouteApplyStatus::Stale);
     let kept_current_route = final_order_topic_conf
         .as_ref()
         .is_some_and(|value| value.as_str() == "broker-new:1");
@@ -3681,18 +3685,21 @@ mod tests {
         instance.set_service_state(ServiceState::Running);
         assert!(instance.connection_event_task_count() > 0);
         instance
-            .scheduled_task_manager
-            .add_fixed_delay_task(Duration::from_secs(60), Duration::from_secs(60), |_token| async {
-                Ok(())
-            })
+            .scheduled_tasks
+            .schedule(
+                ScheduledTaskConfig::fixed_delay("client.shutdown-test", Duration::from_secs(60))
+                    .with_initial_delay(Duration::from_secs(60)),
+                ScheduledExecutionPolicy::default(),
+                || async {},
+            )
             .expect("scheduled shutdown test task should start");
 
-        assert_eq!(instance.scheduled_task_manager.task_count(), 1);
+        assert_eq!(instance.scheduled_tasks.group().task_count(), 1);
 
         instance.shutdown().await;
 
         assert_eq!(instance.service_state(), ServiceState::ShutdownAlready);
-        assert_eq!(instance.scheduled_task_manager.task_count(), 0);
+        assert_eq!(instance.scheduled_tasks.group().task_count(), 0);
         assert_eq!(instance.connection_event_task_count(), 0);
     }
 
@@ -3849,7 +3856,7 @@ mod tests {
 
         let outcome = instance.apply_topic_route_data_if_fresh(&topic, &mut route, 0).await;
 
-        assert_eq!(outcome, TopicRouteApplyOutcome::Applied);
+        assert_eq!(outcome, TopicRouteApplyStatus::Applied);
         assert!(!producer.is_publish_topic_need_update(&topic));
         assert!(!consumer.is_subscribe_topic_need_update(topic.as_str()).await);
         assert_eq!(instance.topic_route_version(&topic), 1);
@@ -3887,8 +3894,8 @@ mod tests {
             .apply_topic_route_data_if_fresh(&topic, &mut second_route, 1)
             .await;
 
-        assert_eq!(first_outcome, TopicRouteApplyOutcome::Applied);
-        assert_eq!(second_outcome, TopicRouteApplyOutcome::Applied);
+        assert_eq!(first_outcome, TopicRouteApplyStatus::Applied);
+        assert_eq!(second_outcome, TopicRouteApplyStatus::Applied);
         assert!(!instance.is_broker_addr_in_route_index("127.0.0.1:10911"));
         assert!(instance.is_broker_addr_in_route_index("127.0.0.2:10911"));
     }
@@ -3965,17 +3972,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn channel_event_methods_match_java_listener_contract_without_match() {
+    async fn channel_active_without_matching_broker_is_safe() {
         let client_config = ClientConfig {
             namesrv_addr: None,
             ..Default::default()
         };
         let instance = test_instance(client_config, "channel-event-test");
 
-        instance.on_channel_connect("127.0.0.1:10911");
-        instance.on_channel_close("127.0.0.1:10911");
-        instance.on_channel_exception("127.0.0.1:10911");
-        instance.on_channel_idle("127.0.0.1:10911");
         instance.on_channel_active("127.0.0.1:10911").await;
     }
 

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::StorageBackend;
+use crate::model::StorageEngine;
 use crate::persistence::StorageMode;
 use crate::persistence::StorageStatus;
 use serde::Deserialize;
@@ -38,7 +38,7 @@ pub enum StorageStatusReason {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageStatusView {
-    pub backend: StorageBackend,
+    pub backend: StorageEngine,
     pub mode: StorageMode,
     pub status: StorageStatus,
     #[serde(skip_serializing_if = "Option::is_none")]

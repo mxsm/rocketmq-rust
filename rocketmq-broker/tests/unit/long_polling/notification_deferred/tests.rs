@@ -38,23 +38,23 @@ use rocketmq_transport::api::DeferredWaitLimits;
 
 use super::deadline::NotificationWaitDeadline;
 use super::deadline::NotificationWaitDeadlineOperationalError;
-use super::deadline::NotificationWaitDeadlineOutcome;
 use super::deadline::NotificationWaitDeadlineRejectionReason;
+use super::deadline::NotificationWaitDecision;
 use super::index::NotificationArrivalView;
 use super::index::NotificationCandidateSelection;
 use super::index::NotificationCriteriaIndex;
 use super::index::NotificationCriteriaKey;
 use super::index::NotificationCriteriaLimits;
 use super::index::NotificationIndexOperationalError;
-use super::index::NotificationIndexReserveOutcome;
+use super::index::NotificationIndexReservationStatus;
 use super::index::NotificationIndexReserveRejection;
 use super::index::NotificationIndexSnapshot;
 use super::index::NotificationMatchCriteria;
 use super::index::NotificationScanCursor;
+use super::service::NotificationContinuationDecision;
 use super::service::NotificationContinuationOperationalError;
-use super::service::NotificationContinuationOutcome;
 use super::service::NotificationContinuationRejection;
-use super::service::NotificationDeferredPrepareOutcome;
+use super::service::NotificationDeferredPreparationStatus;
 use super::service::NotificationDeferredPrepareRejectionKind;
 use super::service::NotificationDeferredService;
 use super::service::NotificationRequestData;
@@ -65,11 +65,11 @@ fn nonzero(value: usize) -> NonZeroUsize {
 }
 
 fn expect_deadline(
-    result: Result<NotificationWaitDeadlineOutcome, NotificationWaitDeadlineOperationalError>,
+    result: Result<NotificationWaitDecision, NotificationWaitDeadlineOperationalError>,
 ) -> NotificationWaitDeadline {
     match result {
-        Ok(NotificationWaitDeadlineOutcome::Pending(deadline)) => deadline,
-        Ok(NotificationWaitDeadlineOutcome::Rejected(rejection)) => {
+        Ok(NotificationWaitDecision::Pending(deadline)) => deadline,
+        Ok(NotificationWaitDecision::Rejected(rejection)) => {
             panic!("expected pending Notification deadline, got {:?}", rejection.reason())
         }
         Err(error) => panic!("expected pending Notification deadline: {error}"),
@@ -77,11 +77,11 @@ fn expect_deadline(
 }
 
 fn expect_deadline_rejection(
-    result: Result<NotificationWaitDeadlineOutcome, NotificationWaitDeadlineOperationalError>,
+    result: Result<NotificationWaitDecision, NotificationWaitDeadlineOperationalError>,
 ) -> NotificationWaitDeadlineRejectionReason {
     match result {
-        Ok(NotificationWaitDeadlineOutcome::Rejected(rejection)) => rejection.reason(),
-        Ok(NotificationWaitDeadlineOutcome::Pending(_)) => panic!("expected rejected Notification deadline"),
+        Ok(NotificationWaitDecision::Rejected(rejection)) => rejection.reason(),
+        Ok(NotificationWaitDecision::Pending(_)) => panic!("expected rejected Notification deadline"),
         Err(error) => panic!("expected rejected Notification deadline: {error}"),
     }
 }
@@ -89,8 +89,8 @@ fn expect_deadline_rejection(
 macro_rules! expect_reserved {
     ($result:expr, $message:literal) => {
         match $result {
-            Ok(NotificationIndexReserveOutcome::Reserved(reservation)) => reservation,
-            Ok(NotificationIndexReserveOutcome::Rejected(rejection)) => {
+            Ok(NotificationIndexReservationStatus::Reserved(reservation)) => reservation,
+            Ok(NotificationIndexReservationStatus::Rejected(rejection)) => {
                 panic!("{}: {rejection:?}", $message)
             }
             Err(error) => panic!("{}: {error:?}", $message),
@@ -101,8 +101,8 @@ macro_rules! expect_reserved {
 macro_rules! expect_continued {
     ($result:expr, $message:literal) => {
         match $result {
-            Ok(NotificationContinuationOutcome::Continued(continuation)) => continuation,
-            Ok(NotificationContinuationOutcome::Rejected(rejection)) => {
+            Ok(NotificationContinuationDecision::Ready(continuation)) => continuation,
+            Ok(NotificationContinuationDecision::Rejected(rejection)) => {
                 panic!("{}: {rejection:?}", $message)
             }
             Err(error) => panic!("{}: {error:?}", $message),
@@ -113,8 +113,8 @@ macro_rules! expect_continued {
 macro_rules! expect_prepared {
     ($result:expr, $message:literal) => {
         match $result {
-            Ok(NotificationDeferredPrepareOutcome::Prepared(prepared)) => *prepared,
-            Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => {
+            Ok(NotificationDeferredPreparationStatus::Prepared(prepared)) => *prepared,
+            Ok(NotificationDeferredPreparationStatus::Rejected(rejection)) => {
                 panic!("{}: {:?}", $message, rejection.kind())
             }
             Err(error) => panic!("{}: {error:?}", $message),
@@ -231,8 +231,8 @@ fn notification_deferred_index_uses_legacy_plus_one_per_key_and_hint_is_not_a_ke
         Arc::clone(&criteria),
     );
     let full = match index.reserve(key("group-a", 0)) {
-        Ok(NotificationIndexReserveOutcome::Rejected(rejection)) => rejection,
-        Ok(NotificationIndexReserveOutcome::Reserved(_)) | Err(_) => {
+        Ok(NotificationIndexReservationStatus::Rejected(rejection)) => rejection,
+        Ok(NotificationIndexReservationStatus::Reserved(_)) | Err(_) => {
             panic!("third entry exceeds pop_polling_size + 1")
         }
     };
@@ -245,8 +245,8 @@ fn notification_deferred_index_uses_legacy_plus_one_per_key_and_hint_is_not_a_ke
     let fourth =
         expect_reserved!(index.reserve(key("group-c", 0)), "fourth global entry").publish(4, deadline, criteria);
     let global = match index.reserve(key("group-d", 0)) {
-        Ok(NotificationIndexReserveOutcome::Rejected(rejection)) => rejection,
-        Ok(NotificationIndexReserveOutcome::Reserved(_)) | Err(_) => {
+        Ok(NotificationIndexReservationStatus::Rejected(rejection)) => rejection,
+        Ok(NotificationIndexReservationStatus::Reserved(_)) | Err(_) => {
             panic!("fifth entry exceeds the global live+reserved cap")
         }
     };
@@ -360,8 +360,8 @@ fn notification_deferred_prepare_failures_release_index_and_wait_capacity() {
         0,
         monotonic,
     ) {
-        Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => rejection,
-        Ok(NotificationDeferredPrepareOutcome::Prepared(_)) | Err(_) => {
+        Ok(NotificationDeferredPreparationStatus::Rejected(rejection)) => rejection,
+        Ok(NotificationDeferredPreparationStatus::Prepared(_)) | Err(_) => {
             panic!("invalid signed deadline stays pre-take")
         }
     };
@@ -400,8 +400,8 @@ fn notification_deferred_continuation_has_independent_count_and_bytes_admission(
     );
     assert_eq!(deferred_service.snapshot().active_continuations(), 1);
     let second = match deferred_service.admit_continuation(arrival, NotificationScanCursor::for_test(1)) {
-        Ok(NotificationContinuationOutcome::Rejected(rejection)) => rejection,
-        Ok(NotificationContinuationOutcome::Continued(_)) | Err(_) => {
+        Ok(NotificationContinuationDecision::Rejected(rejection)) => rejection,
+        Ok(NotificationContinuationDecision::Ready(_)) | Err(_) => {
             panic!("second continuation exceeds the count cap")
         }
     };
@@ -417,8 +417,8 @@ fn notification_deferred_continuation_has_independent_count_and_bytes_admission(
         NotificationArrivalView::new(&large_topic, 0),
         NotificationScanCursor::for_test(1),
     ) {
-        Ok(NotificationContinuationOutcome::Rejected(rejection)) => rejection,
-        Ok(NotificationContinuationOutcome::Continued(_)) | Err(_) => {
+        Ok(NotificationContinuationDecision::Rejected(rejection)) => rejection,
+        Ok(NotificationContinuationDecision::Ready(_)) | Err(_) => {
             panic!("arrival payload exceeds continuation byte capacity")
         }
     };
@@ -467,8 +467,8 @@ fn notification_deferred_continuation_charges_fixed_cursor_and_property_storage_
     let arrival = NotificationArrivalView::new(&topic, 0).with_filter_metadata(None, 0, None, Some(&properties));
     let constrained = service(1, 1, 1, 4096);
     let error = match constrained.admit_continuation(arrival, NotificationScanCursor::for_test(64)) {
-        Ok(NotificationContinuationOutcome::Rejected(rejection)) => rejection,
-        Ok(NotificationContinuationOutcome::Continued(_)) | Err(_) => {
+        Ok(NotificationContinuationDecision::Rejected(rejection)) => rejection,
+        Ok(NotificationContinuationDecision::Ready(_)) | Err(_) => {
             panic!("fixed owners, cursor backing, buckets, and short properties exceed the byte cap")
         }
     };

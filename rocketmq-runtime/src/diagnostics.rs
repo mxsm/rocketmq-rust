@@ -35,20 +35,21 @@ use crate::scheduled::ScheduledTaskSnapshot;
 use crate::shutdown_report::ShutdownReport;
 use crate::task_group::TaskDetailScope;
 use crate::task_group::TaskGroup;
+use crate::task_group::TaskGroupEventCounts;
 use crate::task_group::TaskGroupId;
 use crate::task_group::TaskGroupLifecycleState;
 use crate::task_group::TaskKind;
 
 static NEXT_RUNTIME_DIAGNOSTICS_ID: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Debug, Clone)]
 /// Represents runtime diagnostics.
+#[derive(Debug, Clone)]
 pub struct RuntimeDiagnostics {
     runtime_id: Arc<str>,
 }
 
-#[derive(Debug, Clone, Serialize)]
 /// Represents runtime diagnostics snapshot.
+#[derive(Debug, Clone, Serialize)]
 pub struct RuntimeDiagnosticsSnapshot {
     /// The runtime identifier.
     pub runtime_id: String,
@@ -68,6 +69,8 @@ pub struct RuntimeDiagnosticsSnapshot {
     pub active_tasks: usize,
     /// The number of active child registry slots.
     pub registry_slots: usize,
+    /// Failures absorbed anywhere in the root's tree.
+    pub events: TaskGroupEventCounts,
     /// The blocking lanes value.
     pub blocking_lanes: Vec<BlockingExecutorSnapshot>,
 }
@@ -287,6 +290,7 @@ impl RuntimeDiagnostics {
             child_count: root.component_count(),
             active_tasks: root.task_count(),
             registry_slots: root.component_count(),
+            events: root.event_counts(),
             blocking_lanes,
         }
     }
@@ -401,7 +405,8 @@ pub struct RuntimeDiagnosticsViewOptionsV2 {
     pub max_metadata_resources: usize,
     /// Maximum number of task details emitted when a detail list is requested.
     pub max_detail_entries: usize,
-    /// Maximum number of tasks examined when a detail list is requested.
+    /// Maximum number of tasks examined, and of descendant task groups
+    /// visited, when a detail list is requested.
     pub detail_scan_budget: usize,
 }
 
@@ -593,6 +598,41 @@ pub struct RuntimeDiagnosticsViewV2 {
     pub details_scanned: usize,
     /// Whether any section, including the detail list, was cut short.
     pub truncated: bool,
+}
+
+/// A bounded detail sample that does not scan aggregate subtree statistics.
+///
+/// This separate API leaves the V1/V2 serialized views and their construction
+/// surfaces unchanged. Labels omit caller-provided names and identifiers.
+#[derive(Debug, Clone, Serialize)]
+pub struct RuntimeTaskDetails {
+    /// Sanitized details that fit the output budget.
+    pub details: Vec<RuntimeTaskDetailV2>,
+    /// Number of task entries examined.
+    pub tasks_scanned: usize,
+    /// Number of descendant registrations examined, including expired entries.
+    pub group_entries_scanned: usize,
+    /// Whether a task, group, or output budget truncated the sample.
+    pub truncated: bool,
+}
+
+impl From<crate::task_group::TaskDetailScan> for RuntimeTaskDetails {
+    fn from(scan: crate::task_group::TaskDetailScan) -> Self {
+        Self {
+            details: scan
+                .details
+                .into_iter()
+                .map(|detail| RuntimeTaskDetailV2 {
+                    kind: runtime_task_kind(detail.kind),
+                    scope: runtime_detail_scope(detail.scope),
+                    elapsed_millis: duration_millis(detail.elapsed),
+                })
+                .collect(),
+            tasks_scanned: scan.scanned,
+            group_entries_scanned: scan.group_entries_scanned,
+            truncated: scan.truncated,
+        }
+    }
 }
 
 impl RuntimeDiagnosticsViewV2 {
@@ -1106,6 +1146,43 @@ mod tests {
             .details
             .iter()
             .all(|detail| detail.scope == RuntimeDiagnosticsScope::Local));
+    }
+
+    #[tokio::test]
+    async fn v2_detail_scan_budget_also_bounds_the_groups_it_visits() {
+        let context = RuntimeContext::from_current("runtime-v2-group-budget");
+        // Empty groups add no tasks, so only the group bound can stop the scan.
+        let groups = (0..8)
+            .map(|index| context.service_context(crate::ScopeId::try_new(format!("empty-{index}")).unwrap()))
+            .collect::<Vec<_>>();
+        let diagnostics = RuntimeDiagnostics::new();
+        let view_with_budget = |detail_scan_budget| {
+            diagnostics.view_v2_with_options(
+                RuntimeComponent::Other,
+                context.root_group(),
+                Vec::new(),
+                RuntimeDiagnosticsInputs::default(),
+                RuntimeDiagnosticsViewOptionsV2 {
+                    max_detail_entries: 8,
+                    detail_scan_budget,
+                    ..RuntimeDiagnosticsViewOptionsV2::default()
+                },
+            )
+        };
+
+        let bounded = view_with_budget(3);
+        assert_eq!(bounded.details_scanned, 0);
+        assert!(bounded.details.is_empty());
+        assert!(bounded.truncated, "the scan stopped before every group was visited");
+        assert_eq!(
+            bounded.tasks.task_group_count, 9,
+            "the aggregate section still covers every group"
+        );
+
+        let complete = view_with_budget(8);
+        assert_eq!(complete.details_scanned, 0);
+        assert!(!complete.truncated, "a budget covering every group completes the scan");
+        drop(groups);
     }
 
     #[tokio::test]

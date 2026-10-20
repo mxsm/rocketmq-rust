@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::storage::SharedStorageBackend;
+use crate::storage::SharedKeyValueStore;
 use crate::typ::LogId;
 use crate::typ::SnapshotMeta;
 use crate::typ::StoredMembership;
@@ -43,11 +43,11 @@ pub(in crate::openraft) struct LoadedStateRepository {
 
 #[derive(Clone)]
 pub(in crate::openraft) struct RaftStateRepository {
-    backend: SharedStorageBackend,
+    backend: SharedKeyValueStore,
 }
 
 impl RaftStateRepository {
-    pub(in crate::openraft) fn new(backend: SharedStorageBackend) -> Self {
+    pub(in crate::openraft) fn new(backend: SharedKeyValueStore) -> Self {
         Self { backend }
     }
 
@@ -76,14 +76,22 @@ impl RaftStateRepository {
             .await?;
         let snapshot_data = self.read_bytes(RaftRecordKey::SnapshotData).await?;
         let current_snapshot = match (snapshot_meta, snapshot_data) {
-            (Some(meta), Some(data)) => Some(PersistedSnapshot {
-                meta: SnapshotMeta {
-                    last_log_id: meta.last_log_id,
-                    last_membership: meta.last_membership,
-                    snapshot_id: meta.snapshot_id,
-                },
-                data,
-            }),
+            (Some(meta), Some(data)) => {
+                let identity = crate::openraft::state_machine::inspect_snapshot_payload(&data)?;
+                if identity.snapshot_id != meta.snapshot_id {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Persisted controller snapshot ID does not match its checksummed payload",
+                    ));
+                }
+                Some(PersistedSnapshot {
+                    meta: SnapshotMeta {
+                        last_log_id: meta.last_log_id,
+                        last_membership: meta.last_membership,
+                    },
+                    data,
+                })
+            }
             (None, None) => None,
             _ => {
                 return Err(std::io::Error::new(
@@ -138,7 +146,7 @@ impl RaftStateRepository {
         let persisted_meta = PersistedSnapshotMeta {
             last_log_id: meta.last_log_id,
             last_membership: meta.last_membership.clone(),
-            snapshot_id: meta.snapshot_id.clone(),
+            snapshot_id: crate::openraft::state_machine::inspect_snapshot_payload(data)?.snapshot_id,
         };
         self.write_batch_and_sync(
             vec![
@@ -164,7 +172,7 @@ impl RaftStateRepository {
         let persisted_meta = PersistedSnapshotMeta {
             last_log_id: meta.last_log_id,
             last_membership: meta.last_membership.clone(),
-            snapshot_id: meta.snapshot_id.clone(),
+            snapshot_id: crate::openraft::state_machine::inspect_snapshot_payload(data)?.snapshot_id,
         };
         self.write_batch_and_sync(
             vec![
@@ -221,6 +229,42 @@ impl RaftStateRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn persisted_snapshot_preserves_and_checks_payload_identity() {
+        use openraft::storage::RaftSnapshotBuilder;
+
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("snapshot-identity-test");
+        let backend = crate::storage::create_storage(
+            crate::storage::StorageConfig::Memory,
+            runtime.service_context("storage").storage_io().clone(),
+        )
+        .await
+        .expect("memory backend");
+        let repository = RaftStateRepository::new(backend.clone());
+        let config = crate::ControllerConfigReader::new(crate::ControllerConfig::default());
+        let mut state = crate::openraft::StateMachine::new(config);
+        let snapshot = state.build_snapshot().await.expect("build snapshot");
+        let data = snapshot.snapshot.into_inner();
+        repository.persist_snapshot(&snapshot.meta, &data).await.unwrap();
+        let loaded = repository.load().await.unwrap().current_snapshot.unwrap();
+        assert_eq!(loaded.data, data);
+        assert_eq!(loaded.meta, snapshot.meta);
+
+        let key = RaftRecordKey::SnapshotMeta;
+        let bytes = backend.get(key.as_v1_key().as_ref()).await.unwrap().unwrap();
+        let mut meta: PersistedSnapshotMeta = decode_v1(key, &bytes).unwrap();
+        meta.snapshot_id = "different-snapshot".to_string();
+        backend
+            .write_batch(
+                vec![(key.as_v1_key().into_owned(), encode_v1(key, &meta).unwrap())],
+                vec![],
+            )
+            .await
+            .unwrap();
+        let error = repository.load().await.err().expect("reject mismatched identity");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
 
     #[test]
     fn snapshot_meta_v1_bytes_match_the_existing_record() {

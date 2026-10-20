@@ -296,6 +296,8 @@ def validate_exact_policy(guard: Guard, policy: dict[str, Any], container_policy
         "readiness_path": "/readyz",
         "liveness_path": "/livez",
         "pre_stop_path": "/drainz",
+        "pre_stop_method": "GET",
+        "drain_request_methods": "GET,POST",
         "shutdown_timeout_seconds": 45,
         "termination_grace_period_seconds": 60,
         "liveness_stale_seconds": 30,
@@ -595,11 +597,14 @@ def validate_source_assets(guard: Guard) -> None:
     validate_render(guard, "generated Kustomize base", generated)
 
     workflow = guard.read(".github/workflows/kubernetes-assets-ci.yml")
-    for pin in (
-        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
-    ):
-        guard.require(pin in workflow, f"workflow action pin missing: {pin}")
+    action_pins = container_policy.get("workflow", {}).get("actions", {})
+    for action in ("actions/checkout", "actions/upload-artifact"):
+        sha = action_pins.get(action)
+        if not isinstance(sha, str) or re.fullmatch(r"[0-9a-f]{40}", sha) is None:
+            guard.require(False, f"container policy must pin {action} to a full SHA")
+            continue
+        pin = f"uses: {action}@{sha}"
+        guard.require(pin in workflow, f"workflow action pin missing: {action}@{sha}")
     guard.require("permissions:\n  contents: read" in workflow, "workflow must retain contents:read least privilege")
     guard.require("kubernetes-assets-contract.ps1" in workflow, "workflow must execute the full asset contract")
     guard.require("test_m11_kubernetes_assets" in workflow, "workflow must execute deliberate-violation tests")
@@ -670,6 +675,11 @@ def validate_workload(guard: Guard, label: str, document: Document, service: str
     guard.require(text.count("port: health") == 3, f"{label}: {service} probes must use the named health port")
     guard.require(text.count("scheme: HTTP") == 3, f"{label}: {service} probes must use HTTP")
     guard.require(text.count("path: /drainz") == 1, f"{label}: {service} must expose one idempotent preStop hook")
+    # /drainz accepts only POST unless opted in; the preStop httpGet hook sends GET.
+    guard.require(
+        re.search(r"name:\s*ROCKETMQ_HEALTH_DRAIN_METHODS\s*,?\s*value:\s*[\"']?GET,POST[\"']?", text) is not None,
+        f"{label}: {service} preStop /drainz hook requires ROCKETMQ_HEALTH_DRAIN_METHODS=GET,POST",
+    )
     guard.require(text.count("path: /readyz") == 1, f"{label}: {service} must expose one readiness probe")
     guard.require(text.count("path: /livez") == 1, f"{label}: {service} must expose one liveness probe")
     if expected["kind"] == "StatefulSet":

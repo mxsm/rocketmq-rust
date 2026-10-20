@@ -191,10 +191,10 @@ where
     ) -> Result<Self, StoreError> {
         let config = Arc::new(config);
         let shutdown = CancellationToken::new();
-        let metadata_store = Arc::new(JsonMetadataStore::new_with_provider_descriptor(
-            config.clone(),
-            provider_descriptor,
-        ));
+        let metadata_store = Arc::new(
+            JsonMetadataStore::new_with_provider_descriptor(config.clone(), provider_descriptor)
+                .with_task_group(parent_task_group.clone()),
+        );
         let metrics = Arc::new(TieredStoreMetrics::new(metrics));
         let flat_file_store = Arc::new(TieredFlatFileStore::new_with_metrics(
             config.clone(),
@@ -276,9 +276,14 @@ where
 
     async fn shutdown(&self) -> Result<(), StoreError> {
         self.shutdown.cancel();
-        self.dispatcher.shutdown().await?;
-        self.services.shutdown().await?;
-        self.flat_file_store.shutdown().await
+        let dispatcher_result = self.dispatcher.shutdown().await;
+        let services_result = self.services.shutdown().await;
+        let persistence_result = self.metadata_store.drain_pending_writes().await;
+        let files_result = self.flat_file_store.shutdown().await;
+        persistence_result?;
+        dispatcher_result?;
+        services_result?;
+        files_result
     }
 
     async fn destroy(&self) -> Result<(), StoreError> {
@@ -331,7 +336,7 @@ mod store_api_tests {
         let context = RuntimeContext::from_current("tiered-store-api-test");
         let mut store = TieredStore::new(
             TieredStoreConfig {
-                backend_provider: "memory".to_owned(),
+                storage_provider_id: "memory".to_owned(),
                 store_path_root_dir: temp_dir.path().join("tiered-lifecycle"),
                 ..TieredStoreConfig::default()
             },

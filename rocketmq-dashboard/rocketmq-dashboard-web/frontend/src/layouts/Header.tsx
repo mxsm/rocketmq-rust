@@ -17,6 +17,7 @@ const pageLabels = [
   ['/messages/dlq', 'DLQ Message', 'Messaging'],
   ['/message-trace', 'Message Trace', 'Messaging'],
   ['/dashboard', 'Dashboard', 'Operate'],
+  ['/topology', 'Topology', 'Operate'],
   ['/brokers', 'Cluster', 'Messaging'],
   ['/topics', 'Topic', 'Messaging'],
   ['/consumers', 'Consumer', 'Messaging'],
@@ -94,7 +95,7 @@ export default function Header({ menuButtonRef, onMenuOpen }: HeaderProps) {
   };
 
   return (
-    <header className="topbar">
+    <header className="topbar" data-surface="chrome">
       <div className="topbar-leading">
         <Button ref={menuButtonRef} variant="ghost" size="icon" className="topbar-menu" aria-label="Open navigation" onClick={onMenuOpen}>
           <Menu size={18} aria-hidden="true" />

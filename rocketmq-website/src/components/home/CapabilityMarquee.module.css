@@ -1,0 +1,143 @@
+.marquee {
+  position: relative;
+  display: grid;
+  gap: 1.15rem;
+  padding: 2.4rem 0 2.6rem;
+  border-top: 1px solid var(--home-border);
+  border-bottom: 1px solid var(--home-border);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent);
+}
+
+.row {
+  --marquee-gap: 0.85rem;
+  --marquee-duration: 56s;
+
+  display: flex;
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+}
+
+.track {
+  display: flex;
+  min-width: 100%;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-around;
+  gap: var(--marquee-gap);
+  margin: 0;
+  padding: 0 var(--marquee-gap) 0 0;
+  list-style: none;
+  animation: slide var(--marquee-duration) linear infinite;
+}
+
+.row:hover .track {
+  animation-play-state: paused;
+}
+
+.item {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* ---------- Capability pills ---------- */
+
+.pills .item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--home-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  color: #d5dbea;
+  font-size: 0.88rem;
+  font-weight: 600;
+  transition:
+    border-color 200ms ease,
+    color 200ms ease;
+}
+
+.pills .item::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--home-orange);
+  box-shadow: 0 0 10px var(--home-orange);
+  content: '';
+}
+
+.pills .item:nth-child(3n + 2)::before {
+  background: var(--home-violet);
+  box-shadow: 0 0 10px var(--home-violet);
+}
+
+.pills .item:nth-child(3n)::before {
+  background: var(--home-cyan);
+  box-shadow: 0 0 10px var(--home-cyan);
+}
+
+.pills .item:hover {
+  border-color: var(--home-border-strong);
+  color: #fff;
+}
+
+/* ---------- Technology wordmarks ---------- */
+
+.plain {
+  --marquee-gap: 2.6rem;
+  --marquee-duration: 64s;
+}
+
+.plain .track {
+  animation-direction: reverse;
+}
+
+.plain .item {
+  display: inline-flex;
+  align-items: center;
+  gap: 2.6rem;
+  color: var(--home-faint);
+  font-family: var(--home-font-mono);
+  font-size: 0.82rem;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  transition: color 200ms ease;
+}
+
+.plain .item::after {
+  width: 5px;
+  height: 5px;
+  background: rgba(150, 166, 214, 0.34);
+  content: '';
+  transform: rotate(45deg);
+}
+
+.plain .item:hover {
+  color: #dfe4f1;
+}
+
+@keyframes slide {
+  to {
+    transform: translate3d(-100%, 0, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row {
+    mask-image: none;
+  }
+
+  .track {
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    justify-content: center;
+    padding: 0 1.5rem;
+    animation: none;
+  }
+
+  /* The duplicate only exists for the loop. */
+  .track[aria-hidden='true'] {
+    display: none;
+  }
+}

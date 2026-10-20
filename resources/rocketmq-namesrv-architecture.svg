@@ -1,0 +1,955 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="956" viewBox="0 0 1400 956" role="img" aria-labelledby="title desc">
+  <title id="title">rocketmq-namesrv architecture</title>
+  <desc id="desc">The NameServer binary merges its configuration file and command line, validates a security bootstrap profile, and hands a service context, telemetry, the server and client configuration and the transport security to the Builder. NameServerBootstrap initializes and starts the runtime, whose state moves from Created through Initialized and Running to ShuttingDown and Stopped. Brokers, clients and admin tools reach the remoting server. The request dispatcher tracks requests in flight, classifies each request as route read, broker control, admin read or admin write, applies layered authorization and workload admission, and routes by request code. ClientRequestProcessor answers topic route lookups, ClusterTestRequestProcessor takes its place in cluster-test mode, and DefaultRequestProcessor handles every other request code. In the route manager, one mutation gate serializes every change to six source tables for topic queues, broker addresses, clusters, live brokers, filter servers and queue mappings, and each change publishes immutable per-topic route snapshots, which route lookups load without the gate. Broker liveness reacts to closed sessions, scans for expired brokers and unregisters them in batches. The config stores persist KV configuration and runtime configuration through the metadata I/O actor before making them visible. The outbound client starts with the runtime and tells brokers when the smallest broker id of a group changes, where that is enabled. The cluster-test lookup and the embedded controller are optional. ServiceLifecycle provides probes and the shutdown deadline, and telemetry is exported when configured. Two rows list the order in which start-up brings the parts up and shutdown takes them down. Where motion is allowed, a looping tour plays six steps: boot, register, route lookup, expire, admin and shut down.</desc>
+  <defs>
+    <linearGradient id="card" x1="0" y1="0" x2="0.36" y2="1">
+      <stop offset="0" stop-color="#121728" stop-opacity="0.86"/>
+      <stop offset="1" stop-color="#080a13" stop-opacity="0.94"/>
+    </linearGradient>
+    <pattern id="dots" width="26" height="26" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" fill="#aabaeb" fill-opacity="0.1"/>
+    </pattern>
+    <radialGradient id="glow-violet" cx="0.04" cy="0.08" r="0.62">
+      <stop offset="0" stop-color="#9872ff" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#9872ff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow-orange" cx="1" cy="1" r="0.5">
+      <stop offset="0" stop-color="#ff7a26" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#ff7a26" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="progress" x1="746.6" y1="0" x2="1376" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff7a26"/>
+      <stop offset="0.5" stop-color="#f2468c"/>
+      <stop offset="1" stop-color="#9872ff"/>
+    </linearGradient>
+    <style>
+      text { font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif; }
+      .tc { color: #9872ff; }
+      .tp { color: #ff7a26; }
+      .ts { color: #34d399; }
+      .tm { color: #42d0f0; }
+      .to { color: #ffb86b; }
+      .page { fill: #05060b; }
+      .card { fill: url(#card); stroke: rgba(150, 166, 214, 0.16); stroke-width: 1; }
+      .dots { fill: url(#dots); }
+      .panel { fill: #0c0f1b; fill-opacity: 0.86; stroke: rgba(150, 166, 214, 0.16); stroke-width: 1; }
+      .ti { font-size: 26px; font-weight: 700; letter-spacing: -0.4px; fill: #f4f6fb; }
+      .le { font-size: 13.5px; fill: #9ba4b9; }
+      .grp { fill: rgba(255, 255, 255, 0.014); stroke: rgba(150, 166, 214, 0.24); stroke-width: 1.2; stroke-dasharray: 5 7; }
+      .clu { fill: rgba(255, 255, 255, 0.018); stroke: rgba(150, 166, 214, 0.2); stroke-width: 1; }
+      .gt { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 10.5px; font-weight: 600; letter-spacing: 1.68px; fill: #7a849c; }
+      .r { fill: none; stroke: rgba(150, 166, 214, 0.26); stroke-width: 1.6; stroke-linecap: round; }
+      .rt { fill: none; stroke: currentColor; stroke-opacity: 0.8; stroke-width: 1.6; stroke-linecap: round; }
+      .d { stroke-dasharray: 5 7; }
+      .rg { fill: none; stroke: currentColor; stroke-opacity: 0.18; stroke-width: 9; stroke-linecap: round; }
+      .rh { fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; }
+      .pk path { fill: none; stroke: currentColor; stroke-linecap: round; }
+      .p3 { stroke-width: 26; stroke-opacity: 0.07; }
+      .p2 { stroke-width: 18; stroke-opacity: 0.2; }
+      .p1 { stroke-width: 12; stroke-opacity: 0.6; }
+      .pk .p0 { stroke: #ffffff; stroke-width: 8.4; }
+      .lb { font-size: 11px; fill: #8791a8; }
+      .jc { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 10px; fill: #c9d0e2; text-anchor: middle; }
+      .nb { fill: #0d111e; fill-opacity: 0.94; stroke: rgba(150, 166, 214, 0.26); stroke-width: 1.2; }
+      .op { stroke-dasharray: 6 6; }
+      .nt { font-size: 16px; font-weight: 700; fill: #f1f4fb; }
+      .ns { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 11px; fill: #8791a8; }
+      .nn { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 10px; fill: #7a849c; }
+      .gl rect { fill: none; stroke: currentColor; }
+      .g1 { stroke-width: 4; stroke-opacity: 0.14; }
+      .g2 { stroke-width: 9; stroke-opacity: 0.1; }
+      .g3 { stroke-width: 16; stroke-opacity: 0.07; }
+      .g4 { stroke-width: 24; stroke-opacity: 0.05; }
+      .g5 { stroke-width: 34; stroke-opacity: 0.03; }
+      .nr { fill: none; stroke: currentColor; stroke-width: 1.6; }
+      .bd rect { fill: rgba(52, 211, 153, 0.13); stroke: rgba(52, 211, 153, 0.45); stroke-width: 1; }
+      .bd text { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 9px; font-weight: 700; letter-spacing: 0.7px; fill: #34d399; text-anchor: middle; }
+      .bd.gy rect { fill: rgba(150, 166, 214, 0.1); stroke: rgba(150, 166, 214, 0.34); }
+      .bd.gy text { fill: #9ba4b9; }
+      .bd.vi rect { fill: rgba(152, 114, 255, 0.14); stroke: rgba(152, 114, 255, 0.5); }
+      .bd.vi text { fill: #b9a2ff; }
+      .bd.cy rect { fill: rgba(66, 208, 240, 0.13); stroke: rgba(66, 208, 240, 0.5); }
+      .bd.cy text { fill: #42d0f0; }
+      .bd.am rect { fill: rgba(255, 184, 107, 0.13); stroke: rgba(255, 184, 107, 0.5); }
+      .bd.am text { fill: #ffb86b; }
+      .cn { fill: none; stroke: rgba(150, 166, 214, 0.5); stroke-width: 1.4; stroke-linecap: round; }
+      .bk { fill: rgba(150, 166, 214, 0.17); }
+      .bv { fill: #9872ff; }
+      .bw { fill: #42d0f0; }
+      .bo { fill: #ff7a26; }
+      .cb { fill: #0d111e; fill-opacity: 0.94; stroke: rgba(150, 166, 214, 0.24); stroke-width: 1.1; }
+      .ct { font-size: 12.5px; font-weight: 700; fill: #eef1f8; }
+      .cs { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 10px; fill: #7a849c; }
+      .lg { font-size: 11.5px; fill: #9ba4b9; }
+      .ll { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+      .lo { fill: none; stroke: rgba(150, 166, 214, 0.5); stroke-width: 1.2; stroke-dasharray: 4 4; }
+      .sh { fill: rgba(255, 255, 255, 0.055); stroke: rgba(150, 166, 214, 0.28); stroke-width: 1; }
+      .sc { fill: rgba(150, 166, 214, 0.05); stroke: rgba(150, 166, 214, 0.16); stroke-width: 1; }
+      .si { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 11.5px; font-weight: 600; fill: #7a849c; }
+      .sa { fill: #ffb86b; }
+      .st { font-size: 12.5px; font-weight: 700; fill: #e8ecf6; }
+      .sp { fill: none; stroke: url(#progress); stroke-width: 2; stroke-linecap: round; }
+      .fb { fill: rgba(150, 166, 214, 0.07); stroke: rgba(150, 166, 214, 0.22); stroke-width: 1; }
+      .fn { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 10.5px; fill: #7a849c; }
+      .lt { fill: currentColor; }
+      /* Motion. Classes that start with k- name the animations; all of them share one clock
+         (.k), and each is assigned only inside the reduced-motion guard below. What shows
+         only while a step is in effect rests invisible: glows, bright links, packets, lit
+         labels, the marks of the start-up and shutdown order, the state of the runtime,
+         the request class and the mark of the step in effect. */
+      .gl, .nr, .a, .o { opacity: 0; }
+      .k-f-boot-chain-1 { stroke-dasharray: 0.1 27.90; }
+      .k-f-boot-chain-2 { stroke-dasharray: 0.1 27.90; }
+      .k-f-boot-chain-3 { stroke-dasharray: 0.1 27.90; }
+      .k-f-boot-boot-runtime { stroke-dasharray: 0.1 29.90; }
+      .k-f-register-brokers { stroke-dasharray: 0.1 19.90; }
+      .k-f-register-server-dispatch { stroke-dasharray: 0.1 27.90; }
+      .k-f-register-dispatch-processors { stroke-dasharray: 0.1 23.90; }
+      .k-f-register-write { stroke-dasharray: 0.1 59.90; }
+      .k-f-register-gate-tables { stroke-dasharray: 0.1 13.90; }
+      .k-f-register-publish { stroke-dasharray: 0.1 23.90; }
+      .k-f-route-clients { stroke-dasharray: 0.1 4999.9; }
+      .k-f-route-server-dispatch { stroke-dasharray: 0.1 4999.9; }
+      .k-f-route-dispatch-processors { stroke-dasharray: 0.1 4999.9; }
+      .k-f-route-read { stroke-dasharray: 0.1 4999.9; }
+      .k-f-expire-session-events { stroke-dasharray: 0.1 319.36; }
+      .k-f-expire-batch { stroke-dasharray: 0.1 335.63; }
+      .k-f-expire-gate-tables { stroke-dasharray: 0.1 13.90; }
+      .k-f-expire-publish { stroke-dasharray: 0.1 23.90; }
+      .k-f-admin-admin { stroke-dasharray: 0.1 4999.9; }
+      .k-f-admin-server-dispatch { stroke-dasharray: 0.1 4999.9; }
+      .k-f-admin-dispatch-processors { stroke-dasharray: 0.1 4999.9; }
+      .k-f-admin-default-config { stroke-dasharray: 0.1 4999.9; }
+      .k-f-admin-write { stroke-dasharray: 0.1 59.90; }
+      .k-f-admin-telemetry { stroke-dasharray: 0.1 27.90; }
+      .k-f-admin-lifecycle { stroke-dasharray: 0.1 4999.9; }
+      .k-f-shutdown-lifecycle { stroke-dasharray: 0.1 13.90; }
+      .k-f-shutdown-telemetry { stroke-dasharray: 0.1 27.90; }
+      @media (prefers-reduced-motion: no-preference) {
+        .k { animation-duration: 29s; animation-timing-function: linear; animation-iteration-count: infinite; }
+        .k-r1 { animation-name: k-r1; }
+        .k-s1 { animation-name: k-s1; }
+        .k-p1 { animation-name: k-p1; }
+        .k-r2 { animation-name: k-r2; }
+        .k-s2 { animation-name: k-s2; }
+        .k-p2 { animation-name: k-p2; }
+        .k-r3 { animation-name: k-r3; }
+        .k-s3 { animation-name: k-s3; }
+        .k-p3 { animation-name: k-p3; }
+        .k-r4 { animation-name: k-r4; }
+        .k-s4 { animation-name: k-s4; }
+        .k-p4 { animation-name: k-p4; }
+        .k-r5 { animation-name: k-r5; }
+        .k-s5 { animation-name: k-s5; }
+        .k-p5 { animation-name: k-p5; }
+        .k-r6 { animation-name: k-r6; }
+        .k-s6 { animation-name: k-s6; }
+        .k-p6 { animation-name: k-p6; }
+        .k-s16 { animation-name: k-s16; }
+        .k-off { animation-name: k-off; }
+        .k-x5 { animation-name: k-x5; }
+        .k-x4 { animation-name: k-x4; }
+        .k-x56 { animation-name: k-x56; }
+        .k-d4 { animation-name: k-d4; }
+        .k-d5 { animation-name: k-d5; }
+        .k-d6 { animation-name: k-d6; }
+        .k-s56 { animation-name: k-s56; }
+        .k-n1 { animation-name: k-n1; }
+        .k-n16 { animation-name: k-n16; }
+        .k-n24 { animation-name: k-n24; }
+        .k-n3 { animation-name: k-n3; }
+        .k-n5 { animation-name: k-n5; }
+        .k-q1-6 { animation-name: k-q1-6; }
+        .k-q1-3 { animation-name: k-q1-3; }
+        .k-n123456 { animation-name: k-n123456; }
+        .k-q1-1 { animation-name: k-q1-1; }
+        .k-x235 { animation-name: k-x235; }
+        .k-n12356 { animation-name: k-n12356; }
+        .k-n136 { animation-name: k-n136; }
+        .k-n1256 { animation-name: k-n1256; }
+        .k-n12346 { animation-name: k-n12346; }
+        .k-n12456 { animation-name: k-n12456; }
+        .k-n146 { animation-name: k-n146; }
+        .k-n156 { animation-name: k-n156; }
+        .k-n56 { animation-name: k-n56; }
+        .k-q1-0 { animation-name: k-q1-0; }
+        .k-q1-2 { animation-name: k-q1-2; }
+        .k-q1-4 { animation-name: k-q1-4; }
+        .k-q1-5 { animation-name: k-q1-5; }
+        .k-q1-7 { animation-name: k-q1-7; }
+        .k-q1-8 { animation-name: k-q1-8; }
+        .k-q6-0 { animation-name: k-q6-0; }
+        .k-q6-1 { animation-name: k-q6-1; }
+        .k-q6-3 { animation-name: k-q6-3; }
+        .k-q6-4 { animation-name: k-q6-4; }
+        .k-q6-5 { animation-name: k-q6-5; }
+        .k-q6-6 { animation-name: k-q6-6; }
+        .k-f-boot-chain-1 { animation-name: k-f-boot-chain-1; }
+        .k-f-boot-chain-2 { animation-name: k-f-boot-chain-2; }
+        .k-f-boot-chain-3 { animation-name: k-f-boot-chain-3; }
+        .k-f-boot-boot-runtime { animation-name: k-f-boot-boot-runtime; }
+        .k-f-register-brokers { animation-name: k-f-register-brokers; }
+        .k-f-register-server-dispatch { animation-name: k-f-register-server-dispatch; }
+        .k-f-register-dispatch-processors { animation-name: k-f-register-dispatch-processors; }
+        .k-f-register-write { animation-name: k-f-register-write; }
+        .k-f-register-gate-tables { animation-name: k-f-register-gate-tables; }
+        .k-f-register-publish { animation-name: k-f-register-publish; }
+        .k-f-route-clients { animation-name: k-f-route-clients; }
+        .k-f-route-server-dispatch { animation-name: k-f-route-server-dispatch; }
+        .k-f-route-dispatch-processors { animation-name: k-f-route-dispatch-processors; }
+        .k-f-route-read { animation-name: k-f-route-read; }
+        .k-f-expire-session-events { animation-name: k-f-expire-session-events; }
+        .k-f-expire-batch { animation-name: k-f-expire-batch; }
+        .k-f-expire-gate-tables { animation-name: k-f-expire-gate-tables; }
+        .k-f-expire-publish { animation-name: k-f-expire-publish; }
+        .k-f-admin-admin { animation-name: k-f-admin-admin; }
+        .k-f-admin-server-dispatch { animation-name: k-f-admin-server-dispatch; }
+        .k-f-admin-dispatch-processors { animation-name: k-f-admin-dispatch-processors; }
+        .k-f-admin-default-config { animation-name: k-f-admin-default-config; }
+        .k-f-admin-write { animation-name: k-f-admin-write; }
+        .k-f-admin-telemetry { animation-name: k-f-admin-telemetry; }
+        .k-f-admin-lifecycle { animation-name: k-f-admin-lifecycle; }
+        .k-f-shutdown-lifecycle { animation-name: k-f-shutdown-lifecycle; }
+        .k-f-shutdown-telemetry { animation-name: k-f-shutdown-telemetry; }
+        .k-q6-2 { animation-name: k-q6-2; }
+        .k-q6-7 { animation-name: k-q6-7; }
+        .k-t0 { animation-name: k-t0; }
+        .k-t1 { animation-name: k-t1; }
+        .k-t2 { animation-name: k-t2; }
+        .k-t3 { animation-name: k-t3; }
+        .k-t4 { animation-name: k-t4; }
+        .k-pr0 { animation-name: k-pr0; }
+        .k-pr1 { animation-name: k-pr1; }
+        .k-pr2 { animation-name: k-pr2; }
+        .k-pr3 { animation-name: k-pr3; }
+        .k-pr4 { animation-name: k-pr4; }
+        .k-pr5 { animation-name: k-pr5; }
+        .k-pr6 { animation-name: k-pr6; }
+        .k-w0 { animation-name: k-w0; }
+        .k-w1 { animation-name: k-w1; }
+        .k-w2 { animation-name: k-w2; }
+        .k-w3 { animation-name: k-w3; }
+        .k-w4 { animation-name: k-w4; }
+        .k-w5 { animation-name: k-w5; }
+        .k-w6 { animation-name: k-w6; }
+        .k-w7 { animation-name: k-w7; }
+        .k-pe4 { animation-name: k-pe4; }
+        .k-pe5 { animation-name: k-pe5; }
+        .k-pe6 { animation-name: k-pe6; }
+      }
+      @keyframes k-r1 { 0%, 17.172%, 100% { opacity: 1; } 18.621%, 33.034%, 34.483%, 47.517%, 48.966%, 64.759%, 66.207%, 79.931%, 81.379%, 98.552% { opacity: 0.55; } }
+      @keyframes k-s1 { 0%, 17.172%, 100% { opacity: 1; } 18.621%, 33.034%, 34.483%, 47.517%, 48.966%, 64.759%, 66.207%, 79.931%, 81.379%, 98.552% { opacity: 0; } }
+      @keyframes k-p1 { 0% { stroke-dashoffset: 51.4px; opacity: 0; } 0.862%, 17.759% { opacity: 1; } 18.621%, 100% { stroke-dashoffset: 0px; opacity: 0; } }
+      @keyframes k-r2 { 0%, 17.172%, 34.483%, 47.517%, 48.966%, 64.759%, 66.207%, 79.931%, 81.379%, 98.552%, 100% { opacity: 0.55; } 18.621%, 33.034% { opacity: 1; } }
+      @keyframes k-s2 { 0%, 17.172%, 34.483%, 47.517%, 48.966%, 64.759%, 66.207%, 79.931%, 81.379%, 98.552%, 100% { opacity: 0; } 18.621%, 33.034% { opacity: 1; } }
+      @keyframes k-p2 { 0%, 18.621% { stroke-dashoffset: 73.4px; opacity: 0; } 19.483%, 33.621% { opacity: 1; } 34.483%, 100% { stroke-dashoffset: 0px; opacity: 0; } }
+      @keyframes k-r3 { 0%, 17.172%, 18.621%, 33.034%, 48.966%, 64.759%, 66.207%, 79.931%, 81.379%, 98.552%, 100% { opacity: 0.55; } 34.483%, 47.517% { opacity: 1; } }
+      @keyframes k-s3 { 0%, 17.172%, 18.621%, 33.034%, 48.966%, 64.759%, 66.207%, 79.931%, 81.379%, 98.552%, 100% { opacity: 0; } 34.483%, 47.517% { opacity: 1; } }
+      @keyframes k-p3 { 0%, 34.483% { stroke-dashoffset: 105.4px; opacity: 0; } 35.345%, 48.103% { opacity: 1; } 48.966%, 100% { stroke-dashoffset: 0px; opacity: 0; } }
+      @keyframes k-r4 { 0%, 17.172%, 18.621%, 33.034%, 34.483%, 47.517%, 66.207%, 79.931%, 81.379%, 98.552%, 100% { opacity: 0.55; } 48.966%, 64.759% { opacity: 1; } }
+      @keyframes k-s4 { 0%, 17.172%, 18.621%, 33.034%, 34.483%, 47.517%, 66.207%, 79.931%, 81.379%, 98.552%, 100% { opacity: 0; } 48.966%, 64.759% { opacity: 1; } }
+      @keyframes k-p4 { 0%, 48.966% { stroke-dashoffset: 62.4px; opacity: 0; } 49.828%, 65.345% { opacity: 1; } 66.207%, 100% { stroke-dashoffset: 0px; opacity: 0; } }
+      @keyframes k-r5 { 0%, 17.172%, 18.621%, 33.034%, 34.483%, 47.517%, 48.966%, 64.759%, 81.379%, 98.552%, 100% { opacity: 0.55; } 66.207%, 79.931% { opacity: 1; } }
+      @keyframes k-s5 { 0%, 17.172%, 18.621%, 33.034%, 34.483%, 47.517%, 48.966%, 64.759%, 81.379%, 98.552%, 100% { opacity: 0; } 66.207%, 79.931% { opacity: 1; } }
+      @keyframes k-p5 { 0%, 66.207% { stroke-dashoffset: 63.4px; opacity: 0; } 67.069%, 80.517% { opacity: 1; } 81.379%, 100% { stroke-dashoffset: 0px; opacity: 0; } }
+      @keyframes k-r6 { 0%, 17.172%, 18.621%, 33.034%, 34.483%, 47.517%, 48.966%, 64.759%, 66.207%, 79.931%, 100% { opacity: 0.55; } 81.379%, 98.552% { opacity: 1; } }
+      @keyframes k-s6 { 0%, 17.172%, 18.621%, 33.034%, 34.483%, 47.517%, 48.966%, 64.759%, 66.207%, 79.931%, 100% { opacity: 0; } 81.379%, 98.552% { opacity: 1; } }
+      @keyframes k-p6 { 0%, 81.379% { stroke-dashoffset: 89.4px; opacity: 0; } 82.241%, 99.138% { opacity: 1; } 100% { stroke-dashoffset: 0px; opacity: 0; } }
+      @keyframes k-s16 { 0%, 17.172%, 81.379%, 98.552%, 100% { opacity: 1; } 18.621%, 33.034%, 34.483%, 47.517%, 48.966%, 64.759%, 66.207%, 79.931% { opacity: 0; } }
+      @keyframes k-off { 0%, 100% { opacity: 0; } }
+      @keyframes k-x5 { 0%, 17.172%, 18.621%, 33.034%, 34.483%, 47.517%, 48.966%, 64.759%, 81.379%, 98.552%, 100% { opacity: 1; } 66.207%, 79.931% { opacity: 0; } }
+      @keyframes k-x4 { 0%, 17.172%, 18.621%, 33.034%, 34.483%, 47.517%, 66.207%, 79.931%, 81.379%, 98.552%, 100% { opacity: 1; } 48.966%, 64.759% { opacity: 0; } }
+      @keyframes k-x56 { 0%, 17.172%, 18.621%, 33.034%, 34.483%, 47.517%, 48.966%, 64.759%, 100% { opacity: 1; } 66.207%, 79.931%, 81.379%, 98.552% { opacity: 0; } }
+      @keyframes k-d4 { 0%, 47.517% { stroke-dashoffset: 120px; } 66.207%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-d5 { 0%, 64.759% { stroke-dashoffset: 120px; } 81.379%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-d6 { 0%, 79.931% { stroke-dashoffset: 144px; } 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-s56 { 0%, 17.172%, 18.621%, 33.034%, 34.483%, 47.517%, 48.966%, 64.759%, 100% { opacity: 0; } 66.207%, 79.931%, 81.379%, 98.552% { opacity: 1; } }
+      @keyframes k-n1 { 0%, 17.172%, 100% { opacity: 1; } 18.621%, 33.034%, 34.483%, 47.517%, 48.966%, 64.759%, 66.207%, 79.931%, 81.379%, 98.552% { opacity: 0.62; } }
+      @keyframes k-n16 { 0%, 17.172%, 81.379%, 98.552%, 100% { opacity: 1; } 18.621%, 33.034%, 34.483%, 47.517%, 48.966%, 64.759%, 66.207%, 79.931% { opacity: 0.62; } }
+      @keyframes k-n24 { 0%, 17.172%, 34.483%, 47.517%, 66.207%, 79.931%, 81.379%, 98.552%, 100% { opacity: 0.62; } 18.621%, 33.034%, 48.966%, 64.759% { opacity: 1; } }
+      @keyframes k-n3 { 0%, 17.172%, 18.621%, 33.034%, 48.966%, 64.759%, 66.207%, 79.931%, 81.379%, 98.552%, 100% { opacity: 0.62; } 34.483%, 47.517% { opacity: 1; } }
+      @keyframes k-n5 { 0%, 17.172%, 18.621%, 33.034%, 34.483%, 47.517%, 48.966%, 64.759%, 81.379%, 98.552%, 100% { opacity: 0.62; } 66.207%, 79.931% { opacity: 1; } }
+      @keyframes k-q1-6 { 0%, 11.241%, 18.621%, 100% { opacity: 0; } 12.103%, 17.172% { opacity: 1; } }
+      @keyframes k-q1-3 { 0%, 6.483%, 18.621%, 100% { opacity: 0; } 7.345%, 17.172% { opacity: 1; } }
+      @keyframes k-n123456 { 0%, 17.172%, 18.621%, 33.034%, 34.483%, 47.517%, 48.966%, 64.759%, 66.207%, 79.931%, 81.379%, 98.552%, 100% { opacity: 1; } }
+      @keyframes k-q1-1 { 0%, 3.31%, 18.621%, 100% { opacity: 0; } 4.172%, 17.172% { opacity: 1; } }
+      @keyframes k-x235 { 0%, 17.172%, 48.966%, 64.759%, 81.379%, 98.552%, 100% { opacity: 1; } 18.621%, 33.034%, 34.483%, 47.517%, 66.207%, 79.931% { opacity: 0; } }
+      @keyframes k-n12356 { 0%, 17.172%, 18.621%, 33.034%, 34.483%, 47.517%, 66.207%, 79.931%, 81.379%, 98.552%, 100% { opacity: 1; } 48.966%, 64.759% { opacity: 0.62; } }
+      @keyframes k-n136 { 0%, 17.172%, 34.483%, 47.517%, 81.379%, 98.552%, 100% { opacity: 1; } 18.621%, 33.034%, 48.966%, 64.759%, 66.207%, 79.931% { opacity: 0.62; } }
+      @keyframes k-n1256 { 0%, 17.172%, 18.621%, 33.034%, 66.207%, 79.931%, 81.379%, 98.552%, 100% { opacity: 1; } 34.483%, 47.517%, 48.966%, 64.759% { opacity: 0.62; } }
+      @keyframes k-n12346 { 0%, 17.172%, 18.621%, 33.034%, 34.483%, 47.517%, 48.966%, 64.759%, 81.379%, 98.552%, 100% { opacity: 1; } 66.207%, 79.931% { opacity: 0.62; } }
+      @keyframes k-n12456 { 0%, 17.172%, 18.621%, 33.034%, 48.966%, 64.759%, 66.207%, 79.931%, 81.379%, 98.552%, 100% { opacity: 1; } 34.483%, 47.517% { opacity: 0.62; } }
+      @keyframes k-n146 { 0%, 17.172%, 48.966%, 64.759%, 81.379%, 98.552%, 100% { opacity: 1; } 18.621%, 33.034%, 34.483%, 47.517%, 66.207%, 79.931% { opacity: 0.62; } }
+      @keyframes k-n156 { 0%, 17.172%, 66.207%, 79.931%, 81.379%, 98.552%, 100% { opacity: 1; } 18.621%, 33.034%, 34.483%, 47.517%, 48.966%, 64.759% { opacity: 0.62; } }
+      @keyframes k-n56 { 0%, 17.172%, 18.621%, 33.034%, 34.483%, 47.517%, 48.966%, 64.759%, 100% { opacity: 0.62; } 66.207%, 79.931%, 81.379%, 98.552% { opacity: 1; } }
+      @keyframes k-q1-0 { 0%, 1.724%, 18.621%, 100% { opacity: 0; } 2.586%, 17.172% { opacity: 1; } }
+      @keyframes k-q1-2 { 0%, 4.897%, 18.621%, 100% { opacity: 0; } 5.759%, 17.172% { opacity: 1; } }
+      @keyframes k-q1-4 { 0%, 8.069%, 18.621%, 100% { opacity: 0; } 8.931%, 17.172% { opacity: 1; } }
+      @keyframes k-q1-5 { 0%, 9.655%, 18.621%, 100% { opacity: 0; } 10.517%, 17.172% { opacity: 1; } }
+      @keyframes k-q1-7 { 0%, 12.828%, 18.621%, 100% { opacity: 0; } 13.69%, 17.172% { opacity: 1; } }
+      @keyframes k-q1-8 { 0%, 14.414%, 18.621%, 100% { opacity: 0; } 15.276%, 17.172% { opacity: 1; } }
+      @keyframes k-q6-0 { 0%, 83.103%, 100% { opacity: 0; } 83.966%, 98.552% { opacity: 1; } }
+      @keyframes k-q6-1 { 0%, 84.897%, 100% { opacity: 0; } 85.759%, 98.552% { opacity: 1; } }
+      @keyframes k-q6-3 { 0%, 88.483%, 100% { opacity: 0; } 89.345%, 98.552% { opacity: 1; } }
+      @keyframes k-q6-4 { 0%, 90.276%, 100% { opacity: 0; } 91.138%, 98.552% { opacity: 1; } }
+      @keyframes k-q6-5 { 0%, 92.069%, 100% { opacity: 0; } 92.931%, 98.552% { opacity: 1; } }
+      @keyframes k-q6-6 { 0%, 93.862%, 100% { opacity: 0; } 94.724%, 98.552% { opacity: 1; } }
+      @keyframes k-f-boot-chain-1 { 0%, 100% { stroke-dashoffset: 207.84px; } 18.621%, 98.538% { stroke-dashoffset: 0px; } 98.552% { stroke-dashoffset: 224px; } }
+      @keyframes k-f-boot-chain-2 { 0%, 100% { stroke-dashoffset: 207.84px; } 18.621%, 98.538% { stroke-dashoffset: 0px; } 98.552% { stroke-dashoffset: 224px; } }
+      @keyframes k-f-boot-chain-3 { 0%, 100% { stroke-dashoffset: 207.84px; } 18.621%, 98.538% { stroke-dashoffset: 0px; } 98.552% { stroke-dashoffset: 224px; } }
+      @keyframes k-f-boot-boot-runtime { 0%, 100% { stroke-dashoffset: 194.85px; } 18.621%, 98.538% { stroke-dashoffset: 0px; } 98.552% { stroke-dashoffset: 210px; } }
+      @keyframes k-f-register-brokers { 0%, 17.172% { stroke-dashoffset: 220px; } 34.483%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-register-server-dispatch { 0%, 17.172% { stroke-dashoffset: 196px; } 34.483%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-register-dispatch-processors { 0%, 17.172% { stroke-dashoffset: 192px; } 34.483%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-register-write { 0%, 17.172% { stroke-dashoffset: 360px; } 34.483%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-register-gate-tables { 0%, 17.172% { stroke-dashoffset: 112px; } 34.483%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-register-publish { 0%, 17.172% { stroke-dashoffset: 168px; } 34.483%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-route-clients { 0%, 33.034%, 36.221%, 39.407%, 42.593%, 45.779%, 48.966%, 100% { stroke-dashoffset: 5000.00px; } 34.628%, 37.814%, 41%, 44.186%, 47.372% { stroke-dashoffset: 4960.00px; } }
+      @keyframes k-f-route-server-dispatch { 0%, 33.034%, 36.221%, 39.407%, 42.593%, 45.779%, 48.966%, 100% { stroke-dashoffset: 5000.00px; } 34.628%, 37.814%, 41%, 44.186%, 47.372% { stroke-dashoffset: 4972.00px; } }
+      @keyframes k-f-route-dispatch-processors { 0%, 33.034%, 35.69%, 38.345%, 41%, 43.655%, 46.31%, 48.966%, 100% { stroke-dashoffset: 5000.00px; } 34.362%, 37.017%, 39.672%, 42.328%, 44.983%, 47.638% { stroke-dashoffset: 4976.00px; } }
+      @keyframes k-f-route-read { 0%, 33.034%, 36.221%, 39.407%, 42.593%, 45.779%, 48.966%, 100% { stroke-dashoffset: 5000.00px; } 34.628%, 37.814%, 41%, 44.186%, 47.372% { stroke-dashoffset: 4940.00px; } }
+      @keyframes k-f-expire-session-events { 0%, 47.517% { stroke-dashoffset: 958.38px; } 66.207%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-expire-batch { 0%, 47.517% { stroke-dashoffset: 1678.65px; } 66.207%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-expire-gate-tables { 0%, 47.517% { stroke-dashoffset: 126px; } 66.207%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-expire-publish { 0%, 47.517% { stroke-dashoffset: 192px; } 66.207%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-admin-admin { 0%, 64.759%, 68.083%, 71.407%, 74.731%, 78.055%, 81.379%, 100% { stroke-dashoffset: 5000.00px; } 66.421%, 69.745%, 73.069%, 76.393%, 79.717% { stroke-dashoffset: 4960.00px; } }
+      @keyframes k-f-admin-server-dispatch { 0%, 64.759%, 68.083%, 71.407%, 74.731%, 78.055%, 81.379%, 100% { stroke-dashoffset: 5000.00px; } 66.421%, 69.745%, 73.069%, 76.393%, 79.717% { stroke-dashoffset: 4972.00px; } }
+      @keyframes k-f-admin-dispatch-processors { 0%, 64.759%, 67.529%, 70.299%, 73.069%, 75.839%, 78.609%, 81.379%, 100% { stroke-dashoffset: 5000.00px; } 66.144%, 68.914%, 71.684%, 74.454%, 77.224%, 79.994% { stroke-dashoffset: 4976.00px; } }
+      @keyframes k-f-admin-default-config { 0%, 64.759%, 68.083%, 71.407%, 74.731%, 78.055%, 81.379%, 100% { stroke-dashoffset: 5000.00px; } 66.421%, 69.745%, 73.069%, 76.393%, 79.717% { stroke-dashoffset: 4972.00px; } }
+      @keyframes k-f-admin-write { 0%, 64.759% { stroke-dashoffset: 360px; } 81.379%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-admin-telemetry { 0%, 64.759% { stroke-dashoffset: 140px; } 81.379%, 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-admin-lifecycle { 0%, 64.759%, 68.914%, 73.069%, 77.224%, 81.379%, 100% { stroke-dashoffset: 5000.00px; } 66.836%, 70.991%, 75.147%, 79.302% { stroke-dashoffset: 4972.00px; } }
+      @keyframes k-f-shutdown-lifecycle { 0%, 79.931% { stroke-dashoffset: 182px; } 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-f-shutdown-telemetry { 0%, 79.931% { stroke-dashoffset: 168px; } 100% { stroke-dashoffset: 0px; } }
+      @keyframes k-q6-2 { 0%, 86.69%, 100% { opacity: 0; } 87.552%, 98.552% { opacity: 1; } }
+      @keyframes k-q6-7 { 0%, 95.655%, 100% { opacity: 0; } 96.517%, 98.552% { opacity: 1; } }
+      @keyframes k-t0 { 0%, 9.448%, 100% { opacity: 1; } 10.31%, 98.966% { opacity: 0; } }
+      @keyframes k-t1 { 0%, 9.448%, 16.138%, 100% { opacity: 0; } 10.31%, 15.276% { opacity: 1; } }
+      @keyframes k-t2 { 0%, 15.276%, 83.276%, 100% { opacity: 0; } 16.138%, 82.414% { opacity: 1; } }
+      @keyframes k-t3 { 0%, 82.414%, 97.552%, 100% { opacity: 0; } 83.276%, 96.69% { opacity: 1; } }
+      @keyframes k-t4 { 0%, 96.69%, 100% { opacity: 0; } 97.552%, 98.966% { opacity: 1; } }
+      @keyframes k-pr0 { 0%, 25.172%, 34.483%, 100% { opacity: 0; } 25.69%, 33.448% { opacity: 1; } }
+      @keyframes k-pr1 { 0%, 25.724%, 34.483%, 100% { opacity: 0; } 26.241%, 33.448% { opacity: 1; } }
+      @keyframes k-pr2 { 0%, 26.276%, 34.483%, 100% { opacity: 0; } 26.793%, 33.448% { opacity: 1; } }
+      @keyframes k-pr3 { 0%, 26.828%, 34.483%, 100% { opacity: 0; } 27.345%, 33.448% { opacity: 1; } }
+      @keyframes k-pr4 { 0%, 27.379%, 34.483%, 100% { opacity: 0; } 27.897%, 33.448% { opacity: 1; } }
+      @keyframes k-pr5 { 0%, 27.931%, 34.483%, 100% { opacity: 0; } 28.448%, 33.448% { opacity: 1; } }
+      @keyframes k-pr6 { 0%, 28.483%, 34.483%, 100% { opacity: 0; } 29%, 33.448% { opacity: 1; } }
+      @keyframes k-w0 { 0%, 51.379%, 58.276%, 100% { opacity: 0; } 51.897%, 57.586% { opacity: 1; } }
+      @keyframes k-w1 { 0%, 51.862%, 58.621%, 100% { opacity: 0; } 52.379%, 57.931% { opacity: 1; } }
+      @keyframes k-w2 { 0%, 52.345%, 58.966%, 100% { opacity: 0; } 52.862%, 58.276% { opacity: 1; } }
+      @keyframes k-w3 { 0%, 52.828%, 59.31%, 100% { opacity: 0; } 53.345%, 58.621% { opacity: 1; } }
+      @keyframes k-w4 { 0%, 53.31%, 59.655%, 100% { opacity: 0; } 53.828%, 58.966% { opacity: 1; } }
+      @keyframes k-w5 { 0%, 53.793%, 60%, 100% { opacity: 0; } 54.31%, 59.31% { opacity: 1; } }
+      @keyframes k-w6 { 0%, 54.276%, 60.345%, 100% { opacity: 0; } 54.793%, 59.655% { opacity: 1; } }
+      @keyframes k-w7 { 0%, 54.759%, 60.69%, 100% { opacity: 0; } 55.276%, 60% { opacity: 1; } }
+      @keyframes k-pe4 { 0%, 61.034%, 66.207%, 100% { opacity: 0; } 61.552%, 65.172% { opacity: 1; } }
+      @keyframes k-pe5 { 0%, 61.724%, 66.207%, 100% { opacity: 0; } 62.241%, 65.172% { opacity: 1; } }
+      @keyframes k-pe6 { 0%, 62.414%, 66.207%, 100% { opacity: 0; } 62.931%, 65.172% { opacity: 1; } }
+    </style>
+  </defs>
+  <rect width="1400" height="956" rx="28" class="page"/>
+  <rect width="1400" height="956" rx="28" fill="url(#glow-violet)"/>
+  <rect width="1400" height="956" rx="28" fill="url(#glow-orange)"/>
+
+  <!-- Heading -->
+  <text x="40" y="58" class="ti">rocketmq-namesrv Architecture</text>
+  <text x="40" y="82" class="le">Service discovery and routing for brokers, clients and admin tools.</text>
+
+  <!-- The tour: the step in effect is marked, and its bar fills while it plays -->
+  <g class="k k-r1">
+    <rect x="746.6" y="40" width="75.4" height="34" rx="12" class="sc"/>
+    <rect x="746.6" y="40" width="75.4" height="34" rx="12" class="sh o k k-s1"/>
+    <text x="758.6" y="61.5" class="si">01</text>
+    <text x="758.6" y="61.5" class="si sa o k k-s1">01</text>
+    <text x="781" y="61.5" class="st">Boot</text>
+    <path d="M 758.6 73 H 810" class="sp o k k-p1" stroke-dasharray="51.4 51.4"/>
+  </g>
+  <g class="k k-r2">
+    <rect x="830" y="40" width="97.4" height="34" rx="12" class="sc"/>
+    <rect x="830" y="40" width="97.4" height="34" rx="12" class="sh o k k-s2"/>
+    <text x="842" y="61.5" class="si">02</text>
+    <text x="842" y="61.5" class="si sa o k k-s2">02</text>
+    <text x="864.4" y="61.5" class="st">Register</text>
+    <path d="M 842 73 H 915.4" class="sp o k k-p2" stroke-dasharray="73.4 73.4"/>
+  </g>
+  <g class="k k-r3">
+    <rect x="935.4" y="40" width="129.4" height="34" rx="12" class="sc"/>
+    <rect x="935.4" y="40" width="129.4" height="34" rx="12" class="sh o k k-s3"/>
+    <text x="947.4" y="61.5" class="si">03</text>
+    <text x="947.4" y="61.5" class="si sa o k k-s3">03</text>
+    <text x="969.8" y="61.5" class="st">Route lookup</text>
+    <path d="M 947.4 73 H 1052.8" class="sp o k k-p3" stroke-dasharray="105.4 105.4"/>
+  </g>
+  <g class="k k-r4">
+    <rect x="1072.8" y="40" width="86.4" height="34" rx="12" class="sc"/>
+    <rect x="1072.8" y="40" width="86.4" height="34" rx="12" class="sh o k k-s4"/>
+    <text x="1084.8" y="61.5" class="si">04</text>
+    <text x="1084.8" y="61.5" class="si sa o k k-s4">04</text>
+    <text x="1107.2" y="61.5" class="st">Expire</text>
+    <path d="M 1084.8 73 H 1147.2" class="sp o k k-p4" stroke-dasharray="62.4 62.4"/>
+  </g>
+  <g class="k k-r5">
+    <rect x="1167.2" y="40" width="87.4" height="34" rx="12" class="sc"/>
+    <rect x="1167.2" y="40" width="87.4" height="34" rx="12" class="sh o k k-s5"/>
+    <text x="1179.2" y="61.5" class="si">05</text>
+    <text x="1179.2" y="61.5" class="si sa o k k-s5">05</text>
+    <text x="1201.6" y="61.5" class="st">Admin</text>
+    <path d="M 1179.2 73 H 1242.6" class="sp o k k-p5" stroke-dasharray="63.4 63.4"/>
+  </g>
+  <g class="k k-r6">
+    <rect x="1262.6" y="40" width="113.4" height="34" rx="12" class="sc"/>
+    <rect x="1262.6" y="40" width="113.4" height="34" rx="12" class="sh o k k-s6"/>
+    <text x="1274.6" y="61.5" class="si">06</text>
+    <text x="1274.6" y="61.5" class="si sa o k k-s6">06</text>
+    <text x="1297" y="61.5" class="st">Shut down</text>
+    <path d="M 1274.6 73 H 1364" class="sp o k k-p6" stroke-dasharray="89.4 89.4"/>
+  </g>
+
+  <!-- Card -->
+  <rect x="24" y="104" width="1352" height="828" rx="24" class="card"/>
+  <rect x="24" y="104" width="1352" height="828" rx="24" class="dots"/>
+
+  <!-- Outlines: the runtime, the request processors and the route manager inside it -->
+  <g class="to gl k k-s16"><rect x="250" y="236" width="1102" height="476" rx="24" class="g5"/><rect x="250" y="236" width="1102" height="476" rx="24" class="g4"/><rect x="250" y="236" width="1102" height="476" rx="24" class="g3"/><rect x="250" y="236" width="1102" height="476" rx="24" class="g2"/><rect x="250" y="236" width="1102" height="476" rx="24" class="g1"/></g>
+  <rect x="250" y="236" width="1102" height="476" rx="24" class="grp"/>
+  <rect x="250" y="236" width="1102" height="476" rx="24" class="to nr k k-s16"/>
+  <text x="268" y="260" class="gt">NAMESERVER RUNTIME</text>
+  <text x="1336" y="260" class="nn" text-anchor="end">NameServerRuntimeInner · services hold weak handles</text>
+  <g class="tc gl k k-s2"><rect x="712" y="272" width="238" height="240" rx="18" class="g5"/><rect x="712" y="272" width="238" height="240" rx="18" class="g4"/><rect x="712" y="272" width="238" height="240" rx="18" class="g3"/><rect x="712" y="272" width="238" height="240" rx="18" class="g2"/><rect x="712" y="272" width="238" height="240" rx="18" class="g1"/></g>
+  <g class="tm gl k k-s3"><rect x="712" y="272" width="238" height="240" rx="18" class="g5"/><rect x="712" y="272" width="238" height="240" rx="18" class="g4"/><rect x="712" y="272" width="238" height="240" rx="18" class="g3"/><rect x="712" y="272" width="238" height="240" rx="18" class="g2"/><rect x="712" y="272" width="238" height="240" rx="18" class="g1"/></g>
+  <g class="to gl k k-s5"><rect x="712" y="272" width="238" height="240" rx="18" class="g5"/><rect x="712" y="272" width="238" height="240" rx="18" class="g4"/><rect x="712" y="272" width="238" height="240" rx="18" class="g3"/><rect x="712" y="272" width="238" height="240" rx="18" class="g2"/><rect x="712" y="272" width="238" height="240" rx="18" class="g1"/></g>
+  <rect x="712" y="272" width="238" height="240" rx="18" class="clu"/>
+  <rect x="712" y="272" width="238" height="240" rx="18" class="tc nr k k-s2"/>
+  <rect x="712" y="272" width="238" height="240" rx="18" class="tm nr k k-s3"/>
+  <rect x="712" y="272" width="238" height="240" rx="18" class="to nr k k-s5"/>
+  <text x="728" y="293" class="gt">REQUEST PROCESSORS</text>
+  <g class="tc gl k k-s2"><rect x="998" y="272" width="334" height="340" rx="18" class="g5"/><rect x="998" y="272" width="334" height="340" rx="18" class="g4"/><rect x="998" y="272" width="334" height="340" rx="18" class="g3"/><rect x="998" y="272" width="334" height="340" rx="18" class="g2"/><rect x="998" y="272" width="334" height="340" rx="18" class="g1"/></g>
+  <g class="tm gl k k-s3"><rect x="998" y="272" width="334" height="340" rx="18" class="g5"/><rect x="998" y="272" width="334" height="340" rx="18" class="g4"/><rect x="998" y="272" width="334" height="340" rx="18" class="g3"/><rect x="998" y="272" width="334" height="340" rx="18" class="g2"/><rect x="998" y="272" width="334" height="340" rx="18" class="g1"/></g>
+  <g class="tp gl k k-s4"><rect x="998" y="272" width="334" height="340" rx="18" class="g5"/><rect x="998" y="272" width="334" height="340" rx="18" class="g4"/><rect x="998" y="272" width="334" height="340" rx="18" class="g3"/><rect x="998" y="272" width="334" height="340" rx="18" class="g2"/><rect x="998" y="272" width="334" height="340" rx="18" class="g1"/></g>
+  <g class="to gl k k-s5"><rect x="998" y="272" width="334" height="340" rx="18" class="g5"/><rect x="998" y="272" width="334" height="340" rx="18" class="g4"/><rect x="998" y="272" width="334" height="340" rx="18" class="g3"/><rect x="998" y="272" width="334" height="340" rx="18" class="g2"/><rect x="998" y="272" width="334" height="340" rx="18" class="g1"/></g>
+  <rect x="998" y="272" width="334" height="340" rx="18" class="clu"/>
+  <rect x="998" y="272" width="334" height="340" rx="18" class="tc nr k k-s2"/>
+  <rect x="998" y="272" width="334" height="340" rx="18" class="tm nr k k-s3"/>
+  <rect x="998" y="272" width="334" height="340" rx="18" class="tp nr k k-s4"/>
+  <rect x="998" y="272" width="334" height="340" rx="18" class="to nr k k-s5"/>
+  <text x="1014" y="293" class="gt">ROUTE INFO MANAGER</text>
+  <text x="48" y="308" class="gt">CALLERS</text>
+  <text x="1010" y="392" class="gt">SOURCE TABLES</text>
+  <text x="1010" y="407" class="nn">DashMap · write model</text>
+
+  <!-- Links -->
+  <path d="M 353 167 H 381" class="r"/>
+  <g class="to"><path d="M 353 167 H 381" class="rt k k-off"/></g>
+  <g class="to a k k-s1"><path d="M 353 167 H 381" class="rg"/><path d="M 353 167 H 381" class="rh"/></g>
+  <path d="M 686 167 H 714" class="r"/>
+  <g class="to"><path d="M 686 167 H 714" class="rt k k-off"/></g>
+  <g class="to a k k-s1"><path d="M 686 167 H 714" class="rg"/><path d="M 686 167 H 714" class="rh"/></g>
+  <path d="M 1019 167 H 1047" class="r"/>
+  <g class="to"><path d="M 1019 167 H 1047" class="rt k k-off"/></g>
+  <g class="to a k k-s1"><path d="M 1019 167 H 1047" class="rg"/><path d="M 1019 167 H 1047" class="rh"/></g>
+  <path d="M 1199 206 V 236" class="r"/>
+  <g class="to"><path d="M 1199 206 V 236" class="rt k k-off"/></g>
+  <g class="to a k k-s1"><path d="M 1199 206 V 236" class="rg"/><path d="M 1199 206 V 236" class="rh"/></g>
+  <path d="M 230 344 H 270" class="r"/>
+  <g class="tc"><path d="M 230 344 H 270" class="rt k k-off"/></g>
+  <g class="tc a k k-s2"><path d="M 230 344 H 270" class="rg"/><path d="M 230 344 H 270" class="rh"/></g>
+  <path d="M 230 396 H 270" class="r"/>
+  <g class="tm"><path d="M 230 396 H 270" class="rt k k-off"/></g>
+  <g class="tm a k k-s3"><path d="M 230 396 H 270" class="rg"/><path d="M 230 396 H 270" class="rh"/></g>
+  <path d="M 230 448 H 270" class="r d k k-x5"/>
+  <g class="to"><path d="M 230 448 H 270" class="rt d k k-off"/></g>
+  <g class="to a k k-s5"><path d="M 230 448 H 270" class="rg"/><path d="M 230 448 H 270" class="rh d k k-d5"/></g>
+  <path d="M 446 390 H 474" class="r"/>
+  <g class="tc a k k-s2"><path d="M 446 390 H 474" class="rg"/><path d="M 446 390 H 474" class="rh"/></g>
+  <g class="tm a k k-s3"><path d="M 446 390 H 474" class="rg"/><path d="M 446 390 H 474" class="rh"/></g>
+  <g class="to a k k-s5"><path d="M 446 390 H 474" class="rg"/><path d="M 446 390 H 474" class="rh"/></g>
+  <path d="M 688 390 H 712" class="r"/>
+  <g class="tc a k k-s2"><path d="M 688 390 H 712" class="rg"/><path d="M 688 390 H 712" class="rh"/></g>
+  <g class="tm a k k-s3"><path d="M 688 390 H 712" class="rg"/><path d="M 688 390 H 712" class="rh"/></g>
+  <g class="to a k k-s5"><path d="M 688 390 H 712" class="rg"/><path d="M 688 390 H 712" class="rh"/></g>
+  <path d="M 950 331 H 1010" class="r"/>
+  <g class="tm"><path d="M 950 331 H 1010" class="rt k k-off"/></g>
+  <g class="tm a k k-s3"><path d="M 950 331 H 1010" class="rg"/><path d="M 950 331 H 1010" class="rh"/></g>
+  <path d="M 950 466 H 1010" class="r"/>
+  <g class="tc"><path d="M 950 466 H 1010" class="rt k k-off"/></g>
+  <g class="tc a k k-s2"><path d="M 950 466 H 1010" class="rg"/><path d="M 950 466 H 1010" class="rh"/></g>
+  <g class="to a k k-s5"><path d="M 950 466 H 1010" class="rg"/><path d="M 950 466 H 1010" class="rh"/></g>
+  <path d="M 1154 466 H 1168" class="r"/>
+  <g class="ts"><path d="M 1154 466 H 1168" class="rt k k-off"/></g>
+  <g class="tc a k k-s2"><path d="M 1154 466 H 1168" class="rg"/><path d="M 1154 466 H 1168" class="rh"/></g>
+  <g class="tp a k k-s4"><path d="M 1154 466 H 1168" class="rg"/><path d="M 1154 466 H 1168" class="rh"/></g>
+  <path d="M 1244 384 V 360" class="r"/>
+  <g class="ts"><path d="M 1244 384 V 360" class="rt k k-off"/></g>
+  <g class="tc a k k-s2"><path d="M 1244 384 V 360" class="rg"/><path d="M 1244 384 V 360" class="rh"/></g>
+  <g class="tp a k k-s4"><path d="M 1244 384 V 360" class="rg"/><path d="M 1244 384 V 360" class="rh"/></g>
+  <path d="M 865 512 V 540" class="r"/>
+  <g class="to"><path d="M 865 512 V 540" class="rt k k-off"/></g>
+  <g class="to a k k-s5"><path d="M 865 512 V 540" class="rg"/><path d="M 865 512 V 540" class="rh"/></g>
+  <path d="M 358 468 V 516 Q 358 526 368 526 H 603 Q 613 526 613 536 V 540" class="r d k k-x4"/>
+  <g class="tp"><path d="M 358 468 V 516 Q 358 526 368 526 H 603 Q 613 526 613 536 V 540" class="rt d k k-off"/></g>
+  <g class="tp a k k-s4"><path d="M 358 468 V 516 Q 358 526 368 526 H 603 Q 613 526 613 536 V 540" class="rg"/><path d="M 358 468 V 516 Q 358 526 368 526 H 603 Q 613 526 613 536 V 540" class="rh d k k-d4"/></g>
+  <path d="M 613 674 V 683 Q 613 693 623 693 H 1072 Q 1082 693 1082 683 V 502" class="r"/>
+  <g class="tp"><path d="M 613 674 V 683 Q 613 693 623 693 H 1072 Q 1082 693 1082 683 V 502" class="rt k k-off"/></g>
+  <g class="tp a k k-s4"><path d="M 613 674 V 683 Q 613 693 623 693 H 1072 Q 1082 693 1082 683 V 502" class="rg"/><path d="M 613 674 V 683 Q 613 693 623 693 H 1072 Q 1082 693 1082 683 V 502" class="rh"/></g>
+  <path d="M 300 712 V 740" class="r d"/>
+  <g class="to"><path d="M 300 712 V 740" class="rt d k k-off"/></g>
+  <path d="M 400 674 V 740" class="r d"/>
+  <g class="tm"><path d="M 400 674 V 740" class="rt d k k-off"/></g>
+  <path d="M 866 712 V 740" class="r d k k-x56"/>
+  <g class="to"><path d="M 866 712 V 740" class="rt d k k-off"/></g>
+  <g class="to a k k-s5"><path d="M 866 712 V 740" class="rg"/><path d="M 866 712 V 740" class="rh d k k-d5"/></g>
+  <g class="to a k k-s6"><path d="M 866 712 V 740" class="rg"/><path d="M 866 712 V 740" class="rh d k k-d6"/></g>
+  <path d="M 1199 740 V 712" class="r d k k-x56"/>
+  <g class="to"><path d="M 1199 740 V 712" class="rt d k k-off"/></g>
+  <g class="to a k k-s5"><path d="M 1199 740 V 712" class="rg"/><path d="M 1199 740 V 712" class="rh d k k-d5"/></g>
+  <g class="to a k k-s6"><path d="M 1199 740 V 712" class="rg"/><path d="M 1199 740 V 712" class="rh d k k-d6"/></g>
+
+  <!-- What the links carry -->
+  <text x="1207" y="226" class="lb">initialize · start</text>
+  <g class="to"><text x="1207" y="226" class="lb lt o k k-s1">initialize · start</text></g>
+  <text x="980" y="323" class="lb" text-anchor="middle">load</text>
+  <g class="tm"><text x="980" y="323" class="lb lt o k k-s3" text-anchor="middle">load</text></g>
+  <text x="980" y="458" class="lb" text-anchor="middle">mutate</text>
+  <g class="tc"><text x="980" y="458" class="lb lt o k k-s2" text-anchor="middle">mutate</text></g>
+  <g class="to"><text x="980" y="458" class="lb lt o k k-s5" text-anchor="middle">mutate</text></g>
+  <text x="1252" y="376" class="lb">publish</text>
+  <g class="tc"><text x="1252" y="376" class="lb lt o k k-s2">publish</text></g>
+  <g class="tp"><text x="1252" y="376" class="lb lt o k k-s4">publish</text></g>
+  <text x="873" y="530" class="lb">KV · config</text>
+  <g class="to"><text x="873" y="530" class="lb lt o k k-s5">KV · config</text></g>
+  <text x="376" y="520" class="lb">session events</text>
+  <g class="tp"><text x="376" y="520" class="lb lt o k k-s4">session events</text></g>
+  <text x="1090" y="652" class="lb">unregister batches</text>
+  <g class="tp"><text x="1090" y="652" class="lb lt o k k-s4">unregister batches</text></g>
+  <text x="292" y="730" class="lb" text-anchor="end">start · stop</text>
+  <text x="408" y="730" class="lb">route fallback</text>
+  <text x="874" y="730" class="lb">telemetry</text>
+  <g class="to"><text x="874" y="730" class="lb lt o k k-s56">telemetry</text></g>
+  <text x="1207" y="730" class="lb">ready · probes · shutdown</text>
+  <g class="to"><text x="1207" y="730" class="lb lt o k k-s56">ready · probes · shutdown</text></g>
+
+  <!-- Bootstrap chain of the binary: configuration, security bootstrap, builder, bootstrap -->
+  <g class="to gl k k-s1"><rect x="48" y="128" width="305" height="78" rx="16" class="g5"/><rect x="48" y="128" width="305" height="78" rx="16" class="g4"/><rect x="48" y="128" width="305" height="78" rx="16" class="g3"/><rect x="48" y="128" width="305" height="78" rx="16" class="g2"/><rect x="48" y="128" width="305" height="78" rx="16" class="g1"/></g>
+  <g class="k k-n1" transform="translate(48 128)">
+    <rect class="nb" width="305" height="78" rx="16"/>
+    <text class="nt" x="18" y="29">CLI + configuration</text>
+    <text class="ns" x="18" y="48">TOML file · command line</text>
+    <text class="nn" x="18" y="65">defaults, then file, then flags</text>
+  </g>
+  <rect x="48" y="128" width="305" height="78" rx="16" class="to nr k k-s1"/>
+  <g class="to gl k k-s1"><rect x="381" y="128" width="305" height="78" rx="16" class="g5"/><rect x="381" y="128" width="305" height="78" rx="16" class="g4"/><rect x="381" y="128" width="305" height="78" rx="16" class="g3"/><rect x="381" y="128" width="305" height="78" rx="16" class="g2"/><rect x="381" y="128" width="305" height="78" rx="16" class="g1"/></g>
+  <g class="k k-n1" transform="translate(381 128)">
+    <rect class="nb" width="305" height="78" rx="16"/>
+    <text class="nt" x="18" y="29">Security bootstrap</text>
+    <text class="ns" x="18" y="48">environment profile</text>
+    <text class="nn" x="18" y="65">loopback development or secure enforced</text>
+  </g>
+  <rect x="381" y="128" width="305" height="78" rx="16" class="to nr k k-s1"/>
+  <g class="to gl k k-s1"><rect x="714" y="128" width="305" height="78" rx="16" class="g5"/><rect x="714" y="128" width="305" height="78" rx="16" class="g4"/><rect x="714" y="128" width="305" height="78" rx="16" class="g3"/><rect x="714" y="128" width="305" height="78" rx="16" class="g2"/><rect x="714" y="128" width="305" height="78" rx="16" class="g1"/></g>
+  <g class="k k-n1" transform="translate(714 128)">
+    <rect class="nb" width="305" height="78" rx="16"/>
+    <text class="nt" x="18" y="29">Builder</text>
+    <text class="ns" x="18" y="48">service context · telemetry</text>
+    <text class="nn" x="18" y="65">server · client · transport security</text>
+  </g>
+  <rect x="714" y="128" width="305" height="78" rx="16" class="to nr k k-s1"/>
+  <g class="to gl k k-s16"><rect x="1047" y="128" width="305" height="78" rx="16" class="g5"/><rect x="1047" y="128" width="305" height="78" rx="16" class="g4"/><rect x="1047" y="128" width="305" height="78" rx="16" class="g3"/><rect x="1047" y="128" width="305" height="78" rx="16" class="g2"/><rect x="1047" y="128" width="305" height="78" rx="16" class="g1"/></g>
+  <g class="k k-n16" transform="translate(1047 128)">
+    <rect class="nb" width="305" height="78" rx="16"/>
+    <text class="nt" x="18" y="29">NameServerBootstrap</text>
+    <text class="ns" x="18" y="48">boot_with_lifecycle</text>
+    <text class="nn" x="18" y="65">initialize · start · rollback on failure</text>
+  </g>
+  <rect x="1047" y="128" width="305" height="78" rx="16" class="to nr k k-s16"/>
+
+  <!-- The state of the runtime, on its outline -->
+  <g class="bd gy" transform="translate(440 247)"><rect width="60" height="18" rx="9"/><text x="30" y="12.6">CREATED</text></g>
+  <g class="bd o k k-t0" transform="translate(440 247)"><rect width="60" height="18" rx="9"/><text x="30" y="12.6">CREATED</text></g>
+  <g class="bd gy" transform="translate(512 247)"><rect width="84" height="18" rx="9"/><text x="42" y="12.6">INITIALIZED</text></g>
+  <g class="bd o k k-t1" transform="translate(512 247)"><rect width="84" height="18" rx="9"/><text x="42" y="12.6">INITIALIZED</text></g>
+  <g class="bd gy" transform="translate(608 247)"><rect width="60" height="18" rx="9"/><text x="30" y="12.6">RUNNING</text></g>
+  <g class="bd o k k-t2" transform="translate(608 247)"><rect width="60" height="18" rx="9"/><text x="30" y="12.6">RUNNING</text></g>
+  <g class="bd gy" transform="translate(680 247)"><rect width="96" height="18" rx="9"/><text x="48" y="12.6">SHUTTING DOWN</text></g>
+  <g class="bd am o k k-t3" transform="translate(680 247)"><rect width="96" height="18" rx="9"/><text x="48" y="12.6">SHUTTING DOWN</text></g>
+  <g class="bd gy" transform="translate(788 247)"><rect width="60" height="18" rx="9"/><text x="30" y="12.6">STOPPED</text></g>
+  <g class="bd am o k k-t4" transform="translate(788 247)"><rect width="60" height="18" rx="9"/><text x="30" y="12.6">STOPPED</text></g>
+  <path d="M 502 256 H 510 M 598 256 H 606 M 670 256 H 678 M 778 256 H 786" class="cn"/>
+
+  <!-- Callers of the remoting server -->
+  <g class="tc gl k k-s2"><rect x="48" y="322" width="182" height="44" rx="11" class="g3"/><rect x="48" y="322" width="182" height="44" rx="11" class="g2"/><rect x="48" y="322" width="182" height="44" rx="11" class="g1"/></g>
+  <g class="tp gl k k-s4"><rect x="48" y="322" width="182" height="44" rx="11" class="g3"/><rect x="48" y="322" width="182" height="44" rx="11" class="g2"/><rect x="48" y="322" width="182" height="44" rx="11" class="g1"/></g>
+  <g class="k k-n24" transform="translate(48 322)">
+    <rect class="cb" width="182" height="44" rx="11"/>
+    <text class="ct" x="10" y="20">Brokers</text>
+    <text class="cs" x="10" y="35">register · heartbeat</text>
+  </g>
+  <rect x="48" y="322" width="182" height="44" rx="11" class="tc nr k k-s2"/>
+  <rect x="48" y="322" width="182" height="44" rx="11" class="tp nr k k-s4"/>
+  <g class="tm gl k k-s3"><rect x="48" y="374" width="182" height="44" rx="11" class="g3"/><rect x="48" y="374" width="182" height="44" rx="11" class="g2"/><rect x="48" y="374" width="182" height="44" rx="11" class="g1"/></g>
+  <g class="k k-n3" transform="translate(48 374)">
+    <rect class="cb" width="182" height="44" rx="11"/>
+    <text class="ct" x="10" y="20">Clients</text>
+    <text class="cs" x="10" y="35">topic route lookup</text>
+  </g>
+  <rect x="48" y="374" width="182" height="44" rx="11" class="tm nr k k-s3"/>
+  <g class="to gl k k-s5"><rect x="48" y="426" width="182" height="44" rx="11" class="g3"/><rect x="48" y="426" width="182" height="44" rx="11" class="g2"/><rect x="48" y="426" width="182" height="44" rx="11" class="g1"/></g>
+  <g class="k k-n5" transform="translate(48 426)">
+    <rect class="cb" width="182" height="44" rx="11"/>
+    <text class="ct" x="10" y="20">Admin tools</text>
+    <text class="cs" x="10" y="35">KV · config · topics</text>
+  </g>
+  <rect x="48" y="426" width="182" height="44" rx="11" class="to nr k k-s5"/>
+
+  <!-- Request path: the remoting server and the dispatcher in front of the processors -->
+  <g class="tc gl k k-s2"><rect x="270" y="312" width="176" height="156" rx="16" class="g5"/><rect x="270" y="312" width="176" height="156" rx="16" class="g4"/><rect x="270" y="312" width="176" height="156" rx="16" class="g3"/><rect x="270" y="312" width="176" height="156" rx="16" class="g2"/><rect x="270" y="312" width="176" height="156" rx="16" class="g1"/></g>
+  <g class="tm gl k k-s3"><rect x="270" y="312" width="176" height="156" rx="16" class="g5"/><rect x="270" y="312" width="176" height="156" rx="16" class="g4"/><rect x="270" y="312" width="176" height="156" rx="16" class="g3"/><rect x="270" y="312" width="176" height="156" rx="16" class="g2"/><rect x="270" y="312" width="176" height="156" rx="16" class="g1"/></g>
+  <g class="to gl k k-s5"><rect x="270" y="312" width="176" height="156" rx="16" class="g5"/><rect x="270" y="312" width="176" height="156" rx="16" class="g4"/><rect x="270" y="312" width="176" height="156" rx="16" class="g3"/><rect x="270" y="312" width="176" height="156" rx="16" class="g2"/><rect x="270" y="312" width="176" height="156" rx="16" class="g1"/></g>
+  <g class="tp gl k k-s4"><rect x="270" y="312" width="176" height="156" rx="16" class="g5"/><rect x="270" y="312" width="176" height="156" rx="16" class="g4"/><rect x="270" y="312" width="176" height="156" rx="16" class="g3"/><rect x="270" y="312" width="176" height="156" rx="16" class="g2"/><rect x="270" y="312" width="176" height="156" rx="16" class="g1"/></g>
+  <g class="k k-n123456" transform="translate(270 312)">
+    <rect class="nb" width="176" height="156" rx="16"/>
+    <text class="nt" x="18" y="29">Remoting server</text>
+    <text class="ns" x="18" y="48">TransportServer</text>
+    <text class="nn" x="18" y="100">SessionRegistry</text>
+    <text class="nn" x="18" y="114">transport security</text>
+    <text class="nn" x="18" y="128">ZoneRouteRPCHook</text>
+    <g class="bd gy" transform="translate(18 62)"><rect width="48" height="18" rx="9"/><text x="24" y="12.6">:9876</text></g>
+    <g class="bd o k k-q1-6" transform="translate(18 62)"><rect width="48" height="18" rx="9"/><text x="24" y="12.6">:9876</text></g>
+    <text class="nn" x="76" y="75">default port</text>
+    <g class="ts"><text class="nn lt o k k-q1-3" x="18" y="128">ZoneRouteRPCHook</text></g>
+  </g>
+  <rect x="270" y="312" width="176" height="156" rx="16" class="tc nr k k-s2"/>
+  <rect x="270" y="312" width="176" height="156" rx="16" class="tm nr k k-s3"/>
+  <rect x="270" y="312" width="176" height="156" rx="16" class="to nr k k-s5"/>
+  <rect x="270" y="312" width="176" height="156" rx="16" class="tp nr k k-s4"/>
+  <g class="tc gl k k-s2"><rect x="474" y="312" width="214" height="156" rx="16" class="g5"/><rect x="474" y="312" width="214" height="156" rx="16" class="g4"/><rect x="474" y="312" width="214" height="156" rx="16" class="g3"/><rect x="474" y="312" width="214" height="156" rx="16" class="g2"/><rect x="474" y="312" width="214" height="156" rx="16" class="g1"/></g>
+  <g class="tm gl k k-s3"><rect x="474" y="312" width="214" height="156" rx="16" class="g5"/><rect x="474" y="312" width="214" height="156" rx="16" class="g4"/><rect x="474" y="312" width="214" height="156" rx="16" class="g3"/><rect x="474" y="312" width="214" height="156" rx="16" class="g2"/><rect x="474" y="312" width="214" height="156" rx="16" class="g1"/></g>
+  <g class="to gl k k-s5"><rect x="474" y="312" width="214" height="156" rx="16" class="g5"/><rect x="474" y="312" width="214" height="156" rx="16" class="g4"/><rect x="474" y="312" width="214" height="156" rx="16" class="g3"/><rect x="474" y="312" width="214" height="156" rx="16" class="g2"/><rect x="474" y="312" width="214" height="156" rx="16" class="g1"/></g>
+  <g class="k k-n12356" transform="translate(474 312)">
+    <rect class="nb" width="214" height="156" rx="16"/>
+    <text class="nt" x="18" y="29">Request dispatcher</text>
+    <text class="ns" x="18" y="48">NameServerRequestProcessor</text>
+    <text class="nn" x="18" y="70">in-flight guard · classify</text>
+    <text class="nn" x="18" y="84">layered authorization</text>
+    <text class="nn" x="18" y="98">workload admission</text>
+    <text class="nn" x="18" y="112">route by request code</text>
+    <g class="ts"><text class="nn lt o k k-q1-1" x="18" y="84">layered authorization</text></g>
+    <g class="bd gy k k-x235" transform="translate(18 126)"><rect width="104" height="18" rx="9"/><text x="52" y="12.6">REQUEST CLASS</text></g>
+    <g class="bd vi o k k-s2" transform="translate(18 126)"><rect width="104" height="18" rx="9"/><text x="52" y="12.6">BROKER-CONTROL</text></g>
+    <g class="bd cy o k k-s3" transform="translate(18 126)"><rect width="104" height="18" rx="9"/><text x="52" y="12.6">ROUTE-READ</text></g>
+    <g class="bd am o k k-s5" transform="translate(18 126)"><rect width="104" height="18" rx="9"/><text x="52" y="12.6">ADMIN</text></g>
+  </g>
+  <rect x="474" y="312" width="214" height="156" rx="16" class="tc nr k k-s2"/>
+  <rect x="474" y="312" width="214" height="156" rx="16" class="tm nr k k-s3"/>
+  <rect x="474" y="312" width="214" height="156" rx="16" class="to nr k k-s5"/>
+
+  <!-- Request processors: the route processor and the default processor -->
+  <g class="tm gl k k-s3"><rect x="720" y="302" width="222" height="58" rx="11" class="g3"/><rect x="720" y="302" width="222" height="58" rx="11" class="g2"/><rect x="720" y="302" width="222" height="58" rx="11" class="g1"/></g>
+  <g class="k k-n136" transform="translate(720 302)">
+    <rect class="cb" width="222" height="58" rx="11"/>
+    <text class="ct" x="10" y="20">ClientRequestProcessor</text>
+    <text class="cs" x="10" y="35">GetRouteinfoByTopic</text>
+    <text class="cs" x="10" y="49">zone filter · cache · encode</text>
+  </g>
+  <rect x="720" y="302" width="222" height="58" rx="11" class="tm nr k k-s3"/>
+  <g class="k k-n16" transform="translate(720 366)">
+    <rect class="cb op" width="222" height="58" rx="11"/>
+    <text class="ct" x="10" y="20">ClusterTestRequestProcessor</text>
+    <text class="cs" x="10" y="35">takes its place in clusterTest</text>
+    <text class="cs" x="10" y="49">falls back to product env</text>
+  </g>
+  <g class="tc gl k k-s2"><rect x="720" y="430" width="222" height="72" rx="11" class="g3"/><rect x="720" y="430" width="222" height="72" rx="11" class="g2"/><rect x="720" y="430" width="222" height="72" rx="11" class="g1"/></g>
+  <g class="to gl k k-s5"><rect x="720" y="430" width="222" height="72" rx="11" class="g3"/><rect x="720" y="430" width="222" height="72" rx="11" class="g2"/><rect x="720" y="430" width="222" height="72" rx="11" class="g1"/></g>
+  <g class="k k-n1256" transform="translate(720 430)">
+    <rect class="cb" width="222" height="72" rx="11"/>
+    <text class="ct" x="10" y="20">DefaultRequestProcessor</text>
+    <text class="cs" x="10" y="35">every other request code</text>
+    <text class="cs" x="10" y="49">broker · topic · cluster</text>
+    <text class="cs" x="10" y="63">KV config · runtime config</text>
+  </g>
+  <rect x="720" y="430" width="222" height="72" rx="11" class="tc nr k k-s2"/>
+  <rect x="720" y="430" width="222" height="72" rx="11" class="to nr k k-s5"/>
+
+  <!-- Route manager: one gate for writers, source tables, and the snapshots readers load -->
+  <g class="tc gl k k-s2"><rect x="1010" y="302" width="310" height="58" rx="11" class="g3"/><rect x="1010" y="302" width="310" height="58" rx="11" class="g2"/><rect x="1010" y="302" width="310" height="58" rx="11" class="g1"/></g>
+  <g class="tm gl k k-s3"><rect x="1010" y="302" width="310" height="58" rx="11" class="g3"/><rect x="1010" y="302" width="310" height="58" rx="11" class="g2"/><rect x="1010" y="302" width="310" height="58" rx="11" class="g1"/></g>
+  <g class="tp gl k k-s4"><rect x="1010" y="302" width="310" height="58" rx="11" class="g3"/><rect x="1010" y="302" width="310" height="58" rx="11" class="g2"/><rect x="1010" y="302" width="310" height="58" rx="11" class="g1"/></g>
+  <g class="k k-n12346" transform="translate(1010 302)">
+    <rect class="cb" width="310" height="58" rx="11"/>
+    <text class="ct" x="10" y="20">Published route snapshots</text>
+    <text class="cs" x="10" y="35">per topic · ArcSwap · versioned</text>
+    <text class="cs" x="10" y="49">base view · acting-master view</text>
+    <rect x="200" y="10" width="10" height="12" rx="2.5" class="bk"/><rect x="215" y="10" width="10" height="12" rx="2.5" class="bk"/><rect x="230" y="10" width="10" height="12" rx="2.5" class="bk"/><rect x="245" y="10" width="10" height="12" rx="2.5" class="bk"/><rect x="260" y="10" width="10" height="12" rx="2.5" class="bk"/><rect x="275" y="10" width="10" height="12" rx="2.5" class="bk"/><rect x="290" y="10" width="10" height="12" rx="2.5" class="bk"/><g class="o k k-s3"><rect x="200" y="10" width="10" height="12" rx="2.5" class="bw"/><rect x="215" y="10" width="10" height="12" rx="2.5" class="bw"/><rect x="230" y="10" width="10" height="12" rx="2.5" class="bw"/><rect x="245" y="10" width="10" height="12" rx="2.5" class="bw"/><rect x="260" y="10" width="10" height="12" rx="2.5" class="bw"/><rect x="275" y="10" width="10" height="12" rx="2.5" class="bw"/><rect x="290" y="10" width="10" height="12" rx="2.5" class="bw"/></g><rect x="200" y="10" width="10" height="12" rx="2.5" class="bv o k k-pr0"/><rect x="215" y="10" width="10" height="12" rx="2.5" class="bv o k k-pr1"/><rect x="230" y="10" width="10" height="12" rx="2.5" class="bv o k k-pr2"/><rect x="245" y="10" width="10" height="12" rx="2.5" class="bv o k k-pr3"/><rect x="260" y="10" width="10" height="12" rx="2.5" class="bv o k k-pr4"/><rect x="275" y="10" width="10" height="12" rx="2.5" class="bv o k k-pr5"/><rect x="290" y="10" width="10" height="12" rx="2.5" class="bv o k k-pr6"/><rect x="260" y="10" width="10" height="12" rx="2.5" class="bo o k k-pe4"/><rect x="275" y="10" width="10" height="12" rx="2.5" class="bo o k k-pe5"/><rect x="290" y="10" width="10" height="12" rx="2.5" class="bo o k k-pe6"/>
+  </g>
+  <rect x="1010" y="302" width="310" height="58" rx="11" class="tc nr k k-s2"/>
+  <rect x="1010" y="302" width="310" height="58" rx="11" class="tm nr k k-s3"/>
+  <rect x="1010" y="302" width="310" height="58" rx="11" class="tp nr k k-s4"/>
+  <g class="tc gl k k-s2"><rect x="1010" y="430" width="144" height="72" rx="11" class="g3"/><rect x="1010" y="430" width="144" height="72" rx="11" class="g2"/><rect x="1010" y="430" width="144" height="72" rx="11" class="g1"/></g>
+  <g class="tp gl k k-s4"><rect x="1010" y="430" width="144" height="72" rx="11" class="g3"/><rect x="1010" y="430" width="144" height="72" rx="11" class="g2"/><rect x="1010" y="430" width="144" height="72" rx="11" class="g1"/></g>
+  <g class="to gl k k-s5"><rect x="1010" y="430" width="144" height="72" rx="11" class="g3"/><rect x="1010" y="430" width="144" height="72" rx="11" class="g2"/><rect x="1010" y="430" width="144" height="72" rx="11" class="g1"/></g>
+  <g class="k k-n12456" transform="translate(1010 430)">
+    <rect class="cb" width="144" height="72" rx="11"/>
+    <text class="ct" x="10" y="20">Mutation gate</text>
+    <text class="cs" x="10" y="35">serialized writes</text>
+    <text class="cs" x="10" y="49">management reads</text>
+    <text class="cs" x="10" y="63">hold it too</text>
+  </g>
+  <rect x="1010" y="430" width="144" height="72" rx="11" class="tc nr k k-s2"/>
+  <rect x="1010" y="430" width="144" height="72" rx="11" class="tp nr k k-s4"/>
+  <rect x="1010" y="430" width="144" height="72" rx="11" class="to nr k k-s5"/>
+  <g class="tc gl k k-s2"><rect x="1168" y="384" width="152" height="34" rx="11" class="g3"/><rect x="1168" y="384" width="152" height="34" rx="11" class="g2"/><rect x="1168" y="384" width="152" height="34" rx="11" class="g1"/></g>
+  <g class="tp gl k k-s4"><rect x="1168" y="384" width="152" height="34" rx="11" class="g3"/><rect x="1168" y="384" width="152" height="34" rx="11" class="g2"/><rect x="1168" y="384" width="152" height="34" rx="11" class="g1"/></g>
+  <g class="to gl k k-s5"><rect x="1168" y="384" width="152" height="34" rx="11" class="g3"/><rect x="1168" y="384" width="152" height="34" rx="11" class="g2"/><rect x="1168" y="384" width="152" height="34" rx="11" class="g1"/></g>
+  <g class="k k-n12456" transform="translate(1168 384)">
+    <rect class="cb" width="152" height="34" rx="11"/>
+    <text class="ct" x="10" y="14">Topic queues</text>
+    <text class="cs" x="10" y="29">per topic and broker</text>
+  </g>
+  <rect x="1168" y="384" width="152" height="34" rx="11" class="tc nr k k-s2"/>
+  <rect x="1168" y="384" width="152" height="34" rx="11" class="tp nr k k-s4"/>
+  <rect x="1168" y="384" width="152" height="34" rx="11" class="to nr k k-s5"/>
+  <g class="tc gl k k-s2"><rect x="1168" y="421" width="152" height="34" rx="11" class="g3"/><rect x="1168" y="421" width="152" height="34" rx="11" class="g2"/><rect x="1168" y="421" width="152" height="34" rx="11" class="g1"/></g>
+  <g class="tp gl k k-s4"><rect x="1168" y="421" width="152" height="34" rx="11" class="g3"/><rect x="1168" y="421" width="152" height="34" rx="11" class="g2"/><rect x="1168" y="421" width="152" height="34" rx="11" class="g1"/></g>
+  <g class="to gl k k-s5"><rect x="1168" y="421" width="152" height="34" rx="11" class="g3"/><rect x="1168" y="421" width="152" height="34" rx="11" class="g2"/><rect x="1168" y="421" width="152" height="34" rx="11" class="g1"/></g>
+  <g class="k k-n12456" transform="translate(1168 421)">
+    <rect class="cb" width="152" height="34" rx="11"/>
+    <text class="ct" x="10" y="14">Broker addresses</text>
+    <text class="cs" x="10" y="29">ids and addresses</text>
+  </g>
+  <rect x="1168" y="421" width="152" height="34" rx="11" class="tc nr k k-s2"/>
+  <rect x="1168" y="421" width="152" height="34" rx="11" class="tp nr k k-s4"/>
+  <rect x="1168" y="421" width="152" height="34" rx="11" class="to nr k k-s5"/>
+  <g class="tc gl k k-s2"><rect x="1168" y="458" width="152" height="34" rx="11" class="g3"/><rect x="1168" y="458" width="152" height="34" rx="11" class="g2"/><rect x="1168" y="458" width="152" height="34" rx="11" class="g1"/></g>
+  <g class="tp gl k k-s4"><rect x="1168" y="458" width="152" height="34" rx="11" class="g3"/><rect x="1168" y="458" width="152" height="34" rx="11" class="g2"/><rect x="1168" y="458" width="152" height="34" rx="11" class="g1"/></g>
+  <g class="to gl k k-s5"><rect x="1168" y="458" width="152" height="34" rx="11" class="g3"/><rect x="1168" y="458" width="152" height="34" rx="11" class="g2"/><rect x="1168" y="458" width="152" height="34" rx="11" class="g1"/></g>
+  <g class="k k-n12456" transform="translate(1168 458)">
+    <rect class="cb" width="152" height="34" rx="11"/>
+    <text class="ct" x="10" y="14">Clusters</text>
+    <text class="cs" x="10" y="29">broker names</text>
+  </g>
+  <rect x="1168" y="458" width="152" height="34" rx="11" class="tc nr k k-s2"/>
+  <rect x="1168" y="458" width="152" height="34" rx="11" class="tp nr k k-s4"/>
+  <rect x="1168" y="458" width="152" height="34" rx="11" class="to nr k k-s5"/>
+  <g class="tc gl k k-s2"><rect x="1168" y="495" width="152" height="34" rx="11" class="g3"/><rect x="1168" y="495" width="152" height="34" rx="11" class="g2"/><rect x="1168" y="495" width="152" height="34" rx="11" class="g1"/></g>
+  <g class="tp gl k k-s4"><rect x="1168" y="495" width="152" height="34" rx="11" class="g3"/><rect x="1168" y="495" width="152" height="34" rx="11" class="g2"/><rect x="1168" y="495" width="152" height="34" rx="11" class="g1"/></g>
+  <g class="to gl k k-s5"><rect x="1168" y="495" width="152" height="34" rx="11" class="g3"/><rect x="1168" y="495" width="152" height="34" rx="11" class="g2"/><rect x="1168" y="495" width="152" height="34" rx="11" class="g1"/></g>
+  <g class="k k-n12456" transform="translate(1168 495)">
+    <rect class="cb" width="152" height="34" rx="11"/>
+    <text class="ct" x="10" y="14">Live brokers</text>
+    <text class="cs" x="10" y="29">heartbeat · session</text>
+  </g>
+  <rect x="1168" y="495" width="152" height="34" rx="11" class="tc nr k k-s2"/>
+  <rect x="1168" y="495" width="152" height="34" rx="11" class="tp nr k k-s4"/>
+  <rect x="1168" y="495" width="152" height="34" rx="11" class="to nr k k-s5"/>
+  <g class="tc gl k k-s2"><rect x="1168" y="532" width="152" height="34" rx="11" class="g3"/><rect x="1168" y="532" width="152" height="34" rx="11" class="g2"/><rect x="1168" y="532" width="152" height="34" rx="11" class="g1"/></g>
+  <g class="tp gl k k-s4"><rect x="1168" y="532" width="152" height="34" rx="11" class="g3"/><rect x="1168" y="532" width="152" height="34" rx="11" class="g2"/><rect x="1168" y="532" width="152" height="34" rx="11" class="g1"/></g>
+  <g class="to gl k k-s5"><rect x="1168" y="532" width="152" height="34" rx="11" class="g3"/><rect x="1168" y="532" width="152" height="34" rx="11" class="g2"/><rect x="1168" y="532" width="152" height="34" rx="11" class="g1"/></g>
+  <g class="k k-n12456" transform="translate(1168 532)">
+    <rect class="cb" width="152" height="34" rx="11"/>
+    <text class="ct" x="10" y="14">Filter servers</text>
+    <text class="cs" x="10" y="29">per broker address</text>
+  </g>
+  <rect x="1168" y="532" width="152" height="34" rx="11" class="tc nr k k-s2"/>
+  <rect x="1168" y="532" width="152" height="34" rx="11" class="tp nr k k-s4"/>
+  <rect x="1168" y="532" width="152" height="34" rx="11" class="to nr k k-s5"/>
+  <g class="tc gl k k-s2"><rect x="1168" y="569" width="152" height="34" rx="11" class="g3"/><rect x="1168" y="569" width="152" height="34" rx="11" class="g2"/><rect x="1168" y="569" width="152" height="34" rx="11" class="g1"/></g>
+  <g class="tp gl k k-s4"><rect x="1168" y="569" width="152" height="34" rx="11" class="g3"/><rect x="1168" y="569" width="152" height="34" rx="11" class="g2"/><rect x="1168" y="569" width="152" height="34" rx="11" class="g1"/></g>
+  <g class="to gl k k-s5"><rect x="1168" y="569" width="152" height="34" rx="11" class="g3"/><rect x="1168" y="569" width="152" height="34" rx="11" class="g2"/><rect x="1168" y="569" width="152" height="34" rx="11" class="g1"/></g>
+  <g class="k k-n12456" transform="translate(1168 569)">
+    <rect class="cb" width="152" height="34" rx="11"/>
+    <text class="ct" x="10" y="14">Queue mappings</text>
+    <text class="cs" x="10" y="29">static topics</text>
+  </g>
+  <rect x="1168" y="569" width="152" height="34" rx="11" class="tc nr k k-s2"/>
+  <rect x="1168" y="569" width="152" height="34" rx="11" class="tp nr k k-s4"/>
+  <rect x="1168" y="569" width="152" height="34" rx="11" class="to nr k k-s5"/>
+
+  <!-- Liveness, the config stores and the optional parts -->
+  <g class="tp gl k k-s4"><rect x="474" y="540" width="278" height="134" rx="16" class="g5"/><rect x="474" y="540" width="278" height="134" rx="16" class="g4"/><rect x="474" y="540" width="278" height="134" rx="16" class="g3"/><rect x="474" y="540" width="278" height="134" rx="16" class="g2"/><rect x="474" y="540" width="278" height="134" rx="16" class="g1"/></g>
+  <g class="k k-n146" transform="translate(474 540)">
+    <rect class="nb" width="278" height="134" rx="16"/>
+    <text class="nt" x="18" y="29">Broker liveness</text>
+    <text class="ns" x="18" y="48">housekeeping · scan · batches</text>
+    <text class="nn" x="18" y="70">session closed: unregister at once</text>
+    <text class="nn" x="18" y="84">scan every 5 s · 2 min timeout</text>
+    <text class="nn" x="18" y="98">batches run under the mutation gate</text>
+    <text class="nn" x="18" y="116">queue</text>
+    <rect x="62" y="106" width="10" height="12" rx="2.5" class="bk"/><rect x="77" y="106" width="10" height="12" rx="2.5" class="bk"/><rect x="92" y="106" width="10" height="12" rx="2.5" class="bk"/><rect x="107" y="106" width="10" height="12" rx="2.5" class="bk"/><rect x="122" y="106" width="10" height="12" rx="2.5" class="bk"/><rect x="137" y="106" width="10" height="12" rx="2.5" class="bk"/><rect x="152" y="106" width="10" height="12" rx="2.5" class="bk"/><rect x="167" y="106" width="10" height="12" rx="2.5" class="bk"/><rect x="62" y="106" width="10" height="12" rx="2.5" class="bo o k k-w0"/><rect x="77" y="106" width="10" height="12" rx="2.5" class="bo o k k-w1"/><rect x="92" y="106" width="10" height="12" rx="2.5" class="bo o k k-w2"/><rect x="107" y="106" width="10" height="12" rx="2.5" class="bo o k k-w3"/><rect x="122" y="106" width="10" height="12" rx="2.5" class="bo o k k-w4"/><rect x="137" y="106" width="10" height="12" rx="2.5" class="bo o k k-w5"/><rect x="152" y="106" width="10" height="12" rx="2.5" class="bo o k k-w6"/><rect x="167" y="106" width="10" height="12" rx="2.5" class="bo o k k-w7"/>
+  </g>
+  <rect x="474" y="540" width="278" height="134" rx="16" class="tp nr k k-s4"/>
+  <g class="to gl k k-s5"><rect x="772" y="540" width="186" height="134" rx="16" class="g5"/><rect x="772" y="540" width="186" height="134" rx="16" class="g4"/><rect x="772" y="540" width="186" height="134" rx="16" class="g3"/><rect x="772" y="540" width="186" height="134" rx="16" class="g2"/><rect x="772" y="540" width="186" height="134" rx="16" class="g1"/></g>
+  <g class="k k-n156" transform="translate(772 540)">
+    <rect class="nb" width="186" height="134" rx="16"/>
+    <text class="nt" x="18" y="29">Config stores</text>
+    <text class="ns" x="18" y="48">MetadataIoActor</text>
+    <text class="nn" x="18" y="70">KV config: one writer,</text>
+    <text class="nn" x="18" y="84">durable, then visible</text>
+    <text class="nn" x="18" y="98">runtime config: live</text>
+    <text class="nn" x="18" y="112">or restart-required</text>
+  </g>
+  <rect x="772" y="540" width="186" height="134" rx="16" class="to nr k k-s5"/>
+  <g class="k k-n16" transform="translate(270 540)">
+    <rect class="cb" width="186" height="62" rx="11"/>
+    <text class="ct" x="10" y="20">Outbound client</text>
+    <text class="cs" x="10" y="35">RemotingClient</text>
+    <text class="cs" x="10" y="49">min broker id notices</text>
+  </g>
+  <g class="k k-n16" transform="translate(270 612)">
+    <rect class="cb op" width="186" height="62" rx="11"/>
+    <text class="ct" x="10" y="20">Cluster-test lookup</text>
+    <text class="cs" x="10" y="35">own client · route cache</text>
+    <text class="cs" x="10" y="49">started when clusterTest</text>
+  </g>
+
+  <!-- What the process talks to -->
+  <g class="k k-n16" transform="translate(48 740)">
+    <rect class="nb op" width="305" height="78" rx="16"/>
+    <text class="nt" x="18" y="29">Embedded controller</text>
+    <text class="ns" x="18" y="48">rocketmq-controller</text>
+    <text class="nn" x="18" y="65">Cargo feature plus runtime setting</text>
+    <g class="bd gy" transform="translate(225 15)"><rect width="62" height="18" rx="9"/><text x="31" y="12.6">OPTIONAL</text></g>
+  </g>
+  <g class="k k-n16" transform="translate(381 740)">
+    <rect class="nb op" width="305" height="78" rx="16"/>
+    <text class="nt" x="18" y="29">Product environment</text>
+    <text class="ns" x="18" y="48">another NameServer cluster</text>
+    <text class="nn" x="18" y="65">routes for topics missing locally</text>
+    <g class="bd gy" transform="translate(225 15)"><rect width="62" height="18" rx="9"/><text x="31" y="12.6">OPTIONAL</text></g>
+  </g>
+  <g class="to gl k k-s5"><rect x="714" y="740" width="305" height="78" rx="16" class="g5"/><rect x="714" y="740" width="305" height="78" rx="16" class="g4"/><rect x="714" y="740" width="305" height="78" rx="16" class="g3"/><rect x="714" y="740" width="305" height="78" rx="16" class="g2"/><rect x="714" y="740" width="305" height="78" rx="16" class="g1"/></g>
+  <g class="k k-n56" transform="translate(714 740)">
+    <rect class="nb" width="305" height="78" rx="16"/>
+    <text class="nt" x="18" y="29">Observability</text>
+    <text class="ns" x="18" y="48">metrics · traces · logs</text>
+    <text class="nn" x="18" y="65">low-cardinality request metrics</text>
+  </g>
+  <rect x="714" y="740" width="305" height="78" rx="16" class="to nr k k-s5"/>
+  <g class="to gl k k-s56"><rect x="1047" y="740" width="305" height="78" rx="16" class="g5"/><rect x="1047" y="740" width="305" height="78" rx="16" class="g4"/><rect x="1047" y="740" width="305" height="78" rx="16" class="g3"/><rect x="1047" y="740" width="305" height="78" rx="16" class="g2"/><rect x="1047" y="740" width="305" height="78" rx="16" class="g1"/></g>
+  <g class="k k-n156" transform="translate(1047 740)">
+    <rect class="nb" width="305" height="78" rx="16"/>
+    <text class="nt" x="18" y="29">ServiceLifecycle</text>
+    <text class="ns" x="18" y="48">probes · shutdown deadline</text>
+    <text class="nn" x="18" y="65">/readyz · /livez · /drainz</text>
+  </g>
+  <rect x="1047" y="740" width="305" height="78" rx="16" class="to nr k k-s56"/>
+
+  <!-- Start-up brings the parts up in order; shutdown takes them down in order -->
+  <rect x="772" y="540" width="186" height="134" rx="16" class="ts nr k k-q1-0"/>
+  <rect x="474" y="312" width="214" height="156" rx="16" class="ts nr k k-q1-2"/>
+  <rect x="712" y="272" width="238" height="240" rx="18" class="ts nr k k-q1-2"/>
+  <rect x="474" y="540" width="278" height="134" rx="16" class="ts nr k k-q1-4"/>
+  <rect x="998" y="272" width="334" height="340" rx="18" class="ts nr k k-q1-5"/>
+  <rect x="270" y="312" width="176" height="156" rx="16" class="ts nr k k-q1-6"/>
+  <rect x="270" y="540" width="186" height="62" rx="11" class="ts nr k k-q1-7"/>
+  <rect x="1047" y="740" width="305" height="78" rx="16" class="ts nr k k-q1-8"/>
+  <rect x="474" y="312" width="214" height="156" rx="16" class="to nr k k-q6-0"/>
+  <rect x="474" y="540" width="278" height="134" rx="16" class="to nr k k-q6-1"/>
+  <rect x="772" y="540" width="186" height="134" rx="16" class="to nr k k-q6-3"/>
+  <rect x="998" y="272" width="334" height="340" rx="18" class="to nr k k-q6-4"/>
+  <rect x="270" y="312" width="176" height="156" rx="16" class="to nr k k-q6-5"/>
+  <rect x="712" y="272" width="238" height="240" rx="18" class="to nr k k-q6-5"/>
+  <rect x="270" y="540" width="186" height="62" rx="11" class="to nr k k-q6-6"/>
+
+  <!-- Packets -->
+  <g class="to pk a k k-s1"><path d="M 353 167 H 381" class="p3 k k-f-boot-chain-1"/><path d="M 353 167 H 381" class="p2 k k-f-boot-chain-1"/><path d="M 353 167 H 381" class="p1 k k-f-boot-chain-1"/><path d="M 353 167 H 381" class="p0 k k-f-boot-chain-1"/></g>
+  <g class="to pk a k k-s1"><path d="M 686 167 H 714" class="p3 k k-f-boot-chain-2"/><path d="M 686 167 H 714" class="p2 k k-f-boot-chain-2"/><path d="M 686 167 H 714" class="p1 k k-f-boot-chain-2"/><path d="M 686 167 H 714" class="p0 k k-f-boot-chain-2"/></g>
+  <g class="to pk a k k-s1"><path d="M 1019 167 H 1047" class="p3 k k-f-boot-chain-3"/><path d="M 1019 167 H 1047" class="p2 k k-f-boot-chain-3"/><path d="M 1019 167 H 1047" class="p1 k k-f-boot-chain-3"/><path d="M 1019 167 H 1047" class="p0 k k-f-boot-chain-3"/></g>
+  <g class="to pk a k k-s1"><path d="M 1199 206 V 236" class="p3 k k-f-boot-boot-runtime"/><path d="M 1199 206 V 236" class="p2 k k-f-boot-boot-runtime"/><path d="M 1199 206 V 236" class="p1 k k-f-boot-boot-runtime"/><path d="M 1199 206 V 236" class="p0 k k-f-boot-boot-runtime"/></g>
+  <g class="tc pk a k k-s2"><path d="M 230 344 H 270" class="p3 k k-f-register-brokers"/><path d="M 230 344 H 270" class="p2 k k-f-register-brokers"/><path d="M 230 344 H 270" class="p1 k k-f-register-brokers"/><path d="M 230 344 H 270" class="p0 k k-f-register-brokers"/></g>
+  <g class="tc pk a k k-s2"><path d="M 446 390 H 474" class="p3 k k-f-register-server-dispatch"/><path d="M 446 390 H 474" class="p2 k k-f-register-server-dispatch"/><path d="M 446 390 H 474" class="p1 k k-f-register-server-dispatch"/><path d="M 446 390 H 474" class="p0 k k-f-register-server-dispatch"/></g>
+  <g class="tc pk a k k-s2"><path d="M 688 390 H 712" class="p3 k k-f-register-dispatch-processors"/><path d="M 688 390 H 712" class="p2 k k-f-register-dispatch-processors"/><path d="M 688 390 H 712" class="p1 k k-f-register-dispatch-processors"/><path d="M 688 390 H 712" class="p0 k k-f-register-dispatch-processors"/></g>
+  <g class="tc pk a k k-s2"><path d="M 950 466 H 1010" class="p3 k k-f-register-write"/><path d="M 950 466 H 1010" class="p2 k k-f-register-write"/><path d="M 950 466 H 1010" class="p1 k k-f-register-write"/><path d="M 950 466 H 1010" class="p0 k k-f-register-write"/></g>
+  <g class="tc pk a k k-s2"><path d="M 1154 466 H 1168" class="p3 k k-f-register-gate-tables"/><path d="M 1154 466 H 1168" class="p2 k k-f-register-gate-tables"/><path d="M 1154 466 H 1168" class="p1 k k-f-register-gate-tables"/><path d="M 1154 466 H 1168" class="p0 k k-f-register-gate-tables"/></g>
+  <g class="tc pk a k k-s2"><path d="M 1244 384 V 360" class="p3 k k-f-register-publish"/><path d="M 1244 384 V 360" class="p2 k k-f-register-publish"/><path d="M 1244 384 V 360" class="p1 k k-f-register-publish"/><path d="M 1244 384 V 360" class="p0 k k-f-register-publish"/></g>
+  <g class="tm pk a k k-s3"><path d="M 230 396 H 270" class="p3 k k-f-route-clients"/><path d="M 230 396 H 270" class="p2 k k-f-route-clients"/><path d="M 230 396 H 270" class="p1 k k-f-route-clients"/><path d="M 230 396 H 270" class="p0 k k-f-route-clients"/></g>
+  <g class="tm pk a k k-s3"><path d="M 446 390 H 474" class="p3 k k-f-route-server-dispatch"/><path d="M 446 390 H 474" class="p2 k k-f-route-server-dispatch"/><path d="M 446 390 H 474" class="p1 k k-f-route-server-dispatch"/><path d="M 446 390 H 474" class="p0 k k-f-route-server-dispatch"/></g>
+  <g class="tm pk a k k-s3"><path d="M 688 390 H 712" class="p3 k k-f-route-dispatch-processors"/><path d="M 688 390 H 712" class="p2 k k-f-route-dispatch-processors"/><path d="M 688 390 H 712" class="p1 k k-f-route-dispatch-processors"/><path d="M 688 390 H 712" class="p0 k k-f-route-dispatch-processors"/></g>
+  <g class="tm pk a k k-s3"><path d="M 950 331 H 1010" class="p3 k k-f-route-read"/><path d="M 950 331 H 1010" class="p2 k k-f-route-read"/><path d="M 950 331 H 1010" class="p1 k k-f-route-read"/><path d="M 950 331 H 1010" class="p0 k k-f-route-read"/></g>
+  <g class="tp pk a k k-s4"><path d="M 358 468 V 516 Q 358 526 368 526 H 603 Q 613 526 613 536 V 540" class="p3 k k-f-expire-session-events"/><path d="M 358 468 V 516 Q 358 526 368 526 H 603 Q 613 526 613 536 V 540" class="p2 k k-f-expire-session-events"/><path d="M 358 468 V 516 Q 358 526 368 526 H 603 Q 613 526 613 536 V 540" class="p1 k k-f-expire-session-events"/><path d="M 358 468 V 516 Q 358 526 368 526 H 603 Q 613 526 613 536 V 540" class="p0 k k-f-expire-session-events"/></g>
+  <g class="tp pk a k k-s4"><path d="M 613 674 V 683 Q 613 693 623 693 H 1072 Q 1082 693 1082 683 V 502" class="p3 k k-f-expire-batch"/><path d="M 613 674 V 683 Q 613 693 623 693 H 1072 Q 1082 693 1082 683 V 502" class="p2 k k-f-expire-batch"/><path d="M 613 674 V 683 Q 613 693 623 693 H 1072 Q 1082 693 1082 683 V 502" class="p1 k k-f-expire-batch"/><path d="M 613 674 V 683 Q 613 693 623 693 H 1072 Q 1082 693 1082 683 V 502" class="p0 k k-f-expire-batch"/></g>
+  <g class="tp pk a k k-s4"><path d="M 1154 466 H 1168" class="p3 k k-f-expire-gate-tables"/><path d="M 1154 466 H 1168" class="p2 k k-f-expire-gate-tables"/><path d="M 1154 466 H 1168" class="p1 k k-f-expire-gate-tables"/><path d="M 1154 466 H 1168" class="p0 k k-f-expire-gate-tables"/></g>
+  <g class="tp pk a k k-s4"><path d="M 1244 384 V 360" class="p3 k k-f-expire-publish"/><path d="M 1244 384 V 360" class="p2 k k-f-expire-publish"/><path d="M 1244 384 V 360" class="p1 k k-f-expire-publish"/><path d="M 1244 384 V 360" class="p0 k k-f-expire-publish"/></g>
+  <g class="to pk a k k-s5"><path d="M 230 448 H 270" class="p3 k k-f-admin-admin"/><path d="M 230 448 H 270" class="p2 k k-f-admin-admin"/><path d="M 230 448 H 270" class="p1 k k-f-admin-admin"/><path d="M 230 448 H 270" class="p0 k k-f-admin-admin"/></g>
+  <g class="to pk a k k-s5"><path d="M 446 390 H 474" class="p3 k k-f-admin-server-dispatch"/><path d="M 446 390 H 474" class="p2 k k-f-admin-server-dispatch"/><path d="M 446 390 H 474" class="p1 k k-f-admin-server-dispatch"/><path d="M 446 390 H 474" class="p0 k k-f-admin-server-dispatch"/></g>
+  <g class="to pk a k k-s5"><path d="M 688 390 H 712" class="p3 k k-f-admin-dispatch-processors"/><path d="M 688 390 H 712" class="p2 k k-f-admin-dispatch-processors"/><path d="M 688 390 H 712" class="p1 k k-f-admin-dispatch-processors"/><path d="M 688 390 H 712" class="p0 k k-f-admin-dispatch-processors"/></g>
+  <g class="to pk a k k-s5"><path d="M 865 512 V 540" class="p3 k k-f-admin-default-config"/><path d="M 865 512 V 540" class="p2 k k-f-admin-default-config"/><path d="M 865 512 V 540" class="p1 k k-f-admin-default-config"/><path d="M 865 512 V 540" class="p0 k k-f-admin-default-config"/></g>
+  <g class="to pk a k k-s5"><path d="M 950 466 H 1010" class="p3 k k-f-admin-write"/><path d="M 950 466 H 1010" class="p2 k k-f-admin-write"/><path d="M 950 466 H 1010" class="p1 k k-f-admin-write"/><path d="M 950 466 H 1010" class="p0 k k-f-admin-write"/></g>
+  <g class="to pk a k k-s5"><path d="M 866 712 V 740" class="p3 k k-f-admin-telemetry"/><path d="M 866 712 V 740" class="p2 k k-f-admin-telemetry"/><path d="M 866 712 V 740" class="p1 k k-f-admin-telemetry"/><path d="M 866 712 V 740" class="p0 k k-f-admin-telemetry"/></g>
+  <g class="to pk a k k-s5"><path d="M 1199 740 V 712" class="p3 k k-f-admin-lifecycle"/><path d="M 1199 740 V 712" class="p2 k k-f-admin-lifecycle"/><path d="M 1199 740 V 712" class="p1 k k-f-admin-lifecycle"/><path d="M 1199 740 V 712" class="p0 k k-f-admin-lifecycle"/></g>
+  <g class="to pk a k k-s6"><path d="M 1199 740 V 712" class="p3 k k-f-shutdown-lifecycle"/><path d="M 1199 740 V 712" class="p2 k k-f-shutdown-lifecycle"/><path d="M 1199 740 V 712" class="p1 k k-f-shutdown-lifecycle"/><path d="M 1199 740 V 712" class="p0 k k-f-shutdown-lifecycle"/></g>
+  <g class="to pk a k k-s6"><path d="M 866 712 V 740" class="p3 k k-f-shutdown-telemetry"/><path d="M 866 712 V 740" class="p2 k k-f-shutdown-telemetry"/><path d="M 866 712 V 740" class="p1 k k-f-shutdown-telemetry"/><path d="M 866 712 V 740" class="p0 k k-f-shutdown-telemetry"/></g>
+
+  <!-- Legend -->
+  <rect x="48" y="540" width="182" height="172" rx="20" class="panel"/>
+  <text x="64" y="566" class="gt">LEGEND</text>
+  <g class="tc"><path d="M 64 586 H 96" class="ll"/></g>
+  <text x="106" y="590" class="lg">Broker control</text>
+  <g class="tm"><path d="M 64 605 H 96" class="ll"/></g>
+  <text x="106" y="609" class="lg">Route lookup</text>
+  <g class="tp"><path d="M 64 624 H 96" class="ll"/></g>
+  <text x="106" y="628" class="lg">Expiry · unregister</text>
+  <g class="ts"><path d="M 64 643 H 96" class="ll"/></g>
+  <text x="106" y="647" class="lg">Publication</text>
+  <g class="to"><path d="M 64 662 H 96" class="ll d"/></g>
+  <text x="106" y="666" class="lg">Admin · lifecycle</text>
+  <rect x="64" y="676" width="32" height="12" rx="4" class="lo"/>
+  <text x="106" y="686" class="lg">Optional</text>
+
+  <!-- Start-up order and shutdown order -->
+  <rect x="48" y="836" width="1304" height="78" rx="20" class="panel"/>
+  <text x="68" y="864" class="gt">STARTUP ORDER</text>
+  <rect x="220" y="848" width="79.4" height="24" rx="12" class="fb"/>
+  <text x="259.7" y="863.5" class="jc">KV config</text>
+  <g class="ts"><rect x="220" y="848" width="79.4" height="24" rx="12" class="nr k k-q1-0"/><text x="259.7" y="863.5" class="jc lt o k k-q1-0">KV config</text></g>
+  <rect x="305.4" y="848" width="99.2" height="24" rx="12" class="fb"/>
+  <text x="355" y="863.5" class="jc">auth runtime</text>
+  <g class="ts"><rect x="305.4" y="848" width="99.2" height="24" rx="12" class="nr k k-q1-1"/><text x="355" y="863.5" class="jc lt o k k-q1-1">auth runtime</text></g>
+  <rect x="410.6" y="848" width="119" height="24" rx="12" class="fb"/>
+  <text x="470.1" y="863.5" class="jc">remoting server</text>
+  <g class="ts"><rect x="410.6" y="848" width="119" height="24" rx="12" class="nr k k-q1-2"/><text x="470.1" y="863.5" class="jc lt o k k-q1-2">remoting server</text></g>
+  <rect x="535.6" y="848" width="79.4" height="24" rx="12" class="fb"/>
+  <text x="575.3" y="863.5" class="jc">RPC hooks</text>
+  <g class="ts"><rect x="535.6" y="848" width="79.4" height="24" rx="12" class="nr k k-q1-3"/><text x="575.3" y="863.5" class="jc lt o k k-q1-3">RPC hooks</text></g>
+  <rect x="621" y="848" width="132.2" height="24" rx="12" class="fb"/>
+  <text x="687.1" y="863.5" class="jc">health monitoring</text>
+  <g class="ts"><rect x="621" y="848" width="132.2" height="24" rx="12" class="nr k k-q1-4"/><text x="687.1" y="863.5" class="jc lt o k k-q1-4">health monitoring</text></g>
+  <rect x="759.2" y="848" width="105.8" height="24" rx="12" class="fb"/>
+  <text x="812.1" y="863.5" class="jc">route manager</text>
+  <g class="ts"><rect x="759.2" y="848" width="105.8" height="24" rx="12" class="nr k k-q1-5"/><text x="812.1" y="863.5" class="jc lt o k k-q1-5">route manager</text></g>
+  <rect x="871" y="848" width="72.8" height="24" rx="12" class="fb"/>
+  <text x="907.4" y="863.5" class="jc">listener</text>
+  <g class="ts"><rect x="871" y="848" width="72.8" height="24" rx="12" class="nr k k-q1-6"/><text x="907.4" y="863.5" class="jc lt o k k-q1-6">listener</text></g>
+  <rect x="949.8" y="848" width="119" height="24" rx="12" class="fb"/>
+  <text x="1009.3" y="863.5" class="jc">remoting client</text>
+  <g class="ts"><rect x="949.8" y="848" width="119" height="24" rx="12" class="nr k k-q1-7"/><text x="1009.3" y="863.5" class="jc lt o k k-q1-7">remoting client</text></g>
+  <rect x="1074.8" y="848" width="53" height="24" rx="12" class="fb"/>
+  <text x="1101.3" y="863.5" class="jc">ready</text>
+  <g class="ts"><rect x="1074.8" y="848" width="53" height="24" rx="12" class="nr k k-q1-8"/><text x="1101.3" y="863.5" class="jc lt o k k-q1-8">ready</text></g>
+  <text x="1139.8" y="864" class="fn">initialize, then start</text>
+  <text x="68" y="894" class="gt">SHUTDOWN ORDER</text>
+  <rect x="220" y="878" width="178.4" height="24" rx="12" class="fb"/>
+  <text x="309.2" y="893.5" class="jc">drain in-flight requests</text>
+  <g class="to"><rect x="220" y="878" width="178.4" height="24" rx="12" class="nr k k-q6-0"/><text x="309.2" y="893.5" class="jc lt o k k-q6-0">drain in-flight requests</text></g>
+  <rect x="404.4" y="878" width="119" height="24" rx="12" class="fb"/>
+  <text x="463.9" y="893.5" class="jc">scheduled tasks</text>
+  <g class="to"><rect x="404.4" y="878" width="119" height="24" rx="12" class="nr k k-q6-1"/><text x="463.9" y="893.5" class="jc lt o k k-q6-1">scheduled tasks</text></g>
+  <rect x="529.4" y="878" width="99.2" height="24" rx="12" class="fb"/>
+  <text x="579" y="893.5" class="jc">auth runtime</text>
+  <g class="to"><rect x="529.4" y="878" width="99.2" height="24" rx="12" class="nr k k-q6-2"/><text x="579" y="893.5" class="jc lt o k k-q6-2">auth runtime</text></g>
+  <rect x="634.6" y="878" width="132.2" height="24" rx="12" class="fb"/>
+  <text x="700.7" y="893.5" class="jc">persist KV config</text>
+  <g class="to"><rect x="634.6" y="878" width="132.2" height="24" rx="12" class="nr k k-q6-3"/><text x="700.7" y="893.5" class="jc lt o k k-q6-3">persist KV config</text></g>
+  <rect x="772.8" y="878" width="105.8" height="24" rx="12" class="fb"/>
+  <text x="825.7" y="893.5" class="jc">route manager</text>
+  <g class="to"><rect x="772.8" y="878" width="105.8" height="24" rx="12" class="nr k k-q6-4"/><text x="825.7" y="893.5" class="jc lt o k k-q6-4">route manager</text></g>
+  <rect x="884.6" y="878" width="119" height="24" rx="12" class="fb"/>
+  <text x="944.1" y="893.5" class="jc">remoting server</text>
+  <g class="to"><rect x="884.6" y="878" width="119" height="24" rx="12" class="nr k k-q6-5"/><text x="944.1" y="893.5" class="jc lt o k k-q6-5">remoting server</text></g>
+  <rect x="1009.6" y="878" width="119" height="24" rx="12" class="fb"/>
+  <text x="1069.1" y="893.5" class="jc">remoting client</text>
+  <g class="to"><rect x="1009.6" y="878" width="119" height="24" rx="12" class="nr k k-q6-6"/><text x="1069.1" y="893.5" class="jc lt o k k-q6-6">remoting client</text></g>
+  <rect x="1134.6" y="878" width="92.6" height="24" rx="12" class="fb"/>
+  <text x="1180.9" y="893.5" class="jc">task groups</text>
+  <g class="to"><rect x="1134.6" y="878" width="92.6" height="24" rx="12" class="nr k k-q6-7"/><text x="1180.9" y="893.5" class="jc lt o k k-q6-7">task groups</text></g>
+  <text x="1239.2" y="894" class="fn">one deadline</text>
+</svg>

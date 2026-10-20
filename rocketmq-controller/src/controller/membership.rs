@@ -263,10 +263,10 @@ pub enum MembershipOperation {
     RemoveMember,
 }
 
-/// Stable audit outcome for one membership attempt.
+/// Stable audit status for one membership attempt.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum MembershipAuditOutcome {
+pub enum MembershipAuditStatus {
     /// Consensus accepted and verified the requested change.
     Applied,
     /// A completed operation was returned without a second consensus mutation.
@@ -291,7 +291,7 @@ pub struct MembershipAuditRecord {
     observed_membership_version: Option<u64>,
     resulting_membership_version: Option<u64>,
     reason_sha256: String,
-    outcome: MembershipAuditOutcome,
+    outcome: MembershipAuditStatus,
     decision: String,
 }
 
@@ -319,8 +319,8 @@ impl MembershipAuditRecord {
         self.policy_version
     }
 
-    /// Returns the stable outcome.
-    pub const fn outcome(&self) -> MembershipAuditOutcome {
+    /// Returns the stable audit status.
+    pub const fn outcome(&self) -> MembershipAuditStatus {
         self.outcome
     }
 
@@ -340,16 +340,16 @@ pub enum MembershipChangeDisposition {
     Replayed,
 }
 
-/// Verified result of one authorized membership operation.
+/// Verified report of one authorized membership operation.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
-pub struct MembershipChangeOutcome {
+pub struct MembershipChangeReport {
     disposition: MembershipChangeDisposition,
     membership: ConsensusMembership,
     audit: MembershipAuditRecord,
 }
 
-impl MembershipChangeOutcome {
+impl MembershipChangeReport {
     /// Returns whether the operation was applied or replayed.
     pub const fn disposition(&self) -> MembershipChangeDisposition {
         self.disposition

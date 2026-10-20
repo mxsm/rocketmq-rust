@@ -78,7 +78,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                 .inner
                 .fetch_all_topic_list()
                 .await
-                .map_err(|error| backend_error("fetch_all_topic_list", error))?;
+                .map_err(|source| promote_to_admin_error("fetch_all_topic_list", source))?;
             let mut items = Vec::with_capacity(topic_list.topic_list.len());
             for topic in topic_list.topic_list {
                 let topic = topic.to_string();
@@ -103,7 +103,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                 .inner
                 .examine_topic_route_info(CheetahString::from(topic))
                 .await
-                .map_err(|error| backend_error("examine_topic_route_info", error))?
+                .map_err(|source| promote_to_admin_error("examine_topic_route_info", source))?
                 .ok_or_else(|| AdminError::topic_not_found(topic))?;
             Ok(map_topic_route(topic, &route))
         })
@@ -116,7 +116,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                 .inner
                 .examine_topic_stats(CheetahString::from(topic), None)
                 .await
-                .map_err(|error| backend_error("examine_topic_stats", error))?;
+                .map_err(|source| promote_to_admin_error("examine_topic_stats", source))?;
             Ok(map_topic_stats(topic, &stats))
         })
     }
@@ -131,7 +131,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
             let mut target_addrs = HashSet::new();
             let mut target_broker_names = HashSet::new();
             for cluster_name in &request.cluster_name_list {
@@ -172,14 +172,14 @@ impl dashboard::DashboardAdmin for AdminSession {
                 self.inner
                     .create_and_update_topic_config(broker_addr.clone(), topic_config.clone())
                     .await
-                    .map_err(|error| backend_error("create_and_update_topic_config", error))?;
+                    .map_err(|source| promote_to_admin_error("create_and_update_topic_config", source))?;
             }
             if request.order {
                 let order_conf = build_order_conf(&target_broker_names, topic_config.write_queue_nums);
                 self.inner
                     .create_or_update_order_conf(request.topic.as_str().into(), order_conf.into(), true)
                     .await
-                    .map_err(|error| backend_error("create_or_update_order_conf", error))?;
+                    .map_err(|source| promote_to_admin_error("create_or_update_order_conf", source))?;
             }
             Ok(dashboard::AdminMutationResult {
                 message: format!(
@@ -199,7 +199,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                 .inner
                 .examine_topic_route_info(CheetahString::from(topic))
                 .await
-                .map_err(|error| backend_error("examine_topic_route_info", error))?
+                .map_err(|source| promote_to_admin_error("examine_topic_route_info", source))?
                 .ok_or_else(|| AdminError::topic_not_found(topic))?;
             let mut clusters = route
                 .broker_datas
@@ -214,7 +214,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                 self.inner
                     .delete_topic(topic.into(), cluster_name.as_str().into())
                     .await
-                    .map_err(|error| backend_error("delete_topic", error))?;
+                    .map_err(|source| promote_to_admin_error("delete_topic", source))?;
             }
             Ok(dashboard::AdminMutationResult {
                 message: format!("Topic `{topic}` was deleted from {} cluster(s)", clusters.len()),
@@ -291,7 +291,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                 .inner
                 .examine_consume_stats(CheetahString::from(group), None, None, None, None)
                 .await
-                .map_err(|error| backend_error("examine_consume_stats", error))?;
+                .map_err(|source| promote_to_admin_error("examine_consume_stats", source))?;
             Ok(map_consumer_progress(group, &stats))
         })
     }
@@ -312,7 +312,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                     request.force,
                 )
                 .await
-                .map_err(|error| backend_error("reset_offset_by_timestamp", error))?;
+                .map_err(|source| promote_to_admin_error("reset_offset_by_timestamp", source))?;
             Ok(dashboard::AdminMutationResult {
                 message: format!(
                     "Consumer group `{}` offset was reset for {} queue(s)",
@@ -344,7 +344,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
             let targets = authoritative_consumer_broker_targets(&cluster_info)?;
             let mut items = Vec::new();
             for (broker_name, broker_addr) in targets {
@@ -352,7 +352,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                     .inner
                     .get_all_subscription_group(CheetahString::from(broker_addr.as_str()), 5_000)
                     .await
-                    .map_err(|error| backend_error("get_all_subscription_group", error))?;
+                    .map_err(|source| promote_to_admin_error("get_all_subscription_group", source))?;
                 let has_group = wrapper
                     .get_subscription_group_table()
                     .keys()
@@ -375,28 +375,22 @@ impl dashboard::DashboardAdmin for AdminSession {
     fn dashboard_list_producers(&self) -> AdminFuture<'_, Vec<dashboard::DashboardProducerInfo>> {
         Box::pin(async move {
             self.ensure_open()?;
-            let mut producer_counts: HashMap<String, usize> = HashMap::new();
-            for address in broker_addresses(&self.inner).await? {
+            let cluster_info = self
+                .inner
+                .examine_broker_cluster_info()
+                .await
+                .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
+            let mut tables = Vec::new();
+            for (address, broker_name) in broker_names_by_address(&cluster_info) {
                 if let Ok(table) = self
                     .inner
                     .get_all_producer_info(CheetahString::from(address.as_str()))
                     .await
                 {
-                    for (group, producers) in table.data() {
-                        *producer_counts.entry(group.clone()).or_default() += producers.len();
-                    }
+                    tables.push((broker_name, table));
                 }
             }
-            let mut items = producer_counts
-                .into_iter()
-                .map(|(producer_group, connection_count)| dashboard::DashboardProducerInfo {
-                    topic: String::new(),
-                    producer_group,
-                    connection_count,
-                })
-                .collect::<Vec<_>>();
-            items.sort_by(|left, right| left.producer_group.cmp(&right.producer_group));
-            Ok(items)
+            Ok(aggregate_producer_tables(&tables))
         })
     }
 
@@ -411,7 +405,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                 .inner
                 .examine_producer_connection_info(CheetahString::from(producer_group), CheetahString::from(topic))
                 .await
-                .map_err(|error| backend_error("examine_producer_connection_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_producer_connection_info", source))?;
             Ok(map_producer_connection(topic, producer_group, &connection))
         })
     }
@@ -423,7 +417,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+                .map_err(|source| promote_to_admin_error("examine_broker_cluster_info", source))?;
             let mut items = Vec::new();
             let Some(cluster_addr_table) = cluster_info.cluster_addr_table.as_ref() else {
                 return Ok(dashboard::DashboardBrokerList {
@@ -502,7 +496,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                 .inner
                 .fetch_broker_runtime_stats(CheetahString::from(address.as_str()))
                 .await
-                .map_err(|error| backend_error("fetch_broker_runtime_stats", error))?;
+                .map_err(|source| promote_to_admin_error("fetch_broker_runtime_stats", source))?;
             Ok(dashboard::DashboardBrokerRuntime {
                 broker_name: target.broker_name.clone(),
                 address,
@@ -525,7 +519,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                 .inner
                 .get_broker_config(CheetahString::from(address.as_str()))
                 .await
-                .map_err(|error| backend_error("get_broker_config", error))?
+                .map_err(|source| promote_to_admin_error("get_broker_config", source))?
                 .into_iter()
                 .map(|(key, value)| (key.to_string(), value.to_string()))
                 .collect();
@@ -555,7 +549,7 @@ impl dashboard::DashboardAdmin for AdminSession {
             self.inner
                 .update_broker_config(CheetahString::from(address.as_str()), properties)
                 .await
-                .map_err(|error| backend_error("update_broker_config", error))?;
+                .map_err(|source| promote_to_admin_error("update_broker_config", source))?;
             Ok(dashboard::AdminMutationResult {
                 message: format!("Broker `{}` config was updated at `{address}`", request.broker_name),
                 target_count: 1,
@@ -579,7 +573,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                         CheetahString::from(query.search.as_str()),
                     )
                     .await
-                    .map_err(|error| backend_error("list_users", error))?;
+                    .map_err(|source| promote_to_admin_error("list_users", source))?;
                 users.extend(user_infos.iter().map(|user| map_acl_user(&target, user)));
             }
             users.sort_by(|left, right| {
@@ -609,7 +603,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                         request.user_type.as_str().into(),
                     )
                     .await
-                    .map_err(|error| backend_error("create_user", error))?;
+                    .map_err(|source| promote_to_admin_error("create_user", source))?;
             }
             Ok(dashboard::AdminMutationResult {
                 message: format!(
@@ -640,7 +634,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                         user_status.into(),
                     )
                     .await
-                    .map_err(|error| backend_error("update_user", error))?;
+                    .map_err(|source| promote_to_admin_error("update_user", source))?;
             }
             Ok(dashboard::AdminMutationResult {
                 message: format!(
@@ -665,7 +659,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                 self.inner
                     .delete_user(target.broker_addr.as_str().into(), username.into())
                     .await
-                    .map_err(|error| backend_error("delete_user", error))?;
+                    .map_err(|source| promote_to_admin_error("delete_user", source))?;
             }
             Ok(dashboard::AdminMutationResult {
                 message: format!("Deleted ACL user {username} from {target_count} broker target(s)"),
@@ -691,7 +685,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                         CheetahString::default(),
                     )
                     .await
-                    .map_err(|error| backend_error("list_acl", error))?;
+                    .map_err(|source| promote_to_admin_error("list_acl", source))?;
                 let resource_matches = if query.resource.is_empty() && query.search.is_empty() {
                     Vec::new()
                 } else {
@@ -706,7 +700,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                             },
                         )
                         .await
-                        .map_err(|error| backend_error("list_acl", error))?
+                        .map_err(|source| promote_to_admin_error("list_acl", source))?
                 };
                 let mut all = subject_matches;
                 all.extend(resource_matches);
@@ -741,7 +735,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                 self.inner
                     .create_acl_with_acl_info(target.broker_addr.as_str().into(), acl_info.clone())
                     .await
-                    .map_err(|error| backend_error("create_acl", error))?;
+                    .map_err(|source| promote_to_admin_error("create_acl", source))?;
             }
             Ok(dashboard::AdminMutationResult {
                 message: format!(
@@ -766,7 +760,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                 self.inner
                     .update_acl_with_acl_info(target.broker_addr.as_str().into(), acl_info.clone())
                     .await
-                    .map_err(|error| backend_error("update_acl", error))?;
+                    .map_err(|source| promote_to_admin_error("update_acl", source))?;
             }
             Ok(dashboard::AdminMutationResult {
                 message: format!(
@@ -792,7 +786,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                 self.inner
                     .delete_acl(target.broker_addr.as_str().into(), subject.into(), resource.into())
                     .await
-                    .map_err(|error| backend_error("delete_acl", error))?;
+                    .map_err(|source| promote_to_admin_error("delete_acl", source))?;
             }
             Ok(dashboard::AdminMutationResult {
                 message: format!("Deleted ACL subject {subject} from {target_count} broker target(s)"),
@@ -819,7 +813,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                         request.resource.as_str().into(),
                     )
                     .await
-                    .map_err(|error| backend_error("delete_acl_entry", error))?;
+                    .map_err(|source| promote_to_admin_error("delete_acl_entry", source))?;
             }
             Ok(dashboard::AdminMutationResult {
                 message: "ACL policy entry deleted.".into(),
@@ -863,7 +857,7 @@ fn authoritative_consumer_broker_targets(
     cluster_info: &ClusterInfo,
 ) -> crate::core::AdminResult<Vec<(String, CheetahString)>> {
     let Some(broker_table) = cluster_info.broker_addr_table.as_ref() else {
-        return Err(AdminError::backend(
+        return Err(AdminError::operation_failed(
             "examine_broker_cluster_info",
             "Broker cluster metadata is unavailable.",
         ));
@@ -878,7 +872,7 @@ fn authoritative_consumer_broker_targets(
         })
         .collect::<Vec<_>>();
     if targets.is_empty() {
-        return Err(AdminError::backend(
+        return Err(AdminError::operation_failed(
             "examine_broker_cluster_info",
             "No master broker targets are available.",
         ));
@@ -887,8 +881,11 @@ fn authoritative_consumer_broker_targets(
     Ok(targets)
 }
 
-fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
-    AdminError::from_error(operation, error.into_canonical_error())
+/// Promotes a failure while preserving canonical metadata and typed sources.
+///
+/// The operation name labels the Admin error without replacing canonical context.
+fn promote_to_admin_error(operation_name: &'static str, source: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation_name, source.into_canonical_error())
 }
 
 #[cfg(test)]

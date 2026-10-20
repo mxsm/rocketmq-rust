@@ -71,6 +71,10 @@ Use it as a workspace dependency:
 rocketmq-tieredstore = { path = "../rocketmq-tieredstore" }
 ```
 
+Configuration migration: rename `tieredStoreConfig.backendProvider` to
+`tieredStoreConfig.storageProviderId`. The old key is ignored, leaving the default
+`"posix"` provider unless the new key is set.
+
 Create a store with the in-memory provider, dispatch one message, drain the
 dispatcher on shutdown, and fetch the message by queue offset:
 
@@ -86,7 +90,7 @@ async fn example(parent_task_group: TaskGroup) -> Result<(), StoreError> {
     let Some(store) = TieredStore::new(
         TieredStoreConfig {
             storage_level: TieredStorageLevel::Force,
-            backend_provider: "memory".to_owned(),
+            storage_provider_id: "memory".to_owned(),
             max_pending_tasks: 16,
             ..TieredStoreConfig::default()
         },
@@ -147,7 +151,7 @@ use rocketmq_tieredstore::{TieredStorageLevel, TieredStore, TieredStoreConfig};
 let Some(store) = TieredStore::new(
     TieredStoreConfig {
         storage_level: TieredStorageLevel::Force,
-        backend_provider: "posix".to_owned(),
+        storage_provider_id: "posix".to_owned(),
         store_path_root_dir: "./store/tieredstore".into(),
         ..TieredStoreConfig::default()
     },
@@ -208,6 +212,24 @@ requests.
 | Metadata | `TieredMetadataStore`, `JsonMetadataStore`, `TopicMetadata`, `TopicQueueMetadata`, `FileSegmentMetadata` |
 | Providers | `TieredStoreProvider`, `ProviderKind`, `PosixProvider`, `MemoryProvider` |
 | Services | `CommitLogRecoverService`, `TieredRecoverResult`, cleanup service set |
+
+FileSegment API migration: the `FileSegment` trait is now declared directly with
+`#[trait_variant::make(Send)]`, and the previously generated source trait
+`rocketmq_tieredstore::file::file_segment::FileSegmentInner` has been removed. Replace
+any import, implementation, or generic-bound reference to `FileSegmentInner` with the
+canonical `rocketmq_tieredstore::FileSegment`. The retained trait requires the
+implementing type and its asynchronous futures to be `Send`; an implementation that
+relied on a non-`Send` future must be adapted, because an alias for the old name would
+not preserve that contract.
+
+### Provider API migration (unreleased)
+
+`rocketmq_tieredstore::provider::TieredStoreProviderInner` is removed.
+Replace it in imports, `impl` headers, and generic bounds with
+`rocketmq_tieredstore::TieredStoreProvider`. This breaks source compatibility: the
+retained trait requires implementations and returned futures to be `Send`.
+Non-`Send` implementations or futures must be adapted; an alias would not preserve
+the old contract. The existing `Sync + Clone + 'static` bounds remain in place.
 
 ## Data Model
 

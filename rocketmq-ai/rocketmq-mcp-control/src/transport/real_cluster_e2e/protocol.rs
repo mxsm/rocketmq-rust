@@ -70,6 +70,8 @@ pub(super) struct GeneratedTlsMaterial {
 pub(super) struct StaticJwks;
 
 impl JwksSource for StaticJwks {
+    type Error = AuthError;
+
     async fn fetch(&self) -> Result<Vec<u8>, AuthError> {
         serde_json::to_vec(&serde_json::json!({"keys": [{
             "kty": "RSA",

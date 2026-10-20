@@ -23,6 +23,11 @@ target/
 **/Gemfile.lock
 **/vendor/bundle
 
+# Python bytecode caches
+__pycache__/
+*.pyc
+*.pyo
+
 # Node.js and NPM
 node_modules
 npm-debug.log*
@@ -68,3 +73,6 @@ docs
 !rocketmq-ai/rocketmq-mcp-control/docs/**
 !rocketmq-dashboard/rocketmq-dashboard-web/docs/
 !rocketmq-dashboard/rocketmq-dashboard-web/docs/**
+
+# pycache
+**/__pycache__/

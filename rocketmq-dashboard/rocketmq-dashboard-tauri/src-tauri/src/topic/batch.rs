@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_admin_core::core::topic::{TopicBatchOrderConfigOutcome, TopicBatchTargetOutcome};
+use rocketmq_admin_core::core::topic::{TopicBatchTargetResult, TopicOrderConfigMutationResult};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -62,8 +62,8 @@ pub(crate) fn project_batch(
     operation: TopicBatchOperation,
     topic: String,
     kind: TopicTargetKind,
-    targets: Vec<TopicBatchTargetOutcome>,
-    order_config: Option<TopicBatchOrderConfigOutcome>,
+    targets: Vec<TopicBatchTargetResult>,
+    order_config: Option<TopicOrderConfigMutationResult>,
 ) -> TopicBatchResult {
     let order_required = operation != TopicBatchOperation::DeleteBroker;
     let success = !targets.is_empty()
@@ -113,7 +113,7 @@ mod tests {
     use super::*;
     #[test]
     fn partial_targets_and_order_failure_remain_visible_without_raw_error_details() {
-        let target = |name: &str, success| TopicBatchTargetOutcome {
+        let target = |name: &str, success| TopicBatchTargetResult {
             broker_name: name.into(),
             success,
             message: "password=secret path=C:/private".into(),
@@ -123,7 +123,7 @@ mod tests {
             "orders".into(),
             TopicTargetKind::Broker,
             vec![target("broker-a", true), target("broker-b", false)],
-            Some(TopicBatchOrderConfigOutcome {
+            Some(TopicOrderConfigMutationResult {
                 success: false,
                 message: "credential=secret".into(),
             }),
@@ -138,7 +138,7 @@ mod tests {
             "orders".into(),
             TopicTargetKind::Broker,
             vec![target("broker-a", true)],
-            Some(TopicBatchOrderConfigOutcome {
+            Some(TopicOrderConfigMutationResult {
                 success: true,
                 message: String::new(),
             }),
@@ -150,7 +150,7 @@ mod tests {
             "orders".into(),
             TopicTargetKind::Broker,
             vec![target("broker-a", true)],
-            Some(TopicBatchOrderConfigOutcome {
+            Some(TopicOrderConfigMutationResult {
                 success: false,
                 message: "secret".into(),
             }),

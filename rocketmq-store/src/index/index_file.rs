@@ -30,12 +30,12 @@ use rocketmq_store_local::index::file::drive_index_put;
 use rocketmq_store_local::index::file::is_index_time_matched;
 use rocketmq_store_local::index::file::normalize_index_key_hash;
 use rocketmq_store_local::index::file::query_index_offsets;
+use rocketmq_store_local::index::file::IndexEntryWriteResult;
 use rocketmq_store_local::index::file::IndexFileSnapshot;
 use rocketmq_store_local::index::file::IndexHeaderUpdate;
-use rocketmq_store_local::index::file::IndexPutOutcome;
 #[cfg(test)]
 use rocketmq_store_local::mapped_file::MappedFileAdmissionState;
-use rocketmq_store_local::mapped_file::MappedFileDestroyOutcome;
+use rocketmq_store_local::mapped_file::MappedFileRemovalStatus;
 use tracing::info;
 use tracing::warn;
 
@@ -268,7 +268,7 @@ impl IndexFile {
     }
 
     #[inline]
-    pub fn try_destroy(&self, interval_forcibly: u64) -> MappedFileDestroyOutcome {
+    pub fn try_destroy(&self, interval_forcibly: u64) -> MappedFileRemovalStatus {
         self.try_destroy_with_callbacks(interval_forcibly, || {}, || {})
     }
 
@@ -325,7 +325,7 @@ impl IndexFile {
             |update| header_updates.push(update),
         );
         match outcome {
-            IndexPutOutcome::Written => {
+            IndexEntryWriteResult::Written => {
                 if !writes_succeeded.get() {
                     warn!(file_name = %self.get_file_name(), "failed to write index entry");
                     return false;
@@ -336,7 +336,7 @@ impl IndexFile {
                 }
                 true
             }
-            IndexPutOutcome::Full => {
+            IndexEntryWriteResult::Full => {
                 warn!(
                     "Over index file capacity: index count = {}; index max num = {}",
                     self.index_header.get_index_count(),
@@ -344,11 +344,11 @@ impl IndexFile {
                 );
                 false
             }
-            IndexPutOutcome::SlotUnavailable => {
+            IndexEntryWriteResult::SlotUnavailable => {
                 warn!("Index hash slot is outside the mapped file");
                 false
             }
-            IndexPutOutcome::LayoutOverflow => {
+            IndexEntryWriteResult::LayoutOverflow => {
                 warn!("Index file layout position overflow");
                 false
             }
@@ -441,7 +441,7 @@ impl IndexFile {
         interval_forcibly: u64,
         before_wait: BeforeWait,
         on_closing: OnClosing,
-    ) -> MappedFileDestroyOutcome
+    ) -> MappedFileRemovalStatus
     where
         BeforeWait: FnOnce(),
         OnClosing: FnOnce(),
@@ -454,7 +454,7 @@ impl IndexFile {
     }
 
     fn closing_error() -> StoreError {
-        StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Flush)
+        StoreError::new(&rocketmq_error::STORAGE_UNAVAILABLE, StoreOperation::Flush)
             .in_component(StoreComponent::MappedFile)
     }
 }

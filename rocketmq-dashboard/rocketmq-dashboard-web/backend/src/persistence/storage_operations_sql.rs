@@ -28,9 +28,9 @@ use crate::model::DashboardEnvironment;
 use crate::model::EnvironmentId;
 use crate::model::MetricSample;
 use crate::model::SessionTokenHash;
-use crate::model::StorageBackend;
+use crate::model::StorageEngine;
 use crate::persistence::error::PersistenceError;
-use crate::persistence::sql_store::SqlPersistence;
+use crate::persistence::sql_store::SqlDashboardStore;
 use serde_json::Value;
 use sqlx::Database;
 use sqlx::MySqlConnection;
@@ -75,7 +75,7 @@ macro_rules! finish_write_transaction {
     }};
 }
 
-impl SqlPersistence {
+impl SqlDashboardStore {
     pub(crate) async fn snapshot_for_operations(&self) -> Result<BackupData, PersistenceError> {
         if let Some(pool) = self.sqlite_pool() {
             return snapshot_sqlite(pool).await;
@@ -186,9 +186,9 @@ where
     usize: sqlx::ColumnIndex<R>,
 {
     let mut data = BackupData::with_backend(match R::Database::NAME {
-        "SQLite" => StorageBackend::Sqlite,
-        "MySQL" => StorageBackend::MySql,
-        "PostgreSQL" => StorageBackend::Postgres,
+        "SQLite" => StorageEngine::Sqlite,
+        "MySQL" => StorageEngine::MySql,
+        "PostgreSQL" => StorageEngine::Postgres,
         _ => return Err(PersistenceError::ConnectionUnavailable),
     });
     for row in environments {

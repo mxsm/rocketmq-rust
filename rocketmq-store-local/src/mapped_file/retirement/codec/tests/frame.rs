@@ -21,7 +21,8 @@ use super::COMPLETED_FRAME;
 fn unknown_noncritical_extended_header_uses_its_actual_payload_offset() {
     let payload = [9, 8, 7];
     let encoded = encode_unknown_noncritical(&[0xa5; 8], &payload, 100, 2);
-    let DecodeOutcome::Frame(frame) = decode_next_frame(&encoded, 100, 2).expect("bounded extended header decodes")
+    let LedgerFrameDecodeResult::Frame(frame) =
+        decode_next_frame(&encoded, 100, 2).expect("bounded extended header decodes")
     else {
         panic!("complete extended frame must decode");
     };
@@ -36,7 +37,8 @@ fn unknown_noncritical_extended_header_uses_its_actual_payload_offset() {
         4,
     );
     assert_eq!(maximum.len(), MAX_FRAME_LENGTH);
-    let DecodeOutcome::Frame(maximum_frame) = decode_next_frame(&maximum, 9, 4).expect("maximum bounded frame decodes")
+    let LedgerFrameDecodeResult::Frame(maximum_frame) =
+        decode_next_frame(&maximum, 9, 4).expect("maximum bounded frame decodes")
     else {
         panic!("maximum frame must be complete");
     };
@@ -77,7 +79,7 @@ fn every_golden_cut_is_partial_but_impossible_partial_fields_are_corruption() {
         assert!(
             matches!(
                 outcome,
-                Ok(DecodeOutcome::TrailingPartial(TrailingPartial { available, .. }))
+                Ok(LedgerFrameDecodeResult::TrailingPartial(TrailingPartial { available, .. }))
                     if available == length
             ),
             "length={length}, outcome={outcome:?}"
@@ -349,7 +351,7 @@ fn unknown_noncritical_partial_payload_remains_generically_extensible() {
         assert!(
             matches!(
                 decode_next_frame(&unknown[..cut], 100, 2),
-                Ok(DecodeOutcome::TrailingPartial(_))
+                Ok(LedgerFrameDecodeResult::TrailingPartial(_))
             ),
             "cut={cut}",
         );
@@ -357,7 +359,7 @@ fn unknown_noncritical_partial_payload_remains_generically_extensible() {
 
     assert!(matches!(
         decode_next_frame(&unknown[..MIN_HEADER_LENGTH + 1], 100, 2),
-        Ok(DecodeOutcome::TrailingPartial(TrailingPartial {
+        Ok(LedgerFrameDecodeResult::TrailingPartial(TrailingPartial {
             available: 41,
             required: 47,
         }))
@@ -420,7 +422,7 @@ fn record_type_version_flags_and_sequence_fail_closed() {
         &COMPLETED_FRAME[MIN_HEADER_LENGTH..COMPLETED_FRAME.len() - 4],
     )
     .expect("the final sequence itself remains encodable");
-    let DecodeOutcome::Frame(frame) =
+    let LedgerFrameDecodeResult::Frame(frame) =
         decode_next_frame(&maximum_sequence, u64::MAX, 2).expect("maximum sequence decodes")
     else {
         panic!("maximum sequence frame must be complete");

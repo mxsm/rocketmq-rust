@@ -374,3 +374,98 @@ impl Display for TopicConfig {
         )
     }
 }
+
+#[cfg(test)]
+mod topic_message_type_tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    /// A precedence case: a description, the marker properties to classify, and the
+    /// expected message type.
+    type PrecedenceCase = (&'static str, &'static [(&'static str, &'static str)], TopicMessageType);
+
+    fn props(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn parse_from_message_property_marker_precedence() {
+        // Each row carries every lower-precedence marker alongside the winning one, so it
+        // asserts which marker wins a tie rather than merely that a lone marker maps through.
+        let cases: &[PrecedenceCase] = &[
+            (
+                "TRAN_MSG=true outranks delay and sharding markers",
+                &[("TRAN_MSG", "true"), ("DELAY", "1"), ("__SHARDINGKEY", "k")],
+                TopicMessageType::Transaction,
+            ),
+            (
+                "a delay marker outranks sharding/priority/lite; TRAN_MSG=false does not force Transaction",
+                &[
+                    ("TRAN_MSG", "false"),
+                    ("DELAY", "3"),
+                    ("__SHARDINGKEY", "k"),
+                    ("_SYS_MSG_PRIORITY_", "5"),
+                    ("__LITE_TOPIC", "1"),
+                ],
+                TopicMessageType::Delay,
+            ),
+            (
+                "__SHARDINGKEY outranks priority and lite",
+                &[
+                    ("__SHARDINGKEY", "k"),
+                    ("_SYS_MSG_PRIORITY_", "5"),
+                    ("__LITE_TOPIC", "1"),
+                ],
+                TopicMessageType::Fifo,
+            ),
+            (
+                "_SYS_MSG_PRIORITY_ outranks lite",
+                &[("_SYS_MSG_PRIORITY_", "5"), ("__LITE_TOPIC", "1")],
+                TopicMessageType::Priority,
+            ),
+            (
+                "__LITE_TOPIC alone selects Lite",
+                &[("__LITE_TOPIC", "1")],
+                TopicMessageType::Lite,
+            ),
+            (
+                "TRAN_MSG=false with no other marker selects Normal",
+                &[("TRAN_MSG", "false")],
+                TopicMessageType::Normal,
+            ),
+            ("an empty property map selects Normal", &[], TopicMessageType::Normal),
+        ];
+
+        for (desc, pairs, expected) in cases {
+            let got = TopicMessageType::parse_from_message_property(&props(pairs));
+            assert_eq!(got, *expected, "{desc}");
+        }
+    }
+
+    #[test]
+    fn parse_from_message_property_treats_every_timer_key_as_delay() {
+        for key in ["DELAY", "TIMER_DELIVER_MS", "TIMER_DELAY_SEC", "TIMER_DELAY_MS"] {
+            let got = TopicMessageType::parse_from_message_property(&props(&[(key, "1")]));
+            assert_eq!(got, TopicMessageType::Delay, "{key} should select Delay");
+        }
+    }
+
+    #[test]
+    fn parse_from_message_property_tran_msg_true_is_case_insensitive() {
+        for value in ["true", "TRUE", "TrUe"] {
+            let got = TopicMessageType::parse_from_message_property(&props(&[("TRAN_MSG", value)]));
+            assert_eq!(
+                got,
+                TopicMessageType::Transaction,
+                "TRAN_MSG={value} should select Transaction"
+            );
+        }
+        // A TRAN_MSG value other than a case-insensitive "true" must not be read as Transaction.
+        let got = TopicMessageType::parse_from_message_property(&props(&[("TRAN_MSG", "1")]));
+        assert_eq!(got, TopicMessageType::Normal, "TRAN_MSG=1 is not Transaction");
+    }
+}

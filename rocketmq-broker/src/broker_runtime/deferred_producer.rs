@@ -27,7 +27,7 @@ use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskId;
 use rocketmq_runtime::TaskKind;
 use rocketmq_store::BrokerReadWriteStore;
-use rocketmq_transport::api::DeferredClaimOutcome;
+use rocketmq_transport::api::DeferredClaimResult;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
 use rocketmq_transport::api::DeferredWakeReason;
 use tracing::warn;
@@ -37,14 +37,14 @@ use crate::deferred_generation_handoff::RoutePermit;
 use crate::lite::lite_event_dispatcher::DeferredEventObserver;
 use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
 use crate::long_polling::notification_deferred::index::NotificationArrivalView;
+use crate::long_polling::notification_deferred::service::NotificationArrivalLatchStatus;
 use crate::long_polling::notification_deferred::service::NotificationDeferredService;
-use crate::long_polling::notification_deferred::service::NotificationPendingArrivalOutcome;
-use crate::long_polling::pending_arrival_latch::PendingArrivalInsertOutcome;
+use crate::long_polling::pending_arrival_latch::PendingArrivalAdmissionStatus;
 use crate::long_polling::pop_deferred::index::PopArrivalView;
 use crate::long_polling::pop_deferred::index::PopSelectionOrder;
+use crate::long_polling::pop_deferred::service::PopArrivalLatchStatus;
 use crate::long_polling::pop_deferred::service::PopDeferredService;
 use crate::long_polling::pop_deferred::service::PopDeferredWakeupObserver;
-use crate::long_polling::pop_deferred::service::PopPendingArrivalOutcome;
 use crate::long_polling::pop_deferred::service::PopWakeupCompletion;
 use crate::long_polling::pop_lite_deferred::service::PopLiteDeferredService;
 use crate::long_polling::pop_lite_deferred::service::PopLiteReplayObservation;
@@ -284,8 +284,8 @@ where
             return;
         };
         match self.pull.latch_offset(topic, queue_id, logic_offset) {
-            Ok(PendingArrivalInsertOutcome::Inserted) => self.produce_pending_pull_offsets(),
-            Ok(PendingArrivalInsertOutcome::Rejected(_)) => {}
+            Ok(PendingArrivalAdmissionStatus::Accepted) => self.produce_pending_pull_offsets(),
+            Ok(PendingArrivalAdmissionStatus::Rejected(_)) => {}
             Err(error) => warn!(?error, "failed to retain deferred Pull arrival replay"),
         }
         drop(route);
@@ -313,8 +313,8 @@ where
             properties,
             self.pop.fanout_cursor(),
         ) {
-            Ok(PopPendingArrivalOutcome::Latched) => self.produce_pending_pop_arrivals(),
-            Ok(PopPendingArrivalOutcome::Rejected(_)) => {}
+            Ok(PopArrivalLatchStatus::Latched) => self.produce_pending_pop_arrivals(),
+            Ok(PopArrivalLatchStatus::Rejected(_)) => {}
             Err(error) => warn!(?error, "failed to retain deferred POP arrival replay"),
         }
     }
@@ -334,8 +334,8 @@ where
         _properties: Option<&HashMap<CheetahString, CheetahString>>,
     ) {
         match self.pop.latch_offset(topic, queue_id, logic_offset) {
-            Ok(PendingArrivalInsertOutcome::Inserted) => self.produce_pending_pop_offsets(),
-            Ok(PendingArrivalInsertOutcome::Rejected(_)) => {}
+            Ok(PendingArrivalAdmissionStatus::Accepted) => self.produce_pending_pop_offsets(),
+            Ok(PendingArrivalAdmissionStatus::Rejected(_)) => {}
             Err(error) => warn!(?error, "failed to retain deferred POP offset replay"),
         }
     }
@@ -363,8 +363,8 @@ where
             .notification
             .latch_arrival(arrival, self.notification.arrival_cursor(arrival))
         {
-            Ok(NotificationPendingArrivalOutcome::Latched) => self.produce_pending_notification_arrivals(),
-            Ok(NotificationPendingArrivalOutcome::Rejected(_)) => {}
+            Ok(NotificationArrivalLatchStatus::Latched) => self.produce_pending_notification_arrivals(),
+            Ok(NotificationArrivalLatchStatus::Rejected(_)) => {}
             Err(error) => warn!(?error, "failed to retain deferred Notification arrival replay"),
         }
     }
@@ -384,8 +384,8 @@ where
         _properties: Option<&HashMap<CheetahString, CheetahString>>,
     ) {
         match self.notification.latch_offset(topic, queue_id, logic_offset) {
-            Ok(PendingArrivalInsertOutcome::Inserted) => self.produce_pending_notification_offsets(),
-            Ok(PendingArrivalInsertOutcome::Rejected(_)) => {}
+            Ok(PendingArrivalAdmissionStatus::Accepted) => self.produce_pending_notification_offsets(),
+            Ok(PendingArrivalAdmissionStatus::Rejected(_)) => {}
             Err(error) => warn!(?error, "failed to retain deferred Notification offset replay"),
         }
     }
@@ -456,10 +456,10 @@ where
                 .pull
                 .latch_max_offset_range(key.topic(), key.queue_id(), max_offset)
             {
-                Ok(PendingArrivalInsertOutcome::Inserted) => {
+                Ok(PendingArrivalAdmissionStatus::Accepted) => {
                     self.produce_pending_pull_offsets();
                 }
-                Ok(PendingArrivalInsertOutcome::Rejected(_)) => {}
+                Ok(PendingArrivalAdmissionStatus::Rejected(_)) => {}
                 Err(error) => warn!(?error, "failed to retain deferred Pull short-poll replay"),
             }
         }
@@ -551,7 +551,7 @@ where
             .task_group
             .spawn("broker.deferred.pull-arrival", TaskKind::Worker, async move {
                 let _route = route;
-                if let Ok(DeferredClaimOutcome::Claimed(claimed)) = service.claim_candidate(candidate, reason).await {
+                if let Ok(DeferredClaimResult::Claimed(claimed)) = service.claim_candidate(candidate, reason).await {
                     submit_pull(service, processor, claimed);
                 }
             });
@@ -572,7 +572,7 @@ where
             .task_group
             .spawn("broker.deferred.pop-arrival", TaskKind::Worker, async move {
                 let _route = route;
-                if let Ok(DeferredClaimOutcome::Claimed(claimed)) = service.claim_candidate(candidate, reason).await {
+                if let Ok(DeferredClaimResult::Claimed(claimed)) = service.claim_candidate(candidate, reason).await {
                     submit_pop(service, processor, claimed);
                 }
             });
@@ -594,7 +594,7 @@ where
             .spawn("broker.deferred.pop-lag", TaskKind::Worker, async move {
                 let _route = route;
                 match service.claim_forced_candidate(candidate).await {
-                    Ok(DeferredClaimOutcome::Claimed(claimed)) => {
+                    Ok(DeferredClaimResult::Claimed(claimed)) => {
                         let Some(processor) = processor.upgrade() else {
                             drop(observer);
                             return;
@@ -627,7 +627,7 @@ where
             .task_group
             .spawn("broker.deferred.notification-arrival", TaskKind::Worker, async move {
                 let _route = route;
-                if let Ok(DeferredClaimOutcome::Claimed(claimed)) = service.claim_arrival_candidate(candidate).await {
+                if let Ok(DeferredClaimResult::Claimed(claimed)) = service.claim_arrival_candidate(candidate).await {
                     submit_notification(service, processor, claimed);
                 }
             });

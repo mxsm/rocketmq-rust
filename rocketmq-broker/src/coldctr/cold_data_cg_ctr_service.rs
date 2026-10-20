@@ -30,7 +30,7 @@ const DEFAULT_SHORT_SUSPEND_CAPACITY: usize = 1_024;
 const DEFAULT_SHORT_SUSPEND_DURATION: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ColdDataShortSuspendOutcome {
+pub(crate) enum ColdReadThrottleStatus {
     Suspended,
     QueueFull,
 }
@@ -120,12 +120,12 @@ impl ColdDataCgCtrService {
         }
     }
 
-    pub(crate) async fn short_suspend_active_read(&self) -> ColdDataShortSuspendOutcome {
+    pub(crate) async fn short_suspend_active_read(&self) -> ColdReadThrottleStatus {
         let Ok(_permit) = self.short_suspend_slots.try_acquire() else {
-            return ColdDataShortSuspendOutcome::QueueFull;
+            return ColdReadThrottleStatus::QueueFull;
         };
         let _ = tokio::time::timeout(self.short_suspend_duration, std::future::pending::<()>()).await;
-        ColdDataShortSuspendOutcome::Suspended
+        ColdReadThrottleStatus::Suspended
     }
 
     /// Check if a consumer group needs cold data flow control
@@ -250,20 +250,20 @@ mod tests {
     use std::time::Duration;
 
     use super::ColdDataCgCtrService;
-    use super::ColdDataShortSuspendOutcome;
+    use super::ColdReadThrottleStatus;
 
     #[tokio::test]
     async fn active_cold_read_short_suspend_is_bounded_and_queue_full_fails_fast() {
         let service = ColdDataCgCtrService::with_short_suspend_limits(true, 1, Duration::ZERO);
         assert_eq!(
             service.short_suspend_active_read().await,
-            ColdDataShortSuspendOutcome::Suspended
+            ColdReadThrottleStatus::Suspended
         );
 
         let full = ColdDataCgCtrService::with_short_suspend_limits(true, 0, Duration::from_secs(1));
         assert_eq!(
             full.short_suspend_active_read().await,
-            ColdDataShortSuspendOutcome::QueueFull
+            ColdReadThrottleStatus::QueueFull
         );
     }
 

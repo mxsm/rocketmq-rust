@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_transport::api::DeferredClaimOutcome;
+use rocketmq_transport::api::DeferredClaimResult;
 
 use super::*;
 
@@ -80,10 +80,10 @@ fn index_and_wait_admission_reject_before_responder_transfer_and_release_every_r
         )
         .expect("first index reservation")
     {
-        PopDeferredPrepareOutcome::Prepared(prepared) => prepared,
-        PopDeferredPrepareOutcome::Rejected(_) => panic!("first request must be prepared"),
+        PopDeferredPreparationStatus::Prepared(prepared) => prepared,
+        PopDeferredPreparationStatus::Rejected(_) => panic!("first request must be prepared"),
     };
-    let Ok(PopDeferredPrepareOutcome::Rejected(index_rejection)) = index_limited.prepare_at(
+    let Ok(PopDeferredPreparationStatus::Rejected(index_rejection)) = index_limited.prepare_at(
         preflight_test_data("TopicB", "127.0.0.1:2"),
         None,
         None,
@@ -110,10 +110,10 @@ fn index_and_wait_admission_reject_before_responder_transfer_and_release_every_r
         )
         .expect("first wait permit")
     {
-        PopDeferredPrepareOutcome::Prepared(prepared) => prepared,
-        PopDeferredPrepareOutcome::Rejected(_) => panic!("first request must be prepared"),
+        PopDeferredPreparationStatus::Prepared(prepared) => prepared,
+        PopDeferredPreparationStatus::Rejected(_) => panic!("first request must be prepared"),
     };
-    let Ok(PopDeferredPrepareOutcome::Rejected(admission_rejection)) = admission_limited.prepare_at(
+    let Ok(PopDeferredPreparationStatus::Rejected(admission_rejection)) = admission_limited.prepare_at(
         preflight_test_data("TopicB", "127.0.0.1:4"),
         None,
         None,
@@ -163,7 +163,7 @@ async fn dropped_registration_rolls_back_registry_index_lease_and_wait_permit() 
         .claim(rolled_back.id, DeferredWakeReason::MessageArrived)
         .await
         .expect("rolled-back identity is a normal lifecycle outcome");
-    assert!(matches!(claim, DeferredClaimOutcome::NotFound));
+    assert!(matches!(claim, DeferredClaimResult::NotFound));
     running.finish().await;
 }
 
@@ -191,7 +191,7 @@ async fn shutdown_between_registration_and_dispatch_commit_cleans_every_owner() 
 
     assert!(matches!(
         service.shutdown(),
-        rocketmq_transport::api::DeferredRegistryShutdownOutcome::Completed(_)
+        rocketmq_transport::api::DeferredRegistryShutdownStatus::Completed(_)
     ));
     assert_released(&service);
     barrier.release_outcome.notify_one();
@@ -228,10 +228,10 @@ async fn shutdown_terminalizes_active_waiter_emits_no_frame_and_cannot_reopen() 
     let outcome = service.shutdown();
     assert!(matches!(
         outcome,
-        rocketmq_transport::api::DeferredRegistryShutdownOutcome::Completed(_)
+        rocketmq_transport::api::DeferredRegistryShutdownStatus::Completed(_)
     ));
     assert_released(&service);
-    let Ok(PopDeferredPrepareOutcome::Rejected(reopen)) = service.prepare_at(
+    let Ok(PopDeferredPreparationStatus::Rejected(reopen)) = service.prepare_at(
         preflight_test_data("TopicB", "127.0.0.1:5"),
         None,
         None,

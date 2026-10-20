@@ -27,6 +27,7 @@ use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ShutdownReport;
@@ -34,8 +35,8 @@ use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 
 use crate::config::TieredStoreConfig;
-use crate::dispatcher::progress::FailureRecordOutcome;
 use crate::dispatcher::progress::RecordDisposition;
+use crate::dispatcher::progress::RetryLedgerRecordResult;
 use crate::dispatcher::progress::TieredProgressTracker;
 use crate::dispatcher::TieredDispatchRequest;
 use crate::file::ConsumeQueueUnit;
@@ -130,7 +131,11 @@ where
             .min(u32::MAX as usize) as u32;
         let pending_bytes = Arc::new(Semaphore::new(pending_byte_capacity as usize));
         let progress_health = Arc::new(RwLock::new(TieredDispatchHealth::initial()));
-        let progress = Arc::new(TieredProgressTracker::new(&config, progress_health.clone()));
+        let progress = Arc::new(TieredProgressTracker::new(
+            &config,
+            progress_health.clone(),
+            parent_task_group.clone(),
+        ));
         Self {
             config,
             flat_file_store,
@@ -189,6 +194,12 @@ where
     }
 
     pub async fn shutdown_with_report(&self) -> Result<ShutdownReport, StoreError> {
+        let result = self.stop_tasks().await;
+        self.progress.drain_pending_writes().await?;
+        result
+    }
+
+    async fn stop_tasks(&self) -> Result<ShutdownReport, StoreError> {
         self.shutdown.cancel();
         let _drained_permits = tokio::time::timeout(
             std::time::Duration::from_secs(5),
@@ -437,7 +448,7 @@ where
                 Err(error) => {
                     let now_millis = current_time_millis();
                     match progress.record_failure(record, &queued.request, now_millis).await? {
-                        Ok(FailureRecordOutcome::Recorded | FailureRecordOutcome::AlreadyCommitted) => {
+                        Ok(RetryLedgerRecordResult::Recorded | RetryLedgerRecordResult::AlreadyCommitted) => {
                             tracing::warn!(
                                 descriptor = ?error.descriptor().code(),
                                 operation = ?error.operation(),
@@ -651,12 +662,13 @@ where
         let retry_tick = Arc::new(Notify::new());
         let retry_tick_scheduler = retry_tick.clone();
         ScheduledTaskGroup::new(owner.task_group().clone())
-            .schedule_fixed_rate_no_overlap_operation(
+            .schedule_operation(
                 owner.operation(),
                 ScheduledTaskConfig::fixed_rate_no_overlap(
                     "tieredstore.dispatcher.retry-ledger",
                     self.progress.retry_poll_interval(),
                 ),
+                ScheduledExecutionPolicy::default(),
                 move || {
                     retry_tick_scheduler.notify_one();
                     std::future::ready(())

@@ -16,24 +16,25 @@ use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicU8;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
 
-use dashmap::DashSet;
 use futures::future::join_all;
 use parking_lot::Mutex;
 use parking_lot::MutexGuard;
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
+use crate::shutdown_deadline::ShutdownDeadline;
 use crate::shutdown_deadline::ABORT_CONFIRMATION_TIMEOUT;
 use crate::task_group::TaskGroup;
 use crate::task_group::TaskGroupId;
-use crate::task_group::TaskId;
 use crate::task_group::TaskKind;
 
 /// Why an accepted operation task finished, after its future was destroyed.
@@ -42,7 +43,7 @@ use crate::task_group::TaskKind;
 /// distinct from a cancellation branch selected by the task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum OperationOutcome {
+pub enum OperationTaskExitReason {
     /// The future returned normally.
     Completed = 1,
     /// The operation-local cancellation branch won.
@@ -57,7 +58,7 @@ pub enum OperationOutcome {
     Aborted = 6,
 }
 
-impl OperationOutcome {
+impl OperationTaskExitReason {
     /// All outcomes in counter snapshot order.
     pub const ALL: [Self; 6] = [
         Self::Completed,
@@ -85,9 +86,9 @@ impl OperationOutcome {
 ///
 /// Callbacks must be short, nonblocking and panic-free, including during panic
 /// unwinding. They must not flush exporters or retain request data.
-pub trait OperationOutcomeObserver: std::fmt::Debug + Send + Sync {
+pub trait OperationTaskExitObserver: std::fmt::Debug + Send + Sync {
     /// Records one terminal task outcome using bounded labels.
-    fn on_outcome(&self, kind: TaskKind, outcome: OperationOutcome);
+    fn on_outcome(&self, kind: TaskKind, outcome: OperationTaskExitReason);
 }
 
 /// Cancellation, deadline, and task-class metadata for one bounded operation.
@@ -102,19 +103,100 @@ pub struct OperationContext {
     task_kind: TaskKind,
 }
 
+/// Absolute deadlines for graceful completion and subsequent abort confirmation.
+#[derive(Debug, Clone, Copy)]
+pub struct OperationWaitPolicy {
+    graceful: ShutdownDeadline,
+    confirmation: ShutdownDeadline,
+}
+
+impl OperationWaitPolicy {
+    /// Creates a policy whose graceful phase cannot extend past confirmation.
+    ///
+    /// Passing the same deadline requests aborts at expiry without extending
+    /// the wait. An earlier confirmation deadline also tightens the grace phase.
+    pub fn new(graceful: ShutdownDeadline, confirmation: ShutdownDeadline) -> Self {
+        Self {
+            graceful: graceful.earliest(confirmation),
+            confirmation,
+        }
+    }
+}
+
+/// Whether task draining was confirmed when an operation's bounded wait stopped.
+///
+/// `Completed` confirms that tasks settled during the graceful phase; it does
+/// not describe whether the operation's business work succeeded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationDrainStatus {
+    /// All tasks settled during the graceful phase.
+    Completed,
+    /// All tasks settled after aborts were requested.
+    AbortConfirmed,
+    /// The confirmation deadline expired with tasks still registered.
+    Unconfirmed {
+        /// Tasks whose final destruction and owner bookkeeping remain unconfirmed.
+        remaining_tasks: usize,
+    },
+}
+
 #[derive(Debug)]
 struct OperationContextInner {
+    /// Process-unique id; the owner's task registry tags operation tasks with it.
+    id: u64,
     cancellation: CancellationToken,
     deadline: Option<Instant>,
     accepting: AtomicBool,
+    /// Serializes admission with `close_admission` and `cancel`.
     spawn_gate: Mutex<()>,
-    owner_id: Mutex<Option<TaskGroupId>>,
-    active_tasks: Arc<DashSet<TaskId>>,
+    /// Id of the component owner, or zero before the first submission.
+    owner_id: AtomicU64,
+    /// Accepted tasks whose futures have not yet been destroyed.
+    active: AtomicUsize,
+    /// Woken when `active` drops to zero.
+    idle: Notify,
     outcomes: [AtomicU64; 6],
-    observer: OnceLock<Arc<dyn OperationOutcomeObserver>>,
+    observer: OnceLock<Arc<dyn OperationTaskExitObserver>>,
 }
 
 impl OperationContext {
+    /// Closes operation admission and asynchronously waits using explicit deadlines.
+    ///
+    /// Tasks unfinished at the graceful deadline are asked to abort. The second
+    /// deadline bounds confirmation of future destruction and owner settlement.
+    /// An unconfirmed outcome leaves those tasks visible to the owner's report.
+    /// Deadlines bound cooperative waiting; blocked executor threads can delay
+    /// polling and this method does not promise a hard wall-clock return time.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error without closing admission if `owner` is not this
+    /// operation's bound component owner.
+    pub async fn wait_with_policy(
+        &self,
+        owner: &TaskGroup,
+        policy: OperationWaitPolicy,
+    ) -> RuntimeResult<OperationDrainStatus> {
+        self.ensure_owner(owner.id())?;
+        self.close_admission();
+        if self.wait_until_settled(owner, policy.graceful.instant()).await? {
+            return Ok(OperationDrainStatus::Completed);
+        }
+        let remaining = owner.operation_task_ids(self.inner.id);
+        join_all(
+            remaining
+                .into_iter()
+                .map(|task_id| owner.abort_task_until(task_id, policy.confirmation)),
+        )
+        .await;
+        let remaining_tasks = owner.operation_task_ids(self.inner.id).len();
+        Ok(if remaining_tasks == 0 {
+            OperationDrainStatus::AbortConfirmed
+        } else {
+            OperationDrainStatus::Unconfirmed { remaining_tasks }
+        })
+    }
+
     /// Creates an operation with an absolute deadline.
     pub fn new(deadline: Instant, task_kind: TaskKind) -> Self {
         Self::from_parts(Some(deadline), task_kind)
@@ -126,19 +208,26 @@ impl OperationContext {
     }
 
     fn from_parts(deadline: Option<Instant>, task_kind: TaskKind) -> Self {
+        static NEXT_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
         Self {
             inner: Arc::new(OperationContextInner {
+                id: NEXT_OPERATION_ID.fetch_add(1, Ordering::Relaxed),
                 cancellation: CancellationToken::new(),
                 deadline,
                 accepting: AtomicBool::new(true),
                 spawn_gate: Mutex::new(()),
-                owner_id: Mutex::new(None),
-                active_tasks: Arc::new(DashSet::new()),
+                owner_id: AtomicU64::new(0),
+                active: AtomicUsize::new(0),
+                idle: Notify::new(),
                 outcomes: std::array::from_fn(|_| AtomicU64::new(0)),
                 observer: OnceLock::new(),
             }),
             task_kind,
         }
+    }
+
+    pub(crate) fn id(&self) -> u64 {
+        self.inner.id
     }
 
     /// Returns the operation-local cancellation token.
@@ -188,15 +277,15 @@ impl OperationContext {
 
     /// Returns the number of operation tasks that have not completed.
     pub fn active_task_count(&self) -> usize {
-        self.inner.active_tasks.len()
+        self.inner.active.load(Ordering::Acquire)
     }
 
     /// Reads counters without retaining individual task history.
     ///
     /// Counters share this operation's lifetime and are individually atomic;
     /// completions can occur between fields in this snapshot.
-    pub fn outcomes(&self) -> [(OperationOutcome, u64); 6] {
-        OperationOutcome::ALL.map(|outcome| {
+    pub fn outcomes(&self) -> [(OperationTaskExitReason, u64); 6] {
+        OperationTaskExitReason::ALL.map(|outcome| {
             (
                 outcome,
                 self.inner.outcomes[outcome as usize - 1].load(Ordering::Acquire),
@@ -209,9 +298,9 @@ impl OperationContext {
     /// # Errors
     ///
     /// Returns an error after owner binding or an earlier observer installation.
-    pub fn set_outcome_observer(&self, observer: Arc<dyn OperationOutcomeObserver>) -> RuntimeResult<()> {
+    pub fn set_outcome_observer(&self, observer: Arc<dyn OperationTaskExitObserver>) -> RuntimeResult<()> {
         let _gate = self.inner.spawn_gate.lock();
-        if self.inner.owner_id.lock().is_some() || self.inner.observer.set(observer).is_err() {
+        if self.inner.owner_id.load(Ordering::Acquire) != 0 || self.inner.observer.set(observer).is_err() {
             return Err(RuntimeError::context_unavailable(
                 crate::RuntimeOperation::SpawnOperation,
             ));
@@ -223,8 +312,11 @@ impl OperationContext {
     ///
     /// Returns `true` when every task completed before the shared timeout.
     /// Tasks still running at the deadline are aborted and awaited for a
-    /// bounded confirmation window beyond it, so their running futures are
-    /// dropped before this returns.
+    /// confirmation window of at most one second beyond it. `false` does not
+    /// distinguish a confirmed abort from work whose destruction is still
+    /// unconfirmed. Use [`Self::wait_with_policy`] after [`Self::cancel`] for
+    /// explicit deadlines and completion evidence. Timers require the runtime
+    /// to make progress; they are not a hard wall-clock return guarantee.
     ///
     /// # Errors
     ///
@@ -235,56 +327,127 @@ impl OperationContext {
         self.wait(owner, timeout).await
     }
 
-    /// Waits for all currently registered operation tasks without requesting
-    /// cancellation. Tasks still running at the shared deadline are aborted and
-    /// awaited for a bounded confirmation window.
+    /// Cancels this operation and bounds its asynchronous wait by `deadline`.
+    ///
+    /// Behaves like [`Self::wait_until`] after requesting cancellation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `owner` differs from the component owner used to
+    /// spawn the operation.
+    pub async fn cancel_and_wait_until(&self, owner: &TaskGroup, deadline: ShutdownDeadline) -> RuntimeResult<bool> {
+        self.cancel();
+        self.wait_until(owner, deadline).await
+    }
+
+    /// Waits until no operation task is active and `owner` has settled every
+    /// one, without requesting cancellation. Tasks still running at the
+    /// deadline are aborted and awaited for a confirmation window of at most
+    /// one second, so the call can return up to one second after `timeout`.
+    ///
+    /// Tasks accepted during the wait are waited for too; close admission
+    /// first when new tasks may still be submitted. Returns `true` when every
+    /// task finished before the deadline; `owner` then no longer lists any of
+    /// them. `false` does not confirm destruction. Use [`Self::wait_until`] to
+    /// avoid an extra confirmation allowance, or [`Self::wait_with_policy`]
+    /// to distinguish confirmed aborts from unconfirmed work.
     ///
     /// # Errors
     ///
     /// Returns an error when `owner` differs from the component owner used to
     /// spawn the operation.
     pub async fn wait(&self, owner: &TaskGroup, timeout: Duration) -> RuntimeResult<bool> {
-        self.ensure_owner(owner.id())?;
-        let deadline = Instant::now() + timeout;
-        let task_ids = self
-            .inner
-            .active_tasks
-            .iter()
-            .map(|task_id| *task_id)
-            .collect::<Vec<_>>();
-
-        let completed = join_all(task_ids.iter().copied().map(|task_id| {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            owner.wait_task(task_id, remaining)
-        }))
-        .await;
-        let timed_out = task_ids
-            .into_iter()
-            .zip(completed)
-            .filter_map(|(task_id, completed)| (!completed && owner.contains_task(task_id)).then_some(task_id))
-            .collect::<Vec<_>>();
-
-        join_all(
-            timed_out
-                .iter()
-                .copied()
-                .map(|task_id| owner.abort_task_and_wait(task_id, ABORT_CONFIRMATION_TIMEOUT)),
-        )
-        .await;
-
-        Ok(timed_out.is_empty() && self.active_task_count() == 0)
+        self.wait_for_tasks(owner, Instant::now() + timeout, ABORT_CONFIRMATION_TIMEOUT)
+            .await
     }
 
+    /// Waits for this operation's tasks with no allowance beyond `deadline`.
+    ///
+    /// Tasks still running at the deadline are asked to abort and the call
+    /// returns `false` at once, without confirming that their futures were
+    /// dropped. They stay registered with `owner` until they are, so the
+    /// owner's shutdown report accounts for any that remain. This matches
+    /// [`TaskGroup::shutdown_until`], which also does not extend its deadline.
+    /// Runtime starvation or synchronous destructors can delay timer polling.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `owner` differs from the component owner used to
+    /// spawn the operation.
+    pub async fn wait_until(&self, owner: &TaskGroup, deadline: ShutdownDeadline) -> RuntimeResult<bool> {
+        self.wait_for_tasks(owner, deadline.instant(), Duration::ZERO).await
+    }
+
+    /// Waits until `deadline`, then aborts what remains and waits up to
+    /// `abort_confirmation` for those futures to be dropped.
+    async fn wait_for_tasks(
+        &self,
+        owner: &TaskGroup,
+        deadline: Instant,
+        abort_confirmation: Duration,
+    ) -> RuntimeResult<bool> {
+        if self.wait_until_settled(owner, deadline).await? {
+            return Ok(true);
+        }
+        // A zero confirmation window only requests the aborts. Legacy callers
+        // retain their boolean outcome and relative confirmation allowance.
+        let remaining = owner.operation_task_ids(self.inner.id);
+        join_all(
+            remaining
+                .into_iter()
+                .map(|task_id| owner.abort_task_and_wait(task_id, abort_confirmation)),
+        )
+        .await;
+        Ok(false)
+    }
+
+    async fn wait_until_settled(&self, owner: &TaskGroup, deadline: Instant) -> RuntimeResult<bool> {
+        self.ensure_owner(owner.id())?;
+        loop {
+            // Registered before the check, so a wakeup in between is not lost.
+            let idle = self.inner.idle.notified();
+            if self.inner.active.load(Ordering::Acquire) == 0 {
+                // A task stops counting as active when its future is
+                // destroyed; its owner settles it just afterwards. Wait for
+                // that too, so a caller never finds a finished task still
+                // registered with the owner.
+                let unsettled = owner.operation_task_ids(self.inner.id);
+                if unsettled.is_empty() {
+                    return Ok(true);
+                }
+                let deadline = ShutdownDeadline::at(deadline);
+                let settled = join_all(
+                    unsettled
+                        .into_iter()
+                        .map(|task_id| owner.wait_task_until(task_id, deadline)),
+                )
+                .await;
+                if settled.into_iter().all(|settled| settled) {
+                    continue;
+                }
+                break;
+            }
+            if tokio::time::timeout_at(deadline.into(), idle).await.is_err() {
+                break;
+            }
+        }
+
+        Ok(false)
+    }
+
+    /// Admits one task: binds the owner and counts the task as active.
+    ///
+    /// The caller holds [`Self::spawn_guard`], so admission cannot interleave
+    /// with `close_admission` or `cancel`.
     pub(crate) fn prepare_spawn(&self, owner_id: TaskGroupId) -> RuntimeResult<OperationTaskRegistration> {
         self.bind_owner(owner_id)?;
         if !self.inner.accepting.load(Ordering::Acquire)
             || self.is_cancelled()
             || self.inner.deadline.is_some_and(|deadline| deadline <= Instant::now())
         {
-            return Err(RuntimeError::context_unavailable(
-                crate::RuntimeOperation::SpawnOperation,
-            ));
+            return Err(RuntimeError::closed(crate::RuntimeOperation::SpawnOperation));
         }
+        self.inner.active.fetch_add(1, Ordering::AcqRel);
         Ok(OperationTaskRegistration::new(Arc::clone(&self.inner), self.task_kind))
     }
 
@@ -292,7 +455,7 @@ impl OperationContext {
         self.inner.spawn_gate.lock()
     }
 
-    async fn run<F>(&self, future: F) -> OperationOutcome
+    async fn run<F>(&self, future: F) -> OperationTaskExitReason
     where
         F: Future<Output = ()>,
     {
@@ -300,41 +463,38 @@ impl OperationContext {
             Some(deadline) => {
                 tokio::select! {
                     biased;
-                    _ = self.inner.cancellation.cancelled() => OperationOutcome::Cancelled,
-                    _ = tokio::time::sleep_until(deadline.into()) => OperationOutcome::DeadlineExceeded,
-                    _ = future => OperationOutcome::Completed,
+                    _ = self.inner.cancellation.cancelled() => OperationTaskExitReason::Cancelled,
+                    _ = tokio::time::sleep_until(deadline.into()) => OperationTaskExitReason::DeadlineExceeded,
+                    _ = future => OperationTaskExitReason::Completed,
                 }
             }
             None => {
                 tokio::select! {
                     biased;
-                    _ = self.inner.cancellation.cancelled() => OperationOutcome::Cancelled,
-                    _ = future => OperationOutcome::Completed,
+                    _ = self.inner.cancellation.cancelled() => OperationTaskExitReason::Cancelled,
+                    _ = future => OperationTaskExitReason::Completed,
                 }
             }
         }
     }
 
     fn bind_owner(&self, owner_id: TaskGroupId) -> RuntimeResult<()> {
-        let mut bound_owner = self.inner.owner_id.lock();
-        match *bound_owner {
-            Some(bound_owner) if bound_owner != owner_id => {
-                Err(RuntimeError::internal_failure(crate::RuntimeOperation::OperationOwner))
-            }
-            Some(_) => Ok(()),
-            None => {
-                *bound_owner = Some(owner_id);
-                Ok(())
-            }
+        match self
+            .inner
+            .owner_id
+            .compare_exchange(0, owner_id.as_u64(), Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => Ok(()),
+            Err(bound_owner) if bound_owner == owner_id.as_u64() => Ok(()),
+            Err(_) => Err(RuntimeError::internal_failure(crate::RuntimeOperation::OperationOwner)),
         }
     }
 
     fn ensure_owner(&self, owner_id: TaskGroupId) -> RuntimeResult<()> {
-        match *self.inner.owner_id.lock() {
-            Some(bound_owner) if bound_owner != owner_id => {
-                Err(RuntimeError::internal_failure(crate::RuntimeOperation::OperationOwner))
-            }
-            _ => Ok(()),
+        match self.inner.owner_id.load(Ordering::Acquire) {
+            0 => Ok(()),
+            bound_owner if bound_owner == owner_id.as_u64() => Ok(()),
+            _ => Err(RuntimeError::internal_failure(crate::RuntimeOperation::OperationOwner)),
         }
     }
 }
@@ -343,23 +503,29 @@ pub(crate) struct OperationTaskRegistration {
     state: Arc<OperationTaskRegistrationState>,
 }
 
+/// Set once the owner accepted the task.
+const TASK_REGISTERED: u8 = 1;
+/// Set once the task's future was destroyed.
+const TASK_COMPLETED: u8 = 2;
+
 struct OperationTaskRegistrationState {
-    task_id: AtomicU64,
-    completed: AtomicBool,
+    /// `TASK_REGISTERED` and `TASK_COMPLETED` bits. Both sides set their bit
+    /// with one read-modify-write, so exactly one sees the other bit and
+    /// records the outcome.
+    progress: AtomicU8,
+    outcome: AtomicU8,
     operation: Arc<OperationContextInner>,
     task_kind: TaskKind,
-    outcome: AtomicU8,
 }
 
 impl OperationTaskRegistration {
     fn new(operation: Arc<OperationContextInner>, task_kind: TaskKind) -> Self {
         Self {
             state: Arc::new(OperationTaskRegistrationState {
-                task_id: AtomicU64::new(0),
-                completed: AtomicBool::new(false),
+                progress: AtomicU8::new(0),
+                outcome: AtomicU8::new(0),
                 operation,
                 task_kind,
-                outcome: AtomicU8::new(0),
             }),
         }
     }
@@ -367,66 +533,56 @@ impl OperationTaskRegistration {
     pub(crate) fn guard(&self) -> OperationTaskGuard {
         OperationTaskGuard {
             state: Arc::clone(&self.state),
-            outcome: OperationOutcome::Aborted,
+            outcome: OperationTaskExitReason::Aborted,
         }
     }
 
-    pub(crate) fn register(&self, task_id: TaskId) {
-        self.state.operation.active_tasks.insert(task_id);
-        self.state.task_id.store(task_id.as_u64(), Ordering::Release);
-        if self.state.completed.load(Ordering::Acquire) {
-            self.state.operation.active_tasks.remove(&task_id);
-        }
-    }
-
+    /// Marks the task as accepted by its owner. A task the owner rejected
+    /// never records an outcome.
     pub(crate) fn finish_registration(self) {
-        self.state.record_if_ready();
+        let previous = self.state.progress.fetch_or(TASK_REGISTERED, Ordering::AcqRel);
+        if previous & TASK_COMPLETED != 0 {
+            self.state.record(self.state.outcome.load(Ordering::Acquire));
+        }
     }
 }
 
 pub(crate) struct OperationTaskGuard {
     state: Arc<OperationTaskRegistrationState>,
-    outcome: OperationOutcome,
+    outcome: OperationTaskExitReason,
 }
 
 impl Drop for OperationTaskGuard {
     fn drop(&mut self) {
         let outcome = if std::thread::panicking() {
-            OperationOutcome::Panicked
+            OperationTaskExitReason::Panicked
         } else {
             self.outcome
         };
         self.state.outcome.store(outcome as u8, Ordering::Release);
-        self.state.completed.store(true, Ordering::Release);
-        let task_id = self.state.task_id.load(Ordering::Acquire);
-        if task_id != 0 {
-            self.state.operation.active_tasks.remove(&TaskId::from_raw(task_id));
+        let previous = self.state.progress.fetch_or(TASK_COMPLETED, Ordering::AcqRel);
+        if previous & TASK_REGISTERED != 0 {
+            self.state.record(outcome as u8);
         }
-        self.state.record_if_ready();
+        // Counters are published before a waiter can observe the operation idle.
+        let operation = &self.state.operation;
+        if operation.active.fetch_sub(1, Ordering::AcqRel) == 1 {
+            operation.idle.notify_waiters();
+        }
     }
 }
 
 impl OperationTaskRegistrationState {
-    fn record_if_ready(&self) {
-        if self.task_id.load(Ordering::Acquire) == 0 {
-            return;
-        }
-        let value = self.outcome.load(Ordering::Acquire);
-        let Some(outcome) = OperationOutcome::ALL
+    fn record(&self, value: u8) {
+        let Some(outcome) = OperationTaskExitReason::ALL
             .into_iter()
             .find(|outcome| *outcome as u8 == value)
         else {
             return;
         };
-        if self
-            .outcome
-            .compare_exchange(value, u8::MAX, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            self.operation.outcomes[value as usize - 1].fetch_add(1, Ordering::Release);
-            if let Some(observer) = self.operation.observer.get() {
-                observer.on_outcome(self.task_kind, outcome);
-            }
+        self.operation.outcomes[value as usize - 1].fetch_add(1, Ordering::Release);
+        if let Some(observer) = self.operation.observer.get() {
+            observer.on_outcome(self.task_kind, outcome);
         }
     }
 }
@@ -459,7 +615,7 @@ impl<F: Future<Output = ()>> OperationExecution<F> {
         let outcome = match self.owner_cancellation {
             Some(owner) => tokio::select! {
                 biased;
-                _ = owner.cancelled() => OperationOutcome::OwnerCancelled,
+                _ = owner.cancelled() => OperationTaskExitReason::OwnerCancelled,
                 outcome = self.operation.run(self.future) => outcome,
             },
             None => self.operation.run(self.future).await,
@@ -473,14 +629,56 @@ mod tests {
     use super::*;
     use crate::RuntimeContext;
 
-    struct OutcomeFuture {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wait_returns_only_after_the_owner_settles_the_tasks() {
+        let context = RuntimeContext::from_current("operation-settlement");
+        let owner = context.service_context("owner").task_group().clone();
+        let operation = OperationContext::without_deadline(TaskKind::Worker);
+        let (finish_tx, finish_rx) = tokio::sync::oneshot::channel::<()>();
+        let task_id = owner
+            .spawn_operation(&operation, "settles-late", async move {
+                let _ = finish_rx.await;
+            })
+            .unwrap();
+
+        // Hold the owner's settlement gate on another thread, so the task's
+        // future can be destroyed while the owner cannot yet settle it.
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let gate_owner = owner.clone();
+        let holder = std::thread::spawn(move || {
+            let _settlement = gate_owner.lock_settlement_for_test();
+            locked_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        locked_rx.recv().unwrap();
+        finish_tx.send(()).unwrap();
+        while operation.active_task_count() != 0 {
+            tokio::task::yield_now().await;
+        }
+
+        let mut wait = Box::pin(operation.wait(&owner, Duration::from_secs(5)));
+        assert!(
+            futures::poll!(wait.as_mut()).is_pending(),
+            "a task the owner has not settled still belongs to the operation"
+        );
+        assert!(owner.contains_task(task_id));
+
+        release_tx.send(()).unwrap();
+        holder.join().unwrap();
+        assert!(wait.await.unwrap());
+        assert!(!owner.contains_task(task_id));
+        assert_eq!(owner.task_count(), 0);
+    }
+
+    struct OperationTaskExitTestFuture {
         dropped: Arc<AtomicBool>,
         ready: bool,
         panic_poll: bool,
         panic_drop: bool,
     }
 
-    impl Future for OutcomeFuture {
+    impl Future for OperationTaskExitTestFuture {
         type Output = ();
         fn poll(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<()> {
             assert!(!self.panic_poll, "operation poll panic");
@@ -492,7 +690,7 @@ mod tests {
         }
     }
 
-    impl Drop for OutcomeFuture {
+    impl Drop for OperationTaskExitTestFuture {
         fn drop(&mut self) {
             self.dropped.store(true, Ordering::Release);
             assert!(!self.panic_drop, "operation destructor panic");
@@ -500,13 +698,13 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct RecordingOutcomeObserver {
+    struct RecordingTaskExitObserver {
         dropped: Arc<AtomicBool>,
-        events: Mutex<Vec<OperationOutcome>>,
+        events: Mutex<Vec<OperationTaskExitReason>>,
     }
 
-    impl OperationOutcomeObserver for RecordingOutcomeObserver {
-        fn on_outcome(&self, _kind: TaskKind, outcome: OperationOutcome) {
+    impl OperationTaskExitObserver for RecordingTaskExitObserver {
+        fn on_outcome(&self, _kind: TaskKind, outcome: OperationTaskExitReason) {
             assert!(
                 self.dropped.load(Ordering::Acquire),
                 "outcome preceded future destruction"
@@ -517,16 +715,16 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn all_outcomes_are_recorded_once_after_future_destruction() {
-        for expected in OperationOutcome::ALL {
+        for expected in OperationTaskExitReason::ALL {
             let runtime = RuntimeContext::from_current("operation-outcome");
             let owner = runtime.service_context("operation-owner");
-            let operation = if expected == OperationOutcome::DeadlineExceeded {
+            let operation = if expected == OperationTaskExitReason::DeadlineExceeded {
                 OperationContext::new(Instant::now() + Duration::from_secs(60), TaskKind::Worker)
             } else {
                 OperationContext::without_deadline(TaskKind::Worker)
             };
             let dropped = Arc::new(AtomicBool::new(false));
-            let observer = Arc::new(RecordingOutcomeObserver {
+            let observer = Arc::new(RecordingTaskExitObserver {
                 dropped: dropped.clone(),
                 events: Mutex::new(Vec::new()),
             });
@@ -536,22 +734,22 @@ mod tests {
                 .spawn_operation(
                     &operation,
                     "selected-outcome",
-                    OutcomeFuture {
+                    OperationTaskExitTestFuture {
                         dropped,
-                        ready: expected == OperationOutcome::Completed,
-                        panic_poll: expected == OperationOutcome::Panicked,
+                        ready: expected == OperationTaskExitReason::Completed,
+                        panic_poll: expected == OperationTaskExitReason::Panicked,
                         panic_drop: false,
                     },
                 )
                 .unwrap();
             match expected {
-                OperationOutcome::Cancelled => operation.cancel(),
-                OperationOutcome::OwnerCancelled => owner.task_group().cancel(),
-                OperationOutcome::DeadlineExceeded => tokio::time::advance(Duration::from_secs(61)).await,
-                OperationOutcome::Aborted => {
+                OperationTaskExitReason::Cancelled => operation.cancel(),
+                OperationTaskExitReason::OwnerCancelled => owner.task_group().cancel(),
+                OperationTaskExitReason::DeadlineExceeded => tokio::time::advance(Duration::from_secs(61)).await,
+                OperationTaskExitReason::Aborted => {
                     assert!(owner.task_group().abort_task(id));
                 }
-                OperationOutcome::Completed | OperationOutcome::Panicked => {}
+                OperationTaskExitReason::Completed | OperationTaskExitReason::Panicked => {}
             }
             while owner.task_group().task_count() != 0 {
                 tokio::task::yield_now().await;
@@ -562,7 +760,7 @@ mod tests {
                 assert_eq!(count, u64::from(outcome == expected), "{expected:?}: {outcome:?}");
             }
             let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
-            assert_eq!(report.is_healthy(), expected != OperationOutcome::Panicked);
+            assert_eq!(report.is_healthy(), expected != OperationTaskExitReason::Panicked);
         }
     }
 
@@ -572,7 +770,7 @@ mod tests {
         let owner = runtime.service_context("operation-owner");
         let operation = OperationContext::without_deadline(TaskKind::Worker);
         let dropped = Arc::new(AtomicBool::new(false));
-        let observer = Arc::new(RecordingOutcomeObserver {
+        let observer = Arc::new(RecordingTaskExitObserver {
             dropped: dropped.clone(),
             events: Mutex::new(Vec::new()),
         });
@@ -582,7 +780,7 @@ mod tests {
             .spawn_operation(
                 &operation,
                 "destructor-panic",
-                OutcomeFuture {
+                OperationTaskExitTestFuture {
                     dropped,
                     ready: true,
                     panic_poll: false,
@@ -593,7 +791,7 @@ mod tests {
         while owner.task_group().task_count() != 0 {
             tokio::task::yield_now().await;
         }
-        assert_eq!(*observer.events.lock(), [OperationOutcome::Panicked]);
+        assert_eq!(*observer.events.lock(), [OperationTaskExitReason::Panicked]);
         runtime.shutdown_tasks(Duration::from_secs(1)).await;
 
         let rejected = OperationContext::without_deadline(TaskKind::Worker);
@@ -630,7 +828,10 @@ mod tests {
         .expect("operation tasks should complete");
 
         assert_eq!(owner.task_group().component_count(), baseline_components);
-        assert_eq!(operation.outcomes()[0], (OperationOutcome::Completed, TASKS as u64));
+        assert_eq!(
+            operation.outcomes()[0],
+            (OperationTaskExitReason::Completed, TASKS as u64)
+        );
         let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
     }
@@ -720,6 +921,87 @@ mod tests {
         );
         assert_eq!(operation.active_task_count(), 0);
 
+        let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wait_until_returns_at_its_deadline_without_confirming_the_abort() {
+        // Dropping the aborted future blocks until released, so a wait that
+        // returns before the release cannot have confirmed the abort.
+        struct BlockingDrop(Option<std::sync::mpsc::Receiver<()>>);
+
+        impl Drop for BlockingDrop {
+            fn drop(&mut self) {
+                if let Some(release) = self.0.take() {
+                    let _ = release.recv();
+                }
+            }
+        }
+
+        let runtime = RuntimeContext::from_current("operation-wait-until-test");
+        let owner = runtime.service_context("operations");
+        let operation = OperationContext::without_deadline(TaskKind::Worker);
+        let started = Arc::new(AtomicBool::new(false));
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+
+        owner
+            .task_group()
+            .spawn_operation(&operation, "slow-to-drop-operation", {
+                let started = Arc::clone(&started);
+                async move {
+                    let _guard = BlockingDrop(Some(release_rx));
+                    started.store(true, Ordering::Release);
+                    std::future::pending::<()>().await
+                }
+            })
+            .expect("operation task should spawn");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !started.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("operation task should start");
+
+        let deadline = ShutdownDeadline::after(Duration::from_millis(20));
+        assert!(!operation
+            .wait_until(owner.task_group(), deadline)
+            .await
+            .expect("operation should use its bound owner"));
+        assert_eq!(
+            operation.active_task_count(),
+            1,
+            "wait_until must not wait for the aborted future to be dropped"
+        );
+
+        release_tx.send(()).unwrap();
+        assert!(
+            operation
+                .wait(owner.task_group(), Duration::from_secs(5))
+                .await
+                .expect("operation should use its bound owner"),
+            "the aborted task settles once its future is dropped"
+        );
+        let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test]
+    async fn cancel_and_wait_until_joins_a_cooperative_operation() {
+        let runtime = RuntimeContext::from_current("operation-cancel-until-test");
+        let owner = runtime.service_context("operations");
+        let operation = OperationContext::without_deadline(TaskKind::Worker);
+        owner
+            .task_group()
+            .spawn_operation(&operation, "pending-operation", std::future::pending())
+            .expect("operation task should spawn");
+
+        assert!(operation
+            .cancel_and_wait_until(owner.task_group(), ShutdownDeadline::after(Duration::from_secs(5)))
+            .await
+            .expect("operation should use its bound owner"));
+        assert_eq!(operation.active_task_count(), 0);
         let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
     }

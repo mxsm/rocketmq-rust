@@ -53,7 +53,7 @@ pub(super) async fn require_topic_route(
 ) -> Result<TopicRouteData, AdminError> {
     rocketmq_client_rust::TopicAdmin::examine_topic_route_info(admin, CheetahString::from(topic))
         .await
-        .map_err(|error| backend_error("examine_topic_route_info", error))?
+        .map_err(|source| promote_to_admin_error("examine_topic_route_info", source))?
         .ok_or_else(|| AdminError::invalid_argument("topic", format!("topic `{topic}` was not found")))
 }
 
@@ -137,10 +137,11 @@ pub(super) async fn collect_topic_configs(
 ) -> Result<HashMap<String, Vec<TopicBrokerConfigSnapshot>>, AdminError> {
     let mut topic_configs = HashMap::new();
     for (broker_name, broker_addr) in collect_master_broker_targets(cluster_info) {
-        let wrapper: TopicConfigSerializeWrapper = admin
-            .get_all_topic_config(broker_addr, SEND_TIMEOUT_MILLIS)
-            .await
-            .map_err(|error| backend_error("get_all_topic_config", error))?;
+        let wrapper: TopicConfigSerializeWrapper =
+            admin
+                .get_all_topic_config(broker_addr, SEND_TIMEOUT_MILLIS)
+                .await
+                .map_err(|source| promote_to_admin_error("get_all_topic_config", source))?;
         if let Some(config_table) = wrapper.topic_config_table() {
             for (topic, config) in config_table {
                 topic_configs
@@ -213,11 +214,11 @@ pub(super) fn master_targets_by_cluster_name(
     let cluster_table = cluster_info
         .cluster_addr_table
         .as_ref()
-        .ok_or_else(|| AdminError::backend("examine_broker_cluster_info", "missing cluster address data"))?;
+        .ok_or_else(|| AdminError::operation_failed("examine_broker_cluster_info", "missing cluster address data"))?;
     let broker_table = cluster_info
         .broker_addr_table
         .as_ref()
-        .ok_or_else(|| AdminError::backend("examine_broker_cluster_info", "missing broker address data"))?;
+        .ok_or_else(|| AdminError::operation_failed("examine_broker_cluster_info", "missing broker address data"))?;
     let broker_names = cluster_table.get(cluster_name).ok_or_else(|| {
         AdminError::invalid_argument(
             "clusterName",
@@ -248,7 +249,7 @@ pub(super) async fn collect_route_topic_configs(
             let config = admin
                 .examine_topic_config(master_addr.clone(), CheetahString::from(topic))
                 .await
-                .map_err(|error| backend_error("examine_topic_config", error))?;
+                .map_err(|source| promote_to_admin_error("examine_topic_config", source))?;
             configs.push(TopicBrokerConfigSnapshot {
                 broker_name: broker.broker_name().to_string(),
                 cluster_name: Some(broker.cluster().to_string()),
@@ -408,11 +409,11 @@ pub(super) async fn collect_topic_current_detail(
     let route = admin
         .examine_topic_route_info(topic.clone())
         .await
-        .map_err(|error| backend_error("examine_topic_route_info", error))?;
+        .map_err(|source| promote_to_admin_error("examine_topic_route_info", source))?;
     let group_list = admin
         .query_topic_consume_by_who(topic.clone())
         .await
-        .map_err(|error| backend_error("query_topic_consume_by_who", error))?;
+        .map_err(|source| promote_to_admin_error("query_topic_consume_by_who", source))?;
     let mut in_tps = 0.0;
     let mut in_msg_count_24h = 0;
     if let Some(route) = &route {

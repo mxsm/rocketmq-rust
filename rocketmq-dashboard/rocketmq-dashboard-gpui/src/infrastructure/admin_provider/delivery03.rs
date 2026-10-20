@@ -21,7 +21,7 @@ use std::{
 };
 
 use rocketmq_admin_core::core::{
-    broker::{PatchBrokerConfigOutcome, PatchBrokerConfigRequest, QueryBrokerConfigGenerationRequest},
+    broker::{BrokerConfigPatchResult, PatchBrokerConfigRequest, QueryBrokerConfigGenerationRequest},
     dashboard::{
         DashboardBrokerConfig, DashboardBrokerInfo, DashboardBrokerList, DashboardBrokerRuntime, DashboardBrokerTarget,
         DashboardConsumerList, DashboardProducerInfo, DashboardTopicInfo, DashboardTopicList, DashboardTopicStats,
@@ -482,16 +482,16 @@ fn sanitize_broker_config(response: DashboardBrokerConfig) -> SafeBrokerConfig {
     }
 }
 
-fn sanitize_patch_outcome(outcome: PatchBrokerConfigOutcome) -> SafeConfigPatchOutcome {
+fn sanitize_patch_outcome(outcome: BrokerConfigPatchResult) -> SafeConfigPatchOutcome {
     match outcome {
-        PatchBrokerConfigOutcome::Applied {
+        BrokerConfigPatchResult::Applied {
             previous_generation,
             generation,
         } => SafeConfigPatchOutcome::Applied {
             previous_generation,
             generation,
         },
-        PatchBrokerConfigOutcome::GenerationConflict {
+        BrokerConfigPatchResult::GenerationConflict {
             expected_generation,
             actual_generation,
         } => SafeConfigPatchOutcome::GenerationConflict {
@@ -550,6 +550,7 @@ mod tests {
             topic: "private-topic".into(),
             producer_group: "private-producer".into(),
             connection_count: 3,
+            broker_names: Vec::new(),
         }]);
         assert_eq!(producers.distinct_group_count, 1);
         let producer_debug = format!("{producers:?}");

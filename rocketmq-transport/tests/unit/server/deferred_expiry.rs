@@ -37,18 +37,18 @@ use super::DeferredResumeRetainedSize;
 use super::DeferredRetainedSizeParts;
 use super::DeferredWaitLimits;
 use super::DeferredWakeReason;
-use super::HandlerOutcome;
 use super::RemotingRequest;
 use super::RemotingResponse;
 use super::RequestProcessor;
+use super::ResponseAction;
 use super::TransportServer;
-use crate::dispatch::DeferredAdmissionAcquireOutcome;
-use crate::dispatch::DeferredClaimOutcome;
+use crate::dispatch::DeferredClaimResult;
+use crate::dispatch::DeferredExpiryAttachmentStatus;
 use crate::dispatch::DeferredExpiryMargins;
-use crate::dispatch::DeferredExpiryOutcome;
-use crate::dispatch::DeferredRegistryOutcome;
-use crate::dispatch::DeferredResponderOutcome;
-use crate::dispatch::DeferredResumeOutcome;
+use crate::dispatch::DeferredRegistrationResult;
+use crate::dispatch::DeferredResponderTakeResult;
+use crate::dispatch::DeferredResumeResult;
+use crate::dispatch::DeferredWaitAdmissionResult;
 use crate::telemetry::TransportTelemetry;
 
 #[derive(Clone, Copy)]
@@ -91,13 +91,13 @@ struct TcpDeferredExpiryProcessor {
 }
 
 impl RequestProcessor for TcpDeferredExpiryProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<ResponseAction, rocketmq_error::SharedError> {
         if request.command().code() == 12 {
             self.state.committed.notify_one();
             return RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                 ResponseCode::Success,
             ))
-            .map(HandlerOutcome::Reply)
+            .map(ResponseAction::Reply)
             .map_err(|_| crate::error_helpers::argument_invalid());
         }
         self.state.processes.fetch_add(1, Ordering::SeqCst);
@@ -106,22 +106,22 @@ impl RequestProcessor for TcpDeferredExpiryProcessor {
             .saw_owner_deadline
             .store(owner_deadline.is_some(), Ordering::SeqCst);
         let responder = match request.take_deferred_responder() {
-            DeferredResponderOutcome::Taken(responder) => responder,
-            DeferredResponderOutcome::OneWayRequest
-            | DeferredResponderOutcome::Unavailable
-            | DeferredResponderOutcome::AlreadyTaken
-            | DeferredResponderOutcome::OutcomeCompleted => {
+            DeferredResponderTakeResult::Taken(responder) => responder,
+            DeferredResponderTakeResult::OneWayRequest
+            | DeferredResponderTakeResult::Unavailable
+            | DeferredResponderTakeResult::AlreadyTaken
+            | DeferredResponderTakeResult::OutcomeCompleted => {
                 return Err(crate::error_helpers::argument_invalid());
             }
         };
         let retained = DeferredRegistry::<i32>::try_retained_size(DeferredRetainedSizeParts::new(0))
             .map_err(|_| crate::error_helpers::argument_invalid())?;
         let permit = match self.admission.try_reserve(retained) {
-            DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
-            DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
-            DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)
-            | DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)
-            | DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
+            DeferredWaitAdmissionResult::Closed => panic!("deferred admission unexpectedly closed"),
+            DeferredWaitAdmissionResult::Acquired(permit) => permit,
+            DeferredWaitAdmissionResult::WaiterCapacityExhausted(_)
+            | DeferredWaitAdmissionResult::RetainedByteCapacityExhausted(_)
+            | DeferredWaitAdmissionResult::ParentCapacityExhausted(_) => {
                 return Err(crate::error_helpers::argument_invalid());
             }
         };
@@ -136,33 +136,33 @@ impl RequestProcessor for TcpDeferredExpiryProcessor {
             .try_with_expiry(protocol_at, self.policy.margins)
             .map_err(|_| crate::error_helpers::argument_invalid())?
         {
-            DeferredExpiryOutcome::Attached => {}
-            DeferredExpiryOutcome::AlreadyAttached => {
+            DeferredExpiryAttachmentStatus::Attached => {}
+            DeferredExpiryAttachmentStatus::AlreadyAttached => {
                 return Err(crate::error_helpers::argument_invalid());
             }
-            DeferredExpiryOutcome::OwnerBudgetInsufficient => {
+            DeferredExpiryAttachmentStatus::OwnerBudgetInsufficient => {
                 return Err(crate::error_helpers::argument_invalid());
             }
-            DeferredExpiryOutcome::ProtocolAlreadyExpired => {
+            DeferredExpiryAttachmentStatus::ProtocolAlreadyExpired => {
                 return Err(crate::error_helpers::argument_invalid());
             }
-            DeferredExpiryOutcome::OwnerAlreadyExpired => {
+            DeferredExpiryAttachmentStatus::OwnerAlreadyExpired => {
                 return Err(crate::error_helpers::argument_invalid());
             }
         }
         let opaque = request.original_identity().original_opaque();
         let registration = match self.registry.register(DeferredRequest::new(opaque, parts)) {
-            DeferredRegistryOutcome::Registered(registration) => registration,
-            DeferredRegistryOutcome::DuplicateRequest(_)
-            | DeferredRegistryOutcome::IdentityExhausted(_)
-            | DeferredRegistryOutcome::ParentCancelled
-            | DeferredRegistryOutcome::SessionClosed
-            | DeferredRegistryOutcome::DeadlineExpired
-            | DeferredRegistryOutcome::ContractViolation { .. }
-            | DeferredRegistryOutcome::OperationalFailure { .. } => {
+            DeferredRegistrationResult::Registered(registration) => registration,
+            DeferredRegistrationResult::DuplicateRequest(_)
+            | DeferredRegistrationResult::IdentityExhausted(_)
+            | DeferredRegistrationResult::ParentCancelled
+            | DeferredRegistrationResult::SessionClosed
+            | DeferredRegistrationResult::DeadlineExpired
+            | DeferredRegistrationResult::ContractViolation { .. }
+            | DeferredRegistrationResult::OperationalFailure { .. } => {
                 return Err(crate::error_helpers::argument_invalid());
             }
-            DeferredRegistryOutcome::BuilderRejected { error, .. } => match error {},
+            DeferredRegistrationResult::BuilderRejected { error, .. } => match error {},
         };
         self.registrations
             .send(RegistrationObservation {
@@ -170,7 +170,7 @@ impl RequestProcessor for TcpDeferredExpiryProcessor {
                 scheduled_at,
             })
             .map_err(|_| crate::error_helpers::argument_invalid())?;
-        Ok(HandlerOutcome::Deferred(registration))
+        Ok(ResponseAction::Deferred(registration))
     }
 
     fn request_ordering(
@@ -312,7 +312,7 @@ async fn real_tcp_protocol_timeout_sweeps_and_resumes_exactly_once() {
         )
         .await
         .expect("protocol timeout resumes through the canonical session executor");
-    assert!(matches!(outcome, DeferredResumeOutcome::Completed(_)));
+    assert!(matches!(outcome, DeferredResumeResult::Completed(_)));
 
     let response = client
         .receive_command()
@@ -328,6 +328,7 @@ async fn real_tcp_protocol_timeout_sweeps_and_resumes_exactly_once() {
     assert_eq!(admission.snapshot().retained_bytes(), 0);
     assert_eq!(registry.test_index_counts(), (0, 0, 0));
     assert_eq!(registry.test_claim_marker_count(), 0);
+    await_inflight_release(&mut harness.admission_events).await;
     let snapshot = admission_controller.snapshot();
     assert_eq!(snapshot.queued.current_count, 0);
     assert_eq!(snapshot.queued.current_bytes, 0);
@@ -417,13 +418,13 @@ async fn real_tcp_parent_service_shutdown_terminalizes_accepted_resume_without_a
         .await
         .expect("claim committed request before service stop")
     {
-        DeferredClaimOutcome::Claimed(claim) => claim,
-        DeferredClaimOutcome::NotFound
-        | DeferredClaimOutcome::AlreadyClaimed
-        | DeferredClaimOutcome::AlreadyCompleted
-        | DeferredClaimOutcome::ParentCancelled
-        | DeferredClaimOutcome::SessionClosed
-        | DeferredClaimOutcome::DeadlineExpired => panic!("committed request is claimable before service stop"),
+        DeferredClaimResult::Claimed(claim) => claim,
+        DeferredClaimResult::NotFound
+        | DeferredClaimResult::AlreadyClaimed
+        | DeferredClaimResult::AlreadyCompleted
+        | DeferredClaimResult::ParentCancelled
+        | DeferredClaimResult::SessionClosed
+        | DeferredClaimResult::DeadlineExpired => panic!("committed request is claimable before service stop"),
     };
     let entered = Arc::new(tokio::sync::Notify::new());
     let never_release = Arc::new(tokio::sync::Notify::new());
@@ -448,7 +449,7 @@ async fn real_tcp_parent_service_shutdown_terminalizes_accepted_resume_without_a
     let outcome = (&mut resume)
         .await
         .expect("service stop is a normal cancellation outcome");
-    assert_eq!(outcome, DeferredResumeOutcome::Cancelled);
+    assert_eq!(outcome, DeferredResumeResult::Cancelled);
     running.finish().await;
     let frame = client.receive_command().await;
     assert!(frame.is_none(), "service stop must not emit a response frame");

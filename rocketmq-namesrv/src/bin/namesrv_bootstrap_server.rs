@@ -32,14 +32,18 @@ use rocketmq_controller::ControllerConfig;
 #[cfg(feature = "embedded-controller")]
 use rocketmq_controller::RaftPeer;
 #[cfg(feature = "embedded-controller")]
-use rocketmq_controller::StorageBackendType;
+use rocketmq_controller::StorageEngineType;
 use rocketmq_error::fields;
 use rocketmq_error::CliErrorView;
+use rocketmq_error::CliExitCode;
 use rocketmq_error::CliVerbosity;
 use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
+use rocketmq_error::CORE_CONFIGURATION_INVALID;
+use rocketmq_error::CORE_CONFIGURATION_MISSING;
 use rocketmq_error::CORE_SERVICE_FAILED;
 use rocketmq_model::common::mix_all::string_to_properties;
+use rocketmq_model::common::mix_all::ROCKETMQ_HOME_ENV;
 use rocketmq_model::utils::env_utils::EnvUtils;
 use rocketmq_model::version::CURRENT_VERSION;
 use rocketmq_namesrv::bootstrap::Builder;
@@ -59,14 +63,82 @@ use rocketmq_runtime::ServiceLifecycleState;
 use rocketmq_runtime::ShutdownReason;
 use rocketmq_security_api::SecurityBootstrap;
 use rocketmq_security_api::SecurityBootstrapConfig;
-use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
+use rocketmq_security_api::SecurityBootstrapValidation;
 use rocketmq_security_api::SecurityContractViolation;
 use rocketmq_transport::api::ServerConfig;
 use rocketmq_transport::api::TlsMode;
 use rocketmq_transport::api::TransportClientConfig;
 use serde::Deserialize;
 use tracing::info;
+
+#[derive(Debug, Default, Deserialize)]
+struct StartupRuntimeFileOverrides {
+    runtime: Option<StartupRuntimeOverrides>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StartupRuntimeOverrides {
+    #[serde(alias = "worker_threads")]
+    worker_threads: Option<usize>,
+    #[serde(alias = "max_blocking_threads")]
+    max_blocking_threads: Option<usize>,
+}
+
+#[derive(Debug)]
+enum StartupRuntimeConfigError {
+    FileUnavailable,
+    Load(config::ConfigError),
+    Fields(config::ConfigError),
+    WorkerThreads,
+    MaxBlockingThreads,
+}
+
+impl std::fmt::Display for StartupRuntimeConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Only fixed constraints and the bounded config renderer cross the CLI boundary.
+        // Raw parser errors can contain file contents, paths, and credentials.
+        match self {
+            Self::FileUnavailable => f.write_str("NameServer config file does not exist or is not a file"),
+            Self::Load(error) => write!(
+                f,
+                "failed to load NameServer runtime configuration: {}",
+                parse_config_file::render_safe_config_error(error)
+            ),
+            Self::Fields(error) => write!(
+                f,
+                "invalid [runtime] section (workerThreads > 0; maxBlockingThreads 3..=512): {}",
+                parse_config_file::render_safe_config_error(error)
+            ),
+            Self::WorkerThreads => f.write_str("runtime.workerThreads must be greater than 0"),
+            Self::MaxBlockingThreads => {
+                f.write_str("runtime.maxBlockingThreads must be within the supported range (3..=512)")
+            }
+        }
+    }
+}
+
+impl std::error::Error for StartupRuntimeConfigError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Load(error) | Self::Fields(error) => Some(error),
+            Self::FileUnavailable | Self::WorkerThreads | Self::MaxBlockingThreads => None,
+        }
+    }
+}
+
+/// Neither `ROCKETMQ_HOME` nor `--rocketmqHome` supplied a home directory.
+#[derive(Debug)]
+struct RocketmqHomeNotSet;
+
+impl std::fmt::Display for RocketmqHomeNotSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("set the ROCKETMQ_HOME environment variable or pass --rocketmqHome")
+    }
+}
+
+impl std::error::Error for RocketmqHomeNotSet {}
 
 const LOGO: &str = r#"
       _____            _        _   __  __  ____         _____           _     _   _                         _____
@@ -112,32 +184,69 @@ fn print_release_version_if_requested(component: &str) -> bool {
 
 fn main() {
     if let Err(source) = try_main() {
-        let error = Error::new(&CORE_SERVICE_FAILED)
-            .with_boxed_source(source.into_boxed_dyn_error())
-            .with_context(
-                ErrorContext::new()
-                    .with_text(fields::OPERATION_DIAGNOSTIC, "run-nameserver-service")
-                    .with_secret_presence(fields::SOURCE_PRESENT),
-            );
-        let output = CliErrorView::from_error(&error).output(CliVerbosity::Default);
-        eprintln!("{}", output.stderr());
-        std::process::exit(output.exit_code().as_i32());
+        let (stderr, exit_code) = startup_failure_output(source);
+        eprintln!("{stderr}");
+        std::process::exit(exit_code.as_i32());
     }
+}
+
+/// Projects a startup failure onto the CLI boundary.
+///
+/// Typed startup errors render fixed, redaction-safe diagnostics after the stable error line.
+/// Every other source stays hidden behind the generic service failure.
+fn startup_failure_output(source: anyhow::Error) -> (String, CliExitCode) {
+    let (descriptor, context, diagnostic) = if let Some(error) = source.downcast_ref::<StartupRuntimeConfigError>() {
+        (
+            &CORE_CONFIGURATION_INVALID,
+            ErrorContext::new()
+                .with_text(fields::KEY, "runtime")
+                .with_secret_presence(fields::REASON_PRESENT),
+            Some(error.to_string()),
+        )
+    } else if let Some(error) = source.downcast_ref::<RocketmqHomeNotSet>() {
+        (
+            &CORE_CONFIGURATION_MISSING,
+            ErrorContext::new().with_text(fields::KEY, ROCKETMQ_HOME_ENV),
+            Some(error.to_string()),
+        )
+    } else {
+        (
+            &CORE_SERVICE_FAILED,
+            ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "run-nameserver-service")
+                .with_secret_presence(fields::SOURCE_PRESENT),
+            None,
+        )
+    };
+    let error = Error::new(descriptor)
+        .with_boxed_source(source.into_boxed_dyn_error())
+        .with_context(context);
+    let output = CliErrorView::from_error(&error).output(CliVerbosity::Default);
+    let stderr = match diagnostic {
+        Some(diagnostic) => format!("{}: {diagnostic}", output.stderr()),
+        None => output.stderr().to_string(),
+    };
+    (stderr, output.exit_code())
 }
 
 fn try_main() -> Result<()> {
     if print_release_version_if_requested("rocketmq-namesrv-rust") {
         return Ok(());
     }
-    let owner = RuntimeOwner::plan(namesrv_runtime_config())
-        .expect("namesrv runtime profile is internally valid")
+
+    let args = Args::parse();
+
+    let runtime_config = namesrv_runtime_config(&args).context("failed to resolve namesrv runtime configuration")?;
+
+    let owner = RuntimeOwner::plan(runtime_config)
+        .context("invalid NameServer runtime configuration")?
         .build()
         .context("failed to build namesrv runtime")?;
     let service_context = owner.root_context().component("rocketmq-namesrv-runtime");
     let lifecycle =
         ServiceLifecycle::from_env("rocketmq-namesrv").context("invalid NameServer lifecycle configuration")?;
 
-    let run_result = owner.block_on(run(service_context, lifecycle.clone()));
+    let run_result = owner.block_on(run(service_context, lifecycle.clone(), args));
     if run_result.is_err() {
         lifecycle.mark_failed();
     }
@@ -165,14 +274,43 @@ fn try_main() -> Result<()> {
     }
 }
 
-fn namesrv_runtime_config() -> RuntimeConfig {
-    RuntimeConfig::namesrv_default()
+fn namesrv_runtime_config(args: &Args) -> std::result::Result<RuntimeConfig, StartupRuntimeConfigError> {
+    let mut runtime_config = RuntimeConfig::namesrv_default();
+
+    let Some(config_file) = args.config_file.as_ref() else {
+        return Ok(runtime_config);
+    };
+
+    if !config_file.exists() || !config_file.is_file() {
+        return Err(StartupRuntimeConfigError::FileUnavailable);
+    }
+
+    let overrides = Config::builder()
+        .add_source(config::File::from(config_file.as_path()))
+        .build()
+        .map_err(StartupRuntimeConfigError::Load)?
+        .try_deserialize::<StartupRuntimeFileOverrides>()
+        .map_err(StartupRuntimeConfigError::Fields)?;
+
+    if let Some(runtime) = overrides.runtime {
+        if let Some(worker_threads) = runtime.worker_threads {
+            if worker_threads == 0 {
+                return Err(StartupRuntimeConfigError::WorkerThreads);
+            }
+            runtime_config.worker_threads = worker_threads;
+        }
+
+        if let Some(max_blocking_threads) = runtime.max_blocking_threads {
+            runtime_config = runtime_config
+                .with_max_blocking_threads(max_blocking_threads)
+                .map_err(|_| StartupRuntimeConfigError::MaxBlockingThreads)?;
+        }
+    }
+
+    Ok(runtime_config)
 }
 
-async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> Result<()> {
-    // Parse command line arguments first
-    let args = Args::parse();
-
+async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle, args: Args) -> Result<()> {
     initialize_remoting_defaults(CURRENT_VERSION as i32)
         .context("failed to initialize the immutable NameServer remoting defaults")?;
 
@@ -186,12 +324,8 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         return Ok(());
     }
 
-    // Validate ROCKETMQ_HOME is set
     if namesrv_config.rocketmq_home.is_empty() {
-        bail!(
-            "Please set the ROCKETMQ_HOME variable in your environment to match the location of the RocketMQ \
-             installation"
-        );
+        return Err(RocketmqHomeNotSet.into());
     }
 
     let mut telemetry_bootstrap = build_namesrv_telemetry_bootstrap_config(&namesrv_config);
@@ -207,7 +341,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     let bootstrap_config = telemetry_resolution.bootstrap;
     let security_bootstrap =
         SecurityBootstrapConfig::from_env().context("failed to load NameServer security bootstrap configuration")?;
-    let validated_security = validate_namesrv_security(
+    let security_validation = validate_namesrv_security(
         &security_bootstrap,
         &namesrv_config,
         &server_config,
@@ -233,8 +367,8 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         &resolved_filter,
         telemetry_guard.subscriber_install_status(),
     );
-    log_security_bootstrap(validated_security);
-    let transport_security = build_namesrv_transport_security(validated_security);
+    log_security_bootstrap(security_validation);
+    let transport_security = build_namesrv_transport_security(security_validation);
 
     lifecycle.set_observer(std::sync::Arc::new(
         rocketmq_observability::metrics::runtime::RuntimeMetricsRecorder::from_handle(
@@ -324,11 +458,11 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         rocketmq_runtime::RuntimeComponent::NameServer,
     )
     .record_business_drain(if shutdown_request.deadline.is_expired() {
-        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::DeadlineExceeded
+        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainStatus::DeadlineExceeded
     } else if boot_result.as_ref().is_ok_and(|report| report.is_healthy()) {
-        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::Drained
+        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainStatus::Drained
     } else {
-        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::Failed
+        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainStatus::Failed
     });
     let telemetry_report = match telemetry_flush_lease {
         Some(lease) => {
@@ -373,7 +507,7 @@ fn validate_namesrv_security(
     controller_config: Option<&EmbeddedControllerConfig>,
     prometheus_bind_addr: Option<SocketAddr>,
     probe_bind_addr: Option<SocketAddr>,
-) -> Result<SecurityBootstrapOutcome> {
+) -> Result<SecurityBootstrapValidation> {
     let bind_ip = server_config
         .bind_address
         .parse::<IpAddr>()
@@ -397,8 +531,8 @@ fn validate_namesrv_security(
         listeners.push(probe_bind_addr);
     }
     let has_public_listener = listeners.iter().any(|listener| !listener.ip().is_loopback());
-    let outcome = match security_bootstrap.validate(&listeners) {
-        Ok(outcome) => outcome,
+    let validation = match security_bootstrap.validate(&listeners) {
+        Ok(validation) => validation,
         Err(error)
             if error
                 .source()
@@ -410,7 +544,7 @@ fn validate_namesrv_security(
         Err(error) => return Err(error.into()),
     };
 
-    if matches!(outcome, SecurityBootstrapOutcome::Disabled)
+    if matches!(validation, SecurityBootstrapValidation::Disabled)
         && has_public_listener
         && !namesrv_config.allow_insecure_public_listener
     {
@@ -419,7 +553,7 @@ fn validate_namesrv_security(
         );
     }
 
-    if matches!(outcome, SecurityBootstrapOutcome::Validated(validated) if validated.profile() == SecurityBootstrapProfile::SecureEnforced)
+    if matches!(validation, SecurityBootstrapValidation::Validated(validated) if validated.profile() == SecurityBootstrapProfile::SecureEnforced)
     {
         if namesrv_config.allow_insecure_public_listener {
             bail!("allowInsecurePublicListener is incompatible with the secure-enforced profile");
@@ -440,15 +574,15 @@ fn validate_namesrv_security(
         }
     }
 
-    Ok(outcome)
+    Ok(validation)
 }
 
-fn log_security_bootstrap(outcome: SecurityBootstrapOutcome) {
-    match outcome {
-        SecurityBootstrapOutcome::Disabled => {
+fn log_security_bootstrap(validation: SecurityBootstrapValidation) {
+    match validation {
+        SecurityBootstrapValidation::Disabled => {
             tracing::warn!("NameServer security bootstrap is disabled because no security profile is configured")
         }
-        SecurityBootstrapOutcome::Validated(validated) => match validated.profile() {
+        SecurityBootstrapValidation::Validated(validated) => match validated.profile() {
             SecurityBootstrapProfile::DevelopmentInsecureLoopback => tracing::warn!(
                 profile = validated.profile().as_str(),
                 listener_count = validated.listener_count(),
@@ -870,7 +1004,8 @@ struct ControllerConfigOverrides {
     election_timeout_ms: Option<u64>,
     heartbeat_interval_ms: Option<u64>,
     storage_path: Option<String>,
-    storage_backend: Option<String>,
+    #[serde(rename = "storageBackend")]
+    storage_engine_type: Option<String>,
     enable_elect_unclean_master_local: Option<bool>,
 }
 
@@ -969,12 +1104,12 @@ fn apply_controller_config_overrides(
     if let Some(storage_path) = overrides.storage_path {
         controller_config.storage_path = storage_path;
     }
-    if let Some(storage_backend) = overrides.storage_backend {
-        controller_config.storage_backend = match storage_backend.to_ascii_lowercase().as_str() {
-            "rocks_db" | "rocksdb" => StorageBackendType::RocksDB,
-            "file" => StorageBackendType::File,
-            "memory" => StorageBackendType::Memory,
-            _ => bail!("invalid storageBackend: {}", storage_backend),
+    if let Some(storage_engine_type) = overrides.storage_engine_type {
+        controller_config.storage_engine_type = match storage_engine_type.to_ascii_lowercase().as_str() {
+            "rocks_db" | "rocksdb" => StorageEngineType::RocksDB,
+            "file" => StorageEngineType::File,
+            "memory" => StorageEngineType::Memory,
+            _ => bail!("invalid storageBackend: {}", storage_engine_type),
         };
     }
     if let Some(enable_elect_unclean_master_local) = overrides.enable_elect_unclean_master_local {
@@ -1008,12 +1143,14 @@ fn parse_raft_peers(value: &str) -> Result<Vec<RaftPeer>> {
 /// Command line arguments structure
 #[derive(Parser, Debug)]
 #[command(
-    name = "mqnamesrv",
-    author = "Apache RocketMQ",
-    version = "0.1.0",
-    about = "RocketMQ Name Server (Rust Implementation)",
-    long_about = "Apache RocketMQ Name Server - Rust implementation providing lightweight service discovery and \
-                  routing"
+    name = "rocketmq-namesrv-rust",
+    author,
+    version,
+    about = "RocketMQ-Rust NameServer",
+    long_about = "NameServer for RocketMQ-Rust, a Rust implementation of Apache RocketMQ.\n\n\
+                  Provides broker registration, liveness tracking, topic route discovery, \
+                  and namespaced key-value configuration management.\n\n\
+                  Project: https://github.com/mxsm/rocketmq-rust"
 )]
 struct Args {
     /// Name server config properties file
@@ -1072,6 +1209,25 @@ mod tests {
 
     use super::*;
 
+    #[cfg(feature = "embedded-controller")]
+    #[test]
+    fn controller_storage_engine_override_preserves_storage_backend_key() {
+        let overrides: ControllerConfigOverrides = Config::builder()
+            .add_source(config::File::from_str(
+                "storageBackend = \"memory\"",
+                config::FileFormat::Toml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        assert_eq!(overrides.storage_engine_type.as_deref(), Some("memory"));
+
+        let mut controller_config = ControllerConfig::default();
+        apply_controller_config_overrides(&mut controller_config, overrides).unwrap();
+        assert_eq!(controller_config.storage_engine_type, StorageEngineType::Memory);
+    }
+
     #[test]
     fn tls_properties_reject_invalid_policy_without_partial_updates() {
         let directory = tempfile::tempdir().unwrap();
@@ -1116,7 +1272,7 @@ mod tests {
 
     #[test]
     fn disabled_security_bootstrap_allows_public_listener_by_default() {
-        let outcome = validate_namesrv_security(
+        let validation = validate_namesrv_security(
             &rocketmq_security_api::SecurityBootstrap::Disabled,
             &NamesrvConfig::default(),
             &ServerConfig::default(),
@@ -1125,7 +1281,7 @@ mod tests {
             None,
         )
         .expect("the default compatibility mode should allow the legacy public listener");
-        assert_eq!(outcome, rocketmq_security_api::SecurityBootstrapOutcome::Disabled);
+        assert_eq!(validation, rocketmq_security_api::SecurityBootstrapValidation::Disabled);
 
         let namesrv = NamesrvConfig {
             allow_insecure_public_listener: false,
@@ -1304,11 +1460,11 @@ mod tests {
         let mut server = server;
         server.tls_config.enable = true;
         server.tls_config.server.mode = TlsMode::Enforcing;
-        let outcome = validate_namesrv_security(&security, &namesrv, &server, None, None, None)
+        let validation = validate_namesrv_security(&security, &namesrv, &server, None, None, None)
             .expect("complete secure profile should validate");
         assert!(matches!(
-            outcome,
-            SecurityBootstrapOutcome::Validated(validated)
+            validation,
+            SecurityBootstrapValidation::Validated(validated)
                 if validated.profile() == SecurityBootstrapProfile::SecureEnforced
         ));
     }
@@ -1332,14 +1488,14 @@ mod tests {
         };
         server.tls_config.enable = true;
         server.tls_config.server.mode = TlsMode::Enforcing;
-        let outcome = validate_namesrv_security(&security, &namesrv, &server, None, None, None)
+        let validation = validate_namesrv_security(&security, &namesrv, &server, None, None, None)
             .expect("secure bootstrap should validate before installing transport security");
         assert!(matches!(
-            outcome,
-            SecurityBootstrapOutcome::Validated(validated)
+            validation,
+            SecurityBootstrapValidation::Validated(validated)
                 if validated.profile() == SecurityBootstrapProfile::SecureEnforced && validated.listener_count() == 1
         ));
-        let transport_security = build_namesrv_transport_security(outcome);
+        let transport_security = build_namesrv_transport_security(validation);
         assert!(transport_security.is_secure_enforced());
         assert_eq!(
             transport_security.authorize_ingress(
@@ -1368,7 +1524,7 @@ mod tests {
             listen_port: 9876,
             ..ServerConfig::default()
         };
-        let development_outcome = validate_namesrv_security(
+        let development_validation = validate_namesrv_security(
             &development_bootstrap,
             &NamesrvConfig::default(),
             &development_server,
@@ -1378,12 +1534,12 @@ mod tests {
         )
         .expect("development bootstrap should validate its loopback listener");
         assert!(matches!(
-            development_outcome,
-            SecurityBootstrapOutcome::Validated(validated)
+            development_validation,
+            SecurityBootstrapValidation::Validated(validated)
                 if validated.profile() == SecurityBootstrapProfile::DevelopmentInsecureLoopback
                     && validated.listener_count() == 1
         ));
-        let development = build_namesrv_transport_security(development_outcome);
+        let development = build_namesrv_transport_security(development_validation);
         assert!(!development.is_secure_enforced());
         assert_eq!(
             development.authorize_ingress(
@@ -1399,7 +1555,7 @@ mod tests {
             allow_insecure_public_listener: true,
             ..NamesrvConfig::default()
         };
-        let disabled_outcome = validate_namesrv_security(
+        let disabled_validation = validate_namesrv_security(
             &SecurityBootstrap::Disabled,
             &disabled_namesrv,
             &ServerConfig::default(),
@@ -1408,8 +1564,8 @@ mod tests {
             None,
         )
         .expect("explicit Disabled migration mode should select compatibility transport");
-        assert_eq!(disabled_outcome, SecurityBootstrapOutcome::Disabled);
-        let disabled = build_namesrv_transport_security(disabled_outcome);
+        assert_eq!(disabled_validation, SecurityBootstrapValidation::Disabled);
+        let disabled = build_namesrv_transport_security(disabled_validation);
         assert!(!disabled.is_secure_enforced());
     }
 
@@ -1517,5 +1673,135 @@ mod tests {
             .expect_err("unknown durable keys must prevent startup");
 
         assert!(error.to_string().contains("unknown durable"));
+    }
+
+    fn runtime_config_from_toml(contents: &str) -> std::result::Result<RuntimeConfig, StartupRuntimeConfigError> {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("namesrv.toml");
+        std::fs::write(&path, contents).expect("write config file");
+        let args = Args::try_parse_from([
+            std::ffi::OsStr::new("mqnamesrv"),
+            std::ffi::OsStr::new("--configFile"),
+            path.as_os_str(),
+        ])
+        .expect("parse args");
+        namesrv_runtime_config(&args)
+    }
+
+    #[test]
+    fn namesrv_runtime_config_applies_overrides_to_runtime_planning() {
+        for keys in [
+            "workerThreads = 2\nmaxBlockingThreads = 8",
+            "worker_threads = 2\nmax_blocking_threads = 8",
+        ] {
+            let config = runtime_config_from_toml(&format!("[runtime]\n{keys}")).expect("runtime config");
+            let owner = RuntimeOwner::plan(config)
+                .expect("valid plan")
+                .build()
+                .expect("runtime owner");
+            assert_eq!(owner.config().worker_threads, 2);
+            assert_eq!(owner.config().max_blocking_threads, 8);
+            assert_eq!(owner.config().thread_name, "rocketmq-namesrv");
+            assert!(owner.config().enable_io);
+            assert!(owner.config().enable_time);
+            assert_eq!(
+                owner.block_on(async { tokio::runtime::Handle::current().metrics().num_workers() }),
+                2
+            );
+            assert!(owner.shutdown_runtime_blocking().expect("shutdown").is_healthy());
+        }
+    }
+
+    #[test]
+    fn namesrv_runtime_config_omitted_keys_retain_independent_defaults() {
+        let defaults = RuntimeConfig::namesrv_default();
+        for (contents, workers, blocking) in [
+            (
+                "productEnvName = 'test'",
+                defaults.worker_threads,
+                defaults.max_blocking_threads,
+            ),
+            ("[runtime]", defaults.worker_threads, defaults.max_blocking_threads),
+            ("[runtime]\nworkerThreads = 2", 2, defaults.max_blocking_threads),
+            ("[runtime]\nmaxBlockingThreads = 3", defaults.worker_threads, 3),
+            ("[runtime]\nmaxBlockingThreads = 512", defaults.worker_threads, 512),
+            (
+                include_str!("../../resource/namesrv-example.toml"),
+                defaults.worker_threads,
+                defaults.max_blocking_threads,
+            ),
+        ] {
+            let config = runtime_config_from_toml(contents).expect("runtime config");
+            assert_eq!(config.worker_threads, workers);
+            assert_eq!(config.max_blocking_threads, blocking);
+            RuntimeOwner::plan(config).expect("overrides must preserve valid blocking lane capacities");
+        }
+    }
+
+    #[test]
+    fn namesrv_runtime_config_no_file_falls_back_to_defaults() {
+        let args = Args::try_parse_from(["mqnamesrv"]).expect("parse args");
+        let config = namesrv_runtime_config(&args).expect("no config should use defaults");
+        let defaults = RuntimeConfig::namesrv_default();
+        assert_eq!(config.worker_threads, defaults.worker_threads);
+        assert_eq!(config.max_blocking_threads, defaults.max_blocking_threads);
+    }
+
+    #[test]
+    fn namesrv_runtime_config_rejects_invalid_counts() {
+        assert!(matches!(
+            runtime_config_from_toml("[runtime]\nworkerThreads = 0"),
+            Err(StartupRuntimeConfigError::WorkerThreads)
+        ));
+        for invalid in [0, 2, 513] {
+            assert!(matches!(
+                runtime_config_from_toml(&format!("[runtime]\nmaxBlockingThreads = {invalid}")),
+                Err(StartupRuntimeConfigError::MaxBlockingThreads)
+            ));
+        }
+    }
+
+    #[test]
+    fn namesrv_runtime_config_rejects_unknown_and_duplicate_fields() {
+        for fields in [
+            "workerThread = 2",
+            "maxBlockingThread = 8",
+            "workerThreads = 2\nworker_threads = 3",
+            "maxBlockingThreads = 8\nmax_blocking_threads = 9",
+        ] {
+            assert!(matches!(
+                runtime_config_from_toml(&format!("[runtime]\n{fields}")),
+                Err(StartupRuntimeConfigError::Fields(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn startup_failure_output_names_missing_rocketmq_home() {
+        let (stderr, exit_code) = startup_failure_output(anyhow::Error::from(RocketmqHomeNotSet));
+
+        assert_eq!(
+            stderr,
+            "ERROR core.configuration.missing: Required configuration is missing: set the ROCKETMQ_HOME environment \
+             variable or pass --rocketmqHome"
+        );
+        assert_eq!(exit_code, CliExitCode::CONFIG);
+    }
+
+    #[test]
+    fn startup_failure_output_hides_untyped_sources() {
+        let source = anyhow::anyhow!("token=secret-value").context("failed to parse namesrv configuration");
+
+        let (stderr, exit_code) = startup_failure_output(source);
+
+        assert_eq!(stderr, "ERROR core.service.failed: Service lifecycle operation failed");
+        assert_eq!(exit_code, CliExitCode::SOFTWARE);
+    }
+
+    #[test]
+    fn namesrv_runtime_config_malformed_toml_keeps_safe_diagnostic() {
+        let error = runtime_config_from_toml("[runtime\nworkerThreads = 4").expect_err("malformed config must fail");
+        assert!(matches!(error, StartupRuntimeConfigError::Load(_)));
+        assert!(error.to_string().contains("configuration file parse failed"));
     }
 }

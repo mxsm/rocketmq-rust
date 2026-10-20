@@ -27,13 +27,11 @@ use std::time::Instant;
 use crate::ClientError;
 use crate::ClientResult;
 use cheetah_string::CheetahString;
-use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_runtime::ChildServiceContext;
 use tokio::sync::Mutex;
 
-use crate::producer::local_transaction_state::LocalTransactionState;
 use crate::runtime::schedule_client_fixed_delay_task_with_context;
 use crate::runtime::ClientRuntime;
 use crate::runtime::ClientScheduledTaskHandle;
@@ -41,22 +39,6 @@ use crate::runtime::ClientScheduledTaskHandle;
 pub use crate::consumer::consumer_impl::default_mq_pull_consumer_impl::DefaultMQPullConsumerImpl;
 pub use crate::consumer::default_mq_pull_consumer::DefaultMQPullConsumer;
 pub use crate::consumer::default_mq_pull_consumer::MQPullConsumer;
-
-const MODERN_TRANSACTION_LISTENER: &str = "TransactionListener";
-const MODERN_TRACE_HOOKS: &str = "RocketMQ trace hooks";
-
-fn unsupported_legacy_api(api: &str, replacement: &str) -> ClientError {
-    ClientError::illegal_argument(format!(
-        "{api} is deprecated in the RocketMQ Java client and is not supported by rocketmq-client-rust; use \
-         {replacement} instead"
-    ))
-}
-
-fn unsupported_impl_api(api: &str) -> ClientError {
-    ClientError::illegal_argument(format!(
-        "{api} is a RocketMQ Java impl-package type and is not part of the rocketmq-client-rust public API"
-    ))
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScheduleServiceState {
@@ -130,7 +112,6 @@ impl PullScheduleCore {
             "rocketmq-client-classic-pull-schedule",
             refresh_interval,
             refresh_interval,
-            Duration::from_secs(5),
             move || {
                 let core = core.clone();
                 let due = due.clone();
@@ -421,71 +402,11 @@ impl PullTaskContext {
     }
 }
 
-#[deprecated(
-    since = "0.9.0",
-    note = "Java PullTaskImpl is deprecated; use MQPullConsumerScheduleService"
-)]
-#[derive(Debug, Clone, Default)]
-pub struct PullTaskImpl {
-    message_queue: Option<MessageQueue>,
-}
-
-impl PullTaskImpl {
-    pub fn new(message_queue: MessageQueue) -> Self {
-        Self {
-            message_queue: Some(message_queue),
-        }
-    }
-
-    pub fn message_queue(&self) -> Option<&MessageQueue> {
-        self.message_queue.as_ref()
-    }
-
-    pub fn run(&self) -> ClientResult<()> {
-        self.message_queue
-            .as_ref()
-            .map(|_| ())
-            .ok_or_else(|| ClientError::not_initialized("PullTaskImpl has no message queue"))
-    }
-}
-
-#[deprecated(
-    since = "0.9.0",
-    note = "Java RebalancePullImpl is deprecated with DefaultMQPullConsumer"
-)]
-#[derive(Debug, Clone, Default)]
-pub struct RebalancePullImpl;
-
-impl RebalancePullImpl {
-    pub fn new() -> ClientResult<Self> {
-        Ok(Self)
-    }
-}
-
 #[deprecated(since = "0.9.0", note = "Java MQHelper depends on DefaultMQPullConsumer")]
 #[derive(Debug, Clone, Default)]
 pub struct MQHelper;
 
 impl MQHelper {
-    /// Retains the Java-shaped helper signature without creating a hidden runtime.
-    ///
-    /// Use [`Self::reset_offset_by_timestamp_with_client_runtime`] for the runnable equivalent.
-    ///
-    /// # Errors
-    ///
-    /// Always returns an initialization error because this compatibility signature has no
-    /// application-owned [`ClientRuntime`].
-    pub fn reset_offset_by_timestamp(
-        _message_model: impl Into<CheetahString>,
-        _consumer_group: impl Into<CheetahString>,
-        _topic: impl Into<CheetahString>,
-        _timestamp: u64,
-    ) -> ClientResult<()> {
-        Err(ClientError::not_initialized(
-            "MQHelper requires an application-owned ClientRuntime; use reset_offset_by_timestamp_with_client_runtime",
-        ))
-    }
-
     /// Resets every queue offset for a topic to the position nearest the timestamp.
     ///
     /// The temporary Classic Pull consumer persists updated offsets during its bounded shutdown.
@@ -533,135 +454,10 @@ impl MQHelper {
     }
 }
 
-#[deprecated(
-    since = "0.9.0",
-    note = "Java TransactionCheckListener is deprecated; use TransactionListener"
-)]
-pub trait TransactionCheckListener {
-    fn check_local_transaction_state(&self, _message: &MessageExt) -> ClientResult<LocalTransactionState> {
-        Err(unsupported_legacy_api(
-            "TransactionCheckListener",
-            MODERN_TRANSACTION_LISTENER,
-        ))
-    }
-}
-
-#[deprecated(
-    since = "0.9.0",
-    note = "Java OpenTracing hooks are not part of the modern RocketMQ client trace API"
-)]
-#[derive(Debug, Clone, Default)]
-pub struct SendMessageOpenTracingHookImpl;
-
-impl SendMessageOpenTracingHookImpl {
-    pub fn new<T>(_tracer: T) -> Self {
-        Self
-    }
-
-    pub fn hook_name(&self) -> &'static str {
-        "SendMessageOpenTracingHook"
-    }
-
-    pub fn unsupported(&self) -> ClientResult<()> {
-        Err(unsupported_legacy_api(
-            "SendMessageOpenTracingHookImpl",
-            MODERN_TRACE_HOOKS,
-        ))
-    }
-}
-
-#[deprecated(
-    since = "0.9.0",
-    note = "Java OpenTracing hooks are not part of the modern RocketMQ client trace API"
-)]
-#[derive(Debug, Clone, Default)]
-pub struct ConsumeMessageOpenTracingHookImpl;
-
-impl ConsumeMessageOpenTracingHookImpl {
-    pub fn new<T>(_tracer: T) -> Self {
-        Self
-    }
-
-    pub fn hook_name(&self) -> &'static str {
-        "ConsumeMessageOpenTracingHook"
-    }
-
-    pub fn unsupported(&self) -> ClientResult<()> {
-        Err(unsupported_legacy_api(
-            "ConsumeMessageOpenTracingHookImpl",
-            MODERN_TRACE_HOOKS,
-        ))
-    }
-}
-
-#[deprecated(
-    since = "0.9.0",
-    note = "Java OpenTracing hooks are not part of the modern RocketMQ client trace API"
-)]
-#[derive(Debug, Clone, Default)]
-pub struct EndTransactionOpenTracingHookImpl;
-
-impl EndTransactionOpenTracingHookImpl {
-    pub fn new<T>(_tracer: T) -> Self {
-        Self
-    }
-
-    pub fn hook_name(&self) -> &'static str {
-        "EndTransactionOpenTracingHook"
-    }
-
-    pub fn unsupported(&self) -> ClientResult<()> {
-        Err(unsupported_legacy_api(
-            "EndTransactionOpenTracingHookImpl",
-            MODERN_TRACE_HOOKS,
-        ))
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct DoNothingClientRemotingProcessor;
-
-impl DoNothingClientRemotingProcessor {
-    pub fn new() -> Self {
-        Self
-    }
-
-    pub fn process_request(&self) -> Option<()> {
-        None
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct RebalanceImpl;
-
-impl RebalanceImpl {
-    pub fn new() -> ClientResult<Self> {
-        Err(unsupported_impl_api("RebalanceImpl"))
-    }
-
-    pub fn do_rebalance(&self) -> ClientResult<()> {
-        Err(unsupported_impl_api("RebalanceImpl"))
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct ConsumeRequest;
-
-impl ConsumeRequest {
-    pub fn new() -> Self {
-        Self
-    }
-
-    pub fn run(&self) -> ClientResult<()> {
-        Err(unsupported_impl_api("ConsumeRequest"))
-    }
-}
-
 #[cfg(test)]
 #[allow(deprecated)]
 mod tests {
     use super::*;
-    use crate::test_support::error_assertions::assert_invalid_argument;
     use crate::test_support::error_assertions::assert_not_initialized;
 
     #[tokio::test]
@@ -706,46 +502,5 @@ mod tests {
             &error,
             "MQPullConsumerScheduleService has no ClientRuntime; use with_client_runtime",
         );
-    }
-
-    #[test]
-    fn legacy_open_tracing_hooks_keep_java_hook_names() {
-        assert_eq!(
-            SendMessageOpenTracingHookImpl::new(()).hook_name(),
-            "SendMessageOpenTracingHook"
-        );
-        assert_eq!(
-            ConsumeMessageOpenTracingHookImpl::new(()).hook_name(),
-            "ConsumeMessageOpenTracingHook"
-        );
-        assert_eq!(
-            EndTransactionOpenTracingHookImpl::new(()).hook_name(),
-            "EndTransactionOpenTracingHook"
-        );
-    }
-
-    #[test]
-    fn transaction_check_listener_returns_typed_unsupported_error() {
-        struct Listener;
-        impl TransactionCheckListener for Listener {}
-
-        let error = Listener
-            .check_local_transaction_state(&MessageExt::default())
-            .expect_err("deprecated transaction listener should reject checks");
-
-        assert_invalid_argument(&error);
-    }
-
-    #[test]
-    fn impl_package_markers_do_not_panic() {
-        assert!(DoNothingClientRemotingProcessor::new().process_request().is_none());
-
-        let rebalance_error = RebalanceImpl::new().expect_err("impl-package RebalanceImpl should be unsupported");
-        assert_invalid_argument(&rebalance_error);
-
-        let consume_error = ConsumeRequest::new()
-            .run()
-            .expect_err("impl-package ConsumeRequest should be unsupported");
-        assert_invalid_argument(&consume_error);
     }
 }

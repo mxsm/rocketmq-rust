@@ -60,12 +60,7 @@ impl BrokerRuntime {
         self.initialize_deferred_lifecycle()?;
         let (mut prepared_processor, _fast_request_processor) = self.init_processor_checked()?;
         self.initialize_consumer_lag_observability();
-        let service_context = self.composition.state.service_context.as_ref().ok_or_else(|| {
-            BrokerStartupError::initialization(
-                "service_context",
-                "broker remoting servers require an injected service context".to_owned(),
-            )
-        })?;
+        let service_context = &self.composition.state.service_context;
         let admission = self
             .composition
             .request_pipeline
@@ -121,15 +116,7 @@ impl BrokerRuntime {
             .startup_journal
             .complete(BrokerComponent::RequestProcessors);
 
-        let Some(remoting_server_task_group) = self.broker_task_group_or_current(
-            "rocketmq-broker.remoting-server",
-            "failed to start broker remoting servers outside Tokio runtime",
-        ) else {
-            return Err(BrokerStartupError::component_start_detail(
-                "remoting_servers",
-                "a Tokio runtime and owned task group are required",
-            ));
-        };
+        let remoting_server_task_group = self.broker_component_task_group("rocketmq-broker.remoting-server");
         self.lifecycle.remoting_server_task_group = Some(remoting_server_task_group.clone());
 
         let broker_config = self.composition.state.broker_config();
@@ -255,17 +242,26 @@ impl BrokerRuntime {
 
         if !self.composition.control_plane.broadcast_offset_scan_started {
             let broadcast_offset_manager = self.composition.state.broadcast_offset_manager.clone();
+            let scan_cancellation = self.lifecycle.scheduled_tasks.group().cancellation_token();
             self.lifecycle
-                .scheduled_task_manager
-                .add_fixed_rate_no_overlap_task(SCAN_INTERVAL, SCAN_INTERVAL, move |cancellation| {
-                    let broadcast_offset_manager = broadcast_offset_manager.clone();
-                    async move {
-                        if !cancellation.is_cancelled() {
-                            broadcast_offset_manager.scan_offset_data();
+                .scheduled_tasks
+                .schedule(
+                    rocketmq_runtime::ScheduledTaskConfig::fixed_rate_no_overlap(
+                        "broker.broadcast-offset.scan",
+                        SCAN_INTERVAL,
+                    )
+                    .with_initial_delay(SCAN_INTERVAL),
+                    rocketmq_runtime::ScheduledExecutionPolicy::default(),
+                    move || {
+                        let cancellation = scan_cancellation.clone();
+                        let broadcast_offset_manager = broadcast_offset_manager.clone();
+                        async move {
+                            if !cancellation.is_cancelled() {
+                                broadcast_offset_manager.scan_offset_data();
+                            }
                         }
-                        Ok(())
-                    }
-                })
+                    },
+                )
                 .map_err(|error| BrokerStartupError::component_start("broadcast_offset_manager", error))?;
             self.composition.control_plane.broadcast_offset_scan_started = true;
         }
@@ -316,11 +312,11 @@ mod tests {
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
-    use rocketmq_transport::api::EmbeddedDispatchOutcome;
-    use rocketmq_transport::api::HandlerOutcome;
+    use rocketmq_transport::api::EmbeddedDispatchResult;
     use rocketmq_transport::api::RemotingRequest;
     use rocketmq_transport::api::RemotingResponse;
     use rocketmq_transport::api::RequestProcessor;
+    use rocketmq_transport::api::ResponseAction;
 
     use super::prepared_transport_security;
     use crate::processor::dispatcher::BrokerRequestProcessor;
@@ -336,9 +332,9 @@ mod tests {
         async fn process(
             &mut self,
             _request: &mut RemotingRequest,
-        ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+        ) -> crate::broker_error::BrokerResult<ResponseAction> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            Ok(HandlerOutcome::Reply(RemotingResponse::empty_response(
+            Ok(ResponseAction::Reply(RemotingResponse::empty_response(
                 ResponseCode::Success as i32,
             )))
         }
@@ -375,7 +371,7 @@ mod tests {
         )
         .await
         .expect("coarse ingress should continue to Broker ACL");
-        let EmbeddedDispatchOutcome::Reply(plan) = allowed else {
+        let EmbeddedDispatchResult::Reply(plan) = allowed else {
             panic!("explicitly disabled Broker ACL should reach the leaf")
         };
         assert_eq!(plan.response_code(), ResponseCode::Success as i32);
@@ -403,7 +399,7 @@ mod tests {
         )
         .await
         .expect("Broker ACL denial should be a remoting response");
-        let EmbeddedDispatchOutcome::Reply(plan) = denied else {
+        let EmbeddedDispatchResult::Reply(plan) = denied else {
             panic!("unconfigured Broker ACL should fail closed with one reply")
         };
         assert_eq!(plan.response_code(), ResponseCode::NoPermission as i32);

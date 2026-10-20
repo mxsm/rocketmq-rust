@@ -39,8 +39,8 @@ pub use posix_file_segment::PosixProvider;
 pub use posix_file_segment::PosixProviderIoSnapshot;
 pub use provider_impl::ProviderKind;
 
-#[trait_variant::make(TieredStoreProvider: Send)]
-pub trait TieredStoreProviderInner: Sync + Clone + 'static {
+#[trait_variant::make(Send)]
+pub trait TieredStoreProvider: Sync + Clone + 'static {
     async fn create_segment(
         &self,
         operation: StoreOperation,

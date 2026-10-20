@@ -239,16 +239,17 @@ pub fn decode_checkpoint_set(bytes: &[u8]) -> AdminResult<ReleaseCheckpointSetMa
 
 pub fn encode_checkpoint_set(manifest: &ReleaseCheckpointSetManifest) -> AdminResult<Vec<u8>> {
     verify_checkpoint_set(manifest)?;
-    serde_json::to_vec_pretty(manifest).map_err(|error| AdminError::backend_source("encode checkpoint set", error))
+    serde_json::to_vec_pretty(manifest)
+        .map_err(|error| AdminError::operation_failed_with_source("encode checkpoint set", error))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointArtifact;
-    use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointBackend;
     use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointOffsets;
     use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointStorageIdentity;
+    use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointStoreKind;
 
     fn artifact(checkpoint_id: &str) -> ReleaseCheckpointArtifact {
         ReleaseCheckpointArtifact {
@@ -278,7 +279,7 @@ mod tests {
         StoreReleaseCheckpointManifest {
             artifact: artifact(&format!("store-{member}")),
             member_id: member.to_string(),
-            backend: ReleaseCheckpointBackend::Local,
+            store_kind: ReleaseCheckpointStoreKind::Local,
             offsets: ReleaseCheckpointOffsets {
                 appended_offset: 120,
                 durable_offset: 120,
@@ -331,7 +332,7 @@ mod tests {
         store.store = Some(
             rocketmq_protocol::protocol::body::release_checkpoint::MaintenanceStoreCapabilities {
                 member_id: "broker-a".to_string(),
-                backend: ReleaseCheckpointBackend::Local,
+                store_kind: ReleaseCheckpointStoreKind::Local,
                 storage_identity: ReleaseCheckpointStorageIdentity {
                     volume_id: "volume-a".to_string(),
                     wal_generation: 7,

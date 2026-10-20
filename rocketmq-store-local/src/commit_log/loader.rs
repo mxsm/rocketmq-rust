@@ -34,9 +34,9 @@ use super::load::CommitLogMappingMode;
 use super::load::CommitLogMappingOptions;
 use super::load::CommitLogMappingPlan;
 use super::load::CommitLogMetadataCollectionOptions;
-use super::load::HintOutcome;
 use super::load::LoadStatistics;
 use super::load::RecoveryFilePrefetch;
+use super::load::RecoveryHintReport;
 use super::load::RecoveryMmapAdvice;
 use crate::mapped_file::DefaultMappedFile;
 use crate::mapped_file::MappedFile;
@@ -178,7 +178,7 @@ impl CommitLogLoader {
         apply_memory_hints: H,
     ) -> io::Result<(Vec<Arc<T>>, LoadStatistics)>
     where
-        H: Fn(&T) -> (HintOutcome, HintOutcome) + Sync,
+        H: Fn(&T) -> (RecoveryHintReport, RecoveryHintReport) + Sync,
     {
         let start = std::time::Instant::now();
         let mut stats = LoadStatistics {
@@ -263,7 +263,7 @@ impl CommitLogLoader {
         apply_memory_hints: &H,
     ) -> io::Result<Vec<Arc<T>>>
     where
-        H: Fn(&T) -> (HintOutcome, HintOutcome) + Sync,
+        H: Fn(&T) -> (RecoveryHintReport, RecoveryHintReport) + Sync,
     {
         let results: Result<Vec<_>, io::Error> = entries
             .par_iter()
@@ -293,7 +293,7 @@ impl CommitLogLoader {
         apply_memory_hints: &H,
     ) -> io::Result<Vec<Arc<T>>>
     where
-        H: Fn(&T) -> (HintOutcome, HintOutcome) + Sync,
+        H: Fn(&T) -> (RecoveryHintReport, RecoveryHintReport) + Sync,
     {
         let mut mapped_files = Vec::with_capacity(entries.len());
 
@@ -313,18 +313,22 @@ impl CommitLogLoader {
         (adapter.open)(entry.metadata().path.as_path(), self.mapped_file_size, entry.mode())
     }
 
-    fn apply_memory_hints<T>(&self, mapped_file: &T, adapter: &CommitLogLoadAdapter<T>) -> (HintOutcome, HintOutcome) {
+    fn apply_memory_hints<T>(
+        &self,
+        mapped_file: &T,
+        adapter: &CommitLogLoadAdapter<T>,
+    ) -> (RecoveryHintReport, RecoveryHintReport) {
         let Some((mmap, file_name)) = (adapter.recovery_mapping)(mapped_file) else {
-            return (HintOutcome::not_attempted(), HintOutcome::not_attempted());
+            return (RecoveryHintReport::not_attempted(), RecoveryHintReport::not_attempted());
         };
         let mmap_advice_outcome = apply_recovery_mmap_advice(self.recovery_mmap_advice, mmap, file_name);
         let file_prefetch_outcome = apply_recovery_file_prefetch(self.recovery_file_prefetch, mmap, file_name);
         (mmap_advice_outcome, file_prefetch_outcome)
     }
 
-    fn apply_native_memory_hints(&self, mapped_file: &DefaultMappedFile) -> (HintOutcome, HintOutcome) {
+    fn apply_native_memory_hints(&self, mapped_file: &DefaultMappedFile) -> (RecoveryHintReport, RecoveryHintReport) {
         if mapped_file.is_lazy_mmap_enabled() && !mapped_file.is_mapped() {
-            return (HintOutcome::not_attempted(), HintOutcome::not_attempted());
+            return (RecoveryHintReport::not_attempted(), RecoveryHintReport::not_attempted());
         }
         let file_name = mapped_file.get_file_name().as_str();
         match mapped_file.with_mapped_slice(|mapped| {
@@ -334,7 +338,7 @@ impl CommitLogLoader {
             )
         }) {
             Ok(Some(outcomes)) => outcomes,
-            Ok(None) => (HintOutcome::not_attempted(), HintOutcome::not_attempted()),
+            Ok(None) => (RecoveryHintReport::not_attempted(), RecoveryHintReport::not_attempted()),
             Err(error) => {
                 tracing::warn!(
                     target: "rocketmq_store::log_file::commit_log_loader",
@@ -342,7 +346,7 @@ impl CommitLogLoader {
                     error = ?error,
                     "CommitLog recovery hints skipped because mapped bytes were unavailable"
                 );
-                (HintOutcome::not_attempted(), HintOutcome::not_attempted())
+                (RecoveryHintReport::not_attempted(), RecoveryHintReport::not_attempted())
             }
         }
     }

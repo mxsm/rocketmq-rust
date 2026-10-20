@@ -113,7 +113,7 @@ fn fuzz_decode_sidecars(input: &[u8]) {
 fn fuzz_decode_log(input: &[u8], mut expected_sequence: u64, expected_generation: u64) {
     let mut remaining = input;
     loop {
-        let Ok(codec::DecodeOutcome::Frame(frame)) =
+        let Ok(codec::LedgerFrameDecodeResult::Frame(frame)) =
             codec::decode_next_frame(remaining, expected_sequence, expected_generation)
         else {
             return;

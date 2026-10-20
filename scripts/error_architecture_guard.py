@@ -71,9 +71,9 @@ ANYHOW_RESULT_ALLOWLIST: dict[str, str] = {
     "rocketmq-dashboard/rocketmq-dashboard-web/backend/src/main.rs": "web backend process boundary",
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/main.rs": "TUI process boundary",
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/rocketmq_tui_app.rs": "TUI terminal runtime boundary",
-    "rocketmq-ai/rocketmq-mcp/src/app.rs": "R0 public compatibility wrappers forward to typed McpError bootstrap and tracing APIs",
-    "rocketmq-ai/rocketmq-mcp/src/transport/stdio.rs": "R0 public compatibility wrapper forwards to the typed stdio service API",
-    "rocketmq-ai/rocketmq-mcp/src/transport/streamable_http.rs": "R0 public compatibility wrappers forward to typed HTTP service and router APIs",
+    "rocketmq-ai/rocketmq-mcp-query/src/app.rs": "R0 public compatibility wrappers forward to typed McpError bootstrap and tracing APIs",
+    "rocketmq-ai/rocketmq-mcp-query/src/transport/stdio.rs": "R0 public compatibility wrapper forwards to the typed stdio service API",
+    "rocketmq-ai/rocketmq-mcp-query/src/transport/streamable_http.rs": "R0 public compatibility wrappers forward to typed HTTP service and router APIs",
 }
 
 TRANSPORT_REMOTING_ERROR_LEGACY_FUNCTIONS = (
@@ -631,7 +631,7 @@ def check_required_mapping_adapters() -> list[Finding]:
             "CliErrorView::from_error",
             "CliVerbosity::Verbose",
             ".output(verbosity)",
-            "ProcessOutcome::Error(output.exit_code())",
+            "StoreInspectionExitStatus::Error(output.exit_code())",
             "Error::caused_by(&STORAGE_WRITE_FAILED, source)",
             ".with_secret_presence(fields::SOURCE_PRESENT)",
         ],

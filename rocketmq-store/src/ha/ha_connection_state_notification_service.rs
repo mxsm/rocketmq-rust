@@ -21,6 +21,8 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::task::service_task::ServiceTask;
 use rocketmq_runtime::task::service_task::ServiceTaskContext;
 use rocketmq_runtime::task::ServiceManager;
+use rocketmq_runtime::ShutdownDeadline;
+use rocketmq_runtime::TaskGroup;
 use tokio::sync::Mutex;
 use tracing::error;
 
@@ -195,7 +197,12 @@ impl ServiceTask for Inner {
 }
 
 impl HAConnectionStateNotificationService {
-    pub fn new(ha_service: GeneralHAServiceReference, message_store_config: Arc<MessageStoreConfig>) -> Self {
+    /// Creates the notification service; its loop runs under `parent_task_group`.
+    pub fn new(
+        ha_service: GeneralHAServiceReference,
+        message_store_config: Arc<MessageStoreConfig>,
+        parent_task_group: TaskGroup,
+    ) -> Self {
         let inner = Arc::new(Inner {
             ha_service,
             message_store_config,
@@ -203,13 +210,18 @@ impl HAConnectionStateNotificationService {
             last_check_time_stamp: AtomicU64::new(0),
         });
         HAConnectionStateNotificationService {
-            service_manager: ServiceManager::new_arc_legacy_compatibility(inner.clone()),
+            service_manager: ServiceManager::new_arc_with_task_group(inner.clone(), parent_task_group),
             inner,
         }
     }
 
     pub async fn shutdown(&self) {
         let _ = self.service_manager.shutdown().await;
+    }
+
+    /// Stops the notification loop, aborting it if it is still running at `deadline`.
+    pub async fn shutdown_until(&self, deadline: ShutdownDeadline) {
+        let _ = self.service_manager.shutdown_until(deadline).await;
     }
 
     pub async fn start(&self) -> Result<(), HAError> {

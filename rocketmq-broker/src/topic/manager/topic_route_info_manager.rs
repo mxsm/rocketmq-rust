@@ -27,13 +27,12 @@ use rocketmq_model::common::mix_all;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
-use rocketmq_runtime::tokio_lock::RocketMQTokioMutex;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::TaskGroup;
 use tracing::info;
 use tracing::warn;
 
-use crate::broker_runtime::broker_task_group_or_current;
+use crate::broker_runtime::broker_component_task_group;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::topic::route::topic_route_to_subscribe_queues;
 use crate::topic::route::BrokerPublishRoute;
@@ -43,7 +42,7 @@ const LOCK_TIMEOUT_MILLIS: u64 = 3000;
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) struct TopicRouteInfoManager {
-    pub(crate) lock: Arc<RocketMQTokioMutex<()>>,
+    pub(crate) lock: Arc<tokio::sync::Mutex<()>>,
     pub(crate) topic_route_table: Arc<DashMap<CheetahString /* Topic */, TopicRouteData>>,
     pub(crate) broker_addr_table:
         Arc<DashMap<CheetahString /* Broker Name */, HashMap<u64 /* brokerId */, CheetahString /* address */>>>,
@@ -51,7 +50,7 @@ pub(crate) struct TopicRouteInfoManager {
     pub(crate) topic_subscribe_info_table: Arc<DashMap<CheetahString /* topic */, HashSet<MessageQueue>>>,
     broker_outer_api: BrokerOuterAPI,
     load_balance_poll_name_server_interval: u64,
-    service_context: Option<ChildServiceContext>,
+    service_context: ChildServiceContext,
     running: Arc<AtomicBool>,
     task_group: Arc<Mutex<Option<TaskGroup>>>,
 }
@@ -77,10 +76,10 @@ impl TopicRouteInfoManager {
     pub fn new(
         broker_outer_api: BrokerOuterAPI,
         load_balance_poll_name_server_interval: u64,
-        service_context: Option<ChildServiceContext>,
+        service_context: ChildServiceContext,
     ) -> Self {
         TopicRouteInfoManager {
-            lock: Arc::new(RocketMQTokioMutex::new(())),
+            lock: Arc::new(tokio::sync::Mutex::new(())),
             topic_route_table: Arc::new(DashMap::new()),
             broker_addr_table: Arc::new(DashMap::new()),
             topic_publish_info_table: Arc::new(DashMap::new()),
@@ -102,14 +101,7 @@ impl TopicRouteInfoManager {
             return;
         }
 
-        let Some(group) = broker_task_group_or_current(
-            self.service_context.as_ref(),
-            "rocketmq-broker.topic-route-info",
-            "failed to start TopicRouteInfoManager outside Tokio runtime",
-        ) else {
-            self.running.store(false, Ordering::Release);
-            return;
-        };
+        let group = broker_component_task_group(&self.service_context, "rocketmq-broker.topic-route-info");
         let mut task_group = self.task_group.lock();
         let cancellation_token = group.cancellation_token();
         let manager = self.clone();
@@ -195,11 +187,7 @@ impl TopicRouteInfoManager {
         is_need_update_publish_info: bool,
         is_need_update_subscribe_info: bool,
     ) {
-        if let Some(_lock) = self
-            .lock
-            .try_lock_timeout(Duration::from_millis(LOCK_TIMEOUT_MILLIS))
-            .await
-        {
+        if let Ok(_lock) = tokio::time::timeout(Duration::from_millis(LOCK_TIMEOUT_MILLIS), self.lock.lock()).await {
             let topic_route_data = self
                 .broker_outer_api
                 .get_topic_route_info_from_name_server(topic, GET_TOPIC_ROUTE_TIMEOUT, true)

@@ -1,0 +1,3940 @@
+// Copyright 2026 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+use serde_json::Value;
+use std::time::Instant;
+
+use rmcp::model::CallToolRequestParams;
+use rmcp::model::CallToolResult;
+use rmcp::model::ContentBlock;
+use rmcp::model::JsonObject;
+use rmcp::model::Resource;
+use rmcp::ErrorData;
+use rocketmq_observability::metrics::mcp::McpFailureClass;
+use rocketmq_observability::metrics::mcp::McpMetricsRecorder;
+use rocketmq_observability::metrics::mcp::McpOperationKind;
+use rocketmq_observability::metrics::mcp::McpOperationStatus;
+use tracing::Instrument;
+
+use crate::adapter::query_facade::ReadOnlyQuery;
+use crate::guard::context::RequestContext;
+use crate::guard::sanitizer::ToolOutput;
+use crate::guard::Guard;
+use crate::guard::GuardRejection;
+use crate::model::contract::QueryResult;
+use crate::model::contract::ServerToolResponse;
+use crate::model::contract::ToolResponse;
+use crate::resources::uri::ResourceKind;
+use crate::resources::uri::RocketmqResourceUri;
+use crate::resources::uri::JSON_MIME_TYPE;
+use crate::tools::broker_tools;
+use crate::tools::catalog::ToolDescriptor;
+use crate::tools::catalog::ToolId;
+#[cfg(feature = "change-planning")]
+use crate::tools::change_tools;
+use crate::tools::cluster_tools;
+use crate::tools::config_tools;
+use crate::tools::connection_tools;
+use crate::tools::consumer_tools;
+use crate::tools::diagnosis_tools;
+use crate::tools::infrastructure_tools;
+use crate::tools::message_tools;
+use crate::tools::proxy_tools;
+use crate::tools::response_format::ResponseFormat;
+use crate::tools::topic_tools;
+
+mod observation_calls;
+
+#[derive(Clone)]
+pub(crate) enum ToolFailure {
+    Rejected(ToolRejection),
+    Operational(ToolExecutionError),
+}
+
+/// The kind of logical RocketMQ entity a `not_found` Tool error refers to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum NotFoundEntity {
+    Cluster,
+    Topic,
+    ConsumerGroup,
+    Broker,
+    Message,
+    Proxy,
+    Controller,
+    Client,
+}
+
+impl NotFoundEntity {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Cluster => "cluster",
+            Self::Topic => "topic",
+            Self::ConsumerGroup => "consumer group",
+            Self::Broker => "broker",
+            Self::Message => "message",
+            Self::Proxy => "proxy",
+            Self::Controller => "controller",
+            Self::Client => "client",
+        }
+    }
+
+    pub(crate) const fn suggestion(self) -> &'static str {
+        match self {
+            Self::Cluster => "Ask the server operator to verify the RocketMQ cluster name configured for this cluster.",
+            Self::Topic => "Confirm the Topic name with rocketmq_list_topics.",
+            Self::ConsumerGroup => "Confirm the Consumer Group name with rocketmq_list_consumer_groups.",
+            Self::Broker => "Confirm the Broker name with rocketmq_get_cluster_overview.",
+            Self::Message => "Verify the message identifier and that the message is still retained.",
+            Self::Proxy => "Use a Proxy name configured for the selected cluster.",
+            Self::Controller => "Use a Controller name configured for the selected cluster.",
+            Self::Client => {
+                "List the connected clients again with rocketmq_list_consumer_connections; a client alias is valid \
+                 only while that client is connected."
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum ToolRejection {
+    InvalidArguments {
+        _source: Option<std::sync::Arc<crate::McpError>>,
+    },
+    /// The request was well formed, but the selected entity does not exist.
+    NotFound {
+        entity: NotFoundEntity,
+    },
+    PermissionDenied,
+    UnauthorizedScope,
+    TenantMismatch,
+    ClusterNotAllowed,
+    /// The caller used up a per-minute budget. One request is due after `retry_after_ms`.
+    RateLimited {
+        retry_after_ms: u64,
+    },
+    /// The cluster already serves as many requests as it may at once.
+    ConcurrencyLimited,
+    ChangePlanningDisabled,
+    OutputTooLarge {
+        actual_bytes: usize,
+        max_bytes: usize,
+    },
+    TimedOut {
+        timeout_ms: u64,
+    },
+    Cancelled,
+    /// The paged result a cursor continued is gone; only a new first page can be served.
+    CursorExpired,
+    /// The cursor was not issued by this server for these arguments and this page size.
+    CursorInvalid,
+    /// The result does not fit the bounded snapshot budget, so it cannot be paged.
+    ResultTooLarge,
+    AliasInputBoundExceeded,
+}
+
+#[derive(Clone, Debug, thiserror::Error)]
+pub(crate) enum ToolExecutionError {
+    #[error("RocketMQ source is unavailable")]
+    Backend(#[source] Option<std::sync::Arc<crate::McpError>>),
+    #[error("MCP request failed internally")]
+    Internal(#[source] Option<std::sync::Arc<crate::McpError>>),
+}
+
+impl std::fmt::Display for ToolFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.public_message())
+    }
+}
+
+impl std::fmt::Debug for ToolFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+impl ToolFailure {
+    pub(crate) fn invalid_arguments(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Rejected(ToolRejection::InvalidArguments {
+            _source: Some(std::sync::Arc::new(crate::McpError::from_source(error))),
+        })
+    }
+    pub(crate) fn backend(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Operational(ToolExecutionError::Backend(Some(std::sync::Arc::new(
+            crate::McpError::from_source(error),
+        ))))
+    }
+
+    pub(crate) const fn not_found(entity: NotFoundEntity) -> Self {
+        Self::Rejected(ToolRejection::NotFound { entity })
+    }
+
+    /// Returns the entity a `not_found` failure refers to.
+    pub(crate) const fn not_found_entity(&self) -> Option<NotFoundEntity> {
+        match self {
+            Self::Rejected(ToolRejection::NotFound { entity }) => Some(*entity),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn internal(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Operational(ToolExecutionError::Internal(Some(std::sync::Arc::new(
+            crate::McpError::from_source(error),
+        ))))
+    }
+
+    pub(crate) fn code(&self) -> &'static str {
+        match self {
+            Self::Rejected(ToolRejection::InvalidArguments { .. }) => "invalid_arguments",
+            Self::Rejected(ToolRejection::NotFound { .. }) => "not_found",
+            Self::Operational(ToolExecutionError::Backend(_)) => "source_unavailable",
+            Self::Rejected(ToolRejection::PermissionDenied) => "permission_denied",
+            Self::Rejected(ToolRejection::UnauthorizedScope) => "unauthorized_scope",
+            Self::Rejected(ToolRejection::TenantMismatch) => "tenant_mismatch",
+            Self::Rejected(ToolRejection::ClusterNotAllowed) => "cluster_not_allowed",
+            Self::Rejected(ToolRejection::RateLimited { .. }) => "rate_limited",
+            Self::Rejected(ToolRejection::ConcurrencyLimited) => "concurrency_limited",
+            Self::Rejected(ToolRejection::ChangePlanningDisabled) => "change_planning_disabled",
+            Self::Operational(ToolExecutionError::Internal(_)) => "internal_error",
+            Self::Rejected(ToolRejection::OutputTooLarge { .. }) => "output_too_large",
+            Self::Rejected(ToolRejection::TimedOut { .. }) => "backend_timeout",
+            Self::Rejected(ToolRejection::Cancelled) => "cancelled",
+            Self::Rejected(ToolRejection::CursorExpired) => "cursor_expired",
+            Self::Rejected(ToolRejection::CursorInvalid) => "cursor_invalid",
+            Self::Rejected(ToolRejection::ResultTooLarge) => "result_too_large",
+            Self::Rejected(ToolRejection::AliasInputBoundExceeded) => "identifier_input_bound_exceeded",
+        }
+    }
+
+    fn retryable(&self) -> bool {
+        matches!(
+            self,
+            Self::Operational(ToolExecutionError::Backend(_))
+                | Self::Rejected(ToolRejection::RateLimited { .. })
+                | Self::Rejected(ToolRejection::ConcurrencyLimited)
+                | Self::Rejected(ToolRejection::TimedOut { .. })
+        )
+    }
+
+    /// Returns how long a caller that was refused by a budget has to wait for the next request.
+    const fn retry_after_ms(&self) -> Option<u64> {
+        match self {
+            Self::Rejected(ToolRejection::RateLimited { retry_after_ms }) => Some(*retry_after_ms),
+            _ => None,
+        }
+    }
+
+    fn suggestions(&self) -> Vec<&'static str> {
+        match self {
+            Self::Rejected(ToolRejection::InvalidArguments { .. }) => {
+                vec!["Correct the arguments using the Tool input schema and retry."]
+            }
+            Self::Rejected(ToolRejection::NotFound { entity }) => vec![entity.suggestion()],
+            Self::Operational(ToolExecutionError::Backend(_)) => {
+                vec!["Retry after verifying the selected cluster and RocketMQ availability."]
+            }
+            Self::Rejected(ToolRejection::PermissionDenied) => {
+                vec!["Use a principal or profile authorized for this Tool."]
+            }
+            Self::Rejected(ToolRejection::UnauthorizedScope) => vec!["Request the required OAuth scope and retry."],
+            Self::Rejected(ToolRejection::TenantMismatch) => {
+                vec!["Use credentials issued for the selected cluster tenant."]
+            }
+            Self::Rejected(ToolRejection::ClusterNotAllowed) => {
+                vec!["Select a cluster present in the caller allow-list."]
+            }
+            Self::Rejected(ToolRejection::RateLimited { .. }) => {
+                vec!["Retry after retry_after_ms milliseconds; the budget refills evenly over a minute."]
+            }
+            Self::Rejected(ToolRejection::ConcurrencyLimited) => {
+                vec!["Retry shortly: the cluster serves as many requests as this server allows at once."]
+            }
+            Self::Rejected(ToolRejection::ChangePlanningDisabled) => {
+                vec!["Enable change planning explicitly and use an operator-authorized profile."]
+            }
+            Self::Operational(ToolExecutionError::Internal(_)) => {
+                vec!["Report the request identifier to the server operator."]
+            }
+            Self::Rejected(ToolRejection::OutputTooLarge { .. }) => {
+                vec!["Reduce the page limit or narrow the query filter."]
+            }
+            Self::Rejected(ToolRejection::TimedOut { .. }) => {
+                vec!["Retry after checking RocketMQ availability or narrow the workflow scope."]
+            }
+            Self::Rejected(ToolRejection::Cancelled) => {
+                vec!["Retry the request if the cancellation was not intentional."]
+            }
+            Self::Rejected(ToolRejection::CursorExpired) => {
+                vec!["Send the request again without cursor to start from the first page."]
+            }
+            Self::Rejected(ToolRejection::CursorInvalid) => vec![
+                "Pass next_cursor back unchanged, with the same arguments and limit as the request that returned it.",
+            ],
+            Self::Rejected(ToolRejection::ResultTooLarge) => {
+                vec!["Narrow the request, for example with a more specific filter."]
+            }
+            Self::Rejected(ToolRejection::AliasInputBoundExceeded) => {
+                vec!["Report the request identifier to the server operator."]
+            }
+        }
+    }
+
+    fn metric_failure_label(&self) -> McpFailureClass {
+        match self {
+            Self::Rejected(ToolRejection::InvalidArguments { .. })
+            | Self::Rejected(ToolRejection::CursorExpired)
+            | Self::Rejected(ToolRejection::CursorInvalid) => McpFailureClass::InvalidRequest,
+            Self::Rejected(ToolRejection::NotFound { .. }) => McpFailureClass::NotFound,
+            // An identifier a source reported is too long to be given a pseudonym. No source is
+            // down, so this must not count against availability.
+            Self::Rejected(ToolRejection::AliasInputBoundExceeded) => McpFailureClass::BoundExceeded,
+            Self::Rejected(ToolRejection::PermissionDenied)
+            | Self::Rejected(ToolRejection::UnauthorizedScope)
+            | Self::Rejected(ToolRejection::TenantMismatch)
+            | Self::Rejected(ToolRejection::ClusterNotAllowed)
+            | Self::Rejected(ToolRejection::ChangePlanningDisabled) => McpFailureClass::PermissionDenied,
+            Self::Rejected(ToolRejection::RateLimited { .. }) | Self::Rejected(ToolRejection::ConcurrencyLimited) => {
+                McpFailureClass::RateLimited
+            }
+            Self::Operational(ToolExecutionError::Backend(_)) | Self::Rejected(ToolRejection::TimedOut { .. }) => {
+                McpFailureClass::SourceUnavailable
+            }
+            Self::Rejected(ToolRejection::OutputTooLarge { .. }) | Self::Rejected(ToolRejection::ResultTooLarge) => {
+                McpFailureClass::OutputTooLarge
+            }
+            Self::Operational(ToolExecutionError::Internal(_)) => McpFailureClass::Internal,
+            // The caller withdrew the request: the server did not fail.
+            Self::Rejected(ToolRejection::Cancelled) => McpFailureClass::Cancelled,
+        }
+    }
+
+    fn public_message(&self) -> String {
+        match self {
+            Self::Rejected(ToolRejection::InvalidArguments { .. }) => "invalid arguments".to_string(),
+            Self::Rejected(ToolRejection::NotFound { entity }) => format!("{} was not found", entity.label()),
+            Self::Operational(ToolExecutionError::Backend(_)) => "RocketMQ source is unavailable".to_string(),
+            Self::Rejected(ToolRejection::PermissionDenied) => "permission denied for this Tool".to_string(),
+            Self::Rejected(ToolRejection::UnauthorizedScope) => {
+                "permission denied: required OAuth scope is unavailable".to_string()
+            }
+            Self::Rejected(ToolRejection::TenantMismatch) => "permission denied: tenant boundary mismatch".to_string(),
+            Self::Rejected(ToolRejection::ClusterNotAllowed) => "permission denied: cluster is not allowed".to_string(),
+            Self::Rejected(ToolRejection::RateLimited { .. }) => "rate limit exceeded for this Tool".to_string(),
+            Self::Rejected(ToolRejection::ConcurrencyLimited) => {
+                "concurrency limit reached for this cluster".to_string()
+            }
+            Self::Rejected(ToolRejection::ChangePlanningDisabled) => {
+                "change planning disabled by server policy".to_string()
+            }
+            Self::Operational(ToolExecutionError::Internal(_)) => "MCP request failed internally".to_string(),
+            Self::Rejected(ToolRejection::OutputTooLarge {
+                actual_bytes,
+                max_bytes,
+            }) => format!("tool output is {actual_bytes} bytes; maximum is {max_bytes} bytes"),
+            Self::Rejected(ToolRejection::TimedOut { timeout_ms }) => {
+                format!("RocketMQ source timed out after {timeout_ms} ms")
+            }
+            Self::Rejected(ToolRejection::Cancelled) => "RocketMQ source query was cancelled".to_string(),
+            Self::Rejected(ToolRejection::CursorExpired) => "paged result has expired".to_string(),
+            Self::Rejected(ToolRejection::CursorInvalid) => "cursor is not valid for this request".to_string(),
+            Self::Rejected(ToolRejection::ResultTooLarge) => "result is too large to page".to_string(),
+            Self::Rejected(ToolRejection::AliasInputBoundExceeded) => "identifier safety bound exceeded".to_string(),
+        }
+    }
+
+    fn has_private_detail(&self) -> bool {
+        matches!(
+            self,
+            Self::Operational(ToolExecutionError::Backend(_)) | Self::Operational(ToolExecutionError::Internal(_))
+        )
+    }
+}
+
+struct ToolOperationRecorder {
+    metrics: McpMetricsRecorder,
+    operation: &'static str,
+    started_at: Instant,
+    status: McpOperationStatus,
+    span: tracing::Span,
+}
+
+impl ToolOperationRecorder {
+    fn new(metrics: McpMetricsRecorder, operation: &'static str) -> Self {
+        Self {
+            metrics,
+            operation,
+            started_at: Instant::now(),
+            status: McpOperationStatus::Failure,
+            span: rocketmq_observability::trace::mcp::tool_span(operation),
+        }
+    }
+
+    fn span(&self) -> tracing::Span {
+        self.span.clone()
+    }
+
+    fn denied(&mut self) {
+        self.status = McpOperationStatus::Denied;
+    }
+
+    fn observe_call_result(&mut self, result: &Result<CallToolResult, ErrorData>) {
+        if self.status == McpOperationStatus::Denied {
+            return;
+        }
+        self.status = match result {
+            Ok(result) if !result.is_error.unwrap_or(false) => McpOperationStatus::Success,
+            Ok(_) | Err(_) => McpOperationStatus::Failure,
+        };
+    }
+}
+
+impl Drop for ToolOperationRecorder {
+    fn drop(&mut self) {
+        rocketmq_observability::trace::mcp::record_status(&self.span, self.status);
+        self.metrics.record_operation(
+            McpOperationKind::Tool,
+            self.operation,
+            self.status,
+            self.started_at.elapsed(),
+        );
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct ToolErrorContent<'a> {
+    schema_version: &'static str,
+    request_id: &'a str,
+    correlation_id: &'a str,
+    tool: &'a str,
+    code: &'static str,
+    /// Present only for `not_found`: the kind of entity that does not exist.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entity: Option<NotFoundEntity>,
+    /// Present only for `invalid_arguments` whose arguments could be located.
+    #[serde(skip_serializing_if = "<[ArgumentViolation]>::is_empty")]
+    violations: &'a [ArgumentViolation],
+    retryable: bool,
+    /// Present only for `rate_limited`: the wait after which one request is due.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retry_after_ms: Option<u64>,
+    message: String,
+    suggestions: Vec<&'static str>,
+}
+
+/// One argument that failed validation: where it is and which kind of rule it broke.
+///
+/// It never carries the offending value, and its path uses only names that the Tool's input
+/// schema declares, so nothing a caller sent is echoed back.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct ArgumentViolation {
+    /// JSON Pointer to the argument; `*` stands for a property the schema does not declare.
+    path: String,
+    constraint: ViolationConstraint,
+}
+
+/// The closed set of rule kinds that an argument violation reports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ViolationConstraint {
+    Required,
+    Type,
+    MinLength,
+    MaxLength,
+    Minimum,
+    Maximum,
+    Enum,
+    Pattern,
+    AdditionalProperty,
+    Other,
+}
+
+/// How many violations one error reports; the first ones are enough to correct a call.
+const MAX_REPORTED_VIOLATIONS: usize = 3;
+const UNDECLARED_PROPERTY: &str = "*";
+
+impl From<GuardRejection> for ToolFailure {
+    fn from(error: GuardRejection) -> Self {
+        match error {
+            GuardRejection::InvalidArgument => Self::Rejected(ToolRejection::InvalidArguments { _source: None }),
+            GuardRejection::PermissionDenied => Self::Rejected(ToolRejection::PermissionDenied),
+            GuardRejection::UnauthorizedScope => Self::Rejected(ToolRejection::UnauthorizedScope),
+            GuardRejection::TenantMismatch => Self::Rejected(ToolRejection::TenantMismatch),
+            GuardRejection::ClusterNotAllowed => Self::Rejected(ToolRejection::ClusterNotAllowed),
+            GuardRejection::RateLimited { retry_after_ms } => {
+                Self::Rejected(ToolRejection::RateLimited { retry_after_ms })
+            }
+            GuardRejection::ConcurrencyLimited => Self::Rejected(ToolRejection::ConcurrencyLimited),
+            GuardRejection::ChangePlanningDisabled => Self::Rejected(ToolRejection::ChangePlanningDisabled),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ToolExecutor<A> {
+    adapter: A,
+    guard: Guard,
+    context: RequestContext,
+    metrics: McpMetricsRecorder,
+}
+
+impl<A> ToolExecutor<A>
+where
+    A: ReadOnlyQuery,
+{
+    pub(crate) fn new(adapter: A, guard: Guard) -> Self {
+        let context = guard.local_request_context();
+        Self {
+            adapter,
+            guard,
+            context,
+            metrics: McpMetricsRecorder::noop(),
+        }
+    }
+
+    pub(crate) fn with_metrics(mut self, metrics: McpMetricsRecorder) -> Self {
+        self.metrics = metrics;
+        self
+    }
+
+    pub(crate) fn with_request_context(mut self, context: RequestContext) -> Self {
+        self.context = context;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn call(&self, request: CallToolRequestParams) -> Result<CallToolResult, ErrorData> {
+        self.call_with_request_id(request, "test-request").await
+    }
+
+    pub(crate) async fn call_with_request_id(
+        &self,
+        request: CallToolRequestParams,
+        request_id: &str,
+    ) -> Result<CallToolResult, ErrorData> {
+        let operation = ToolId::resolve(request.name.as_ref())
+            .map(|tool_id| tool_id.descriptor().name)
+            .unwrap_or("unknown_tool");
+        let mut operation_recorder = ToolOperationRecorder::new(self.metrics.clone(), operation);
+        let span = operation_recorder.span();
+        let result = self
+            .execute(request, request_id, &mut operation_recorder)
+            .instrument(span)
+            .await;
+        operation_recorder.observe_call_result(&result);
+        result
+    }
+
+    /// Renders a Tool error and counts it under its bounded failure label.
+    fn error_result(
+        &self,
+        operation: &'static str,
+        tool_name: &str,
+        request_id: &str,
+        error: ToolFailure,
+    ) -> CallToolResult {
+        self.located_error_result(operation, tool_name, request_id, error, &[])
+    }
+
+    /// Renders a Tool error together with the arguments that caused it.
+    fn located_error_result(
+        &self,
+        operation: &'static str,
+        tool_name: &str,
+        request_id: &str,
+        error: ToolFailure,
+        violations: &[ArgumentViolation],
+    ) -> CallToolResult {
+        self.metrics
+            .record_failure(McpOperationKind::Tool, operation, error.metric_failure_label());
+        located_error_result(operation, tool_name, request_id, error, violations)
+    }
+
+    async fn execute(
+        &self,
+        request: CallToolRequestParams,
+        request_id: &str,
+        operation_recorder: &mut ToolOperationRecorder,
+    ) -> Result<CallToolResult, ErrorData> {
+        let tool_name = request.name.to_string();
+        let tool_id = match ToolId::resolve(&tool_name) {
+            Some(tool_id) => tool_id,
+            None => {
+                self.metrics
+                    .record_failure(McpOperationKind::Tool, "unknown_tool", McpFailureClass::InvalidRequest);
+                return Err(ErrorData::invalid_params("unknown tool", None));
+            }
+        };
+        let descriptor = tool_id.descriptor();
+        let mut arguments = request.arguments.unwrap_or_default();
+        let audit_arguments = audit_arguments(&arguments);
+        let guarded_call =
+            match self
+                .guard
+                .begin_tool_call(&self.context, &tool_name, descriptor.risk_level, &audit_arguments)
+            {
+                Ok(guarded_call) => guarded_call,
+                Err(error) => {
+                    operation_recorder.denied();
+                    // The Guard resolves the cluster before the input schema is checked, and that
+                    // is its only argument error: locate it here.
+                    let violations = match error {
+                        GuardRejection::InvalidArgument => cluster_violation(&arguments),
+                        _ => None,
+                    };
+                    return Ok(self.located_error_result(
+                        descriptor.name,
+                        &tool_name,
+                        request_id,
+                        error.into(),
+                        violations.as_slice(),
+                    ));
+                }
+            };
+        // The Guard authorized exactly this cluster, so the query reads it instead of
+        // resolving one from the raw arguments.
+        if let Some(cluster) = guarded_call.cluster() {
+            arguments.insert("cluster".to_string(), Value::String(cluster.to_string()));
+        }
+
+        if let Err(violations) = validate_input(&descriptor, &arguments) {
+            return Ok(guarded_call.finish_result(self.located_error_result(
+                descriptor.name,
+                &tool_name,
+                request_id,
+                ToolFailure::Rejected(ToolRejection::InvalidArguments { _source: None }),
+                &violations,
+            )));
+        }
+        // What is left are the arguments of the query. Only a list Tool has the argument.
+        let response_format = ResponseFormat::take(&mut arguments);
+
+        let result = match tool_id {
+            ToolId::GetClusterOverview => {
+                let args = decode_args::<cluster_tools::ClusterOverviewArgs>(arguments.clone());
+                let args = match args {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.cluster_overview(args).await.and_then(|output| {
+                    let summary = summary_cluster_overview(&output);
+                    let cluster = output.cluster.clone();
+                    let resource = RocketmqResourceUri::new(cluster.clone(), ResourceKind::Overview);
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
+                })
+            }
+            ToolId::ListTopics => {
+                let args = match decode_args::<topic_tools::ListTopicsArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.list_topics(args).await.and_then(|output| {
+                    let summary = summary_list_topics(&output);
+                    let cluster = output.cluster.clone();
+                    let resource = RocketmqResourceUri::new(cluster.clone(), ResourceKind::Topics);
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
+                })
+            }
+            ToolId::DescribeTopic => {
+                let args = match decode_args::<topic_tools::DescribeTopicArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.describe_topic(args).await.and_then(|output| {
+                    let summary = summary_describe_topic(&output);
+                    let cluster = output.cluster.clone();
+                    let resource = RocketmqResourceUri::new(cluster.clone(), ResourceKind::Topic(output.topic.clone()));
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
+                })
+            }
+            ToolId::GetTopicRoute => {
+                let args = match decode_args::<topic_tools::QueryTopicRouteArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.query_topic_route(args).await.and_then(|output| {
+                    let summary = summary_topic_route(&output);
+                    let cluster = output.cluster.clone();
+                    let resource =
+                        RocketmqResourceUri::new(cluster.clone(), ResourceKind::TopicRoute(output.topic.clone()));
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
+                })
+            }
+            ToolId::ListConsumerGroups => {
+                let args = match decode_args::<consumer_tools::ListConsumerGroupsArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                if response_format.is_concise() {
+                    // The names need no read about each group, so this format skips those reads.
+                    self.adapter.list_consumer_group_names(args).await.and_then(|output| {
+                        let summary = summary_consumer_group_names(&output);
+                        let cluster = output.cluster.clone();
+                        let resource = RocketmqResourceUri::new(cluster.clone(), ResourceKind::ConsumerGroups);
+                        success_result(descriptor, request_id, cluster, summary, output, resource)
+                    })
+                } else {
+                    self.adapter.list_consumer_groups(args).await.and_then(|output| {
+                        let summary = summary_consumer_groups(&output);
+                        let cluster = output.cluster.clone();
+                        let resource = RocketmqResourceUri::new(cluster.clone(), ResourceKind::ConsumerGroups);
+                        success_result(descriptor, request_id, cluster, summary, output, resource)
+                    })
+                }
+            }
+            ToolId::GetConsumerLag => {
+                let args = match decode_args::<consumer_tools::QueryConsumerLagArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.query_consumer_lag(args).await.and_then(|output| {
+                    let summary = summary_consumer_lag(&output);
+                    let cluster = output.cluster.clone();
+                    let resource = RocketmqResourceUri::new(
+                        cluster.clone(),
+                        ResourceKind::ConsumerLag {
+                            group: output.consumer_group.clone(),
+                            topic: output.topic.clone(),
+                        },
+                    );
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
+                })
+            }
+            ToolId::DescribeBroker => {
+                let args = match decode_args::<broker_tools::DescribeBrokerArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.describe_broker(args).await.and_then(|output| {
+                    let summary = summary_describe_broker(&output);
+                    let cluster = output.cluster.clone();
+                    let resource =
+                        RocketmqResourceUri::new(cluster.clone(), ResourceKind::Broker(output.broker_name.clone()));
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
+                })
+            }
+            ToolId::ListBrokers => {
+                let args = match decode_args::<broker_tools::ListBrokersArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                // No Resource link: the `brokers` Resource publishes the same rows but is authorized as
+                // the cluster overview, which a caller of this Tool need not hold.
+                self.adapter.list_brokers(args).await.and_then(|output| {
+                    let summary = summary_list_brokers(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::GetBrokerDiagnostics => {
+                let args = match decode_args::<broker_tools::BrokerDiagnosticsArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.broker_diagnostics(args).await.and_then(|output| {
+                    let summary = summary_broker_diagnostics(&output);
+                    let cluster = output.cluster.clone();
+                    let resource = RocketmqResourceUri::new(
+                        cluster.clone(),
+                        ResourceKind::BrokerDiagnostics(output.broker_name.clone()),
+                    );
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
+                })
+            }
+            ToolId::GetBrokerConfigSummary => {
+                let args = match decode_args::<config_tools::BrokerConfigSummaryArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.broker_config_summary(args).await.and_then(|output| {
+                    let summary = summary_broker_config(&output);
+                    let cluster = output.cluster.clone();
+                    let resource = RocketmqResourceUri::new(
+                        cluster.clone(),
+                        ResourceKind::BrokerConfigSummary(output.broker_name.clone()),
+                    );
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
+                })
+            }
+            ToolId::GetBrokerLogFilterState => {
+                let args = match decode_args::<config_tools::BrokerLogFilterStateArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.broker_log_filter_state(args).await.and_then(|output| {
+                    let summary = summary_broker_log_filter(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::GetProxyDrainState => {
+                let args = match decode_args::<proxy_tools::ProxyDrainStateArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.proxy_drain_state(args).await.and_then(|output| {
+                    let summary = summary_proxy_drain(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::DiagnoseConsumerLag => {
+                let args = match decode_args::<diagnosis_tools::DiagnoseConsumerLagArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                let cluster = args.cluster.clone();
+                let resource = RocketmqResourceUri::new(
+                    cluster.clone(),
+                    ResourceKind::ConsumerLag {
+                        group: args.consumer_group.clone(),
+                        topic: args.topic.clone(),
+                    },
+                );
+                self.adapter.diagnose_consumer_lag(args).await.and_then(|output| {
+                    let summary = output.summary.clone();
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
+                })
+            }
+            ToolId::DiagnoseConsumerGroup => {
+                let args = match decode_args::<diagnosis_tools::DiagnoseConsumerGroupArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                let cluster = args.cluster.clone();
+                self.adapter.diagnose_consumer_group(args).await.and_then(|output| {
+                    let summary = output.summary.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::DiagnoseBrokerHealth => {
+                let args = match decode_args::<diagnosis_tools::DiagnoseBrokerHealthArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                let cluster = args.cluster.clone();
+                self.adapter.diagnose_broker_health(args).await.and_then(|output| {
+                    let summary = output.summary.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::GetClusterHealth => {
+                let args = match decode_args::<diagnosis_tools::GetClusterHealthArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                let cluster = args.cluster.clone();
+                self.adapter.cluster_health(args).await.and_then(|output| {
+                    let summary = output.summary.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::DiagnoseMessageDelivery => {
+                let args = match decode_args::<diagnosis_tools::DiagnoseMessageDeliveryArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                let cluster = args.cluster.clone();
+                // Looking up one message is what `rocketmq_get_message_metadata` does, so a call
+                // that names a message needs the permission for that Tool too.
+                if args.message_id.is_some()
+                    && !self
+                        .guard
+                        .allows_tool_on_cluster(&self.context, ToolId::GetMessageMetadata, &cluster)
+                {
+                    operation_recorder.denied();
+                    return Ok(guarded_call.finish_result(self.located_error_result(
+                        descriptor.name,
+                        &tool_name,
+                        request_id,
+                        ToolFailure::Rejected(ToolRejection::PermissionDenied),
+                        &[ArgumentViolation {
+                            path: "/message_id".to_string(),
+                            constraint: ViolationConstraint::Other,
+                        }],
+                    )));
+                }
+                self.adapter.diagnose_message_delivery(args).await.and_then(|output| {
+                    let summary = output.summary.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::ListConsumerConnections => {
+                let args = match decode_args::<connection_tools::ListConsumerConnectionsArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.list_consumer_connections(args).await.and_then(|output| {
+                    let summary = summary_consumer_connections(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::ListProducerConnections => {
+                let args = match decode_args::<connection_tools::ListProducerConnectionsArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.list_producer_connections(args).await.and_then(|output| {
+                    let summary = summary_producer_connections(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::GetMessageMetadata => {
+                let args = match decode_args::<message_tools::MessageMetadataArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.message_metadata(args).await.and_then(|output| {
+                    let summary = summary_message_metadata(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::GetTopicConfigState => {
+                let args = match decode_args::<config_tools::TopicConfigStateArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.topic_config_state(args).await.and_then(|output| {
+                    let summary = summary_topic_config_state(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::GetConsumerGroupConfigState => {
+                let args = match decode_args::<config_tools::ConsumerGroupConfigStateArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.consumer_group_config_state(args).await.and_then(|output| {
+                    let summary = summary_consumer_group_config_state(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::GetTopicStats => {
+                let args = match decode_args::<topic_tools::GetTopicStatsArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                let page = args.page.clone();
+                self.adapter.topic_stats(args).await.and_then(|output| {
+                    let summary = summary_topic_stats(&output);
+                    let cluster = output.cluster.clone();
+                    let resource =
+                        RocketmqResourceUri::new(cluster.clone(), ResourceKind::TopicStats(output.topic.clone()))
+                            .with_page(page);
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
+                })
+            }
+            ToolId::GetTopicConfig => {
+                let args = match decode_args::<config_tools::GetTopicConfigArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.topic_config(args).await.and_then(|output| {
+                    let summary = summary_topic_config(&output);
+                    let cluster = output.cluster.clone();
+                    let resource =
+                        RocketmqResourceUri::new(cluster.clone(), ResourceKind::TopicConfig(output.topic.clone()));
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
+                })
+            }
+            ToolId::GetConsumerGroupDetails => {
+                let args = match decode_args::<consumer_tools::GetConsumerGroupDetailsArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.consumer_group_details(args).await.and_then(|output| {
+                    let summary = summary_consumer_group_details(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::GetConsumerProgress => {
+                let args = match decode_args::<consumer_tools::GetConsumerProgressArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                let page = args.page.clone();
+                self.adapter.consumer_progress(args).await.and_then(|output| {
+                    let summary = summary_consumer_progress(&output);
+                    let cluster = output.cluster.clone();
+                    let resource = RocketmqResourceUri::new(
+                        cluster.clone(),
+                        ResourceKind::ConsumerProgress(output.consumer_group.clone()),
+                    )
+                    .with_page(page);
+                    success_result(descriptor, request_id, cluster, summary, output, resource)
+                })
+            }
+            ToolId::GetHaStatus => {
+                let args = match decode_args::<infrastructure_tools::GetHaStatusArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.ha_status(args).await.and_then(|output| {
+                    let summary = summary_ha_status(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::GetControllerMetadata => {
+                let args = match decode_args::<infrastructure_tools::GetControllerMetadataArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.controller_metadata(args).await.and_then(|output| {
+                    let summary = summary_controller_metadata(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::GetNameserverConfigSummary => {
+                let args = match decode_args::<infrastructure_tools::GetNameserverConfigSummaryArgs>(arguments.clone())
+                {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.nameserver_config_summary(args).await.and_then(|output| {
+                    let summary = summary_nameserver_config(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::ListTopicConsumers => {
+                Box::pin(self.list_topic_consumers(descriptor, request_id, arguments.clone())).await
+            }
+            ToolId::GetConsumerRunningInfo => {
+                Box::pin(self.consumer_running_info(descriptor, request_id, arguments.clone())).await
+            }
+            ToolId::GetDlqSummary => Box::pin(self.dlq_summary(descriptor, request_id, arguments.clone())).await,
+            ToolId::GetLiteBrokerInfo => {
+                Box::pin(self.lite_broker_info(descriptor, request_id, arguments.clone())).await
+            }
+            #[cfg(feature = "security-admin")]
+            ToolId::ListAclUsers => Box::pin(self.list_acl_users(descriptor, request_id, arguments.clone())).await,
+            ToolId::QueryMessageTrace | ToolId::FindMessagesByKey => {
+                // Looking messages up is what `rocketmq_get_message_metadata` does, so a Tool that
+                // does it needs the permission for that Tool too.
+                let may_look_up = guarded_call.cluster().is_some_and(|cluster| {
+                    self.guard
+                        .allows_tool_on_cluster(&self.context, ToolId::GetMessageMetadata, cluster)
+                });
+                if !may_look_up {
+                    operation_recorder.denied();
+                    return Ok(guarded_call.finish_result(self.located_error_result(
+                        descriptor.name,
+                        &tool_name,
+                        request_id,
+                        ToolFailure::Rejected(ToolRejection::PermissionDenied),
+                        &[ArgumentViolation {
+                            path: observation_calls::lookup_argument(tool_id).to_string(),
+                            constraint: ViolationConstraint::Other,
+                        }],
+                    )));
+                }
+                Box::pin(self.look_up_messages(tool_id, descriptor, request_id, arguments.clone())).await
+            }
+            ToolId::ListClusters => {
+                if let Err(error) = decode_args::<cluster_tools::ListClustersArgs>(arguments.clone()) {
+                    return Ok(guarded_call.finish_result(self.error_result(
+                        descriptor.name,
+                        &tool_name,
+                        request_id,
+                        error,
+                    )));
+                }
+                // The Guard checked the role and the scope. Which clusters the caller sees is the
+                // same decision a call to this Tool on that cluster would get.
+                let clusters = self
+                    .adapter
+                    .configured_clusters()
+                    .into_iter()
+                    .filter(|entry| self.guard.allows_tool_on_cluster(&self.context, tool_id, &entry.name))
+                    .collect();
+                let output = cluster_tools::ListClustersOutput { clusters };
+                let summary = summary_list_clusters(&output);
+                success_server_result(descriptor, request_id, summary, output)
+            }
+            #[cfg(feature = "change-planning")]
+            ToolId::PlanCreateTopic => {
+                let args = match decode_args::<change_tools::CreateTopicArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                let cluster = args.cluster.clone();
+                self.adapter
+                    .list_topics(topic_tools::ListTopicsArgs {
+                        cluster: Some(cluster.clone()),
+                        filter: None,
+                        page: crate::model::contract::PageRequest::default(),
+                    })
+                    .await
+                    .and_then(|current| {
+                        let current = canonical_current_state(&current)?;
+                        let output = change_tools::plan_create_topic_with_current_state(args, current);
+                        let summary = summary_change_plan(&output);
+                        success_live_result(descriptor, request_id, cluster, summary, output)
+                    })
+            }
+            #[cfg(feature = "change-planning")]
+            ToolId::PlanUpdateTopicConfig => {
+                let args = match decode_args::<change_tools::UpdateTopicConfigArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                let cluster = args.cluster.clone();
+                self.adapter
+                    .describe_topic(topic_tools::DescribeTopicArgs {
+                        cluster: cluster.clone(),
+                        topic: args.desired.topic.clone(),
+                        page: crate::model::contract::PageRequest::default(),
+                    })
+                    .await
+                    .and_then(|current| {
+                        let current = canonical_current_state(&current)?;
+                        let output = change_tools::plan_update_topic_config_with_current_state(args, current);
+                        let summary = summary_change_plan(&output);
+                        success_live_result(descriptor, request_id, cluster, summary, output)
+                    })
+            }
+            #[cfg(feature = "change-planning")]
+            ToolId::PlanUpdateTopicPermissions => {
+                let args = match decode_args::<change_tools::UpdateTopicPermArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                let cluster = args.cluster.clone();
+                self.adapter
+                    .describe_topic(topic_tools::DescribeTopicArgs {
+                        cluster: cluster.clone(),
+                        topic: args.desired.topic.clone(),
+                        page: crate::model::contract::PageRequest::default(),
+                    })
+                    .await
+                    .and_then(|current| {
+                        let current = canonical_current_state(&current)?;
+                        let output = change_tools::plan_update_topic_perm_with_current_state(args, current);
+                        let summary = summary_change_plan(&output);
+                        success_live_result(descriptor, request_id, cluster, summary, output)
+                    })
+            }
+            #[cfg(feature = "change-planning")]
+            ToolId::PlanUpdateBrokerConfig => {
+                let args = match decode_args::<change_tools::UpdateBrokerConfigArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                let cluster = args.cluster.clone();
+                self.adapter
+                    .describe_broker(broker_tools::DescribeBrokerArgs {
+                        cluster: cluster.clone(),
+                        broker_name: args.desired.broker_name.clone(),
+                    })
+                    .await
+                    .and_then(|current| {
+                        let current = canonical_current_state(&current)?;
+                        let output = change_tools::plan_update_broker_config_with_current_state(args, current);
+                        let summary = summary_change_plan(&output);
+                        success_live_result(descriptor, request_id, cluster, summary, output)
+                    })
+            }
+            #[cfg(feature = "change-planning")]
+            ToolId::PlanResetConsumerOffset => {
+                let args = match decode_args::<change_tools::ResetConsumerOffsetArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(self.error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                let cluster = args.cluster.clone();
+                self.adapter
+                    .query_consumer_lag(consumer_tools::QueryConsumerLagArgs {
+                        cluster: cluster.clone(),
+                        topic: args.desired.topic.clone(),
+                        consumer_group: args.desired.consumer_group.clone(),
+                        page: crate::model::contract::PageRequest::default(),
+                    })
+                    .await
+                    .and_then(|current| {
+                        let current = canonical_current_state(&current)?;
+                        let output = change_tools::plan_reset_consumer_offset_with_current_state(args, current);
+                        let summary = summary_change_plan(&output);
+                        success_live_result(descriptor, request_id, cluster, summary, output)
+                    })
+            }
+        };
+
+        // The Guard publishes what the Tool composed. A result it refuses becomes an error result.
+        let published = result.and_then(|mut output| {
+            response_format.shape(tool_id, &mut output.structured);
+            guarded_call.finish_output(output)
+        });
+        let result = match published {
+            Ok(result) => result,
+            Err(error) => guarded_call.finish_result(self.error_result(descriptor.name, &tool_name, request_id, error)),
+        };
+
+        Ok(result)
+    }
+}
+
+fn decode_args<T>(arguments: JsonObject) -> Result<T, ToolFailure>
+where
+    T: DeserializeOwned,
+{
+    serde_json::from_value(Value::Object(arguments)).map_err(ToolFailure::invalid_arguments)
+}
+
+/// Checks the arguments against the Tool's input schema and locates what is wrong with them.
+///
+/// The error holds at most [`MAX_REPORTED_VIOLATIONS`] entries. It is empty when the arguments
+/// are invalid but nothing could be located.
+fn validate_input(descriptor: &ToolDescriptor, arguments: &JsonObject) -> Result<(), Vec<ArgumentViolation>> {
+    let validators = descriptor.id.validators();
+    let Some(validator) = validators.input() else {
+        return Err(Vec::new());
+    };
+    let instance = Value::Object(arguments.clone());
+    let mut errors = validator.iter_errors(&instance).peekable();
+    if errors.peek().is_none() {
+        return Ok(());
+    }
+    Err(errors
+        .take(MAX_REPORTED_VIOLATIONS)
+        .map(|error| argument_violation(&error, validators.declared_input_properties()))
+        .collect())
+}
+
+/// Reduces a schema validation error to a location and a rule kind.
+///
+/// Property names reach the path only when the schema declares them. Anything else is caller
+/// text, including the names of the properties an `additionalProperties` rule rejects.
+fn argument_violation(
+    error: &jsonschema::ValidationError<'_>,
+    declared: &std::collections::BTreeSet<String>,
+) -> ArgumentViolation {
+    use jsonschema::error::ValidationErrorKind as Kind;
+    use jsonschema::paths::LocationSegment;
+
+    let mut path = String::new();
+    let push_property = |path: &mut String, name: &str| {
+        path.push('/');
+        path.push_str(if declared.contains(name) {
+            name
+        } else {
+            UNDECLARED_PROPERTY
+        });
+    };
+    for segment in error.instance_path() {
+        match segment {
+            LocationSegment::Property(name) => push_property(&mut path, &name),
+            LocationSegment::Index(index) => {
+                path.push('/');
+                path.push_str(&index.to_string());
+            }
+        }
+    }
+    let constraint = match error.kind() {
+        Kind::Required { property } => {
+            push_property(&mut path, property.as_str().unwrap_or(UNDECLARED_PROPERTY));
+            ViolationConstraint::Required
+        }
+        Kind::AdditionalProperties { .. } | Kind::UnevaluatedProperties { .. } => {
+            push_property(&mut path, UNDECLARED_PROPERTY);
+            ViolationConstraint::AdditionalProperty
+        }
+        // An object that declares no property at all rejects any property through a `false`
+        // schema, which the validator reports as such instead of as an additional property.
+        Kind::FalseSchema if error.schema_path().as_str().ends_with("/additionalProperties") => {
+            push_property(&mut path, UNDECLARED_PROPERTY);
+            ViolationConstraint::AdditionalProperty
+        }
+        Kind::Type { .. } => ViolationConstraint::Type,
+        Kind::MinLength { .. } => ViolationConstraint::MinLength,
+        Kind::MaxLength { .. } => ViolationConstraint::MaxLength,
+        Kind::Minimum { .. } | Kind::ExclusiveMinimum { .. } => ViolationConstraint::Minimum,
+        Kind::Maximum { .. } | Kind::ExclusiveMaximum { .. } => ViolationConstraint::Maximum,
+        Kind::Enum { .. } | Kind::Constant { .. } => ViolationConstraint::Enum,
+        Kind::Pattern { .. } => ViolationConstraint::Pattern,
+        _ => ViolationConstraint::Other,
+    };
+    ArgumentViolation { path, constraint }
+}
+
+/// Locates what is wrong with `cluster` when the Guard rejected it.
+fn cluster_violation(arguments: &JsonObject) -> Option<ArgumentViolation> {
+    let constraint = match arguments.get("cluster") {
+        None | Some(Value::Null) => ViolationConstraint::Required,
+        Some(Value::String(cluster)) if cluster.trim().is_empty() => ViolationConstraint::MinLength,
+        Some(Value::String(_)) => return None,
+        Some(_) => ViolationConstraint::Type,
+    };
+    Some(ArgumentViolation {
+        path: "/cluster".to_string(),
+        constraint,
+    })
+}
+
+fn success_result<T>(
+    descriptor: ToolDescriptor,
+    request_id: &str,
+    cluster: String,
+    summary: String,
+    output: QueryResult<T>,
+    resource: RocketmqResourceUri,
+) -> Result<ToolOutput, ToolFailure>
+where
+    T: Serialize,
+{
+    let envelope = ToolResponse::from_query(request_id, cluster, output);
+    compose_success(descriptor, summary, envelope, Some(resource))
+}
+
+fn success_unlinked_result<T>(
+    descriptor: ToolDescriptor,
+    request_id: &str,
+    cluster: String,
+    summary: String,
+    output: QueryResult<T>,
+) -> Result<ToolOutput, ToolFailure>
+where
+    T: Serialize,
+{
+    let envelope = ToolResponse::from_query(request_id, cluster, output);
+    compose_success(descriptor, summary, envelope, None)
+}
+
+#[cfg(feature = "change-planning")]
+fn success_live_result<T>(
+    descriptor: ToolDescriptor,
+    request_id: &str,
+    cluster: String,
+    summary: String,
+    output: T,
+) -> Result<ToolOutput, ToolFailure>
+where
+    T: Serialize,
+{
+    compose_success(
+        descriptor,
+        summary,
+        ToolResponse::live(request_id, cluster, output),
+        None,
+    )
+}
+
+/// Renders the result of a Tool that is not bound to a cluster, in the envelope without `cluster`.
+fn success_server_result<T>(
+    descriptor: ToolDescriptor,
+    request_id: &str,
+    summary: String,
+    output: T,
+) -> Result<ToolOutput, ToolFailure>
+where
+    T: Serialize,
+{
+    compose_success(descriptor, summary, ServerToolResponse::live(request_id, output), None)
+}
+
+/// Composes a successful result: the summary, the envelope as a value, and the Resource link.
+///
+/// The values a Resource URI could not carry safely are redacted here, because only the Tool
+/// knows them. Everything else the result goes through is the Guard's processing, which
+/// [`GuardedToolCall::finish_output`](crate::guard::GuardedToolCall::finish_output) applies once.
+fn compose_success<E>(
+    descriptor: ToolDescriptor,
+    mut summary: String,
+    envelope: E,
+    resource: Option<RocketmqResourceUri>,
+) -> Result<ToolOutput, ToolFailure>
+where
+    E: Serialize,
+{
+    let resource_can_link = resource.as_ref().is_none_or(RocketmqResourceUri::is_safe);
+    let sensitive_values = resource
+        .as_ref()
+        .map(|resource| {
+            resource
+                .sensitive_values()
+                .into_iter()
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let mut structured = serde_json::to_value(envelope).map_err(ToolFailure::internal)?;
+    if !sensitive_values.is_empty() {
+        summary = redact_sensitive_summary(summary, &sensitive_values);
+        redact_exact_string_fields(&mut structured, &sensitive_values);
+    }
+    Ok(ToolOutput {
+        tool: descriptor.id,
+        summary,
+        structured,
+        link: resource.filter(|_| resource_can_link).map(resource_link),
+    })
+}
+
+fn redact_exact_string_fields(value: &mut Value, sensitive_values: &[String]) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                redact_exact_string_fields(value, sensitive_values);
+            }
+        }
+        Value::Object(values) => {
+            for value in values.values_mut() {
+                redact_exact_string_fields(value, sensitive_values);
+            }
+        }
+        Value::String(value) if sensitive_values.iter().any(|sensitive| value == sensitive) => {
+            *value = "[REDACTED]".to_string();
+        }
+        Value::String(_) => {}
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+fn redact_sensitive_summary(mut summary: String, sensitive_values: &[String]) -> String {
+    summary = crate::guard::sanitizer::sanitize_text(&summary);
+    for sensitive in sensitive_values {
+        summary = replace_delimited_value(&summary, sensitive, "[REDACTED]");
+    }
+    summary
+}
+
+fn replace_delimited_value(value: &str, target: &str, replacement: &str) -> String {
+    let matches = value
+        .match_indices(target)
+        .filter_map(|(start, _)| {
+            let end = start + target.len();
+            (is_summary_boundary(value[..start].chars().next_back())
+                && is_summary_boundary(value[end..].chars().next()))
+            .then_some((start, end))
+        })
+        .collect::<Vec<_>>();
+    if matches.is_empty() {
+        return value.to_string();
+    }
+
+    let mut redacted = String::with_capacity(value.len());
+    let mut copied = 0;
+    for (start, end) in matches {
+        redacted.push_str(&value[copied..start]);
+        redacted.push_str(replacement);
+        copied = end;
+    }
+    redacted.push_str(&value[copied..]);
+    redacted
+}
+
+fn is_summary_boundary(character: Option<char>) -> bool {
+    character.is_none_or(|character| character.is_whitespace() || ",.;()[]{}".contains(character))
+}
+
+fn resource_link(uri: RocketmqResourceUri) -> Resource {
+    Resource::new(uri.as_string(), uri.name())
+        .with_title(uri.kind.title())
+        .with_description(uri.kind.description())
+        .with_mime_type(JSON_MIME_TYPE)
+}
+
+#[cfg(test)]
+fn error_result(operation: &'static str, tool_name: &str, request_id: &str, error: ToolFailure) -> CallToolResult {
+    located_error_result(operation, tool_name, request_id, error, &[])
+}
+
+fn located_error_result(
+    operation: &'static str,
+    tool_name: &str,
+    request_id: &str,
+    error: ToolFailure,
+    violations: &[ArgumentViolation],
+) -> CallToolResult {
+    if error.has_private_detail() {
+        tracing::warn!(
+            correlation_id = request_id,
+            tool = operation,
+            code = error.code(),
+            "MCP Tool execution failed"
+        );
+    }
+    let content = ToolErrorContent {
+        schema_version: crate::model::contract::SCHEMA_VERSION,
+        request_id,
+        correlation_id: request_id,
+        tool: tool_name,
+        code: error.code(),
+        entity: error.not_found_entity(),
+        violations,
+        retryable: error.retryable(),
+        retry_after_ms: error.retry_after_ms(),
+        message: error.public_message(),
+        suggestions: error.suggestions(),
+    };
+    let text =
+        serde_json::to_string(&content).unwrap_or_else(|_| format!("{tool_name} failed; request_id={request_id}"));
+    CallToolResult::error(vec![ContentBlock::text(text)])
+}
+
+fn summary_cluster_overview(output: &cluster_tools::ClusterOverviewOutput) -> String {
+    format!(
+        "Cluster {} has {} broker rows, {} topics, and {} consumer groups.",
+        output.cluster,
+        output.brokers.len(),
+        output.topic_count,
+        output.consumer_group_count
+    )
+}
+
+fn summary_list_clusters(output: &cluster_tools::ListClustersOutput) -> String {
+    match output.clusters.iter().find(|cluster| cluster.default) {
+        Some(default) => format!(
+            "{} cluster(s) are available to you; the default is {}.",
+            output.clusters.len(),
+            default.name
+        ),
+        None => format!(
+            "{} cluster(s) are available to you; none is the default.",
+            output.clusters.len()
+        ),
+    }
+}
+
+fn summary_list_topics(output: &topic_tools::ListTopicsOutput) -> String {
+    format!(
+        "Cluster {} returned {} of {} topics.",
+        output.cluster, output.page.count, output.page.total_count
+    )
+}
+
+fn summary_describe_topic(output: &topic_tools::DescribeTopicOutput) -> String {
+    format!(
+        "Topic {} on cluster {} has {} brokers, {} read queues, and {} write queues.",
+        output.topic,
+        output.cluster,
+        output.broker_names.len(),
+        output.read_queue_count,
+        output.write_queue_count
+    )
+}
+
+fn summary_topic_route(output: &topic_tools::QueryTopicRouteOutput) -> String {
+    format!(
+        "Topic {} route on cluster {} has {} brokers and {} queue entries.",
+        output.topic,
+        output.cluster,
+        output.brokers.len(),
+        output.page.total_count
+    )
+}
+
+fn summary_consumer_groups(output: &consumer_tools::ListConsumerGroupsOutput) -> String {
+    format!(
+        "Cluster {} returned {} of {} consumer groups.",
+        output.cluster, output.page.count, output.page.total_count
+    )
+}
+
+fn summary_consumer_group_names(output: &consumer_tools::ListConsumerGroupNamesOutput) -> String {
+    format!(
+        "Cluster {} returned {} of {} consumer groups.",
+        output.cluster, output.page.count, output.page.total_count
+    )
+}
+
+fn summary_consumer_lag(output: &consumer_tools::QueryConsumerLagOutput) -> String {
+    format!(
+        "Consumer group {} has total lag {} on topic {} across {} queues.",
+        output.consumer_group, output.total_lag, output.topic, output.page.total_count
+    )
+}
+
+fn summary_describe_broker(output: &broker_tools::DescribeBrokerOutput) -> String {
+    format!(
+        "Broker {} on cluster {} has {} broker rows.",
+        output.broker_name,
+        output.cluster,
+        output.brokers.len()
+    )
+}
+
+fn summary_list_brokers(output: &broker_tools::ListBrokersOutput) -> String {
+    let inactive = output.brokers.iter().filter(|broker| !broker.broker_active).count();
+    format!(
+        "Cluster {} has {} broker rows, {} of them inactive.",
+        output.cluster,
+        output.brokers.len(),
+        inactive
+    )
+}
+
+fn summary_broker_diagnostics(output: &broker_tools::BrokerDiagnosticsOutput) -> String {
+    format!(
+        "Broker {} on cluster {} returned {} diagnostic rows.",
+        output.broker_name,
+        output.cluster,
+        output.brokers.len()
+    )
+}
+
+fn summary_broker_config(output: &config_tools::BrokerConfigSummaryOutput) -> String {
+    format!(
+        "Broker {} on cluster {} returned {} allowlisted configuration rows.",
+        output.broker_name,
+        output.cluster,
+        output.brokers.len()
+    )
+}
+
+fn summary_broker_log_filter(output: &config_tools::BrokerLogFilterStateOutput) -> String {
+    format!(
+        "Broker {} on cluster {} returned {} log-filter state rows for {}.",
+        output.broker_name,
+        output.cluster,
+        output.brokers.len(),
+        output.logger
+    )
+}
+
+fn summary_proxy_drain(output: &proxy_tools::ProxyDrainStateOutput) -> String {
+    format!(
+        "Proxy {} on cluster {} is in {:?} drain phase.",
+        output.proxy_name, output.cluster, output.phase
+    )
+}
+
+/// The arguments as the audit trail records them. A message identifier is never recorded,
+/// whichever Tool takes one.
+/// Replaces what names a message before the arguments are hashed for the audit record: its
+/// identifier, and a key, which is a business identifier.
+fn audit_arguments(arguments: &JsonObject) -> JsonObject {
+    let mut audit_arguments = arguments.clone();
+    for name in ["message_id", "key"] {
+        if audit_arguments.get(name).is_some_and(|value| !value.is_null()) {
+            audit_arguments.insert(name.to_string(), Value::String("<redacted>".to_string()));
+        }
+    }
+    audit_arguments
+}
+
+fn summary_consumer_connections(output: &connection_tools::ListConsumerConnectionsOutput) -> String {
+    format!(
+        "Consumer group {} on cluster {} returned {} of {} pseudonymous connections.",
+        output.consumer_group, output.cluster, output.page.count, output.page.total_count
+    )
+}
+
+fn summary_producer_connections(output: &connection_tools::ListProducerConnectionsOutput) -> String {
+    format!(
+        "Producer group {} for Topic {} on cluster {} returned {} of {} pseudonymous connections.",
+        output.producer_group, output.topic, output.cluster, output.page.count, output.page.total_count
+    )
+}
+
+fn summary_message_metadata(output: &message_tools::MessageMetadataOutput) -> String {
+    format!(
+        "Message {} on cluster {} belongs to Topic {} without body or property disclosure.",
+        output.message_alias, output.cluster, output.topic
+    )
+}
+
+fn summary_topic_config_state(output: &config_tools::TopicConfigStateOutput) -> String {
+    format!(
+        "Topic {} on cluster {} returned {} logical Broker version states.",
+        output.topic,
+        output.cluster,
+        output.brokers.len()
+    )
+}
+
+fn summary_consumer_group_config_state(output: &config_tools::ConsumerGroupConfigStateOutput) -> String {
+    format!(
+        "Consumer group {} on cluster {} returned {} logical Broker version states.",
+        output.group,
+        output.cluster,
+        output.brokers.len()
+    )
+}
+
+fn summary_topic_stats(output: &topic_tools::GetTopicStatsOutput) -> String {
+    format!(
+        "Topic {} on cluster {} returned {} of {} queue statistics.",
+        output.topic, output.cluster, output.page.count, output.queue_count
+    )
+}
+
+fn summary_topic_config(output: &config_tools::GetTopicConfigOutput) -> String {
+    format!(
+        "Topic {} on cluster {} returned {} Broker configurations with {} semantic differences.",
+        output.topic,
+        output.cluster,
+        output.brokers.len(),
+        output.inconsistent_fields.len()
+    )
+}
+
+fn summary_consumer_group_details(output: &consumer_tools::GetConsumerGroupDetailsOutput) -> String {
+    format!(
+        "Consumer group {} on cluster {} returned {} Broker observations and {} total connections.",
+        output.consumer_group,
+        output.cluster,
+        output.brokers.len(),
+        output.total_connection_count
+    )
+}
+
+fn summary_consumer_progress(output: &consumer_tools::GetConsumerProgressOutput) -> String {
+    format!(
+        "Consumer group {} on cluster {} returned {} of {} queue progress rows with total lag {}.",
+        output.consumer_group, output.cluster, output.page.count, output.queue_count, output.total_lag
+    )
+}
+
+fn summary_ha_status(output: &infrastructure_tools::GetHaStatusOutput) -> String {
+    format!(
+        "Cluster {} returned {} logical master Broker HA observations and {} Controller sync-state observations.",
+        output.cluster,
+        output.brokers.len(),
+        output.controller_sync_states.len()
+    )
+}
+
+fn summary_controller_metadata(output: &infrastructure_tools::GetControllerMetadataOutput) -> String {
+    format!(
+        "Cluster {} returned metadata for {} configured logical Controllers.",
+        output.cluster,
+        output.controllers.len()
+    )
+}
+
+fn summary_nameserver_config(output: &infrastructure_tools::GetNameserverConfigSummaryOutput) -> String {
+    format!(
+        "Cluster {} returned {} allowlisted NameServer configuration summaries with {} differences.",
+        output.cluster,
+        output.nameservers.len(),
+        output.inconsistent_fields.len()
+    )
+}
+
+#[cfg(feature = "change-planning")]
+fn summary_change_plan(output: &change_tools::ChangePlan) -> String {
+    format!(
+        "Generated {:?} with {} planned changes for cluster {}; no mutation was applied.",
+        output.plan_type,
+        output.planned_changes.len(),
+        output.cluster
+    )
+}
+
+#[cfg(feature = "change-planning")]
+fn canonical_current_state<T: Serialize>(current: &QueryResult<T>) -> Result<Value, ToolFailure> {
+    let mut state = serde_json::to_value(&current.data).map_err(ToolFailure::internal)?;
+    remove_transient_state_fields(&mut state);
+    Ok(state)
+}
+
+#[cfg(feature = "change-planning")]
+fn remove_transient_state_fields(value: &mut Value) {
+    match value {
+        Value::Array(values) => values.iter_mut().for_each(remove_transient_state_fields),
+        Value::Object(values) => {
+            values.remove("generated_at");
+            values.values_mut().for_each(remove_transient_state_fields);
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(feature = "security-admin")]
+    mod acl_users;
+    mod audit_target;
+    mod consumer_running_info;
+    mod diagnosis_reports;
+    mod dlq_summary;
+    mod list_brokers;
+    mod list_clusters;
+    mod lite_broker;
+    mod message_lookup;
+    mod topic_consumers;
+
+    use crate::config::AuditConfig;
+    use crate::config::ClusterConfig;
+    use crate::config::SecurityConfig;
+    use crate::guard::audit::AuditStatus;
+    use crate::guard::Guard;
+    use std::error::Error;
+
+    use super::*;
+
+    #[test]
+    fn backend_and_argument_sources_remain_typed_while_all_projections_are_fixed() {
+        for error in [
+            ToolFailure::backend(std::io::Error::other("raw-backend-token /private/path tenant-cluster")),
+            ToolFailure::invalid_arguments(std::io::Error::other("raw-tool-argument")),
+        ] {
+            let source = match &error {
+                ToolFailure::Operational(operational) => operational.source().unwrap().source().unwrap(),
+                ToolFailure::Rejected(ToolRejection::InvalidArguments { _source: Some(source) }) => {
+                    source.source().unwrap()
+                }
+                _ => panic!("expected a retained source"),
+            };
+            assert!(source.is::<std::io::Error>());
+            for projection in [error.to_string(), format!("{error:?}"), error.public_message()] {
+                assert!(!projection.contains("raw-"));
+                assert!(!projection.contains("private/path"));
+                assert!(!projection.contains("tenant-cluster"));
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct FakeAdapter {
+        fail: bool,
+        partial: bool,
+    }
+
+    impl ReadOnlyQuery for FakeAdapter {
+        fn configured_clusters(&self) -> Vec<cluster_tools::ClusterEntry> {
+            crate::adapter::query_facade::cluster_entries(&list_clusters::configured_clusters())
+        }
+
+        async fn cluster_overview(
+            &self,
+            args: cluster_tools::ClusterOverviewArgs,
+        ) -> Result<QueryResult<cluster_tools::ClusterOverviewOutput>, ToolFailure> {
+            if self.fail {
+                return Err(ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
+                ));
+            }
+            let mut result = QueryResult::bypass(cluster_tools::ClusterOverviewOutput {
+                cluster: args.cluster,
+                namesrv_addr: "127.0.0.1:9876".to_string(),
+                brokers: vec![broker_summary()],
+                topic_count: 2,
+                consumer_group_count: 1,
+                generated_at: "1".to_string(),
+            });
+            if self.partial {
+                result.partial = true;
+                result.warnings = vec!["source_failures_present".to_string()];
+                result.source_failures = vec![crate::model::contract::SourceFailure::new(
+                    crate::model::contract::QuerySource::BrokerRuntime,
+                    crate::model::contract::SourceFailureCode::Timeout,
+                    true,
+                    "broker-b",
+                )];
+            }
+            Ok(result)
+        }
+
+        async fn list_topics(
+            &self,
+            args: topic_tools::ListTopicsArgs,
+        ) -> Result<QueryResult<topic_tools::ListTopicsOutput>, ToolFailure> {
+            Ok(QueryResult::bypass(topic_tools::ListTopicsOutput {
+                cluster: args.cluster.unwrap_or_else(|| "local-dev".to_string()),
+                namesrv_addr: "127.0.0.1:9876".to_string(),
+                page: crate::model::contract::Page {
+                    items: Vec::new(),
+                    count: 0,
+                    total_count: 0,
+                    has_more: false,
+                    next_cursor: None,
+                },
+                generated_at: "transient-test-time".to_string(),
+            }))
+        }
+
+        async fn describe_topic(
+            &self,
+            _args: topic_tools::DescribeTopicArgs,
+        ) -> Result<QueryResult<topic_tools::DescribeTopicOutput>, ToolFailure> {
+            unimplemented!("not needed by this test")
+        }
+
+        async fn query_topic_route(
+            &self,
+            _args: topic_tools::QueryTopicRouteArgs,
+        ) -> Result<QueryResult<topic_tools::QueryTopicRouteOutput>, ToolFailure> {
+            unimplemented!("not needed by this test")
+        }
+
+        async fn list_consumer_groups(
+            &self,
+            _args: consumer_tools::ListConsumerGroupsArgs,
+        ) -> Result<QueryResult<consumer_tools::ListConsumerGroupsOutput>, ToolFailure> {
+            unimplemented!("not needed by this test")
+        }
+
+        async fn query_consumer_lag(
+            &self,
+            _args: consumer_tools::QueryConsumerLagArgs,
+        ) -> Result<QueryResult<consumer_tools::QueryConsumerLagOutput>, ToolFailure> {
+            unimplemented!("not needed by this test")
+        }
+
+        async fn describe_broker(
+            &self,
+            _args: broker_tools::DescribeBrokerArgs,
+        ) -> Result<QueryResult<broker_tools::DescribeBrokerOutput>, ToolFailure> {
+            unimplemented!("not needed by this test")
+        }
+
+        async fn list_brokers(
+            &self,
+            args: broker_tools::ListBrokersArgs,
+        ) -> Result<QueryResult<broker_tools::ListBrokersOutput>, ToolFailure> {
+            if self.fail {
+                return Err(ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
+                ));
+            }
+            let mut result = QueryResult::bypass(broker_tools::ListBrokersOutput {
+                cluster: args.cluster,
+                brokers: vec![broker_summary()],
+                generated_at: "1".to_string(),
+            });
+            if self.partial {
+                result.partial = true;
+                result.warnings = vec!["source_failures_present".to_string()];
+                result.source_failures = vec![crate::model::contract::SourceFailure::new(
+                    crate::model::contract::QuerySource::BrokerRuntime,
+                    crate::model::contract::SourceFailureCode::Timeout,
+                    true,
+                    "broker-b",
+                )];
+            }
+            Ok(result)
+        }
+
+        async fn broker_diagnostics(
+            &self,
+            args: broker_tools::BrokerDiagnosticsArgs,
+        ) -> Result<QueryResult<broker_tools::BrokerDiagnosticsOutput>, ToolFailure> {
+            if self.fail {
+                return Err(ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
+                ));
+            }
+            Ok(QueryResult::bypass(broker_tools::BrokerDiagnosticsOutput {
+                cluster: args.cluster,
+                broker_name: args.broker_name,
+                diagnostics_schema_version: "rocketmq.admin-broker-diagnostics.v1".to_string(),
+                observed_at_millis: 1,
+                brokers: Vec::new(),
+                unavailable_brokers: 0,
+            }))
+        }
+
+        async fn broker_config_summary(
+            &self,
+            args: config_tools::BrokerConfigSummaryArgs,
+        ) -> Result<QueryResult<config_tools::BrokerConfigSummaryOutput>, ToolFailure> {
+            Ok(QueryResult::bypass(config_tools::BrokerConfigSummaryOutput {
+                cluster: args.cluster,
+                broker_name: args.broker_name,
+                brokers: Vec::new(),
+            }))
+        }
+
+        async fn broker_log_filter_state(
+            &self,
+            args: config_tools::BrokerLogFilterStateArgs,
+        ) -> Result<QueryResult<config_tools::BrokerLogFilterStateOutput>, ToolFailure> {
+            Ok(QueryResult::bypass(config_tools::BrokerLogFilterStateOutput {
+                cluster: args.cluster,
+                broker_name: args.broker_name,
+                logger: args.logger,
+                brokers: Vec::new(),
+            }))
+        }
+
+        async fn proxy_drain_state(
+            &self,
+            args: proxy_tools::ProxyDrainStateArgs,
+        ) -> Result<QueryResult<proxy_tools::ProxyDrainStateOutput>, ToolFailure> {
+            if self.fail {
+                return Err(ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
+                ));
+            }
+            Ok(QueryResult::bypass(proxy_tools::ProxyDrainStateOutput {
+                cluster: args.cluster,
+                proxy_name: args.proxy_name,
+                state_schema_version: "rocketmq.proxy-drain.v1".to_string(),
+                phase: proxy_tools::ProxyDrainPhase::Accepting,
+                operation_id: None,
+                admission_open: true,
+                routing_open: true,
+                readiness_published: true,
+                zero_pending: true,
+                pending: proxy_tools::ProxyDrainPending {
+                    active_connections: 0,
+                    sessions: 0,
+                    receipt_handles: 0,
+                    prepared_transactions: 0,
+                    telemetry_links: 0,
+                    remoting_channels: 0,
+                    telemetry_commands: 0,
+                    rpc_in_flight: 0,
+                },
+            }))
+        }
+
+        async fn list_consumer_connections(
+            &self,
+            args: connection_tools::ListConsumerConnectionsArgs,
+        ) -> Result<QueryResult<connection_tools::ListConsumerConnectionsOutput>, ToolFailure> {
+            let oversized = args.consumer_group == "oversized";
+            let items = oversized
+                .then(|| connection_tools::ConnectionRow {
+                    broker_name: "broker-a".to_string(),
+                    client_alias: format!("client-{}", "x".repeat(2 * 1024 * 1024)),
+                    language: "RUST".to_string(),
+                    version: 1,
+                    last_update_at: None,
+                })
+                .into_iter()
+                .collect::<Vec<_>>();
+            Ok(QueryResult::bypass(connection_tools::ListConsumerConnectionsOutput {
+                cluster: args.cluster,
+                consumer_group: args.consumer_group,
+                queried_broker_count: 1,
+                page: crate::model::contract::Page {
+                    count: items.len(),
+                    total_count: items.len(),
+                    items,
+                    has_more: false,
+                    next_cursor: None,
+                },
+                generated_at: "transient-test-time".to_string(),
+            }))
+        }
+
+        async fn list_producer_connections(
+            &self,
+            args: connection_tools::ListProducerConnectionsArgs,
+        ) -> Result<QueryResult<connection_tools::ListProducerConnectionsOutput>, ToolFailure> {
+            let oversized = args.producer_group == "oversized";
+            let items = oversized
+                .then(|| connection_tools::ConnectionRow {
+                    broker_name: "broker-a".to_string(),
+                    client_alias: format!("client-{}", "x".repeat(2 * 1024 * 1024)),
+                    language: "RUST".to_string(),
+                    version: 1,
+                    last_update_at: None,
+                })
+                .into_iter()
+                .collect::<Vec<_>>();
+            Ok(QueryResult::bypass(connection_tools::ListProducerConnectionsOutput {
+                cluster: args.cluster,
+                topic: args.topic,
+                producer_group: args.producer_group,
+                queried_broker_count: 1,
+                page: crate::model::contract::Page {
+                    count: items.len(),
+                    total_count: items.len(),
+                    items,
+                    has_more: false,
+                    next_cursor: None,
+                },
+                generated_at: "transient-test-time".to_string(),
+            }))
+        }
+
+        async fn message_metadata(
+            &self,
+            args: message_tools::MessageMetadataArgs,
+        ) -> Result<QueryResult<message_tools::MessageMetadataOutput>, ToolFailure> {
+            let topic = if args.message_id == "oversized" {
+                "x".repeat(2 * 1024 * 1024)
+            } else {
+                "orders".to_string()
+            };
+            Ok(QueryResult::bypass(message_tools::MessageMetadataOutput {
+                cluster: args.cluster,
+                message_alias: "message-00000000000000000000000000000000".to_string(),
+                unique_message_alias: None,
+                topic,
+                born_at: None,
+                stored_at: None,
+                queue_id: 0,
+                queue_offset: 0,
+                store_size: 0,
+                reconsume_times: 0,
+                sys_flag: 0,
+                flag: 0,
+                prepared_transaction_offset: 0,
+            }))
+        }
+
+        async fn topic_config_state(
+            &self,
+            args: config_tools::TopicConfigStateArgs,
+        ) -> Result<QueryResult<config_tools::TopicConfigStateOutput>, ToolFailure> {
+            let brokers = (args.topic == "oversized")
+                .then(|| config_tools::TopicConfigStateRow {
+                    broker_name: "x".repeat(2 * 1024 * 1024),
+                    version: 1,
+                    read_queue_nums: 1,
+                    write_queue_nums: 1,
+                    order: false,
+                })
+                .into_iter()
+                .collect();
+            Ok(QueryResult::bypass(config_tools::TopicConfigStateOutput {
+                cluster: args.cluster,
+                topic: args.topic,
+                brokers,
+            }))
+        }
+
+        async fn consumer_group_config_state(
+            &self,
+            args: config_tools::ConsumerGroupConfigStateArgs,
+        ) -> Result<QueryResult<config_tools::ConsumerGroupConfigStateOutput>, ToolFailure> {
+            let brokers = (args.group == "oversized")
+                .then(|| config_tools::ConsumerGroupConfigStateRow {
+                    broker_name: "x".repeat(2 * 1024 * 1024),
+                    version: 1,
+                    retry_max_times: 1,
+                    retry_queue_nums: 1,
+                    consume_timeout_minutes: 1,
+                    consume_enable: true,
+                    consume_from_min_enable: false,
+                    consume_broadcast_enable: false,
+                    consume_message_orderly: false,
+                    broker_id: 0,
+                    which_broker_when_consume_slowly: 1,
+                    notify_consumer_ids_changed_enable: true,
+                    group_sys_flag: 0,
+                })
+                .into_iter()
+                .collect();
+            Ok(QueryResult::bypass(config_tools::ConsumerGroupConfigStateOutput {
+                cluster: args.cluster,
+                group: args.group,
+                brokers,
+            }))
+        }
+
+        async fn topic_stats(
+            &self,
+            args: topic_tools::GetTopicStatsArgs,
+        ) -> Result<QueryResult<topic_tools::GetTopicStatsOutput>, ToolFailure> {
+            let broker_name = if args.topic == "oversized" {
+                "x".repeat(2 * 1024 * 1024)
+            } else {
+                "broker-a".to_string()
+            };
+            let items = vec![topic_tools::TopicStatsQueueRow {
+                broker_name,
+                queue_id: 0,
+                min_offset: 0,
+                max_offset: 10,
+                message_count: 10,
+                last_update_at: None,
+            }];
+            Ok(QueryResult::bypass(topic_tools::GetTopicStatsOutput {
+                cluster: args.cluster,
+                topic: args.topic,
+                total_message_count: 10,
+                queue_count: 1,
+                truncated: false,
+                page: crate::model::contract::Page {
+                    count: items.len(),
+                    total_count: items.len(),
+                    items,
+                    has_more: false,
+                    next_cursor: None,
+                },
+                generated_at: "transient-test-time".to_string(),
+            }))
+        }
+
+        async fn topic_consumers(
+            &self,
+            args: topic_tools::ListTopicConsumersArgs,
+        ) -> Result<QueryResult<topic_tools::ListTopicConsumersOutput>, ToolFailure> {
+            topic_consumers::answer(self, args)
+        }
+
+        async fn consumer_running_info(
+            &self,
+            args: consumer_tools::GetConsumerRunningInfoArgs,
+        ) -> Result<QueryResult<consumer_tools::GetConsumerRunningInfoOutput>, ToolFailure> {
+            consumer_running_info::answer(self, args)
+        }
+
+        async fn dlq_summary(
+            &self,
+            args: consumer_tools::GetDlqSummaryArgs,
+        ) -> Result<QueryResult<consumer_tools::GetDlqSummaryOutput>, ToolFailure> {
+            dlq_summary::answer(self, args)
+        }
+
+        async fn lite_broker_info(
+            &self,
+            args: broker_tools::GetLiteBrokerInfoArgs,
+        ) -> Result<QueryResult<broker_tools::GetLiteBrokerInfoOutput>, ToolFailure> {
+            lite_broker::answer(self, args)
+        }
+
+        #[cfg(feature = "security-admin")]
+        async fn list_acl_users(
+            &self,
+            args: crate::tools::security_tools::ListAclUsersArgs,
+        ) -> Result<QueryResult<crate::tools::security_tools::ListAclUsersOutput>, ToolFailure> {
+            acl_users::answer(self, args)
+        }
+
+        async fn message_trace(
+            &self,
+            args: message_tools::QueryMessageTraceArgs,
+        ) -> Result<QueryResult<message_tools::QueryMessageTraceOutput>, ToolFailure> {
+            message_lookup::trace(self, args)
+        }
+
+        async fn find_messages_by_key(
+            &self,
+            args: message_tools::FindMessagesByKeyArgs,
+        ) -> Result<QueryResult<message_tools::FindMessagesByKeyOutput>, ToolFailure> {
+            message_lookup::matches(self, args)
+        }
+
+        async fn topic_config(
+            &self,
+            args: config_tools::GetTopicConfigArgs,
+        ) -> Result<QueryResult<config_tools::GetTopicConfigOutput>, ToolFailure> {
+            let broker_name = if args.topic == "oversized" {
+                "x".repeat(2 * 1024 * 1024)
+            } else {
+                "broker-a".to_string()
+            };
+            Ok(QueryResult::bypass(config_tools::GetTopicConfigOutput {
+                cluster: args.cluster,
+                topic: args.topic,
+                brokers: vec![config_tools::TopicConfigObservationRow {
+                    broker_name,
+                    version: 1,
+                    read_queue_nums: 8,
+                    write_queue_nums: 8,
+                    perm: 6,
+                    order: false,
+                    message_type: "NORMAL".to_string(),
+                }],
+                inconsistent_fields: Vec::new(),
+                generated_at: "transient-test-time".to_string(),
+            }))
+        }
+
+        async fn consumer_group_details(
+            &self,
+            args: consumer_tools::GetConsumerGroupDetailsArgs,
+        ) -> Result<QueryResult<consumer_tools::GetConsumerGroupDetailsOutput>, ToolFailure> {
+            let broker_name = if args.consumer_group == "oversized" {
+                "x".repeat(2 * 1024 * 1024)
+            } else {
+                "broker-a".to_string()
+            };
+            Ok(QueryResult::bypass(consumer_tools::GetConsumerGroupDetailsOutput {
+                cluster: args.cluster,
+                consumer_group: args.consumer_group,
+                total_connection_count: 0,
+                brokers: vec![consumer_tools::ConsumerGroupDetailsBrokerRow {
+                    broker_name,
+                    config_state: consumer_tools::ConsumerGroupConfigPresence::Present,
+                    config_version: Some(1),
+                    consume_enable: Some(true),
+                    consume_from_min_enable: Some(false),
+                    consume_broadcast_enable: Some(false),
+                    consume_message_orderly: Some(false),
+                    retry_queue_nums: Some(1),
+                    retry_max_times: Some(1),
+                    notify_consumer_ids_changed_enable: Some(true),
+                    consume_timeout_minutes: Some(1),
+                    connection_state: Some(consumer_tools::ConsumerConnectionState::Offline),
+                    connection_count: 0,
+                    consume_type: None,
+                    message_model: None,
+                    consume_from_where: None,
+                }],
+                generated_at: "transient-test-time".to_string(),
+            }))
+        }
+
+        async fn consumer_progress(
+            &self,
+            args: consumer_tools::GetConsumerProgressArgs,
+        ) -> Result<QueryResult<consumer_tools::GetConsumerProgressOutput>, ToolFailure> {
+            let broker_name = if args.consumer_group == "oversized" {
+                "x".repeat(2 * 1024 * 1024)
+            } else {
+                "broker-a".to_string()
+            };
+            let items = vec![consumer_tools::ConsumerProgressQueueRow {
+                topic: "orders".to_string(),
+                broker_name,
+                queue_id: 0,
+                broker_offset: 1,
+                consumer_offset: 1,
+                pull_offset: 1,
+                lag: 0,
+                inflight: 0,
+                last_observed_at: None,
+            }];
+            Ok(QueryResult::bypass(consumer_tools::GetConsumerProgressOutput {
+                cluster: args.cluster,
+                consumer_group: args.consumer_group,
+                state: consumer_tools::ConsumerProgressState::Observed,
+                topic_count: 1,
+                queue_count: 1,
+                total_lag: 0,
+                max_queue_lag: 0,
+                total_inflight: 0,
+                consume_tps: 0.0,
+                truncated: false,
+                page: crate::model::contract::Page {
+                    count: items.len(),
+                    total_count: items.len(),
+                    items,
+                    has_more: false,
+                    next_cursor: None,
+                },
+                generated_at: "transient-test-time".to_string(),
+            }))
+        }
+
+        async fn ha_status(
+            &self,
+            args: infrastructure_tools::GetHaStatusArgs,
+        ) -> Result<QueryResult<infrastructure_tools::GetHaStatusOutput>, ToolFailure> {
+            let brokers = if args.broker_names == ["bounded"] {
+                bounded_ha_brokers()
+            } else {
+                Vec::new()
+            };
+            Ok(QueryResult::bypass(infrastructure_tools::GetHaStatusOutput {
+                cluster: args.cluster,
+                brokers,
+                controller_sync_states: Vec::new(),
+            }))
+        }
+
+        async fn controller_metadata(
+            &self,
+            args: infrastructure_tools::GetControllerMetadataArgs,
+        ) -> Result<QueryResult<infrastructure_tools::GetControllerMetadataOutput>, ToolFailure> {
+            Ok(QueryResult::bypass(infrastructure_tools::GetControllerMetadataOutput {
+                cluster: args.cluster,
+                controllers: Vec::new(),
+            }))
+        }
+
+        async fn nameserver_config_summary(
+            &self,
+            args: infrastructure_tools::GetNameserverConfigSummaryArgs,
+        ) -> Result<QueryResult<infrastructure_tools::GetNameserverConfigSummaryOutput>, ToolFailure> {
+            Ok(QueryResult::bypass(
+                infrastructure_tools::GetNameserverConfigSummaryOutput {
+                    cluster: args.cluster,
+                    nameservers: Vec::new(),
+                    inconsistent_fields: Vec::new(),
+                },
+            ))
+        }
+
+        async fn diagnose_consumer_group(
+            &self,
+            args: diagnosis_tools::DiagnoseConsumerGroupArgs,
+        ) -> Result<QueryResult<crate::model::diagnosis::DiagnosisReport>, ToolFailure> {
+            if self.fail {
+                return Err(ToolFailure::Operational(ToolExecutionError::Backend(None)));
+            }
+            Ok(diagnosis_report("consumer_group", &args.cluster, self.partial))
+        }
+
+        async fn diagnose_broker_health(
+            &self,
+            args: diagnosis_tools::DiagnoseBrokerHealthArgs,
+        ) -> Result<QueryResult<crate::model::diagnosis::DiagnosisReport>, ToolFailure> {
+            if self.fail {
+                return Err(ToolFailure::Operational(ToolExecutionError::Backend(None)));
+            }
+            Ok(diagnosis_report("broker_health", &args.cluster, self.partial))
+        }
+
+        async fn cluster_health(
+            &self,
+            args: diagnosis_tools::GetClusterHealthArgs,
+        ) -> Result<QueryResult<crate::model::diagnosis::DiagnosisReport>, ToolFailure> {
+            if self.fail {
+                return Err(ToolFailure::Operational(ToolExecutionError::Backend(None)));
+            }
+            Ok(diagnosis_report("cluster_health", &args.cluster, self.partial))
+        }
+
+        async fn diagnose_message_delivery(
+            &self,
+            args: diagnosis_tools::DiagnoseMessageDeliveryArgs,
+        ) -> Result<QueryResult<crate::model::diagnosis::DiagnosisReport>, ToolFailure> {
+            if self.fail {
+                return Err(ToolFailure::Operational(ToolExecutionError::Backend(None)));
+            }
+            Ok(diagnosis_report("message_delivery", &args.cluster, self.partial))
+        }
+
+        async fn diagnose_consumer_lag(
+            &self,
+            _args: diagnosis_tools::DiagnoseConsumerLagArgs,
+        ) -> Result<QueryResult<crate::model::diagnosis::DiagnosisReport>, ToolFailure> {
+            unimplemented!("not needed by this test")
+        }
+    }
+
+    fn bounded_ha_brokers() -> Vec<infrastructure_tools::BrokerHaObservation> {
+        (0..16)
+            .map(|broker_index| {
+                let connection_count = if broker_index == 15 { 39 } else { 63 };
+                infrastructure_tools::BrokerHaObservation {
+                    broker_name: format!("broker-{broker_index:02}"),
+                    broker_id: 0,
+                    master_commit_log_max_offset: 100,
+                    in_sync_slave_count: u32::try_from(connection_count).unwrap(),
+                    pending_group_transfer_request_count: 0,
+                    pending_group_transfer_oldest_wait_millis: 0,
+                    group_transfer_ack_notify_count: 0,
+                    connections: (1..=connection_count)
+                        .map(|replica_index| infrastructure_tools::HaConnectionObservation {
+                            replica: infrastructure_tools::LogicalBrokerInstance {
+                                broker_name: format!("broker-{broker_index:02}"),
+                                broker_id: u64::try_from(replica_index).unwrap(),
+                            },
+                            slave_ack_offset: 90,
+                            diff: 10,
+                            in_sync: true,
+                            transferred_bytes_per_second: 1,
+                            transfer_from_where: 80,
+                        })
+                        .collect(),
+                }
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn call_returns_summary_and_structured_content() {
+        let guard = test_guard("diagnose");
+        let result = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            guard.clone(),
+        )
+        .call(
+            CallToolRequestParams::new(ToolId::GetClusterOverview.descriptor().name).with_arguments(
+                serde_json::json!({
+                    "cluster": "local-dev",
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.is_error, Some(false));
+        let structured = result.structured_content.as_ref().unwrap();
+        assert_eq!(structured["schema_version"], "rocketmq-mcp.v2");
+        assert_eq!(structured["request_id"], "test-request");
+        assert_eq!(structured["cluster"], "local-dev");
+        assert!(chrono::DateTime::parse_from_rfc3339(structured["observed_at"].as_str().unwrap()).is_ok());
+        assert!(structured["data"].get("namesrv_addr").is_none());
+        assert!(structured["data"]["brokers"][0].get("broker_addr").is_none());
+        assert!(!result.content.is_empty());
+        let resource_link = result.content.iter().find_map(ContentBlock::as_resource_link).unwrap();
+        assert_eq!(resource_link.uri, "rocketmq://clusters/local-dev/overview");
+        let records = guard.audit_log().records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].tool, ToolId::GetClusterOverview.descriptor().name);
+        assert_eq!(records[0].cluster.as_deref(), Some("local-dev"));
+        assert_eq!(records[0].status, AuditStatus::Success);
+    }
+
+    #[tokio::test]
+    async fn tool_response_propagates_partial_source_failures() {
+        let result = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: true,
+            },
+            test_guard("diagnose"),
+        )
+        .call(
+            CallToolRequestParams::new(ToolId::GetClusterOverview.descriptor().name)
+                .with_arguments(serde_json::json!({"cluster": "local-dev"}).as_object().unwrap().clone()),
+        )
+        .await
+        .unwrap();
+
+        let structured = result.structured_content.unwrap();
+        assert_eq!(structured["partial"], true);
+        assert_eq!(structured["warnings"], serde_json::json!(["source_failures_present"]));
+        assert_eq!(structured["source_failures"][0]["source"], "broker_runtime");
+        assert_eq!(structured["source_failures"][0]["logical_target"], "broker-b");
+    }
+
+    #[tokio::test]
+    async fn backend_error_is_returned_as_source_unavailable() {
+        let guard = test_guard("diagnose");
+        let result = ToolExecutor::new(
+            FakeAdapter {
+                fail: true,
+                partial: false,
+            },
+            guard.clone(),
+        )
+        .call(
+            CallToolRequestParams::new(ToolId::GetClusterOverview.descriptor().name).with_arguments(
+                serde_json::json!({
+                    "cluster": "local-dev",
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.structured_content.is_none());
+        let error: serde_json::Value = serde_json::from_str(&content_text(&result)).unwrap();
+        assert_eq!(error["code"], "source_unavailable");
+        assert_eq!(error["retryable"], true);
+        assert_eq!(error["request_id"], "test-request");
+        assert_eq!(error["message"], "RocketMQ source is unavailable");
+        assert!(!content_text(&result).contains("super-secret"));
+        assert!(!content_text(&result).contains("10.24.7.9"));
+        assert!(!content_text(&result).contains("nameserver"));
+        let records = guard.audit_log().records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, AuditStatus::Failure);
+    }
+
+    #[tokio::test]
+    async fn invalid_arguments_are_actionable_tool_errors() {
+        let result = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            test_guard("diagnose"),
+        )
+        .call(CallToolRequestParams::new(ToolId::GetClusterOverview.descriptor().name))
+        .await
+        .unwrap();
+
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.structured_content.is_none());
+        let error: serde_json::Value = serde_json::from_str(&content_text(&result)).unwrap();
+        assert_eq!(error["code"], "invalid_arguments");
+        assert_eq!(error["retryable"], false);
+        assert_eq!(error["request_id"], "test-request");
+        assert!(!error["suggestions"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn invalid_arguments_report_field_paths_without_values() {
+        use serde_json::json;
+        let executor = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            test_guard("diagnose"),
+        );
+        let call = |arguments: serde_json::Value| {
+            let executor = &executor;
+            async move {
+                let request = CallToolRequestParams::new(ToolId::GetTopicRoute.descriptor().name)
+                    .with_arguments(arguments.as_object().unwrap().clone());
+                let text = content_text(&executor.call(request).await.unwrap());
+                // Neither a value nor the name of an undeclared property is echoed.
+                assert!(!text.contains("sentinel"), "{arguments}");
+                let error: serde_json::Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(error["code"], "invalid_arguments", "{arguments}");
+                error["violations"].clone()
+            }
+        };
+        let located = |path: &str, constraint: &str| json!([{ "path": path, "constraint": constraint }]);
+
+        for (arguments, expected) in [
+            (json!({"cluster": "local-dev"}), located("/topic", "required")),
+            (
+                json!({"cluster": "local-dev", "topic": "orders", "limit": "value-sentinel"}),
+                located("/limit", "type"),
+            ),
+            (
+                json!({"cluster": "local-dev", "topic": "orders", "limit": 0}),
+                located("/limit", "minimum"),
+            ),
+            (
+                json!({"cluster": "local-dev", "topic": "orders", "limit": 201}),
+                located("/limit", "maximum"),
+            ),
+            (
+                json!({"cluster": "local-dev", "topic": "orders", "name-sentinel": "value-sentinel"}),
+                located("/*", "additional_property"),
+            ),
+            // The Guard rejects these before the input schema is checked.
+            (json!({"topic": "orders"}), located("/cluster", "required")),
+            (
+                json!({"cluster": "  ", "topic": "orders"}),
+                located("/cluster", "min_length"),
+            ),
+            (json!({"cluster": 7, "topic": "orders"}), located("/cluster", "type")),
+        ] {
+            assert_eq!(call(arguments.clone()).await, expected, "{arguments}");
+        }
+
+        // Four arguments are wrong; the first three are enough to correct the call.
+        let many = call(json!({
+            "cluster": "local-dev",
+            "limit": "value-sentinel",
+            "cursor": 7,
+            "name-sentinel": true
+        }))
+        .await;
+        assert_eq!(many.as_array().unwrap().len(), MAX_REPORTED_VIOLATIONS);
+    }
+
+    #[test]
+    fn not_found_is_a_non_retryable_tool_error_that_names_the_entity() {
+        for (entity, wire_entity, next_step) in [
+            (NotFoundEntity::Topic, "topic", "rocketmq_list_topics"),
+            (
+                NotFoundEntity::ConsumerGroup,
+                "consumer_group",
+                "rocketmq_list_consumer_groups",
+            ),
+            (NotFoundEntity::Broker, "broker", "rocketmq_get_cluster_overview"),
+        ] {
+            let failure = ToolFailure::not_found(entity);
+            assert_eq!(failure.metric_failure_label(), McpFailureClass::NotFound);
+            let result = error_result(
+                "rocketmq_get_topic_route",
+                "rocketmq_get_topic_route",
+                "request-1",
+                failure,
+            );
+
+            assert_eq!(result.is_error, Some(true));
+            let error: serde_json::Value = serde_json::from_str(&content_text(&result)).unwrap();
+            assert_eq!(error["code"], "not_found");
+            assert_eq!(error["entity"], wire_entity);
+            assert_eq!(error["retryable"], false);
+            assert!(error["suggestions"][0].as_str().unwrap().contains(next_step));
+        }
+
+        // Only `not_found` carries an entity; every other error keeps its previous shape.
+        let result = error_result(
+            "rocketmq_get_topic_route",
+            "rocketmq_get_topic_route",
+            "request-1",
+            ToolFailure::Operational(ToolExecutionError::Backend(None)),
+        );
+        let error: serde_json::Value = serde_json::from_str(&content_text(&result)).unwrap();
+        assert_eq!(error["code"], "source_unavailable");
+        assert_eq!(error["retryable"], true);
+        assert!(error.get("entity").is_none());
+    }
+
+    #[test]
+    fn a_failure_that_is_no_fault_of_server_or_source_is_counted_as_what_it_is() {
+        for (failure, class) in [
+            // A caller that withdraws its request did not find an internal error.
+            (
+                ToolFailure::Rejected(ToolRejection::Cancelled),
+                McpFailureClass::Cancelled,
+            ),
+            // An identifier too long for a pseudonym does not mean that a source is down.
+            (
+                ToolFailure::Rejected(ToolRejection::AliasInputBoundExceeded),
+                McpFailureClass::BoundExceeded,
+            ),
+            (
+                ToolFailure::not_found(NotFoundEntity::Message),
+                McpFailureClass::NotFound,
+            ),
+            // What really is the server or a source keeps its class.
+            (
+                ToolFailure::Operational(ToolExecutionError::Internal(None)),
+                McpFailureClass::Internal,
+            ),
+            (
+                ToolFailure::Operational(ToolExecutionError::Backend(None)),
+                McpFailureClass::SourceUnavailable,
+            ),
+            (
+                ToolFailure::Rejected(ToolRejection::TimedOut { timeout_ms: 25_000 }),
+                McpFailureClass::SourceUnavailable,
+            ),
+            (
+                ToolFailure::Rejected(ToolRejection::RateLimited { retry_after_ms: 1 }),
+                McpFailureClass::RateLimited,
+            ),
+            (
+                ToolFailure::Rejected(ToolRejection::ConcurrencyLimited),
+                McpFailureClass::RateLimited,
+            ),
+        ] {
+            assert_eq!(failure.metric_failure_label(), class, "{}", failure.code());
+        }
+    }
+
+    #[test]
+    fn cursor_and_result_size_errors_are_non_retryable_and_name_the_recovery() {
+        for (rejection, code, label, next_step) in [
+            (
+                ToolRejection::CursorExpired,
+                "cursor_expired",
+                McpFailureClass::InvalidRequest,
+                "without cursor",
+            ),
+            (
+                ToolRejection::CursorInvalid,
+                "cursor_invalid",
+                McpFailureClass::InvalidRequest,
+                "next_cursor back unchanged",
+            ),
+            (
+                ToolRejection::ResultTooLarge,
+                "result_too_large",
+                McpFailureClass::OutputTooLarge,
+                "filter",
+            ),
+        ] {
+            let failure = ToolFailure::Rejected(rejection);
+            assert_eq!(failure.metric_failure_label(), label);
+            let result = error_result("rocketmq_list_topics", "rocketmq_list_topics", "request-1", failure);
+
+            assert_eq!(result.is_error, Some(true));
+            let error: serde_json::Value = serde_json::from_str(&content_text(&result)).unwrap();
+            assert_eq!(error["code"], code);
+            assert_eq!(error["retryable"], false);
+            assert!(error["suggestions"][0].as_str().unwrap().contains(next_step), "{code}");
+            assert!(error.get("entity").is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn unknown_tool_returns_protocol_error() {
+        let err = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            test_guard("diagnose"),
+        )
+        .call(CallToolRequestParams::new("unknown-tool-secret-token-sentinel"))
+        .await
+        .unwrap_err();
+
+        assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        assert_eq!(err.message, "unknown tool");
+    }
+
+    #[tokio::test]
+    async fn read_only_guard_denies_diagnosis_tool() {
+        let guard = test_guard("read_only");
+        let result = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            guard.clone(),
+        )
+        .call(
+            CallToolRequestParams::new(ToolId::DiagnoseConsumerLag.descriptor().name).with_arguments(
+                serde_json::json!({
+                    "cluster": "local-dev",
+                    "topic": "orders",
+                    "consumer_group": "order-service",
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.is_error, Some(true));
+        let error: serde_json::Value = serde_json::from_str(&content_text(&result)).unwrap();
+        assert_eq!(error["code"], "unauthorized_scope");
+        assert_eq!(error["correlation_id"], "test-request");
+        assert!(error["message"].as_str().unwrap().contains("permission denied"));
+        let records = guard.audit_log().records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, AuditStatus::Failure);
+    }
+
+    #[tokio::test]
+    async fn broker_tools_dispatch_with_resource_links_while_proxy_tools_remain_unlinked() {
+        let executor = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            test_guard("diagnose"),
+        );
+        let calls = [
+            (
+                ToolId::GetBrokerDiagnostics,
+                serde_json::json!({"cluster": "local-dev", "broker_name": "broker-a"}),
+                Some("rocketmq://clusters/local-dev/brokers/broker-a/diagnostics"),
+            ),
+            (
+                ToolId::GetBrokerConfigSummary,
+                serde_json::json!({"cluster": "local-dev", "broker_name": "broker-a"}),
+                Some("rocketmq://clusters/local-dev/brokers/broker-a/config-summary"),
+            ),
+            (
+                ToolId::GetBrokerLogFilterState,
+                serde_json::json!({
+                    "cluster": "local-dev",
+                    "broker_name": "broker-a",
+                    "logger": "rocketmq_broker::processor"
+                }),
+                None,
+            ),
+            (
+                ToolId::GetProxyDrainState,
+                serde_json::json!({"cluster": "local-dev", "proxy_name": "proxy-a"}),
+                None,
+            ),
+        ];
+        for (tool, arguments, expected_uri) in calls {
+            let result = executor
+                .call(
+                    CallToolRequestParams::new(tool.descriptor().name)
+                        .with_arguments(arguments.as_object().unwrap().clone()),
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.is_error, Some(false), "{}", tool.descriptor().name);
+            assert_eq!(
+                result
+                    .content
+                    .iter()
+                    .find_map(ContentBlock::as_resource_link)
+                    .map(|link| link.uri.as_str()),
+                expected_uri
+            );
+            assert!(result.structured_content.is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn broker_and_proxy_tools_reject_unknown_fields_and_enforce_scopes() {
+        let diagnose = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            test_guard("diagnose"),
+        );
+        let invalid_calls = [
+            (
+                ToolId::GetBrokerDiagnostics,
+                serde_json::json!({"cluster": "local-dev", "broker_name": "broker-a", "extra": true}),
+            ),
+            (
+                ToolId::GetBrokerConfigSummary,
+                serde_json::json!({"cluster": "local-dev", "broker_name": "broker-a", "extra": true}),
+            ),
+            (
+                ToolId::GetBrokerLogFilterState,
+                serde_json::json!({
+                    "cluster": "local-dev",
+                    "broker_name": "broker-a",
+                    "logger": "rocketmq_broker::processor",
+                    "extra": true
+                }),
+            ),
+            (
+                ToolId::GetProxyDrainState,
+                serde_json::json!({"cluster": "local-dev", "proxy_name": "proxy-a", "endpoint": "secret"}),
+            ),
+        ];
+        for (tool, arguments) in invalid_calls {
+            let invalid = diagnose
+                .call(
+                    CallToolRequestParams::new(tool.descriptor().name)
+                        .with_arguments(arguments.as_object().unwrap().clone()),
+                )
+                .await
+                .unwrap();
+            assert_eq!(invalid.is_error, Some(true), "{}", tool.descriptor().name);
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&content_text(&invalid)).unwrap()["code"],
+                "invalid_arguments"
+            );
+        }
+
+        let read_only = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            test_guard("read_only"),
+        );
+        let denied = read_only
+            .call(
+                CallToolRequestParams::new(ToolId::GetBrokerDiagnostics.descriptor().name).with_arguments(
+                    serde_json::json!({"cluster": "local-dev", "broker_name": "broker-a"})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.is_error, Some(true));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&content_text(&denied)).unwrap()["code"],
+            "unauthorized_scope"
+        );
+
+        let allowed = read_only
+            .call(
+                CallToolRequestParams::new(ToolId::GetBrokerConfigSummary.descriptor().name).with_arguments(
+                    serde_json::json!({"cluster": "local-dev", "broker_name": "broker-a"})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(allowed.is_error, Some(false));
+    }
+
+    #[tokio::test]
+    async fn infrastructure_tools_enforce_scope_before_schema_and_never_accept_addresses() {
+        let read_guard = test_guard("read_only");
+        let read_only = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            read_guard.clone(),
+        );
+        let denied_before_schema = read_only
+            .call(
+                CallToolRequestParams::new(ToolId::GetHaStatus.descriptor().name).with_arguments(
+                    serde_json::json!({
+                        "cluster": "local-dev",
+                        "endpoint": "private-controller.internal:9878"
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied_before_schema.is_error, Some(true));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&content_text(&denied_before_schema)).unwrap()["code"],
+            "unauthorized_scope"
+        );
+
+        let nameserver = read_only
+            .call(
+                CallToolRequestParams::new(ToolId::GetNameserverConfigSummary.descriptor().name)
+                    .with_arguments(serde_json::json!({"cluster": "local-dev"}).as_object().unwrap().clone()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(nameserver.is_error, Some(false));
+
+        let diagnose_guard = test_guard("diagnose");
+        let diagnose = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            diagnose_guard.clone(),
+        );
+        for (tool, arguments) in [
+            (
+                ToolId::GetHaStatus,
+                serde_json::json!({
+                    "cluster": "local-dev",
+                    "broker_names": ["broker-a"],
+                    "include_sync_state": true,
+                    "controller_names": ["controller-local"]
+                }),
+            ),
+            (
+                ToolId::GetControllerMetadata,
+                serde_json::json!({"cluster": "local-dev", "controller_names": ["controller-local"]}),
+            ),
+        ] {
+            let result = diagnose
+                .call(
+                    CallToolRequestParams::new(tool.descriptor().name)
+                        .with_arguments(arguments.as_object().unwrap().clone()),
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.is_error, Some(false));
+            let wire = serde_json::to_string(&result).unwrap();
+            assert!(!wire.contains("private-controller"));
+        }
+        let invalid = diagnose
+            .call(
+                CallToolRequestParams::new(ToolId::GetControllerMetadata.descriptor().name).with_arguments(
+                    serde_json::json!({"cluster": "local-dev", "address": "10.20.30.40:9878"})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(invalid.is_error, Some(true));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&content_text(&invalid)).unwrap()["code"],
+            "invalid_arguments"
+        );
+        for records in [read_guard.audit_log().records(), diagnose_guard.audit_log().records()] {
+            let wire = serde_json::to_string(&records).unwrap();
+            assert!(!wire.contains("private-controller"));
+            assert!(!wire.contains("10.20.30.40"));
+        }
+    }
+
+    #[tokio::test]
+    async fn new_read_tools_expose_only_scoped_resource_links_and_reject_unknown_fields() {
+        let executor = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            test_guard("read_only"),
+        );
+        let calls = [
+            (
+                ToolId::ListConsumerConnections,
+                serde_json::json!({"cluster":"local-dev","consumer_group":"group-a"}),
+                None,
+            ),
+            (
+                ToolId::ListProducerConnections,
+                serde_json::json!({"cluster":"local-dev","topic":"orders","producer_group":"producer-a"}),
+                None,
+            ),
+            (
+                ToolId::GetMessageMetadata,
+                serde_json::json!({"cluster":"local-dev","message_id":"raw-message-a"}),
+                None,
+            ),
+            (
+                ToolId::GetTopicConfigState,
+                serde_json::json!({"cluster":"local-dev","topic":"orders","broker_names":["broker-a"]}),
+                None,
+            ),
+            (
+                ToolId::GetConsumerGroupConfigState,
+                serde_json::json!({"cluster":"local-dev","group":"group-a","broker_names":["broker-a"]}),
+                None,
+            ),
+            (
+                ToolId::GetTopicStats,
+                serde_json::json!({"cluster":"local-dev","topic":"orders","limit":1}),
+                Some("rocketmq://clusters/local-dev/topics/orders/stats?limit=1"),
+            ),
+            (
+                ToolId::GetTopicConfig,
+                serde_json::json!({"cluster":"local-dev","topic":"orders"}),
+                Some("rocketmq://clusters/local-dev/topics/orders/config"),
+            ),
+            (
+                ToolId::GetConsumerGroupDetails,
+                serde_json::json!({"cluster":"local-dev","consumer_group":"group-a"}),
+                None,
+            ),
+            (
+                ToolId::GetConsumerProgress,
+                serde_json::json!({"cluster":"local-dev","consumer_group":"group-a","limit":1}),
+                Some("rocketmq://clusters/local-dev/consumer-groups/group-a/progress?limit=1"),
+            ),
+        ];
+        for (tool, arguments, expected_uri) in calls {
+            let result = executor
+                .call(
+                    CallToolRequestParams::new(tool.descriptor().name)
+                        .with_arguments(arguments.as_object().unwrap().clone()),
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.is_error, Some(false), "{}", tool.descriptor().name);
+            assert_eq!(
+                result
+                    .content
+                    .iter()
+                    .find_map(ContentBlock::as_resource_link)
+                    .map(|link| link.uri.as_str()),
+                expected_uri
+            );
+
+            let mut invalid_arguments = arguments.as_object().unwrap().clone();
+            invalid_arguments.insert("unexpected".to_string(), serde_json::Value::Bool(true));
+            let invalid = executor
+                .call(CallToolRequestParams::new(tool.descriptor().name).with_arguments(invalid_arguments))
+                .await
+                .unwrap();
+            assert_eq!(invalid.is_error, Some(true), "{}", tool.descriptor().name);
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&content_text(&invalid)).unwrap()["code"],
+                "invalid_arguments"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn unrepresentable_resource_targets_only_omit_links_without_rewriting_tool_data() {
+        let guard = test_guard("read_only");
+        let executor = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            guard.clone(),
+        );
+        let safe = executor
+            .call(
+                CallToolRequestParams::new("rocketmq_get_topic_config").with_arguments(
+                    serde_json::json!({"cluster":"local-dev","topic":"orders"})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(safe.is_error, Some(false));
+        assert_eq!(
+            safe.content
+                .iter()
+                .find_map(ContentBlock::as_resource_link)
+                .map(|link| link.uri.as_str()),
+            Some("rocketmq://clusters/local-dev/topics/orders/config")
+        );
+
+        let unrepresentable_topics = [
+            ".".to_string(),
+            ":".to_string(),
+            "x".repeat(crate::model::identifier::TOPIC_MAX_BYTES + 1),
+        ];
+        for topic in unrepresentable_topics {
+            let result = executor
+                .call(
+                    CallToolRequestParams::new("rocketmq_get_topic_config").with_arguments(
+                        serde_json::json!({"cluster":"local-dev","topic":&topic})
+                            .as_object()
+                            .unwrap()
+                            .clone(),
+                    ),
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.is_error, Some(false));
+            assert!(result.content.iter().all(|block| block.as_resource_link().is_none()));
+            let structured = result.structured_content.as_ref().unwrap();
+            assert_eq!(structured["schema_version"], "rocketmq-mcp.v2");
+            assert!(chrono::DateTime::parse_from_rfc3339(structured["observed_at"].as_str().unwrap()).is_ok());
+            assert_eq!(structured["cluster"], "local-dev");
+            assert_eq!(structured["data"]["topic"], topic);
+            assert_eq!(structured["data"]["generated_at"], "transient-test-time");
+            assert_eq!(structured["data"]["brokers"][0]["broker_name"], "broker-a");
+            assert_eq!(
+                result.content[0].as_text().unwrap().text,
+                format!(
+                    "Topic {topic} on cluster local-dev returned 1 Broker configurations with 0 semantic differences."
+                )
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sensitive_unrepresentable_targets_are_cleaned_without_touching_unrelated_fields() {
+        let guard = test_guard("read_only");
+        let executor = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            guard.clone(),
+        );
+        for topic in ["127.0.0.1", "127.0.0.1:9876", "token=secret", "%74oken%3Dsecret"] {
+            let result = executor
+                .call(
+                    CallToolRequestParams::new("rocketmq_get_topic_config").with_arguments(
+                        serde_json::json!({"cluster":"local-dev","topic":topic})
+                            .as_object()
+                            .unwrap()
+                            .clone(),
+                    ),
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.is_error, Some(false));
+            assert!(result.content.iter().all(|block| block.as_resource_link().is_none()));
+            let structured = result.structured_content.as_ref().unwrap();
+            assert_eq!(structured["schema_version"], "rocketmq-mcp.v2");
+            assert!(chrono::DateTime::parse_from_rfc3339(structured["observed_at"].as_str().unwrap()).is_ok());
+            assert_eq!(structured["cluster"], "local-dev");
+            assert_eq!(structured["data"]["topic"], "[REDACTED]");
+            assert_eq!(structured["data"]["generated_at"], "transient-test-time");
+            assert_eq!(structured["data"]["brokers"][0]["broker_name"], "broker-a");
+            let wire = serde_json::to_string(&result).unwrap();
+            assert!(!wire.contains(topic), "sensitive target escaped: {topic}");
+        }
+        let audit = serde_json::to_string(&guard.audit_log().records()).unwrap();
+        for unsafe_value in ["127.0.0.1", "token=secret", "%74oken%3Dsecret"] {
+            assert!(!audit.contains(unsafe_value));
+        }
+    }
+
+    #[tokio::test]
+    async fn new_read_tools_require_read_scope() {
+        let guard = test_guard("read_only");
+        let mut context = guard.local_request_context();
+        context.principal.scopes.clear();
+        let executor = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            guard,
+        )
+        .with_request_context(context);
+        let calls = [
+            (
+                ToolId::ListConsumerConnections,
+                serde_json::json!({"cluster":"local-dev","consumer_group":"group-a"}),
+            ),
+            (
+                ToolId::ListProducerConnections,
+                serde_json::json!({"cluster":"local-dev","topic":"orders","producer_group":"producer-a"}),
+            ),
+            (
+                ToolId::GetMessageMetadata,
+                serde_json::json!({"cluster":"local-dev","message_id":"raw-message-a"}),
+            ),
+            (
+                ToolId::GetTopicConfigState,
+                serde_json::json!({"cluster":"local-dev","topic":"orders","broker_names":["broker-a"]}),
+            ),
+            (
+                ToolId::GetConsumerGroupConfigState,
+                serde_json::json!({"cluster":"local-dev","group":"group-a","broker_names":["broker-a"]}),
+            ),
+            (
+                ToolId::GetTopicStats,
+                serde_json::json!({"cluster":"local-dev","topic":"orders","limit":1}),
+            ),
+            (
+                ToolId::GetTopicConfig,
+                serde_json::json!({"cluster":"local-dev","topic":"orders"}),
+            ),
+            (
+                ToolId::GetConsumerGroupDetails,
+                serde_json::json!({"cluster":"local-dev","consumer_group":"group-a"}),
+            ),
+            (
+                ToolId::GetConsumerProgress,
+                serde_json::json!({"cluster":"local-dev","consumer_group":"group-a","limit":1}),
+            ),
+        ];
+        for (tool, arguments) in calls {
+            let denied = executor
+                .call(
+                    CallToolRequestParams::new(tool.descriptor().name)
+                        .with_arguments(arguments.as_object().unwrap().clone()),
+                )
+                .await
+                .unwrap();
+            assert_eq!(denied.is_error, Some(true), "{}", tool.descriptor().name);
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&content_text(&denied)).unwrap()["code"],
+                "unauthorized_scope"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn message_identifiers_are_redacted_before_audit_hashing() {
+        // Every Tool that takes a message identifier, with the rest of its arguments.
+        let calls = [
+            (
+                "read_only",
+                ToolId::GetMessageMetadata,
+                serde_json::json!({"cluster":"local-dev"}),
+            ),
+            (
+                "diagnose",
+                ToolId::DiagnoseMessageDelivery,
+                serde_json::json!({"cluster":"local-dev","topic":"orders","consumer_group":"order-service"}),
+            ),
+            (
+                "read_only",
+                ToolId::QueryMessageTrace,
+                serde_json::json!({"cluster":"local-dev"}),
+            ),
+        ];
+        for (profile, tool, other_arguments) in calls {
+            let tool = tool.descriptor().name;
+            let guard = test_guard(profile);
+            let executor = ToolExecutor::new(
+                FakeAdapter {
+                    fail: false,
+                    partial: false,
+                },
+                guard.clone(),
+            );
+            for message_id in ["RAW-MESSAGE-ID-A", "RAW-MESSAGE-ID-B"] {
+                let mut arguments = other_arguments.as_object().unwrap().clone();
+                arguments.insert("message_id".to_string(), serde_json::json!(message_id));
+                let result = executor
+                    .call(CallToolRequestParams::new(tool).with_arguments(arguments))
+                    .await
+                    .unwrap();
+                assert_eq!(result.is_error, Some(false), "{tool}");
+                assert!(!content_text(&result).contains(message_id), "{tool}");
+                assert!(
+                    !serde_json::to_string(&result.structured_content)
+                        .unwrap()
+                        .contains(message_id),
+                    "{tool}"
+                );
+            }
+            let records = guard.audit_log().records();
+            assert_eq!(records.len(), 2, "{tool}");
+            assert_eq!(records[0].arguments_hash, records[1].arguments_hash, "{tool}");
+            let audit_json = serde_json::to_string(&records).unwrap();
+            assert!(!audit_json.contains("RAW-MESSAGE-ID-A"), "{tool}");
+            assert!(!audit_json.contains("RAW-MESSAGE-ID-B"), "{tool}");
+        }
+    }
+
+    #[tokio::test]
+    async fn new_read_tool_output_limit_is_enforced_by_executor() {
+        let executor = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            test_guard("read_only"),
+        );
+        let calls = [
+            (
+                ToolId::ListConsumerConnections,
+                serde_json::json!({"cluster":"local-dev","consumer_group":"oversized"}),
+            ),
+            (
+                ToolId::ListProducerConnections,
+                serde_json::json!({"cluster":"local-dev","topic":"orders","producer_group":"oversized"}),
+            ),
+            (
+                ToolId::GetMessageMetadata,
+                serde_json::json!({"cluster":"local-dev","message_id":"oversized"}),
+            ),
+            (
+                ToolId::GetTopicConfigState,
+                serde_json::json!({"cluster":"local-dev","topic":"oversized","broker_names":["broker-a"]}),
+            ),
+            (
+                ToolId::GetConsumerGroupConfigState,
+                serde_json::json!({"cluster":"local-dev","group":"oversized","broker_names":["broker-a"]}),
+            ),
+            (
+                ToolId::GetTopicStats,
+                serde_json::json!({"cluster":"local-dev","topic":"oversized"}),
+            ),
+            (
+                ToolId::GetTopicConfig,
+                serde_json::json!({"cluster":"local-dev","topic":"oversized"}),
+            ),
+            (
+                ToolId::GetConsumerGroupDetails,
+                serde_json::json!({"cluster":"local-dev","consumer_group":"oversized"}),
+            ),
+            (
+                ToolId::GetConsumerProgress,
+                serde_json::json!({"cluster":"local-dev","consumer_group":"oversized"}),
+            ),
+        ];
+        for (tool, arguments) in calls {
+            let result = executor
+                .call(
+                    CallToolRequestParams::new(tool.descriptor().name)
+                        .with_arguments(arguments.as_object().unwrap().clone()),
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.is_error, Some(true), "{}", tool.descriptor().name);
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&content_text(&result)).unwrap()["code"],
+                "output_too_large"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn exact_nested_infrastructure_budget_reaches_executor_without_output_too_large() {
+        let result = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            test_guard("diagnose"),
+        )
+        .call(
+            CallToolRequestParams::new(ToolId::GetHaStatus.descriptor().name).with_arguments(
+                serde_json::json!({
+                    "cluster":"local-dev",
+                    "broker_names":["bounded"],
+                    "include_sync_state":false
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.is_error, Some(false));
+        let structured = result.structured_content.unwrap();
+        assert_eq!(structured["data"]["brokers"].as_array().unwrap().len(), 16);
+        assert!(!structured["warnings"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("output_rows_truncated")));
+    }
+
+    #[tokio::test]
+    async fn proxy_backend_failure_never_exposes_internal_endpoint() {
+        let result = ToolExecutor::new(
+            FakeAdapter {
+                fail: true,
+                partial: false,
+            },
+            test_guard("diagnose"),
+        )
+        .call(
+            CallToolRequestParams::new(ToolId::GetProxyDrainState.descriptor().name).with_arguments(
+                serde_json::json!({"cluster": "local-dev", "proxy_name": "proxy-a"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await
+        .unwrap();
+        let text = content_text(&result);
+        assert_eq!(result.is_error, Some(true));
+        assert!(!text.contains("private-proxy-endpoint"));
+        assert!(!text.contains("super-secret"));
+    }
+
+    #[cfg(feature = "change-planning")]
+    #[tokio::test]
+    async fn runtime_policy_denies_change_planning_by_default() {
+        let guard = test_guard_with_policy("operator", false);
+        let result = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            guard.clone(),
+        )
+        .call(plan_create_topic_request())
+        .await
+        .unwrap();
+
+        assert_eq!(result.is_error, Some(true));
+        assert!(content_text(&result).contains("change planning disabled"));
+        assert_eq!(guard.audit_log().records()[0].status, AuditStatus::Failure);
+    }
+
+    #[cfg(feature = "change-planning")]
+    #[tokio::test]
+    async fn change_plan_is_non_mutating_and_schema_validated() {
+        let guard = test_guard_with_policy("operator", true);
+        let result = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            guard.clone(),
+        )
+        .call(plan_create_topic_request())
+        .await
+        .unwrap();
+
+        assert_eq!(result.is_error, Some(false));
+        let structured = result.structured_content.as_ref().unwrap();
+        assert_eq!(structured["data"]["plan_type"], "create_topic");
+        assert_eq!(structured["data"]["mutates_cluster"], false);
+        assert_eq!(structured["data"]["ephemeral"], true);
+        assert_eq!(structured["data"]["immutable"], true);
+        assert!(structured["data"]["current_state"].get("generated_at").is_none());
+        assert_eq!(guard.audit_log().records()[0].status, AuditStatus::Success);
+    }
+
+    #[cfg(feature = "change-planning")]
+    #[test]
+    fn current_state_snapshot_excludes_transient_fields() {
+        let first = QueryResult {
+            data: serde_json::json!({
+                "value": "unchanged",
+                "nested": { "generated_at": "first" },
+                "generated_at": "first",
+            }),
+            observed_at: "first".to_string(),
+            freshness_ms: 0,
+            cache_status: crate::model::contract::CacheStatus::Bypass,
+            partial: false,
+            warnings: Vec::new(),
+            source_failures: Vec::new(),
+        };
+        let second = QueryResult {
+            data: serde_json::json!({
+                "value": "unchanged",
+                "nested": { "generated_at": "second" },
+                "generated_at": "second",
+            }),
+            observed_at: "second".to_string(),
+            freshness_ms: 100,
+            cache_status: crate::model::contract::CacheStatus::Hit,
+            partial: false,
+            warnings: Vec::new(),
+            source_failures: Vec::new(),
+        };
+
+        let first = canonical_current_state(&first).unwrap();
+        let second = canonical_current_state(&second).unwrap();
+
+        assert_eq!(first, serde_json::json!({ "value": "unchanged", "nested": {} }));
+        assert_eq!(first, second);
+    }
+
+    #[cfg(feature = "change-planning")]
+    fn plan_create_topic_request() -> CallToolRequestParams {
+        CallToolRequestParams::new(ToolId::PlanCreateTopic.descriptor().name).with_arguments(
+            serde_json::json!({
+                "cluster": "local-dev",
+                "reason": "capacity preparation",
+                "desired": {
+                    "topic": "orders",
+                    "read_queue_nums": 8,
+                    "write_queue_nums": 8,
+                    "perm": "read_write"
+                }
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        )
+    }
+
+    fn content_text(result: &CallToolResult) -> String {
+        result
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// A report as a diagnosis Tool returns it, reduced to what the envelope needs.
+    fn diagnosis_report(
+        report_type: &str,
+        cluster: &str,
+        partial: bool,
+    ) -> QueryResult<crate::model::diagnosis::DiagnosisReport> {
+        use crate::model::diagnosis as model;
+
+        let observed_at = "2026-10-10T00:00:00.000Z".to_string();
+        let mut result = QueryResult::bypass(model::DiagnosisReport {
+            report_type: report_type.to_string(),
+            evidence_version: "evidence.v1".to_string(),
+            rules_version: "rules.v1".to_string(),
+            cluster: cluster.to_string(),
+            target: serde_json::json!({}),
+            severity: model::Severity::Healthy,
+            confidence: 0.9,
+            confidence_band: model::ConfidenceBand::High,
+            policy_profile: "production-default".to_string(),
+            partial,
+            missing_evidence: Vec::new(),
+            evidence_refs: Vec::new(),
+            evidence_snapshot: model::EvidenceSnapshot {
+                evidence_version: "evidence.v1".to_string(),
+                query_hash: "0".repeat(64),
+                cluster: cluster.to_string(),
+                target: serde_json::json!({}),
+                observed_at: observed_at.clone(),
+                items: Vec::new(),
+            },
+            summary: format!("The {report_type} diagnosis found nothing to report."),
+            impacts: Vec::new(),
+            root_causes: Vec::new(),
+            recommendations: Vec::new(),
+            risks: Vec::new(),
+            follow_up_metrics: Vec::new(),
+            generated_at: observed_at,
+        });
+        if partial {
+            result.partial = true;
+            result.warnings = vec!["diagnosis_evidence_incomplete".to_string()];
+        }
+        result
+    }
+
+    fn test_guard(profile: &str) -> Guard {
+        test_guard_with_policy(profile, false)
+    }
+
+    fn test_guard_with_policy(profile: &str, allow_change_planning: bool) -> Guard {
+        test_guard_with_permissions(profile, allow_change_planning, permission_path())
+    }
+
+    /// A Guard over the `local-dev` cluster whose roles come from `permissions_file`.
+    fn test_guard_with_permissions(profile: &str, allow_change_planning: bool, permissions_file: String) -> Guard {
+        Guard::new(
+            SecurityConfig {
+                profile: profile.to_string(),
+                allow_change_planning,
+                sanitize_output: true,
+                rate_limit_per_minute: 60,
+                permissions_file,
+                max_concurrent_requests_per_cluster: 8,
+                pseudonym_key_env: None,
+                http_rate_limit_per_minute: None,
+            },
+            AuditConfig {
+                enabled: true,
+                sink: "memory".to_string(),
+                path: String::new(),
+                queue_capacity: 16,
+                max_record_bytes: 16 * 1024,
+                queue_max_bytes: 1024 * 1024,
+                max_file_bytes: 0,
+            },
+            &[ClusterConfig {
+                name: "local-dev".to_string(),
+                namesrv_addr: "127.0.0.1:9876".to_string(),
+                default: Some(true),
+                rocketmq_cluster_name: None,
+                tenant: None,
+                credentials: None,
+                proxies: Vec::new(),
+                controllers: Vec::new(),
+            }],
+        )
+        .unwrap()
+    }
+
+    fn permission_path() -> String {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("conf")
+            .join("permissions.example.toml")
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn broker_summary() -> cluster_tools::BrokerSummary {
+        cluster_tools::BrokerSummary {
+            cluster: "local-dev".to_string(),
+            broker_name: "broker-a".to_string(),
+            broker_id: 0,
+            broker_addr: "127.0.0.1:10911".to_string(),
+            version: "5.3.0".to_string(),
+            in_tps: "1.0".to_string(),
+            out_tps: "1.0".to_string(),
+            timer_progress: "0".to_string(),
+            page_cache_lock_time_millis: "0".to_string(),
+            hour: "0".to_string(),
+            space: "0".to_string(),
+            broker_active: true,
+        }
+    }
+}

@@ -425,14 +425,6 @@ impl AsyncTraceDispatcher {
         info!("AsyncTraceDispatcher stopped");
     }
 
-    pub fn register_shutdown_hook(&self) {}
-
-    pub fn register_shut_down_hook(&self) {
-        self.register_shutdown_hook();
-    }
-
-    pub fn remove_shutdown_hook(&self) {}
-
     fn request_worker_shutdown(&self) {
         self.state.is_stopped.store(true, Ordering::SeqCst);
         if let Err(error) = self.tx.try_send(TraceWorkerCommand::Shutdown) {
@@ -1504,18 +1496,6 @@ mod tests {
         // Should return error since not started
         let result = dispatcher.flush();
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn java_shutdown_hook_aliases_are_noop_under_drop_based_shutdown() {
-        let dispatcher = AsyncTraceDispatcher::new(test_runtime(), "TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
-
-        dispatcher.register_shutdown_hook();
-        dispatcher.register_shut_down_hook();
-        dispatcher.remove_shutdown_hook();
-
-        assert!(!dispatcher.is_started());
-        assert!(!dispatcher.is_stopped());
     }
 
     #[tokio::test]

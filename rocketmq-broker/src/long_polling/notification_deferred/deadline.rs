@@ -32,19 +32,19 @@ impl NotificationWaitDeadline {
         poll_time: i64,
         wall_now: i64,
         monotonic_now: tokio::time::Instant,
-    ) -> Result<NotificationWaitDeadlineOutcome, NotificationWaitDeadlineOperationalError> {
+    ) -> Result<NotificationWaitDecision, NotificationWaitDeadlineOperationalError> {
         if born_time < 0 {
-            return Ok(NotificationWaitDeadlineOutcome::Rejected(
+            return Ok(NotificationWaitDecision::Rejected(
                 NotificationWaitDeadlineRejection::new(NotificationWaitDeadlineRejectionReason::NegativeBornTime),
             ));
         }
         if poll_time <= 0 {
-            return Ok(NotificationWaitDeadlineOutcome::Rejected(
+            return Ok(NotificationWaitDecision::Rejected(
                 NotificationWaitDeadlineRejection::new(NotificationWaitDeadlineRejectionReason::NonPositivePollTime),
             ));
         }
         if wall_now < 0 {
-            return Ok(NotificationWaitDeadlineOutcome::Rejected(
+            return Ok(NotificationWaitDecision::Rejected(
                 NotificationWaitDeadlineRejection::new(NotificationWaitDeadlineRejectionReason::NegativeWallTime),
             ));
         }
@@ -53,7 +53,7 @@ impl NotificationWaitDeadline {
             .ok_or(NotificationWaitDeadlineOperationalError::ProtocolOverflow)?;
         let cutoff = requested_end.saturating_sub(EARLY_WAKE_MILLIS);
         if wall_now > cutoff {
-            return Ok(NotificationWaitDeadlineOutcome::Rejected(
+            return Ok(NotificationWaitDecision::Rejected(
                 NotificationWaitDeadlineRejection::new(NotificationWaitDeadlineRejectionReason::AlreadyExpired),
             ));
         }
@@ -68,7 +68,7 @@ impl NotificationWaitDeadline {
         let protocol_at = monotonic_now
             .checked_add(Duration::from_millis(remaining))
             .ok_or(NotificationWaitDeadlineOperationalError::MonotonicOverflow)?;
-        Ok(NotificationWaitDeadlineOutcome::Pending(Self {
+        Ok(NotificationWaitDecision::Pending(Self {
             protocol_millis,
             protocol_at,
         }))
@@ -87,7 +87,7 @@ impl NotificationWaitDeadline {
 
 #[derive(Debug)]
 #[must_use]
-pub(crate) enum NotificationWaitDeadlineOutcome {
+pub(crate) enum NotificationWaitDecision {
     Pending(NotificationWaitDeadline),
     Rejected(NotificationWaitDeadlineRejection),
 }

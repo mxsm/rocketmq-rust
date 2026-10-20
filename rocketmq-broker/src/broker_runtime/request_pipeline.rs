@@ -315,10 +315,7 @@ impl BrokerRuntime {
         let pop_lite_subscription_group_lookup = self.composition.state.subscription_group_manager().config_lookup();
         let pop_lite_event_dispatcher = self.composition.state.lite_event_dispatcher().clone();
         let pop_lite_service_context = self.composition.state.service_context.clone();
-        let pop_lite_queue_lock_manager = pop_lite_service_context
-            .clone()
-            .map(QueueLockManager::new_with_service_context)
-            .expect("BrokerRuntime always has an injected ChildServiceContext");
+        let pop_lite_queue_lock_manager = QueueLockManager::new_with_service_context(pop_lite_service_context.clone());
         let pop_lite_offset_manager = self.composition.state.consumer_offset_manager_handle();
         let pop_lite_escape_bridge = self.composition.state.escape_bridge();
         let pop_lite_message_processor = PopLiteMessageProcessor::new(
@@ -443,13 +440,6 @@ impl BrokerRuntime {
             .composition
             .state
             .service_context
-            .as_ref()
-            .ok_or_else(|| {
-                BrokerStartupError::initialization(
-                    "deferred_producers",
-                    "Broker deferred producers require an injected service context".to_owned(),
-                )
-            })?
             .try_component("broker.deferred-producers")
             .map_err(|error| BrokerStartupError::initialization_source("deferred_producers", error))?;
         let deferred_producer_task_group = deferred_producer_context.task_group().clone();
@@ -526,13 +516,10 @@ impl BrokerRuntime {
         }
         let mut broker_request_processor =
             BrokerRequestProcessor::new_with_factory(self.composition.state.command_factory());
-        let request_processor_task_group = self.lifecycle.request_processor_task_group.clone().or_else(|| {
-            self.broker_task_group_or_current(
-                "rocketmq-broker.request-processor",
-                "failed to initialize broker request processor task group outside Tokio runtime",
-            )
-        });
-        self.lifecycle.request_processor_task_group = request_processor_task_group;
+        if self.lifecycle.request_processor_task_group.is_none() {
+            self.lifecycle.request_processor_task_group =
+                Some(self.broker_component_task_group("rocketmq-broker.request-processor"));
+        }
         if let Some(auth_runtime) = &self.composition.request_pipeline.auth_runtime {
             broker_request_processor.set_auth_runtime(auth_runtime.clone());
         }
@@ -569,18 +556,7 @@ impl BrokerRuntime {
                     "maintenance API requires the Broker-owned Store".to_string(),
                 )
             })?;
-            let service_context = self
-                .composition
-                .state
-                .service_context
-                .as_ref()
-                .cloned()
-                .ok_or_else(|| {
-                    BrokerStartupError::initialization(
-                        "maintenance_request_processor",
-                        "maintenance API requires a lifecycle-owned service context".to_string(),
-                    )
-                })?;
+            let service_context = self.composition.state.broker_service_context();
             let checkpoint_service = Arc::new(rocketmq_store::StoreReleaseCheckpointService::new(
                 store,
                 std::path::PathBuf::from(broker_config.maintenance_checkpoint_root.as_str()),

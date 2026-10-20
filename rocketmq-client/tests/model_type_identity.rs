@@ -16,7 +16,7 @@
 
 use rocketmq_client_rust::AllocateMessageQueueAveragely as LegacyAverage;
 use rocketmq_client_rust::AllocateMessageQueueStrategy as LegacyAllocationStrategy;
-use rocketmq_client_rust::PullOutcome;
+use rocketmq_client_rust::PullResponse;
 use rocketmq_client_rust::PullResult;
 use rocketmq_client_rust::PullStatus as LegacyPullStatus;
 use rocketmq_client_rust::QueryResult as LegacyQueryResult;
@@ -67,11 +67,11 @@ fn legacy_allocation_contract_is_the_canonical_model_contract() {
 #[test]
 fn pull_result_adapter_preserves_message_presence_and_order() {
     let absent = PullResult::new(PullStatus::Found, 12, 1, 20, None);
-    let absent_round_trip = PullResult::from(PullOutcome::from(&absent));
+    let absent_round_trip = PullResult::from(PullResponse::from(&absent));
     assert!(absent_round_trip.msg_found_list().is_none());
 
     let present_empty = PullResult::new(PullStatus::Found, 12, 1, 20, Some(Vec::new()));
-    let present_empty_round_trip = PullResult::from(PullOutcome::from(&present_empty));
+    let present_empty_round_trip = PullResult::from(PullResponse::from(&present_empty));
     assert_eq!(
         present_empty_round_trip
             .msg_found_list()
@@ -84,7 +84,7 @@ fn pull_result_adapter_preserves_message_presence_and_order() {
     first.set_queue_offset(10);
     let mut second = MessageExt::default();
     second.set_queue_offset(11);
-    let present = PullOutcome::new(PullStatus::Found, 12, 1, 20, Some(vec![first, second]));
+    let present = PullResponse::new(PullStatus::Found, 12, 1, 20, Some(vec![first, second]));
     let present_round_trip = PullResult::from(present);
     let offsets = present_round_trip
         .msg_found_list()

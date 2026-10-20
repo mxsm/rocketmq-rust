@@ -34,7 +34,7 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_security_api::Principal;
 use rocketmq_store::MessageStoreConfig;
-use rocketmq_transport::api::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::EmbeddedDispatchResult;
 use rocketmq_transport::api::RequestDeadline;
 
 use crate::broker_runtime::BrokerRuntime;
@@ -43,19 +43,18 @@ use crate::lifecycle::BrokerStartupError;
 
 /// In-process embedding entry point for the Broker.
 ///
-/// A `ProxyBrokerFacade` owns a `BrokerRuntime` together with the task group
+/// An `EmbeddedBroker` owns a `BrokerRuntime` together with the task group
 /// used for local request dispatch, and is the supported way to run the Broker
-/// inside another process (for example the Proxy). It is re-exported from the
-/// crate root. Owning a facade means owning the embedded Broker's lifecycle:
+/// inside another process (for example the Proxy). The host owns its lifecycle:
 /// call [`initialize`](Self::initialize) then [`start`](Self::start) before
 /// serving traffic, and [`shutdown`](Self::shutdown) to stop it.
-pub struct ProxyBrokerFacade {
+pub struct EmbeddedBroker {
     runtime: BrokerRuntime,
     local_request_tasks: TaskGroup,
     started: bool,
 }
 
-impl ProxyBrokerFacade {
+impl EmbeddedBroker {
     /// Creates an embedded Broker using the store root carried by `broker_config`.
     ///
     /// This is the narrow constructor for local Proxy composition. Callers that
@@ -73,7 +72,7 @@ impl ProxyBrokerFacade {
         )
     }
 
-    /// Creates a proxy facade from broker configuration using explicit remoting defaults.
+    /// Creates an embedded Broker from broker configuration using explicit remoting defaults.
     ///
     /// # Errors
     ///
@@ -126,7 +125,7 @@ impl ProxyBrokerFacade {
         )
     }
 
-    /// Creates a proxy facade from broker and message-store configurations using explicit remoting defaults.
+    /// Creates an embedded Broker from broker and message-store configurations using explicit remoting defaults.
     ///
     /// # Errors
     ///
@@ -149,7 +148,7 @@ impl ProxyBrokerFacade {
         ))
     }
 
-    /// Creates a proxy facade from an already-[`ValidatedBrokerConfig`], using
+    /// Creates an embedded Broker from an already-[`ValidatedBrokerConfig`], using
     /// the application's default remoting command factory.
     ///
     /// This constructor is infallible: validation happened when the
@@ -169,7 +168,7 @@ impl ProxyBrokerFacade {
         )
     }
 
-    /// Creates a proxy facade from validated configuration using explicit remoting defaults.
+    /// Creates an embedded Broker from validated configuration using explicit remoting defaults.
     pub fn from_validated_config_with_factory(
         validated_config: ValidatedBrokerConfig,
         service_context: ChildServiceContext,
@@ -294,7 +293,7 @@ impl ProxyBrokerFacade {
         &self,
         request: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
         timeout: Duration,
-    ) -> crate::broker_error::BrokerResult<EmbeddedDispatchOutcome> {
+    ) -> crate::broker_error::BrokerResult<EmbeddedDispatchResult> {
         self.process_request_with_deadline(request, RequestDeadline::after(timeout))
             .await
     }
@@ -303,7 +302,7 @@ impl ProxyBrokerFacade {
         &self,
         mut request: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
         deadline: RequestDeadline,
-    ) -> crate::broker_error::BrokerResult<EmbeddedDispatchOutcome> {
+    ) -> crate::broker_error::BrokerResult<EmbeddedDispatchResult> {
         request.make_custom_header_to_net();
         let dispatcher = self
             .runtime
@@ -329,24 +328,24 @@ fn embedded_broker_request_processor_not_ready() -> rocketmq_error::SharedError 
 }
 
 fn embedded_dispatch_request_outcome(
-    outcome: EmbeddedDispatchOutcome,
+    outcome: EmbeddedDispatchResult,
     timeout: Duration,
-) -> crate::broker_error::BrokerResult<EmbeddedDispatchOutcome> {
+) -> crate::broker_error::BrokerResult<EmbeddedDispatchResult> {
     match outcome {
-        outcome @ (EmbeddedDispatchOutcome::Reply(_)
-        | EmbeddedDispatchOutcome::OneWay { .. }
-        | EmbeddedDispatchOutcome::Deferred { .. }
-        | EmbeddedDispatchOutcome::NoReply { .. }) => Ok(outcome),
-        EmbeddedDispatchOutcome::DeadlineExceeded => Err(crate::broker_error::timeout(
+        outcome @ (EmbeddedDispatchResult::Reply(_)
+        | EmbeddedDispatchResult::OneWay { .. }
+        | EmbeddedDispatchResult::Deferred { .. }
+        | EmbeddedDispatchResult::NoReply { .. }) => Ok(outcome),
+        EmbeddedDispatchResult::DeadlineExceeded => Err(crate::broker_error::timeout(
             "embedded_broker_response",
             timeout.as_millis().min(u128::from(u64::MAX)) as u64,
         )),
-        EmbeddedDispatchOutcome::AdmissionRejected
-        | EmbeddedDispatchOutcome::Cancelled
-        | EmbeddedDispatchOutcome::SessionClosed
-        | EmbeddedDispatchOutcome::CompletionClosed
-        | EmbeddedDispatchOutcome::IdentityExhausted => Err(embedded_dispatch_source_free_failure()),
-        // `EmbeddedDispatchOutcome` is non-exhaustive; retain the fixed legacy
+        EmbeddedDispatchResult::AdmissionRejected
+        | EmbeddedDispatchResult::Cancelled
+        | EmbeddedDispatchResult::SessionClosed
+        | EmbeddedDispatchResult::CompletionClosed
+        | EmbeddedDispatchResult::IdentityExhausted => Err(embedded_dispatch_source_free_failure()),
+        // `EmbeddedDispatchResult` is non-exhaustive; retain the fixed legacy
         // failure boundary if a future source-free control is introduced.
         _ => Err(embedded_dispatch_source_free_failure()),
     }
@@ -394,7 +393,7 @@ mod tests {
     #[test]
     fn embedded_dispatch_deadline_preserves_legacy_timeout_mapping() {
         let error =
-            embedded_dispatch_request_outcome(EmbeddedDispatchOutcome::DeadlineExceeded, Duration::from_millis(41))
+            embedded_dispatch_request_outcome(EmbeddedDispatchResult::DeadlineExceeded, Duration::from_millis(41))
                 .expect_err("deadline control must remain a Broker timeout");
 
         assert_eq!(error.descriptor(), &rocketmq_error::CORE_OPERATION_TIMED_OUT);
@@ -403,11 +402,11 @@ mod tests {
     #[test]
     fn embedded_dispatch_source_free_controls_keep_fixed_failure_mapping() {
         for outcome in [
-            EmbeddedDispatchOutcome::AdmissionRejected,
-            EmbeddedDispatchOutcome::Cancelled,
-            EmbeddedDispatchOutcome::SessionClosed,
-            EmbeddedDispatchOutcome::CompletionClosed,
-            EmbeddedDispatchOutcome::IdentityExhausted,
+            EmbeddedDispatchResult::AdmissionRejected,
+            EmbeddedDispatchResult::Cancelled,
+            EmbeddedDispatchResult::SessionClosed,
+            EmbeddedDispatchResult::CompletionClosed,
+            EmbeddedDispatchResult::IdentityExhausted,
         ] {
             let error = embedded_dispatch_request_outcome(outcome, Duration::ZERO)
                 .expect_err("source-free control must not become an operational error");

@@ -31,12 +31,9 @@ use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPush
 use crate::consumer::consumer_impl::pop_request::PopRequest;
 use crate::consumer::consumer_impl::pull_request::PullRequest;
 
-/// The `MQConsumerInnerLocal` trait defines the core functionalities required for a local MQ
-/// consumer. It extends the `MQConsumerInnerAny` trait and requires implementations to be `Sync`
-/// and `'static`.
-
-#[trait_variant::make(MQConsumerInner: Send)]
-pub trait MQConsumerInnerLocal: MQConsumerInnerAny + Sync + 'static {
+/// Consumer operations shared by Push and LitePull implementations.
+#[trait_variant::make(Send)]
+pub trait MQConsumerInner: MQConsumerInnerAny + Sync + 'static {
     /// Returns the group name of the consumer.
     fn group_name(&self) -> CheetahString;
 

@@ -168,46 +168,6 @@ pub type SharedTopicQueueMappingInfo = Arc<TopicQueueMappingInfo>;
 /// Broker address information
 pub type SharedBrokerAddrInfo = Arc<BrokerAddrInfo>;
 
-/// Configuration for RouteInfoManager
-///
-/// Runtime configuration is owned by [`crate::NamesrvConfig`]. In particular,
-/// `NamesrvConfig::unregister_broker_batch_size` is wired to the production
-/// batch-unregistration service.
-#[derive(Clone, Debug)]
-#[deprecated(
-    since = "1.0.0",
-    note = "use NamesrvConfig; this compatibility DTO is not consumed by the production runtime"
-)]
-pub struct RouteManagerConfig {
-    /// Broker channel expired time in milliseconds
-    pub broker_channel_expired_time: i64,
-
-    /// Enable automatic topic cleanup when broker unregisters
-    pub delete_topic_with_broker_registration: bool,
-
-    /// Enable batch unregistration
-    pub enable_batch_unregistration: bool,
-
-    /// Maximum batch size for unregistration
-    pub max_batch_unregister_size: usize,
-
-    /// Scan interval for inactive brokers (milliseconds)
-    pub scan_not_active_broker_interval: u64,
-}
-
-#[allow(deprecated, reason = "implements the retained compatibility DTO")]
-impl Default for RouteManagerConfig {
-    fn default() -> Self {
-        Self {
-            broker_channel_expired_time: 1000 * 60 * 2, // 2 minutes
-            delete_topic_with_broker_registration: true,
-            enable_batch_unregistration: true,
-            max_batch_unregister_size: 100,
-            scan_not_active_broker_interval: 5000, // 5 seconds
-        }
-    }
-}
-
 /// Broker registration information
 #[derive(Clone, Debug)]
 pub struct BrokerRegistration {
@@ -327,21 +287,6 @@ impl TopicRouteQuery {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    #[allow(
-        deprecated,
-        reason = "covers the retained compatibility DTO until its next-major removal"
-    )]
-    fn test_route_manager_config_default() {
-        let config = RouteManagerConfig::default();
-
-        assert_eq!(config.broker_channel_expired_time, 1000 * 60 * 2);
-        assert!(config.delete_topic_with_broker_registration);
-        assert!(config.enable_batch_unregistration);
-        assert_eq!(config.max_batch_unregister_size, 100);
-        assert_eq!(config.scan_not_active_broker_interval, 5000);
-    }
 
     #[test]
     fn test_broker_registration_builder() {

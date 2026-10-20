@@ -14,17 +14,17 @@
 
 use super::*;
 use crate::contract::TransportContractViolation;
-use crate::dispatch::DeferredResponseOutcome;
+use crate::dispatch::DeferredResponseResult;
 use crate::dispatch::ResponseSendClaim;
 use crate::dispatch::ResponseState;
-use crate::dispatch::ResponseStateOutcome;
+use crate::dispatch::ResponseTransitionResult;
 
 fn expect_send_claim(
-    result: Result<ResponseStateOutcome<ResponseSendClaim>, TransportContractViolation>,
+    result: Result<ResponseTransitionResult<ResponseSendClaim>, TransportContractViolation>,
 ) -> ResponseSendClaim {
     match result {
-        Ok(ResponseStateOutcome::Applied(claim)) => claim,
-        Ok(ResponseStateOutcome::AlreadyCompleted { state, reason }) => {
+        Ok(ResponseTransitionResult::Applied(claim)) => claim,
+        Ok(ResponseTransitionResult::AlreadyCompleted { state, reason }) => {
             panic!("send claim unexpectedly observed {state:?} with reason {reason:?}")
         }
         Err(error) => panic!("send claim violated its state contract: {error:?}"),
@@ -71,7 +71,7 @@ async fn production_seed_shares_the_canonical_slot_and_rejects_another_session_o
         )
         .await
         .expect("deferred response uses the canonical writer");
-    let DeferredResponseOutcome::Completed(receipt) = outcome else {
+    let DeferredResponseResult::Completed(receipt) = outcome else {
         panic!("canonical deferred response must complete, got {outcome:?}");
     };
     assert_eq!(receipt.request_id(), original.request_id());
@@ -88,7 +88,7 @@ async fn production_seed_shares_the_canonical_slot_and_rejects_another_session_o
                     .expect("duplicate binding")
             )
             .await,
-        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+        Ok(ResponseCompletionResult::AlreadyCompleted(
             ResponseTerminalState::Completed
         ))
     ));
@@ -162,7 +162,7 @@ async fn dropping_a_waiting_deferred_send_completes_rsp_and_def_not_started() {
         .await;
     assert!(matches!(
         duplicate_error,
-        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+        Ok(ResponseCompletionResult::AlreadyCompleted(
             ResponseTerminalState::Failed {
                 progress: WriteProgress::NotStarted
             }
@@ -248,7 +248,7 @@ async fn dropping_a_writer_claimed_deferred_send_completes_rsp_and_def_possibly_
         .await;
     assert!(matches!(
         duplicate_error,
-        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+        Ok(ResponseCompletionResult::AlreadyCompleted(
             ResponseTerminalState::Failed {
                 progress: WriteProgress::PossiblyPartial
             }
@@ -319,7 +319,7 @@ async fn prestart_deadline_resumes_both_outer_claims_without_a_delegated_sending
     tokio::task::yield_now().await;
     assert!(matches!(
         send.await.expect("deferred send task"),
-        Ok(ResponseCompletionOutcome::DeadlineExpired)
+        Ok(ResponseCompletionResult::DeadlineExpired)
     ));
     assert_eq!(
         state_for_assert.terminal_state(),
@@ -338,7 +338,7 @@ async fn prestart_deadline_resumes_both_outer_claims_without_a_delegated_sending
         .await;
     assert!(matches!(
         duplicate_error,
-        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+        Ok(ResponseCompletionResult::AlreadyCompleted(
             ResponseTerminalState::Failed {
                 progress: WriteProgress::NotStarted
             }

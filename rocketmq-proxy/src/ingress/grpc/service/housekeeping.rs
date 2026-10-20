@@ -22,6 +22,7 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -115,8 +116,9 @@ where
 {
     let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
     observe(scheduled_tasks.observer(&["proxy.grpc.housekeeping"]));
-    let schedule_result = scheduled_tasks.schedule_fixed_rate_no_overlap(
+    let schedule_result = scheduled_tasks.schedule(
         ScheduledTaskConfig::fixed_rate_no_overlap("proxy.grpc.housekeeping", interval),
+        ScheduledExecutionPolicy::default(),
         run_once,
     );
     if schedule_result.is_err() {

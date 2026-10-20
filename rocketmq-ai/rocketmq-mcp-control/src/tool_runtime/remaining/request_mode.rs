@@ -19,12 +19,14 @@ use rocketmq_admin_core::core::supervised_mutation as admin;
 use super::{dry_status, map_request_mode, map_request_mode_from_admin, status_from_failures};
 use crate::error::ControlError;
 use crate::tool_runtime::admin_session::SupervisedMutationBackend;
-use crate::tool_runtime::{map_failure, map_persistence, map_verification};
+use crate::tool_runtime::plan_binding::PlanBinding;
+use crate::tool_runtime::{map_failure, map_persistence, map_verification, MutationToolResponse};
 use crate::tools;
 
 pub(crate) async fn run_request_mode<B: SupervisedMutationBackend>(
     backend: &mut B,
     args: tools::SetConsumerRequestModeArgs,
+    binding: &PlanBinding,
 ) -> Result<tools::RequestModeMutationToolResponse, ControlError> {
     let replacement = tools::RequestModeValue {
         mode: args.mode,
@@ -42,6 +44,14 @@ pub(crate) async fn run_request_mode<B: SupervisedMutationBackend>(
     if args.dry_run {
         return Ok(request_mode_dry_run(&args, replacement, targets, failures));
     }
+    binding.admit(|| {
+        MutationToolResponse::ConsumerRequestMode(request_mode_dry_run(
+            &args,
+            replacement,
+            targets.clone(),
+            failures.clone(),
+        ))
+    })?;
     let before = targets;
     let outcome = backend.execute_request_mode(&plan, args.timeout_millis).await?;
     Ok(request_mode_executed(&args, replacement, before, outcome))
@@ -102,7 +112,7 @@ fn request_mode_executed(
     args: &tools::SetConsumerRequestModeArgs,
     requested: tools::RequestModeValue,
     before_targets: Vec<(String, Option<admin::RequestModeValue>)>,
-    outcome: admin::RequestModeMutationOutcome,
+    outcome: admin::RequestModeMutationReport,
 ) -> tools::RequestModeMutationToolResponse {
     let before = before_targets
         .into_iter()

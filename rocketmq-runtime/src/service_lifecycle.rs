@@ -59,7 +59,9 @@ pub const HEALTH_BIND_ADDR_ENV: &str = "ROCKETMQ_HEALTH_BIND_ADDR";
 pub const SHUTDOWN_TIMEOUT_SECONDS_ENV: &str = "ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS";
 /// The liveness stale seconds env constant.
 pub const LIVENESS_STALE_SECONDS_ENV: &str = "ROCKETMQ_LIVENESS_STALE_SECONDS";
-/// The default shutdown timeout constant.
+/// HTTP methods accepted by `/drainz`: `POST` (the default) or `GET,POST`.
+pub const HEALTH_DRAIN_METHODS_ENV: &str = "ROCKETMQ_HEALTH_DRAIN_METHODS";
+/// Default process shutdown budget of [`ServiceLifecycleConfig::shutdown_timeout`].
 pub const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(45);
 /// The default liveness stale after constant.
 pub const DEFAULT_LIVENESS_STALE_AFTER: Duration = Duration::from_secs(30);
@@ -169,6 +171,62 @@ pub struct ShutdownRequest {
     pub deadline: ShutdownDeadline,
 }
 
+/// HTTP methods that the `/drainz` probe route accepts.
+///
+/// A drain request starts the process shutdown, so the default accepts only
+/// `POST`. Kubernetes `preStop.httpGet` hooks can send only `GET`; a deployment
+/// that drains through such a hook opts in with [`Self::GetOrPost`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DrainRequestMethods {
+    /// Accepts only `POST`. `GET` receives `405 Method Not Allowed`.
+    #[default]
+    PostOnly,
+    /// Accepts `GET` and `POST`.
+    GetOrPost,
+}
+
+impl DrainRequestMethods {
+    /// Parses the value of `ROCKETMQ_HEALTH_DRAIN_METHODS`.
+    ///
+    /// Accepts a comma-separated method list, ignoring case, blanks around
+    /// methods, and order: `POST` or `GET,POST`. Returns `None` for any other
+    /// list, including `GET` alone, since draining must stay reachable by `POST`.
+    pub fn parse(raw: &str) -> Option<Self> {
+        let mut get = false;
+        let mut post = false;
+        for method in raw.split(',').map(str::trim) {
+            if method.eq_ignore_ascii_case("GET") && !get {
+                get = true;
+            } else if method.eq_ignore_ascii_case("POST") && !post {
+                post = true;
+            } else {
+                return None;
+            }
+        }
+        match (get, post) {
+            (false, true) => Some(Self::PostOnly),
+            (true, true) => Some(Self::GetOrPost),
+            (_, false) => None,
+        }
+    }
+
+    /// Returns whether `method` may start a drain.
+    pub fn allows(self, method: &str) -> bool {
+        match self {
+            Self::PostOnly => method == "POST",
+            Self::GetOrPost => method == "GET" || method == "POST",
+        }
+    }
+
+    /// Returns the value of the `Allow` header for a rejected drain request.
+    pub const fn allow_header(self) -> &'static str {
+        match self {
+            Self::PostOnly => "POST",
+            Self::GetOrPost => "GET, POST",
+        }
+    }
+}
+
 /// Versioned runtime configuration for the process lifecycle boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceLifecycleConfig {
@@ -176,10 +234,16 @@ pub struct ServiceLifecycleConfig {
     pub service_name: Arc<str>,
     /// The probe bind addr value.
     pub probe_bind_addr: Option<SocketAddr>,
-    /// The shutdown timeout value.
+    /// Process shutdown budget.
+    ///
+    /// The first shutdown request fixes a `ShutdownDeadline` this far ahead.
+    /// That deadline is the single source for component shutdown and the
+    /// owner's final shutdown; repeated requests never extend it.
     pub shutdown_timeout: Duration,
     /// The liveness stale after value.
     pub liveness_stale_after: Duration,
+    /// HTTP methods that `/drainz` accepts.
+    pub drain_request_methods: DrainRequestMethods,
 }
 
 impl ServiceLifecycleConfig {
@@ -191,7 +255,8 @@ impl ServiceLifecycleConfig {
     /// # Errors
     ///
     /// Returns a configuration runtime failure for a malformed address, non-UTF-8 input,
-    /// zero timeout, or a liveness window shorter than two progress intervals.
+    /// zero timeout, a liveness window shorter than two progress intervals, or a
+    /// drain method list other than `POST` or `GET,POST`.
     pub fn from_env(service_name: impl Into<Arc<str>>) -> RuntimeResult<Self> {
         let probe_bind_addr = optional_env(HEALTH_BIND_ADDR_ENV)?
             .map(|raw| parse_socket_addr(HEALTH_BIND_ADDR_ENV, &raw))
@@ -199,11 +264,17 @@ impl ServiceLifecycleConfig {
         let shutdown_timeout = parse_duration_env(SHUTDOWN_TIMEOUT_SECONDS_ENV, DEFAULT_SHUTDOWN_TIMEOUT, 1, 300)?;
         let liveness_stale_after =
             parse_duration_env(LIVENESS_STALE_SECONDS_ENV, DEFAULT_LIVENESS_STALE_AFTER, 2, 300)?;
+        let drain_request_methods = match optional_env(HEALTH_DRAIN_METHODS_ENV)? {
+            None => DrainRequestMethods::default(),
+            Some(raw) => DrainRequestMethods::parse(&raw)
+                .ok_or_else(|| RuntimeError::configuration(crate::RuntimeOperation::ServiceLifecycleDrainMethods))?,
+        };
         Ok(Self {
             service_name: service_name.into(),
             probe_bind_addr,
             shutdown_timeout,
             liveness_stale_after,
+            drain_request_methods,
         })
     }
 }
@@ -425,10 +496,9 @@ impl ServiceLifecycle {
         let mut start_attempt = ServiceLifecycleStartAttempt::new(&self.inner);
         let lifecycle_context = service_context.component("service-lifecycle");
         let lifecycle_tasks = lifecycle_context.task_group().clone();
-        if lifecycle_tasks.lifecycle_state() != crate::TaskGroupLifecycleState::Open {
-            return Err(RuntimeError::context_unavailable(
-                crate::RuntimeOperation::ServiceLifecycleTaskGroup,
-            ));
+        let lifecycle_state = lifecycle_tasks.lifecycle_state();
+        if lifecycle_state != crate::TaskGroupLifecycleState::Open {
+            return Err(lifecycle_state.admission_error(crate::RuntimeOperation::ServiceLifecycleTaskGroup));
         }
         start_attempt.own(lifecycle_tasks.cancellation_token());
 
@@ -454,9 +524,9 @@ impl ServiceLifecycle {
 
         if let Some((listener, local_addr)) = probe {
             let lifecycle = self.clone();
-            let cancellation = lifecycle_tasks.cancellation_token();
+            let connection_tasks = lifecycle_tasks.clone();
             if let Err(error) = lifecycle_tasks.spawn_service("service-lifecycle.probe-server", async move {
-                lifecycle.serve_probe_requests(listener, cancellation).await;
+                lifecycle.serve_probe_requests(listener, connection_tasks).await;
             }) {
                 return self.rollback_failed_start(lifecycle_tasks, error).await;
             }
@@ -811,13 +881,18 @@ mod tests {
             probe_bind_addr,
             shutdown_timeout: Duration::from_secs(45),
             liveness_stale_after: Duration::from_secs(30),
+            drain_request_methods: DrainRequestMethods::PostOnly,
         }
     }
 
     async fn request(addr: SocketAddr, path: &str) -> String {
+        request_with_method(addr, "GET", path).await
+    }
+
+    async fn request_with_method(addr: SocketAddr, method: &str, path: &str) -> String {
         let mut stream = TcpStream::connect(addr).await.expect("connect lifecycle probe");
         stream
-            .write_all(format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").as_bytes())
+            .write_all(format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").as_bytes())
             .await
             .expect("write lifecycle probe request");
         let mut response = Vec::new();
@@ -938,7 +1013,9 @@ mod tests {
 
         lifecycle.mark_ready().unwrap();
         assert!(request(addr, "/readyz").await.starts_with("HTTP/1.1 200"));
-        assert!(request(addr, "/drainz").await.starts_with("HTTP/1.1 200"));
+        assert!(request_with_method(addr, "POST", "/drainz")
+            .await
+            .starts_with("HTTP/1.1 200"));
         assert!(!lifecycle.is_ready());
         assert_eq!(lifecycle.wait_for_shutdown().await.reason, ShutdownReason::PreStop);
 

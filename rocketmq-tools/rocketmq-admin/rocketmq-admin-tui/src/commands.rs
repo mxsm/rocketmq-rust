@@ -125,6 +125,21 @@ pub enum ArgKind {
     TimestampMillis,
 }
 
+impl ArgKind {
+    /// Returns the fixed values of an argument that is chosen rather than typed.
+    pub fn choices(&self) -> Option<&'static [&'static str]> {
+        match self {
+            Self::Bool { .. } => Some(&["false", "true"]),
+            Self::Enum { values, .. } => Some(values),
+            Self::String { .. }
+            | Self::OptionalString { .. }
+            | Self::Number { .. }
+            | Self::KeyValueMap
+            | Self::TimestampMillis => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArgSpec {
     pub name: &'static str,
@@ -135,6 +150,11 @@ pub struct ArgSpec {
 }
 
 impl ArgSpec {
+    /// Returns whether the value is a credential that must never be drawn on screen.
+    pub fn is_secret(&self) -> bool {
+        self.name.contains("password") || self.name.contains("secret")
+    }
+
     pub fn default_value(&self) -> String {
         match &self.kind {
             ArgKind::String { .. } | ArgKind::OptionalString { .. } | ArgKind::KeyValueMap => String::new(),

@@ -38,7 +38,7 @@ pub const TOPIC: &str = "BatchSendTestTopic";
 pub const TAG: &str = "BatchTag";
 pub const TIMEOUT_MS: u64 = 3000;
 
-#[path = "../support/mod.rs"]
+#[path = "../support.rs"]
 mod support;
 
 pub fn main() -> ClientResult<()> {

@@ -29,6 +29,8 @@
   ],
   "runtime": {
     "health_paths": ["/readyz", "/livez", "/drainz"],
+    "pre_stop_method": "GET",
+    "drain_request_methods": "GET,POST",
     "stateful_update_strategy": "OnDelete",
     "controller_minimum_voters": 3,
     "controller_quorum": "majority of current voters",

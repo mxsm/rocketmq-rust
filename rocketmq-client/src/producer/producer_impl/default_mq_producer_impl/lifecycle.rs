@@ -535,8 +535,6 @@ impl DefaultMQProducerImpl {
         Self::resize_available_permits(&self.semaphore_async_send_size, old_total, new_total);
     }
 
-    pub fn semaphore_processor(&self) {}
-
     pub fn semaphore_async_adjust(
         &self,
         semaphore_async_num: i32,

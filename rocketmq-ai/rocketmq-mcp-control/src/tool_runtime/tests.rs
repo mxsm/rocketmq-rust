@@ -30,8 +30,11 @@ use crate::model::MUTATION_ARGUMENTS_SCHEMA_VERSION;
 enum Behavior {
     Success,
     Partial,
+    Conflict,
     VerificationFailed,
     Block,
+    /// Waits for the gate like `Block`, then fails the run.
+    FailAfterGate,
     Panic,
 }
 
@@ -76,14 +79,19 @@ impl UpsertSession for FakeSession {
             self.counters.runs.fetch_add(1, Ordering::SeqCst);
             match self.behavior {
                 Behavior::Block => self.gate.notified().await,
+                Behavior::FailAfterGate => {
+                    self.gate.notified().await;
+                    return Err(ControlError::execution_failed());
+                }
                 Behavior::Panic => panic!("synthetic adapter panic"),
-                Behavior::Success | Behavior::Partial | Behavior::VerificationFailed => {}
+                Behavior::Success | Behavior::Partial | Behavior::Conflict | Behavior::VerificationFailed => {}
             }
             let UpsertRequest::Topic(args) = request else {
                 return Err(ControlError::execution_failed());
             };
             let (status, targets) = match self.behavior {
                 Behavior::Partial => (tools::MutationStatus::Partial, Vec::new()),
+                Behavior::Conflict => (tools::MutationStatus::Conflict, Vec::new()),
                 Behavior::VerificationFailed => (
                     tools::MutationStatus::Failed,
                     vec![tools::MutationTarget {
@@ -101,7 +109,12 @@ impl UpsertSession for FakeSession {
                         retryable: true,
                     }],
                 ),
-                Behavior::Success | Behavior::Block | Behavior::Panic => (tools::MutationStatus::Applied, Vec::new()),
+                Behavior::Success | Behavior::Block | Behavior::FailAfterGate | Behavior::Panic if args.dry_run => {
+                    (tools::MutationStatus::Planned, Vec::new())
+                }
+                Behavior::Success | Behavior::Block | Behavior::FailAfterGate | Behavior::Panic => {
+                    (tools::MutationStatus::Applied, Vec::new())
+                }
             };
             Ok(UpsertResponse::Topic(topic_response(
                 &args,
@@ -144,6 +157,7 @@ fn request(key: Option<&str>) -> UpsertRequest {
         confirm: true,
         reason: Some("planned operation".to_owned()),
         request_key: key.map(ToOwned::to_owned),
+        expected_plan_digest: None,
     })
 }
 
@@ -181,6 +195,7 @@ fn stage_c_idempotency_identity_covers_operation_resource_and_full_payload() {
         confirm: true,
         reason,
         request_key,
+        expected_plan_digest: None,
     });
     let offset_identity = IdempotencyIdentity::from_request(&principal, &cluster, &offset).unwrap();
     let offset_key = offset_identity.key.as_ref().expect("explicit offset key");
@@ -200,6 +215,7 @@ fn stage_c_idempotency_identity_covers_operation_resource_and_full_payload() {
         confirm: true,
         reason,
         request_key,
+        expected_plan_digest: None,
     });
     let broker_identity = IdempotencyIdentity::from_request(&principal, &cluster, &broker).unwrap();
     let broker_key = broker_identity.key.as_ref().expect("explicit broker key");
@@ -219,6 +235,7 @@ fn stage_c_idempotency_identity_covers_operation_resource_and_full_payload() {
         confirm: true,
         reason,
         request_key,
+        expected_plan_digest: None,
     });
     let request_mode_identity = IdempotencyIdentity::from_request(&principal, &cluster, &request_mode).unwrap();
     let request_mode_key = request_mode_identity.key.as_ref().expect("explicit request-mode key");
@@ -278,9 +295,21 @@ fn authorized() -> AuthorizedMutation {
     )
 }
 
+/// Runs one call as `alice` on the test cluster.
+async fn execute_as_alice(runtime: &ToolRuntime, request: UpsertRequest) -> Result<UpsertResponse, ControlError> {
+    runtime
+        .execute(&principal("alice"), &authorized(), request, CancellationToken::new())
+        .await
+}
+
 #[tokio::test]
-async fn completed_partial_and_verification_failures_are_cached_with_exact_audit() {
-    for behavior in [Behavior::Success, Behavior::Partial, Behavior::VerificationFailed] {
+async fn settled_outcomes_are_replayed_and_unsettled_ones_run_again() {
+    for behavior in [
+        Behavior::Success,
+        Behavior::Partial,
+        Behavior::Conflict,
+        Behavior::VerificationFailed,
+    ] {
         let (runtime, counters, sink, _) = runtime(behavior, Duration::from_secs(1));
         let first = runtime
             .execute(
@@ -304,17 +333,25 @@ async fn completed_partial_and_verification_failures_are_cached_with_exact_audit
             serde_json::to_value(&second).unwrap(),
             serde_json::to_value(&first).unwrap()
         );
-        let (expected_result, expected_code) = match behavior {
-            Behavior::Success => (crate::audit::AuditResult::Applied, None),
+        let (expected_result, expected_code, attempts) = match behavior {
+            Behavior::Success => (crate::audit::AuditResult::Applied, None, 1),
             Behavior::Partial => (
                 crate::audit::AuditResult::Partial,
                 Some(crate::error::ControlErrorCode::PartialApply),
+                1,
             ),
+            Behavior::Conflict => (
+                crate::audit::AuditResult::Conflict,
+                Some(crate::error::ControlErrorCode::PreconditionConflict),
+                1,
+            ),
+            // The write may have happened, and only another read of the cluster can tell.
             Behavior::VerificationFailed => (
                 crate::audit::AuditResult::Failed,
                 Some(crate::error::ControlErrorCode::VerificationFailed),
+                2,
             ),
-            Behavior::Block | Behavior::Panic => unreachable!(),
+            Behavior::Block | Behavior::FailAfterGate | Behavior::Panic => unreachable!(),
         };
         assert_eq!(first.is_error(), !matches!(behavior, Behavior::Success));
         for response in [&first, &second] {
@@ -323,9 +360,15 @@ async fn completed_partial_and_verification_failures_are_cached_with_exact_audit
             };
             assert_eq!(response.error_code, expected_code);
         }
-        assert_eq!(counters.opens.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.runs.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.opens.load(Ordering::SeqCst), attempts);
+        assert_eq!(counters.runs.load(Ordering::SeqCst), attempts);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), attempts);
+        // Only a settled outcome stays behind for the key.
+        assert_eq!(
+            runtime.idempotency.lock().await.entries.len(),
+            usize::from(attempts == 1)
+        );
+        // Replayed or run again, each call keeps its own audit pair.
         let records = sink.records().await.unwrap();
         assert_eq!(records.len(), 4);
         assert_eq!(records[1].result, expected_result);
@@ -333,6 +376,99 @@ async fn completed_partial_and_verification_failures_are_cached_with_exact_audit
         assert_eq!(records[1].error_code, expected_code);
         assert_eq!(records[3].error_code, expected_code);
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn retry_after_leader_timeout_runs_preflight_again() {
+    let (runtime, counters, sink, gate) = runtime(Behavior::Block, Duration::from_millis(5));
+    let timed_out = execute_as_alice(&runtime, request(Some("request-1234"))).await;
+    assert_eq!(timed_out.unwrap_err().code(), crate::error::ControlErrorCode::Timeout);
+    // The session of the first attempt was shut down before its key was released.
+    assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
+    assert!(runtime.idempotency.lock().await.entries.is_empty());
+
+    // The backend answers now, and the same key reads the cluster again instead of repeating the timeout.
+    gate.notify_one();
+    let retried = execute_as_alice(&runtime, request(Some("request-1234"))).await.unwrap();
+    assert!(!retried.is_error());
+    assert_eq!(counters.opens.load(Ordering::SeqCst), 2);
+    assert_eq!(counters.runs.load(Ordering::SeqCst), 2);
+    assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 2);
+
+    // That attempt applied, so a third call replays it.
+    execute_as_alice(&runtime, request(Some("request-1234"))).await.unwrap();
+    assert_eq!(counters.opens.load(Ordering::SeqCst), 2);
+    let records = sink.records().await.unwrap();
+    assert_eq!(records.len(), 6);
+    assert_eq!(records[1].result, crate::audit::AuditResult::Failed);
+    assert_eq!(records[1].error_code, Some(crate::error::ControlErrorCode::Timeout));
+    assert_eq!(records[3].result, crate::audit::AuditResult::Applied);
+    assert_eq!(records[5].result, crate::audit::AuditResult::Applied);
+}
+
+#[tokio::test]
+async fn dry_run_with_a_request_key_is_never_cached() {
+    let (runtime, counters, sink, _) = runtime(Behavior::Success, Duration::from_secs(1));
+    let plan = || {
+        let mut plan = request(Some("request-1234"));
+        let UpsertRequest::Topic(args) = &mut plan else {
+            unreachable!();
+        };
+        args.dry_run = true;
+        args.confirm = false;
+        plan
+    };
+    execute_as_alice(&runtime, plan()).await.unwrap();
+    execute_as_alice(&runtime, plan()).await.unwrap();
+    assert_eq!(counters.opens.load(Ordering::SeqCst), 2);
+    assert!(runtime.idempotency.lock().await.entries.is_empty());
+
+    // The execute call that follows a plan may carry the key of that plan.
+    let executed = execute_as_alice(&runtime, request(Some("request-1234"))).await.unwrap();
+    assert!(!executed.is_error());
+    assert_eq!(counters.opens.load(Ordering::SeqCst), 3);
+    assert_eq!(runtime.idempotency.lock().await.entries.len(), 1);
+    assert_eq!(sink.records().await.unwrap().len(), 6);
+}
+
+#[tokio::test]
+async fn followers_of_a_failed_leader_receive_the_error_once() {
+    let (runtime, counters, sink, gate) = runtime(Behavior::FailAfterGate, Duration::from_secs(2));
+    let leader = tokio::spawn({
+        let runtime = runtime.clone();
+        async move { execute_as_alice(&runtime, request(Some("request-1234"))).await }
+    });
+    while counters.runs.load(Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+    let follower = tokio::spawn({
+        let runtime = runtime.clone();
+        async move { execute_as_alice(&runtime, request(Some("request-1234"))).await }
+    });
+    while sink.records().await.unwrap().len() < 2 {
+        tokio::task::yield_now().await;
+    }
+    gate.notify_waiters();
+    for call in [leader, follower] {
+        assert_eq!(
+            call.await.unwrap().unwrap_err().code(),
+            crate::error::ControlErrorCode::ExecutionFailed
+        );
+    }
+    // One attempt served both calls, and its failure was not kept for the key.
+    assert_eq!(counters.opens.load(Ordering::SeqCst), 1);
+    assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
+    assert!(runtime.idempotency.lock().await.entries.is_empty());
+
+    // The next call with the key is a new attempt, not a replay of that failure.
+    gate.notify_one();
+    let again = execute_as_alice(&runtime, request(Some("request-1234"))).await;
+    assert_eq!(
+        again.unwrap_err().code(),
+        crate::error::ControlErrorCode::ExecutionFailed
+    );
+    assert_eq!(counters.opens.load(Ordering::SeqCst), 2);
+    assert_eq!(sink.records().await.unwrap().len(), 6);
 }
 
 #[tokio::test]
@@ -622,8 +758,8 @@ async fn idempotency_ttl_expires_and_capacity_evicts_oldest_completed_entry() {
     };
     let result = Ok(UpsertResponse::Topic(topic_response(
         &sample_args,
-        tools::MutationMode::DryRun,
-        tools::MutationStatus::Planned,
+        tools::MutationMode::Execute,
+        tools::MutationStatus::Applied,
         BTreeMap::new(),
         None,
         Vec::new(),
@@ -723,8 +859,8 @@ fn failed_postread_preserves_applied_and_persisted_target_truth() {
         unreachable!();
     };
     let before = BTreeMap::from([("broker-a".to_owned(), tools::VisibleState::Absent)]);
-    let outcome = admin::MetadataMutationOutcome {
-        targets: vec![admin::MetadataMutationTargetOutcome {
+    let outcome = admin::MetadataMutationReport {
+        targets: vec![admin::MetadataMutationTargetReport {
             broker_name: "broker-a".to_owned(),
             expected_state: admin::ExpectedState::Absent,
             resulting_state: Some(admin::ExpectedState::Present { version: 1 }),
@@ -783,6 +919,7 @@ fn topic_and_group_dry_runs_report_all_mixed_and_zero_success() {
         confirm: false,
         reason: None,
         request_key: None,
+        expected_plan_digest: None,
     };
     let topic_before = BTreeMap::from([
         ("broker-a".to_owned(), tools::VisibleState::Absent),
@@ -830,7 +967,7 @@ fn response_mapping_preserves_unchanged_conflict_partial_and_persistence_states(
         version: 2,
         value: replacement.clone(),
     };
-    let mapped = |outcomes: Vec<admin::MetadataMutationTargetOutcome>, brokers: &[&str]| {
+    let mapped = |outcomes: Vec<admin::MetadataMutationTargetReport>, brokers: &[&str]| {
         let before = brokers
             .iter()
             .map(|broker| ((*broker).to_owned(), state.clone()))
@@ -846,22 +983,21 @@ fn response_mapping_preserves_unchanged_conflict_partial_and_persistence_states(
         let targets = build_executed_targets(before, after, outcomes, BTreeMap::new(), replacement.clone());
         (execution_status(&targets), targets)
     };
-    let outcome =
-        |broker: &str,
-         applied: bool,
-         changed: bool,
-         persistence: admin::MutationPersistenceState,
-         failure: Option<admin::MutationFailureCode>| admin::MetadataMutationTargetOutcome {
-            broker_name: broker.to_owned(),
-            expected_state: admin::ExpectedState::Present { version: 1 },
-            resulting_state: Some(admin::ExpectedState::Present { version: 2 }),
-            applied,
-            changed,
-            persistence,
-            verification: admin::MutationVerificationState::NotPerformed,
-            failure,
-            retryable: false,
-        };
+    let outcome = |broker: &str,
+                   applied: bool,
+                   changed: bool,
+                   persistence: admin::MutationPersistenceState,
+                   failure: Option<admin::MutationFailureCode>| admin::MetadataMutationTargetReport {
+        broker_name: broker.to_owned(),
+        expected_state: admin::ExpectedState::Present { version: 1 },
+        resulting_state: Some(admin::ExpectedState::Present { version: 2 }),
+        applied,
+        changed,
+        persistence,
+        verification: admin::MutationVerificationState::NotPerformed,
+        failure,
+        retryable: false,
+    };
 
     let (status, targets) = mapped(
         vec![outcome(
@@ -935,4 +1071,893 @@ fn response_mapping_preserves_unchanged_conflict_partial_and_persistence_states(
             .collect::<Vec<_>>(),
         vec!["broker-a", "broker-b"]
     );
+}
+
+/// Accepts the `started` record and rejects every later append.
+struct TerminalRejectingSink {
+    inner: MemoryAuditSink,
+    appends: AtomicUsize,
+}
+
+impl ReliableAuditSink for TerminalRejectingSink {
+    fn append<'a>(
+        &'a self,
+        record: &'a crate::audit::AuditRecord,
+    ) -> crate::audit::AuditFuture<'a, Result<(), ControlError>> {
+        Box::pin(async move {
+            if self.appends.fetch_add(1, Ordering::SeqCst) > 0 {
+                return Err(ControlError::audit_unavailable());
+            }
+            self.inner.append(record).await
+        })
+    }
+
+    fn records(&self) -> crate::audit::AuditFuture<'_, Result<Vec<crate::audit::AuditRecord>, ControlError>> {
+        self.inner.records()
+    }
+}
+
+#[tokio::test]
+async fn audit_failures_are_logged_by_stage_with_what_the_mutation_did() {
+    let logs = crate::telemetry::testing::LogCapture::start();
+    let context = rocketmq_runtime::RuntimeContext::from_current("control-audit-signal-test");
+    let owner = context
+        .service_context("control-audit-signal-test")
+        .task_group()
+        .clone();
+    let counters = Arc::new(Counters::default());
+    let factory = || {
+        Arc::new(FakeFactory {
+            behavior: Behavior::Success,
+            counters: counters.clone(),
+            gate: Arc::new(tokio::sync::Notify::new()),
+        })
+    };
+
+    // A lost `started` record stops the call before any session is opened.
+    let unavailable = ToolRuntime::new(
+        AuditTrail::new(Arc::new(MemoryAuditSink::failing(32, 4096))),
+        factory(),
+        Duration::from_secs(1),
+        owner.clone(),
+    );
+    let error = unavailable
+        .execute(
+            &principal("alice"),
+            &authorized(),
+            request(None),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), crate::error::ControlErrorCode::AuditUnavailable);
+    assert_eq!(counters.opens.load(Ordering::SeqCst), 0);
+
+    // A lost terminal record is reported together with the result that was not recorded.
+    let lossy = ToolRuntime::new(
+        AuditTrail::new(Arc::new(TerminalRejectingSink {
+            inner: MemoryAuditSink::new(32, 4096),
+            appends: AtomicUsize::new(0),
+        })),
+        factory(),
+        Duration::from_secs(1),
+        owner,
+    );
+    let error = lossy
+        .execute(
+            &principal("alice"),
+            &authorized(),
+            request(None),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), crate::error::ControlErrorCode::AuditUnavailable);
+    assert_eq!(counters.runs.load(Ordering::SeqCst), 1);
+    assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
+
+    let text = logs.text();
+    for expected in [
+        r#"durable audit record is unavailable site="audit" stage="started" suppressed=0"#,
+        r#"mutation call was rejected before execution site="call" tool="rocketmq_upsert_topic" code="audit_unavailable" suppressed=0"#,
+        r#"durable audit record is unavailable site="audit" stage="terminal" suppressed=0"#,
+        r#"mutation finished without a clean result operation="topic_upsert" cluster="cluster-a" mode="execute" result="applied" audit_recorded=false invocation_id=1 "#,
+    ] {
+        assert!(text.contains(expected), "missing {expected} in {text}");
+    }
+    assert_eq!(text.matches("mutation call was rejected before execution").count(), 1);
+    for forbidden in ["alice", "planned operation", "orders", "broker-a"] {
+        assert!(!text.contains(forbidden), "log exposed {forbidden}");
+    }
+}
+
+fn limits(dry_runs_per_minute: u32, executes_per_minute: u32) -> crate::config::LimitsConfig {
+    crate::config::LimitsConfig {
+        dry_runs_per_minute,
+        executes_per_minute,
+        max_concurrent_calls: 8,
+    }
+}
+
+fn plan(key: Option<&str>) -> UpsertRequest {
+    let mut plan = request(key);
+    let UpsertRequest::Topic(args) = &mut plan else {
+        unreachable!();
+    };
+    args.dry_run = true;
+    args.confirm = false;
+    plan
+}
+
+#[tokio::test(start_paused = true)]
+async fn dry_run_flood_is_rate_limited_before_audit() {
+    let (runtime, counters, sink, _) = runtime(Behavior::Success, Duration::from_secs(1));
+    let runtime = runtime.with_limits(limits(3, 2));
+    for _ in 0..3 {
+        execute_as_alice(&runtime, plan(None)).await.unwrap();
+    }
+    for _ in 0..5 {
+        let refused = execute_as_alice(&runtime, plan(None)).await.unwrap_err();
+        assert_eq!(refused.code(), crate::error::ControlErrorCode::RateLimited);
+        assert_eq!(refused, ControlError::rate_limited());
+    }
+    // A refused call opened no session and, above all, cost no audit record.
+    assert_eq!(counters.opens.load(Ordering::SeqCst), 3);
+    assert_eq!(sink.records().await.unwrap().len(), 6);
+    assert!(runtime.idempotency.lock().await.entries.is_empty());
+
+    // Three dry runs a minute come back at one every twenty seconds.
+    tokio::time::advance(Duration::from_secs(20)).await;
+    execute_as_alice(&runtime, plan(None)).await.unwrap();
+    assert_eq!(
+        execute_as_alice(&runtime, plan(None)).await.unwrap_err().code(),
+        crate::error::ControlErrorCode::RateLimited
+    );
+    assert_eq!(sink.records().await.unwrap().len(), 8);
+}
+
+#[tokio::test(start_paused = true)]
+async fn execute_and_dry_run_have_separate_budgets() {
+    let (runtime, counters, sink, _) = runtime(Behavior::Success, Duration::from_secs(1));
+    let runtime = runtime.with_limits(limits(1, 2));
+    execute_as_alice(&runtime, plan(None)).await.unwrap();
+    assert_eq!(
+        execute_as_alice(&runtime, plan(None)).await.unwrap_err().code(),
+        crate::error::ControlErrorCode::RateLimited
+    );
+    // Planning used up its own budget, not the one for writes.
+    execute_as_alice(&runtime, request(None)).await.unwrap();
+    execute_as_alice(&runtime, request(None)).await.unwrap();
+    assert_eq!(
+        execute_as_alice(&runtime, request(None)).await.unwrap_err().code(),
+        crate::error::ControlErrorCode::RateLimited
+    );
+    // Another principal has its own budgets.
+    runtime
+        .execute(&principal("bob"), &authorized(), plan(None), CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(counters.opens.load(Ordering::SeqCst), 4);
+    assert_eq!(sink.records().await.unwrap().len(), 8);
+
+    // A replayed outcome still writes an audit pair, so it draws on the budget like any call.
+    tokio::time::advance(Duration::from_secs(60)).await;
+    execute_as_alice(&runtime, request(Some("request-1234"))).await.unwrap();
+    execute_as_alice(&runtime, request(Some("request-1234"))).await.unwrap();
+    assert_eq!(
+        execute_as_alice(&runtime, request(Some("request-1234")))
+            .await
+            .unwrap_err()
+            .code(),
+        crate::error::ControlErrorCode::RateLimited
+    );
+    assert_eq!(counters.opens.load(Ordering::SeqCst), 5);
+}
+
+#[tokio::test]
+async fn audit_records_say_which_object_was_changed_to_what() {
+    let (runtime, _, sink, _) = runtime(Behavior::VerificationFailed, Duration::from_secs(1));
+    execute_as_alice(&runtime, request(Some("request-1234"))).await.unwrap();
+    let records = sink.records().await.unwrap();
+    assert_eq!(records.len(), 2);
+    let sorted = ["broker-a".to_owned(), "broker-b".to_owned()];
+    for record in &records {
+        let target = record.target.as_ref().unwrap();
+        assert_eq!(target.topic.as_deref(), Some("orders"));
+        assert_eq!(target.consumer_group, None);
+        assert_eq!(target.broker, None);
+        let brokers = target.brokers.as_ref().unwrap();
+        assert_eq!(brokers.count, 2);
+        assert_eq!(brokers.names.as_deref(), Some(&sorted[..]));
+        assert_eq!(
+            record.request_key_digest.as_deref(),
+            Some(crate::audit::sha256_hex(b"request-1234").as_str())
+        );
+        assert_eq!(record.requested_digest, records[0].requested_digest);
+    }
+    // The `started` record is written before the attempt, so only the terminal record knows it.
+    assert_eq!(
+        (
+            records[0].before_digest.as_ref(),
+            records[0].changed,
+            records[0].target_results
+        ),
+        (None, None, None)
+    );
+    assert_eq!(records[1].before_digest, None);
+    assert_eq!(records[1].changed, Some(true));
+    assert_eq!(
+        records[1].target_results,
+        Some(crate::audit::AuditTargetResults {
+            applied: 0,
+            unchanged: 0,
+            conflict: 0,
+            failed: 1,
+        })
+    );
+
+    // The digest follows what is asked for, not how or why it is asked.
+    let digest = |request: &UpsertRequest| request.requested_digest().unwrap();
+    let base = request(Some("request-1234"));
+    let mut reworded = plan(None);
+    let UpsertRequest::Topic(args) = &mut reworded else {
+        unreachable!();
+    };
+    args.reason = Some("another approved reason".to_owned());
+    args.broker_names.reverse();
+    assert_eq!(digest(&base), digest(&reworded));
+    assert_eq!(Some(digest(&base)), records[0].requested_digest);
+    let mut changed = request(Some("request-1234"));
+    let UpsertRequest::Topic(args) = &mut changed else {
+        unreachable!();
+    };
+    args.replacement.write_queue_nums = 9;
+    assert_ne!(digest(&base), digest(&changed));
+}
+
+struct LeakyFactory;
+
+impl UpsertSessionFactory for LeakyFactory {
+    fn open<'a>(
+        &'a self,
+        _cluster: &'a ClusterName,
+    ) -> RuntimeFuture<'a, Result<Box<dyn UpsertSession>, ControlError>> {
+        Box::pin(async {
+            Err(ControlError::new(
+                crate::error::ControlErrorCode::ExecutionFailed,
+                "broker 10.0.0.1:10911 refused access key AKIDEXAMPLE",
+                true,
+            ))
+        })
+    }
+}
+
+#[tokio::test]
+async fn audit_records_never_contain_addresses_or_backend_errors() {
+    let sink = Arc::new(MemoryAuditSink::new(32, 4096));
+    let context = rocketmq_runtime::RuntimeContext::from_current("control-leak-test");
+    let owner = context.service_context("control-leak-test").task_group().clone();
+    let runtime = ToolRuntime::new(
+        AuditTrail::new(sink.clone()),
+        Arc::new(LeakyFactory),
+        Duration::from_secs(1),
+        owner,
+    );
+    let error = execute_as_alice(&runtime, request(Some("request-1234")))
+        .await
+        .unwrap_err();
+    assert_eq!(error, ControlError::execution_failed());
+
+    let records = sink.records().await.unwrap();
+    assert_eq!(records.len(), 2);
+    let durable = records
+        .iter()
+        .map(|record| serde_json::to_string(record).unwrap())
+        .collect::<String>();
+    for forbidden in ["10.0.0.1", "AKIDEXAMPLE", "refused", "request-1234"] {
+        assert!(!durable.contains(forbidden), "audit record holds {forbidden}");
+    }
+    // What the durable record does hold: the validated logical object and the closed error code.
+    for expected in ["\"topic\":\"orders\"", "\"broker-a\"", "\"execution_failed\""] {
+        assert!(durable.contains(expected), "audit record lacks {expected}");
+    }
+    // An attempt that ended without a result does not claim to know what it did.
+    assert_eq!(
+        (
+            records[1].before_digest.as_ref(),
+            records[1].changed,
+            records[1].target_results
+        ),
+        (None, None, None)
+    );
+}
+
+fn cluster_a() -> ClusterName {
+    ClusterName::try_new("cluster-a").unwrap()
+}
+
+/// A mutation authorization for a named caller on the test cluster.
+fn authorized_as(operator: &str) -> AuthorizedMutation {
+    AuthorizedMutation::synthetic_as(ControlOperation::TopicUpsert, cluster_a(), operator)
+}
+
+/// The right of a named caller to read its own results on the test cluster.
+fn reader(operator: &str) -> crate::guard::AuthorizedResultLookup {
+    crate::guard::AuthorizedResultLookup::synthetic(cluster_a(), operator)
+}
+
+fn lookup_arguments(invocation_id: Option<u64>, request_key: Option<&str>) -> tools::GetMutationResultArgs {
+    tools::GetMutationResultArgs {
+        schema_version: MUTATION_ARGUMENTS_SCHEMA_VERSION.to_owned(),
+        cluster: "cluster-a".to_owned(),
+        invocation_id,
+        request_key: request_key.map(ToOwned::to_owned),
+    }
+}
+
+/// Reads one result as `operator` from the trail that `runtime` writes.
+async fn look_up(
+    runtime: &ToolRuntime,
+    operator: &str,
+    invocation_id: Option<u64>,
+    request_key: Option<&str>,
+) -> tools::MutationResultToolResponse {
+    ResultLookup::new(runtime.audit.clone(), 60)
+        .find(&reader(operator), &lookup_arguments(invocation_id, request_key))
+        .await
+        .unwrap()
+}
+
+/// Starts one call as `operator` on its own task and waits until `runs` sessions are running.
+async fn start_blocked_call(
+    runtime: &ToolRuntime,
+    counters: &Counters,
+    operator: &'static str,
+    key: Option<&'static str>,
+    runs: usize,
+) -> tokio::task::JoinHandle<Result<InvokedMutation, ControlError>> {
+    let call = tokio::spawn({
+        let runtime = runtime.clone();
+        async move {
+            runtime
+                .execute_invoked(
+                    &principal(operator),
+                    &authorized_as(operator),
+                    request(key),
+                    CancellationToken::new(),
+                )
+                .await
+        }
+    });
+    while counters.runs.load(Ordering::SeqCst) < runs {
+        tokio::task::yield_now().await;
+    }
+    call
+}
+
+async fn wait_for_records(sink: &MemoryAuditSink, count: usize) {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while sink.records().await.unwrap().len() < count {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the supervisor writes the terminal record");
+}
+
+#[tokio::test]
+async fn in_flight_invocation_reports_in_progress() {
+    let (runtime, counters, sink, gate) = runtime(Behavior::Block, Duration::from_secs(1));
+    let call = start_blocked_call(&runtime, &counters, "alice", Some("request-0001"), 1).await;
+
+    let running = look_up(&runtime, "alice", Some(1), None).await;
+    assert_eq!(running.state, tools::MutationResultState::InProgress);
+    assert_eq!(running.invocation_id, Some(1));
+    assert_eq!(running.operation, Some(ControlOperation::TopicUpsert));
+    assert_eq!(running.mode, Some(tools::MutationMode::Execute));
+    let target = running.target.clone().unwrap();
+    assert_eq!(target.topic.as_deref(), Some("orders"));
+    assert_eq!(target.broker_count, Some(2));
+    assert_eq!(
+        target.broker_names,
+        Some(vec!["broker-a".to_owned(), "broker-b".to_owned()])
+    );
+    // Nothing about the outcome is known yet, and nothing is made up.
+    assert_eq!(
+        (
+            running.status,
+            running.error_code,
+            running.duration_millis,
+            running.changed
+        ),
+        (None, None, None, None)
+    );
+    assert_eq!(running.target_results, None);
+    // The request key finds the same invocation.
+    assert_eq!(look_up(&runtime, "alice", None, Some("request-0001")).await, running);
+
+    gate.notify_waiters();
+    let invoked = call.await.unwrap().unwrap();
+    assert_eq!(invoked.invocation_id.get(), 1);
+    assert_eq!(sink.records().await.unwrap().len(), 2);
+    let finished = look_up(&runtime, "alice", Some(1), None).await;
+    assert_eq!(finished.state, tools::MutationResultState::Finished);
+    assert_eq!(finished.status, Some(tools::MutationStatus::Applied));
+}
+
+#[tokio::test]
+async fn result_is_available_after_the_waiter_disconnects() {
+    let (runtime, counters, sink, gate) = runtime(Behavior::Block, Duration::from_secs(1));
+    let call = start_blocked_call(&runtime, &counters, "alice", Some("request-0001"), 1).await;
+
+    // The caller goes away before any response exists; all it has is the key it sent.
+    call.abort();
+    assert!(call.await.unwrap_err().is_cancelled());
+    assert_eq!(
+        look_up(&runtime, "alice", None, Some("request-0001")).await.state,
+        tools::MutationResultState::InProgress
+    );
+
+    gate.notify_waiters();
+    wait_for_records(&sink, 2).await;
+    let found = look_up(&runtime, "alice", None, Some("request-0001")).await;
+    assert_eq!(found.state, tools::MutationResultState::Finished);
+    assert_eq!(found.status, Some(tools::MutationStatus::Applied));
+    assert_eq!(found.error_code, None);
+    assert!(found.duration_millis.is_some());
+    let invocation_id = found.invocation_id.unwrap();
+    assert_eq!(invocation_id, sink.records().await.unwrap()[0].invocation_id.get());
+    assert_eq!(look_up(&runtime, "alice", Some(invocation_id), None).await, found);
+
+    // A mutation that fails after its caller left is found as failed, with its code.
+    let (runtime, counters, sink, gate) = runtime_with(Behavior::FailAfterGate);
+    let call = start_blocked_call(&runtime, &counters, "alice", Some("request-0002"), 1).await;
+    call.abort();
+    gate.notify_waiters();
+    wait_for_records(&sink, 2).await;
+    let failed = look_up(&runtime, "alice", None, Some("request-0002")).await;
+    assert_eq!(failed.state, tools::MutationResultState::Finished);
+    assert_eq!(failed.status, Some(tools::MutationStatus::Failed));
+    assert_eq!(failed.error_code, Some(crate::error::ControlErrorCode::ExecutionFailed));
+    // The attempt reported nothing about its targets, so the answer does not claim it changed none.
+    assert_eq!(failed.changed, None);
+}
+
+fn runtime_with(
+    behavior: Behavior,
+) -> (
+    ToolRuntime,
+    Arc<Counters>,
+    Arc<MemoryAuditSink>,
+    Arc<tokio::sync::Notify>,
+) {
+    runtime(behavior, Duration::from_secs(1))
+}
+
+#[tokio::test]
+async fn result_lookup_is_scoped_to_the_calling_principal() {
+    let (runtime, _, _, _) = runtime_with(Behavior::Success);
+    let mut invocations = Vec::new();
+    for operator in ["alice", "bob"] {
+        let invoked = runtime
+            .execute_invoked(
+                &principal(operator),
+                &authorized_as(operator),
+                request(Some("shared-key-0001")),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        invocations.push(invoked.invocation_id.get());
+    }
+    let (alice_invocation, bob_invocation) = (invocations[0], invocations[1]);
+    assert_ne!(alice_invocation, bob_invocation);
+
+    // Each caller finds its own call, by identifier and by the key both of them used.
+    for (operator, own, foreign) in [
+        ("alice", alice_invocation, bob_invocation),
+        ("bob", bob_invocation, alice_invocation),
+    ] {
+        let by_id = look_up(&runtime, operator, Some(own), None).await;
+        assert_eq!(by_id.state, tools::MutationResultState::Finished, "{operator}");
+        assert_eq!(by_id.invocation_id, Some(own));
+        let by_key = look_up(&runtime, operator, None, Some("shared-key-0001")).await;
+        assert_eq!(by_key.invocation_id, Some(own), "{operator}");
+
+        // The other caller's invocation looks exactly like one that never existed.
+        let hidden = look_up(&runtime, operator, Some(foreign), None).await;
+        let missing = look_up(&runtime, operator, Some(9_999), None).await;
+        assert_eq!(hidden, missing, "{operator}");
+        assert_eq!(hidden.state, tools::MutationResultState::NotFound);
+        assert_eq!(
+            (hidden.invocation_id, hidden.operation, hidden.target),
+            (None, None, None)
+        );
+    }
+    assert_eq!(
+        look_up(&runtime, "carol", None, Some("shared-key-0001")).await.state,
+        tools::MutationResultState::NotFound
+    );
+
+    // The cluster is part of the scope as well.
+    let other_cluster =
+        crate::guard::AuthorizedResultLookup::synthetic(ClusterName::try_new("cluster-b").unwrap(), "alice");
+    let elsewhere = ResultLookup::new(runtime.audit.clone(), 60)
+        .find(&other_cluster, &lookup_arguments(Some(alice_invocation), None))
+        .await
+        .unwrap();
+    assert_eq!(elsewhere.state, tools::MutationResultState::NotFound);
+    assert_eq!(elsewhere.cluster, "cluster-b");
+}
+
+#[tokio::test]
+async fn result_lookup_survives_restart_for_the_active_segment() {
+    let (runtime, counters, sink, gate) = runtime_with(Behavior::Block);
+    let finished = start_blocked_call(&runtime, &counters, "alice", Some("request-0001"), 1).await;
+    gate.notify_waiters();
+    let finished = finished.await.unwrap().unwrap().invocation_id.get();
+    // A second call is still running when the process stops.
+    let running = start_blocked_call(&runtime, &counters, "alice", Some("request-0002"), 2).await;
+    let records = sink.records().await.unwrap();
+    assert_eq!(records.len(), 3);
+    let interrupted = records[2].invocation_id.get();
+
+    // A new process resumes from the records the sink still holds.
+    let resumed = ResultLookup::new(AuditTrail::resume(sink.clone()).await.unwrap(), 60);
+    let find = |invocation_id, request_key| {
+        let resumed = &resumed;
+        async move {
+            resumed
+                .find(&reader("alice"), &lookup_arguments(invocation_id, request_key))
+                .await
+                .unwrap()
+        }
+    };
+    let found = find(Some(finished), None).await;
+    assert_eq!(found.state, tools::MutationResultState::Finished);
+    assert_eq!(found.status, Some(tools::MutationStatus::Applied));
+    assert_eq!(found.target.unwrap().topic.as_deref(), Some("orders"));
+    assert_eq!(find(None, Some("request-0001")).await.invocation_id, Some(finished));
+
+    // Nothing recorded how the second call ended, and no task of the new process will finish it.
+    let lost = find(Some(interrupted), None).await;
+    assert_eq!(lost.state, tools::MutationResultState::Interrupted);
+    assert_eq!((lost.status, lost.changed), (None, None));
+    assert_eq!(find(None, Some("request-0002")).await, lost);
+    // The results stay scoped after the restart.
+    assert_eq!(
+        resumed
+            .find(&reader("bob"), &lookup_arguments(Some(finished), None))
+            .await
+            .unwrap()
+            .state,
+        tools::MutationResultState::NotFound
+    );
+
+    running.abort();
+    gate.notify_waiters();
+}
+
+#[tokio::test]
+async fn result_response_contains_no_operator_or_reason() {
+    const OPERATOR: &str = "alice-operator-7f3a";
+    let (runtime, counters, sink, gate) = runtime_with(Behavior::Block);
+    let call = start_blocked_call(&runtime, &counters, OPERATOR, Some("request-0001"), 1).await;
+    let running = look_up(&runtime, OPERATOR, Some(1), None).await;
+    gate.notify_waiters();
+    call.await.unwrap().unwrap();
+    let finished = look_up(&runtime, OPERATOR, Some(1), None).await;
+    let missing = look_up(&runtime, OPERATOR, Some(99), None).await;
+
+    // The durable records do hold both; the answers hold neither, nor the key that was sent.
+    let records = sink.records().await.unwrap();
+    assert_eq!(records[0].operator.as_deref(), Some(OPERATOR));
+    assert_eq!(records[0].reason.as_deref(), Some("planned operation"));
+    let published = tools::MutationResultToolResponse::json_schema_properties();
+    for answer in [&running, &finished, &missing] {
+        let rendered = serde_json::to_value(answer).unwrap();
+        let text = rendered.to_string();
+        for private in [
+            OPERATOR,
+            "planned operation",
+            "request-0001",
+            "operator",
+            "reason",
+            "request_key",
+        ] {
+            assert!(!text.contains(private), "the answer holds {private}: {text}");
+        }
+        // Every member the answer has is one the output schema declares.
+        for member in rendered.as_object().unwrap().keys() {
+            assert!(published.contains(member), "{member} is not in the output schema");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_replayed_response_is_returned_under_the_invocation_of_its_own_call() {
+    let (runtime, counters, sink, _) = runtime_with(Behavior::Success);
+    let mut invocations = Vec::new();
+    for _ in 0..2 {
+        let invoked = runtime
+            .execute_invoked(
+                &principal("alice"),
+                &authorized_as("alice"),
+                request(Some("request-0001")),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        invocations.push(invoked.invocation_id.get());
+    }
+    // One session ran; the second call was answered from the request-key cache.
+    assert_eq!(counters.runs.load(Ordering::SeqCst), 1);
+    let started = sink
+        .records()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|record| record.event == crate::audit::AuditEvent::Started)
+        .map(|record| record.invocation_id.get())
+        .collect::<Vec<_>>();
+    assert_eq!(invocations, started);
+    assert_ne!(invocations[0], invocations[1]);
+    // The key selects the newest call that carried it; each call is still found by its identifier.
+    assert_eq!(
+        look_up(&runtime, "alice", None, Some("request-0001"))
+            .await
+            .invocation_id,
+        Some(invocations[1])
+    );
+    for invocation in invocations {
+        let found = look_up(&runtime, "alice", Some(invocation), Some("request-0001")).await;
+        assert_eq!(found.state, tools::MutationResultState::Finished);
+        assert_eq!(found.invocation_id, Some(invocation));
+    }
+    // An identifier and a key that do not belong together find nothing.
+    assert_eq!(
+        look_up(&runtime, "alice", Some(1), Some("request-9999")).await.state,
+        tools::MutationResultState::NotFound
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn result_lookups_are_budgeted_per_caller() {
+    let (runtime, _, sink, _) = runtime_with(Behavior::Success);
+    let lookups = ResultLookup::new(runtime.audit.clone(), 2);
+    for _ in 0..2 {
+        lookups.admit(&reader("alice")).unwrap();
+    }
+    assert_eq!(
+        lookups.admit(&reader("alice")).unwrap_err().code(),
+        crate::error::ControlErrorCode::RateLimited
+    );
+    lookups.admit(&reader("bob")).unwrap();
+    tokio::time::advance(Duration::from_secs(30)).await;
+    lookups.admit(&reader("alice")).unwrap();
+    // A lookup is not a mutation: it leaves no durable record.
+    lookups
+        .find(&reader("alice"), &lookup_arguments(Some(1), None))
+        .await
+        .unwrap();
+    assert!(sink.records().await.unwrap().is_empty());
+}
+
+fn drain_args(operation_id: &str) -> tools::ProxyDrainArgs {
+    tools::ProxyDrainArgs {
+        schema_version: MUTATION_ARGUMENTS_SCHEMA_VERSION.to_owned(),
+        cluster: "cluster-a".to_owned(),
+        proxy_name: "proxy-a".to_owned(),
+        operation_id: operation_id.to_owned(),
+        dry_run: false,
+        confirm: true,
+        reason: Some("planned operation".to_owned()),
+        request_key: Some("request-1234".to_owned()),
+        expected_plan_digest: None,
+    }
+}
+
+fn set_filter_args(ttl_seconds: u32) -> tools::SetBrokerLogFilterTtlArgs {
+    tools::SetBrokerLogFilterTtlArgs {
+        schema_version: MUTATION_ARGUMENTS_SCHEMA_VERSION.to_owned(),
+        cluster: "cluster-a".to_owned(),
+        broker_name: "broker-a".to_owned(),
+        logger: "rocketmq_broker::processor".to_owned(),
+        level: tools::BrokerLogLevel::Debug,
+        ttl_seconds,
+        operation_id: "debug-0001".to_owned(),
+        dry_run: false,
+        confirm: true,
+        reason: Some("planned operation".to_owned()),
+        request_key: Some("request-1234".to_owned()),
+        expected_plan_digest: None,
+    }
+}
+
+#[test]
+fn operation_bound_requests_are_keyed_by_operation_and_digest_their_identifier() {
+    let principal = principal("alice");
+    let cluster = ClusterName::try_new("cluster-a").unwrap();
+    let identity = |request: &MutationToolRequest| {
+        IdempotencyIdentity::from_request(&principal, &cluster, request)
+            .unwrap()
+            .key
+            .expect("an explicit request key")
+    };
+
+    // One request key and the same arguments are still two operations: a cancel never replays
+    // the recorded outcome of a begin.
+    let begin = MutationToolRequest::ProxyDrainBegin(drain_args("drain-0001"));
+    let cancel = MutationToolRequest::ProxyDrainCancel(drain_args("drain-0001"));
+    assert_eq!(begin.operation(), ControlOperation::ProxyDrainBegin);
+    assert_eq!(cancel.operation(), ControlOperation::ProxyDrainCancel);
+    assert_eq!(identity(&begin).operation, ControlOperation::ProxyDrainBegin);
+    assert_eq!(identity(&cancel).operation, ControlOperation::ProxyDrainCancel);
+    assert_eq!(identity(&begin).targets, ["proxy-a"]);
+    assert!(identity(&begin) != identity(&cancel));
+
+    // Which drain is asked for is part of the request. It reaches the audit record as a digest.
+    let other_drain = MutationToolRequest::ProxyDrainBegin(drain_args("drain-0002"));
+    assert_ne!(
+        begin.requested_digest().unwrap(),
+        other_drain.requested_digest().unwrap()
+    );
+    assert_ne!(
+        IdempotencyIdentity::from_request(&principal, &cluster, &begin)
+            .unwrap()
+            .payload,
+        IdempotencyIdentity::from_request(&principal, &cluster, &other_drain)
+            .unwrap()
+            .payload
+    );
+
+    let set = MutationToolRequest::BrokerLogFilterSet(set_filter_args(300));
+    let restore = MutationToolRequest::BrokerLogFilterRestore(tools::RestoreBrokerLogFilterArgs {
+        schema_version: MUTATION_ARGUMENTS_SCHEMA_VERSION.to_owned(),
+        cluster: "cluster-a".to_owned(),
+        broker_name: "broker-a".to_owned(),
+        operation_id: "debug-0001".to_owned(),
+        dry_run: false,
+        confirm: true,
+        reason: Some("planned operation".to_owned()),
+        request_key: Some("request-1234".to_owned()),
+        expected_plan_digest: None,
+    });
+    assert_eq!(identity(&set).operation, ControlOperation::BrokerLogFilterSet);
+    assert_eq!(identity(&restore).operation, ControlOperation::BrokerLogFilterRestore);
+    assert_eq!(identity(&set).targets, ["broker-a"]);
+    assert_eq!(identity(&restore).targets, ["broker-a"]);
+    let longer = MutationToolRequest::BrokerLogFilterSet(set_filter_args(301));
+    assert_ne!(set.requested_digest().unwrap(), longer.requested_digest().unwrap());
+
+    // Each request has the audit shape of its own operation, and neither a digest nor the
+    // debug form of an argument repeats what the caller wrote.
+    for request in [&begin, &cancel, &set, &restore] {
+        assert!(request.audit_subject().is_ok());
+        let digest = request.requested_digest().unwrap();
+        assert_eq!(digest.len(), 64);
+        for written in ["drain-0001", "debug-0001", "request-1234", "planned operation"] {
+            assert!(!digest.contains(written));
+        }
+    }
+    let rendered = format!("{:?}{:?}", drain_args("drain-0001"), set_filter_args(300));
+    for hidden in [
+        "drain-0001",
+        "debug-0001",
+        "proxy-a",
+        "broker-a",
+        "request-1234",
+        "planned operation",
+    ] {
+        assert!(!rendered.contains(hidden), "{rendered}");
+    }
+}
+
+#[test]
+fn an_operation_bound_response_is_audited_by_what_its_one_target_says() {
+    let state = |held_by: tools::OperationHolder| tools::ProxyDrainState {
+        phase: if held_by == tools::OperationHolder::None {
+            tools::ProxyDrainPhase::Accepting
+        } else {
+            tools::ProxyDrainPhase::Draining
+        },
+        held_by,
+        admission_open: held_by == tools::OperationHolder::None,
+        routing_open: held_by == tools::OperationHolder::None,
+        readiness_published: held_by == tools::OperationHolder::None,
+        zero_pending: true,
+        pending: tools::ProxyDrainPending {
+            active_connections: 0,
+            sessions: 0,
+            receipt_handles: 0,
+            prepared_transactions: 0,
+            telemetry_links: 0,
+            remoting_channels: 0,
+            telemetry_commands: 0,
+            rpc_in_flight: 0,
+        },
+    };
+    let response = |before: Option<tools::ProxyDrainState>, changed: bool, failure: Option<tools::FailureCode>| {
+        let requested = tools::ProxyDrainRequested {
+            action: tools::ProxyDrainAction::Begin,
+        };
+        let status = match failure {
+            None => tools::MutationStatus::Applied,
+            Some(tools::FailureCode::Conflict) => tools::MutationStatus::Conflict,
+            Some(_) => tools::MutationStatus::Failed,
+        };
+        Ok(MutationToolResponse::ProxyDrain(tools::ProxyDrainToolResponse {
+            schema_version: tools::MutationResultSchemaVersion::V1,
+            operation: tools::ProxyDrainOperation::ProxyDrainBegin,
+            cluster: "cluster-a".to_owned(),
+            mode: tools::MutationMode::Execute,
+            status,
+            error_code: tools::response_error_code(status, [failure]),
+            target: tools::ProxyDrainResource {
+                proxy_name: "proxy-a".to_owned(),
+            },
+            before: before
+                .map(|state| BTreeMap::from([("proxy-a".to_owned(), state)]))
+                .unwrap_or_default(),
+            requested,
+            after: None,
+            targets: vec![tools::ProxyDrainTarget {
+                proxy_name: "proxy-a".to_owned(),
+                before,
+                requested,
+                after: None,
+                applied: failure.is_none(),
+                changed,
+                verification: tools::VerificationState::NotPerformed,
+                failure,
+                retryable: false,
+            }],
+            warnings: Vec::new(),
+        }))
+    };
+    let counts = |applied, unchanged, conflict, failed| {
+        Some(AuditTargetResults {
+            applied,
+            unchanged,
+            conflict,
+            failed,
+        })
+    };
+
+    let begun = audit_outcome(&response(Some(state(tools::OperationHolder::None)), true, None));
+    assert_eq!(begun.changed, Some(true));
+    assert_eq!(begun.target_results, counts(1, 0, 0, 0));
+    assert!(begun.before_digest.is_some());
+    assert_eq!(terminal_audit(&response(None, true, None)).0, AuditResult::Applied);
+
+    let repeated = audit_outcome(&response(
+        Some(state(tools::OperationHolder::ThisOperation)),
+        false,
+        None,
+    ));
+    assert_eq!(repeated.changed, Some(false));
+    assert_eq!(repeated.target_results, counts(0, 1, 0, 0));
+
+    let held = response(
+        Some(state(tools::OperationHolder::OtherOperation)),
+        false,
+        Some(tools::FailureCode::Conflict),
+    );
+    assert_eq!(audit_outcome(&held).target_results, counts(0, 0, 1, 0));
+    assert_eq!(
+        terminal_audit(&held),
+        (
+            AuditResult::Conflict,
+            Some(crate::error::ControlErrorCode::PreconditionConflict)
+        )
+    );
+    // A conflict is settled: the same request key replays it instead of reading the Proxy again.
+    assert!(is_settled(&held));
+
+    // A Proxy that could not be read leaves no state to digest, and the failure is not settled.
+    let unread = response(None, false, Some(tools::FailureCode::Unavailable));
+    let outcome = audit_outcome(&unread);
+    assert_eq!(outcome.before_digest, None);
+    assert_eq!(outcome.target_results, counts(0, 0, 0, 1));
+    assert!(!is_settled(&unread));
 }

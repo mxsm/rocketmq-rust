@@ -29,7 +29,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
 
 use crate::admission::AdmissionPermit;
-use crate::backend::WriteBackend;
+use crate::backend::TransportWriteHalf;
 use crate::deadline::RequestDeadline;
 use crate::error_helpers::serialization_failed;
 use crate::file_region::FileRegion;
@@ -734,7 +734,7 @@ enum SelectedFileTransfer {
     Sendfile,
 }
 
-impl FrameWriter<WriteBackend> {
+impl FrameWriter<TransportWriteHalf> {
     /// Writes transport payloads and calls `on_start` immediately before the
     /// first potentially observable socket operation.
     pub(crate) async fn write_transport_payloads_with_start(
@@ -796,7 +796,7 @@ impl FrameWriter<WriteBackend> {
         let mut selections = Vec::with_capacity(body.regions().len());
         for region in body.regions() {
             let native_eligible = matches!(self.mode, FrameWriteMode::PlainVectored)
-                && matches!(&self.io, WriteBackend::Tcp(_))
+                && matches!(&self.io, TransportWriteHalf::Tcp(_))
                 && native_file_region_eligible(region);
             let auto_native_eligible = native_eligible && region.len() >= AUTO_SENDFILE_MIN_BYTES;
             match select_file_transfer(
@@ -837,14 +837,16 @@ impl FrameWriter<WriteBackend> {
                 }
                 #[cfg(all(target_os = "linux", feature = "linux-sendfile"))]
                 SelectedFileTransfer::Sendfile => match &mut self.io {
-                    WriteBackend::Tcp(writer) => {
-                        let written = crate::linux::sendfile::send_file_region(writer, region).await;
+                    TransportWriteHalf::Tcp(tcp_write_half) => {
+                        let written = crate::linux::sendfile::send_file_region(tcp_write_half, region).await;
                         if let Ok(written) = written {
                             record_sendfile_bytes(written);
                         }
                         written
                     }
-                    WriteBackend::Compat(_) => unreachable!("native selection requires a plaintext TCP backend"),
+                    TransportWriteHalf::Compat(_) => {
+                        unreachable!("native selection requires a plaintext TCP backend")
+                    }
                 },
             };
             if let Err(error) = body_result {

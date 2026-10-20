@@ -24,7 +24,7 @@ use crate::model::AuditOutcome;
 use crate::model::AuditResourceType;
 use crate::model::DashboardEnvironment;
 use crate::model::SessionTokenHash;
-use crate::model::StorageBackend;
+use crate::model::StorageEngine;
 use crate::persistence::error::PersistenceError;
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -165,7 +165,7 @@ pub(super) fn attach_endpoints(
     Ok(())
 }
 
-pub(super) fn verify_data(data: &BackupData, expected_backend: Option<StorageBackend>) -> Result<(), PersistenceError> {
+pub(super) fn verify_data(data: &BackupData, expected_backend: Option<StorageEngine>) -> Result<(), PersistenceError> {
     if data.manifest.format_version != BACKUP_FORMAT_VERSION
         || expected_backend.is_some_and(|backend| data.manifest.backend != backend)
         || data.manifest.scope.collections

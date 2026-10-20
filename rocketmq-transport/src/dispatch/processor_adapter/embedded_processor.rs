@@ -21,17 +21,16 @@ use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting
 
 use crate::contract::TransportContractViolation;
 use crate::dispatch::DeferredRegistration;
-use crate::dispatch::HandlerOutcome;
 use crate::dispatch::IngressRequestView;
 use crate::dispatch::InternalFailureOrigin;
 use crate::dispatch::InternalProcessorCandidate;
-use crate::dispatch::InternalProcessorOutcome;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::ProtocolNoResponse;
 use crate::dispatch::RemotingRequest;
 use crate::dispatch::RemotingResponse;
+use crate::dispatch::ResponseAction;
 use crate::dispatch::ResponseBodyKind;
-use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseCompletionResult;
 use crate::dispatch::ResponseOperationalFailure;
 use crate::request_ordering::RequestOrdering;
 use crate::runtime::processor::RejectRequestDecision;
@@ -42,7 +41,7 @@ use crate::runtime::processor::ResponseWritePath;
 use super::DispatchProcessorError;
 use super::ExplicitProcessor;
 
-pub(crate) enum EmbeddedResolvedOutcome {
+pub(crate) enum EmbeddedResponseAction {
     Reply(RemotingResponse),
     OneWay,
     Deferred(DeferredRegistration),
@@ -60,9 +59,9 @@ where
     pub(crate) fn embedded_reject_request(&self, request_code: i32) -> Option<InternalProcessorCandidate> {
         match self.processor.reject_request(request_code) {
             RejectRequestDecision::Proceed => None,
-            RejectRequestDecision::Reject(response) => Some(InternalProcessorCandidate::success(
-                InternalProcessorOutcome::Handled(HandlerOutcome::Reply(response)),
-            )),
+            RejectRequestDecision::Reject(response) => {
+                Some(InternalProcessorCandidate::success(ResponseAction::Reply(response)))
+            }
         }
     }
 
@@ -75,9 +74,7 @@ where
             None => Ok(self.processor.process(request).await),
         };
         match processed {
-            Ok(Ok(outcome)) => Ok(InternalProcessorCandidate::success(InternalProcessorOutcome::Handled(
-                outcome,
-            ))),
+            Ok(Ok(outcome)) => Ok(InternalProcessorCandidate::success(outcome)),
             Ok(Err(error)) => {
                 let context = error.context();
                 let view = PublicErrorView::try_new(error.descriptor(), context)
@@ -87,48 +84,47 @@ where
                     crate::error_response::RemotingErrorTarget::Fresh(&application_remoting_command_factory()),
                 );
                 Ok(InternalProcessorCandidate::failure(
-                    InternalProcessorOutcome::Handled(HandlerOutcome::Reply(RemotingResponse::command(command)?)),
+                    ResponseAction::Reply(RemotingResponse::command(command)?),
                     InternalFailureOrigin::ProcessorError,
                 ))
             }
             Err(_) => Ok(InternalProcessorCandidate::failure(
-                InternalProcessorOutcome::Handled(HandlerOutcome::Reply(RemotingResponse::command(
+                ResponseAction::Reply(RemotingResponse::command(
                     super::super::authorized_dispatcher::deadline_response(
                         request.original_identity().original_opaque(),
                     ),
-                )?)),
+                )?),
                 InternalFailureOrigin::Deadline,
             )),
         }
     }
 
-    pub(crate) fn resolve_embedded_outcome(
+    pub(crate) fn resolve_embedded_response_action(
         &self,
         request: &mut RemotingRequest,
-        outcome: InternalProcessorOutcome,
-    ) -> Result<EmbeddedResolvedOutcome, TransportContractViolation> {
-        let InternalProcessorOutcome::Handled(outcome) = outcome;
+        action: ResponseAction,
+    ) -> Result<EmbeddedResponseAction, TransportContractViolation> {
         if request.original_identity().is_one_way() {
-            return match outcome {
-                HandlerOutcome::Reply(response) => {
-                    let resolved = request.resolve_handler_outcome(HandlerOutcome::Reply(response))?;
+            return match action {
+                ResponseAction::Reply(response) => {
+                    let resolved = request.resolve_response_action(ResponseAction::Reply(response))?;
                     drop(resolved);
-                    Ok(EmbeddedResolvedOutcome::OneWay)
+                    Ok(EmbeddedResponseAction::OneWay)
                 }
-                HandlerOutcome::Deferred(registration) => {
+                ResponseAction::Deferred(registration) => {
                     request.consume_oneway_deferred(registration)?;
                     Err(TransportContractViolation::OneWayDeferredHandlerOutcome)
                 }
-                HandlerOutcome::NoReply(marker) => {
+                ResponseAction::NoReply(marker) => {
                     request.consume_oneway_no_reply(marker)?;
                     Err(TransportContractViolation::OneWayNoReplyHandlerOutcome)
                 }
             };
         }
-        match request.resolve_handler_outcome(outcome)? {
-            HandlerOutcome::Reply(response) => Ok(EmbeddedResolvedOutcome::Reply(response)),
-            HandlerOutcome::Deferred(registration) => Ok(EmbeddedResolvedOutcome::Deferred(registration)),
-            HandlerOutcome::NoReply(marker) => Ok(EmbeddedResolvedOutcome::NoReply(marker)),
+        match request.resolve_response_action(action)? {
+            ResponseAction::Reply(response) => Ok(EmbeddedResponseAction::Reply(response)),
+            ResponseAction::Deferred(registration) => Ok(EmbeddedResponseAction::Deferred(registration)),
+            ResponseAction::NoReply(marker) => Ok(EmbeddedResponseAction::NoReply(marker)),
         }
     }
 
@@ -139,7 +135,7 @@ where
         body_kind: ResponseBodyKind,
         write_elapsed: Duration,
         end_to_end_elapsed: Duration,
-        result: &Result<ResponseCompletionOutcome, ResponseOperationalFailure>,
+        result: &Result<ResponseCompletionResult, ResponseOperationalFailure>,
     ) {
         self.processor.observe_response(ResponseObservation::from_write_result(
             original.request_id(),

@@ -18,8 +18,8 @@ use rocketmq_store_api::MasterEpoch;
 use rocketmq_store_api::SyncStateSetEpoch;
 use tokio::sync::mpsc;
 
+use super::actor::BrokerRoleNotificationSubmissionStatus;
 use super::actor::Mailbox;
-use super::actor::SubmitOutcome;
 use super::NotifyKey;
 use super::NotifyState;
 use super::NotifyTask;
@@ -60,15 +60,15 @@ fn broker_role_notifier_mailbox_is_bounded_by_retained_keys() {
 
     assert_eq!(
         mailbox.submit(NotifyTask::new_for_test(key(1), state(1, 1)), false, &sender),
-        SubmitOutcome::Accepted
+        BrokerRoleNotificationSubmissionStatus::Accepted
     );
     assert_eq!(
         mailbox.submit(NotifyTask::new_for_test(key(2), state(1, 1)), false, &sender),
-        SubmitOutcome::Accepted
+        BrokerRoleNotificationSubmissionStatus::Accepted
     );
     assert_eq!(
         mailbox.submit(NotifyTask::new_for_test(key(3), state(1, 1)), false, &sender),
-        SubmitOutcome::Full
+        BrokerRoleNotificationSubmissionStatus::Full
     );
 
     let snapshot = mailbox.snapshot();
@@ -89,7 +89,7 @@ fn broker_role_notifier_mailbox_coalesces_latest_state_per_key() {
             false,
             &sender,
         ),
-        SubmitOutcome::Accepted
+        BrokerRoleNotificationSubmissionStatus::Accepted
     );
     assert_eq!(
         mailbox.submit(
@@ -97,7 +97,7 @@ fn broker_role_notifier_mailbox_coalesces_latest_state_per_key() {
             false,
             &sender,
         ),
-        SubmitOutcome::Replaced
+        BrokerRoleNotificationSubmissionStatus::Replaced
     );
     assert_eq!(
         mailbox.submit(
@@ -105,7 +105,7 @@ fn broker_role_notifier_mailbox_coalesces_latest_state_per_key() {
             false,
             &sender,
         ),
-        SubmitOutcome::Coalesced
+        BrokerRoleNotificationSubmissionStatus::Coalesced
     );
     assert_eq!(
         mailbox.submit(
@@ -113,7 +113,7 @@ fn broker_role_notifier_mailbox_coalesces_latest_state_per_key() {
             false,
             &sender,
         ),
-        SubmitOutcome::Stale
+        BrokerRoleNotificationSubmissionStatus::Stale
     );
 
     assert_eq!(receiver.try_recv(), Ok(notify_key.clone()));
@@ -130,7 +130,10 @@ fn broker_role_notifier_retry_wait_remains_inside_retained_key_bound() {
     let notify_key = key(1);
     let task = NotifyTask::new_for_test(notify_key.clone(), state(1, 1));
 
-    assert_eq!(mailbox.submit(task.clone(), false, &sender), SubmitOutcome::Accepted);
+    assert_eq!(
+        mailbox.submit(task.clone(), false, &sender),
+        BrokerRoleNotificationSubmissionStatus::Accepted
+    );
     assert_eq!(receiver.try_recv(), Ok(notify_key.clone()));
     assert_eq!(
         mailbox.take(&notify_key).as_ref().map(|task| &task.state),
@@ -142,7 +145,7 @@ fn broker_role_notifier_retry_wait_remains_inside_retained_key_bound() {
             false,
             &sender,
         ),
-        SubmitOutcome::Coalesced
+        BrokerRoleNotificationSubmissionStatus::Coalesced
     );
     assert!(mailbox.finish(&task, false, std::time::Duration::from_millis(1)));
 
@@ -151,11 +154,11 @@ fn broker_role_notifier_retry_wait_remains_inside_retained_key_bound() {
     assert_eq!(snapshot.retained_keys, 1);
     assert_eq!(
         mailbox.submit(NotifyTask::new_for_test(notify_key, state(1, 1)), false, &sender,),
-        SubmitOutcome::Coalesced
+        BrokerRoleNotificationSubmissionStatus::Coalesced
     );
     assert_eq!(
         mailbox.submit(NotifyTask::new_for_test(key(2), state(1, 1)), false, &sender),
-        SubmitOutcome::Full
+        BrokerRoleNotificationSubmissionStatus::Full
     );
 }
 
@@ -172,7 +175,7 @@ fn broker_role_notifier_reset_invalidates_queued_generation() {
             false,
             &sender,
         ),
-        SubmitOutcome::Accepted
+        BrokerRoleNotificationSubmissionStatus::Accepted
     );
     mailbox.reset();
 
@@ -203,7 +206,7 @@ fn broker_role_notifier_rejects_conflicting_master_at_same_epoch() {
             false,
             &sender,
         ),
-        SubmitOutcome::Accepted
+        BrokerRoleNotificationSubmissionStatus::Accepted
     );
     assert_eq!(
         mailbox.submit(
@@ -211,7 +214,7 @@ fn broker_role_notifier_rejects_conflicting_master_at_same_epoch() {
             false,
             &sender
         ),
-        SubmitOutcome::Stale
+        BrokerRoleNotificationSubmissionStatus::Stale
     );
 
     assert_eq!(receiver.try_recv(), Ok(notify_key.clone()));

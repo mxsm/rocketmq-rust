@@ -37,6 +37,7 @@ use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_runtime::ResourcePermit;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -580,7 +581,7 @@ impl BrokerFastFailure {
         let mut config = ScheduledTaskConfig::fixed_delay("broker.fast-failure.scan", scan_interval);
         config.initial_delay = initial_delay;
 
-        if let Err(error) = scheduled_tasks.schedule_fixed_delay(config, move || {
+        if let Err(error) = scheduled_tasks.schedule(config, ScheduledExecutionPolicy::default(), move || {
             let this = this.clone();
             async move {
                 if this.is_enabled() {

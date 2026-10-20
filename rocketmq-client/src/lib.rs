@@ -89,7 +89,6 @@ mod utils;
 pub use crate::base::query_result::QueryResult;
 pub use crate::base::MQAdmin;
 pub use crate::base::MqClientAdmin;
-pub use crate::base::MqClientAdminInner;
 pub use crate::client_error::ClientError;
 pub use crate::client_error::ClientResult;
 pub use crate::common::acl::AclConstants;
@@ -396,12 +395,12 @@ mod cluster_session {
             self.inner.get_broker_name_from_message_queue(queue).await
         }
 
-        pub async fn pull_outcome_from_broker(
+        pub async fn pull_response_from_broker(
             &self,
             broker_addr: &str,
             request: rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader,
             timeout_millis: u64,
-        ) -> crate::ClientResult<rocketmq_model::result::PullOutcome<MessageExt>> {
+        ) -> crate::ClientResult<rocketmq_model::result::PullResponse<MessageExt>> {
             let _operation = self.operation().await;
             let result = self
                 .inner
@@ -887,7 +886,7 @@ pub use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
 pub use crate::consumer::listener::message_listener_concurrently::ArcMessageListenerConcurrently;
 pub use crate::consumer::listener::message_listener_orderly::ArcMessageListenerOrderly;
 pub use crate::consumer::notify_result::NotifyResult;
-pub use crate::consumer::pull_result::PullOutcome;
+pub use crate::consumer::pull_result::PullResponse;
 pub use crate::consumer::AbstractAllocateMessageQueueStrategy;
 pub use crate::consumer::AckCallback;
 pub use crate::consumer::AckCallbackFn;
@@ -964,13 +963,7 @@ pub use crate::latency::MQFaultStrategy;
 pub use crate::latency::Resolver;
 pub use crate::latency::ServiceDetector;
 #[allow(deprecated)]
-pub use crate::legacy::ConsumeMessageOpenTracingHookImpl;
-pub use crate::legacy::ConsumeRequest;
-#[allow(deprecated)]
 pub use crate::legacy::DefaultMQPullConsumerImpl;
-pub use crate::legacy::DoNothingClientRemotingProcessor;
-#[allow(deprecated)]
-pub use crate::legacy::EndTransactionOpenTracingHookImpl;
 #[allow(deprecated)]
 pub use crate::legacy::MQHelper;
 #[allow(deprecated)]
@@ -979,15 +972,6 @@ pub use crate::legacy::MQPullConsumerScheduleService;
 pub use crate::legacy::PullTaskCallback;
 #[allow(deprecated)]
 pub use crate::legacy::PullTaskContext;
-#[allow(deprecated)]
-pub use crate::legacy::PullTaskImpl;
-pub use crate::legacy::RebalanceImpl;
-#[allow(deprecated)]
-pub use crate::legacy::RebalancePullImpl;
-#[allow(deprecated)]
-pub use crate::legacy::SendMessageOpenTracingHookImpl;
-#[allow(deprecated)]
-pub use crate::legacy::TransactionCheckListener;
 pub use crate::lock::ReadWriteCASLock;
 pub use crate::producer::send_callback::ArcSendCallback;
 pub use crate::producer::transaction_listener::ArcTransactionListener;

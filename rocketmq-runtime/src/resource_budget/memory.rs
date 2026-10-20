@@ -84,8 +84,8 @@ impl MemoryFileView for HostMemoryFileView {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Identifies the memory limit source state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryLimitSource {
     /// Represents the configured case.
     Configured,
@@ -99,8 +99,8 @@ pub enum MemoryLimitSource {
     HostPhysicalMemory,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Represents process memory limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProcessMemoryLimit {
     bytes: u64,
     source: MemoryLimitSource,
