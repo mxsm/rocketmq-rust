@@ -142,7 +142,6 @@ pub use crate::request_outcome::OutboundRequestStage;
 pub use crate::request_processor::default_request_processor::DefaultRequestProcessor;
 pub use crate::rpc::client_metadata::ClientMetadata;
 pub use crate::rpc::rpc_client::RpcClient;
-pub use crate::rpc::rpc_client::RpcClientLocal;
 pub use crate::rpc::rpc_client_hook::RpcClientHookFn;
 pub use crate::rpc::rpc_client_impl::RpcClientImpl;
 pub use crate::rpc::rpc_client_utils::RpcClientUtils;

@@ -7734,15 +7734,6 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::rpc::rpc_client::RpcClientLocal",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::rpc::rpc_client::RpcClientLocal",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
           "declaration": "pub use crate::rpc::rpc_client_hook::RpcClientHookFn",
           "identity": "rocketmq-transport/src/public_api.rs:pub use crate::rpc::rpc_client_hook::RpcClientHookFn",
           "owner": "transport",
