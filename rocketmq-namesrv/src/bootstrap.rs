@@ -673,7 +673,7 @@ impl NameServerRuntime {
             .expect("Server not initialized - call initialize() first");
 
         // Start route info manager service
-        self.inner.route_info_manager().start();
+        self.inner.route_info_manager().try_start()?;
 
         // Spawn server task and retain handle for graceful shutdown
         let mut server_shutdown_rx = self
@@ -861,14 +861,7 @@ impl NameServerRuntime {
         }
 
         info!("NameServer shutdown: stopping the route information manager...");
-        shutdown_report.route_unregistration =
-            match tokio::time::timeout(deadline.remaining(), self.inner.route_info_manager().shutdown()).await {
-                Ok(report) => report,
-                Err(_) => {
-                    warn!("NameServer route unregistration exhausted the shutdown deadline");
-                    None
-                }
-            };
+        shutdown_report.route_unregistration = self.inner.route_info_manager().shutdown_until(deadline).await;
 
         if let Some(cluster_test_route_lookup) = self.inner.cluster_test_route_lookup() {
             shutdown_report.cluster_test_route_lookup_healthy = Some(
@@ -1418,10 +1411,6 @@ impl NameServerRuntimeHandle {
 
     pub(crate) fn task_group(&self) -> TaskGroup {
         self.runtime().task_group()
-    }
-
-    pub(crate) fn component_task_group(&self, scope: &'static str) -> TaskGroup {
-        self.runtime().component_task_group(scope)
     }
 
     pub(crate) fn namesrv_metrics(&self) -> NameServerMetrics {
