@@ -268,8 +268,14 @@ impl RouteInfoManager {
 
     /// Start the route manager
     pub fn start(&self) {
+        if let Err(error) = self.try_start() {
+            warn!("RouteInfoManager cannot start batch unregistration: {error}");
+        }
+    }
+
+    pub(crate) fn try_start(&self) -> crate::NameServerResult<()> {
         info!("Starting RouteInfoManager with DashMap tables");
-        self.un_register_service.start();
+        self.un_register_service.start()
     }
 
     /// Find broker info by stable transport session identity.
@@ -332,6 +338,13 @@ impl RouteInfoManager {
     pub async fn shutdown(&self) -> Option<rocketmq_runtime::ShutdownReport> {
         info!("Shutting down RouteInfoManager");
         self.un_register_service.shutdown().await
+    }
+
+    pub(crate) async fn shutdown_until(
+        &self,
+        deadline: rocketmq_runtime::ShutdownDeadline,
+    ) -> Option<rocketmq_runtime::ShutdownReport> {
+        self.un_register_service.shutdown_until(deadline).await
     }
 }
 

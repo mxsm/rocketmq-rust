@@ -172,6 +172,8 @@ struct ActiveHandle {
     meters: Option<FixedMeters>,
     #[cfg(feature = "otel-metrics")]
     release_identity: parking_lot::Mutex<Option<ReleaseIdentityRegistration>>,
+    #[cfg(feature = "otel-metrics")]
+    namesrv_unregistration_age: std::sync::OnceLock<Arc<crate::metrics::namesrv::UnregistrationAge>>,
 }
 
 /// Failure to register a release identity on an explicit telemetry handle.
@@ -243,6 +245,7 @@ impl TelemetryHandle {
                 ),
                 meters: meter_provider.map(FixedMeters::new),
                 release_identity: parking_lot::Mutex::new(None),
+                namesrv_unregistration_age: std::sync::OnceLock::new(),
             })),
         }
     }
@@ -342,6 +345,20 @@ impl TelemetryHandle {
             }
             HandleBackend::Noop | HandleBackend::Active(_) => None,
         }
+    }
+
+    #[cfg(feature = "otel-metrics")]
+    pub(crate) fn namesrv_unregistration_age(&self) -> Option<Arc<crate::metrics::namesrv::UnregistrationAge>> {
+        let HandleBackend::Active(inner) = &self.backend else {
+            return None;
+        };
+        let meter = self.meter(NAMESRV_METER_SCOPE)?;
+        // One callback per runtime, even when typed recorders are reconstructed.
+        Some(Arc::clone(
+            inner
+                .namesrv_unregistration_age
+                .get_or_init(|| crate::metrics::namesrv::UnregistrationAge::new(&meter)),
+        ))
     }
 
     /// Registers one instance-scoped release identity before service readiness.
