@@ -548,9 +548,9 @@ struct BrokerRocksDbConfigManagers {
 #[cfg(feature = "rocksdb_store")]
 impl BrokerRocksDbConfigManagers {
     fn close_all(self) {
-        let mut closed = HashSet::new();
+        let mut closed_store_ids = HashSet::new();
         for manager in [self.topic, self.consumer_offset, self.subscription_group] {
-            if closed.insert(manager.backend_identity()) {
+            if closed_store_ids.insert(manager.store_instance_id()) {
                 manager.close();
             }
         }
