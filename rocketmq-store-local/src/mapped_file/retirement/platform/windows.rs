@@ -81,9 +81,9 @@ use windows::Win32::Storage::FileSystem::FILE_WRITE_DATA;
 use windows::Win32::Storage::FileSystem::SYNCHRONIZE;
 use windows::Win32::System::IO::IO_STATUS_BLOCK;
 
-use super::engine::BackendFailure;
 use super::engine::EntryObservation;
 use super::engine::NamespaceIo;
+use super::engine::NamespaceIoFailure;
 use super::engine::NamespaceSnapshot;
 use super::physical_key;
 use super::types::NamespaceEntry;
@@ -111,8 +111,8 @@ pub(super) struct NamespaceRoot {
 
 impl NamespaceRoot {
     pub(super) fn open(file: File) -> Result<Self, NamespaceOperationResult> {
-        let attributes =
-            query_attributes(&file, NamespaceOperation::VerifyRoot).map_err(BackendFailure::into_verification_error)?;
+        let attributes = query_attributes(&file, NamespaceOperation::VerifyRoot)
+            .map_err(NamespaceIoFailure::into_verification_error)?;
         if attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
             return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::RootIsReparsePoint,
@@ -123,8 +123,9 @@ impl NamespaceRoot {
                 NamespacePolicyViolation::RootIsNotDirectory,
             ));
         }
-        let writer_qualified = is_ntfs_volume(&file)
-            .map_err(|error| classify_io(NamespaceOperation::VerifyRoot, error).into_verification_error())?;
+        let writer_qualified = is_ntfs_volume(&file).map_err(|error| {
+            classify_namespace_io_error(NamespaceOperation::VerifyRoot, error).into_verification_error()
+        })?;
         Ok(Self { file, writer_qualified })
     }
 
@@ -193,10 +194,11 @@ impl NamespaceRoot {
         }
         let (parent_path, file_name) = split_parent(path.as_str());
         let parent = open_parent(&self.file, parent_path)?;
-        let file = open_writable_relative(&parent, file_name, FILE_OPEN, false)
-            .map_err(|error| classify_io(NamespaceOperation::VerifyCanonical, error).into_verification_error())?;
+        let file = open_writable_relative(&parent, file_name, FILE_OPEN, false).map_err(|error| {
+            classify_namespace_io_error(NamespaceOperation::VerifyCanonical, error).into_verification_error()
+        })?;
         let attributes = query_attributes(&file, NamespaceOperation::VerifyCanonical)
-            .map_err(BackendFailure::into_verification_error)?;
+            .map_err(NamespaceIoFailure::into_verification_error)?;
         if attributes.FileAttributes & (FILE_ATTRIBUTE_DIRECTORY.0 | FILE_ATTRIBUTE_REPARSE_POINT.0) != 0 {
             return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::UnexpectedEntryType {
@@ -204,9 +206,9 @@ impl NamespaceRoot {
                 },
             ));
         }
-        let metadata = file
-            .metadata()
-            .map_err(|error| classify_io(NamespaceOperation::VerifyCanonical, error).into_verification_error())?;
+        let metadata = file.metadata().map_err(|error| {
+            classify_namespace_io_error(NamespaceOperation::VerifyCanonical, error).into_verification_error()
+        })?;
         if metadata.len() != expected_length {
             return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::ExpectedLengthMismatch {
@@ -216,8 +218,9 @@ impl NamespaceRoot {
                 },
             ));
         }
-        let actual_key = physical_key::capture(&file)
-            .map_err(|error| classify_io(NamespaceOperation::VerifyCanonical, error).into_verification_error())?;
+        let actual_key = physical_key::capture(&file).map_err(|error| {
+            classify_namespace_io_error(NamespaceOperation::VerifyCanonical, error).into_verification_error()
+        })?;
         if actual_key != expected_key {
             return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::NamespaceChangedDuringVerification,
@@ -250,10 +253,10 @@ impl NamespaceRoot {
         require_missing(&parent, canonical_name, IncarnationCreationStage::VerifyNames)?;
         require_missing(&parent, create_name, IncarnationCreationStage::VerifyNames)?;
         let file = create_relative(&parent, create_name)?;
-        let attributes = query_attributes(&file, NamespaceOperation::VerifyCanonical).map_err(|failure| {
+        let attributes = query_attributes(&file, NamespaceOperation::VerifyCanonical).map_err(|io_failure| {
             IncarnationCreationFailure::namespace(
                 IncarnationCreationStage::CreateTemp,
-                failure.into_verification_error(),
+                io_failure.into_verification_error(),
             )
         })?;
         if attributes.FileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT.0 | FILE_ATTRIBUTE_DIRECTORY.0) != 0 {
@@ -307,10 +310,10 @@ impl NamespaceRoot {
             ));
         }
 
-        rename_handle_no_replace(&created.file, &created.parent, &created.canonical_name).map_err(|failure| {
+        rename_handle_no_replace(&created.file, &created.parent, &created.canonical_name).map_err(|io_failure| {
             IncarnationCreationFailure::namespace(
                 IncarnationCreationStage::RenameNoReplace,
-                failure.into_verification_error(),
+                io_failure.into_verification_error(),
             )
         })?;
         // Windows has no POSIX parent-directory fsync. Close the mutation handle, then reopen both
@@ -318,10 +321,10 @@ impl NamespaceRoot {
         drop(created.file);
         let canonical = open_created_relative(&created.parent, &created.canonical_name, FILE_OPEN)
             .map_err(|error| IncarnationCreationFailure::io(IncarnationCreationStage::ReopenCanonical, error))?;
-        let attributes = query_attributes(&canonical, NamespaceOperation::VerifyCanonical).map_err(|failure| {
+        let attributes = query_attributes(&canonical, NamespaceOperation::VerifyCanonical).map_err(|io_failure| {
             IncarnationCreationFailure::namespace(
                 IncarnationCreationStage::VerifyCanonical,
-                failure.into_verification_error(),
+                io_failure.into_verification_error(),
             )
         })?;
         let reopened_key = physical_key::capture(&canonical)
@@ -376,7 +379,7 @@ impl NamespaceIo for NamespaceReservation {
         &mut self,
         expected_key: PhysicalFileKey,
         expected_length: u64,
-    ) -> Result<NamespaceSnapshot, BackendFailure> {
+    ) -> Result<NamespaceSnapshot, NamespaceIoFailure> {
         self.release_for_reverification();
         let canonical = observe_entry(
             &self.parent,
@@ -400,30 +403,28 @@ impl NamespaceIo for NamespaceReservation {
         })
     }
 
-    fn rename_to_tombstone(&mut self) -> Result<(), BackendFailure> {
-        let source = self
-            .canonical
-            .as_ref()
-            .ok_or_else(|| BackendFailure::failed(NamespaceOperation::Rename, NamespaceFailureClass::OtherIo, None))?;
+    fn rename_to_tombstone(&mut self) -> Result<(), NamespaceIoFailure> {
+        let source = self.canonical.as_ref().ok_or_else(|| {
+            NamespaceIoFailure::non_retryable(NamespaceOperation::Rename, NamespaceFailureClass::OtherIo, None)
+        })?;
         rename_handle_no_replace(source, &self.parent, &self.tombstone_name)
     }
 
-    fn unlink(&mut self, entry: NamespaceEntry) -> Result<(), BackendFailure> {
+    fn unlink(&mut self, entry: NamespaceEntry) -> Result<(), NamespaceIoFailure> {
         if entry != NamespaceEntry::Tombstone {
-            return Err(BackendFailure::failed(
+            return Err(NamespaceIoFailure::non_retryable(
                 NamespaceOperation::Unlink,
                 NamespaceFailureClass::OtherIo,
                 None,
             ));
         }
-        let target = self
-            .tombstone
-            .as_ref()
-            .ok_or_else(|| BackendFailure::failed(NamespaceOperation::Unlink, NamespaceFailureClass::OtherIo, None))?;
+        let target = self.tombstone.as_ref().ok_or_else(|| {
+            NamespaceIoFailure::non_retryable(NamespaceOperation::Unlink, NamespaceFailureClass::OtherIo, None)
+        })?;
         disposition_handle(target)
     }
 
-    fn sync_after_namespace(&mut self, _transition: NamespaceTransition) -> Result<(), BackendFailure> {
+    fn sync_after_namespace(&mut self, _transition: NamespaceTransition) -> Result<(), NamespaceIoFailure> {
         // Windows exposes no POSIX directory-fsync equivalent. FlushFileBuffers on a rename or
         // delete handle is neither a parent-directory durability proof nor guaranteed to be
         // permitted for a DELETE|READ_ATTRIBUTES handle. The durable intent therefore remains
@@ -450,7 +451,7 @@ fn observe_entry(
     expected_key: PhysicalFileKey,
     expected_length: u64,
     operation: NamespaceOperation,
-) -> Result<ObservedEntry, BackendFailure> {
+) -> Result<ObservedEntry, NamespaceIoFailure> {
     let Some(file) = open_relative(parent, name, false, operation)? else {
         return Ok(ObservedEntry {
             observation: EntryObservation::Missing,
@@ -470,9 +471,12 @@ fn observe_entry(
             handle: Some(file),
         });
     }
-    let key = physical_key::capture(&file).map_err(|error| classify_io(operation, error))?;
+    let key = physical_key::capture(&file).map_err(|error| classify_namespace_io_error(operation, error))?;
     let observation = if key == expected_key {
-        let actual_length = file.metadata().map_err(|error| classify_io(operation, error))?.len();
+        let actual_length = file
+            .metadata()
+            .map_err(|error| classify_namespace_io_error(operation, error))?
+            .len();
         if actual_length == expected_length {
             EntryObservation::ExpectedFile
         } else {
@@ -488,17 +492,17 @@ fn observe_entry(
 }
 
 fn open_parent(root: &File, parent_path: &str) -> Result<File, NamespaceOperationResult> {
-    let mut parent = root
-        .try_clone()
-        .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?;
+    let mut parent = root.try_clone().map_err(|error| {
+        classify_namespace_io_error(NamespaceOperation::OpenParent, error).into_verification_error()
+    })?;
     if parent_path.is_empty() {
         return Ok(parent);
     }
     for component in parent_path.split('/') {
         parent = open_relative(&parent, component, true, NamespaceOperation::OpenParent)
-            .map_err(BackendFailure::into_verification_error)?
+            .map_err(NamespaceIoFailure::into_verification_error)?
             .ok_or_else(|| {
-                BackendFailure::retryable(
+                NamespaceIoFailure::retryable(
                     NamespaceOperation::OpenParent,
                     NamespaceFailureClass::NotFoundNeedsReconciliation,
                     Some(ERROR_PATH_NOT_FOUND.0 as i32),
@@ -506,7 +510,7 @@ fn open_parent(root: &File, parent_path: &str) -> Result<File, NamespaceOperatio
                 .into_verification_error()
             })?;
         let attributes = query_attributes(&parent, NamespaceOperation::OpenParent)
-            .map_err(BackendFailure::into_verification_error)?;
+            .map_err(NamespaceIoFailure::into_verification_error)?;
         if attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
             return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::ParentEscapedRoot,
@@ -522,9 +526,9 @@ fn open_parent(root: &File, parent_path: &str) -> Result<File, NamespaceOperatio
 }
 
 fn open_or_create_parent(root: &File, parent_path: &str) -> Result<File, NamespaceOperationResult> {
-    let mut parent = root
-        .try_clone()
-        .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?;
+    let mut parent = root.try_clone().map_err(|error| {
+        classify_namespace_io_error(NamespaceOperation::OpenParent, error).into_verification_error()
+    })?;
     if parent_path.is_empty() {
         return Ok(parent);
     }
@@ -535,8 +539,8 @@ fn open_or_create_parent(root: &File, parent_path: &str) -> Result<File, Namespa
             ));
         }
         let next = open_or_create_directory_component(&parent, component)?;
-        let attributes =
-            query_attributes(&next, NamespaceOperation::OpenParent).map_err(BackendFailure::into_verification_error)?;
+        let attributes = query_attributes(&next, NamespaceOperation::OpenParent)
+            .map_err(NamespaceIoFailure::into_verification_error)?;
         if attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
             || attributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 == 0
         {
@@ -545,19 +549,21 @@ fn open_or_create_parent(root: &File, parent_path: &str) -> Result<File, Namespa
             ));
         }
         let reopened = open_relative(&parent, component, true, NamespaceOperation::OpenParent)
-            .map_err(BackendFailure::into_verification_error)?
+            .map_err(NamespaceIoFailure::into_verification_error)?
             .ok_or_else(|| {
-                BackendFailure::retryable(
+                NamespaceIoFailure::retryable(
                     NamespaceOperation::OpenParent,
                     NamespaceFailureClass::NotFoundNeedsReconciliation,
                     Some(ERROR_PATH_NOT_FOUND.0 as i32),
                 )
                 .into_verification_error()
             })?;
-        let created_key = physical_key::capture(&next)
-            .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?;
-        let reopened_key = physical_key::capture(&reopened)
-            .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?;
+        let created_key = physical_key::capture(&next).map_err(|error| {
+            classify_namespace_io_error(NamespaceOperation::OpenParent, error).into_verification_error()
+        })?;
+        let reopened_key = physical_key::capture(&reopened).map_err(|error| {
+            classify_namespace_io_error(NamespaceOperation::OpenParent, error).into_verification_error()
+        })?;
         if created_key != reopened_key {
             return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::ParentEscapedRoot,
@@ -614,13 +620,17 @@ fn open_or_create_directory_component(parent: &File, name: &str) -> Result<File,
         )
     };
     if status.0 < 0 {
-        return Err(classify_io(NamespaceOperation::OpenParent, status_error(status)).into_verification_error());
+        return Err(
+            classify_namespace_io_error(NamespaceOperation::OpenParent, status_error(status)).into_verification_error(),
+        );
     }
     if handle.is_invalid() {
-        return Err(
-            BackendFailure::failed(NamespaceOperation::OpenParent, NamespaceFailureClass::OtherIo, None)
-                .into_verification_error(),
-        );
+        return Err(NamespaceIoFailure::non_retryable(
+            NamespaceOperation::OpenParent,
+            NamespaceFailureClass::OtherIo,
+            None,
+        )
+        .into_verification_error());
     }
     // SAFETY: successful NtCreateFile returned unique ownership of a valid kernel handle.
     Ok(unsafe { File::from_raw_handle(handle.0) })
@@ -631,13 +641,13 @@ fn open_relative(
     name: &str,
     directory: bool,
     operation: NamespaceOperation,
-) -> Result<Option<File>, BackendFailure> {
+) -> Result<Option<File>, NamespaceIoFailure> {
     let mut wide = name.encode_utf16().collect::<Vec<_>>();
     let byte_length = wide
         .len()
         .checked_mul(size_of::<u16>())
         .and_then(|value| u16::try_from(value).ok())
-        .ok_or_else(|| BackendFailure::failed(operation, NamespaceFailureClass::OtherIo, None))?;
+        .ok_or_else(|| NamespaceIoFailure::non_retryable(operation, NamespaceFailureClass::OtherIo, None))?;
     let unicode = UNICODE_STRING {
         Length: byte_length,
         MaximumLength: byte_length,
@@ -685,10 +695,14 @@ fn open_relative(
         return Ok(None);
     }
     if status.0 < 0 {
-        return Err(classify_io(operation, status_error(status)));
+        return Err(classify_namespace_io_error(operation, status_error(status)));
     }
     if handle.is_invalid() {
-        return Err(BackendFailure::failed(operation, NamespaceFailureClass::OtherIo, None));
+        return Err(NamespaceIoFailure::non_retryable(
+            operation,
+            NamespaceFailureClass::OtherIo,
+            None,
+        ));
     }
     // SAFETY: successful NtCreateFile returned unique ownership of a valid kernel handle.
     Ok(Some(unsafe { File::from_raw_handle(handle.0) }))
@@ -780,14 +794,14 @@ fn require_missing(
             stage,
             io::Error::new(io::ErrorKind::AlreadyExists, "managed creation name already exists"),
         )),
-        Err(failure) => Err(IncarnationCreationFailure::namespace(
+        Err(io_failure) => Err(IncarnationCreationFailure::namespace(
             stage,
-            failure.into_verification_error(),
+            io_failure.into_verification_error(),
         )),
     }
 }
 
-fn query_attributes(file: &File, operation: NamespaceOperation) -> Result<FILE_ATTRIBUTE_TAG_INFO, BackendFailure> {
+fn query_attributes(file: &File, operation: NamespaceOperation) -> Result<FILE_ATTRIBUTE_TAG_INFO, NamespaceIoFailure> {
     let mut attributes = MaybeUninit::<FILE_ATTRIBUTE_TAG_INFO>::uninit();
     // SAFETY: the handle remains borrowed; `attributes` is aligned writable storage of the exact
     // fixed information class size and is completely initialized on success.
@@ -798,12 +812,12 @@ fn query_attributes(file: &File, operation: NamespaceOperation) -> Result<FILE_A
             attributes.as_mut_ptr().cast(),
             size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
         )
-        .map_err(|error| classify_io(operation, windows_error_to_io(error)))?;
+        .map_err(|error| classify_namespace_io_error(operation, windows_error_to_io(error)))?;
         Ok(attributes.assume_init())
     }
 }
 
-fn rename_handle_no_replace(source: &File, parent: &File, tombstone_name: &str) -> Result<(), BackendFailure> {
+fn rename_handle_no_replace(source: &File, parent: &File, tombstone_name: &str) -> Result<(), NamespaceIoFailure> {
     let extended = rename_buffer(parent, tombstone_name, true)?;
     let extended_length = rename_buffer_length(tombstone_name)?;
     let mut io_status = IO_STATUS_BLOCK::default();
@@ -841,15 +855,16 @@ fn rename_handle_no_replace(source: &File, parent: &File, tombstone_name: &str) 
     status_result(NamespaceOperation::Rename, status)
 }
 
-fn rename_buffer(parent: &File, name: &str, extended: bool) -> Result<Vec<usize>, BackendFailure> {
+fn rename_buffer(parent: &File, name: &str, extended: bool) -> Result<Vec<usize>, NamespaceIoFailure> {
     let wide = name.encode_utf16().collect::<Vec<_>>();
-    let byte_length = wide
-        .len()
-        .checked_mul(size_of::<u16>())
-        .ok_or_else(|| BackendFailure::failed(NamespaceOperation::Rename, NamespaceFailureClass::OtherIo, None))?;
+    let byte_length = wide.len().checked_mul(size_of::<u16>()).ok_or_else(|| {
+        NamespaceIoFailure::non_retryable(NamespaceOperation::Rename, NamespaceFailureClass::OtherIo, None)
+    })?;
     let total = size_of::<FILE_RENAME_INFORMATION>()
         .checked_add(byte_length)
-        .ok_or_else(|| BackendFailure::failed(NamespaceOperation::Rename, NamespaceFailureClass::OtherIo, None))?;
+        .ok_or_else(|| {
+            NamespaceIoFailure::non_retryable(NamespaceOperation::Rename, NamespaceFailureClass::OtherIo, None)
+        })?;
     let words = total.div_ceil(size_of::<usize>());
     let mut storage = vec![0_usize; words];
     let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>();
@@ -863,27 +878,33 @@ fn rename_buffer(parent: &File, name: &str, extended: bool) -> Result<Vec<usize>
             (*info).Anonymous.ReplaceIfExists = false;
         }
         (*info).RootDirectory = HANDLE(parent.as_raw_handle());
-        (*info).FileNameLength = u32::try_from(byte_length)
-            .map_err(|_| BackendFailure::failed(NamespaceOperation::Rename, NamespaceFailureClass::OtherIo, None))?;
+        (*info).FileNameLength = u32::try_from(byte_length).map_err(|_| {
+            NamespaceIoFailure::non_retryable(NamespaceOperation::Rename, NamespaceFailureClass::OtherIo, None)
+        })?;
         ptr::copy_nonoverlapping(wide.as_ptr(), (*info).FileName.as_mut_ptr(), wide.len());
     }
     Ok(storage)
 }
 
-fn rename_buffer_length(name: &str) -> Result<u32, BackendFailure> {
+fn rename_buffer_length(name: &str) -> Result<u32, NamespaceIoFailure> {
     let name_bytes = name
         .encode_utf16()
         .count()
         .checked_mul(size_of::<u16>())
-        .ok_or_else(|| BackendFailure::failed(NamespaceOperation::Rename, NamespaceFailureClass::OtherIo, None))?;
+        .ok_or_else(|| {
+            NamespaceIoFailure::non_retryable(NamespaceOperation::Rename, NamespaceFailureClass::OtherIo, None)
+        })?;
     let total = size_of::<FILE_RENAME_INFORMATION>()
         .checked_add(name_bytes)
-        .ok_or_else(|| BackendFailure::failed(NamespaceOperation::Rename, NamespaceFailureClass::OtherIo, None))?;
-    u32::try_from(total)
-        .map_err(|_| BackendFailure::failed(NamespaceOperation::Rename, NamespaceFailureClass::OtherIo, None))
+        .ok_or_else(|| {
+            NamespaceIoFailure::non_retryable(NamespaceOperation::Rename, NamespaceFailureClass::OtherIo, None)
+        })?;
+    u32::try_from(total).map_err(|_| {
+        NamespaceIoFailure::non_retryable(NamespaceOperation::Rename, NamespaceFailureClass::OtherIo, None)
+    })
 }
 
-fn disposition_handle(target: &File) -> Result<(), BackendFailure> {
+fn disposition_handle(target: &File) -> Result<(), NamespaceIoFailure> {
     let extended = FILE_DISPOSITION_INFO_EX {
         Flags: FILE_DISPOSITION_INFO_EX_FLAGS(FILE_DISPOSITION_FLAG_DELETE.0 | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS.0),
     };
@@ -911,9 +932,12 @@ fn disposition_handle(target: &File) -> Result<(), BackendFailure> {
                     size_of::<FILE_DISPOSITION_INFO>() as u32,
                 )
             }
-            .map_err(|error| classify_io(NamespaceOperation::Unlink, windows_error_to_io(error)))
+            .map_err(|error| classify_namespace_io_error(NamespaceOperation::Unlink, windows_error_to_io(error)))
         }
-        Err(error) => Err(classify_io(NamespaceOperation::Unlink, windows_error_to_io(error))),
+        Err(error) => Err(classify_namespace_io_error(
+            NamespaceOperation::Unlink,
+            windows_error_to_io(error),
+        )),
     }
 }
 
@@ -928,11 +952,11 @@ fn is_status_information_class_unsupported(status: NTSTATUS) -> bool {
     code == ERROR_INVALID_PARAMETER.0 || code == ERROR_NOT_SUPPORTED.0
 }
 
-fn status_result(operation: NamespaceOperation, status: NTSTATUS) -> Result<(), BackendFailure> {
+fn status_result(operation: NamespaceOperation, status: NTSTATUS) -> Result<(), NamespaceIoFailure> {
     if status.0 >= 0 {
         Ok(())
     } else {
-        Err(classify_io(operation, status_error(status)))
+        Err(classify_namespace_io_error(operation, status_error(status)))
     }
 }
 
@@ -958,8 +982,8 @@ fn is_ntfs_volume(file: &File) -> io::Result<bool> {
     Ok(String::from_utf16_lossy(&filesystem_name[..length]).eq_ignore_ascii_case("NTFS"))
 }
 
-fn classify_io(operation: NamespaceOperation, error: io::Error) -> BackendFailure {
-    let raw_code = error.raw_os_error();
+fn classify_namespace_io_error(operation: NamespaceOperation, io_error: io::Error) -> NamespaceIoFailure {
+    let raw_code = io_error.raw_os_error();
     let class = match raw_code.map(|code| code as u32) {
         Some(code) if code == ERROR_SHARING_VIOLATION.0 => NamespaceFailureClass::SharingViolation,
         Some(code) if code == ERROR_LOCK_VIOLATION.0 => NamespaceFailureClass::LockViolation,
@@ -968,7 +992,7 @@ fn classify_io(operation: NamespaceOperation, error: io::Error) -> BackendFailur
         Some(code) if code == ERROR_FILE_NOT_FOUND.0 || code == ERROR_PATH_NOT_FOUND.0 => {
             NamespaceFailureClass::NotFoundNeedsReconciliation
         }
-        _ if error.kind() == io::ErrorKind::Interrupted => NamespaceFailureClass::Interrupted,
+        _ if io_error.kind() == io::ErrorKind::Interrupted => NamespaceFailureClass::Interrupted,
         _ => NamespaceFailureClass::OtherIo,
     };
     if matches!(
@@ -980,9 +1004,9 @@ fn classify_io(operation: NamespaceOperation, error: io::Error) -> BackendFailur
             | NamespaceFailureClass::NotFoundNeedsReconciliation
             | NamespaceFailureClass::Interrupted
     ) {
-        BackendFailure::retryable(operation, class, raw_code)
+        NamespaceIoFailure::retryable(operation, class, raw_code)
     } else {
-        BackendFailure::failed(operation, class, raw_code)
+        NamespaceIoFailure::non_retryable(operation, class, raw_code)
     }
 }
 

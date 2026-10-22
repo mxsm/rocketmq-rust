@@ -955,6 +955,17 @@ string-based `rocketmq_filter::FilterError` remains an E9-1 deletion
 candidate; it is not counted as one of the nine opaque facades above. The
 final master catalog-facade acceptance item is intentionally not checked.
 
+Current implementation note: the mapped-file retirement platform backend uses the
+internal `Debug` carrier `NamespaceIoFailure`
+([engine.rs](../../rocketmq-store-local/src/mapped_file/retirement/platform/engine.rs))
+for failed namespace I/O steps. It is not a new public error facade or catalog
+descriptor and does not change the counts above. Its diagnostic payload is the
+existing `NamespaceFailure` (operation, failure class, raw OS code), and the
+operation result is the existing `NamespaceOperationResult`
+([types.rs](../../rocketmq-store-local/src/mapped_file/retirement/platform/types.rs)):
+the carrier's `is_retryable` flag selects `Retryable`, while `non_retryable`
+values convert to `Failed`.
+
 ## Compatibility constraints
 
 The Rust API is allowed to break. There will be no V1/V2 public compatibility

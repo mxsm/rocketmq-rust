@@ -20,9 +20,9 @@ use std::os::fd::AsRawFd;
 use std::os::fd::FromRawFd;
 use std::os::unix::fs::MetadataExt;
 
-use super::engine::BackendFailure;
 use super::engine::EntryObservation;
 use super::engine::NamespaceIo;
+use super::engine::NamespaceIoFailure;
 use super::engine::NamespaceSnapshot;
 use super::physical_key;
 use super::types::NamespaceEntry;
@@ -59,9 +59,9 @@ pub(super) struct NamespaceRoot {
 
 impl NamespaceRoot {
     pub(super) fn open(file: File) -> Result<Self, NamespaceOperationResult> {
-        let metadata = file
-            .metadata()
-            .map_err(|error| classify_io(NamespaceOperation::VerifyRoot, error).into_verification_error())?;
+        let metadata = file.metadata().map_err(|error| {
+            classify_namespace_io_error(NamespaceOperation::VerifyRoot, error).into_verification_error()
+        })?;
         if !metadata.is_dir() {
             return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::RootIsNotDirectory,
@@ -95,9 +95,9 @@ impl NamespaceRoot {
             ));
         }
         let parent = open_parent_strict(&self.file, parent_path)?;
-        let metadata = parent
-            .metadata()
-            .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?;
+        let metadata = parent.metadata().map_err(|error| {
+            classify_namespace_io_error(NamespaceOperation::OpenParent, error).into_verification_error()
+        })?;
         if !metadata.is_dir() || metadata.dev() != self.device {
             return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::ParentEscapedRoot,
@@ -131,9 +131,9 @@ impl NamespaceRoot {
         }
         let (parent_path, file_name) = split_parent(path.as_str());
         let parent = open_parent_strict(&self.file, parent_path)?;
-        let parent_metadata = parent
-            .metadata()
-            .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?;
+        let parent_metadata = parent.metadata().map_err(|error| {
+            classify_namespace_io_error(NamespaceOperation::OpenParent, error).into_verification_error()
+        })?;
         if !parent_metadata.is_dir() || parent_metadata.dev() != self.device {
             return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::ParentEscapedRoot,
@@ -141,11 +141,13 @@ impl NamespaceRoot {
         }
         let file_name = CString::new(file_name)
             .map_err(|_| NamespaceOperationResult::Rejected(NamespacePolicyViolation::ParentEscapedRoot))?;
-        let file = openat2(&parent, &file_name, libc::O_RDWR | libc::O_CLOEXEC | libc::O_NOFOLLOW)
-            .map_err(|error| classify_io(NamespaceOperation::VerifyCanonical, error).into_verification_error())?;
-        let metadata = file
-            .metadata()
-            .map_err(|error| classify_io(NamespaceOperation::VerifyCanonical, error).into_verification_error())?;
+        let file =
+            openat2(&parent, &file_name, libc::O_RDWR | libc::O_CLOEXEC | libc::O_NOFOLLOW).map_err(|error| {
+                classify_namespace_io_error(NamespaceOperation::VerifyCanonical, error).into_verification_error()
+            })?;
+        let metadata = file.metadata().map_err(|error| {
+            classify_namespace_io_error(NamespaceOperation::VerifyCanonical, error).into_verification_error()
+        })?;
         if !metadata.is_file() || metadata.dev() != self.device {
             return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::UnexpectedEntryType {
@@ -162,8 +164,9 @@ impl NamespaceRoot {
                 },
             ));
         }
-        let actual_key = physical_key::capture(&file)
-            .map_err(|error| classify_io(NamespaceOperation::VerifyCanonical, error).into_verification_error())?;
+        let actual_key = physical_key::capture(&file).map_err(|error| {
+            classify_namespace_io_error(NamespaceOperation::VerifyCanonical, error).into_verification_error()
+        })?;
         if actual_key != expected_key {
             return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::NamespaceChangedDuringVerification,
@@ -334,7 +337,7 @@ impl NamespaceIo for NamespaceReservation {
         &mut self,
         expected_key: PhysicalFileKey,
         expected_length: u64,
-    ) -> Result<NamespaceSnapshot, BackendFailure> {
+    ) -> Result<NamespaceSnapshot, NamespaceIoFailure> {
         self.release_for_reverification();
         let canonical = observe_entry(
             &self.parent,
@@ -358,9 +361,9 @@ impl NamespaceIo for NamespaceReservation {
         })
     }
 
-    fn rename_to_tombstone(&mut self) -> Result<(), BackendFailure> {
+    fn rename_to_tombstone(&mut self) -> Result<(), NamespaceIoFailure> {
         if self.canonical.is_none() {
-            return Err(BackendFailure::failed(
+            return Err(NamespaceIoFailure::non_retryable(
                 NamespaceOperation::Rename,
                 NamespaceFailureClass::OtherIo,
                 None,
@@ -381,17 +384,20 @@ impl NamespaceIo for NamespaceReservation {
         if result == 0 {
             Ok(())
         } else {
-            Err(classify_io(NamespaceOperation::Rename, io::Error::last_os_error()))
+            Err(classify_namespace_io_error(
+                NamespaceOperation::Rename,
+                io::Error::last_os_error(),
+            ))
         }
     }
 
-    fn unlink(&mut self, entry: NamespaceEntry) -> Result<(), BackendFailure> {
+    fn unlink(&mut self, entry: NamespaceEntry) -> Result<(), NamespaceIoFailure> {
         let (name, handle_present) = match entry {
             NamespaceEntry::Canonical => (&self.canonical_name, self.canonical.is_some()),
             NamespaceEntry::Tombstone => (&self.tombstone_name, self.tombstone.is_some()),
         };
         if !handle_present {
-            return Err(BackendFailure::failed(
+            return Err(NamespaceIoFailure::non_retryable(
                 NamespaceOperation::Unlink,
                 NamespaceFailureClass::OtherIo,
                 None,
@@ -403,14 +409,17 @@ impl NamespaceIo for NamespaceReservation {
         if result == 0 {
             Ok(())
         } else {
-            Err(classify_io(NamespaceOperation::Unlink, io::Error::last_os_error()))
+            Err(classify_namespace_io_error(
+                NamespaceOperation::Unlink,
+                io::Error::last_os_error(),
+            ))
         }
     }
 
-    fn sync_after_namespace(&mut self, _transition: NamespaceTransition) -> Result<(), BackendFailure> {
+    fn sync_after_namespace(&mut self, _transition: NamespaceTransition) -> Result<(), NamespaceIoFailure> {
         self.parent
             .sync_all()
-            .map_err(|error| classify_io(NamespaceOperation::SyncParentOrHandle, error))
+            .map_err(|error| classify_namespace_io_error(NamespaceOperation::SyncParentOrHandle, error))
     }
 
     fn release_for_reverification(&mut self) {
@@ -430,7 +439,7 @@ fn observe_entry(
     expected_key: PhysicalFileKey,
     expected_length: u64,
     operation: NamespaceOperation,
-) -> Result<ObservedEntry, BackendFailure> {
+) -> Result<ObservedEntry, NamespaceIoFailure> {
     let file = match openat2(parent, name, libc::O_PATH | libc::O_CLOEXEC | libc::O_NOFOLLOW) {
         Ok(file) => file,
         Err(error) if error.raw_os_error() == Some(libc::ENOENT) => {
@@ -445,16 +454,18 @@ fn observe_entry(
                 handle: None,
             });
         }
-        Err(error) => return Err(classify_io(operation, error)),
+        Err(error) => return Err(classify_namespace_io_error(operation, error)),
     };
-    let metadata = file.metadata().map_err(|error| classify_io(operation, error))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| classify_namespace_io_error(operation, error))?;
     if !metadata.is_file() {
         return Ok(ObservedEntry {
             observation: EntryObservation::Directory,
             handle: Some(file),
         });
     }
-    let key = physical_key::capture(&file).map_err(|error| classify_io(operation, error))?;
+    let key = physical_key::capture(&file).map_err(|error| classify_namespace_io_error(operation, error))?;
     let observation = if key == expected_key {
         if metadata.len() == expected_length {
             EntryObservation::ExpectedFile
@@ -486,24 +497,24 @@ fn open_parent_strict(root: &File, parent_path: &str) -> Result<File, NamespaceO
         Err(error) if error.raw_os_error() == Some(libc::EXDEV) || error.raw_os_error() == Some(libc::ELOOP) => Err(
             NamespaceOperationResult::Rejected(NamespacePolicyViolation::ParentEscapedRoot),
         ),
-        Err(error) => Err(classify_io(NamespaceOperation::OpenParent, error).into_verification_error()),
+        Err(error) => Err(classify_namespace_io_error(NamespaceOperation::OpenParent, error).into_verification_error()),
     }
 }
 
 fn open_or_create_parent_strict(root: &File, parent_path: &str) -> Result<File, NamespaceOperationResult> {
     let root_device = root
         .metadata()
-        .map_err(|error| classify_io(NamespaceOperation::VerifyRoot, error).into_verification_error())?
+        .map_err(|error| classify_namespace_io_error(NamespaceOperation::VerifyRoot, error).into_verification_error())?
         .dev();
     if parent_path.is_empty() {
-        return root
-            .try_clone()
-            .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error());
+        return root.try_clone().map_err(|error| {
+            classify_namespace_io_error(NamespaceOperation::OpenParent, error).into_verification_error()
+        });
     }
 
-    let mut parent = root
-        .try_clone()
-        .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?;
+    let mut parent = root.try_clone().map_err(|error| {
+        classify_namespace_io_error(NamespaceOperation::OpenParent, error).into_verification_error()
+    })?;
     for component in parent_path.split('/') {
         if component.is_empty() || component == "." || component == ".." {
             return Err(NamespaceOperationResult::Rejected(
@@ -525,18 +536,21 @@ fn open_or_create_parent_strict(root: &File, parent_path: &str) -> Result<File, 
                 if result != 0 {
                     let error = io::Error::last_os_error();
                     if error.raw_os_error() != Some(libc::EEXIST) {
-                        return Err(classify_io(NamespaceOperation::OpenParent, error).into_verification_error());
+                        return Err(classify_namespace_io_error(NamespaceOperation::OpenParent, error)
+                            .into_verification_error());
                     }
                 }
                 parent.sync_all().map_err(|error| {
-                    classify_io(NamespaceOperation::SyncParentOrHandle, error).into_verification_error()
+                    classify_namespace_io_error(NamespaceOperation::SyncParentOrHandle, error).into_verification_error()
                 })?;
                 openat2(
                     &parent,
                     &component,
                     libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
                 )
-                .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?
+                .map_err(|error| {
+                    classify_namespace_io_error(NamespaceOperation::OpenParent, error).into_verification_error()
+                })?
             }
             Err(error) if error.raw_os_error() == Some(libc::ENOSYS) => {
                 return Err(NamespaceOperationResult::Unsupported {
@@ -550,12 +564,14 @@ fn open_or_create_parent_strict(root: &File, parent_path: &str) -> Result<File, 
                 ));
             }
             Err(error) => {
-                return Err(classify_io(NamespaceOperation::OpenParent, error).into_verification_error());
+                return Err(
+                    classify_namespace_io_error(NamespaceOperation::OpenParent, error).into_verification_error()
+                );
             }
         };
-        let metadata = next
-            .metadata()
-            .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?;
+        let metadata = next.metadata().map_err(|error| {
+            classify_namespace_io_error(NamespaceOperation::OpenParent, error).into_verification_error()
+        })?;
         if !metadata.is_dir() || metadata.dev() != root_device {
             return Err(NamespaceOperationResult::Rejected(
                 NamespacePolicyViolation::ParentEscapedRoot,
@@ -612,8 +628,8 @@ fn require_missing(
     }
 }
 
-fn classify_io(operation: NamespaceOperation, error: io::Error) -> BackendFailure {
-    let raw_code = error.raw_os_error();
+fn classify_namespace_io_error(operation: NamespaceOperation, io_error: io::Error) -> NamespaceIoFailure {
+    let raw_code = io_error.raw_os_error();
     let class = match raw_code {
         Some(code) if code == libc::EACCES || code == libc::EPERM => NamespaceFailureClass::PermissionDenied,
         Some(libc::EBUSY) => NamespaceFailureClass::SharingViolation,
@@ -628,9 +644,9 @@ fn classify_io(operation: NamespaceOperation, error: io::Error) -> BackendFailur
             | NamespaceFailureClass::NotFoundNeedsReconciliation
             | NamespaceFailureClass::Interrupted
     ) {
-        BackendFailure::retryable(operation, class, raw_code)
+        NamespaceIoFailure::retryable(operation, class, raw_code)
     } else {
-        BackendFailure::failed(operation, class, raw_code)
+        NamespaceIoFailure::non_retryable(operation, class, raw_code)
     }
 }
 

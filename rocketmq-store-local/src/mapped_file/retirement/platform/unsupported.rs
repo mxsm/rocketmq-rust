@@ -14,8 +14,8 @@
 
 use std::fs::File;
 
-use super::engine::BackendFailure;
 use super::engine::NamespaceIo;
+use super::engine::NamespaceIoFailure;
 use super::engine::NamespaceSnapshot;
 use super::types::NamespaceEntry;
 use super::types::NamespaceFailureClass;
@@ -113,25 +113,25 @@ impl NamespaceIo for NamespaceReservation {
         &mut self,
         _expected_key: PhysicalFileKey,
         _expected_length: u64,
-    ) -> Result<NamespaceSnapshot, BackendFailure> {
+    ) -> Result<NamespaceSnapshot, NamespaceIoFailure> {
         Err(unsupported_failure(NamespaceOperation::Reverify))
     }
 
-    fn rename_to_tombstone(&mut self) -> Result<(), BackendFailure> {
+    fn rename_to_tombstone(&mut self) -> Result<(), NamespaceIoFailure> {
         Err(unsupported_failure(NamespaceOperation::Rename))
     }
 
-    fn unlink(&mut self, _entry: NamespaceEntry) -> Result<(), BackendFailure> {
+    fn unlink(&mut self, _entry: NamespaceEntry) -> Result<(), NamespaceIoFailure> {
         Err(unsupported_failure(NamespaceOperation::Unlink))
     }
 
-    fn sync_after_namespace(&mut self, _transition: NamespaceTransition) -> Result<(), BackendFailure> {
+    fn sync_after_namespace(&mut self, _transition: NamespaceTransition) -> Result<(), NamespaceIoFailure> {
         Err(unsupported_failure(NamespaceOperation::SyncParentOrHandle))
     }
 
     fn release_for_reverification(&mut self) {}
 }
 
-const fn unsupported_failure(operation: NamespaceOperation) -> BackendFailure {
-    BackendFailure::failed(operation, NamespaceFailureClass::OtherIo, None)
+const fn unsupported_failure(operation: NamespaceOperation) -> NamespaceIoFailure {
+    NamespaceIoFailure::non_retryable(operation, NamespaceFailureClass::OtherIo, None)
 }
