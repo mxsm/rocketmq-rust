@@ -20,7 +20,7 @@ use std::path::PathBuf;
 /// Configuration aliases, defaults, and compatibility fields remain owned by
 /// the caller that deserializes the legacy configuration.
 #[derive(Clone, Debug, PartialEq)]
-pub struct LocalBackendConfig {
+pub struct LocalStoreConfig {
     pub store_path_root_dir: PathBuf,
     pub commit_log_paths: Vec<PathBuf>,
     pub store_io_hint_enabled: bool,

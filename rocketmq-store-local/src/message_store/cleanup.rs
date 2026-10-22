@@ -15,7 +15,7 @@
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
-use crate::config::backend::LocalCleanupConfig;
+use crate::config::local_store::LocalCleanupConfig;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct DiskCleanDecision {

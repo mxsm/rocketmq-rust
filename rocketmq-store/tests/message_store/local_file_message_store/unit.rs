@@ -5216,7 +5216,7 @@ async fn clean_commit_log_service_never_crosses_derived_wal_pin() {
             .expect("append commitlog file"));
     }
     let cleanup_policy =
-        super::LocalCleanupPolicy::new(store.message_store_config.normalized_local_backend_config().cleanup);
+        super::LocalCleanupPolicy::new(store.message_store_config.normalized_local_store_config().cleanup);
     store.clean_commit_log_service = Arc::new(CleanCommitLogService::new(
         store.message_store_config.clone(),
         store.commit_log.cleanup_handle(),
@@ -5326,7 +5326,7 @@ fn clean_commit_log_service_unknown_configured_root_requests_reclaim() {
         store_path_commit_log: Some(store_path_commit_log.into()),
         ..MessageStoreConfig::default()
     });
-    let cleanup_policy = super::LocalCleanupPolicy::new(message_store_config.normalized_local_backend_config().cleanup);
+    let cleanup_policy = super::LocalCleanupPolicy::new(message_store_config.normalized_local_store_config().cleanup);
     let service = CleanCommitLogService::new(
         message_store_config,
         store.commit_log.cleanup_handle(),

@@ -17,7 +17,7 @@ use std::sync::Arc;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreLifecycle;
 
-use crate::config::backend::LocalBackendConfig;
+use crate::config::local_store::LocalStoreConfig;
 use crate::message_store::cleanup::CleanupPolicy;
 use crate::message_store::lifecycle::LocalStoreLifecycle;
 use crate::message_store::query::QueryPolicy;
@@ -28,7 +28,7 @@ use crate::message_store::reput::ReputPolicy;
 /// Concrete CommitLog, ConsumeQueue, scheduler, and broker adapters remain in
 /// the facade crate. This root owns only local-store state and decisions.
 pub struct LocalStoreComposition {
-    config: LocalBackendConfig,
+    config: LocalStoreConfig,
     lifecycle: Arc<LocalStoreLifecycle>,
     query: QueryPolicy,
     reput: ReputPolicy,
@@ -36,7 +36,7 @@ pub struct LocalStoreComposition {
 }
 
 impl LocalStoreComposition {
-    pub fn new(config: LocalBackendConfig) -> Self {
+    pub fn new(config: LocalStoreConfig) -> Self {
         let query = QueryPolicy::new(config.query);
         let reput = ReputPolicy::new(config.reput);
         let cleanup = CleanupPolicy::new(config.cleanup);
@@ -49,7 +49,7 @@ impl LocalStoreComposition {
         }
     }
 
-    pub const fn config(&self) -> &LocalBackendConfig {
+    pub const fn config(&self) -> &LocalStoreConfig {
         &self.config
     }
 
