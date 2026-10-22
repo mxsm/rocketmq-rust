@@ -99,6 +99,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(namesrv):** Make the metrics-collection abort cleanup test deterministic by preventing the unregistration worker from gracefully draining between cancellation and abort, while retaining concurrent SDK collection and broker registration checks ([#11824](https://github.com/mxsm/rocketmq-rust/issues/11824)).
 - **fix(mcp):** Synchronize the standalone query lockfile with `jsonschema 0.59.0` to restore locked query and control CI boundary checks ([#11807](https://github.com/mxsm/rocketmq-rust/issues/11807)).
 - **fix(proxy-cluster):** Make cancellation lifecycle tests deterministic and assert the canonical transport descriptor across shutdown-notification and dropped-reply paths while retaining client and producer cleanup checks ([#11775](https://github.com/mxsm/rocketmq-rust/issues/11775)).
 - **docs(auth):** Describe the built-in in-memory metadata providers, optional JSON snapshots, and `ProviderBundle` extension interfaces, and align the ACL provider examples with the current public API ([#11645](https://github.com/mxsm/rocketmq-rust/issues/11645)).
