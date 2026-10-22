@@ -22,11 +22,11 @@ use cheetah_string::CheetahString;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::mix_all;
 use rocketmq_store_api::TimerStoreMode;
-use rocketmq_store_local::config::backend::LocalBackendConfig;
-use rocketmq_store_local::config::backend::LocalCleanupConfig;
-use rocketmq_store_local::config::backend::LocalQueryConfig;
-use rocketmq_store_local::config::backend::LocalRecoveryConfig;
-use rocketmq_store_local::config::backend::LocalReputConfig;
+use rocketmq_store_local::config::local_store::LocalCleanupConfig;
+use rocketmq_store_local::config::local_store::LocalQueryConfig;
+use rocketmq_store_local::config::local_store::LocalRecoveryConfig;
+use rocketmq_store_local::config::local_store::LocalReputConfig;
+use rocketmq_store_local::config::local_store::LocalStoreConfig;
 use serde::Deserialize;
 
 use super::timer_store_config::TimerStoreConfig;
@@ -1724,8 +1724,8 @@ impl MessageStoreConfig {
         self.timer_policy_snapshot().map(|policy| policy.fingerprint())
     }
 
-    /// Projects the legacy Serde-compatible envelope into local backend settings.
-    pub fn normalized_local_backend_config(&self) -> LocalBackendConfig {
+    /// Projects the legacy Serde-compatible envelope into normalized local-store configuration.
+    pub fn normalized_local_store_config(&self) -> LocalStoreConfig {
         let commit_log_paths = self
             .get_store_path_commit_log()
             .split(mix_all::MULTI_PATH_SPLITTER.as_str())
@@ -1734,7 +1734,7 @@ impl MessageStoreConfig {
             .map(PathBuf::from)
             .collect();
 
-        LocalBackendConfig {
+        LocalStoreConfig {
             store_path_root_dir: PathBuf::from(self.store_path_root_dir.as_str()),
             commit_log_paths,
             store_io_hint_enabled: self.store_io_hint_enable,
@@ -2770,33 +2770,33 @@ mod tests {
     }
 
     #[test]
-    fn normalized_local_backend_config_preserves_legacy_defaults() {
+    fn normalized_local_store_config_preserves_legacy_defaults() {
         let config = MessageStoreConfig::default();
-        let normalized = config.normalized_local_backend_config();
+        let local_store_config = config.normalized_local_store_config();
 
         assert_eq!(
-            normalized.store_path_root_dir,
+            local_store_config.store_path_root_dir,
             std::path::PathBuf::from(config.store_path_root_dir.as_str())
         );
         assert_eq!(
-            normalized.commit_log_paths,
+            local_store_config.commit_log_paths,
             vec![std::path::PathBuf::from(config.get_store_path_commit_log())]
         );
         assert_eq!(
-            normalized.recovery.consume_queue_parallelism,
+            local_store_config.recovery.consume_queue_parallelism,
             config.effective_local_file_consume_queue_recovery_parallelism()
         );
-        assert!(!normalized.recovery.background_index_rebuild_enabled);
-        assert!(normalized.query.message_index_enabled);
-        assert!(!normalized.reput.read_uncommitted);
-        assert_eq!(normalized.cleanup.disk_warning_ratio, 0.90);
-        assert_eq!(normalized.cleanup.disk_clean_forcibly_ratio, 0.85);
-        assert_eq!(normalized.cleanup.disk_max_used_ratio, 0.75);
-        assert!(normalized.cleanup.clean_file_forcibly_enabled);
+        assert!(!local_store_config.recovery.background_index_rebuild_enabled);
+        assert!(local_store_config.query.message_index_enabled);
+        assert!(!local_store_config.reput.read_uncommitted);
+        assert_eq!(local_store_config.cleanup.disk_warning_ratio, 0.90);
+        assert_eq!(local_store_config.cleanup.disk_clean_forcibly_ratio, 0.85);
+        assert_eq!(local_store_config.cleanup.disk_max_used_ratio, 0.75);
+        assert!(local_store_config.cleanup.clean_file_forcibly_enabled);
     }
 
     #[test]
-    fn normalized_local_backend_config_uses_deserialized_alias_values() -> Result<(), serde_json::Error> {
+    fn normalized_local_store_config_uses_deserialized_alias_values() -> Result<(), serde_json::Error> {
         let config: MessageStoreConfig = serde_json::from_str(
             r#"{
                 "store_io_hint_enable": false,
@@ -2808,14 +2808,14 @@ mod tests {
             }"#,
         )?;
 
-        let normalized = config.normalized_local_backend_config();
+        let local_store_config = config.normalized_local_store_config();
 
-        assert_eq!(normalized.commit_log_paths.len(), 2);
-        assert!(!normalized.store_io_hint_enabled);
-        assert_eq!(normalized.cleanup.disk_warning_ratio, 0.35);
-        assert_eq!(normalized.cleanup.disk_clean_forcibly_ratio, 0.85);
-        assert_eq!(normalized.cleanup.disk_max_used_ratio, 0.10);
-        assert!(normalized.reput.read_uncommitted);
+        assert_eq!(local_store_config.commit_log_paths.len(), 2);
+        assert!(!local_store_config.store_io_hint_enabled);
+        assert_eq!(local_store_config.cleanup.disk_warning_ratio, 0.35);
+        assert_eq!(local_store_config.cleanup.disk_clean_forcibly_ratio, 0.85);
+        assert_eq!(local_store_config.cleanup.disk_max_used_ratio, 0.10);
+        assert!(local_store_config.reput.read_uncommitted);
         Ok(())
     }
 
@@ -2844,13 +2844,13 @@ mod tests {
     }
 
     #[test]
-    fn normalized_local_backend_config_keeps_camel_case_and_alias_inputs_equivalent() -> Result<(), serde_json::Error> {
+    fn normalized_local_store_config_keeps_camel_case_and_alias_inputs_equivalent() -> Result<(), serde_json::Error> {
         let camel_case: MessageStoreConfig = serde_json::from_str(r#"{"storeIoHintEnable":false}"#)?;
         let alias: MessageStoreConfig = serde_json::from_str(r#"{"store_io_hint_enable":false}"#)?;
 
         assert_eq!(
-            camel_case.normalized_local_backend_config(),
-            alias.normalized_local_backend_config()
+            camel_case.normalized_local_store_config(),
+            alias.normalized_local_store_config()
         );
         Ok(())
     }

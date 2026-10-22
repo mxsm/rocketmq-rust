@@ -300,8 +300,8 @@ impl LocalFileMessageStore {
             None
         };
         let runtime_scope = StoreRuntimeScope::new(service_context.clone());
-        let local_backend_config = message_store_config.normalized_local_backend_config();
-        let cleanup_policy = LocalCleanupPolicy::new(local_backend_config.cleanup);
+        let local_store_config = message_store_config.normalized_local_store_config();
+        let cleanup_policy = LocalCleanupPolicy::new(local_store_config.cleanup);
         let (delay_level_table, max_delay_level) = parse_delay_level(message_store_config.message_delay_level.as_str());
         let delay_level_table = Arc::new(delay_level_table);
         let running_flags = Arc::new(RunningFlags::new());
@@ -489,7 +489,7 @@ impl LocalFileMessageStore {
             telemetry,
             message_store_config: message_store_config.clone(),
             store_runtime_state,
-            composition: LocalStoreComposition::new(local_backend_config),
+            composition: LocalStoreComposition::new(local_store_config),
             broker_config,
             put_message_hook_list: HookRegistry::new(),
             topic_config_table,
