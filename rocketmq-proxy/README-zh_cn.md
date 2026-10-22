@@ -44,6 +44,10 @@ proxy、auth、client、broker、remoting 集成面的贡献者。
 - `ClusterServiceManager` 将操作转发到配置的 RocketMQ 集群。
 - `LocalServiceManager` 基于内嵌 Broker facade 执行操作。
 
+自动组装的 Cluster 和 Local 服务使用从应用注入的父作用域派生的内部 `dependency_service_context`。
+注入 ServiceManager 或使用自定义 processor 的构造路径不创建这个子作用域。清理按顺序停止依赖健康监控、
+Broker Remoting handler、依赖任务组、认证服务和 Proxy 父任务组，共用一个截止时间并收集清理失败。
+
 ## 协议接口
 
 ### gRPC
