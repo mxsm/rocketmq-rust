@@ -232,7 +232,7 @@ async fn collection_in_progress_allows_real_route_shutdown_and_pending_cleanup()
     finish(fixture).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "current_thread")]
 async fn collection_in_progress_allows_aborted_batch_pending_cleanup() {
     let fixture = fixture(64, Duration::from_secs(30));
     for header in &fixture.headers {
@@ -248,6 +248,9 @@ async fn collection_in_progress_allows_aborted_batch_pending_cleanup() {
     .unwrap();
     fixture.probe.armed.store(true, Ordering::Release);
     assert_eq!(sample(&fixture.samples).unwrap().0, fixture.headers.len());
+    // Keep cancellation and abort on the same executor thread so the worker
+    // cannot gracefully drain between them. SDK collection remains concurrent
+    // on the log exporter's PeriodicReader thread.
     match &*fixture.service.lifecycle.lock() {
         ServiceLifecycle::Running(group) => {
             group.shutdown_now();
