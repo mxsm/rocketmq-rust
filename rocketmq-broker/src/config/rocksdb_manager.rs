@@ -357,7 +357,7 @@ impl RocksDbBrokerConfigManager {
         self.core.store.close();
     }
 
-    pub(crate) fn backend_identity(&self) -> usize {
+    pub(crate) fn store_instance_id(&self) -> usize {
         Arc::as_ptr(&self.core) as usize
     }
 
