@@ -35,6 +35,16 @@ impl BrokerControlPlane {
     }
 }
 
+/// When the slave-sync task copies metadata from the master.
+#[derive(Clone, Copy)]
+enum SlaveSyncScope {
+    /// The broker is configured as a slave for its whole lifetime.
+    ConfiguredSlave,
+    /// The controller assigns the role. Only a slave syncs: a master's name server registration
+    /// stores an empty master address, which the task must not dial.
+    ControllerAssignedSlave,
+}
+
 #[cfg(feature = "otel-metrics")]
 pub(super) fn consumer_lag_runtime_settings(policy: rocketmq_observability::MetricsRuntimePolicy) -> (Duration, usize) {
     (
@@ -540,42 +550,7 @@ impl BrokerRuntime {
                 } else {
                     self.composition.state.update_master_haserver_addr_periodically = true;
                 }
-                let slave_sync_shutdown = Arc::clone(&self.composition.state.shutdown);
-                let slave_synchronize = self.composition.state.slave_synchronize.clone();
-                let config_state = self.composition.state.config_state.clone();
-                let last_sync_time_ms = Arc::new(AtomicU64::new(current_millis()));
-                let cancellation = self.lifecycle.scheduled_tasks.group().cancellation_token();
-                Self::log_scheduled_task_start(
-                    "slave_synchronize",
-                    self.lifecycle.scheduled_tasks.schedule(
-                        ScheduledTaskConfig::fixed_rate_no_overlap("broker.slave.synchronize", Duration::from_secs(3))
-                            .with_initial_delay(Duration::from_secs(10)),
-                        ScheduledExecutionPolicy::default(),
-                        move || {
-                            let ctx = cancellation.clone();
-                            let slave_sync_shutdown = Arc::clone(&slave_sync_shutdown);
-                            let slave_synchronize = slave_synchronize.clone();
-                            let config_state = config_state.clone();
-                            let last_sync_time_ms = Arc::clone(&last_sync_time_ms);
-                            async move {
-                                if ctx.is_cancelled() || slave_sync_shutdown.load(Ordering::Acquire) {
-                                    return;
-                                }
-                                if current_millis() - last_sync_time_ms.load(Ordering::Relaxed) > 10_000 {
-                                    if let Some(slave_synchronize) = slave_synchronize.as_ref() {
-                                        slave_synchronize.sync_all().await;
-                                    }
-                                    last_sync_time_ms.store(current_millis(), Ordering::Relaxed);
-                                }
-                                if config_state.store_snapshot().timer_wheel_enable {
-                                    if let Some(slave_synchronize) = slave_synchronize.as_ref() {
-                                        slave_synchronize.sync_timer_check_point().await
-                                    }
-                                }
-                            }
-                        },
-                    ),
-                );
+                self.schedule_slave_synchronize(SlaveSyncScope::ConfiguredSlave);
             } else {
                 let master_diff_shutdown = Arc::clone(&self.composition.state.shutdown);
                 let master_diff_store = self.composition.data_plane.escape_bridge_owner.store_capability();
@@ -627,6 +602,9 @@ impl BrokerRuntime {
 
         if broker_config.enable_controller_mode {
             self.composition.state.update_master_haserver_addr_periodically = true;
+            // Java's `ReplicasManager#handleSlaveSynchronize` runs the same sync for Controller-mode
+            // slaves and cancels it when the broker becomes master.
+            self.schedule_slave_synchronize(SlaveSyncScope::ControllerAssignedSlave);
         }
 
         if let Some(ref namesrv_address) = broker_config.namesrv_addr.clone() {
@@ -668,6 +646,56 @@ impl BrokerRuntime {
                 ),
             );
         }
+    }
+
+    /// Copies topic configs, consumer offsets, delay offsets, subscription groups and the timer
+    /// checkpoint from the master every 10 s, while `scope` holds and a master address is set.
+    fn schedule_slave_synchronize(&mut self, scope: SlaveSyncScope) {
+        let slave_sync_shutdown = Arc::clone(&self.composition.state.shutdown);
+        let slave_synchronize = self.composition.state.slave_synchronize.clone();
+        let config_state = self.composition.state.config_state.clone();
+        let last_sync_time_ms = Arc::new(AtomicU64::new(current_millis()));
+        let cancellation = self.lifecycle.scheduled_tasks.group().cancellation_token();
+        Self::log_scheduled_task_start(
+            "slave_synchronize",
+            self.lifecycle.scheduled_tasks.schedule(
+                ScheduledTaskConfig::fixed_rate_no_overlap("broker.slave.synchronize", Duration::from_secs(3))
+                    .with_initial_delay(Duration::from_secs(10)),
+                ScheduledExecutionPolicy::default(),
+                move || {
+                    let ctx = cancellation.clone();
+                    let slave_sync_shutdown = Arc::clone(&slave_sync_shutdown);
+                    let slave_synchronize = slave_synchronize.clone();
+                    let config_state = config_state.clone();
+                    let last_sync_time_ms = Arc::clone(&last_sync_time_ms);
+                    async move {
+                        if ctx.is_cancelled() || slave_sync_shutdown.load(Ordering::Acquire) {
+                            return;
+                        }
+                        let syncs = match scope {
+                            SlaveSyncScope::ConfiguredSlave => true,
+                            SlaveSyncScope::ControllerAssignedSlave => {
+                                config_state.store_snapshot().broker_role == BrokerRole::Slave
+                            }
+                        };
+                        if !syncs {
+                            return;
+                        }
+                        if current_millis() - last_sync_time_ms.load(Ordering::Relaxed) > 10_000 {
+                            if let Some(slave_synchronize) = slave_synchronize.as_ref() {
+                                slave_synchronize.sync_all().await;
+                            }
+                            last_sync_time_ms.store(current_millis(), Ordering::Relaxed);
+                        }
+                        if config_state.store_snapshot().timer_wheel_enable {
+                            if let Some(slave_synchronize) = slave_synchronize.as_ref() {
+                                slave_synchronize.sync_timer_check_point().await
+                            }
+                        }
+                    }
+                },
+            ),
+        );
     }
 
     pub(super) fn log_scheduled_task_start(

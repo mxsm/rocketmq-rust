@@ -355,37 +355,48 @@ pub(crate) mod test_support {
     use dashmap::DashMap;
     use rocketmq_model::common::config::TopicConfig;
 
+    /// Encodes one CommitLog record as a replica receives it from its master.
+    pub(crate) fn replicated_message_record(
+        topic: &str,
+        queue_id: i32,
+        queue_offset: i64,
+        physical_offset: i64,
+    ) -> BytesMut {
+        let body = b"body";
+        let total_size =
+            MessageExtEncoder::cal_msg_length(MessageVersion::V1, 0, body.len() as i32, topic.len() as i32, 0);
+        let mut record = BytesMut::with_capacity(total_size as usize);
+        record.put_i32(total_size);
+        record.put_i32(MESSAGE_MAGIC_CODE);
+        record.put_i32(0); // body CRC
+        record.put_i32(queue_id);
+        record.put_i32(0); // flag
+        record.put_i64(queue_offset);
+        record.put_i64(physical_offset);
+        record.put_i32(0); // system flag
+        record.put_i64(0); // born timestamp
+        record.put_bytes(0, 8); // born host
+        record.put_i64(0); // store timestamp
+        record.put_bytes(0, 8); // store host
+        record.put_i32(0); // reconsume times
+        record.put_i64(0); // prepared transaction offset
+        record.put_i32(body.len() as i32);
+        record.put_slice(body);
+        record.put_u8(topic.len() as u8);
+        record.put_slice(topic.as_bytes());
+        record.put_i16(0); // properties length
+        record
+    }
+
     /// Appends CommitLog records the way a replica does: raw bytes, with no dispatch and no queue
     /// offset assignment. Each entry is `(topic, queue_id, queue_offset)`.
     pub(crate) async fn append_replicated_messages(store: &mut LocalFileMessageStore, messages: &[(&str, i32, i64)]) {
         for (topic, queue_id, queue_offset) in messages {
-            let body = b"body";
-            let total_size =
-                MessageExtEncoder::cal_msg_length(MessageVersion::V1, 0, body.len() as i32, topic.len() as i32, 0);
-            let mut record = BytesMut::with_capacity(total_size as usize);
-            record.put_i32(total_size);
-            record.put_i32(MESSAGE_MAGIC_CODE);
-            record.put_i32(0); // body CRC
-            record.put_i32(*queue_id);
-            record.put_i32(0); // flag
-            record.put_i64(*queue_offset);
-            record.put_i64(0); // physical offset
-            record.put_i32(0); // system flag
-            record.put_i64(0); // born timestamp
-            record.put_bytes(0, 8); // born host
-            record.put_i64(0); // store timestamp
-            record.put_bytes(0, 8); // store host
-            record.put_i32(0); // reconsume times
-            record.put_i64(0); // prepared transaction offset
-            record.put_i32(body.len() as i32);
-            record.put_slice(body);
-            record.put_u8(topic.len() as u8);
-            record.put_slice(topic.as_bytes());
-            record.put_i16(0); // properties length
             let start_offset = store.get_max_phy_offset();
+            let record = replicated_message_record(topic, *queue_id, *queue_offset, start_offset);
             store
                 .get_commit_log_mut()
-                .append_data(start_offset, &record, 0, total_size)
+                .append_data(start_offset, &record, 0, record.len() as i32)
                 .await
                 .expect("append replicated message");
         }

@@ -313,6 +313,8 @@ impl LocalFileMessageStore {
                 "rechecked reputFromOffset from {} to {} using dispatch recovery offset {}",
                 previous_reput_from_offset, target_reput_from_offset, dispatch_recovery_offset
             );
+            // The reader may already have spent its start-up wake-up at the old offset.
+            self.reput_message_service.notify_handle().notify_dispatchable();
         }
     }
 
@@ -553,6 +555,13 @@ pub(super) struct ReputNotifyHandle {
 impl ReputNotifyHandle {
     pub(super) fn notify_new_message(&self) {
         self.pending_messages.fetch_add(1, Ordering::Relaxed);
+        self.new_message_notify.notify_one();
+    }
+
+    /// Wakes the reader without counting a local message: replication or a confirm offset made
+    /// more CommitLog data dispatchable. The reader otherwise sleeps until the next local put,
+    /// whereas Java's reput service polls every millisecond.
+    pub(super) fn notify_dispatchable(&self) {
         self.new_message_notify.notify_one();
     }
 }

@@ -7212,6 +7212,125 @@ async fn three_controller_two_broker_controller_mode_sync_state_set_follows_repl
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn three_controller_two_broker_controller_mode_slave_syncs_master_metadata() {
+    let _controller_test_guard = CONTROLLER_INTEGRATION_TEST_LOCK.lock().await;
+    let base_port = allocate_controller_test_base_port();
+    let root = controller_cluster_root("controller-mode-slave-metadata-sync");
+
+    let (controllers, controller_peers) = start_controller_cluster(base_port, &root).await;
+    let controller_addrs = controller_addr_list(&controller_peers);
+    let controller_leader_manager = controllers
+        .iter()
+        .find(|manager| manager.is_leader())
+        .expect("controller cluster should elect a leader")
+        .clone();
+
+    let mut broker_a = new_controller_mode_runtime(
+        &root,
+        "controller-mode-broker",
+        base_port + 21,
+        base_port + 22,
+        controller_addrs.clone(),
+    );
+    let mut broker_b = new_controller_mode_runtime(
+        &root,
+        "controller-mode-broker",
+        base_port + 31,
+        base_port + 32,
+        controller_addrs,
+    );
+
+    initialize_controller_mode_broker(&mut broker_a, "broker A").await;
+    initialize_controller_mode_broker(&mut broker_b, "broker B").await;
+    broker_a.start().await.expect("broker A should start");
+    broker_b.start().await.expect("broker B should start");
+    bootstrap_broker_against_controller(&mut broker_a, &controller_leader_manager).await;
+    broker_a
+        .composition
+        .state
+        .build_controller_runtime()
+        .send_heartbeat()
+        .await;
+    let broker_a_controller_id = broker_a
+        .composition
+        .state
+        .replicas_manager()
+        .expect("broker A replicas manager should exist after bootstrap")
+        .broker_controller_id();
+    wait_until(
+        Duration::from_secs(5),
+        || {
+            controller_leader_manager.heartbeat_manager().is_broker_active(
+                "controller-test-cluster",
+                "controller-mode-broker",
+                broker_a_controller_id as i64,
+            )
+        },
+        "controller leader to mark broker A active",
+    )
+    .await;
+    bootstrap_broker_against_controller(&mut broker_b, &controller_leader_manager).await;
+
+    wait_until(
+        Duration::from_secs(10),
+        || {
+            let manager_a = broker_a.composition.state.replicas_manager();
+            let manager_b = broker_b.composition.state.replicas_manager();
+            match (manager_a, manager_b) {
+                (Some(manager_a), Some(manager_b)) => {
+                    manager_a.register_state() == RegisterState::Registered
+                        && manager_b.register_state() == RegisterState::Registered
+                        && manager_a.master_broker_id().is_some()
+                        && manager_a.master_broker_id() == manager_b.master_broker_id()
+                }
+                _ => false,
+            }
+        },
+        "brokers to finish controller bootstrap",
+    )
+    .await;
+
+    let manager_a = broker_a
+        .composition
+        .state
+        .replicas_manager()
+        .expect("broker A replicas manager should exist");
+    let master_broker_id = manager_a.master_broker_id().expect("controller should elect a master");
+    let broker_a_is_master = manager_a.broker_controller_id() == master_broker_id;
+    let (master_broker, slave_broker) = if broker_a_is_master {
+        (&broker_a, &broker_b)
+    } else {
+        (&broker_b, &broker_a)
+    };
+
+    // A topic created on the master must reach the slave, so that a promoted slave can serve it.
+    let topic = CheetahString::from_static_str("controller-synced-topic");
+    master_broker
+        .composition
+        .state
+        .topic_config_manager()
+        .update_topic_config(TopicConfig::with_queues("controller-synced-topic", 4, 4), 0);
+    wait_until(
+        Duration::from_secs(30),
+        || {
+            slave_broker
+                .composition
+                .state
+                .topic_config_manager()
+                .select_topic_config(&topic)
+                .is_some()
+        },
+        "the slave to sync the new topic config from its master",
+    )
+    .await;
+
+    broker_a.shutdown().await;
+    broker_b.shutdown().await;
+    shutdown_controller_cluster(&controllers).await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn three_controller_two_broker_controller_mode_failover_and_rejoin() {
     let _controller_test_guard = CONTROLLER_INTEGRATION_TEST_LOCK.lock().await;
     let base_port = allocate_controller_test_base_port();

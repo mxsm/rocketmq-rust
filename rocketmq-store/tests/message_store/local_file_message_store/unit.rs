@@ -356,6 +356,103 @@ async fn wave_b_managed_store_bootstraps_starts_and_creates_first_queue_segments
         .is_file());
 }
 
+#[tokio::test]
+async fn replicated_append_is_dispatched_without_a_local_put() {
+    let temp_dir = tempdir().expect("temporary Store root");
+    let mut store = new_configured_test_store(
+        &temp_dir,
+        MessageStoreConfig {
+            message_index_enable: false,
+            timer_wheel_enable: false,
+            enable_consume_queue_ext: false,
+            // No HA listener: the test appends through the replica handle itself.
+            duplication_enable: true,
+            flush_disk_type: FlushDiskType::AsyncFlush,
+            ..MessageStoreConfig::default()
+        },
+    );
+    let topic = CheetahString::from_static_str("replicated-dispatch");
+    store.init().await.expect("initialize Store");
+    assert!(store.load().await, "load Store");
+    store.start().await.expect("start Store");
+
+    let record = crate::ha::test_support::replicated_message_record(topic.as_str(), 0, 0, 0);
+    assert!(store
+        .ha_replica_store_handle()
+        .append_replica_data(0, &record, 0, record.len() as i32)
+        .await
+        .expect("append replicated record"));
+
+    let queue_offset = wait_for_max_offset_in_queue(&store, &topic, 1).await;
+    store.shutdown().await;
+
+    assert_eq!(queue_offset, 1);
+}
+
+#[tokio::test]
+async fn replicated_confirm_offset_wakes_dispatch_of_confirmed_data() {
+    let temp_dir = tempdir().expect("temporary Store root");
+    let mut store = new_owned_test_store_with_broker(
+        &temp_dir,
+        MessageStoreConfig {
+            message_index_enable: false,
+            timer_wheel_enable: false,
+            enable_consume_queue_ext: false,
+            // No HA listener: the test appends through the replica handle itself.
+            duplication_enable: true,
+            flush_disk_type: FlushDiskType::AsyncFlush,
+            ..MessageStoreConfig::default()
+        },
+        // Dispatch stops at the published confirm offset, as on a Controller-mode slave.
+        StoreRuntimeConfig {
+            duplication_enable: true,
+            ..StoreRuntimeConfig::default()
+        },
+    );
+    let topic = CheetahString::from_static_str("replicated-confirm-dispatch");
+    store.init().await.expect("initialize Store");
+    assert!(store.load().await, "load Store");
+    store.start().await.expect("start Store");
+
+    let replica = store.ha_replica_store_handle();
+    let mut records = crate::ha::test_support::replicated_message_record(topic.as_str(), 0, 0, 0);
+    let first_end = records.len() as i64;
+    records.extend_from_slice(&crate::ha::test_support::replicated_message_record(
+        topic.as_str(),
+        0,
+        1,
+        first_end,
+    ));
+    // A single append wakes the reader once, so no stored wake-up outlives the first dispatch.
+    assert!(replica
+        .append_replica_data(0, &records, 0, records.len() as i32)
+        .await
+        .expect("append replicated records"));
+
+    // The reader dispatches the confirmed record and then sleeps, with the second one unconfirmed.
+    replica.publish_confirm_offset(first_end);
+    let first_dispatched = wait_for_max_offset_in_queue(&store, &topic, 1).await;
+    replica.publish_confirm_offset(records.len() as i64);
+    let second_dispatched = wait_for_max_offset_in_queue(&store, &topic, 2).await;
+    store.shutdown().await;
+
+    assert_eq!(first_dispatched, 1);
+    assert_eq!(second_dispatched, 2);
+}
+
+/// Polls queue 0 of `topic` for up to two seconds until it holds `expected` messages.
+async fn wait_for_max_offset_in_queue(store: &LocalFileMessageStore, topic: &CheetahString, expected: i64) -> i64 {
+    let mut queue_offset = 0;
+    for _ in 0..100 {
+        queue_offset = store.get_max_offset_in_queue(topic, 0);
+        if queue_offset == expected {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    queue_offset
+}
+
 #[cfg(any(target_os = "linux", windows))]
 #[tokio::test]
 async fn wave_b_normal_shutdown_preserves_segments_until_explicit_durable_destroy() {
@@ -4628,6 +4725,8 @@ fn reput_once_initializes_from_minimum_dispatcher_progress() {
 
 #[test]
 fn do_recheck_reput_offset_from_dispatchers_rewinds_to_dispatched_commitlog_offset() {
+    use futures_util::FutureExt;
+
     let temp_dir = tempdir().unwrap();
     let mut store = new_controller_test_store(
         &temp_dir,
@@ -4655,6 +4754,8 @@ fn do_recheck_reput_offset_from_dispatchers_rewinds_to_dispatched_commitlog_offs
                 ..DispatchRequest::default()
             });
     }
+    let reput_wakeup = Arc::clone(&store.reput_message_service.new_message_notify);
+    assert!(reput_wakeup.notified().now_or_never().is_none());
 
     store.do_recheck_reput_offset_from_dispatchers();
 
@@ -4665,6 +4766,8 @@ fn do_recheck_reput_offset_from_dispatchers_rewinds_to_dispatched_commitlog_offs
         .expect("reput offset should exist")
         .load(Ordering::SeqCst);
     assert_eq!(reput_from_offset, 164);
+    // A started reader may already have gone idle at the old offset.
+    assert!(reput_wakeup.notified().now_or_never().is_some());
 }
 
 #[test]
