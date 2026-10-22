@@ -72,7 +72,7 @@ struct ProxyRuntimeDependencies {
     service_manager: Arc<dyn ServiceManager>,
     broker_remoting_handler:
         Option<Arc<dyn ProxyRemotingRequestHandler<Response = rocketmq_transport::api::EmbeddedDispatchResult>>>,
-    context: Option<ChildServiceContext>,
+    dependency_service_context: Option<ChildServiceContext>,
 }
 
 #[derive(Debug)]
@@ -277,7 +277,7 @@ impl ProxyRuntimeBuilder {
             Some(service_manager) => ProxyRuntimeDependencies {
                 service_manager,
                 broker_remoting_handler: self.broker_remoting_handler,
-                context: None,
+                dependency_service_context: None,
             },
             None => build_proxy_runtime_dependencies(&self.config, &service_context, telemetry.clone())?,
         };
@@ -323,7 +323,7 @@ impl ProxyRuntimeBuilder {
             transport_telemetry,
             grpc_guards,
             dependencies.broker_remoting_handler,
-            dependencies.context,
+            dependencies.dependency_service_context,
             service_context,
         );
         runtime.grpc_service = runtime
@@ -346,7 +346,7 @@ pub struct ProxyRuntime<P = DefaultMessagingProcessor> {
     transport_telemetry: rocketmq_transport::api::TransportTelemetry,
     broker_remoting_handler:
         Option<Arc<dyn ProxyRemotingRequestHandler<Response = rocketmq_transport::api::EmbeddedDispatchResult>>>,
-    backend_context: Option<ChildServiceContext>,
+    dependency_service_context: Option<ChildServiceContext>,
     service_context: ChildServiceContext,
 }
 
@@ -413,7 +413,7 @@ where
         broker_remoting_handler: Option<
             Arc<dyn ProxyRemotingRequestHandler<Response = rocketmq_transport::api::EmbeddedDispatchResult>>,
         >,
-        backend_context: Option<ChildServiceContext>,
+        dependency_service_context: Option<ChildServiceContext>,
         service_context: ChildServiceContext,
     ) -> ProxyResult<Self> {
         config.dependency_health.validate()?;
@@ -430,7 +430,7 @@ where
             transport_telemetry,
             grpc_guards,
             broker_remoting_handler,
-            backend_context,
+            dependency_service_context,
             service_context,
         ))
     }
@@ -453,7 +453,7 @@ where
         broker_remoting_handler: Option<
             Arc<dyn ProxyRemotingRequestHandler<Response = rocketmq_transport::api::EmbeddedDispatchResult>>,
         >,
-        backend_context: Option<ChildServiceContext>,
+        dependency_service_context: Option<ChildServiceContext>,
         service_context: ChildServiceContext,
     ) -> Self {
         let config = Arc::new(config);
@@ -478,7 +478,7 @@ where
             auth_metadata_service,
             transport_telemetry,
             broker_remoting_handler,
-            backend_context,
+            dependency_service_context,
             service_context,
         }
     }
@@ -560,7 +560,7 @@ where
             auth_metadata_service,
             transport_telemetry,
             broker_remoting_handler,
-            backend_context,
+            dependency_service_context,
             service_context,
         } = self;
         let broker_remoting_handler_for_shutdown = broker_remoting_handler.clone();
@@ -667,7 +667,7 @@ where
             listener_result,
             Some(&mut dependency_health),
             broker_remoting_handler_for_shutdown.as_ref(),
-            backend_context.as_ref(),
+            dependency_service_context.as_ref(),
             auth_runtime_for_shutdown.as_ref(),
             &auth_context,
             &service_context,
@@ -695,7 +695,7 @@ async fn finalize_proxy_run(
     broker_remoting_handler: Option<
         &Arc<dyn ProxyRemotingRequestHandler<Response = rocketmq_transport::api::EmbeddedDispatchResult>>,
     >,
-    backend_context: Option<&ChildServiceContext>,
+    dependency_service_context: Option<&ChildServiceContext>,
     auth_runtime: Option<&ProxyAuthRuntime>,
     auth_context: &ChildServiceContext,
     service_context: &ChildServiceContext,
@@ -704,7 +704,7 @@ async fn finalize_proxy_run(
     let cleanup_result = shutdown_proxy_components(
         dependency_health,
         broker_remoting_handler,
-        backend_context,
+        dependency_service_context,
         auth_runtime,
         auth_context,
         service_context,
@@ -735,7 +735,7 @@ async fn shutdown_proxy_components(
     broker_remoting_handler: Option<
         &Arc<dyn ProxyRemotingRequestHandler<Response = rocketmq_transport::api::EmbeddedDispatchResult>>,
     >,
-    backend_context: Option<&ChildServiceContext>,
+    dependency_service_context: Option<&ChildServiceContext>,
     auth_runtime: Option<&ProxyAuthRuntime>,
     auth_context: &ChildServiceContext,
     service_context: &ChildServiceContext,
@@ -757,8 +757,8 @@ async fn shutdown_proxy_components(
         }
     }
 
-    if let Some(backend_context) = backend_context {
-        let report = backend_context.task_group().shutdown_until(deadline).await;
+    if let Some(dependency_service_context) = dependency_service_context {
+        let report = dependency_service_context.task_group().shutdown_until(deadline).await;
         if let Err(error) = require_healthy_component_shutdown("Proxy backend", report) {
             failures.push(error);
         }
@@ -806,18 +806,18 @@ fn build_proxy_runtime_dependencies(
                 cluster_config.broker_cluster_name = config.auth.cluster_name.clone();
             }
             let signer = build_cluster_acl_signer(config)?.map(|signer| signer.into_outbound_signer());
-            let cluster_context = service_context.component("cluster-backend");
+            let dependency_service_context = service_context.component("cluster-backend");
             let client = Arc::new(ClusterCommandGateway::new(
                 cluster_config,
                 signer,
-                &cluster_context,
+                &dependency_service_context,
                 telemetry_handle,
             )?);
             let service_client: Arc<dyn ClusterClient> = client.clone();
             Ok(ProxyRuntimeDependencies {
                 service_manager: Arc::new(ClusterServiceManager::from_cluster_client(service_client)),
                 broker_remoting_handler: Some(Arc::new(ClusterBrokerRemotingAdapter::new(client))),
-                context: Some(cluster_context),
+                dependency_service_context: Some(dependency_service_context),
             })
         }
         #[cfg(not(feature = "cluster-mode"))]
@@ -826,17 +826,17 @@ fn build_proxy_runtime_dependencies(
         )),
         #[cfg(feature = "local-mode")]
         ProxyMode::Local => {
-            let local_context = service_context.component("local-backend");
+            let dependency_service_context = service_context.component("local-backend");
             let (manager, client) = local_components_from_config_with_service_context(
                 config.local.clone(),
                 config.local.query_assignment_strategy_name.clone(),
-                &local_context,
+                &dependency_service_context,
                 telemetry_handle,
             )?;
             Ok(ProxyRuntimeDependencies {
                 service_manager: Arc::new(manager),
                 broker_remoting_handler: Some(Arc::new(LocalBrokerRemotingAdapter::new(client))),
-                context: Some(local_context),
+                dependency_service_context: Some(dependency_service_context),
             })
         }
         #[cfg(not(feature = "local-mode"))]
@@ -868,7 +868,7 @@ mod tests {
     use crate::service::DefaultMetadataService;
 
     struct ShutdownOrderRemotingHandler {
-        context: rocketmq_runtime::ChildServiceContext,
+        dependency_service_context: rocketmq_runtime::ChildServiceContext,
         called: Arc<AtomicBool>,
     }
 
@@ -887,7 +887,11 @@ mod tests {
             _deadline: rocketmq_runtime::ShutdownDeadline,
         ) -> rocketmq_proxy_core::ProxyServiceFuture<'_, ()> {
             Box::pin(async move {
-                assert!(!self.context.task_group().cancellation_token().is_cancelled());
+                assert!(!self
+                    .dependency_service_context
+                    .task_group()
+                    .cancellation_token()
+                    .is_cancelled());
                 self.called.store(true, Ordering::Release);
                 Ok(())
             })
@@ -957,11 +961,11 @@ mod tests {
     async fn early_startup_error_cleans_started_backend_task_group() {
         let runtime_context = RuntimeContext::from_current("proxy-startup-rollback-test");
         let service_context = runtime_context.service_context("proxy-startup-rollback");
-        let backend_context = service_context.component("backend");
+        let dependency_service_context = service_context.component("backend");
         let auth_context = service_context.component("auth");
-        let cancellation = backend_context.task_group().cancellation_token();
+        let cancellation = dependency_service_context.task_group().cancellation_token();
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
-        backend_context
+        dependency_service_context
             .spawn_service("proxy.test.backend-worker", async move {
                 let _ = started_tx.send(());
                 cancellation.cancelled().await;
@@ -978,7 +982,7 @@ mod tests {
         let broker_remoting_handler: Arc<
             dyn ProxyRemotingRequestHandler<Response = rocketmq_transport::api::EmbeddedDispatchResult>,
         > = Arc::new(ShutdownOrderRemotingHandler {
-            context: backend_context.clone(),
+            dependency_service_context: dependency_service_context.clone(),
             called: Arc::clone(&handler_shutdown_called),
         });
 
@@ -988,7 +992,7 @@ mod tests {
             )),
             Some(&mut health),
             Some(&broker_remoting_handler),
-            Some(&backend_context),
+            Some(&dependency_service_context),
             None,
             &auth_context,
             &service_context,
@@ -1010,7 +1014,7 @@ mod tests {
             "successful rollback must preserve the primary startup error"
         );
         assert_eq!(
-            backend_context.task_group().task_count(),
+            dependency_service_context.task_group().task_count(),
             0,
             "transactional rollback must leave no backend task behind"
         );

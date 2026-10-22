@@ -47,6 +47,11 @@ The runtime is assembled by `ProxyRuntimeBuilder`:
 - `ClusterServiceManager` forwards work to the configured RocketMQ cluster.
 - `LocalServiceManager` runs against an embedded broker facade.
 
+Automatically assembled Cluster and Local services use an internal `dependency_service_context` derived from
+the application's injected parent context. Injected service managers and custom processors do not create this child
+context. Cleanup stops dependency health, the Broker Remoting handler, the dependency task group, authentication,
+and the parent Proxy task group, in that order, using one shared deadline and collecting cleanup failures.
+
 ## Protocol Surface
 
 ### gRPC
