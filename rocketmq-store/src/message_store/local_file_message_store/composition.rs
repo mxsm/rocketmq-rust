@@ -702,6 +702,7 @@ impl LocalFileMessageStore {
             controller_epoch_start_offset: self.controller_epoch_start_offset.clone(),
             commit_log: self.commit_log.replica_handle(),
             consume_queue_store: self.consume_queue_store.clone(),
+            reput_notify: self.reput_message_service.notify_handle(),
         }
     }
 

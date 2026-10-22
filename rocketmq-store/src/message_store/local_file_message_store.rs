@@ -299,7 +299,8 @@ enum PendingHAService {
 /// The handle deliberately excludes queue, index, dispatcher, and lifecycle
 /// mutation APIs while retaining replica append/read, confirm publication, and
 /// replication progress state shared by the owning Store. Its one queue operation
-/// rebuilds the queue offset table when the Store becomes master.
+/// rebuilds the queue offset table when the Store becomes master, and replica appends and
+/// confirm offsets wake the reput service so that replicated data is dispatched.
 #[derive(Clone)]
 pub(crate) struct HAReplicaStoreHandle {
     message_store_config: Arc<MessageStoreConfig>,
@@ -311,6 +312,7 @@ pub(crate) struct HAReplicaStoreHandle {
     controller_epoch_start_offset: Arc<AtomicI64>,
     commit_log: CommitLogReplicaHandle,
     consume_queue_store: ConsumeQueueStore,
+    reput_notify: ReputNotifyHandle,
 }
 
 impl HAReplicaStoreHandle {
@@ -415,7 +417,9 @@ impl HAReplicaStoreHandle {
             .commit_log
             .append_data(start_offset, data, data_start, data_length)
             .await?;
-        if !appended {
+        if appended {
+            self.reput_notify.notify_dispatchable();
+        } else {
             error!(
                 "HA replica append failed, physical offset={}, data length={}",
                 start_offset, data_length
@@ -427,6 +431,8 @@ impl HAReplicaStoreHandle {
     #[inline]
     pub(crate) fn publish_confirm_offset(&self, phy_offset: i64) {
         self.commit_log.publish_confirm_offset(phy_offset);
+        // In controller mode the reput service stops at the confirm offset.
+        self.reput_notify.notify_dispatchable();
     }
 }
 

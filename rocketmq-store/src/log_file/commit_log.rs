@@ -1389,7 +1389,9 @@ impl CommitLog {
     }
 
     async fn handle_ha(&self, put_message_result: &AppendMessageResult, need_ack_nums: i32) -> PutMessageStatus {
-        if need_ack_nums <= 1 {
+        // As in Java, only 0 and 1 skip the wait: `ALL_ACK_IN_SYNC_STATE_SET` (-1) waits for every
+        // member of the sync state set.
+        if (0..=1).contains(&need_ack_nums) {
             return PutMessageStatus::PutOk;
         }
         let next_offset = put_message_result.wrote_offset + put_message_result.wrote_bytes as i64;
@@ -3281,6 +3283,40 @@ mod tests {
         assert_eq!(accepted.put_message_status(), PutMessageStatus::PutOk);
 
         let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn all_ack_write_waits_for_every_sync_state_set_member() {
+        use std::collections::HashSet;
+
+        use crate::ha::general_ha_service::GeneralHAService;
+
+        let root = tempfile::tempdir().unwrap();
+        let message_store_config = MessageStoreConfig {
+            slave_timeout: 50,
+            ..MessageStoreConfig::default()
+        };
+        let mut store =
+            new_test_message_store_with_config(root.path(), message_store_config, BrokerRole::SyncMaster, true);
+        store.init().await.expect("init message store");
+        let auto_switch = store
+            .get_ha_service()
+            .and_then(GeneralHAService::auto_switch_service)
+            .expect("controller mode uses the auto-switch HA service");
+        // Broker 1 is in the sync state set but never acknowledges.
+        auto_switch.sync_controller_sync_state_set(0, &HashSet::from([0, 1]));
+        assert!(auto_switch.change_to_master(1).await.expect("change to master"));
+        let authority = WriteAuthority::try_new(0, MasterEpoch::try_from(1).unwrap()).unwrap();
+        let token = WriteLeaseToken::try_new(authority, 1).unwrap();
+        assert!(store
+            .get_commit_log()
+            .install_controller_write_lease(token, Duration::from_secs(5)));
+
+        let mut message = append_test_message("all-ack-topic", b"all-ack");
+        message.set_wait_store_msg_ok(true);
+        let result = store.get_commit_log().put_message(message).await;
+
+        assert_eq!(result.put_message_status(), PutMessageStatus::FlushSlaveTimeout);
     }
 
     #[tokio::test]
