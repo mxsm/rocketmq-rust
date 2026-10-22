@@ -60,9 +60,9 @@ use crate::service::ServiceManager;
 use crate::session::ClientSessionRegistry;
 
 #[derive(Clone)]
-struct LifecycleReadiness {
+struct ListenerReadinessGate {
     lifecycle: ServiceLifecycle,
-    remaining_listeners: Arc<AtomicUsize>,
+    remaining_listener_count: Arc<AtomicUsize>,
 }
 
 /// Dependencies used to assemble a Proxy runtime.
@@ -92,24 +92,24 @@ impl std::error::Error for ProxyShutdownFailures {
     }
 }
 
-impl LifecycleReadiness {
-    fn new(lifecycle: ServiceLifecycle, listener_count: usize) -> Self {
+impl ListenerReadinessGate {
+    fn new(lifecycle: ServiceLifecycle, required_listener_count: usize) -> Self {
         Self {
             lifecycle,
-            remaining_listeners: Arc::new(AtomicUsize::new(listener_count)),
+            remaining_listener_count: Arc::new(AtomicUsize::new(required_listener_count)),
         }
     }
 
     fn listener_bound(&self) -> ProxyResult<()> {
-        let previous = self
-            .remaining_listeners
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
-                remaining.checked_sub(1)
+        let previous_remaining_count = self
+            .remaining_listener_count
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |remaining_count| {
+                remaining_count.checked_sub(1)
             })
             .map_err(|_| ProxyError::Transport {
                 message: "Proxy listener readiness was published more than once".to_string(),
             })?;
-        if previous == 1 {
+        if previous_remaining_count == 1 {
             self.lifecycle
                 .mark_ready()
                 .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
@@ -118,9 +118,9 @@ impl LifecycleReadiness {
     }
 }
 
-fn publish_listener_ready(readiness: Option<LifecycleReadiness>) -> ProxyResult<()> {
-    match readiness {
-        Some(readiness) => readiness.listener_bound(),
+fn publish_listener_ready(readiness_gate: Option<ListenerReadinessGate>) -> ProxyResult<()> {
+    match readiness_gate {
+        Some(readiness_gate) => readiness_gate.listener_bound(),
         None => Ok(()),
     }
 }
@@ -600,17 +600,17 @@ where
                 .start(health_source, &service_context, lifecycle.clone())
                 .await?;
             let grpc_service = grpc_service.with_auth_runtime(effective_auth_runtime.clone());
-            let readiness = lifecycle
-                .map(|lifecycle| LifecycleReadiness::new(lifecycle, if config.remoting.enabled { 2 } else { 1 }));
+            let readiness_gate = lifecycle
+                .map(|lifecycle| ListenerReadinessGate::new(lifecycle, if config.remoting.enabled { 2 } else { 1 }));
             let serve_result = if !config.remoting.enabled {
-                let grpc_ready = readiness;
+                let grpc_readiness_gate = readiness_gate;
                 let grpc_context = service_context.component("grpc-ingress");
                 server::serve_with_report_with_service_context_and_ready(
                     config,
                     grpc_service,
                     shared_shutdown.clone(),
                     grpc_context,
-                    move || publish_listener_ready(grpc_ready),
+                    move || publish_listener_ready(grpc_readiness_gate),
                 )
                 .await
                 .and_then(require_healthy_grpc_shutdown)
@@ -627,15 +627,15 @@ where
                 let grpc_config = config.clone();
                 let remoting_config = config;
                 let remoting_auth_runtime = effective_auth_runtime;
-                let grpc_ready = readiness.clone();
-                let remoting_ready = readiness;
+                let grpc_readiness_gate = readiness_gate.clone();
+                let remoting_readiness_gate = readiness_gate;
                 let grpc_future = async move {
                     server::serve_with_report_with_service_context_and_ready(
                         grpc_config,
                         grpc_service,
                         grpc_shutdown,
                         grpc_service_context,
-                        move || publish_listener_ready(grpc_ready),
+                        move || publish_listener_ready(grpc_readiness_gate),
                     )
                     .await
                     .and_then(require_healthy_grpc_shutdown)
@@ -652,7 +652,7 @@ where
                         drain,
                         application_remoting_command_factory(),
                         remoting_shutdown,
-                        move || publish_listener_ready(remoting_ready),
+                        move || publish_listener_ready(remoting_readiness_gate),
                     )
                     .await
                     .and_then(require_healthy_remoting_shutdown)
@@ -859,7 +859,7 @@ mod tests {
     use rocketmq_runtime::ServiceLifecycleState;
 
     use super::finalize_proxy_run;
-    use super::LifecycleReadiness;
+    use super::ListenerReadinessGate;
     use super::ProxyRuntime;
     use super::ProxyRuntimeBuilder;
     use crate::config::ProxyConfig;
@@ -909,24 +909,24 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_readiness_waits_for_every_required_listener() {
+    fn listener_readiness_gate_waits_for_every_required_listener() {
         let lifecycle = lifecycle();
-        let readiness = LifecycleReadiness::new(lifecycle.clone(), 2);
+        let readiness_gate = ListenerReadinessGate::new(lifecycle.clone(), 2);
 
-        readiness.listener_bound().expect("first listener binds");
+        readiness_gate.listener_bound().expect("first listener binds");
         assert_eq!(lifecycle.state(), ServiceLifecycleState::Starting);
-        readiness.listener_bound().expect("second listener binds");
+        readiness_gate.listener_bound().expect("second listener binds");
         assert_eq!(lifecycle.state(), ServiceLifecycleState::Ready);
-        assert!(readiness.listener_bound().is_err());
+        assert!(readiness_gate.listener_bound().is_err());
     }
 
     #[test]
-    fn lifecycle_readiness_fails_after_shutdown_has_started() {
+    fn listener_readiness_gate_fails_after_shutdown_has_started() {
         let lifecycle = lifecycle();
-        let readiness = LifecycleReadiness::new(lifecycle.clone(), 1);
+        let readiness_gate = ListenerReadinessGate::new(lifecycle.clone(), 1);
         lifecycle.request_shutdown(rocketmq_runtime::ShutdownReason::Internal);
 
-        assert!(readiness.listener_bound().is_err());
+        assert!(readiness_gate.listener_bound().is_err());
         assert_eq!(lifecycle.state(), ServiceLifecycleState::Draining);
     }
 
