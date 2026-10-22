@@ -59,6 +59,12 @@ use crate::service::MetadataService;
 use crate::service::ServiceManager;
 use crate::session::ClientSessionRegistry;
 
+/// Aggregates listener startup reports before requesting lifecycle readiness.
+///
+/// Clones share one countdown. Each enabled listener must report once through
+/// [`Self::listener_bound`]; the counter tracks reports, not listener identities.
+/// Reports do not wait for other listeners. Dependency health and maintenance
+/// readiness are managed separately by the lifecycle.
 #[derive(Clone)]
 struct ListenerReadinessGate {
     lifecycle: ServiceLifecycle,
@@ -93,6 +99,10 @@ impl std::error::Error for ProxyShutdownFailures {
 }
 
 impl ListenerReadinessGate {
+    /// Creates a gate expecting `required_listener_count` listener reports.
+    ///
+    /// The Proxy runtime supplies one report for gRPC alone or two for gRPC plus
+    /// Remoting. Cloned gates share the remaining report count.
     fn new(lifecycle: ServiceLifecycle, required_listener_count: usize) -> Self {
         Self {
             lifecycle,
@@ -100,6 +110,16 @@ impl ListenerReadinessGate {
         }
     }
 
+    /// Records one bound listener without waiting for the remaining listeners.
+    ///
+    /// The final expected report calls [`ServiceLifecycle::mark_ready`].
+    /// Intermediate reports only decrement the countdown and do not check the
+    /// lifecycle state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the countdown is exhausted or if the final report's
+    /// readiness transition is rejected, such as after shutdown or failure begins.
     fn listener_bound(&self) -> ProxyResult<()> {
         let previous_remaining_count = self
             .remaining_listener_count
@@ -118,6 +138,13 @@ impl ListenerReadinessGate {
     }
 }
 
+/// Publishes a listener startup report when a readiness gate is present.
+///
+/// An absent gate is a successful no-op that leaves the lifecycle unchanged.
+///
+/// # Errors
+///
+/// Propagates errors from [`ListenerReadinessGate::listener_bound`].
 fn publish_listener_ready(readiness_gate: Option<ListenerReadinessGate>) -> ProxyResult<()> {
     match readiness_gate {
         Some(readiness_gate) => readiness_gate.listener_bound(),
