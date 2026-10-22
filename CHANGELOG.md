@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(proxy):** Rename the private listener readiness gate to `ListenerReadinessGate`, document its reporting contract, and align the production-readiness source policy with the renamed counter ([#11828](https://github.com/mxsm/rocketmq-rust/issues/11828)).
 - **refactor(proxy):** Rename optional Broker Remoting handler wiring to `broker_remoting_handler` and add `ProxyRuntimeBuilder::with_broker_remoting_handler`; adapter selection, dispatch behavior, diagnostics, and shutdown ordering are unchanged ([#11812](https://github.com/mxsm/rocketmq-rust/issues/11812)).
 
 - **chore(version):** Advance the shared Cargo workspace and internal dependency requirements to `1.1.0` for continued development ([#11780](https://github.com/mxsm/rocketmq-rust/issues/11780)).
