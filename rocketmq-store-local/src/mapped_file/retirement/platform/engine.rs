@@ -41,48 +41,55 @@ pub(super) struct NamespaceSnapshot {
     pub(super) tombstone: EntryObservation,
 }
 
+/// Internal result of one filesystem namespace I/O step performed by a [`NamespaceIo`] backend.
+///
+/// The carrier holds the [`NamespaceFailure`] diagnostics (operation, failure class, and raw OS
+/// code) together with the platform classifier's retry decision. It never leaves the platform
+/// module: it is converted into a [`NamespaceOperationResult`], becoming `Retryable` when
+/// `is_retryable` is set and `Failed` otherwise. Neither outcome proves that the namespace mutation
+/// happened or that the entry is absent.
 #[derive(Debug)]
-pub(super) struct BackendFailure {
-    failure: NamespaceFailure,
-    retryable: bool,
+pub(super) struct NamespaceIoFailure {
+    details: NamespaceFailure,
+    is_retryable: bool,
 }
 
-impl BackendFailure {
+impl NamespaceIoFailure {
     pub(super) const fn retryable(
         operation: NamespaceOperation,
         class: NamespaceFailureClass,
         raw_code: Option<i32>,
     ) -> Self {
         Self {
-            failure: NamespaceFailure::new(operation, class, raw_code),
-            retryable: true,
+            details: NamespaceFailure::new(operation, class, raw_code),
+            is_retryable: true,
         }
     }
 
-    pub(super) const fn failed(
+    pub(super) const fn non_retryable(
         operation: NamespaceOperation,
         class: NamespaceFailureClass,
         raw_code: Option<i32>,
     ) -> Self {
         Self {
-            failure: NamespaceFailure::new(operation, class, raw_code),
-            retryable: false,
+            details: NamespaceFailure::new(operation, class, raw_code),
+            is_retryable: false,
         }
     }
 
-    pub(super) fn into_result(self) -> NamespaceOperationResult {
-        if self.retryable {
-            NamespaceOperationResult::Retryable(self.failure)
+    pub(super) fn into_operation_result(self) -> NamespaceOperationResult {
+        if self.is_retryable {
+            NamespaceOperationResult::Retryable(self.details)
         } else {
-            NamespaceOperationResult::Failed(self.failure)
+            NamespaceOperationResult::Failed(self.details)
         }
     }
 
     pub(super) fn into_verification_error(self) -> NamespaceOperationResult {
-        if self.retryable {
-            NamespaceOperationResult::Retryable(self.failure)
+        if self.is_retryable {
+            NamespaceOperationResult::Retryable(self.details)
         } else {
-            NamespaceOperationResult::Failed(self.failure)
+            NamespaceOperationResult::Failed(self.details)
         }
     }
 }
@@ -93,13 +100,13 @@ pub(super) trait NamespaceIo {
         &mut self,
         expected_key: PhysicalFileKey,
         expected_length: u64,
-    ) -> Result<NamespaceSnapshot, BackendFailure>;
+    ) -> Result<NamespaceSnapshot, NamespaceIoFailure>;
 
-    fn rename_to_tombstone(&mut self) -> Result<(), BackendFailure>;
+    fn rename_to_tombstone(&mut self) -> Result<(), NamespaceIoFailure>;
 
-    fn unlink(&mut self, entry: NamespaceEntry) -> Result<(), BackendFailure>;
+    fn unlink(&mut self, entry: NamespaceEntry) -> Result<(), NamespaceIoFailure>;
 
-    fn sync_after_namespace(&mut self, transition: NamespaceTransition) -> Result<(), BackendFailure>;
+    fn sync_after_namespace(&mut self, transition: NamespaceTransition) -> Result<(), NamespaceIoFailure>;
 
     fn release_for_reverification(&mut self);
 }
@@ -133,21 +140,21 @@ pub(super) fn advance<I: NamespaceIo>(
     }
     let initial = match io.snapshot(request.physical_key(), request.ticket().expected_length()) {
         Ok(snapshot) => snapshot,
-        Err(failure) => return failure.into_result(),
+        Err(io_failure) => return io_failure.into_operation_result(),
     };
     match decide(request, transition, initial) {
         Decision::Return(result) => *result,
         Decision::Tombstoned => settle_without_mutation(request, transition, io, Decision::Tombstoned),
         Decision::Absent => settle_without_mutation(request, transition, io, Decision::Absent),
         Decision::MutateRename => {
-            if let Err(failure) = io.rename_to_tombstone() {
-                return failure.into_result();
+            if let Err(io_failure) = io.rename_to_tombstone() {
+                return io_failure.into_operation_result();
             }
             finish_mutation(request, transition, io, Decision::Tombstoned)
         }
         Decision::MutateUnlink(entry) => {
-            if let Err(failure) = io.unlink(entry) {
-                return failure.into_result();
+            if let Err(io_failure) = io.unlink(entry) {
+                return io_failure.into_operation_result();
             }
             finish_mutation(request, transition, io, Decision::Absent)
         }
@@ -160,8 +167,8 @@ fn settle_without_mutation<I: NamespaceIo>(
     io: &mut I,
     expected: Decision,
 ) -> NamespaceOperationResult {
-    if let Err(failure) = io.sync_after_namespace(transition) {
-        return failure.into_result();
+    if let Err(io_failure) = io.sync_after_namespace(transition) {
+        return io_failure.into_operation_result();
     }
     io.release_for_reverification();
     verify_converged(request, io, expected)
@@ -173,8 +180,8 @@ fn finish_mutation<I: NamespaceIo>(
     io: &mut I,
     expected: Decision,
 ) -> NamespaceOperationResult {
-    if let Err(failure) = io.sync_after_namespace(transition) {
-        return failure.into_result();
+    if let Err(io_failure) = io.sync_after_namespace(transition) {
+        return io_failure.into_operation_result();
     }
     io.release_for_reverification();
     verify_converged(request, io, expected)
@@ -187,7 +194,7 @@ fn verify_converged<I: NamespaceIo>(
 ) -> NamespaceOperationResult {
     let snapshot = match io.snapshot(request.physical_key(), request.ticket().expected_length()) {
         Ok(snapshot) => snapshot,
-        Err(failure) => return failure.into_result(),
+        Err(io_failure) => return io_failure.into_operation_result(),
     };
     if let Some(outcome) = static_rejection(request, snapshot) {
         return outcome;
