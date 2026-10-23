@@ -14,6 +14,7 @@
 
 use std::sync::Arc;
 
+use parking_lot::Mutex;
 use rocketmq_store_api::TimerEngineId;
 use rocketmq_store_api::TimerSourceCqOffset;
 use rocketmq_store_api::TimerTimelineCursor;
@@ -49,6 +50,24 @@ enum FormalDueContinuation {
     Segmented(SegmentedTimelineContinuation),
 }
 
+/// Where the first page of a due scan starts.
+#[derive(Clone, Copy, Debug)]
+enum DueScanStart {
+    /// Every key whose due time is at or after this time.
+    AtOrAfter(i64),
+    /// Every key ordered after this full key, which a previous scan already consumed.
+    After(TimelineKeyV1),
+}
+
+impl DueScanStart {
+    fn due_time_ms(self) -> i64 {
+        match self {
+            Self::AtOrAfter(due_time_ms) => due_time_ms,
+            Self::After(key) => key.due_time_ms,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 struct FormalDuePage {
     entries: Vec<TimelineIndexEntry>,
@@ -61,7 +80,7 @@ struct FormalDuePage {
 trait TimelineDueIndex: Send + Sync {
     fn range_scan(
         &self,
-        start_due_ms: i64,
+        start: DueScanStart,
         end_due_exclusive_ms: i64,
         scan_continuation: Option<FormalDueContinuation>,
         max_messages: usize,
@@ -76,7 +95,7 @@ struct RocksTimelineDueIndex {
 impl TimelineDueIndex for RocksTimelineDueIndex {
     fn range_scan(
         &self,
-        start_due_ms: i64,
+        start: DueScanStart,
         end_due_exclusive_ms: i64,
         scan_continuation: Option<FormalDueContinuation>,
         max_messages: usize,
@@ -87,10 +106,13 @@ impl TimelineDueIndex for RocksTimelineDueIndex {
             Some(FormalDueContinuation::Segmented(_)) => {
                 return Err(TimelineDueScannerError::ContinuationIndexKindMismatch)
             }
-            None => None,
+            None => match start {
+                DueScanStart::After(key) => Some(key),
+                DueScanStart::AtOrAfter(_) => None,
+            },
         };
         let page = self.timeline.range_scan(
-            start_due_ms,
+            start.due_time_ms(),
             end_due_exclusive_ms,
             rocks_resume_key,
             max_messages,
@@ -111,7 +133,7 @@ struct SegmentedTimelineDueIndex {
 impl TimelineDueIndex for SegmentedTimelineDueIndex {
     fn range_scan(
         &self,
-        start_due_ms: i64,
+        start: DueScanStart,
         end_due_exclusive_ms: i64,
         scan_continuation: Option<FormalDueContinuation>,
         max_messages: usize,
@@ -124,13 +146,22 @@ impl TimelineDueIndex for SegmentedTimelineDueIndex {
             }
             None => None,
         };
-        let Some(page) = self.timeline.scan_due(
-            Some(TimelineSegmentKey {
-                due_time_ms: start_due_ms.max(0),
+        let from_exclusive = match start {
+            DueScanStart::AtOrAfter(due_time_ms) => TimelineSegmentKey {
+                due_time_ms: due_time_ms.max(0),
                 lane: 0,
                 timer_id: rocketmq_store_api::TimerId::new(0),
                 generation: rocketmq_store_api::TimerGeneration::new(0),
-            }),
+            },
+            DueScanStart::After(key) => TimelineSegmentKey {
+                due_time_ms: key.due_time_ms,
+                lane: key.lane,
+                timer_id: key.timer_id,
+                generation: key.generation,
+            },
+        };
+        let Some(page) = self.timeline.scan_due(
+            Some(from_exclusive),
             end_due_exclusive_ms,
             max_messages,
             max_bytes.max(max_messages.saturating_mul(TimelineSegmentRecord::encoded_size())),
@@ -153,6 +184,11 @@ impl TimelineDueIndex for SegmentedTimelineDueIndex {
 }
 
 /// Bounded, overlap-safe Timeline scanner.
+///
+/// Each scan kind resumes after the last key it scanned. Only the first scan after start-up
+/// begins `safetyOverlapMs` before the persisted due cursor, so entries that are already Ready
+/// or Delivered no longer refill every page. A source materialized behind the scanner reaches it
+/// through the late-ready outbox instead.
 pub(crate) struct TimelineDueScanner {
     config: TimerStoreConfig,
     timeline: Arc<RocksDbTimelineIndex>,
@@ -160,6 +196,8 @@ pub(crate) struct TimelineDueScanner {
     state: RocksDbTimelineStateIndex,
     shadow_reconciler: Option<Arc<ShadowReconciler>>,
     clock: Option<Arc<TimerClockSafety>>,
+    formal_resume_after: Mutex<Option<TimelineKeyV1>>,
+    shadow_resume_after: Mutex<Option<TimelineKeyV1>>,
 }
 
 impl TimelineDueScanner {
@@ -173,6 +211,8 @@ impl TimelineDueScanner {
             timeline,
             shadow_reconciler: None,
             clock: None,
+            formal_resume_after: Mutex::new(None),
+            shadow_resume_after: Mutex::new(None),
         }
     }
 
@@ -190,6 +230,8 @@ impl TimelineDueScanner {
             timeline,
             shadow_reconciler: None,
             clock: Some(clock),
+            formal_resume_after: Mutex::new(None),
+            shadow_resume_after: Mutex::new(None),
         }
     }
 
@@ -207,6 +249,8 @@ impl TimelineDueScanner {
             timeline,
             shadow_reconciler: Some(reconciler),
             clock: None,
+            formal_resume_after: Mutex::new(None),
+            shadow_resume_after: Mutex::new(None),
         }
     }
 
@@ -224,6 +268,8 @@ impl TimelineDueScanner {
             formal_index: Arc::new(SegmentedTimelineDueIndex { timeline: native }),
             shadow_reconciler: None,
             clock: None,
+            formal_resume_after: Mutex::new(None),
+            shadow_resume_after: Mutex::new(None),
         }
     }
 
@@ -239,12 +285,18 @@ impl TimelineDueScanner {
         max_bytes: usize,
     ) -> Result<DueScanResult, TimelineDueScannerError> {
         let checkpoint = self.checkpoint(SHADOW_DUE_CHECKPOINT_LANE)?;
-        let start_ms = checkpoint
-            .due_cursor
-            .due_time_ms()
-            .saturating_sub(self.config.safety_overlap_ms);
-        let mut continuation = None;
+        let mut resume_after = self.shadow_resume_after.lock();
+        let start = self.scan_start(checkpoint, *resume_after);
+        let end_ms = now_ms.saturating_add(1);
+        let mut continuation = match start {
+            DueScanStart::After(key) => Some(key),
+            DueScanStart::AtOrAfter(_) => None,
+        };
         let mut result = DueScanResult::default();
+        // A resumed scan is ahead of a clock that moved back: nothing in its range is due yet.
+        if end_ms <= start.due_time_ms() {
+            return Ok(result);
+        }
         loop {
             let remaining_messages = max_messages.saturating_sub(result.observed);
             let remaining_bytes = max_bytes.saturating_sub(result.bytes);
@@ -252,8 +304,8 @@ impl TimelineDueScanner {
                 break;
             }
             let page = self.timeline.range_scan_shadow(
-                start_ms,
-                now_ms.saturating_add(1),
+                start.due_time_ms(),
+                end_ms,
                 continuation,
                 remaining_messages,
                 remaining_bytes,
@@ -280,17 +332,20 @@ impl TimelineDueScanner {
                 .last()
                 .map(|entry| entry.key)
                 .ok_or(TimelineDueScannerError::EmptyPage)?;
-            RocksDbTimelineIndex::append_checkpoint(
-                &mut batch,
-                TimelineCheckpointKind::Due,
-                SHADOW_DUE_CHECKPOINT_LANE,
-                checkpoint_after(
-                    checkpoint,
-                    last,
-                    u64::try_from(result.pages.saturating_add(1)).unwrap_or(u64::MAX),
-                ),
-            );
+            if advances_checkpoint(checkpoint, last) {
+                RocksDbTimelineIndex::append_checkpoint(
+                    &mut batch,
+                    TimelineCheckpointKind::Due,
+                    SHADOW_DUE_CHECKPOINT_LANE,
+                    checkpoint_after(
+                        checkpoint,
+                        last,
+                        u64::try_from(result.pages.saturating_add(1)).unwrap_or(u64::MAX),
+                    ),
+                );
+            }
             self.timeline.write_batch(&batch)?;
+            *resume_after = Some(last);
             if let Some(reconciler) = self.shadow_reconciler.as_ref() {
                 for entry in &page.entries {
                     reconciler.reconcile_due(ShadowExpectedRecord {
@@ -337,10 +392,12 @@ impl TimelineDueScanner {
         };
         let mut result = self.drain_late_ready(max_messages, max_bytes)?;
         let checkpoint = self.checkpoint(FORMAL_DUE_CHECKPOINT_LANE)?;
-        let start_ms = checkpoint
-            .due_cursor
-            .due_time_ms()
-            .saturating_sub(self.config.safety_overlap_ms);
+        let mut resume_after = self.formal_resume_after.lock();
+        let start = self.scan_start(checkpoint, *resume_after);
+        let end_ms = now_ms.saturating_add(1);
+        if end_ms <= start.due_time_ms() {
+            return Ok(result);
+        }
         let mut scan_continuation = None;
         loop {
             let remaining_messages = max_messages.saturating_sub(result.observed);
@@ -348,13 +405,9 @@ impl TimelineDueScanner {
             if remaining_messages == 0 || remaining_bytes == 0 {
                 break;
             }
-            let page = self.formal_index.range_scan(
-                start_ms,
-                now_ms.saturating_add(1),
-                scan_continuation,
-                remaining_messages,
-                remaining_bytes,
-            )?;
+            let page =
+                self.formal_index
+                    .range_scan(start, end_ms, scan_continuation, remaining_messages, remaining_bytes)?;
             if page.entries.is_empty() {
                 break;
             }
@@ -396,18 +449,21 @@ impl TimelineDueScanner {
                 .last()
                 .map(|entry| entry.key)
                 .ok_or(TimelineDueScannerError::EmptyPage)?;
-            self.timeline.put_batch(
-                &[],
-                Some((
-                    TimelineCheckpointKind::Due,
-                    FORMAL_DUE_CHECKPOINT_LANE,
-                    checkpoint_after(
-                        checkpoint,
-                        last,
-                        u64::try_from(result.pages.saturating_add(1)).unwrap_or(u64::MAX),
-                    ),
-                )),
-            )?;
+            if advances_checkpoint(checkpoint, last) {
+                self.timeline.put_batch(
+                    &[],
+                    Some((
+                        TimelineCheckpointKind::Due,
+                        FORMAL_DUE_CHECKPOINT_LANE,
+                        checkpoint_after(
+                            checkpoint,
+                            last,
+                            u64::try_from(result.pages.saturating_add(1)).unwrap_or(u64::MAX),
+                        ),
+                    )),
+                )?;
+            }
+            *resume_after = Some(last);
             result.observed = result.observed.saturating_add(page.entries.len());
             result.bytes = result.bytes.saturating_add(page.retained_bytes);
             result.pages = result.pages.saturating_add(1);
@@ -479,6 +535,22 @@ impl TimelineDueScanner {
         Ok(result)
     }
 
+    /// Resumes after the last scanned key. Without one, starts the safety overlap before the
+    /// persisted cursor, so a restart re-reads what a crashed run may not have promoted.
+    fn scan_start(&self, checkpoint: TimelineCheckpointV1, resume_after: Option<TimelineKeyV1>) -> DueScanStart {
+        resume_after.map_or_else(
+            || {
+                DueScanStart::AtOrAfter(
+                    checkpoint
+                        .due_cursor
+                        .due_time_ms()
+                        .saturating_sub(self.config.safety_overlap_ms),
+                )
+            },
+            DueScanStart::After,
+        )
+    }
+
     fn checkpoint(&self, lane: u16) -> Result<TimelineCheckpointV1, TimelineDueScannerError> {
         Ok(self
             .timeline
@@ -491,6 +563,12 @@ impl TimelineDueScanner {
                 generation: 0,
             }))
     }
+}
+
+/// The first scan after start-up re-reads the safety overlap, and its pages must not move the
+/// persisted cursor back.
+fn advances_checkpoint(base: TimelineCheckpointV1, key: TimelineKeyV1) -> bool {
+    key.due_time_ms >= base.due_cursor.due_time_ms()
 }
 
 fn checkpoint_after(base: TimelineCheckpointV1, key: TimelineKeyV1, page_generation: u64) -> TimelineCheckpointV1 {
@@ -774,5 +852,169 @@ mod tests {
                 .state,
             TimelineState::Ready
         );
+    }
+
+    /// Five entries due within one safety overlap; the first three were promoted by an earlier
+    /// run, which on their own fill a page of two.
+    fn entries_behind_processed_ones() -> Vec<(TimelineIndexEntry, TimelineState)> {
+        (0..5)
+            .map(|index| {
+                let mut entry = formal_entry(8_000 + index, 10 + index as u128);
+                entry.record.payload =
+                    TimerPayloadStoreLocator::try_new(0, entry.key.lane, 1, 0, 10, 11).expect("locator");
+                let state = if index < 3 {
+                    TimelineState::Ready
+                } else {
+                    TimelineState::Pending
+                };
+                (entry, state)
+            })
+            .collect()
+    }
+
+    fn put_states(timeline: &RocksDbTimelineIndex, entries: &[(TimelineIndexEntry, TimelineState)]) {
+        let mut batch = RocksDbWriteBatch::with_capacity(entries.len());
+        for (entry, state) in entries {
+            RocksDbTimelineStateIndex::append_state(
+                &mut batch,
+                entry.key.timer_id,
+                entry.key.generation,
+                &TimelineStateRecordV1 {
+                    state: *state,
+                    ..state_record()
+                },
+            )
+            .expect("state");
+        }
+        timeline.write_batch(&batch).expect("write states");
+    }
+
+    fn promote_with_pages_of_two(scanner: &TimelineDueScanner) -> usize {
+        (0..3)
+            .map(|_| {
+                scanner
+                    .scan_formal_until_with_budget(9_000, 2, TimerStoreConfig::default().due_scan_bytes)
+                    .expect("scan")
+                    .ready
+            })
+            .sum()
+    }
+
+    fn assert_all_ready(timeline: &RocksDbTimelineIndex, entries: &[(TimelineIndexEntry, TimelineState)]) {
+        for (entry, _) in entries {
+            let state = timeline
+                .state_index()
+                .get(entry.key.timer_id, entry.key.generation)
+                .expect("state")
+                .expect("present")
+                .state;
+            assert_eq!(state, TimelineState::Ready, "{:?}", entry.key);
+        }
+    }
+
+    #[test]
+    fn formal_scan_resumes_after_processed_entries_that_fill_a_page() {
+        let dir = tempdir().expect("tempdir");
+        let timeline = Arc::new(
+            RocksDbTimelineIndex::open(dir.path())
+                .expect("open")
+                .expect("valid Timeline configuration"),
+        );
+        let entries = entries_behind_processed_ones();
+        let mut batch = RocksDbWriteBatch::with_capacity(entries.len());
+        for (entry, _) in &entries {
+            RocksDbTimelineIndex::append_entry(&mut batch, entry).expect("entry");
+        }
+        timeline.write_batch(&batch).expect("write entries");
+        put_states(&timeline, &entries);
+        let scanner = TimelineDueScanner::new(TimerStoreConfig::default(), Arc::clone(&timeline));
+
+        assert_eq!(promote_with_pages_of_two(&scanner), 2);
+        assert_all_ready(&timeline, &entries);
+    }
+
+    #[test]
+    fn segmented_formal_scan_resumes_after_processed_entries_that_fill_a_page() {
+        let dir = tempdir().expect("tempdir");
+        let timeline = Arc::new(
+            RocksDbTimelineIndex::open(dir.path())
+                .expect("open overlay")
+                .expect("valid overlay configuration"),
+        );
+        let native = Arc::new(
+            SegmentedTimeline::open(dir.path(), SegmentedTimelineConfig::default())
+                .expect("open native")
+                .expect("valid native configuration"),
+        );
+        let entries = entries_behind_processed_ones();
+        let records: Vec<_> = entries
+            .iter()
+            .map(|(entry, _)| TimelineSegmentRecord {
+                key: TimelineSegmentKey {
+                    due_time_ms: entry.key.due_time_ms,
+                    lane: entry.key.lane,
+                    timer_id: entry.key.timer_id,
+                    generation: entry.key.generation,
+                },
+                payload: entry.record.payload,
+                source_cq_offset: entry.record.source_cq_offset,
+                source_physical_offset: entry.record.source_physical_offset,
+                source_size: entry.record.source_size,
+                state_version: entry.record.state_version,
+                owner_engine: entry.record.owner_engine,
+                shadow_only: false,
+            })
+            .collect();
+        native
+            .append_batch(&records)
+            .expect("native entries")
+            .expect("valid native entries");
+        put_states(&timeline, &entries);
+        let scanner = TimelineDueScanner::new_segmented(TimerStoreConfig::default(), Arc::clone(&timeline), native);
+
+        assert_eq!(promote_with_pages_of_two(&scanner), 2);
+        assert_all_ready(&timeline, &entries);
+    }
+
+    #[test]
+    fn shadow_scan_resumes_after_the_last_observed_entry() {
+        let dir = tempdir().expect("tempdir");
+        let timeline = Arc::new(
+            RocksDbTimelineIndex::open(dir.path())
+                .expect("open")
+                .expect("valid Timeline configuration"),
+        );
+        let entries: Vec<_> = (0..5)
+            .map(|index| {
+                let mut entry = formal_entry(8_000 + index, 20 + index as u128);
+                entry.record.owner_engine = TimerEngineId::JavaCompat;
+                entry.record.shadow_only = true;
+                entry
+            })
+            .collect();
+        timeline.put_batch(&entries, None).expect("shadow entries");
+        let scanner = TimelineDueScanner::new(TimerStoreConfig::default(), Arc::clone(&timeline));
+
+        for _ in 0..3 {
+            scanner
+                .scan_shadow_until_with_budget(9_000, 2, TimerStoreConfig::default().due_scan_bytes)
+                .expect("scan");
+        }
+
+        for entry in &entries {
+            assert!(
+                timeline
+                    .shadow_observation(
+                        entry.record.source_cq_offset.get(),
+                        entry.record.source_physical_offset,
+                        entry.key.generation,
+                        ShadowObservationKind::Due,
+                    )
+                    .expect("observation")
+                    .is_some(),
+                "{:?}",
+                entry.key
+            );
+        }
     }
 }

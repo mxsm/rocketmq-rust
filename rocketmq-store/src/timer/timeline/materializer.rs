@@ -292,6 +292,13 @@ impl ShadowTimelineMaterializer {
             .checkpoint(TimelineCheckpointKind::Due, due_checkpoint_lane)?
             .map(|checkpoint| checkpoint.due_cursor.due_time_ms())
             .unwrap_or_default();
+        // The due scanner resumes after the last key it scanned and never reads past its own
+        // clock, which may be ahead of its persisted cursor. A source due within the safety
+        // overlap of the later of the two may already be behind it, so it goes through the
+        // late-ready outbox.
+        let late_through_ms = due_cursor
+            .max(rocketmq_runtime::common::time_utils::current_millis() as i64)
+            .saturating_add(self.config.safety_overlap_ms);
         let start_offset = checkpoint.materialized_source_offset.get().saturating_add(1);
         let Some(queue) = self
             .consume_queues
@@ -339,8 +346,7 @@ impl ShadowTimelineMaterializer {
                 self.mode,
                 self.format_fingerprint,
             )?;
-            decoded.late = !decoded.cancelled
-                && decoded.key.due_time_ms <= due_cursor.saturating_add(self.config.safety_overlap_ms);
+            decoded.late = !decoded.cancelled && decoded.key.due_time_ms <= late_through_ms;
             let generation = decoded.key.generation;
             let existing = match self.mode {
                 TimelineMaterializationMode::Shadow => {
