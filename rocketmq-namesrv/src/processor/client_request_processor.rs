@@ -42,8 +42,8 @@ use crate::bootstrap::NameServerRuntimeHandle;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
 use crate::route::response_cache::JsonEncoding;
 use crate::route::response_cache::RouteCacheKey;
-use crate::route::response_cache::RouteCacheOutcomeKind;
 use crate::route::response_cache::RouteCachePolicy;
+use crate::route::response_cache::RouteResponseCacheStatus;
 use crate::route::route_info_manager::TopicRouteLookupStatus;
 use crate::route::zone_filter::filter_route_by_zone;
 use crate::route::zone_filter::ZoneRequest;
@@ -228,16 +228,16 @@ impl ClientRequestProcessor {
                 encoding,
             );
             let cache = self.name_server_runtime_inner.route_response_cache();
-            cache.get_or_try_insert_with(key, encode).map(|outcome| {
+            cache.get_or_try_insert_with(key, encode).map(|cache_result| {
                 if metrics.is_enabled() {
-                    let cache_event = match outcome.kind {
-                        RouteCacheOutcomeKind::Hit => NameServerRouteCacheEvent::Hit,
-                        RouteCacheOutcomeKind::Miss => NameServerRouteCacheEvent::Miss,
-                        RouteCacheOutcomeKind::Oversize => NameServerRouteCacheEvent::Oversize,
+                    let cache_event = match cache_result.status {
+                        RouteResponseCacheStatus::Hit => NameServerRouteCacheEvent::Hit,
+                        RouteResponseCacheStatus::Miss => NameServerRouteCacheEvent::Miss,
+                        RouteResponseCacheStatus::Oversize => NameServerRouteCacheEvent::Oversize,
                     };
                     metrics.record_route_cache(cache_event, cache.stats().weighted_size);
                 }
-                outcome.body
+                cache_result.body
             })
         } else {
             if metrics.is_enabled() {
