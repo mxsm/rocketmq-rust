@@ -279,16 +279,30 @@ impl TimerPipeline {
     }
 
     /// Submits due work before source work. Both calls are non-blocking, so a saturated stage
-    /// cannot pin the scheduler. Source still receives one admission opportunity per tick.
+    /// cannot pin the scheduler. A stage that still has a queued or running request is skipped:
+    /// that request keeps running batches while they come back full, so a tick only restarts a
+    /// stage that has gone idle.
     pub(crate) fn submit_tick(&self, epoch: Option<u64>) {
         if self.metrics.completion_backpressured.load(Ordering::Acquire) {
             self.metrics.rejected_submissions.fetch_add(1, Ordering::Relaxed);
             return;
         }
         if let Some(epoch) = epoch {
-            self.submit(PipelineStage::Due, epoch);
+            if self.is_idle(PipelineStage::Due) {
+                self.submit(PipelineStage::Due, epoch);
+            }
         }
-        self.submit(PipelineStage::Source, 0);
+        if self.is_idle(PipelineStage::Source) {
+            self.submit(PipelineStage::Source, 0);
+        }
+    }
+
+    fn is_idle(&self, stage: PipelineStage) -> bool {
+        let (queue, active_workers) = match stage {
+            PipelineStage::Source => (&self.source_queue, &self.metrics.active_source_workers),
+            PipelineStage::Due => (&self.due_queue, &self.metrics.active_due_workers),
+        };
+        queue.is_empty() && active_workers.load(Ordering::Acquire) == 0
     }
 
     pub(crate) fn close(&self) {
@@ -358,7 +372,7 @@ impl TimerPipeline {
     {
         while let Some(request) = self.source_queue.recv().await {
             let _active = ActiveWorkerGuard::new(&self.metrics.active_source_workers);
-            let progress = self.run_with_retry(&engine, PipelineStage::Source, request.epoch).await;
+            let progress = self.run_until_idle(&engine, PipelineStage::Source, request.epoch).await;
             self.publish_completion(PipelineStage::Source, request, progress).await;
         }
     }
@@ -369,8 +383,40 @@ impl TimerPipeline {
     {
         while let Some(request) = self.due_queue.recv().await {
             let _active = ActiveWorkerGuard::new(&self.metrics.active_due_workers);
-            let progress = self.run_with_retry(&engine, PipelineStage::Due, request.epoch).await;
+            let progress = self.run_until_idle(&engine, PipelineStage::Due, request.epoch).await;
             self.publish_completion(PipelineStage::Due, request, progress).await;
+        }
+    }
+
+    /// Runs batches for one pump request while they come back full, so a backlog drains at the
+    /// rate the stage can process it rather than one batch per scheduler tick. The request ends
+    /// with the first batch that is not full, when its slice elapses, or when the pipeline
+    /// closes. Source and Due batches still interleave on the store's process lock.
+    async fn run_until_idle<E>(
+        &self,
+        engine: &E,
+        stage: PipelineStage,
+        epoch: u64,
+    ) -> crate::timer::request::EngineBatchProgress
+    where
+        E: TimerEngine,
+    {
+        let (batch_messages, queue) = match stage {
+            PipelineStage::Source => (self.source_batch_messages, &self.source_queue),
+            PipelineStage::Due => (self.due_batch_messages, &self.due_queue),
+        };
+        let slice_deadline = Instant::now() + self.work_timeout;
+        let mut total = crate::timer::request::EngineBatchProgress::empty();
+        loop {
+            let progress = self.run_with_retry(engine, stage, epoch).await;
+            total.messages = total.messages.saturating_add(progress.messages);
+            total.bytes = total.bytes.saturating_add(progress.bytes);
+            total.continuation = progress.continuation;
+            // The last batch's commit covers every earlier batch of this request.
+            total.durable = progress.durable;
+            if progress.messages < batch_messages || queue.is_closed() || Instant::now() >= slice_deadline {
+                return total;
+            }
         }
     }
 
@@ -553,5 +599,162 @@ impl Drop for PipelineWorkerLease {
         if self.pipeline.remaining_workers.fetch_sub(1, Ordering::AcqRel) == 1 {
             self.pipeline.completion_queue.close();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use rocketmq_store_api::TimerEngineEpoch;
+    use rocketmq_store_api::TimerEngineId;
+    use rocketmq_store_api::TimerId;
+    use tokio::sync::Notify;
+    use tokio::sync::Semaphore;
+
+    use super::TimerPipeline;
+    use crate::config::message_store_config::MessageStoreConfig;
+    use crate::timer::engine::TimerEngine;
+    use crate::timer::engine::WorkBudget;
+    use crate::timer::error::TimerEngineError;
+    use crate::timer::request::EngineBatchProgress;
+
+    /// Serves `full_batches` full Source batches and then partial ones. Every Source batch waits
+    /// for a `permits` permit and signals `entered` first, so a test can hold a batch open.
+    #[derive(Clone)]
+    struct ScriptedEngine {
+        full_batches: usize,
+        source_calls: Arc<AtomicUsize>,
+        entered: Arc<Notify>,
+        permits: Arc<Semaphore>,
+    }
+
+    impl ScriptedEngine {
+        fn new(full_batches: usize, permits: usize) -> Self {
+            Self {
+                full_batches,
+                source_calls: Arc::new(AtomicUsize::new(0)),
+                entered: Arc::new(Notify::new()),
+                permits: Arc::new(Semaphore::new(permits)),
+            }
+        }
+    }
+
+    impl TimerEngine for ScriptedEngine {
+        fn engine_id(&self) -> TimerEngineId {
+            TimerEngineId::JavaCompat
+        }
+
+        async fn load(&self) -> Result<(), TimerEngineError> {
+            Ok(())
+        }
+
+        async fn enqueue_source(&self, budget: WorkBudget) -> Result<EngineBatchProgress, TimerEngineError> {
+            self.entered.notify_one();
+            self.permits
+                .acquire()
+                .await
+                .expect("test semaphore stays open")
+                .forget();
+            let call = self.source_calls.fetch_add(1, Ordering::AcqRel);
+            let messages = if call < self.full_batches {
+                budget.max_messages
+            } else {
+                1
+            };
+            Ok(EngineBatchProgress {
+                messages,
+                ..EngineBatchProgress::empty()
+            })
+        }
+
+        async fn roll_due(
+            &self,
+            _epoch: TimerEngineEpoch,
+            _budget: WorkBudget,
+        ) -> Result<EngineBatchProgress, TimerEngineError> {
+            Ok(EngineBatchProgress::empty())
+        }
+
+        async fn complete(&self, _timer_id: TimerId, _epoch: TimerEngineEpoch) -> Result<(), TimerEngineError> {
+            Ok(())
+        }
+
+        async fn cancel(&self, _timer_id: TimerId) -> Result<(), TimerEngineError> {
+            Ok(())
+        }
+
+        async fn checkpoint(&self) -> Result<bool, TimerEngineError> {
+            Ok(true)
+        }
+
+        async fn on_role_change(&self, _active: bool, _epoch: TimerEngineEpoch) -> Result<(), TimerEngineError> {
+            Ok(())
+        }
+
+        async fn shutdown(&self) -> Result<(), TimerEngineError> {
+            Ok(())
+        }
+    }
+
+    fn spawn_pipeline(
+        name: &'static str,
+        engine: &ScriptedEngine,
+    ) -> (Arc<TimerPipeline>, rocketmq_runtime::TaskGroup) {
+        let config = MessageStoreConfig::default();
+        let scope = crate::runtime::test_scope(name);
+        let pipeline = TimerPipeline::new(&scope, &config).expect("default pipeline configuration is valid");
+        let task_group = scope.task_group(name);
+        assert!(pipeline.spawn(&task_group, engine.clone(), 1, 1, config.timer_completion_gap_limit));
+        (pipeline, task_group)
+    }
+
+    async fn shutdown_pipeline(pipeline: &TimerPipeline, task_group: &rocketmq_runtime::TaskGroup) {
+        pipeline.close();
+        let report = task_group.shutdown(Duration::from_secs(5)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test]
+    async fn one_tick_keeps_running_source_batches_while_they_come_back_full() {
+        let engine = ScriptedEngine::new(5, Semaphore::MAX_PERMITS);
+        let (pipeline, task_group) = spawn_pipeline("timer-pipeline-backlog-test", &engine);
+
+        pipeline.submit_tick(None);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while engine.source_calls.load(Ordering::Acquire) < 6 || pipeline.snapshot().completed_messages < 5 * 64 + 1
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("a single tick drains the whole backlog");
+
+        // Five full batches and the partial one that ends the request, all from a single tick.
+        assert_eq!(engine.source_calls.load(Ordering::Acquire), 6);
+        assert_eq!(pipeline.snapshot().completed_messages, 5 * 64 + 1);
+        shutdown_pipeline(&pipeline, &task_group).await;
+    }
+
+    #[tokio::test]
+    async fn tick_skips_a_stage_whose_request_is_still_running() {
+        let engine = ScriptedEngine::new(0, 0);
+        let (pipeline, task_group) = spawn_pipeline("timer-pipeline-coalesce-test", &engine);
+
+        pipeline.submit_tick(None);
+        tokio::time::timeout(Duration::from_secs(5), engine.entered.notified())
+            .await
+            .expect("the source worker starts its batch");
+        pipeline.submit_tick(None);
+        pipeline.submit_tick(None);
+
+        assert!(pipeline.source_queue.is_empty());
+        assert_eq!(*pipeline.next_source_sequence.lock(), 1);
+        assert_eq!(pipeline.snapshot().rejected_submissions(), 0);
+        engine.permits.add_permits(1);
+        shutdown_pipeline(&pipeline, &task_group).await;
     }
 }
