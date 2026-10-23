@@ -130,6 +130,16 @@ struct RecoveredTimerState {
     queue_offset: i64,
 }
 
+/// A wall-clock time paired with the Timer CQ max offset read after it.
+///
+/// Once the enqueue cursor reaches `queue_offset`, every Timer CQ entry that was visible at
+/// `observed_at_ms` has been indexed.
+#[derive(Clone, Copy, Debug)]
+struct SourceVisibilitySnapshot {
+    observed_at_ms: i64,
+    queue_offset: i64,
+}
+
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct TimerDeleteIdentity {
     key: CheetahString,
@@ -258,6 +268,12 @@ pub struct TimerMessageStore {
     active_source_mutations: AtomicUsize,
     active_due_mutations: AtomicUsize,
     pending_progress: AtomicBool,
+    /// Latest wall-clock time at which every visible Timer CQ entry was indexed; `0` until the
+    /// first snapshot resolves. Due delivery drains only slots that end at or before it.
+    source_visible_through_ms: AtomicI64,
+    /// The oldest unresolved snapshot. It is kept, not replaced, so the watermark still advances
+    /// while new sources arrive faster than one enqueue pass drains them.
+    pending_source_visibility: Mutex<Option<SourceVisibilitySnapshot>>,
     scheduler_group: Mutex<Option<rocketmq_runtime::TaskGroup>>,
     scheduler_tasks: Mutex<Option<ScheduledTaskGroup>>,
     pipeline: Mutex<Option<Arc<TimerPipeline>>>,
@@ -728,6 +744,8 @@ impl TimerMessageStore {
             active_source_mutations: AtomicUsize::new(0),
             active_due_mutations: AtomicUsize::new(0),
             pending_progress: AtomicBool::new(false),
+            source_visible_through_ms: AtomicI64::new(0),
+            pending_source_visibility: Mutex::new(None),
             scheduler_group: Mutex::new(None),
             scheduler_tasks: Mutex::new(None),
             pipeline: Mutex::new(None),
@@ -987,6 +1005,9 @@ impl TimerMessageStore {
 
         if should_start {
             self.restore_progress_on_dequeue_resume();
+            // Visibility observed under the previous role is not carried into a new delivery
+            // epoch; the first due pass or enqueue snapshot re-establishes it.
+            self.reset_source_visibility();
             self.enqueue_suspended.store(false, Ordering::Relaxed);
             match self.role_state.transition(true) {
                 Ok(_) => self.should_running_dequeue.store(true, Ordering::Release),
@@ -1453,6 +1474,7 @@ impl TimerMessageStore {
             let _mutation = AtomicActivityGuard::new(&self.active_source_mutations, &self.persistence_gate);
             self.enqueue_from_timer_topic(limit.max(1))
         };
+        self.advance_source_visibility();
         if indexed > 0 {
             self.pending_progress.store(true, Ordering::Release);
         }
@@ -1493,18 +1515,14 @@ impl TimerMessageStore {
         if !self.role_state.is_current_delivery_epoch(delivery_epoch) {
             return 0;
         }
-        // A Recall tombstone already visible in the Timer CQ must be materialized before
-        // delivery starts. The source workers retain a bounded share of every tick; this stage
-        // simply waits for their contiguous watermark instead of bypassing it.
-        if self
-            .timer_queue_high_watermark()
-            .is_some_and(|watermark| self.curr_queue_offset.load(Ordering::Acquire) < watermark)
-        {
-            return 0;
-        }
+        // A Recall tombstone that is visible in the Timer CQ before its target slot ends must be
+        // indexed before that slot is drained. Draining only up to the source visibility
+        // watermark keeps that guarantee without waiting for a Timer CQ that keeps growing.
+        let visible_through_ms = self.advance_source_visibility();
         let delivered = {
             let _mutation = AtomicActivityGuard::new(&self.active_due_mutations, &self.persistence_gate);
-            self.dequeue_due_messages(limit.max(1), delivery_epoch).await
+            self.dequeue_due_messages(limit.max(1), delivery_epoch, visible_through_ms)
+                .await
         };
         if delivered > 0 {
             self.pending_progress.store(true, Ordering::Release);
@@ -1692,14 +1710,15 @@ impl TimerMessageStore {
         }
     }
 
-    async fn dequeue_due_messages(&self, limit: usize, delivery_epoch: u64) -> usize {
+    async fn dequeue_due_messages(&self, limit: usize, delivery_epoch: u64, visible_through_ms: i64) -> usize {
         let now_ms = self.clock.read().wall_time_ms();
         let current_tick_ms = self.floor_time_ms(now_ms);
         let mut cursor = self.ensure_dequeue_cursor(current_tick_ms);
+        let drain_bound_ms = current_tick_ms.min(self.floor_time_ms(visible_through_ms));
         let mut remaining_budget = limit;
         let mut delivered = 0usize;
 
-        while cursor < current_tick_ms && remaining_budget > 0 {
+        while cursor < drain_bound_ms && remaining_budget > 0 {
             if let Some(slot) = self.get_timer_wheel_slot(cursor).filter(|slot| slot.num > 0) {
                 let delivered_now = self.deliver_slot(cursor, slot, remaining_budget, delivery_epoch).await;
                 delivered += delivered_now;
@@ -1727,6 +1746,44 @@ impl TimerMessageStore {
     fn timer_queue_high_watermark(&self) -> Option<i64> {
         self.find_store_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0)
             .map(|queue| queue.read().get_max_offset_in_queue())
+    }
+
+    /// Resolves the pending source visibility snapshot when the enqueue cursor has reached it,
+    /// starts a new one, and returns the current watermark.
+    ///
+    /// The clock is read before the Timer CQ max offset, so the snapshot covers every entry that
+    /// was visible at its time. A snapshot whose entries are all indexed when it is taken
+    /// resolves immediately, which keeps an idle Timer CQ at zero added latency.
+    fn advance_source_visibility(&self) -> i64 {
+        let mut pending = self.pending_source_visibility.lock();
+        if let Some(snapshot) = *pending {
+            if self.curr_queue_offset.load(Ordering::Acquire) < snapshot.queue_offset {
+                return self.source_visible_through_ms.load(Ordering::Acquire);
+            }
+            self.source_visible_through_ms
+                .fetch_max(snapshot.observed_at_ms, Ordering::AcqRel);
+        }
+        let observed_at_ms = self.clock.read().wall_time_ms();
+        *pending = match self.timer_queue_high_watermark() {
+            Some(queue_offset) if self.curr_queue_offset.load(Ordering::Acquire) < queue_offset => {
+                Some(SourceVisibilitySnapshot {
+                    observed_at_ms,
+                    queue_offset,
+                })
+            }
+            _ => {
+                self.source_visible_through_ms
+                    .fetch_max(observed_at_ms, Ordering::AcqRel);
+                None
+            }
+        };
+        self.source_visible_through_ms.load(Ordering::Acquire)
+    }
+
+    fn reset_source_visibility(&self) {
+        let mut pending = self.pending_source_visibility.lock();
+        *pending = None;
+        self.source_visible_through_ms.store(0, Ordering::Release);
     }
 
     fn index_timer_message(
@@ -3282,6 +3339,96 @@ mod tests {
 
         assert_eq!(processed, 6);
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
+    }
+
+    #[tokio::test]
+    async fn due_stage_keeps_delivering_while_timer_sources_stay_ahead_of_enqueue() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        let clock = Arc::new(ManualTimerClock::new(1_700_000_000_000));
+        timer_message_store.set_clock(clock.clone());
+        assert!(initialize_and_load(&mut store).await);
+        timer_message_store.set_should_running_dequeue(true);
+        let epoch = timer_message_store
+            .capture_delivery_epoch()
+            .expect("active delivery epoch");
+        for _ in 0..2 {
+            let deliver_ms = clock.wall_time_ms() as u64 - 2_000;
+            assert!(store
+                .put_message(build_timer_message(&real_topic, deliver_ms))
+                .await
+                .is_ok());
+        }
+        store.reput_once().await;
+
+        // Each pass indexes one source while another one arrives, so the Timer CQ never stops
+        // growing ahead of the enqueue cursor, as under steady production traffic.
+        let mut delivered = 0usize;
+        for _ in 0..3 {
+            assert_eq!(timer_message_store.process_enqueue_stage(1), 1);
+            clock.advance(timer_message_store.precision_ms());
+            let deliver_ms = clock.wall_time_ms() as u64 - 2_000;
+            assert!(store
+                .put_message(build_timer_message(&real_topic, deliver_ms))
+                .await
+                .is_ok());
+            store.reput_once().await;
+            assert!(
+                timer_message_store.curr_queue_offset.load(Ordering::Acquire)
+                    < timer_message_store.timer_queue_high_watermark().expect("Timer CQ")
+            );
+            delivered += timer_message_store.process_due_stage(16, epoch).await;
+        }
+        store.reput_once().await;
+
+        assert_eq!(delivered, 3);
+        assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 3);
+    }
+
+    #[tokio::test]
+    async fn due_stage_keeps_a_slot_until_recalls_visible_before_it_ended_are_indexed() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        let clock = Arc::new(ManualTimerClock::new(1_700_000_000_000));
+        timer_message_store.set_clock(clock.clone());
+        assert!(initialize_and_load(&mut store).await);
+        timer_message_store.set_should_running_dequeue(true);
+        let epoch = timer_message_store
+            .capture_delivery_epoch()
+            .expect("active delivery epoch");
+        let deliver_ms = clock.wall_time_ms() as u64 + 500;
+        let unique_key = "recall-before-due";
+        let mut target = build_timer_message(&real_topic, deliver_ms);
+        target.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
+            CheetahString::from_static_str(unique_key),
+        );
+        target.properties_string = message_properties_to_string(target.get_properties());
+        assert!(store.put_message(target).await.is_ok());
+        store.reput_once().await;
+        assert_eq!(timer_message_store.process_enqueue_stage(16), 1);
+
+        // The Recall is visible before the target slot ends, but is not indexed yet when the
+        // slot becomes due.
+        assert!(store
+            .put_message(build_delete_timer_message(&real_topic, unique_key, deliver_ms))
+            .await
+            .is_ok());
+        store.reput_once().await;
+        clock.advance(2_500);
+        assert_eq!(timer_message_store.process_due_stage(16, epoch).await, 0);
+
+        assert_eq!(timer_message_store.process_enqueue_stage(16), 1);
+        timer_message_store.process_due_stage(16, epoch).await;
+        store.reput_once().await;
+
+        assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 0);
+        let slot_time_ms = timer_message_store.ceil_time_ms(deliver_ms as i64);
+        assert!(timer_message_store
+            .get_timer_wheel_slot(slot_time_ms)
+            .is_none_or(|slot| slot.num == 0));
     }
 
     #[tokio::test]
