@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -138,6 +139,45 @@ struct RecoveredTimerState {
 struct SourceVisibilitySnapshot {
     observed_at_ms: i64,
     queue_offset: i64,
+}
+
+/// One Source batch, planned against the wheel before anything is written.
+///
+/// A record links to the previous record of its slot, which can be an earlier record of the same
+/// batch, so record positions are assigned from the timer log end before the batch is appended.
+struct TimerIndexPlan {
+    log_end: i64,
+    records: Vec<(TimerLogRecord, u64)>,
+    /// Every touched slot as it stands after the batch.
+    slots: BTreeMap<i64, Slot>,
+    sources: Vec<IndexedTimerSource>,
+}
+
+impl TimerIndexPlan {
+    fn new(log_end: i64) -> Self {
+        Self {
+            log_end,
+            records: Vec::new(),
+            slots: BTreeMap::new(),
+            sources: Vec::new(),
+        }
+    }
+
+    fn position_of(&self, record_index: usize) -> i64 {
+        self.log_end + record_index as i64 * TimerLogRecord::SIZE as i64
+    }
+
+    fn next_position(&self) -> i64 {
+        self.position_of(self.records.len())
+    }
+}
+
+/// Metric inputs of one planned source, reported once its batch is committed.
+struct IndexedTimerSource {
+    real_topic: Option<CheetahString>,
+    deliver_time_ms: i64,
+    born_timestamp: i64,
+    is_delete: bool,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -1616,9 +1656,14 @@ impl TimerMessageStore {
             queue_offset = cq_unit.queue_offset + 1;
             batch.push(cq_unit);
         }
+        let Some(log_end) = self.timer_log_len() else {
+            return 0;
+        };
         let locators: Vec<_> = batch.iter().map(|unit| (unit.pos, unit.size)).collect();
         let messages = self.look_messages_by_locator(&locators, self.message_store_config.timer_pipeline_queue_bytes);
-        let mut indexed = 0usize;
+        let mut plan = TimerIndexPlan::new(log_end);
+        let mut owned_elsewhere = 0usize;
+        let mut next_queue_offset = None;
 
         for (cq_unit, message) in batch.into_iter().zip(messages) {
             let message = match message {
@@ -1644,9 +1689,8 @@ impl TimerMessageStore {
                 // The Extended materializer owns this source. Advancing the Java-compatible
                 // enqueue cursor is safe because its independent cleanup fence remains pinned
                 // until payload and Timeline commits are durable.
-                self.curr_queue_offset
-                    .store(cq_unit.queue_offset.saturating_add(1), Ordering::Relaxed);
-                indexed = indexed.saturating_add(1);
+                next_queue_offset = Some(cq_unit.queue_offset.saturating_add(1));
+                owned_elsewhere = owned_elsewhere.saturating_add(1);
                 continue;
             }
             if let Err(reason) = validate_timer_source_route(&message) {
@@ -1656,46 +1700,59 @@ impl TimerMessageStore {
             }
             let Some(deliver_time_ms) = parse_deliver_time_ms(&message) else {
                 warn!("skip a persisted timer payload with an invalid delivery deadline");
-                self.curr_queue_offset
-                    .store(cq_unit.queue_offset + 1, Ordering::Relaxed);
+                next_queue_offset = Some(cq_unit.queue_offset + 1);
                 continue;
             };
 
-            let (slot_time_ms, magic) = self.plan_timer_slot(
-                deliver_time_ms,
-                enqueue_reference_time_ms,
-                dequeue_cursor,
-                is_delete_timer_message(&message),
+            let is_delete = is_delete_timer_message(&message);
+            let (slot_time_ms, magic) =
+                self.plan_timer_slot(deliver_time_ms, enqueue_reference_time_ms, dequeue_cursor, is_delete);
+            self.plan_timer_index(
+                &mut plan,
+                slot_time_ms,
+                magic,
+                timer_generation(&message),
+                &cq_unit,
+                IndexedTimerSource {
+                    real_topic: message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC)),
+                    deliver_time_ms,
+                    born_timestamp: message.born_timestamp(),
+                    is_delete,
+                },
             );
-            match self.index_timer_message(slot_time_ms, magic, timer_generation(&message), &cq_unit) {
-                Ok(()) => {
-                    let real_topic =
-                        message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC));
-                    self.otel_timer_metrics
-                        .record_enqueue_total(real_topic.as_ref().map(|topic| topic.as_str()));
-                    self.otel_store_metrics.record_delay_message_latency_from_timestamps(
-                        deliver_time_ms,
-                        message.born_timestamp(),
-                        real_topic.as_ref().map(|topic| topic.as_str()),
-                    );
-                    if let Some(real_topic) = real_topic {
-                        if !is_delete_timer_message(&message) {
-                            self.timer_metrics.add_timing_count(&real_topic, 1);
-                        }
-                    }
-                    self.enqueue_tps_counter.record(1, current_millis() as i64);
-                    self.curr_queue_offset
-                        .store(cq_unit.queue_offset + 1, Ordering::Relaxed);
-                    indexed += 1;
-                }
-                Err(_error) => {
-                    error!(source_present = true, "index a timer payload into the wheel failed");
-                    break;
+            next_queue_offset = Some(cq_unit.queue_offset + 1);
+        }
+
+        // Nothing of the batch is visible before this commit; a failed commit keeps the cursor so
+        // the whole batch is planned again.
+        if let Err(_error) = self.commit_timer_index_plan(&plan) {
+            error!(
+                source_present = true,
+                "index a timer payload batch into the wheel failed"
+            );
+            return 0;
+        }
+        let indexed = plan.records.len();
+        for source in plan.sources {
+            let real_topic = source.real_topic.as_ref().map(|topic| topic.as_str());
+            self.otel_timer_metrics.record_enqueue_total(real_topic);
+            self.otel_store_metrics.record_delay_message_latency_from_timestamps(
+                source.deliver_time_ms,
+                source.born_timestamp,
+                real_topic,
+            );
+            if let Some(real_topic) = source.real_topic.as_ref() {
+                if !source.is_delete {
+                    self.timer_metrics.add_timing_count(real_topic, 1);
                 }
             }
         }
+        self.enqueue_tps_counter.record(indexed, current_millis() as i64);
+        if let Some(queue_offset) = next_queue_offset {
+            self.curr_queue_offset.store(queue_offset, Ordering::Relaxed);
+        }
 
-        indexed
+        indexed + owned_elsewhere
     }
 
     fn quarantine_source(&self, source_offset: i64, reason: CorruptionReason) {
@@ -1785,40 +1842,81 @@ impl TimerMessageStore {
         self.source_visible_through_ms.store(0, Ordering::Release);
     }
 
-    fn index_timer_message(
+    fn timer_log_len(&self) -> Option<i64> {
+        let length = self.timer_log.lock().as_ref()?.len().ok()?;
+        i64::try_from(length).ok()
+    }
+
+    /// Adds one source to `plan`, linked after the last record of its slot as the wheel will hold
+    /// it once the earlier records of the batch are committed.
+    fn plan_timer_index(
         &self,
+        plan: &mut TimerIndexPlan,
         slot_time_ms: i64,
         magic: i32,
         generation: u64,
         cq_unit: &CqUnit,
-    ) -> std::io::Result<()> {
-        let current_slot = self.get_timer_wheel_slot(slot_time_ms);
-        let prev_pos = current_slot
-            .filter(|slot| slot.num > 0)
-            .map(|slot| slot.last_pos)
-            .unwrap_or(EMPTY_TIMER_LOG_POS);
-        let record = TimerLogRecord {
-            deliver_time_ms: slot_time_ms,
-            commit_log_offset: cq_unit.pos,
-            size: cq_unit.size,
-            queue_offset: cq_unit.queue_offset,
-            prev_pos,
-            magic,
-        };
-        let record_pos = self
+        source: IndexedTimerSource,
+    ) {
+        let current_slot = plan
+            .slots
+            .get(&slot_time_ms)
+            .copied()
+            .or_else(|| self.get_timer_wheel_slot(slot_time_ms));
+        let linked_slot = current_slot.filter(|slot| slot.num > 0);
+        let record_pos = plan.next_position();
+        plan.records.push((
+            TimerLogRecord {
+                deliver_time_ms: slot_time_ms,
+                commit_log_offset: cq_unit.pos,
+                size: cq_unit.size,
+                queue_offset: cq_unit.queue_offset,
+                prev_pos: linked_slot.map(|slot| slot.last_pos).unwrap_or(EMPTY_TIMER_LOG_POS),
+                magic,
+            },
+            generation,
+        ));
+        plan.slots.insert(
+            slot_time_ms,
+            Slot::new_with_num_magic(
+                slot_time_ms,
+                linked_slot.map(|slot| slot.first_pos).unwrap_or(record_pos),
+                record_pos,
+                current_slot.map(|slot| slot.num + 1).unwrap_or(1),
+                current_slot.map(|slot| slot.magic | magic).unwrap_or(magic),
+            ),
+        );
+        plan.sources.push(source);
+    }
+
+    /// Appends the planned records in one timer log write, then updates every touched slot.
+    fn commit_timer_index_plan(&self, plan: &TimerIndexPlan) -> std::io::Result<()> {
+        if plan.records.is_empty() {
+            return Ok(());
+        }
+        let positions = self
             .timer_log
             .lock()
             .as_ref()
             .ok_or_else(|| std::io::Error::other("timer log is not loaded"))?
-            .append_record(record, generation)? as i64;
-        let first_pos = current_slot
-            .filter(|slot| slot.num > 0)
-            .map(|slot| slot.first_pos)
-            .unwrap_or(record_pos);
-        let num = current_slot.map(|slot| slot.num + 1).unwrap_or(1);
-        let slot_magic = current_slot.map(|slot| slot.magic | magic).unwrap_or(magic);
-        self.put_timer_wheel_slot(slot_time_ms, first_pos, record_pos, num, slot_magic)?;
-        Ok(())
+            .append_batch(&plan.records)?;
+        // The records link to the positions the plan assigned. Records placed anywhere else
+        // would break their slot chains, so the wheel is left untouched.
+        let placed_as_planned = positions.len() == plan.records.len()
+            && positions.iter().enumerate().all(|(index, position)| {
+                i64::try_from(*position).is_ok_and(|position| position == plan.position_of(index))
+            });
+        if !placed_as_planned {
+            return Err(std::io::Error::other(
+                "timer log placed an index batch away from its planned positions",
+            ));
+        }
+        let slots: Vec<_> = plan.slots.values().copied().collect();
+        self.timer_wheel
+            .lock()
+            .as_ref()
+            .ok_or_else(|| std::io::Error::other("timer wheel is not loaded"))?
+            .put_slots(&slots)
     }
 
     async fn deliver_slot(&self, slot_time_ms: i64, slot: Slot, limit: usize, delivery_epoch: u64) -> usize {
@@ -3748,6 +3846,58 @@ mod tests {
         assert_eq!(first_tick, 1);
         assert_eq!(timer_message_store.curr_queue_offset.load(Ordering::Relaxed), 2);
         assert_eq!(second_tick, 1);
+    }
+
+    #[tokio::test]
+    async fn enqueue_batches_link_slot_chains_within_and_across_batches() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+
+        assert!(initialize_and_load(&mut store).await);
+        // Whole seconds, so the slot time (the deadline rounded up to the precision) is the
+        // deadline itself.
+        let hot_deliver_ms = (current_millis() / 1_000 + 60) * 1_000;
+        let other_deliver_ms = hot_deliver_ms + 5_000;
+        for deliver_ms in [hot_deliver_ms, other_deliver_ms, hot_deliver_ms, hot_deliver_ms] {
+            assert!(store
+                .put_message(build_timer_message(&real_topic, deliver_ms))
+                .await
+                .is_ok());
+        }
+        store.reput_once().await;
+
+        // The second batch links its first record to the first batch through the wheel, and its
+        // second record to its first through the plan.
+        assert_eq!(timer_message_store.process_enqueue_stage(2), 2);
+        assert_eq!(timer_message_store.process_enqueue_stage(16), 2);
+        assert_eq!(timer_message_store.curr_queue_offset.load(Ordering::Relaxed), 4);
+
+        let record_size = TimerLogRecord::SIZE as i64;
+        let hot_slot = timer_message_store.get_timer_wheel_slot(hot_deliver_ms as i64).unwrap();
+        assert_eq!(
+            (hot_slot.num, hot_slot.first_pos, hot_slot.last_pos),
+            (3, 0, 3 * record_size)
+        );
+        let other_slot = timer_message_store
+            .get_timer_wheel_slot(other_deliver_ms as i64)
+            .unwrap();
+        assert_eq!(
+            (other_slot.num, other_slot.first_pos, other_slot.last_pos),
+            (1, record_size, record_size)
+        );
+        let hot_chain = timer_message_store.load_slot_entries(hot_slot).unwrap();
+        assert_eq!(
+            hot_chain.iter().map(|entry| entry.position).collect::<Vec<_>>(),
+            vec![0, 2 * record_size, 3 * record_size]
+        );
+        assert_eq!(
+            hot_chain
+                .iter()
+                .map(|entry| entry.record.queue_offset)
+                .collect::<Vec<_>>(),
+            vec![0, 2, 3]
+        );
     }
 
     #[tokio::test]

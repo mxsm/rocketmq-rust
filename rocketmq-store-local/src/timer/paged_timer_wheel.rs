@@ -179,20 +179,34 @@ impl PagedTimerWheel {
     }
 
     pub(crate) fn put_slot_checked(&self, index: usize, slot: Slot) -> Result<(), PagedTimerWheelFailure> {
-        let page_id = index / self.slots_per_page;
+        self.put_slots_checked(&[(index, slot)])
+    }
+
+    /// Writes every `(index, slot)` pair under one lock. All indexes are validated first, so a
+    /// rejected batch leaves the wheel unchanged.
+    pub(crate) fn put_slots_checked(&self, updates: &[(usize, Slot)]) -> Result<(), PagedTimerWheelFailure> {
         let mut state = self.state.lock();
-        let current = state.slots.get_mut(index).ok_or(PagedTimerWheelFailure::Violation(
-            PagedTimerWheelViolation::SlotOutOfRange(index),
-        ))?;
-        if *current == slot {
-            return Ok(());
+        if let Some((index, _)) = updates.iter().find(|(index, _)| *index >= state.slots.len()) {
+            return Err(PagedTimerWheelFailure::Violation(
+                PagedTimerWheelViolation::SlotOutOfRange(*index),
+            ));
         }
-        *current = slot;
-        state.dirty_pages.insert(page_id);
-        state.page_versions[page_id] = state.page_versions[page_id].saturating_add(1);
-        let range = self.page_slot_range(page_id);
-        state.non_empty_pages[page_id] = state.slots[range].iter().any(|value| value.num > 0);
-        self.metrics.set_dirty_pages(state.dirty_pages.len() as u64);
+        let mut changed = false;
+        for (index, slot) in updates.iter().copied() {
+            if state.slots[index] == slot {
+                continue;
+            }
+            let page_id = index / self.slots_per_page;
+            state.slots[index] = slot;
+            state.dirty_pages.insert(page_id);
+            state.page_versions[page_id] = state.page_versions[page_id].saturating_add(1);
+            let range = self.page_slot_range(page_id);
+            state.non_empty_pages[page_id] = state.slots[range].iter().any(|value| value.num > 0);
+            changed = true;
+        }
+        if changed {
+            self.metrics.set_dirty_pages(state.dirty_pages.len() as u64);
+        }
         Ok(())
     }
 
@@ -746,5 +760,31 @@ mod tests {
             reloaded.load_checked(generation),
             Err(PagedTimerWheelFailure::InvalidPage(0))
         ));
+    }
+
+    #[test]
+    fn put_slots_writes_all_slots_or_none() {
+        let directory = tempdir().unwrap();
+        let metrics = Arc::new(TimerStorageMetrics::default());
+        let wheel = PagedTimerWheel::new(directory.path(), 16, 288, Arc::clone(&metrics))
+            .unwrap()
+            .unwrap();
+        wheel.load(0).unwrap();
+        let first = Slot::new_with_num_magic(1_000, 0, 40, 2, 1);
+        let second = Slot::new_with_num_magic(12_000, 80, 80, 1, 1);
+
+        assert!(matches!(
+            wheel.put_slots_checked(&[(1, first), (16, second)]),
+            Err(PagedTimerWheelFailure::Violation(
+                PagedTimerWheelViolation::SlotOutOfRange(16)
+            ))
+        ));
+        assert_eq!(wheel.get_slot(1).unwrap(), empty_slot());
+        assert_eq!(metrics.snapshot().dirty_pages, 0);
+
+        wheel.put_slots_checked(&[(1, first), (12, second)]).unwrap();
+        assert_eq!(wheel.get_slot(1).unwrap(), first);
+        assert_eq!(wheel.get_slot(12).unwrap(), second);
+        assert_eq!(metrics.snapshot().dirty_pages, 2);
     }
 }

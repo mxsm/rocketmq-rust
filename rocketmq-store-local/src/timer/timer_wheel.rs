@@ -164,6 +164,31 @@ impl TimerWheel {
         self.with_inner(|wheel| wheel.put_slot_checked(index, slot))
     }
 
+    /// Writes several slots at once, each at the wheel index of its `time_ms`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error, with no slot written, when the wheel is not loaded or a slot falls
+    /// outside it.
+    pub fn put_slots(&self, slots: &[Slot]) -> std::io::Result<()> {
+        let updates: Vec<_> = slots
+            .iter()
+            .map(|slot| {
+                (
+                    self.get_slot_index(slot.time_ms),
+                    Slot::new_with_num_magic(
+                        self.format_time_ms(slot.time_ms),
+                        slot.first_pos,
+                        slot.last_pos,
+                        slot.num,
+                        slot.magic,
+                    ),
+                )
+            })
+            .collect();
+        self.with_inner(|wheel| wheel.put_slots_checked(&updates))
+    }
+
     pub fn get_num(&self, time_ms: i64) -> i64 {
         self.get_slot(time_ms).map(|slot| slot.num as i64).unwrap_or_default()
     }

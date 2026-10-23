@@ -246,6 +246,9 @@ impl TimerLog {
             }
         }
         migrated.flush_checked().map_err(as_io_error)?;
+        // The log keeps its active segment open, and Windows refuses to rename a directory that
+        // holds an open file.
+        drop(migrated);
         write_marker(&migration_root.join(COMMITTED_MARKER))?;
         std::fs::rename(&migration_root, &v2_root)?;
         Ok(())
