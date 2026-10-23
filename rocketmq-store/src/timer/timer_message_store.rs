@@ -437,10 +437,9 @@ impl TimerMessageStore {
             return;
         }
 
-        let interval_ms = self
-            .message_store_config
-            .timer_precision_ms
-            .max(MIN_SCHEDULER_INTERVAL_MS);
+        // A running stage keeps going while its batches come back full, so the tick only
+        // restarts idle stages. Like Java's idle wait, it polls ten times per precision interval.
+        let interval_ms = (self.message_store_config.timer_precision_ms / 10).max(MIN_SCHEDULER_INTERVAL_MS);
         let scheduler_group = crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.timer.scheduler");
         let pipeline = match TimerPipeline::new(&self.runtime_scope, &self.message_store_config) {
             Some(pipeline) => pipeline,

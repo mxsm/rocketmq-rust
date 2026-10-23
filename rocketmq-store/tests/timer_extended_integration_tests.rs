@@ -82,6 +82,10 @@ fn service_context() -> ChildServiceContext {
 }
 
 fn new_store(root: &TempDir) -> LocalFileMessageStore {
+    new_store_with_scheduler_interval(root, 10)
+}
+
+fn new_store_with_scheduler_interval(root: &TempDir, scheduler_interval_ms: u64) -> LocalFileMessageStore {
     let mut config = MessageStoreConfig {
         store_path_root_dir: root.path().to_string_lossy().into_owned().into(),
         read_uncommitted: true,
@@ -92,7 +96,7 @@ fn new_store(root: &TempDir) -> LocalFileMessageStore {
         mapped_file_size_consume_queue: 200,
         ..MessageStoreConfig::default()
     };
-    config.timer_store_config.scheduler_interval_ms = 10;
+    config.timer_store_config.scheduler_interval_ms = scheduler_interval_ms;
     config.timer_store_config.materialize_batch_messages = 4;
 
     let topics = Arc::new(DashMap::new());
@@ -275,6 +279,31 @@ async fn materializer_payload_first_shadow_restart_keeps_one_year_payload_idempo
         1,
         "idempotent replay must not duplicate payload"
     );
+}
+
+#[tokio::test]
+async fn materializer_drains_a_backlog_larger_than_one_batch_in_a_single_run() {
+    let root = TempDir::new().expect("tempdir");
+    // With a one-minute interval only the run at start-up happens before the wait below ends.
+    let mut store = new_store_with_scheduler_interval(&root, 60_000);
+    store.init().await.expect("init");
+    assert!(store.load().await, "load");
+    for _ in 0..10 {
+        assert!(store.put_message(timer_message(1_800_000_000_000)).await.is_ok());
+    }
+    store.reput_once().await;
+
+    store.start().await.expect("start");
+    wait_for_zero_lag(&store).await;
+
+    assert_eq!(
+        store
+            .get_runtime_info()
+            .get("timerExtendedMaterializedRecords")
+            .map(String::as_str),
+        Some("10")
+    );
+    store.shutdown().await;
 }
 
 #[tokio::test]

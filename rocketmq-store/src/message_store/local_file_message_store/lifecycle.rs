@@ -47,6 +47,7 @@ impl LocalFileMessageStore {
         #[cfg(feature = "extended_timeline")]
         if let Some(engine) = self.extended_timeline_engine.as_ref() {
             let engine = engine.clone();
+            let shutdown = self.scheduled_task_shutdown.clone();
             let interval_ms = self.message_store_config.timer_store_config.scheduler_interval_ms;
             let max_messages = self.message_store_config.timer_store_config.materialize_batch_messages;
             let max_bytes = self.message_store_config.timer_store_config.materialize_batch_bytes;
@@ -55,17 +56,29 @@ impl LocalFileMessageStore {
                 ScheduledExecutionPolicy::default(),
                 move || {
                     let engine = engine.clone();
+                    let shutdown = shutdown.clone();
                     async move {
-                        let budget = WorkBudget::try_new(
-                            max_messages,
-                            max_bytes,
-                            Instant::now() + Duration::from_millis(interval_ms.max(100).saturating_mul(4)),
-                        );
-                        let Some(budget) = budget else {
-                            return;
-                        };
-                        if let Err(error) = engine.enqueue_source(budget).await.map(|_| ()) {
-                            warn!("Extended Timeline materialization paused at its cleanup fence: {error}");
+                        // Keep materializing while batches come back full, so a backlog is not
+                        // capped at one batch per interval; the fixed delay restarts an idle run.
+                        let work_timeout = Duration::from_millis(interval_ms.max(100).saturating_mul(4));
+                        let slice_deadline = Instant::now() + work_timeout;
+                        loop {
+                            let Some(budget) =
+                                WorkBudget::try_new(max_messages, max_bytes, Instant::now() + work_timeout)
+                            else {
+                                return;
+                            };
+                            match engine.enqueue_source(budget).await {
+                                Ok(progress)
+                                    if progress.messages >= max_messages
+                                        && !shutdown.is_cancelled()
+                                        && Instant::now() < slice_deadline => {}
+                                Ok(_) => return,
+                                Err(error) => {
+                                    warn!("Extended Timeline materialization paused at its cleanup fence: {error}");
+                                    return;
+                                }
+                            }
                         }
                     }
                 },
