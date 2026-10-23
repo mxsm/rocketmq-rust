@@ -55,6 +55,7 @@ use thiserror::Error;
 use crate::config::timer_store_config::TimerStoreConfig;
 use crate::log_file::commit_log::CommitLogReadHandle;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueLookupHandle;
+use crate::queue::ArcConsumeQueue;
 use crate::timer::delivery::delivery_shard;
 use crate::timer::timer_message_store::TIMER_TOPIC;
 
@@ -89,12 +90,41 @@ pub(crate) struct ShadowTimelineMaterializer {
     materialized_records: AtomicU64,
     materialized_bytes: AtomicU64,
     materialization_failures: AtomicU64,
+    unmaterialized_sources: Mutex<UnmaterializedSourceBytes>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TimelineMaterializationMode {
     Shadow,
     Formal { admission_epoch: TimerEngineEpoch },
+}
+
+/// Running total of the CommitLog sizes of the Timer CQ entries in `[start_offset, end_offset)`.
+#[derive(Debug, Default)]
+struct UnmaterializedSourceBytes {
+    start_offset: i64,
+    end_offset: i64,
+    bytes: u64,
+}
+
+impl UnmaterializedSourceBytes {
+    fn starting_at(offset: i64) -> Self {
+        Self {
+            start_offset: offset,
+            end_offset: offset,
+            bytes: 0,
+        }
+    }
+}
+
+/// Timer CQ entries that are not materialized yet.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct MaterializationBacklog {
+    /// Entries between the materialized checkpoint and the Timer CQ max offset.
+    pub(crate) messages: u64,
+    /// CommitLog bytes of those entries; an entry whose CQ unit cannot be read yet is charged
+    /// at the payload record ceiling.
+    pub(crate) bytes: u64,
 }
 
 impl ShadowTimelineMaterializer {
@@ -179,6 +209,7 @@ impl ShadowTimelineMaterializer {
             materialized_records: AtomicU64::new(0),
             materialized_bytes: AtomicU64::new(0),
             materialization_failures: AtomicU64::new(0),
+            unmaterialized_sources: Mutex::new(UnmaterializedSourceBytes::default()),
         };
         materializer.restore_cleanup_fence()?;
         Ok(materializer)
@@ -217,20 +248,13 @@ impl ShadowTimelineMaterializer {
 
     /// Returns bounded operational counters without scanning Timeline keys.
     pub(crate) fn metrics(&self) -> ExtendedTimelineShadowMetrics {
-        let checkpoint = self.source_checkpoint().ok();
-        let materialized_offset = checkpoint
-            .map(|checkpoint| checkpoint.materialized_source_offset.get())
-            .unwrap_or(-1);
-        let source_max_offset = self
-            .consume_queues
-            .find_or_create_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0)
-            .map(|queue| queue.read().get_max_offset_in_queue())
-            .unwrap_or_default();
+        let backlog = self.source_backlog();
         let payload = self.payload_store.metrics();
         let rocks = self.timeline.store().metrics();
         let ticker = self.timeline.store().ticker_metrics();
         ExtendedTimelineShadowMetrics {
-            materialization_lag: source_max_offset.saturating_sub(materialized_offset.saturating_add(1)) as u64,
+            materialization_lag: backlog.messages,
+            unmaterialized_source_bytes: backlog.bytes,
             materialized_records: self.materialized_records.load(Ordering::Relaxed),
             materialized_bytes: self.materialized_bytes.load(Ordering::Relaxed),
             materialization_failures: self.materialization_failures.load(Ordering::Relaxed),
@@ -243,6 +267,79 @@ impl ShadowTimelineMaterializer {
             timeline_errors: rocks.error_count,
             reconciliation: self.reconciler.snapshot(),
         }
+    }
+
+    /// Returns the Timer CQ entries that are not materialized yet, without the Timeline
+    /// statistics that [`Self::metrics`] also reads. Admission calls it for every Extended Timer.
+    pub(crate) fn source_backlog(&self) -> MaterializationBacklog {
+        let materialized_offset = self
+            .source_checkpoint()
+            .ok()
+            .map(|checkpoint| checkpoint.materialized_source_offset.get())
+            .unwrap_or(-1);
+        let start_offset = materialized_offset.saturating_add(1);
+        let Some(queue) = self
+            .consume_queues
+            .find_or_create_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0)
+        else {
+            return MaterializationBacklog::default();
+        };
+        let end_offset = queue.read().get_max_offset_in_queue();
+        MaterializationBacklog {
+            messages: end_offset.saturating_sub(start_offset) as u64,
+            bytes: self.unmaterialized_source_bytes(&queue, start_offset, end_offset),
+        }
+    }
+
+    /// Returns the CommitLog bytes of the Timer CQ entries in `[start_offset, end_offset)`.
+    ///
+    /// The total is kept incrementally: an entry is read once when it is first counted and once
+    /// when it is materialized, so admission does not walk the whole backlog for every message.
+    /// An entry whose CQ unit cannot be read yet is charged at the payload record ceiling.
+    fn unmaterialized_source_bytes(&self, queue: &ArcConsumeQueue, start_offset: i64, end_offset: i64) -> u64 {
+        let mut tracked = self.unmaterialized_sources.lock();
+        if start_offset < tracked.start_offset || start_offset > tracked.end_offset || end_offset < tracked.end_offset {
+            *tracked = UnmaterializedSourceBytes::starting_at(start_offset);
+        }
+        let ceiling = self.config.payload_record_bytes as u64;
+        let unit_bytes = |size: i32| u64::try_from(size).unwrap_or(ceiling);
+        let queue = queue.read();
+        if tracked.start_offset < start_offset {
+            let consumed = start_offset.saturating_sub(tracked.start_offset);
+            let mut released = 0u64;
+            let mut read = 0i64;
+            if let Some(units) =
+                queue.iterate_from_with_count(tracked.start_offset, i32::try_from(consumed).unwrap_or(i32::MAX))
+            {
+                for unit in units {
+                    released = released.saturating_add(unit_bytes(unit.size));
+                    read = read.saturating_add(1);
+                }
+            }
+            if read == consumed {
+                tracked.bytes = tracked.bytes.saturating_sub(released);
+                tracked.start_offset = start_offset;
+            } else {
+                // Materialized entries were cleaned before they were released: count again.
+                *tracked = UnmaterializedSourceBytes::starting_at(start_offset);
+            }
+        }
+        if tracked.end_offset < end_offset {
+            let arrived = end_offset.saturating_sub(tracked.end_offset);
+            if let Some(units) =
+                queue.iterate_from_with_count(tracked.end_offset, i32::try_from(arrived).unwrap_or(i32::MAX))
+            {
+                for unit in units {
+                    if unit.queue_offset != tracked.end_offset {
+                        break;
+                    }
+                    tracked.bytes = tracked.bytes.saturating_add(unit_bytes(unit.size));
+                    tracked.end_offset = tracked.end_offset.saturating_add(1);
+                }
+            }
+        }
+        let unread = u64::try_from(end_offset.saturating_sub(tracked.end_offset)).unwrap_or(0);
+        tracked.bytes.saturating_add(unread.saturating_mul(ceiling))
     }
 
     /// Recomputes the fail-closed cleanup fence after ConsumeQueue recovery.
@@ -787,6 +884,7 @@ fn decode_route(
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ExtendedTimelineShadowMetrics {
     pub(crate) materialization_lag: u64,
+    pub(crate) unmaterialized_source_bytes: u64,
     pub(crate) materialized_records: u64,
     pub(crate) materialized_bytes: u64,
     pub(crate) materialization_failures: u64,
