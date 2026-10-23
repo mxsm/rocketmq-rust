@@ -19,6 +19,7 @@ pub mod paged_timer_wheel;
 pub mod partition_manifest;
 pub mod payload_record;
 pub mod payload_store;
+mod positional_io;
 pub mod segmented_timeline;
 pub mod segmented_timer_log;
 pub mod service;

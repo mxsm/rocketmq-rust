@@ -14,6 +14,7 @@
 
 use std::fs::File;
 use std::fs::OpenOptions;
+use std::io::BufWriter;
 use std::io::Read;
 use std::io::Seek;
 use std::io::SeekFrom;
@@ -30,6 +31,7 @@ const RECORD_MAGIC: u32 = 0x5444_5232;
 const VERSION: u16 = 2;
 const HEADER_SIZE: usize = 64;
 const RECORD_SIZE: usize = 56;
+const WRITE_BUFFER_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SlotDrainLocator {
@@ -84,7 +86,9 @@ impl SlotDrainLocator {
 pub struct SlotDrainFileBuilder {
     temporary_path: PathBuf,
     final_path: PathBuf,
-    file: File,
+    /// A hot slot spills every locator of its chain, so writes are buffered instead of costing one
+    /// system call per locator.
+    file: BufWriter<File>,
     slot_time_ms: i64,
     generation: u64,
     record_count: u64,
@@ -97,12 +101,13 @@ impl SlotDrainFileBuilder {
             std::fs::create_dir_all(parent)?;
         }
         let temporary_path = final_path.with_extension("tmp");
-        let mut file = OpenOptions::new()
+        let file = OpenOptions::new()
             .create(true)
             .read(true)
             .write(true)
             .truncate(true)
             .open(&temporary_path)?;
+        let mut file = BufWriter::with_capacity(WRITE_BUFFER_BYTES, file);
         file.write_all(&[0u8; HEADER_SIZE])?;
         Ok(Self {
             temporary_path,
@@ -124,12 +129,13 @@ impl SlotDrainFileBuilder {
         Ok(())
     }
 
-    pub fn finish(mut self) -> std::io::Result<SlotDrainFile> {
+    pub fn finish(self) -> std::io::Result<SlotDrainFile> {
         let header = encode_header(self.slot_time_ms, self.generation, self.record_count);
-        self.file.seek(SeekFrom::Start(0))?;
-        self.file.write_all(&header)?;
-        self.file.sync_data()?;
-        drop(self.file);
+        let mut file = self.file.into_inner().map_err(|error| error.into_error())?;
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(&header)?;
+        file.sync_data()?;
+        drop(file);
         if self.final_path.exists() {
             std::fs::remove_file(&self.final_path)?;
         }
