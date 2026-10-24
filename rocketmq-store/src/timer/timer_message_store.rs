@@ -131,6 +131,14 @@ struct RecoveredTimerState {
     queue_offset: i64,
 }
 
+/// The read slot and drain cursor of the checkpoint a store loads from.
+#[derive(Clone, Copy, Debug)]
+struct CommittedDrain {
+    slot_time_ms: i64,
+    /// Generation of the slot's remaining entries, then the processed count as page and record.
+    cursor: (u64, u32, u32),
+}
+
 /// A wall-clock time paired with the Timer CQ max offset read after it.
 ///
 /// Once the enqueue cursor reaches `queue_offset`, every Timer CQ entry that was visible at
@@ -444,6 +452,12 @@ impl TimerMessageStore {
             }
         }
 
+        // Recovery rewrites the checkpoint's read time; the drain cursor belongs to the read time
+        // it was committed with.
+        let committed_drain = CommittedDrain {
+            slot_time_ms: timer_checkpoint.last_read_time_ms(),
+            cursor: timer_checkpoint.drain_cursor(),
+        };
         let recovered_state = match self.recover_and_revise(&timer_checkpoint, &timer_log, &timer_wheel) {
             Ok(recovered_state) => recovered_state,
             Err(_error) => {
@@ -459,6 +473,10 @@ impl TimerMessageStore {
         *self.timer_checkpoint.lock() = Some(timer_checkpoint);
         *self.timer_log.lock() = Some(timer_log);
         *self.timer_wheel.lock() = Some(timer_wheel);
+        if let Err(_error) = self.restore_partial_slot_drain(committed_drain) {
+            error!(source_present = true, "restore the partially drained timer slot failed");
+            return false;
+        }
         let _ = self.timer_metrics.load();
         self.refresh_timer_backlog_distribution();
         if self.should_check_and_revise_metrics() {
@@ -940,13 +958,9 @@ impl TimerMessageStore {
     fn commit_durable_progress(&self) -> std::io::Result<bool> {
         let _checkpoint_guard = self.checkpoint_lock.lock();
         let _persistence_guard = self.persistence_gate.write();
-        // A partial slot depends on the complete tombstone summary built from its original chain.
-        // Until that slot is drained, keep the previous checkpoint authoritative. A crash may
-        // replay already delivered entries (with the same delivery token), but cannot lose a
-        // tombstone by publishing only the remaining suffix.
         if self.active_source_mutations.load(Ordering::Acquire) > 0
             || self.active_due_mutations.load(Ordering::Acquire) > 0
-            || !self.slot_drains.lock().is_empty()
+            || !self.slot_drains_fit_checkpoint()
         {
             return Ok(false);
         }
@@ -971,24 +985,24 @@ impl TimerMessageStore {
         };
         self.observe_persistence_stage(PersistenceStage::AfterTimerWheel)?;
 
-        let active_drain_cursor = self
+        // The drain cursor names the read slot by the wheel state committed with it and counts the
+        // entries of that slot processed in front of it.
+        let read_slot_time_ms = self.curr_read_time_ms.load(Ordering::Acquire);
+        let processed = self
             .slot_drains
             .lock()
-            .iter()
-            .min_by_key(|(slot_time, _)| *slot_time)
-            .map(|(_, active)| {
+            .get(&read_slot_time_ms)
+            .map_or(0, |active| active.plan.cursor());
+        let drain_cursor = self
+            .get_timer_wheel_slot(read_slot_time_ms)
+            .filter(|slot| slot.num > 0)
+            .map(|slot| {
                 (
-                    active.plan.generation(),
-                    (active.plan.cursor() / DEFAULT_IN_MEMORY_DRAIN_ENTRIES) as u32,
-                    (active.plan.cursor() % DEFAULT_IN_MEMORY_DRAIN_ENTRIES) as u32,
+                    slot_drain_generation(slot),
+                    (processed / DEFAULT_IN_MEMORY_DRAIN_ENTRIES) as u32,
+                    (processed % DEFAULT_IN_MEMORY_DRAIN_ENTRIES) as u32,
                 )
             });
-        let drain_cursor = active_drain_cursor.or_else(|| {
-            let slot_time_ms = self.curr_read_time_ms.load(Ordering::Acquire);
-            self.get_timer_wheel_slot(slot_time_ms)
-                .filter(|slot| slot.num > 0)
-                .map(|slot| (slot_drain_generation(slot), 0, 0))
-        });
         let checkpoint_generation = if let Some(timer_checkpoint) = self.timer_checkpoint.lock().as_ref() {
             let queue_offset = self.curr_queue_offset.load(Ordering::Acquire);
             let enqueue_suspended = self.enqueue_suspended.load(Ordering::Acquire);
@@ -1024,6 +1038,20 @@ impl TimerMessageStore {
         self.observe_persistence_stage(PersistenceStage::AfterCheckpoint)?;
         self.pending_progress.store(false, Ordering::Release);
         Ok(true)
+    }
+
+    /// A partially drained slot is committed with its drain cursor: the generation of its
+    /// remaining wheel slot and the number of entries already processed in front of it. On
+    /// restart the plan is rebuilt over the processed entries too, so a tombstone among them still
+    /// cancels entries that are pending. The cursor describes one slot, the one at the read
+    /// cursor; any other drain keeps the previous checkpoint authoritative.
+    fn slot_drains_fit_checkpoint(&self) -> bool {
+        let slot_drains = self.slot_drains.lock();
+        match slot_drains.len() {
+            0 => true,
+            1 => slot_drains.contains_key(&self.curr_read_time_ms.load(Ordering::Acquire)),
+            _ => false,
+        }
     }
 
     fn observe_persistence_stage(&self, stage: PersistenceStage) -> std::io::Result<()> {
@@ -1362,11 +1390,9 @@ impl TimerMessageStore {
             cursor = next_cursor;
         }
 
-        let (drain_generation, drain_page, drain_record) = timer_checkpoint.drain_cursor();
-        let processed = (drain_page as usize)
-            .checked_mul(DEFAULT_IN_MEMORY_DRAIN_ENTRIES)
-            .and_then(|value| value.checked_add(drain_record as usize))
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "timer drain cursor overflow"))?;
+        // The drain generation identifies the read slot's remaining entries as committed; entries
+        // in front of them were processed before the checkpoint.
+        let (drain_generation, _, _) = timer_checkpoint.drain_cursor();
         let mut rebuilt = Vec::with_capacity(records_by_slot.len());
         for (slot_time_ms, entries) in records_by_slot {
             let last_position = entries.last().map(|entry| entry.0).ok_or_else(|| {
@@ -1401,7 +1427,7 @@ impl TimerMessageStore {
                         break;
                     }
                 }
-                let suffix_start = matched.ok_or_else(|| {
+                start = matched.ok_or_else(|| {
                     std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         format!(
@@ -1409,18 +1435,6 @@ impl TimerMessageStore {
                         ),
                     )
                 })?;
-                start = suffix_start.checked_add(processed).ok_or_else(|| {
-                    std::io::Error::new(std::io::ErrorKind::InvalidData, "timer drain continuation overflow")
-                })?;
-                if start > entries.len() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!(
-                            "timer drain cursor {processed} exceeds the {} records in slot {slot_time_ms}",
-                            entries.len() - suffix_start
-                        ),
-                    ));
-                }
             }
             if start == entries.len() {
                 continue;
@@ -1508,6 +1522,17 @@ impl TimerMessageStore {
     }
 
     pub(crate) fn process_enqueue_stage_with_durability(&self, limit: usize) -> std::io::Result<(usize, bool)> {
+        let indexed = self.index_source_batch(limit);
+        let durable = if self.pending_progress.load(Ordering::Acquire) {
+            self.commit_durable_progress()?
+        } else {
+            true
+        };
+        Ok((indexed, durable))
+    }
+
+    /// Indexes one Source batch without committing it.
+    fn index_source_batch(&self, limit: usize) -> usize {
         let _stage_guard = self.enqueue_stage_lock.lock();
         let indexed = {
             let _mutation = AtomicActivityGuard::new(&self.active_source_mutations, &self.persistence_gate);
@@ -1517,12 +1542,7 @@ impl TimerMessageStore {
         if indexed > 0 {
             self.pending_progress.store(true, Ordering::Release);
         }
-        let durable = if self.pending_progress.load(Ordering::Acquire) {
-            self.commit_durable_progress()?
-        } else {
-            true
-        };
-        Ok((indexed, durable))
+        indexed
     }
 
     pub(crate) async fn process_due_stage(&self, limit: usize, delivery_epoch: u64) -> usize {
@@ -1569,21 +1589,25 @@ impl TimerMessageStore {
         delivered
     }
 
+    /// Runs one pipeline Source batch. Its changes become durable with the next pipeline
+    /// checkpoint, so the batch reports itself as not durable.
     pub(crate) async fn process_pipeline_enqueue_stage(
         self: &Arc<Self>,
         limit: usize,
     ) -> std::io::Result<(usize, bool)> {
         let _pipeline_guard = self.process_lock.lock().await;
         let store = Arc::clone(self);
-        self.runtime_scope
+        let indexed = self
+            .runtime_scope
             .storage_io()
-            .spawn_io("timer-source-materialization", move || {
-                store.process_enqueue_stage_with_durability(limit)
-            })
+            .spawn_io("timer-source-materialization", move || store.index_source_batch(limit))
             .await
-            .map_err(|error| std::io::Error::other(format!("timer source materialization task failed: {error}")))?
+            .map_err(|error| std::io::Error::other(format!("timer source materialization task failed: {error}")))?;
+        Ok((indexed, false))
     }
 
+    /// Runs one pipeline Due batch; like a Source batch, it is committed by the next pipeline
+    /// checkpoint.
     pub(crate) async fn process_pipeline_due_stage(
         self: &Arc<Self>,
         limit: usize,
@@ -1591,21 +1615,25 @@ impl TimerMessageStore {
     ) -> std::io::Result<(usize, bool)> {
         let _pipeline_guard = self.process_lock.lock().await;
         let delivered = self.process_due_stage_mutation(limit, delivery_epoch).await;
-        let durable = if self.pending_progress.load(Ordering::Acquire) {
-            let store = Arc::clone(self);
-            self.runtime_scope
-                .storage_io()
-                .spawn_io("timer-due-checkpoint", move || store.commit_durable_progress())
-                .await
-                .map_err(|error| std::io::Error::other(format!("timer due checkpoint task failed: {error}")))??
-        } else {
-            true
-        };
-        Ok((delivered, durable))
+        Ok((delivered, false))
     }
 
-    pub(crate) fn commit_pipeline_progress(&self) -> std::io::Result<bool> {
-        self.commit_durable_progress()
+    /// Commits pipeline progress, once per `timerFlushIntervalMs` from the pipeline's checkpoint
+    /// worker. Holding the process lock places the commit between stage batches, so no stage
+    /// change is in flight. Returns whether every finished batch is now durable.
+    pub(crate) async fn process_pipeline_checkpoint(self: &Arc<Self>) -> std::io::Result<bool> {
+        let _pipeline_guard = self.process_lock.lock().await;
+        // Every batch marks pending progress after its changes, and a commit clears the flag
+        // only once those changes are on disk.
+        if !self.pending_progress.load(Ordering::Acquire) {
+            return Ok(true);
+        }
+        let store = Arc::clone(self);
+        self.runtime_scope
+            .storage_io()
+            .spawn_io("timer-checkpoint", move || store.commit_durable_progress())
+            .await
+            .map_err(|error| std::io::Error::other(format!("timer checkpoint task failed: {error}")))?
     }
 
     pub(crate) fn is_storage_loaded(&self) -> bool {
@@ -2096,22 +2124,77 @@ impl TimerMessageStore {
     }
 
     fn take_or_build_slot_drain(&self, slot: Slot) -> std::io::Result<ActiveSlotDrain> {
-        if let Some(active) = self.slot_drains.lock().remove(&slot.time_ms) {
-            if active.plan.matches_slot(slot)? {
-                return Ok(active);
-            }
-            active.plan.remove()?;
+        let Some(active) = self.slot_drains.lock().remove(&slot.time_ms) else {
+            return self.build_slot_drain(slot, 0);
+        };
+        if active.plan.matches_slot(slot)? {
+            return Ok(active);
         }
+        // Records reached the slot while it was being drained. The processed entries stay part of
+        // the plan, so their tombstones keep cancelling entries that are still pending.
+        let processed = active.plan.cursor();
+        let first_position = active.plan.first_position()?;
+        active.plan.remove()?;
+        if processed > 0 {
+            match self.build_slot_drain(slot, processed) {
+                Ok(rebuilt) if rebuilt.plan.first_position()? == first_position => return Ok(rebuilt),
+                Ok(rebuilt) => rebuilt.plan.remove()?,
+                Err(_error) => {}
+            }
+            warn!("a timer slot no longer extends its drain plan; rebuilding it from its remaining entries");
+        }
+        self.build_slot_drain(slot, 0)
+    }
 
+    /// Rebuilds the drain plan of a slot committed in the middle of its drain. It runs during
+    /// load, before any new record can reach the slot, so the remaining wheel slot is still the
+    /// committed one.
+    fn restore_partial_slot_drain(&self, committed: CommittedDrain) -> std::io::Result<()> {
+        let (generation, page, record) = committed.cursor;
+        let processed = (page as usize)
+            .checked_mul(DEFAULT_IN_MEMORY_DRAIN_ENTRIES)
+            .and_then(|value| value.checked_add(record as usize))
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "timer drain cursor overflow"))?;
+        if processed == 0 {
+            return Ok(());
+        }
+        let slot = self
+            .get_timer_wheel_slot(committed.slot_time_ms)
+            .filter(|slot| slot.num > 0 && slot_drain_generation(*slot) == generation)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "timer drain cursor does not match the committed wheel slot {}",
+                        committed.slot_time_ms
+                    ),
+                )
+            })?;
+        let drain = self.build_slot_drain(slot, processed)?;
+        self.slot_drains.lock().insert(committed.slot_time_ms, drain);
+        Ok(())
+    }
+
+    /// Builds the drain plan of `slot` when `processed` entries in front of it were drained
+    /// already. The plan covers those entries too, for their tombstones, and starts after them.
+    fn build_slot_drain(&self, slot: Slot, processed: usize) -> std::io::Result<ActiveSlotDrain> {
+        let total = usize::try_from(slot.num.max(0))
+            .ok()
+            .and_then(|remaining| remaining.checked_add(processed))
+            .and_then(|total| i32::try_from(total).ok())
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "timer drain plan is too large"))?;
+        // The plan's own identity names its spill file only; checkpoints identify a slot by its
+        // remaining wheel state.
+        let chain = Slot::new_with_num_magic(slot.time_ms, slot.first_pos, slot.last_pos, total, slot.magic);
         let mut builder = SlotDrainPlanBuilder::new(
             self.message_store_config.store_path_root_dir.as_str(),
-            slot,
+            chain,
             DEFAULT_IN_MEMORY_DRAIN_ENTRIES,
             Arc::clone(&self.storage_metrics),
         )?;
         let mut delete_keys = HashSet::new();
-        let mut current_pos = slot.last_pos;
-        for _ in 0..slot.num.max(0) {
+        let mut current_pos = chain.last_pos;
+        for _ in 0..chain.num {
             if current_pos < 0 {
                 break;
             }
@@ -2145,18 +2228,20 @@ impl TimerMessageStore {
             }
             current_pos = record.prev_pos;
         }
-        let plan = builder.finish()?;
-        if plan.remaining() != slot.num.max(0) as usize {
+        let mut plan = builder.finish()?;
+        if plan.remaining() != chain.num as usize {
+            let declared = chain.num;
+            let found = plan.remaining();
+            plan.remove()?;
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!(
-                    "timer slot {} declares {} records but its chain contains {}",
-                    slot.time_ms,
-                    slot.num,
-                    plan.remaining()
+                    "timer slot {} declares {declared} records but its chain contains {found}",
+                    slot.time_ms
                 ),
             ));
         }
+        plan.skip(processed)?;
         Ok(ActiveSlotDrain { plan, delete_keys })
     }
 
@@ -2517,6 +2602,7 @@ mod tests {
     use std::path::Path;
     use std::path::PathBuf;
     use std::sync::atomic::AtomicI64;
+    use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
@@ -2539,6 +2625,7 @@ mod tests {
     use super::get_timer_check_path;
     use super::get_timer_log_path;
     use super::get_timer_wheel_path;
+    use super::slot_drain_generation;
     use super::validate_timer_source_route;
     use super::CorruptionReason;
     use super::MessageStoreConfig;
@@ -2896,7 +2983,9 @@ mod tests {
         assert!(timer_message_store.load());
         timer_message_store.start();
         assert!(timer_message_store.has_scheduler_handle());
-        assert_eq!(timer_message_store.scheduler_task_count(), 8);
+        // Three Source and three Due workers, the checkpoint worker, the completion coordinator
+        // and the scheduler tick.
+        assert_eq!(timer_message_store.scheduler_task_count(), 9);
 
         let report = timer_message_store
             .shutdown_gracefully_with_report()
@@ -3578,7 +3667,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn restart_before_slot_completion_replays_earlier_tombstone() {
+    async fn restart_in_the_middle_of_a_slot_keeps_the_tombstone_it_already_processed() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let config = config_with_root_and_limits(root_dir.as_str(), 1, 1, 1);
@@ -3613,12 +3702,115 @@ mod tests {
         let (mut reloaded, reloaded_timer, _) = build_store_with_timer_and_config(config);
         assert!(initialize_and_load(&mut reloaded).await);
         reloaded_timer.set_should_running_dequeue(true);
-        // Source materialization was durably checkpointed before the partial slot drain. Restart
-        // therefore replays only the slot, not the already indexed source records.
+        // The tombstone was processed before the checkpoint that left the slot half drained.
+        // Restart resumes after it, and the rebuilt plan still cancels its target.
         assert_eq!(reloaded_timer.process_once().await, 1);
-        assert_eq!(reloaded_timer.process_once().await, 1);
+        assert_eq!(reloaded_timer.process_once().await, 0);
         reloaded.reput_once().await;
         assert_eq!(reloaded.get_max_offset_in_queue(&real_topic, 0), 0);
+    }
+
+    #[tokio::test]
+    async fn records_reaching_a_half_drained_slot_keep_its_processed_tombstones() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let config = config_with_root_and_limits(root_dir.as_str(), 1, 1, 1);
+        let (mut store, timer_store, real_topic) = build_store_with_timer_and_config(config);
+        assert!(initialize_and_load(&mut store).await);
+        let deliver_ms = current_millis().saturating_sub(2_000);
+        assert!(store
+            .put_message(build_java_delete_timer_message(
+                &real_topic,
+                "late-recall-target",
+                deliver_ms,
+            ))
+            .await
+            .is_ok());
+        assert!(store
+            .put_message(build_timer_message(&real_topic, deliver_ms))
+            .await
+            .is_ok());
+        store.reput_once().await;
+        timer_store.set_should_running_dequeue(true);
+        // The tombstone is processed first and leaves the slot half drained.
+        assert_eq!(timer_store.process_once().await, 3);
+
+        // The recalled message reaches the Timer topic only now, as a rolled message does, and
+        // joins the slot that is being drained.
+        let mut target = build_timer_message(&real_topic, deliver_ms);
+        target.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
+            CheetahString::from_static_str("late-recall-target"),
+        );
+        target.properties_string = message_properties_to_string(target.get_properties());
+        assert!(store.put_message(target).await.is_ok());
+        store.reput_once().await;
+        assert_eq!(timer_store.process_once().await, 2);
+        assert_eq!(timer_store.process_once().await, 1);
+        store.reput_once().await;
+        assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
+    }
+
+    #[tokio::test]
+    async fn checkpoint_commits_a_half_drained_slot_with_its_processed_count() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let config = config_with_root_and_limits(root_dir.as_str(), 1, 1, 1);
+        let (mut store, timer_store, real_topic) = build_store_with_timer_and_config(config);
+        assert!(initialize_and_load(&mut store).await);
+        let deliver_ms = current_millis().saturating_sub(2_000);
+        for _ in 0..3 {
+            assert!(store
+                .put_message(build_timer_message(&real_topic, deliver_ms))
+                .await
+                .is_ok());
+        }
+        store.reput_once().await;
+        timer_store.set_should_running_dequeue(true);
+        assert_eq!(timer_store.process_once().await, 4);
+
+        let read_slot_ms = timer_store.curr_read_time_ms.load(Ordering::Acquire);
+        let remaining = timer_store.get_timer_wheel_slot(read_slot_ms).unwrap();
+        assert_eq!(remaining.num, 2);
+        assert!(timer_store.commit_durable_progress().unwrap());
+        assert_eq!(
+            timer_store.timer_checkpoint.lock().as_ref().unwrap().drain_cursor(),
+            (slot_drain_generation(remaining), 0, 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn pipeline_batches_stay_pending_until_the_pipeline_checkpoint() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let (mut store, timer_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        assert!(initialize_and_load(&mut store).await);
+        for delay_ms in [60_000, 61_000, 62_000] {
+            assert!(store
+                .put_message(build_timer_message(&real_topic, current_millis() + delay_ms))
+                .await
+                .is_ok());
+        }
+        store.reput_once().await;
+        let commits = Arc::new(AtomicUsize::new(0));
+        let commits_for_hook = Arc::clone(&commits);
+        *timer_store.persistence_observer.lock() = Some(Arc::new(move |stage| {
+            if stage == PersistenceStage::AfterCheckpoint {
+                commits_for_hook.fetch_add(1, Ordering::AcqRel);
+            }
+            Ok(())
+        }));
+
+        assert_eq!(
+            timer_store.process_pipeline_enqueue_stage(16).await.unwrap(),
+            (3, false)
+        );
+        assert_eq!(commits.load(Ordering::Acquire), 0);
+        assert!(timer_store.process_pipeline_checkpoint().await.unwrap());
+        assert_eq!(commits.load(Ordering::Acquire), 1);
+        // Nothing changed since, so the next checkpoint has nothing to write.
+        assert!(timer_store.process_pipeline_checkpoint().await.unwrap());
+        assert_eq!(commits.load(Ordering::Acquire), 1);
     }
 
     #[tokio::test]

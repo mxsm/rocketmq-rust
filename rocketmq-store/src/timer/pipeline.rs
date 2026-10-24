@@ -31,6 +31,7 @@ use rocketmq_runtime::QueueSnapshot;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_store_api::TimerEngineEpoch;
+use tokio_util::sync::CancellationToken;
 
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::runtime::StoreRuntimeScope;
@@ -56,12 +57,32 @@ struct PumpRequest {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct CompletionEvent {
+enum CompletionEvent {
+    Request(RequestCompletion),
+    Checkpoint(CheckpointCompletion),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RequestCompletion {
     stage: PipelineStage,
     sequence: u64,
     epoch: u64,
     messages: usize,
     durable: bool,
+}
+
+/// Requests made durable by one engine checkpoint: Source requests through `source_through` and
+/// Due requests through `due`.
+#[derive(Clone, Copy, Debug)]
+struct CheckpointCompletion {
+    source_through: u64,
+    due: Option<FinishedRequest>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct FinishedRequest {
+    epoch: u64,
+    sequence: u64,
 }
 
 #[derive(Debug, Default)]
@@ -151,6 +172,13 @@ pub(crate) struct TimerPipeline {
     configured_source_workers: usize,
     configured_due_workers: usize,
     remaining_workers: AtomicUsize,
+    checkpoint_interval: Duration,
+    /// Last Source request whose batches have all returned. Requests of one stage run one at a
+    /// time, so every earlier request has returned as well.
+    finished_source: AtomicU64,
+    /// Last Due request whose batches have all returned.
+    finished_due: Mutex<Option<FinishedRequest>>,
+    closed: CancellationToken,
 }
 
 impl TimerPipeline {
@@ -207,6 +235,10 @@ impl TimerPipeline {
             configured_source_workers: config.timer_put_message_thread_num,
             configured_due_workers: config.timer_get_message_thread_num,
             remaining_workers: AtomicUsize::new(0),
+            checkpoint_interval: Duration::from_millis(config.timer_flush_interval_ms.max(1) as u64),
+            finished_source: AtomicU64::new(0),
+            finished_due: Mutex::new(None),
+            closed: CancellationToken::new(),
         }))
     }
 
@@ -223,7 +255,9 @@ impl TimerPipeline {
     {
         let source_workers = source_workers.max(1);
         let due_workers = due_workers.max(1);
-        let total_workers = source_workers.saturating_add(due_workers);
+        // The checkpoint worker holds a lease too, so completions close only after its last
+        // checkpoint event.
+        let total_workers = source_workers.saturating_add(due_workers).saturating_add(1);
         self.remaining_workers.store(total_workers, Ordering::Release);
         let mut attempted_workers = 0usize;
         for worker_id in 0..source_workers {
@@ -267,6 +301,21 @@ impl TimerPipeline {
             }
         }
         let pipeline = Arc::clone(self);
+        let lease = PipelineWorkerLease {
+            pipeline: Arc::clone(&pipeline),
+        };
+        attempted_workers += 1;
+        if task_group
+            .spawn("timer-checkpoint-worker", TaskKind::Worker, async move {
+                let _lease = lease;
+                pipeline.run_checkpoint_worker(engine).await;
+            })
+            .is_err()
+        {
+            self.abandon_unspawned(total_workers.saturating_sub(attempted_workers));
+            return false;
+        }
+        let pipeline = Arc::clone(self);
         if task_group
             .spawn("timer-completion-coordinator", TaskKind::Worker, async move {
                 pipeline.run_completion_coordinator(completion_gap_limit).await;
@@ -306,6 +355,7 @@ impl TimerPipeline {
     }
 
     pub(crate) fn close(&self) {
+        self.closed.cancel();
         self.source_queue.close();
         self.due_queue.close();
         if self.remaining_workers.load(Ordering::Acquire) == 0 {
@@ -373,6 +423,7 @@ impl TimerPipeline {
         while let Some(request) = self.source_queue.recv().await {
             let _active = ActiveWorkerGuard::new(&self.metrics.active_source_workers);
             let progress = self.run_until_idle(&engine, PipelineStage::Source, request.epoch).await;
+            self.finished_source.fetch_max(request.sequence, Ordering::AcqRel);
             self.publish_completion(PipelineStage::Source, request, progress).await;
         }
     }
@@ -384,7 +435,48 @@ impl TimerPipeline {
         while let Some(request) = self.due_queue.recv().await {
             let _active = ActiveWorkerGuard::new(&self.metrics.active_due_workers);
             let progress = self.run_until_idle(&engine, PipelineStage::Due, request.epoch).await;
+            let finished = FinishedRequest {
+                epoch: request.epoch,
+                sequence: request.sequence,
+            };
+            {
+                let mut finished_due = self.finished_due.lock();
+                if finished_due.is_none_or(|current| finished > current) {
+                    *finished_due = Some(finished);
+                }
+            }
             self.publish_completion(PipelineStage::Due, request, progress).await;
+        }
+    }
+
+    /// Commits engine progress once per `timerFlushIntervalMs`, like Java's `TimerFlushService`,
+    /// and reports every request that had finished before the commit as durable. Stage batches
+    /// do not commit on their own.
+    async fn run_checkpoint_worker<E>(&self, engine: E)
+    where
+        E: TimerEngine,
+    {
+        loop {
+            tokio::select! {
+                () = self.closed.cancelled() => return,
+                () = tokio::time::sleep(self.checkpoint_interval) => {}
+            }
+            // Read before the commit starts: a request counted here has returned from all of its
+            // batches, so the commit covers its changes. Requests that finish later wait for the
+            // next checkpoint.
+            let covered = CheckpointCompletion {
+                source_through: self.finished_source.load(Ordering::Acquire),
+                due: *self.finished_due.lock(),
+            };
+            match engine.checkpoint().await {
+                Ok(true) => self.publish_event(CompletionEvent::Checkpoint(covered)).await,
+                // A refused or failed commit is retried on the next interval; the stages keep
+                // running in the meantime.
+                Ok(false) => {}
+                Err(_) => {
+                    self.metrics.retries.fetch_add(1, Ordering::Relaxed);
+                }
+            }
         }
     }
 
@@ -474,13 +566,17 @@ impl TimerPipeline {
         request: PumpRequest,
         progress: crate::timer::request::EngineBatchProgress,
     ) {
-        let mut event = CompletionEvent {
+        self.publish_event(CompletionEvent::Request(RequestCompletion {
             stage,
             sequence: request.sequence,
             epoch: request.epoch,
             messages: progress.messages,
             durable: progress.durable,
-        };
+        }))
+        .await;
+    }
+
+    async fn publish_event(&self, mut event: CompletionEvent) {
         loop {
             let deadline = Instant::now() + self.work_timeout;
             match self
@@ -518,51 +614,62 @@ impl TimerPipeline {
         let mut source = OrderedCompletionTracker::new(0, 0, gap_limit);
         let mut due = OrderedCompletionTracker::new(0, 0, gap_limit);
         while let Some(event) = self.completion_queue.recv().await {
-            let tracker = match event.stage {
-                PipelineStage::Source => &mut source,
-                PipelineStage::Due => {
-                    if event.epoch > due.epoch() {
-                        due.reset_epoch(event.epoch, event.sequence.saturating_sub(1));
+            match event {
+                CompletionEvent::Request(event) => {
+                    let tracker = match event.stage {
+                        PipelineStage::Source => &mut source,
+                        PipelineStage::Due => {
+                            if event.epoch > due.epoch() {
+                                due.reset_epoch(event.epoch, event.sequence.saturating_sub(1));
+                            }
+                            &mut due
+                        }
+                    };
+                    let disposition = if event.durable {
+                        tracker.commit_prefix(event.epoch, event.sequence)
+                    } else {
+                        tracker.observe_pending(event.epoch, event.sequence)
+                    };
+                    match disposition {
+                        CompletionDisposition::StaleEpoch => {
+                            self.metrics.stale_completions.fetch_add(1, Ordering::Relaxed);
+                        }
+                        CompletionDisposition::GapLimitReached => {
+                            self.metrics.quarantined.fetch_add(1, Ordering::Relaxed);
+                        }
+                        _ => {
+                            self.metrics
+                                .completed_messages
+                                .fetch_add(event.messages as u64, Ordering::Relaxed);
+                        }
                     }
-                    &mut due
                 }
-            };
-            let disposition = if event.durable {
-                tracker.commit_prefix(event.epoch, event.sequence)
-            } else {
-                tracker.observe_pending(event.epoch, event.sequence)
-            };
-            match disposition {
-                CompletionDisposition::StaleEpoch => {
-                    self.metrics.stale_completions.fetch_add(1, Ordering::Relaxed);
-                }
-                CompletionDisposition::GapLimitReached => {
-                    self.metrics.quarantined.fetch_add(1, Ordering::Relaxed);
-                }
-                _ => {
-                    self.metrics
-                        .completed_messages
-                        .fetch_add(event.messages as u64, Ordering::Relaxed);
+                CompletionEvent::Checkpoint(covered) => {
+                    if covered.source_through > 0 {
+                        source.commit_prefix(source.epoch(), covered.source_through);
+                    }
+                    if let Some(finished) = covered.due {
+                        if finished.epoch > due.epoch() {
+                            due.reset_epoch(finished.epoch, finished.sequence);
+                        } else {
+                            // A request of an older delivery epoch is stale; the tracker ignores it.
+                            due.commit_prefix(finished.epoch, finished.sequence);
+                        }
+                    }
                 }
             }
-            match event.stage {
-                PipelineStage::Source => {
-                    self.metrics
-                        .source_observed_completion
-                        .store(source.observed_through(), Ordering::Relaxed);
-                    self.metrics
-                        .source_durable_completion
-                        .store(source.durable_through(), Ordering::Relaxed);
-                }
-                PipelineStage::Due => {
-                    self.metrics
-                        .due_observed_completion
-                        .store(due.observed_through(), Ordering::Relaxed);
-                    self.metrics
-                        .due_durable_completion
-                        .store(due.durable_through(), Ordering::Relaxed);
-                }
-            }
+            self.metrics
+                .source_observed_completion
+                .store(source.observed_through(), Ordering::Relaxed);
+            self.metrics
+                .source_durable_completion
+                .store(source.durable_through(), Ordering::Relaxed);
+            self.metrics
+                .due_observed_completion
+                .store(due.observed_through(), Ordering::Relaxed);
+            self.metrics
+                .due_durable_completion
+                .store(due.durable_through(), Ordering::Relaxed);
             self.metrics
                 .completion_gaps
                 .store(source.gap_count().saturating_add(due.gap_count()), Ordering::Relaxed);
@@ -630,6 +737,8 @@ mod tests {
         source_calls: Arc<AtomicUsize>,
         entered: Arc<Notify>,
         permits: Arc<Semaphore>,
+        batches_durable: bool,
+        checkpoints: Arc<AtomicUsize>,
     }
 
     impl ScriptedEngine {
@@ -639,7 +748,15 @@ mod tests {
                 source_calls: Arc::new(AtomicUsize::new(0)),
                 entered: Arc::new(Notify::new()),
                 permits: Arc::new(Semaphore::new(permits)),
+                batches_durable: true,
+                checkpoints: Arc::new(AtomicUsize::new(0)),
             }
+        }
+
+        /// Batches report pending progress, as the Java-compatible engine's batches do.
+        fn with_pending_batches(mut self) -> Self {
+            self.batches_durable = false;
+            self
         }
     }
 
@@ -667,6 +784,7 @@ mod tests {
             };
             Ok(EngineBatchProgress {
                 messages,
+                durable: self.batches_durable,
                 ..EngineBatchProgress::empty()
             })
         }
@@ -676,7 +794,10 @@ mod tests {
             _epoch: TimerEngineEpoch,
             _budget: WorkBudget,
         ) -> Result<EngineBatchProgress, TimerEngineError> {
-            Ok(EngineBatchProgress::empty())
+            Ok(EngineBatchProgress {
+                durable: self.batches_durable,
+                ..EngineBatchProgress::empty()
+            })
         }
 
         async fn complete(&self, _timer_id: TimerId, _epoch: TimerEngineEpoch) -> Result<(), TimerEngineError> {
@@ -688,6 +809,7 @@ mod tests {
         }
 
         async fn checkpoint(&self) -> Result<bool, TimerEngineError> {
+            self.checkpoints.fetch_add(1, Ordering::AcqRel);
             Ok(true)
         }
 
@@ -704,7 +826,14 @@ mod tests {
         name: &'static str,
         engine: &ScriptedEngine,
     ) -> (Arc<TimerPipeline>, rocketmq_runtime::TaskGroup) {
-        let config = MessageStoreConfig::default();
+        spawn_pipeline_with_config(name, engine, MessageStoreConfig::default())
+    }
+
+    fn spawn_pipeline_with_config(
+        name: &'static str,
+        engine: &ScriptedEngine,
+        config: MessageStoreConfig,
+    ) -> (Arc<TimerPipeline>, rocketmq_runtime::TaskGroup) {
         let scope = crate::runtime::test_scope(name);
         let pipeline = TimerPipeline::new(&scope, &config).expect("default pipeline configuration is valid");
         let task_group = scope.task_group(name);
@@ -755,6 +884,35 @@ mod tests {
         assert_eq!(*pipeline.next_source_sequence.lock(), 1);
         assert_eq!(pipeline.snapshot().rejected_submissions(), 0);
         engine.permits.add_permits(1);
+        shutdown_pipeline(&pipeline, &task_group).await;
+    }
+
+    #[tokio::test]
+    async fn checkpoints_make_pending_completions_of_both_stages_durable() {
+        let engine = ScriptedEngine::new(0, Semaphore::MAX_PERMITS).with_pending_batches();
+        let config = MessageStoreConfig {
+            timer_flush_interval_ms: 10,
+            ..MessageStoreConfig::default()
+        };
+        let (pipeline, task_group) = spawn_pipeline_with_config("timer-pipeline-checkpoint-test", &engine, config);
+
+        pipeline.submit_tick(Some(1));
+        // Neither stage reports a durable batch, so only a checkpoint can advance either prefix.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let snapshot = pipeline.snapshot();
+                if snapshot.source_durable_completion == 1 && snapshot.due_durable_completion == 1 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("a checkpoint covers the finished Source and Due requests");
+
+        let snapshot = pipeline.snapshot();
+        assert_eq!(snapshot.completion_gaps(), 0);
+        assert!(engine.checkpoints.load(Ordering::Acquire) > 0);
         shutdown_pipeline(&pipeline, &task_group).await;
     }
 }
