@@ -77,15 +77,15 @@ impl RouteCachePolicy {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RouteCacheOutcomeKind {
+pub(crate) enum RouteResponseCacheStatus {
     Hit,
     Miss,
     Oversize,
 }
 
-pub(crate) struct RouteCacheOutcome {
+pub(crate) struct RouteResponseCacheResult {
     pub(crate) body: Bytes,
-    pub(crate) kind: RouteCacheOutcomeKind,
+    pub(crate) status: RouteResponseCacheStatus,
 }
 
 #[derive(Clone)]
@@ -184,22 +184,22 @@ impl RouteResponseCache {
         &self,
         key: RouteCacheKey,
         encode: impl FnOnce() -> NameServerResult<Vec<u8>>,
-    ) -> NameServerResult<RouteCacheOutcome> {
+    ) -> NameServerResult<RouteResponseCacheResult> {
         if let Some(value) = self.cache.get(&key) {
             return Ok(match value {
                 CachedRouteBody::Ready(body) => {
                     self.counters.hits.fetch_add(1, Ordering::Relaxed);
-                    RouteCacheOutcome {
+                    RouteResponseCacheResult {
                         body,
-                        kind: RouteCacheOutcomeKind::Hit,
+                        status: RouteResponseCacheStatus::Hit,
                     }
                 }
                 CachedRouteBody::Oversize(body) => {
                     self.cache.invalidate(&key);
                     self.counters.oversize.fetch_add(1, Ordering::Relaxed);
-                    RouteCacheOutcome {
+                    RouteResponseCacheResult {
                         body,
-                        kind: RouteCacheOutcomeKind::Oversize,
+                        status: RouteResponseCacheStatus::Oversize,
                     }
                 }
             });
@@ -222,16 +222,16 @@ impl RouteResponseCache {
             .map_err(route_encode_failure)?;
 
         match value {
-            CachedRouteBody::Ready(body) => Ok(RouteCacheOutcome {
+            CachedRouteBody::Ready(body) => Ok(RouteResponseCacheResult {
                 body,
-                kind: RouteCacheOutcomeKind::Miss,
+                status: RouteResponseCacheStatus::Miss,
             }),
             CachedRouteBody::Oversize(body) => {
                 self.cache.invalidate(&key);
                 self.counters.oversize.fetch_add(1, Ordering::Relaxed);
-                Ok(RouteCacheOutcome {
+                Ok(RouteResponseCacheResult {
                     body,
-                    kind: RouteCacheOutcomeKind::Oversize,
+                    status: RouteResponseCacheStatus::Oversize,
                 })
             }
         }
@@ -320,8 +320,8 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(first.kind, RouteCacheOutcomeKind::Miss);
-        assert_eq!(second.kind, RouteCacheOutcomeKind::Hit);
+        assert_eq!(first.status, RouteResponseCacheStatus::Miss);
+        assert_eq!(second.status, RouteResponseCacheStatus::Hit);
         assert_eq!(second.body, Bytes::from_static(&[1, 2, 3]));
         assert_eq!(encodes.load(Ordering::Relaxed), 1);
     }
@@ -338,8 +338,8 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            let outcome = cache.get_or_try_insert_with(key, || Ok(vec![index as u8])).unwrap();
-            assert_eq!(outcome.kind, RouteCacheOutcomeKind::Miss);
+            let cache_result = cache.get_or_try_insert_with(key, || Ok(vec![index as u8])).unwrap();
+            assert_eq!(cache_result.status, RouteResponseCacheStatus::Miss);
         }
     }
 
@@ -348,14 +348,14 @@ mod tests {
         let cache = cache(1024, 10, 4);
         let key = key(1, RouteVariant::Base, JsonEncoding::Legacy);
 
-        let outcome = cache.get_or_try_insert_with(key.clone(), || Ok(vec![0; 5])).unwrap();
+        let cache_result = cache.get_or_try_insert_with(key.clone(), || Ok(vec![0; 5])).unwrap();
         cache.run_pending_tasks();
 
-        assert_eq!(outcome.kind, RouteCacheOutcomeKind::Oversize);
-        assert_eq!(outcome.body.len(), 5);
+        assert_eq!(cache_result.status, RouteResponseCacheStatus::Oversize);
+        assert_eq!(cache_result.body.len(), 5);
         assert_eq!(cache.stats().entry_count, 0);
         let second = cache.get_or_try_insert_with(key, || Ok(vec![1; 5])).unwrap();
-        assert_eq!(second.kind, RouteCacheOutcomeKind::Oversize);
+        assert_eq!(second.status, RouteResponseCacheStatus::Oversize);
     }
 
     #[test]
@@ -402,7 +402,7 @@ mod tests {
         let retry = cache
             .get_or_try_insert_with(key, || Ok(vec![1, 2, 3]))
             .expect("failed route encoding must not be cached");
-        assert_eq!(retry.kind, RouteCacheOutcomeKind::Miss);
+        assert_eq!(retry.status, RouteResponseCacheStatus::Miss);
         assert_eq!(retry.body, Bytes::from_static(&[1, 2, 3]));
     }
 
