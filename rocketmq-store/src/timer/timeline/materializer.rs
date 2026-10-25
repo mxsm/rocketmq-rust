@@ -19,14 +19,12 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use bytes::Bytes;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
-use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_store_api::PersistedTimerRoute;
 use rocketmq_store_api::TimerEngineEpoch;
 use rocketmq_store_api::TimerEngineId;
@@ -57,6 +55,8 @@ use crate::log_file::commit_log::CommitLogReadHandle;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueLookupHandle;
 use crate::queue::ArcConsumeQueue;
 use crate::timer::delivery::delivery_shard;
+use crate::timer::source::read_timer_source_frames;
+use crate::timer::source::TimerSourceRead;
 use crate::timer::timer_message_store::TIMER_TOPIC;
 
 use super::shadow::ShadowExpectedRecord;
@@ -423,18 +423,39 @@ impl ShadowTimelineMaterializer {
             return Ok(0);
         }
 
-        let mut prepared = Vec::new();
+        // The batch is chosen from the consume queue sizes, then its frames are read together.
+        let mut selected = Vec::new();
         let mut retained_bytes = 0usize;
         for source in sources {
+            if source.size <= 0 {
+                return Err(TimelineMaterializerError::InvalidSourceSize);
+            }
             let size = usize::try_from(source.size).map_err(|_| TimelineMaterializerError::InvalidSourceSize)?;
-            if prepared.is_empty() && size > max_bytes {
+            if selected.is_empty() && size > max_bytes {
                 return Ok(0);
             }
-            if !prepared.is_empty() && retained_bytes.saturating_add(size) > max_bytes {
+            if !selected.is_empty() && retained_bytes.saturating_add(size) > max_bytes {
                 break;
             }
-            let raw_frame = self.read_frame(source)?;
-            let message = decode_frame(&raw_frame)?;
+            retained_bytes = retained_bytes.saturating_add(size);
+            selected.push(source);
+        }
+        let locators: Vec<_> = selected
+            .iter()
+            .map(|source| (source.physical_offset, source.size))
+            .collect();
+        let frames = read_timer_source_frames(&self.commit_log, &locators, retained_bytes);
+
+        let mut prepared = Vec::with_capacity(selected.len());
+        for (source, frame) in selected.into_iter().zip(frames) {
+            let (raw_frame, message) = match frame {
+                TimerSourceRead::Frame { bytes, message } => (bytes.to_vec(), message),
+                TimerSourceRead::Undecodable => return Err(TimelineMaterializerError::InvalidCommitLogFrame),
+                TimerSourceRead::InvalidLocator => return Err(TimelineMaterializerError::InvalidSourceSize),
+                TimerSourceRead::Missing | TimerSourceRead::ShortRead => {
+                    return Err(TimelineMaterializerError::SourcePayloadMissing(source.physical_offset));
+                }
+            };
             let mut decoded = decode_source(
                 source,
                 raw_frame,
@@ -462,10 +483,8 @@ impl ShadowTimelineMaterializer {
                     matches!(self.mode, TimelineMaterializationMode::Shadow),
                 )?;
                 prepared.push(PreparedSource::Existing(decoded));
-                retained_bytes = retained_bytes.saturating_add(size);
                 continue;
             }
-            retained_bytes = retained_bytes.saturating_add(size);
             prepared.push(PreparedSource::New(decoded));
         }
         if prepared.is_empty() {
@@ -682,17 +701,6 @@ impl ShadowTimelineMaterializer {
         Ok(checkpoint)
     }
 
-    fn read_frame(&self, source: SourceIdentity) -> Result<Vec<u8>, TimelineMaterializerError> {
-        if source.size <= 0 {
-            return Err(TimelineMaterializerError::InvalidSourceSize);
-        }
-        self.commit_log
-            .get_message(source.physical_offset, source.size)
-            .and_then(|result| result.get_bytes())
-            .map(|bytes| bytes.to_vec())
-            .ok_or(TimelineMaterializerError::SourcePayloadMissing(source.physical_offset))
-    }
-
     fn restore_cleanup_fence(&self) -> Result<(), TimelineMaterializerError> {
         let next = self
             .source_checkpoint()?
@@ -896,11 +904,6 @@ pub(crate) struct ExtendedTimelineShadowMetrics {
     pub(crate) timeline_bytes_read: u64,
     pub(crate) timeline_errors: u64,
     pub(crate) reconciliation: ShadowReconciliationSnapshot,
-}
-
-fn decode_frame(frame: &[u8]) -> Result<MessageExt, TimelineMaterializerError> {
-    MessageDecoder::decode(&mut Bytes::copy_from_slice(frame), true, false, false, false, false)
-        .ok_or(TimelineMaterializerError::InvalidCommitLogFrame)
 }
 
 fn property(message: &MessageExt, name: &'static str) -> Option<String> {
