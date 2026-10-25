@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::io::Seek;
@@ -45,6 +47,11 @@ const GENERATION_VERSION: u16 = 2;
 const GENERATION_HEADER_SIZE: usize = 24;
 const GENERATION_TRAILER_SIZE: usize = 4;
 
+/// Timer wheel slots persisted as checksummed pages in two page files and a generation journal.
+///
+/// Each page keeps up to two copies, one per page file. A flush writes a dirty page into the file
+/// that does not hold the copy the committed generation references, so a crash at any point of a
+/// flush leaves every committed copy intact. Flushes and commits must not run concurrently.
 pub struct PagedTimerWheel {
     directory: PathBuf,
     slots_total: usize,
@@ -62,6 +69,51 @@ struct PagedTimerWheelState {
     non_empty_pages: Vec<bool>,
     committed_generation: u64,
     max_generation: u64,
+    /// File holding the copy of each page that the committed generation references.
+    committed_files: Vec<PageFile>,
+    /// Pages flushed since their last commit, with the generation of the newest flush. That copy
+    /// is in the other file than the committed one.
+    uncommitted_pages: HashMap<usize, u64>,
+}
+
+/// One of the two page files.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PageFile {
+    A,
+    B,
+}
+
+impl PageFile {
+    /// File chosen by generation parity. Before copies were placed per page, every page of a
+    /// generation went there, so load looks there first.
+    fn for_generation(generation: u64) -> Self {
+        if generation.is_multiple_of(2) {
+            Self::A
+        } else {
+            Self::B
+        }
+    }
+
+    fn other(self) -> Self {
+        match self {
+            Self::A => Self::B,
+            Self::B => Self::A,
+        }
+    }
+
+    fn index(self) -> usize {
+        match self {
+            Self::A => 0,
+            Self::B => 1,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::A => PAGES_A,
+            Self::B => PAGES_B,
+        }
+    }
 }
 
 impl PagedTimerWheel {
@@ -92,6 +144,8 @@ impl PagedTimerWheel {
                 non_empty_pages: vec![false; page_count],
                 committed_generation: 0,
                 max_generation: 0,
+                committed_files: vec![PageFile::A; page_count],
+                uncommitted_pages: HashMap::new(),
             }),
         })
     }
@@ -102,22 +156,21 @@ impl PagedTimerWheel {
             self.initialize_files()?;
         }
         let expected_generations = self.load_expected_generations(committed_generation)?;
-        let mut pages_a = OpenOptions::new().read(true).open(self.directory.join(PAGES_A))?;
-        let mut pages_b = OpenOptions::new().read(true).open(self.directory.join(PAGES_B))?;
+        let mut page_files = [
+            OpenOptions::new().read(true).open(self.directory.join(PAGES_A))?,
+            OpenOptions::new().read(true).open(self.directory.join(PAGES_B))?,
+        ];
         let mut state = self.state.lock();
         state.committed_generation = 0;
         state.max_generation = 0;
+        state.uncommitted_pages.clear();
         for (page_id, expected_generation) in expected_generations.iter().copied().enumerate() {
-            let source = if expected_generation.is_multiple_of(2) {
-                &mut pages_a
-            } else {
-                &mut pages_b
-            };
-            let selected = self.read_page(source, page_id, expected_generation)?;
+            let (file, selected) = self.read_committed_page(&mut page_files, page_id, expected_generation)?;
             let range = self.page_slot_range(page_id);
             state.slots[range.clone()].copy_from_slice(&selected.slots[..range.len()]);
             state.page_versions[page_id] = selected.generation;
             state.non_empty_pages[page_id] = selected.non_empty;
+            state.committed_files[page_id] = file;
             state.max_generation = state.max_generation.max(selected.generation);
         }
         state.committed_generation = if committed_generation == u64::MAX {
@@ -171,6 +224,11 @@ impl PagedTimerWheel {
         state.non_empty_pages.fill(false);
         state.committed_generation = committed_generation;
         state.max_generation = committed_generation;
+        // No copy on disk is valid any more, so either file may take the rebuilt pages.
+        state
+            .committed_files
+            .fill(PageFile::for_generation(committed_generation));
+        state.uncommitted_pages.clear();
         Ok(())
     }
 
@@ -230,6 +288,9 @@ impl PagedTimerWheel {
         self.metrics.set_dirty_pages(state.dirty_pages.len() as u64);
     }
 
+    /// Writes every dirty page as the next generation and appends that generation to the journal.
+    /// Each page goes to the file that does not hold its committed copy, so the generation becomes
+    /// visible to load only once the journal record and a checkpoint naming it are durable.
     pub(crate) fn flush_dirty_checked(&self) -> Result<u64, PagedTimerWheelFailure> {
         let (generation, pages) = {
             let state = self.state.lock();
@@ -247,32 +308,40 @@ impl PagedTimerWheel {
                         page_id,
                         version: state.page_versions[page_id],
                         slots: state.slots[range].to_vec(),
+                        target: state.committed_files[page_id].other(),
                     }
                 })
                 .collect::<Vec<_>>();
             (generation, pages)
         };
 
-        let target = if generation.is_multiple_of(2) {
-            self.directory.join(PAGES_A)
-        } else {
-            self.directory.join(PAGES_B)
-        };
-        let started = Instant::now();
-        let mut file = OpenOptions::new().read(true).write(true).open(target)?;
+        let mut page_files: [Option<File>; 2] = [None, None];
         for page in &pages {
+            let file = match &mut page_files[page.target.index()] {
+                Some(file) => file,
+                empty => empty.insert(
+                    OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .open(self.directory.join(page.target.name()))?,
+                ),
+            };
             let encoded = self.encode_page(page.page_id, generation, &page.slots);
             file.seek(SeekFrom::Start((page.page_id * self.page_size) as u64))?;
             file.write_all(&encoded)?;
             self.metrics.record_physical_write(encoded.len() as u64);
         }
-        file.sync_data()?;
-        self.metrics.record_fsync(started.elapsed().as_nanos() as u64);
+        for file in page_files.iter().flatten() {
+            let started = Instant::now();
+            file.sync_data()?;
+            self.metrics.record_fsync(started.elapsed().as_nanos() as u64);
+        }
         self.append_generation(generation, pages.iter().map(|page| page.page_id))?;
 
         let mut state = self.state.lock();
         state.max_generation = state.max_generation.max(generation);
         for page in pages {
+            state.uncommitted_pages.insert(page.page_id, generation);
             if state.page_versions[page.page_id] == page.version {
                 state.dirty_pages.remove(&page.page_id);
                 state.page_versions[page.page_id] = generation;
@@ -282,12 +351,28 @@ impl PagedTimerWheel {
         Ok(generation)
     }
 
+    /// Records that a durable checkpoint names `generation`. Callers commit the generation they
+    /// flushed last: a page flushed again since then has overwritten the copy `generation` names.
     pub(crate) fn commit_generation_checked(&self, generation: u64) -> Result<(), PagedTimerWheelFailure> {
         let mut state = self.state.lock();
         if generation > state.max_generation {
             return Err(PagedTimerWheelFailure::GenerationNotWritten(generation));
         }
         state.committed_generation = state.committed_generation.max(generation);
+        let committed_generation = state.committed_generation;
+        let PagedTimerWheelState {
+            committed_files,
+            uncommitted_pages,
+            ..
+        } = &mut *state;
+        // A copy flushed at or before the committed generation is the one load reads now.
+        uncommitted_pages.retain(|page_id, flushed| {
+            if *flushed > committed_generation {
+                return true;
+            }
+            committed_files[*page_id] = committed_files[*page_id].other();
+            false
+        });
         Ok(())
     }
 
@@ -347,6 +432,28 @@ impl PagedTimerWheel {
         marker.write_all(b"paged-timer-wheel-v2\n")?;
         marker.sync_data()?;
         Ok(())
+    }
+
+    /// Reads the copy of `page_id` written at `expected_generation` from whichever page file holds
+    /// it. When neither does, the error is the one from the file chosen by generation parity.
+    fn read_committed_page(
+        &self,
+        page_files: &mut [File; 2],
+        page_id: usize,
+        expected_generation: u64,
+    ) -> Result<(PageFile, DecodedPage), PagedTimerWheelFailure> {
+        let first = PageFile::for_generation(expected_generation);
+        let first_error = match self.read_page(&mut page_files[first.index()], page_id, expected_generation) {
+            Ok(page) => return Ok((first, page)),
+            Err(error @ PagedTimerWheelFailure::Io(_)) => return Err(error),
+            Err(error) => error,
+        };
+        let second = first.other();
+        match self.read_page(&mut page_files[second.index()], page_id, expected_generation) {
+            Ok(page) => Ok((second, page)),
+            Err(error @ PagedTimerWheelFailure::Io(_)) => Err(error),
+            Err(_) => Err(first_error),
+        }
     }
 
     fn read_page(
@@ -577,6 +684,7 @@ struct FrozenPage {
     page_id: usize,
     version: u64,
     slots: Vec<Slot>,
+    target: PageFile,
 }
 
 struct DecodedPage {
@@ -760,6 +868,89 @@ mod tests {
             reloaded.load_checked(generation),
             Err(PagedTimerWheelFailure::InvalidPage(0))
         ));
+    }
+
+    fn flush_and_commit(wheel: &PagedTimerWheel, index: usize, slot: Slot) -> u64 {
+        wheel.put_slot(index, slot).unwrap();
+        let generation = wheel.flush_dirty().unwrap();
+        wheel.commit_generation(generation).unwrap();
+        generation
+    }
+
+    #[test]
+    fn a_flush_interrupted_before_its_commit_keeps_every_committed_copy() {
+        let directory = tempdir().unwrap();
+        let metrics = Arc::new(TimerStorageMetrics::default());
+        let wheel = PagedTimerWheel::new(directory.path(), 16, 288, Arc::clone(&metrics))
+            .unwrap()
+            .unwrap();
+        wheel.load(0).unwrap();
+        let first = Slot::new_with_num_magic(1_000, 40, 40, 1, 1);
+        let other_page = Slot::new_with_num_magic(9_000, 80, 80, 1, 1);
+        assert_eq!(flush_and_commit(&wheel, 1, first), 1);
+        assert_eq!(flush_and_commit(&wheel, 9, other_page), 2);
+
+        // Page 0 changes again at generation 3, which by parity shares a file with its committed
+        // generation-1 copy. The flush is interrupted before its commit and leaves a torn copy.
+        wheel
+            .put_slot(2, Slot::new_with_num_magic(2_000, 120, 120, 1, 1))
+            .unwrap();
+        assert_eq!(wheel.flush_dirty().unwrap(), 3);
+        for copy in [PAGES_A, PAGES_B] {
+            let mut file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(directory.path().join(copy))
+                .unwrap();
+            let mut header = [0u8; PAGE_HEADER_SIZE];
+            file.read_exact(&mut header).unwrap();
+            if read_u64(&header, 16) == 3 {
+                file.seek(SeekFrom::Start(PAGE_HEADER_SIZE as u64)).unwrap();
+                file.write_all(&[0xA5; 64]).unwrap();
+            }
+        }
+
+        let reloaded = PagedTimerWheel::new(directory.path(), 16, 288, metrics)
+            .unwrap()
+            .unwrap();
+        reloaded.load(2).unwrap();
+        assert_eq!(reloaded.get_slot(1).unwrap(), first);
+        assert_eq!(reloaded.get_slot(2).unwrap(), empty_slot());
+        assert_eq!(reloaded.get_slot(9).unwrap(), other_page);
+    }
+
+    #[test]
+    fn copies_keep_alternating_per_page_across_reloads() {
+        let directory = tempdir().unwrap();
+        let metrics = Arc::new(TimerStorageMetrics::default());
+        let wheel = PagedTimerWheel::new(directory.path(), 16, 288, Arc::clone(&metrics))
+            .unwrap()
+            .unwrap();
+        wheel.load(0).unwrap();
+        flush_and_commit(&wheel, 1, Slot::new_with_num_magic(1_000, 40, 40, 1, 1));
+        flush_and_commit(&wheel, 9, Slot::new_with_num_magic(9_000, 80, 80, 1, 1));
+        let committed = Slot::new_with_num_magic(3_000, 120, 120, 1, 1);
+        assert_eq!(flush_and_commit(&wheel, 1, committed), 3);
+
+        // Generation 3's copy of page 0 is not in the file its parity names, and generation 2's
+        // copy of page 1 is not either.
+        let reloaded = PagedTimerWheel::new(directory.path(), 16, 288, Arc::clone(&metrics))
+            .unwrap()
+            .unwrap();
+        reloaded.load(3).unwrap();
+        assert_eq!(reloaded.get_slot(1).unwrap(), committed);
+        assert_eq!(reloaded.get_slot(9).unwrap().time_ms, 9_000);
+
+        // The reloaded wheel writes page 0 away from the copy it loaded.
+        reloaded
+            .put_slot(1, Slot::new_with_num_magic(4_000, 160, 160, 1, 1))
+            .unwrap();
+        assert_eq!(reloaded.flush_dirty().unwrap(), 4);
+        let interrupted = PagedTimerWheel::new(directory.path(), 16, 288, metrics)
+            .unwrap()
+            .unwrap();
+        interrupted.load(3).unwrap();
+        assert_eq!(interrupted.get_slot(1).unwrap(), committed);
     }
 
     #[test]
