@@ -100,6 +100,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **model:** Remove the ten deprecated `Message` constructors and `with_details_body`; use `Message::builder()` instead.
 - **refactor(client):** Remove the unused internal `ProducerConfigValidator`; active producer validation and accepted configuration values are unchanged ([#11761](https://github.com/mxsm/rocketmq-rust/issues/11761)).
 - **refactor(client):** Remove unused borrowed consumer downcast adapters; retain owned request downcasting ([#11852](https://github.com/mxsm/rocketmq-rust/issues/11852)).
+- **refactor(store):** Remove nine unused internal `IndexHeader` methods; retain checked updates and the existing index format ([#11858](https://github.com/mxsm/rocketmq-rust/issues/11858)).
 
 ### Fixed
 
