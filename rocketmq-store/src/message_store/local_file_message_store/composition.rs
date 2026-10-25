@@ -352,12 +352,12 @@ impl LocalFileMessageStore {
             Vec::new()
         };
         #[cfg(feature = "extended_timeline")]
-        let extended_timeline_completion_wake = Arc::new(TimelineCompletionWake::default());
+        let extended_timeline_completion_feed = Arc::new(TimelineCompletionFeed::default());
         #[cfg(feature = "extended_timeline")]
         let dispatcher_vec = {
             let mut dispatcher_vec = dispatcher_vec;
             if message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline {
-                dispatcher_vec.push(extended_timeline_completion_wake.clone());
+                dispatcher_vec.push(extended_timeline_completion_feed.clone());
             }
             dispatcher_vec
         };
@@ -558,7 +558,7 @@ impl LocalFileMessageStore {
             #[cfg(feature = "extended_timeline")]
             extended_timeline_recall_service: None,
             #[cfg(feature = "extended_timeline")]
-            extended_timeline_completion_wake,
+            extended_timeline_completion_feed,
             #[cfg(feature = "extended_timeline")]
             extended_timeline_completion_reconciler: None,
             #[cfg(feature = "extended_timeline")]
@@ -834,7 +834,7 @@ impl LocalFileMessageStore {
                 let completion = Arc::new(TimelineCompletionReconciler::new(
                     Arc::clone(&timeline),
                     self.commit_log.read_handle(),
-                    Arc::clone(&self.extended_timeline_completion_wake),
+                    Arc::clone(&self.extended_timeline_completion_feed),
                 ));
                 let timer_config = &self.message_store_config.timer_store_config;
                 let delivery = TimelineDeliveryCoordinator::new(
@@ -1288,6 +1288,17 @@ impl LocalFileMessageStore {
     #[cfg(all(test, feature = "extended_timeline"))]
     pub(crate) fn extended_timeline_engine_for_test(&self) -> Option<ExtendedTimelineEngine> {
         self.extended_timeline_engine.clone()
+    }
+
+    #[cfg(all(test, feature = "extended_timeline"))]
+    pub(crate) fn extended_timeline_completion_for_test(&self) -> Option<Arc<TimelineCompletionReconciler>> {
+        self.extended_timeline_completion_reconciler.clone()
+    }
+
+    /// The internal write path timer delivery uses, which accepts reserved timer properties.
+    #[cfg(all(test, feature = "extended_timeline"))]
+    pub(crate) fn timer_message_write_handle_for_test(&self) -> TimerMessageWriteHandle {
+        self.timer_message_write_handle()
     }
 
     pub(super) fn refresh_controller_confirm_offset_after_role_change(&self) {
