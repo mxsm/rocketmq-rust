@@ -130,7 +130,6 @@ impl SlotDrainPlanBuilder {
         };
         Ok(SlotDrainPlan {
             slot_time_ms: self.slot_time_ms,
-            generation: self.generation,
             total: storage.len(),
             cursor: 0,
             magic_counts: self.magic_counts,
@@ -141,7 +140,6 @@ impl SlotDrainPlanBuilder {
 
 pub(crate) struct SlotDrainPlan {
     slot_time_ms: i64,
-    generation: u64,
     total: usize,
     cursor: usize,
     magic_counts: [usize; 3],
@@ -149,10 +147,7 @@ pub(crate) struct SlotDrainPlan {
 }
 
 impl SlotDrainPlan {
-    pub fn generation(&self) -> u64 {
-        self.generation
-    }
-
+    /// Number of entries processed so far, counted from the oldest entry of the plan.
     pub fn cursor(&self) -> usize {
         self.cursor
     }
@@ -171,6 +166,29 @@ impl SlotDrainPlan {
             update_magic_counts(&mut self.magic_counts, entry.record.magic, -1);
         }
         self.cursor = (self.cursor + entries.len()).min(self.total);
+    }
+
+    /// Marks the next `count` entries as processed without returning them. They are read in
+    /// bounded pages only to keep the magic of the remaining entries exact.
+    pub fn skip(&mut self, count: usize) -> std::io::Result<()> {
+        let target = self.cursor.saturating_add(count).min(self.total);
+        while self.cursor < target {
+            let entries = self.read_batch((target - self.cursor).min(DEFAULT_IN_MEMORY_DRAIN_ENTRIES))?;
+            if entries.is_empty() {
+                break;
+            }
+            self.advance(&entries);
+        }
+        Ok(())
+    }
+
+    /// Timer log position of the oldest entry, processed or not.
+    pub fn first_position(&self) -> std::io::Result<Option<i64>> {
+        Ok(self
+            .storage
+            .read_batch(self.slot_time_ms, 0, self.total.min(1))?
+            .first()
+            .map(|entry| entry.position))
     }
 
     pub fn remaining_slot(&self) -> std::io::Result<Option<Slot>> {

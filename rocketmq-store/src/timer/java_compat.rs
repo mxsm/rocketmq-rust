@@ -72,7 +72,7 @@ impl TimerEngine for JavaCompatEngine {
     }
 
     async fn checkpoint(&self) -> Result<bool, TimerEngineError> {
-        Ok(self.store.commit_pipeline_progress()?)
+        Ok(self.store.process_pipeline_checkpoint().await?)
     }
 
     async fn on_role_change(&self, active: bool, _epoch: TimerEngineEpoch) -> Result<(), TimerEngineError> {

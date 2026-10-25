@@ -45,8 +45,8 @@ where
         .expect("bounded source pump");
     assert!(progress.messages <= 1);
     assert!(progress.bytes <= 1_024);
-    assert!(progress.durable);
-    engine.checkpoint().await.expect("checkpoint contract");
+    // A pump may leave its progress pending; a checkpoint makes every finished pump durable.
+    assert!(engine.checkpoint().await.expect("checkpoint contract"));
     engine.shutdown().await.expect("shutdown contract");
 }
 
