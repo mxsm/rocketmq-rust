@@ -70,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - **refactor(store):** Remove the unused internal `TopicQueueLock`; CommitLog append sequencing and configuration fields are unchanged ([#11850](https://github.com/mxsm/rocketmq-rust/issues/11850)).
+- **refactor(store):** Remove the unused internal `ByteBuffer` and commented message-buffer list scaffolding ([#11856](https://github.com/mxsm/rocketmq-rust/issues/11856)).
 - **refactor(broker):** Remove the unused internal `PollingHeader`; protocol headers and deferred polling behavior are unchanged ([#11759](https://github.com/mxsm/rocketmq-rust/issues/11759)).
 - **refactor(client):** Remove unused internal consumer core-pool increment/decrement no-ops; explicit pool resizing is unchanged ([#11724](https://github.com/mxsm/rocketmq-rust/issues/11724)).
 - **refactor(broker):** Remove unused private metrics attribute/status models and constant re-export modules ([#11652](https://github.com/mxsm/rocketmq-rust/issues/11652)).
