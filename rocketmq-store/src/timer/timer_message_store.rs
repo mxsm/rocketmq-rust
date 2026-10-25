@@ -83,8 +83,6 @@ use crate::timer::error::QuarantineManifest;
 use crate::timer::error::QuarantineRecord;
 use crate::timer::error::TimerWorkResult;
 use crate::timer::java_compat::JavaCompatEngine;
-use crate::timer::payload_cursor::TimerPayloadCursor;
-use crate::timer::payload_cursor::TimerPayloadCursorViolation;
 use crate::timer::pipeline::TimerPipeline;
 use crate::timer::pipeline::TimerPipelineDiagnostics;
 use crate::timer::role::TimerRoleState;
@@ -94,6 +92,8 @@ use crate::timer::slot_drain::SlotDrainEntry as TimerLogEntry;
 use crate::timer::slot_drain::SlotDrainPlan;
 use crate::timer::slot_drain::SlotDrainPlanBuilder;
 use crate::timer::slot_drain::DEFAULT_IN_MEMORY_DRAIN_ENTRIES;
+use crate::timer::source::read_timer_source_frames;
+use crate::timer::source::TimerSourceRead;
 use crate::timer::source_wake::TimerSourceWake;
 use crate::timer::timer_checkpoint::TimerCheckpoint;
 use crate::timer::timer_checkpoint::TimerCheckpointSnapshot;
@@ -628,73 +628,11 @@ impl TimerMessageStore {
         self.storage_metrics.snapshot()
     }
 
-    fn look_messages_by_locator(&self, locators: &[(i64, i32)], max_bytes: usize) -> Vec<TimerPayloadReadResult> {
+    fn read_source_frames(&self, locators: &[(i64, i32)], max_bytes: usize) -> Vec<TimerSourceRead> {
         let Some(store_context) = self.store_context.as_ref() else {
-            return locators.iter().map(|_| TimerPayloadReadResult::Missing).collect();
+            return locators.iter().map(|_| TimerSourceRead::Missing).collect();
         };
-        let mut output = Vec::with_capacity(locators.len());
-        let mut cursor = 0usize;
-        let mut retained_bytes = 0usize;
-        while cursor < locators.len() {
-            let (start, first_size) = locators[cursor];
-            let Ok(first_size) = usize::try_from(first_size) else {
-                output.push(TimerPayloadReadResult::InvalidLocator);
-                cursor += 1;
-                continue;
-            };
-            if start < 0 || first_size == 0 || retained_bytes.saturating_add(first_size) > max_bytes {
-                output.push(TimerPayloadReadResult::InvalidLocator);
-                cursor += 1;
-                continue;
-            }
-
-            let run_start = cursor;
-            let mut run_bytes = first_size;
-            let mut expected_next = start.saturating_add(first_size as i64);
-            cursor += 1;
-            while cursor < locators.len() {
-                let (next_offset, next_size) = locators[cursor];
-                let Ok(next_size) = usize::try_from(next_size) else {
-                    break;
-                };
-                if next_offset != expected_next
-                    || next_size == 0
-                    || retained_bytes.saturating_add(run_bytes).saturating_add(next_size) > max_bytes
-                    || run_bytes.saturating_add(next_size) > i32::MAX as usize
-                {
-                    break;
-                }
-                run_bytes += next_size;
-                expected_next = expected_next.saturating_add(next_size as i64);
-                cursor += 1;
-            }
-
-            let Some(segments) = store_context.commit_log.get_bulk_data(start, run_bytes as i32) else {
-                output.extend((run_start..cursor).map(|_| TimerPayloadReadResult::Missing));
-                retained_bytes = retained_bytes.saturating_add(run_bytes);
-                continue;
-            };
-            let mut payload_cursor = TimerPayloadCursor::new(segments);
-            if payload_cursor.remaining() != run_bytes {
-                output.extend((run_start..cursor).map(|_| TimerPayloadReadResult::ShortRead));
-                retained_bytes = retained_bytes.saturating_add(run_bytes);
-                continue;
-            }
-            for (_, size) in &locators[run_start..cursor] {
-                let size = *size as usize;
-                let result = match payload_cursor.take_frame(size) {
-                    Err(error) => match error {
-                        TimerPayloadCursorViolation::InvalidFrameSize { .. } => TimerPayloadReadResult::InvalidLocator,
-                        TimerPayloadCursorViolation::ShortRead { .. } => TimerPayloadReadResult::ShortRead,
-                    },
-                    Ok(mut bytes) => MessageDecoder::decode(&mut bytes, true, false, false, false, false)
-                        .map_or(TimerPayloadReadResult::Decode, TimerPayloadReadResult::Decoded),
-                };
-                output.push(result);
-            }
-            retained_bytes = retained_bytes.saturating_add(run_bytes);
-        }
-        output
+        read_timer_source_frames(&store_context.commit_log, locators, max_bytes)
     }
 
     /// Returns the immutable normalization policy fingerprint written at timer admission.
@@ -1683,22 +1621,22 @@ impl TimerMessageStore {
             return 0;
         };
         let locators: Vec<_> = batch.iter().map(|unit| (unit.pos, unit.size)).collect();
-        let messages = self.look_messages_by_locator(&locators, self.message_store_config.timer_pipeline_queue_bytes);
+        let frames = self.read_source_frames(&locators, self.message_store_config.timer_pipeline_queue_bytes);
         let mut plan = TimerIndexPlan::new(log_end);
         let mut owned_elsewhere = 0usize;
         let mut next_queue_offset = None;
 
-        for (cq_unit, message) in batch.into_iter().zip(messages) {
-            let message = match message {
-                TimerPayloadReadResult::Decoded(message) => message,
+        for (cq_unit, frame) in batch.into_iter().zip(frames) {
+            let message = match frame {
+                TimerSourceRead::Frame { message, .. } => message,
                 reason => {
                     let corruption = match reason {
-                        TimerPayloadReadResult::Missing => CorruptionReason::MissingPayload,
-                        TimerPayloadReadResult::ShortRead => CorruptionReason::ShortRead,
-                        TimerPayloadReadResult::Decode | TimerPayloadReadResult::InvalidLocator => {
+                        TimerSourceRead::Missing => CorruptionReason::MissingPayload,
+                        TimerSourceRead::ShortRead => CorruptionReason::ShortRead,
+                        TimerSourceRead::Undecodable | TimerSourceRead::InvalidLocator => {
                             CorruptionReason::UnsupportedRecord
                         }
-                        TimerPayloadReadResult::Decoded(_) => continue,
+                        TimerSourceRead::Frame { .. } => continue,
                     };
                     self.quarantine_source(cq_unit.queue_offset, corruption);
                     warn!("timer materialization is blocked by an unreadable persisted payload");
@@ -2634,6 +2572,8 @@ mod tests {
     use super::get_timer_check_path;
     use super::get_timer_log_path;
     use super::get_timer_wheel_path;
+    use super::parse_deliver_time_ms;
+    use super::read_timer_source_frames;
     use super::slot_drain_generation;
     use super::validate_timer_source_route;
     use super::CorruptionReason;
@@ -2646,6 +2586,7 @@ mod tests {
     use super::TimerLog;
     use super::TimerLogRecord;
     use super::TimerMessageStore;
+    use super::TimerSourceRead;
     use super::TimerWheel;
     use super::DAY_SECS;
     use super::EMPTY_TIMER_LOG_POS;
@@ -4467,6 +4408,54 @@ mod tests {
 
         assert_eq!(timer_message_store.process_once().await, 0);
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
+    }
+
+    #[tokio::test]
+    async fn source_frames_are_read_together_and_decoded_without_body() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        assert!(initialize_and_load(&mut store).await);
+        for delay_ms in [60_000, 61_000, 62_000] {
+            assert!(store
+                .put_message(build_timer_message(&real_topic, current_millis() + delay_ms))
+                .await
+                .is_ok());
+        }
+        store.reput_once().await;
+        let queue = timer_message_store
+            .find_store_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0)
+            .unwrap();
+        let units: Vec<_> = (0..3).map(|offset| queue.read().get(offset).unwrap()).collect();
+        let mut locators: Vec<_> = units.iter().map(|unit| (unit.pos, unit.size)).collect();
+        locators.push((-1, 64));
+        let commit_log = &timer_message_store.store_context.as_ref().unwrap().commit_log;
+
+        let reads = read_timer_source_frames(commit_log, &locators, usize::MAX);
+        for (unit, read) in units.iter().zip(&reads) {
+            let TimerSourceRead::Frame { bytes, message } = read else {
+                panic!("an indexed source frame is readable: {read:?}");
+            };
+            assert_eq!(bytes.len(), unit.size as usize);
+            assert_eq!(
+                &bytes[..],
+                &commit_log
+                    .get_message(unit.pos, unit.size)
+                    .unwrap()
+                    .get_bytes()
+                    .unwrap()[..]
+            );
+            assert_eq!(message.topic().as_str(), TIMER_TOPIC);
+            assert!(parse_deliver_time_ms(message).is_some());
+            assert!(message.get_body().is_none());
+        }
+        assert!(matches!(reads[3], TimerSourceRead::InvalidLocator));
+
+        // Frames past the byte budget are not read.
+        let budgeted = read_timer_source_frames(commit_log, &locators[..3], units[0].size as usize);
+        assert!(matches!(budgeted[0], TimerSourceRead::Frame { .. }));
+        assert!(matches!(budgeted[1], TimerSourceRead::InvalidLocator));
+        assert!(matches!(budgeted[2], TimerSourceRead::InvalidLocator));
     }
 
     #[tokio::test]
