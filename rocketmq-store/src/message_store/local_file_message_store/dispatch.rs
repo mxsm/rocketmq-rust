@@ -40,9 +40,22 @@ pub(super) struct ReputRuntimeContext {
     store_stats_service: Arc<StoreStatsService>,
     message_arrival: MessageArrivalCapability,
     long_polling_enable: bool,
+    timer_source_wake: Arc<TimerSourceWake>,
 }
 
 impl ReputRuntimeContext {
+    /// Wakes the timer source stages when the batch held a Timer topic record. Reput calls this
+    /// after every dispatcher has finished the batch, so the records are already in the Timer
+    /// consume queue.
+    fn wake_timer_sources(&self, dispatch_batch: &[DispatchRequest]) {
+        if dispatch_batch
+            .iter()
+            .any(|request| request.success && request.topic.as_str() == TIMER_TOPIC)
+        {
+            self.timer_source_wake.wake();
+        }
+    }
+
     pub(super) fn notify_message_arrive_for_multi_queue(&self, dispatch_request: &mut DispatchRequest) {
         let Some(message_arriving_listener) = self.message_arrival.snapshot() else {
             return;
@@ -293,6 +306,7 @@ impl LocalFileMessageStore {
             store_stats_service: self.store_stats_service.clone(),
             message_arrival: self.message_arrival.clone(),
             long_polling_enable: self.broker_config.long_polling_enable,
+            timer_source_wake: Arc::clone(&self.timer_source_wake),
         }
     }
 
@@ -976,6 +990,7 @@ async fn dispatch_reput_batch(
     runtime_context
         .store_stats_service
         .record_reput_dispatch_batch(batch_size, started.elapsed());
+    runtime_context.wake_timer_sources(dispatch_batch);
 
     if !notify_message_arrive_in_batch {
         for req in dispatch_batch.iter_mut() {

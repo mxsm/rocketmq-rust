@@ -202,6 +202,7 @@ use crate::timer::engine::TimerEngine;
 use crate::timer::engine::WorkBudget;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::role::TimerRoleState;
+use crate::timer::source_wake::TimerSourceWake;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::timeline::ExtendedTimelineEngine;
 #[cfg(feature = "extended_timeline")]
@@ -226,6 +227,7 @@ use crate::timer::timeline::TimelineRecallService;
 use crate::timer::timeline::TimelineSnapshotManager;
 use crate::timer::timer_message_store::TimerMessageStore;
 use crate::timer::timer_message_store::TimerStoreContext;
+use crate::timer::timer_message_store::TIMER_TOPIC;
 use crate::transfer::segment::SegmentLease;
 use crate::utils::store_util::TOTAL_PHYSICAL_MEMORY_SIZE;
 #[cfg(feature = "extended_timeline")]
@@ -655,6 +657,8 @@ pub struct LocalFileMessageStore {
     compaction_service: Option<CompactionService>,
 
     timer_message_store: Option<Arc<TimerMessageStore>>,
+    /// Woken by Reput after it dispatches Timer topic records; the timer source stages wait on it.
+    timer_source_wake: Arc<TimerSourceWake>,
     #[cfg(feature = "extended_timeline")]
     extended_timeline_cleanup_pin: Arc<AtomicI64>,
     #[cfg(feature = "extended_timeline")]
