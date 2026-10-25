@@ -21,9 +21,6 @@ use crate::base::select_result::SelectMappedBufferResult;
 pub struct GetMessageResult {
     /// The list of mapped buffer results.
     message_mapped_list: Vec<SelectMappedBufferResult>,
-    /// The list of message buffers.
-    /* message_buffer_list: Vec<Bytes>, *//* Using Vec<u8> as a simplified representation of
-     * ByteBuffer in Rust */
     /// The list of message queue offsets.
     message_queue_offset: Vec<u64>,
     /// The status of getting the message.
@@ -89,7 +86,6 @@ impl GetMessageResult {
     pub fn new() -> Self {
         GetMessageResult {
             message_mapped_list: Vec::with_capacity(100),
-            // message_buffer_list: Vec::with_capacity(100),
             message_queue_offset: Vec::with_capacity(100),
             ..Default::default()
         }
@@ -99,7 +95,6 @@ impl GetMessageResult {
     pub fn new_result_size(result_size: usize) -> Self {
         GetMessageResult {
             message_mapped_list: Vec::with_capacity(result_size),
-            //  message_buffer_list: Vec::with_capacity(result_size),
             message_queue_offset: Vec::with_capacity(result_size),
             ..Default::default()
         }
@@ -111,7 +106,6 @@ impl GetMessageResult {
         min_offset: i64,
         max_offset: i64,
         message_mapped_list: Vec<SelectMappedBufferResult>,
-        //message_buffer_list: Vec<ByteBuffer>,
         message_queue_offset: Vec<u64>,
     ) -> Self {
         GetMessageResult {
@@ -187,12 +181,6 @@ impl GetMessageResult {
     pub fn set_message_mapped_list(&mut self, message_mapped_list: Vec<SelectMappedBufferResult>) {
         self.message_mapped_list = message_mapped_list;
     }
-
-    /*
-    #[inline]
-    pub fn set_message_buffer_list(&mut self, message_buffer_list: Vec<Bytes>) {
-        self.message_buffer_list = message_buffer_list;
-    }*/
 
     #[inline]
     pub fn set_message_queue_offset(&mut self, message_queue_offset: Vec<u64>) {
@@ -295,15 +283,12 @@ impl GetMessageResult {
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
-
     use super::*;
     use crate::base::message_status_enum::GetMessageStatus;
     #[test]
     fn get_message_result_new() {
         let result = GetMessageResult::new();
         assert_eq!(result.message_mapped_list.capacity(), 100);
-        //assert_eq!(result.message_buffer_list.capacity(), 100);
         assert_eq!(result.message_queue_offset.capacity(), 100);
     }
 
@@ -311,14 +296,12 @@ mod tests {
     fn get_message_result_new_result_size() {
         let result = GetMessageResult::new_result_size(50);
         assert_eq!(result.message_mapped_list.capacity(), 50);
-        //assert_eq!(result.message_buffer_list.capacity(), 50);
         assert_eq!(result.message_queue_offset.capacity(), 50);
     }
 
     #[test]
     fn get_message_result_setters() {
         let mut result = GetMessageResult::new();
-        let buffer_list = vec![Bytes::from(vec![0u8; 10]); 10];
         let queue_offset = vec![0u64; 10];
         let status = Some(GetMessageStatus::Found);
         let next_begin_offset = 10;
@@ -331,7 +314,6 @@ mod tests {
         let commercial_size_per_msg = 20;
         let cold_data_sum = 500;
 
-        //result.set_message_buffer_list(buffer_list);
         result.set_message_queue_offset(queue_offset);
         result.set_status(status);
         result.set_next_begin_offset(next_begin_offset);
@@ -345,7 +327,6 @@ mod tests {
         result.set_cold_data_sum(cold_data_sum);
 
         assert_eq!(result.message_mapped_list.len(), 0);
-        // assert_eq!(result.message_buffer_list.len(), 10);
         assert_eq!(result.message_queue_offset.len(), 10);
         assert_eq!(result.status, status);
         assert_eq!(result.next_begin_offset, next_begin_offset);
