@@ -591,14 +591,21 @@ impl TimerMessageStore {
             .unwrap_or_default()
     }
 
+    /// Indexed timer messages per real topic, and the wheel's records over `timerDist` by their
+    /// remaining time. The topic counts are the timing counters the stages maintain; the
+    /// distribution is summed from wheel slot counts, like Java's `calcTimerDistribution`. No
+    /// payload is read and the wheel is not copied, so metric callbacks can poll it.
     pub fn runtime_backlog_metrics(&self) -> (HashMap<String, i64>, HashMap<i32, i64>) {
-        let backlog_metrics = self.collect_backlog_metrics();
+        let distribution = self.wheel_backlog_distribution();
         self.timer_metrics
-            .replace_timing_distribution_snapshot(backlog_metrics.distribution_snapshot());
-        (
-            backlog_metrics.topic_snapshot(),
-            backlog_metrics.distribution_snapshot(),
-        )
+            .replace_timing_distribution_snapshot(distribution.clone());
+        let topics = self
+            .timer_metrics
+            .get_timing_count_snapshot()
+            .into_iter()
+            .filter(|(_, count)| *count > 0)
+            .collect();
+        (topics, distribution)
     }
 
     pub fn get_enqueue_tps(&self) -> f32 {
@@ -1148,9 +1155,24 @@ impl TimerMessageStore {
     }
 
     fn refresh_timer_backlog_distribution(&self) {
-        let backlog_metrics = self.collect_backlog_metrics();
         self.timer_metrics
-            .replace_timing_distribution_snapshot(backlog_metrics.distribution_snapshot());
+            .replace_timing_distribution_snapshot(self.wheel_backlog_distribution());
+    }
+
+    /// Records in the wheel at or after the read cursor, over `timerDist` by the remaining time
+    /// of their slot. Slot counts include recall tombstones.
+    fn wheel_backlog_distribution(&self) -> HashMap<i32, i64> {
+        let now_ms = self.floor_time_ms(current_millis() as i64);
+        let read_cursor = self.curr_read_time_ms.load(Ordering::Relaxed);
+        let mut backlog_metrics = TimerBacklogMetrics::new(self.timer_metrics.timer_dist_list());
+        if let Some(timer_wheel) = self.timer_wheel.lock().as_ref() {
+            timer_wheel.visit_occupied_slots(|_, slot| {
+                if slot.time_ms > 0 && slot.time_ms >= read_cursor {
+                    backlog_metrics.observe_due(slot.time_ms, now_ms, i64::from(slot.num));
+                }
+            });
+        }
+        backlog_metrics.distribution_snapshot()
     }
 
     fn check_and_revise_metrics(&self) {
@@ -1159,8 +1181,7 @@ impl TimerMessageStore {
             return;
         }
 
-        let backlog_metrics = self.collect_backlog_metrics();
-        let actual_topic_backlog = backlog_metrics.topic_snapshot();
+        let actual_topic_backlog = self.collect_indexed_topic_backlog();
         let current_topic_backlog = self.timer_metrics.get_timing_count_snapshot();
         let mut revised_topic_backlog = current_topic_backlog.clone();
         let mut candidate_topics = HashSet::new();
@@ -1190,52 +1211,26 @@ impl TimerMessageStore {
         if revised_topic_backlog != current_topic_backlog {
             self.timer_metrics.replace_timing_count_snapshot(revised_topic_backlog);
         }
-        self.timer_metrics
-            .replace_timing_distribution_snapshot(backlog_metrics.distribution_snapshot());
+        self.refresh_timer_backlog_distribution();
     }
 
-    fn collect_backlog_metrics(&self) -> TimerBacklogMetrics {
+    /// Counts the indexed timer messages of each real topic by reading every pending payload in
+    /// the wheel. Only the metric revision pays for this scan. Like the timing counters it
+    /// corrects, it leaves out Timer CQ entries that are not indexed yet: indexing counts them.
+    fn collect_indexed_topic_backlog(&self) -> HashMap<String, i64> {
         let now_ms = self.floor_time_ms(current_millis() as i64);
-        let mut backlog_metrics = TimerBacklogMetrics::new(self.timer_metrics.timer_dist_list());
-        self.collect_unindexed_timer_queue_backlog(now_ms, &mut backlog_metrics);
-        self.collect_indexed_timer_wheel_backlog(now_ms, &mut backlog_metrics);
-        backlog_metrics
-    }
-
-    fn collect_unindexed_timer_queue_backlog(&self, now_ms: i64, backlog_metrics: &mut TimerBacklogMetrics) {
-        let Some(consume_queue) = self.find_store_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0) else {
-            return;
-        };
-
-        let max_offset = consume_queue.read().get_max_offset_in_queue();
-        let mut queue_offset = self.curr_queue_offset.load(Ordering::Relaxed);
-        while queue_offset < max_offset {
-            let Some(cq_unit) = consume_queue.read().get(queue_offset) else {
-                break;
-            };
-            let Some(message) = self.look_store_message(cq_unit.pos, cq_unit.size) else {
-                warn!("skip timer backlog metrics because a persisted payload is missing");
-                queue_offset = cq_unit.queue_offset + 1;
-                continue;
-            };
-            observe_backlog_message(backlog_metrics, &message, now_ms);
-            queue_offset = cq_unit.queue_offset + 1;
-        }
-    }
-
-    fn collect_indexed_timer_wheel_backlog(&self, now_ms: i64, backlog_metrics: &mut TimerBacklogMetrics) {
         let read_cursor = self.curr_read_time_ms.load(Ordering::Relaxed);
-        let slots = self
-            .timer_wheel
-            .lock()
-            .as_ref()
-            .map(TimerWheel::slots_snapshot)
-            .unwrap_or_default();
+        let mut slots = Vec::new();
+        if let Some(timer_wheel) = self.timer_wheel.lock().as_ref() {
+            timer_wheel.visit_occupied_slots(|_, slot| {
+                if slot.time_ms > 0 && slot.time_ms >= read_cursor {
+                    slots.push(slot);
+                }
+            });
+        }
 
+        let mut backlog_metrics = TimerBacklogMetrics::new(self.timer_metrics.timer_dist_list());
         for slot in slots {
-            if slot.num <= 0 || slot.time_ms <= 0 || slot.time_ms < read_cursor {
-                continue;
-            }
             let entries = match self.load_slot_entries(slot) {
                 Ok(entries) => entries,
                 Err(_error) => {
@@ -1252,9 +1247,10 @@ impl TimerMessageStore {
                     warn!("skip timer backlog metrics because a persisted payload is missing");
                     continue;
                 };
-                observe_backlog_message(backlog_metrics, &message, now_ms);
+                observe_backlog_message(&mut backlog_metrics, &message, now_ms);
             }
         }
+        backlog_metrics.topic_snapshot()
     }
 
     fn recover_and_revise(
@@ -4414,6 +4410,32 @@ mod tests {
         assert_eq!(
             reloaded_timer_message_store.timer_metrics.get_timing_count(&real_topic),
             0
+        );
+    }
+
+    #[tokio::test]
+    async fn metric_revision_leaves_unindexed_sources_to_indexing() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let config = config_with_metrics_check(root_dir.as_str(), 10);
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer_and_config(config.clone());
+        assert!(initialize_and_load(&mut store).await);
+        assert!(store
+            .put_message(build_timer_message(&real_topic, current_millis() + 60_000))
+            .await
+            .is_ok());
+        // The message reaches the Timer CQ but is not indexed before the restart.
+        store.reput_once().await;
+        drop(timer_message_store);
+        store.shutdown().await;
+        drop(store);
+
+        let (mut reloaded_store, reloaded_timer_message_store, _) = build_store_with_timer_and_config(config);
+        assert!(initialize_and_load(&mut reloaded_store).await);
+        assert_eq!(reloaded_timer_message_store.process_once().await, 1);
+        assert_eq!(
+            reloaded_timer_message_store.timer_metrics.get_timing_count(&real_topic),
+            1
         );
     }
 
