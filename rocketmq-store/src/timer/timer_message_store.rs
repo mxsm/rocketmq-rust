@@ -452,18 +452,17 @@ impl TimerMessageStore {
             }
         }
 
-        // Recovery rewrites the checkpoint's read time; the drain cursor belongs to the read time
-        // it was committed with.
-        let committed_drain = CommittedDrain {
-            slot_time_ms: timer_checkpoint.last_read_time_ms(),
-            cursor: timer_checkpoint.drain_cursor(),
-        };
         let recovered_state = match self.recover_and_revise(&timer_checkpoint, &timer_log, &timer_wheel) {
             Ok(recovered_state) => recovered_state,
             Err(_error) => {
                 error!(source_present = true, "recover timer state failed");
                 return false;
             }
+        };
+        // Recovery keeps the drain cursor with the read slot it names.
+        let committed_drain = CommittedDrain {
+            slot_time_ms: recovered_state.read_time_ms,
+            cursor: timer_checkpoint.drain_cursor(),
         };
 
         self.curr_read_time_ms
@@ -985,24 +984,14 @@ impl TimerMessageStore {
         };
         self.observe_persistence_stage(PersistenceStage::AfterTimerWheel)?;
 
-        // The drain cursor names the read slot by the wheel state committed with it and counts the
-        // entries of that slot processed in front of it.
         let read_slot_time_ms = self.curr_read_time_ms.load(Ordering::Acquire);
         let processed = self
             .slot_drains
             .lock()
             .get(&read_slot_time_ms)
             .map_or(0, |active| active.plan.cursor());
-        let drain_cursor = self
-            .get_timer_wheel_slot(read_slot_time_ms)
-            .filter(|slot| slot.num > 0)
-            .map(|slot| {
-                (
-                    slot_drain_generation(slot),
-                    (processed / DEFAULT_IN_MEMORY_DRAIN_ENTRIES) as u32,
-                    (processed % DEFAULT_IN_MEMORY_DRAIN_ENTRIES) as u32,
-                )
-            });
+        let (drain_generation, drain_page, drain_record) =
+            drain_cursor_of(self.get_timer_wheel_slot(read_slot_time_ms), processed);
         let checkpoint_generation = if let Some(timer_checkpoint) = self.timer_checkpoint.lock().as_ref() {
             let queue_offset = self.curr_queue_offset.load(Ordering::Acquire);
             let enqueue_suspended = self.enqueue_suspended.load(Ordering::Acquire);
@@ -1017,11 +1006,7 @@ impl TimerMessageStore {
             timer_checkpoint.set_last_timer_log_flush_pos(durable_timer_log_len);
             timer_checkpoint.set_wheel_generation(wheel_generation);
             timer_checkpoint.set_role_epoch(self.role_state.epoch());
-            if let Some((generation, page, record)) = drain_cursor {
-                timer_checkpoint.set_drain_cursor(generation, page, record);
-            } else {
-                timer_checkpoint.set_drain_cursor(0, 0, 0);
-            }
+            timer_checkpoint.set_drain_cursor(drain_generation, drain_page, drain_record);
             timer_checkpoint.flush()?;
             timer_checkpoint.local_generation()
         } else {
@@ -1465,6 +1450,12 @@ impl TimerMessageStore {
         recovered_queue_offset: i64,
         recovered_log_len: i64,
     ) -> std::io::Result<()> {
+        // A read cursor moved past the wheel window leaves the committed read slot behind, and
+        // its drain cursor with it. The recovered slot starts with nothing processed.
+        if recovered_read_time_ms != timer_checkpoint.last_read_time_ms() {
+            let (generation, page, record) = drain_cursor_of(timer_wheel.get_slot(recovered_read_time_ms), 0);
+            timer_checkpoint.set_drain_cursor(generation, page, record);
+        }
         timer_checkpoint.set_last_read_time_ms(recovered_read_time_ms);
         timer_checkpoint.set_last_timer_queue_offset(recovered_queue_offset);
         timer_checkpoint.set_master_timer_queue_offset(recovered_queue_offset);
@@ -2593,6 +2584,19 @@ fn stable_delivery_token(queue_offset: i64, generation: u64) -> CheetahString {
 
 fn need_roll(magic: i32) -> bool {
     (magic & MAGIC_ROLL) != 0
+}
+
+/// Checkpoint drain cursor of the read slot: the generation of its remaining wheel slot, then the
+/// number of its entries processed in front of that slot, as page and record. A read slot with
+/// nothing remaining has no cursor.
+fn drain_cursor_of(read_slot: Option<Slot>, processed: usize) -> (u64, u32, u32) {
+    read_slot.filter(|slot| slot.num > 0).map_or((0, 0, 0), |slot| {
+        (
+            slot_drain_generation(slot),
+            (processed / DEFAULT_IN_MEMORY_DRAIN_ENTRIES) as u32,
+            (processed % DEFAULT_IN_MEMORY_DRAIN_ENTRIES) as u32,
+        )
+    })
 }
 
 #[cfg(test)]
@@ -3777,6 +3781,46 @@ mod tests {
             timer_store.timer_checkpoint.lock().as_ref().unwrap().drain_cursor(),
             (slot_drain_generation(remaining), 0, 1)
         );
+    }
+
+    #[tokio::test]
+    async fn restart_past_the_wheel_window_leaves_the_half_drained_slot_behind() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let config = config_with_root_and_limits(root_dir.as_str(), 1, 1, 1);
+        let (mut store, timer_store, real_topic) = build_store_with_timer_and_config(config.clone());
+        assert!(initialize_and_load(&mut store).await);
+        let deliver_ms = current_millis().saturating_sub(2_000);
+        for _ in 0..3 {
+            assert!(store
+                .put_message(build_timer_message(&real_topic, deliver_ms))
+                .await
+                .is_ok());
+        }
+        store.reput_once().await;
+        timer_store.set_should_running_dequeue(true);
+        assert_eq!(timer_store.process_once().await, 4);
+        let half_drained_slot_ms = timer_store.curr_read_time_ms.load(Ordering::Acquire);
+        drop(timer_store);
+        store.shutdown().await;
+        drop(store);
+
+        // Recovery moves the read cursor to the start of the wheel window, past the slot the
+        // checkpoint left half drained.
+        let restart_ms = half_drained_slot_ms + i64::from(TIMER_WHEEL_TTL_DAY + 1) * i64::from(DAY_SECS) * 1_000;
+        let (mut reloaded, reloaded_timer, _) = build_store_with_timer_and_config(config.clone());
+        reloaded_timer.set_clock(Arc::new(ManualTimerClock::new(restart_ms)));
+        assert!(initialize_and_load(&mut reloaded).await);
+        assert!(reloaded_timer.curr_read_time_ms.load(Ordering::Acquire) > half_drained_slot_ms);
+        assert!(reloaded_timer.slot_drains.lock().is_empty());
+        assert!(reloaded_timer.commit_durable_progress().unwrap());
+        drop(reloaded_timer);
+        reloaded.shutdown().await;
+        drop(reloaded);
+
+        let (mut restarted, restarted_timer, _) = build_store_with_timer_and_config(config);
+        restarted_timer.set_clock(Arc::new(ManualTimerClock::new(restart_ms)));
+        assert!(initialize_and_load(&mut restarted).await);
     }
 
     #[tokio::test]
