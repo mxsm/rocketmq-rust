@@ -633,7 +633,7 @@ impl DefaultRequestProcessor {
     }
 
     async fn update_config(&self, request: &mut RemotingCommand) -> crate::NameServerResult<RemotingCommand> {
-        let mut apply_outcome = None;
+        let mut update_report = None;
         if let Some(body) = request.body() {
             let body_str = match str::from_utf8(body) {
                 Ok(s) => s,
@@ -665,25 +665,25 @@ impl DefaultRequestProcessor {
                 ));
             }
 
-            apply_outcome = Some(self.name_server_runtime_inner.update_runtime_config(properties).await?);
+            update_report = Some(self.name_server_runtime_inner.update_runtime_config(properties).await?);
         }
 
         let mut response = self
             .command_factory
             .create_response_command_with_code(RemotingSysResponseCode::Success);
         response.ensure_ext_fields_initialized();
-        if let Some(outcome) = apply_outcome {
-            response.add_ext_field("desiredGeneration", outcome.desired_generation.to_string());
-            response.add_ext_field("durableGeneration", outcome.durable_generation.to_string());
-            response.add_ext_field("effectiveGeneration", outcome.effective_generation.to_string());
-            response.add_ext_field("appliedKeys", outcome.applied_keys.join(","));
-            response.add_ext_field("restartRequiredKeys", outcome.restart_required_keys.join(","));
-            if outcome.restart_required_keys.is_empty() {
+        if let Some(report) = update_report {
+            response.add_ext_field("desiredGeneration", report.desired_generation.to_string());
+            response.add_ext_field("durableGeneration", report.durable_generation.to_string());
+            response.add_ext_field("effectiveGeneration", report.effective_generation.to_string());
+            response.add_ext_field("appliedKeys", report.applied_keys.join(","));
+            response.add_ext_field("restartRequiredKeys", report.restart_required_keys.join(","));
+            if report.restart_required_keys.is_empty() {
                 response.set_remark_mut(CheetahString::empty());
             } else {
                 response.set_remark_mut(format!(
                     "configuration persisted; restart required for: {}",
-                    outcome.restart_required_keys.join(",")
+                    report.restart_required_keys.join(",")
                 ));
             }
         } else {

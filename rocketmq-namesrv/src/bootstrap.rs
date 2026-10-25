@@ -93,8 +93,8 @@ use crate::route_info::broker_housekeeping_service::BrokerHousekeepingService;
 use crate::KVConfigManager;
 use crate::NamesrvConfig;
 
-use self::config_apply::ConfigApplyOutcome;
 use self::config_apply::ConfigGenerationState;
+use self::config_apply::RuntimeConfigUpdateReport;
 
 pub(crate) mod config_apply;
 mod lifecycle;
@@ -1428,7 +1428,7 @@ impl NameServerRuntimeHandle {
     pub(crate) async fn update_runtime_config(
         &self,
         updates: HashMap<CheetahString, CheetahString>,
-    ) -> NameServerResult<ConfigApplyOutcome> {
+    ) -> NameServerResult<RuntimeConfigUpdateReport> {
         self.runtime().update_runtime_config(updates).await
     }
 
@@ -1781,7 +1781,7 @@ impl NameServerRuntimeInner {
     pub async fn update_runtime_config(
         &self,
         updates: HashMap<CheetahString, CheetahString>,
-    ) -> NameServerResult<ConfigApplyOutcome> {
+    ) -> NameServerResult<RuntimeConfigUpdateReport> {
         config_apply::apply_runtime_updates(self, updates).await
     }
 
@@ -2343,7 +2343,7 @@ mod tests {
         let runtime = bootstrap.runtime_inner();
         let original_port = runtime.server_config().listen_port;
 
-        let outcome = runtime
+        let update_report = runtime
             .update_runtime_config(HashMap::from([
                 (
                     CheetahString::from_static_str("enableTopicList"),
@@ -2359,9 +2359,9 @@ mod tests {
 
         assert!(!runtime.name_server_config().enable_topic_list);
         assert_eq!(runtime.server_config().listen_port, original_port);
-        assert_eq!(outcome.restart_required_keys, vec!["listenPort"]);
-        assert_eq!(outcome.desired_generation, outcome.durable_generation);
-        assert_eq!(outcome.effective_generation, 1);
+        assert_eq!(update_report.restart_required_keys, vec!["listenPort"]);
+        assert_eq!(update_report.desired_generation, update_report.durable_generation);
+        assert_eq!(update_report.effective_generation, 1);
         let persisted = std::fs::read_to_string(config_path).expect("desired snapshot should be durable");
         assert!(persisted.contains("listenPort=19876"));
         drop(root);
@@ -2397,11 +2397,11 @@ mod tests {
             CheetahString::from_static_str("true"),
         )]);
 
-        let outcome = runtime
+        let update_report = runtime
             .update_runtime_config(update.clone())
             .await
             .expect("restart-required update should be persisted as desired state");
-        assert_eq!(outcome.restart_required_keys, vec!["enableControllerInNamesrv"]);
+        assert_eq!(update_report.restart_required_keys, vec!["enableControllerInNamesrv"]);
         assert!(Arc::ptr_eq(&before, &runtime.config_snapshot()));
 
         let namesrv_error = runtime
@@ -5070,7 +5070,7 @@ mod tests {
         );
         let ext = response
             .ext_fields()
-            .expect("config outcome should include extension fields");
+            .expect("config update report should include extension fields");
         assert_eq!(ext.get("desiredGeneration").map(|value| value.as_str()), Some("1"));
         assert_eq!(ext.get("durableGeneration").map(|value| value.as_str()), Some("1"));
         assert_eq!(ext.get("effectiveGeneration").map(|value| value.as_str()), Some("1"));
@@ -5353,7 +5353,7 @@ mod tests {
             TopicRouteData::decode(before.body().expect("route response should include a body")).unwrap();
         assert!(before_route.order_topic_conf.is_none());
 
-        let outcome = bootstrap
+        let update_report = bootstrap
             .runtime_inner()
             .update_runtime_config(HashMap::from([(
                 CheetahString::from_static_str("orderMessageEnable"),
@@ -5361,8 +5361,8 @@ mod tests {
             )]))
             .await
             .expect("live route configuration should update durably");
-        assert_eq!(outcome.effective_generation, 1);
-        assert_eq!(outcome.applied_keys, vec!["orderMessageEnable"]);
+        assert_eq!(update_report.effective_generation, 1);
+        assert_eq!(update_report.applied_keys, vec!["orderMessageEnable"]);
 
         let mut after_request = RemotingCommand::create_request_command(
             RequestCode::GetRouteinfoByTopic,
