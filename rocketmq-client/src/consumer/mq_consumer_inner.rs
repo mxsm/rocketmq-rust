@@ -33,7 +33,7 @@ use crate::consumer::consumer_impl::pull_request::PullRequest;
 
 /// Consumer operations shared by Push and LitePull implementations.
 #[trait_variant::make(Send)]
-pub trait MQConsumerInner: MQConsumerInnerAny + Sync + 'static {
+pub trait MQConsumerInner: Sync + 'static {
     /// Returns the group name of the consumer.
     fn group_name(&self) -> CheetahString;
 
@@ -89,22 +89,6 @@ pub trait MQConsumerInner: MQConsumerInnerAny + Sync + 'static {
 
     /// Returns the running information of the consumer.
     async fn consumer_running_info(&self) -> ConsumerRunningInfo;
-}
-
-pub trait MQConsumerInnerAny: std::any::Any {
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
-
-    fn as_any(&self) -> &dyn std::any::Any;
-}
-
-impl<T: MQConsumerInner> MQConsumerInnerAny for T {
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 #[derive(Clone)]
