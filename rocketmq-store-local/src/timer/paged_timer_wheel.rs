@@ -397,6 +397,25 @@ impl PagedTimerWheel {
         self.state.lock().slots.clone()
     }
 
+    /// Calls `visit` with the index and value of every slot that holds records, under one lock
+    /// and without copying the wheel. Pages without such a slot are skipped.
+    pub fn visit_occupied_slots(&self, mut visit: impl FnMut(usize, Slot)) {
+        let state = self.state.lock();
+        for (page_id, _) in state
+            .non_empty_pages
+            .iter()
+            .enumerate()
+            .filter(|(_, non_empty)| **non_empty)
+        {
+            for index in self.page_slot_range(page_id) {
+                let slot = state.slots[index];
+                if slot.num > 0 {
+                    visit(index, slot);
+                }
+            }
+        }
+    }
+
     fn initialize_files(&self) -> Result<(), PagedTimerWheelFailure> {
         let file_len = (self.page_count * self.page_size) as u64;
         let path_a = self.directory.join(PAGES_A);
