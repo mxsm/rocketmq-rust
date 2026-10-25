@@ -94,6 +94,7 @@ use crate::timer::slot_drain::SlotDrainEntry as TimerLogEntry;
 use crate::timer::slot_drain::SlotDrainPlan;
 use crate::timer::slot_drain::SlotDrainPlanBuilder;
 use crate::timer::slot_drain::DEFAULT_IN_MEMORY_DRAIN_ENTRIES;
+use crate::timer::source_wake::TimerSourceWake;
 use crate::timer::timer_checkpoint::TimerCheckpoint;
 use crate::timer::timer_checkpoint::TimerCheckpointSnapshot;
 use crate::timer::timer_log::TimerLog;
@@ -258,6 +259,7 @@ pub(crate) struct TimerStoreContext {
     consume_queues: ConsumeQueueLookupHandle,
     commit_log: CommitLogReadHandle,
     message_write: TimerMessageWriteHandle,
+    source_wake: Arc<TimerSourceWake>,
 }
 
 impl TimerStoreContext {
@@ -265,11 +267,13 @@ impl TimerStoreContext {
         consume_queues: ConsumeQueueLookupHandle,
         commit_log: CommitLogReadHandle,
         message_write: TimerMessageWriteHandle,
+        source_wake: Arc<TimerSourceWake>,
     ) -> Self {
         Self {
             consume_queues,
             commit_log,
             message_write,
+            source_wake,
         }
     }
 
@@ -496,6 +500,7 @@ impl TimerMessageStore {
 
         // A running stage keeps going while its batches come back full, so the tick only
         // restarts idle stages. Like Java's idle wait, it polls ten times per precision interval.
+        // Reput wakes the Source stage as soon as Timer topic records are dispatched.
         let interval_ms = (self.message_store_config.timer_precision_ms / 10).max(MIN_SCHEDULER_INTERVAL_MS);
         let scheduler_group = crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.timer.scheduler");
         let pipeline = match TimerPipeline::new(&self.runtime_scope, &self.message_store_config) {
@@ -511,6 +516,9 @@ impl TimerMessageStore {
             self.message_store_config.timer_put_message_thread_num,
             self.message_store_config.timer_get_message_thread_num,
             self.message_store_config.timer_completion_gap_limit,
+            self.store_context
+                .as_ref()
+                .map(|store_context| store_context.source_wake.subscribe()),
         ) {
             error!("failed to spawn TimerMessageStore pipeline: scheduler closed");
             pipeline.close();
@@ -2610,6 +2618,7 @@ mod tests {
     use bytes::Bytes;
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
+    use futures_util::FutureExt;
     use parking_lot::Mutex as ParkingMutex;
     use rocketmq_model::common::config::TopicConfig;
     use rocketmq_model::common::message::message_ext::MessageExt;
@@ -4458,5 +4467,36 @@ mod tests {
 
         assert_eq!(timer_message_store.process_once().await, 0);
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
+    }
+
+    #[tokio::test]
+    async fn reput_wakes_the_source_stages_only_for_timer_topic_records() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        assert!(initialize_and_load(&mut store).await);
+        let source_wake = timer_message_store
+            .store_context
+            .as_ref()
+            .expect("store-owned timer")
+            .source_wake
+            .subscribe();
+
+        let mut ordinary = MessageExtBrokerInner::default();
+        ordinary.set_topic(real_topic.clone());
+        ordinary.message_ext_inner.queue_id = 0;
+        ordinary.set_body(Bytes::from_static(b"ordinary-body"));
+        assert!(store.put_message(ordinary).await.is_ok());
+        store.reput_once().await;
+        assert!(source_wake.notified().now_or_never().is_none());
+
+        assert!(store
+            .put_message(build_timer_message(&real_topic, current_millis() + 60_000))
+            .await
+            .is_ok());
+        store.reput_once().await;
+        assert!(source_wake.notified().now_or_never().is_some());
+        // Reput woke the stage after the record reached the Timer consume queue.
+        assert_eq!(timer_message_store.process_once().await, 1);
     }
 }

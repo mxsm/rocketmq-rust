@@ -547,6 +547,7 @@ impl LocalFileMessageStore {
             store_stats_service,
             compaction_store,
             timer_message_store: None,
+            timer_source_wake: Arc::new(TimerSourceWake::default()),
             #[cfg(feature = "extended_timeline")]
             extended_timeline_cleanup_pin,
             #[cfg(feature = "extended_timeline")]
@@ -744,6 +745,7 @@ impl LocalFileMessageStore {
             self.consume_queue_lookup_handle(),
             self.commit_log.read_handle(),
             self.timer_message_write_handle(),
+            Arc::clone(&self.timer_source_wake),
         )
     }
 

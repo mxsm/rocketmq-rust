@@ -31,6 +31,7 @@ use rocketmq_runtime::QueueSnapshot;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_store_api::TimerEngineEpoch;
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::message_store_config::MessageStoreConfig;
@@ -242,6 +243,8 @@ impl TimerPipeline {
         }))
     }
 
+    /// Spawns the stage workers, the checkpoint worker and the completion coordinator, plus a
+    /// worker that submits a Source request whenever `source_wake` is notified.
     pub(crate) fn spawn<E>(
         self: &Arc<Self>,
         task_group: &TaskGroup,
@@ -249,6 +252,7 @@ impl TimerPipeline {
         source_workers: usize,
         due_workers: usize,
         completion_gap_limit: usize,
+        source_wake: Option<Arc<Notify>>,
     ) -> bool
     where
         E: TimerEngine + Clone + Send + Sync + 'static,
@@ -324,6 +328,18 @@ impl TimerPipeline {
         {
             return false;
         }
+        if let Some(source_wake) = source_wake {
+            let pipeline = Arc::clone(self);
+            if task_group
+                .spawn("timer-source-wake", TaskKind::Worker, async move {
+                    pipeline.run_source_wake(source_wake).await;
+                })
+                .is_err()
+            {
+                self.close();
+                return false;
+            }
+        }
         true
     }
 
@@ -337,12 +353,24 @@ impl TimerPipeline {
             return;
         }
         if let Some(epoch) = epoch {
-            if self.is_idle(PipelineStage::Due) {
-                self.submit(PipelineStage::Due, epoch);
-            }
+            self.submit_if_idle(PipelineStage::Due, epoch);
         }
-        if self.is_idle(PipelineStage::Source) {
-            self.submit(PipelineStage::Source, 0);
+        self.submit_if_idle(PipelineStage::Source, 0);
+    }
+
+    /// Submits a Source request each time Reput reports dispatched Timer topic records, so new
+    /// sources are indexed without waiting for the next tick.
+    async fn run_source_wake(&self, source_wake: Arc<Notify>) {
+        loop {
+            tokio::select! {
+                () = self.closed.cancelled() => return,
+                () = source_wake.notified() => {}
+            }
+            if self.metrics.completion_backpressured.load(Ordering::Acquire) {
+                self.metrics.rejected_submissions.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+            self.submit_if_idle(PipelineStage::Source, 0);
         }
     }
 
@@ -392,12 +420,17 @@ impl TimerPipeline {
         }
     }
 
-    fn submit(&self, stage: PipelineStage, epoch: u64) {
+    /// Submits a request for `stage` unless one is queued or running. The tick and the source
+    /// wake both submit, so the idle check runs under the stage's sequence lock.
+    fn submit_if_idle(&self, stage: PipelineStage, epoch: u64) {
         let sequence_lock = match stage {
             PipelineStage::Source => &self.next_source_sequence,
             PipelineStage::Due => &self.next_due_sequence,
         };
         let mut sequence = sequence_lock.lock();
+        if !self.is_idle(stage) {
+            return;
+        }
         let request = PumpRequest {
             sequence: sequence.saturating_add(1),
             epoch,
@@ -834,10 +867,26 @@ mod tests {
         engine: &ScriptedEngine,
         config: MessageStoreConfig,
     ) -> (Arc<TimerPipeline>, rocketmq_runtime::TaskGroup) {
+        spawn_pipeline_with_wake(name, engine, config, None)
+    }
+
+    fn spawn_pipeline_with_wake(
+        name: &'static str,
+        engine: &ScriptedEngine,
+        config: MessageStoreConfig,
+        source_wake: Option<Arc<Notify>>,
+    ) -> (Arc<TimerPipeline>, rocketmq_runtime::TaskGroup) {
         let scope = crate::runtime::test_scope(name);
         let pipeline = TimerPipeline::new(&scope, &config).expect("default pipeline configuration is valid");
         let task_group = scope.task_group(name);
-        assert!(pipeline.spawn(&task_group, engine.clone(), 1, 1, config.timer_completion_gap_limit));
+        assert!(pipeline.spawn(
+            &task_group,
+            engine.clone(),
+            1,
+            1,
+            config.timer_completion_gap_limit,
+            source_wake
+        ));
         (pipeline, task_group)
     }
 
@@ -883,6 +932,30 @@ mod tests {
         assert!(pipeline.source_queue.is_empty());
         assert_eq!(*pipeline.next_source_sequence.lock(), 1);
         assert_eq!(pipeline.snapshot().rejected_submissions(), 0);
+        engine.permits.add_permits(1);
+        shutdown_pipeline(&pipeline, &task_group).await;
+    }
+
+    #[tokio::test]
+    async fn a_source_wake_starts_a_source_request_without_a_tick() {
+        let engine = ScriptedEngine::new(0, 0);
+        let source_wake = Arc::new(Notify::new());
+        let (pipeline, task_group) = spawn_pipeline_with_wake(
+            "timer-pipeline-wake-test",
+            &engine,
+            MessageStoreConfig::default(),
+            Some(Arc::clone(&source_wake)),
+        );
+
+        source_wake.notify_one();
+        tokio::time::timeout(Duration::from_secs(5), engine.entered.notified())
+            .await
+            .expect("a wake starts a Source batch");
+        // A wake while that request still runs does not queue another one.
+        source_wake.notify_one();
+        tokio::task::yield_now().await;
+        assert!(pipeline.source_queue.is_empty());
+        assert_eq!(*pipeline.next_source_sequence.lock(), 1);
         engine.permits.add_permits(1);
         shutdown_pipeline(&pipeline, &task_group).await;
     }
