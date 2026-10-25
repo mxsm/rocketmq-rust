@@ -211,9 +211,9 @@ use crate::timer::timeline::TimelineAdmissionController;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::timeline::TimelineAdmissionDecision;
 #[cfg(feature = "extended_timeline")]
-use crate::timer::timeline::TimelineCompletionReconciler;
+use crate::timer::timeline::TimelineCompletionFeed;
 #[cfg(feature = "extended_timeline")]
-use crate::timer::timeline::TimelineCompletionWake;
+use crate::timer::timeline::TimelineCompletionReconciler;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::timeline::TimelineDueScanner;
 #[cfg(feature = "extended_timeline")]
@@ -666,7 +666,7 @@ pub struct LocalFileMessageStore {
     #[cfg(feature = "extended_timeline")]
     extended_timeline_recall_service: Option<Arc<TimelineRecallService>>,
     #[cfg(feature = "extended_timeline")]
-    extended_timeline_completion_wake: Arc<TimelineCompletionWake>,
+    extended_timeline_completion_feed: Arc<TimelineCompletionFeed>,
     #[cfg(feature = "extended_timeline")]
     extended_timeline_completion_reconciler: Option<Arc<TimelineCompletionReconciler>>,
     #[cfg(feature = "extended_timeline")]

@@ -47,8 +47,8 @@ pub(crate) use recall::TimelineRecallService;
 pub(crate) use receipt::TimelineCompletionReceiptV1;
 pub(crate) use receipt::TimelineReceiptStore;
 pub(crate) use receipt_reconciler::TimelineCompletionError;
+pub(crate) use receipt_reconciler::TimelineCompletionFeed;
 pub(crate) use receipt_reconciler::TimelineCompletionReconciler;
-pub(crate) use receipt_reconciler::TimelineCompletionWake;
 #[cfg(test)]
 pub(crate) use rocksdb_index::RocksDbTimerIndex;
 pub(crate) use shadow::ShadowReconciler;
