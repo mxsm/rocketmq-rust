@@ -19,6 +19,10 @@ Application RuntimeOwner
 仍然存活的句柄停止记录。SDK 提供程序由守卫持有，初始化不会设置全局 OpenTelemetry
 指标或追踪提供程序。tracing 订阅器及可选的文本映射传播器属于进程级状态。
 
+内部的 `TelemetryBinding::Noop` 始终处于关闭状态；`Shared` 让克隆句柄在关闭后仍绑定同一份
+`SharedTelemetryState`。其中的原子 `TelemetryState::{Active, Closing, Closed}` 独立于绑定控制是否记录。
+守卫仍是提供程序及关闭流程的唯一所有者。
+
 配置、启动函数、句柄及上下文传播辅助函数从 crate 根路径导入。
 `config`、`init`、`logging`、`propagation` 是私有实现模块。
 公开的 `metrics`、`trace`、`logs`、`semantic`、`statistics` 和 `stats`
