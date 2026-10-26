@@ -38,7 +38,6 @@ use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::TimerMessageStore;
 use rocketmq_store::TIMER_TOPIC;
-use rocketmq_store_api::TimerStoreMode;
 use tracing::error;
 use tracing::warn;
 
@@ -256,15 +255,11 @@ impl HookUtils {
                 .remove(property);
         }
 
-        let max_delay_ms = if message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline {
-            if !message_store_config.timer_extended_admission_enable {
-                return Some(PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable));
-            }
-            u64::from(message_store_config.timer_extended_admission_horizon_days).checked_mul(86_400_000)
-        } else {
-            message_store_config.timer_max_delay_sec.checked_mul(1_000)
-        };
-        let Some(max_delay_ms) = max_delay_ms else {
+        let route = message_store_config.timer_admission_route();
+        if !route.admission_open {
+            return Some(PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable));
+        }
+        let Some(max_delay_ms) = route.max_delay_ms() else {
             warn!("reject timer message because timerMaxDelaySec overflows milliseconds");
             return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerMsgIllegal));
         };
@@ -285,9 +280,7 @@ impl HookUtils {
                 }
             };
 
-        if message_store_config.timer_store_mode == TimerStoreMode::JavaCompat
-            && timer_message_store.is_reject(normalized.timer_out_ms)
-        {
+        if route.rejects_congested_slots && timer_message_store.is_reject(normalized.timer_out_ms) {
             return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerFlowControl));
         }
 
@@ -314,16 +307,8 @@ impl HookUtils {
                     normalized.original_deliver_ms
                 )
             });
-        let (engine, format_version) = match message_store_config.timer_store_mode {
-            TimerStoreMode::JavaCompat => (
-                MessageConst::TIMER_ENGINE_FILE_TIME_WHEEL,
-                rocketmq_store_api::JAVA_COMPAT_TIMER_FORMAT_VERSION,
-            ),
-            TimerStoreMode::ExtendedTimeline => (
-                MessageConst::TIMER_ENGINE_ROCKSDB_TIMELINE,
-                rocketmq_store_api::EXTENDED_TIMELINE_FORMAT_VERSION,
-            ),
-        };
+        let engine = route.engine.as_str();
+        let format_version = route.format_version;
         let delivery_token = format!(
             "{engine}:{format_version}:{source_identity}:{}:{generation}",
             normalized.original_deliver_ms
@@ -425,6 +410,7 @@ mod tests {
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_store::PutMessageStatus;
     use rocketmq_store::TIMER_TOPIC;
+    use rocketmq_store_api::TimerStoreMode;
 
     use super::*;
 
@@ -682,6 +668,72 @@ mod tests {
         assert_eq!(
             result.unwrap().put_message_status(),
             PutMessageStatus::WheelTimerNotEnable
+        );
+    }
+
+    fn extended_admission_config(admission_enable: bool) -> MessageStoreConfig {
+        MessageStoreConfig {
+            timer_store_mode: TimerStoreMode::ExtendedTimeline,
+            timer_extended_admission_enable: admission_enable,
+            timer_extended_admission_horizon_days: 30,
+            ..MessageStoreConfig::default()
+        }
+    }
+
+    fn timer_message_due_in(delay_ms: u64) -> MessageExtBrokerInner {
+        let mut msg = MessageExtBrokerInner::default();
+        msg.set_topic(CheetahString::from_static_str("test_topic"));
+        msg.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVER_MS),
+            CheetahString::from_string((current_millis() + delay_ms).to_string()),
+        );
+        msg
+    }
+
+    #[test]
+    fn extended_route_admits_its_horizon_and_stamps_its_engine() {
+        let timer_message_store = TimerMessageStore::new_empty(crate::test_service_context("timer-store"));
+        // Ten days is beyond the Java-compatible three days but inside the 30-day horizon.
+        let mut msg = timer_message_due_in(10 * 86_400_000);
+
+        let result =
+            HookUtils::transform_timer_message(&timer_message_store, &extended_admission_config(true), &mut msg);
+
+        assert!(result.is_none());
+        assert_eq!(
+            msg.property(&CheetahString::from_static_str(MessageConst::TIMER_ENGINE_TYPE))
+                .as_deref(),
+            Some(MessageConst::TIMER_ENGINE_ROCKSDB_TIMELINE)
+        );
+        assert!(msg
+            .property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
+            ))
+            .is_some_and(|token| token.starts_with("R:1:")));
+
+        let mut beyond_horizon = timer_message_due_in(31 * 86_400_000);
+        assert_eq!(
+            HookUtils::transform_timer_message(
+                &timer_message_store,
+                &extended_admission_config(true),
+                &mut beyond_horizon
+            )
+            .map(|result| result.put_message_status()),
+            Some(PutMessageStatus::WheelTimerMsgIllegal)
+        );
+    }
+
+    #[test]
+    fn extended_route_rejects_timers_while_its_admission_is_closed() {
+        let timer_message_store = TimerMessageStore::new_empty(crate::test_service_context("timer-store"));
+        let mut msg = timer_message_due_in(60_000);
+
+        let result =
+            HookUtils::transform_timer_message(&timer_message_store, &extended_admission_config(false), &mut msg);
+
+        assert_eq!(
+            result.map(|result| result.put_message_status()),
+            Some(PutMessageStatus::ServiceNotAvailable)
         );
     }
 
