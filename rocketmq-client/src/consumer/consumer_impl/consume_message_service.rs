@@ -13,10 +13,8 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::sync::Weak;
 
 use cheetah_string::CheetahString;
-use rocketmq_model::common::message::message_client_ext::MessageClientExt;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_protocol::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
@@ -38,10 +36,6 @@ impl<T, K> ConsumeMessageServiceGeneral<T, K> {
             consume_message_concurrently_service,
             consume_message_orderly_service,
         }
-    }
-
-    pub fn get_consume_message_concurrently_service_weak(&self) -> Option<Weak<T>> {
-        self.consume_message_concurrently_service.as_ref().map(Arc::downgrade)
     }
 }
 
@@ -138,15 +132,6 @@ where
                 .submit_consume_request(this, msgs, process_queue, message_queue, dispatch_to_consume)
                 .await;
         }
-    }
-
-    pub async fn submit_pop_consume_request(
-        &self,
-        msgs: Vec<MessageExt>,
-        process_queue: &PopProcessQueue,
-        message_queue: &MessageQueue,
-    ) {
-        let _ = (msgs, process_queue, message_queue);
     }
 
     pub fn get_consume_message_concurrently_service(&self) -> Option<Arc<T>> {
@@ -246,16 +231,6 @@ where
                 0,
             )
         }
-    }
-
-    pub async fn submit_consume_request(
-        &self,
-        msgs: Vec<Arc<MessageClientExt>>,
-        process_queue: Arc<ProcessQueue>,
-        message_queue: MessageQueue,
-        dispatch_to_consume: bool,
-    ) {
-        let _ = (msgs, process_queue, message_queue, dispatch_to_consume);
     }
 
     pub async fn submit_pop_consume_request(
