@@ -40,6 +40,12 @@ descriptor, validated authority, and applicable policy/approval checks.
 See [supervised_execution](src/supervised_execution), [automation](src/automation)
 and [configuration](src/config.rs).
 
+The [submission client](src/supervised_execution/executor_client.rs) classifies an explicit
+HTTP 409 or other client-error response as `Rejected`. `Unconfirmed` covers failures without
+a valid acceptance receipt or definitive rejection, including failures before dispatch.
+Only `Rejected` persists a definitive rejection; `Unconfirmed` neither proves that execution
+started nor that no effect occurred, and does not authorize a retry.
+
 Models receive only bounded, sanitized evidence
 summaries and eligible human-validated knowledge; they never receive MCP,
 RocketMQ, or executor credentials and cannot call MCP directly. Invalid,

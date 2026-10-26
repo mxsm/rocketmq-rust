@@ -595,17 +595,17 @@ mod tests {
     use crate::supervised_execution::executor_client::ExecutorDispatchFailure;
 
     #[test]
-    fn definitive_executor_rejections_remain_distinct_from_other_failures() {
+    fn definitive_executor_rejections_remain_distinct_from_unconfirmed_failures() {
         let rejection = ExecutorDispatchFailure::Rejected(ControlPlaneRequestFailure::forbidden(
             "executor_rejected",
             "request rejected",
         ));
-        let unavailable = ExecutorDispatchFailure::Other(ControlPlaneRequestFailure::conflict_code(
+        let unconfirmed = ExecutorDispatchFailure::Unconfirmed(ControlPlaneRequestFailure::conflict_code(
             "executor_unavailable",
             "executor unavailable",
         ));
 
         assert!(rejection.is_definitive_rejection());
-        assert!(!unavailable.is_definitive_rejection());
+        assert!(!unconfirmed.is_definitive_rejection());
     }
 }

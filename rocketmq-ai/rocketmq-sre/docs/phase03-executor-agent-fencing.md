@@ -84,6 +84,13 @@ never assumes that a timed-out target write did not happen.
 | Old epoch request after new `FenceAck` | Agent rejects it |
 | Unknown or R3 action | No registry handler and no reachable driver |
 
+The Control Plane's [submission client](../crates/rocketmq-sre-control-plane/src/supervised_execution/executor_client.rs)
+distinguishes `Rejected` (an explicit HTTP 409 or other client-error response) from
+`Unconfirmed` (no valid acceptance receipt or definitive rejection, including pre-dispatch,
+transport, server, and invalid-receipt failures). Only `Rejected` persists a definitive
+rejection. `Unconfirmed` does not establish whether dispatch or an effect occurred and
+must not be treated as permission to retry.
+
 ## Verification
 
 The Docker PostgreSQL suite includes:
