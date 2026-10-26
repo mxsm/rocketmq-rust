@@ -26,7 +26,7 @@ pub(super) fn answer(
     args: security_tools::ListAclUsersArgs,
 ) -> Result<QueryResult<security_tools::ListAclUsersOutput>, ToolFailure> {
     if adapter.fail {
-        return Err(ToolFailure::Operational(ToolExecutionError::Backend(None)));
+        return Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None)));
     }
     let row = |broker_name: &str, user_status: &str| security_tools::AclUserRow {
         username: "ops".to_string(),

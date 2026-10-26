@@ -212,7 +212,7 @@ mod tests {
                 "permission_denied",
             ),
             (
-                ToolFailure::Operational(ToolExecutionError::Backend(None)),
+                ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None)),
                 EvidenceStatus::Unavailable,
                 "source_unavailable",
             ),
