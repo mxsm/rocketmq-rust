@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod checkpoint;
+pub mod java_format;
 pub mod metrics;
 pub mod migration;
 pub mod paged_timer_wheel;
