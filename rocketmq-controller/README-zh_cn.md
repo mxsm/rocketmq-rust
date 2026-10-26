@@ -32,6 +32,9 @@ storage、snapshot，以及可选 metrics exporter。
 二进制启动时要求配置加载后的 `rocketmqHome` 非空。常规运行时请设置 `ROCKETMQ_HOME`，或在 Controller 配置文件中提供
 `rocketmqHome`。
 
+可选的 [File 存储](src/storage/file_key_value_store.rs) 使用私有 `CommittedFileIndex`
+保存所选 manifest generation 的内存索引。提交仅在记录和 manifest 写入成功后发布新的内存索引。
+
 ## 目录结构
 
 | 路径 | 说明 |

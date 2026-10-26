@@ -34,6 +34,10 @@ OpenRaft-backed state replication, storage, snapshots, and optional metrics expo
 The binary requires a non-empty `rocketmqHome` value after configuration loading. For normal runs, set
 `ROCKETMQ_HOME` or provide `rocketmqHome` in the controller config file.
 
+The opt-in [file store](src/storage/file_key_value_store.rs) keeps a private `CommittedFileIndex`
+for the selected manifest generation. A commit publishes its new in-memory index only after the
+record and manifest writes succeed.
+
 ## Crate Layout
 
 | Path | Purpose |
