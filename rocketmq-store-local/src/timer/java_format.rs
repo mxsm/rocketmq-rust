@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Apache RocketMQ 5.x timer files, byte for byte: the `timerlog` unit and blank, the
-//! `timerwheel` slot and the `timercheck` record. Integers are big-endian, as Java's `ByteBuffer`
-//! writes them.
+//! Apache RocketMQ 5.x timer files, byte for byte: the `timerlog` unit and blank, and the
+//! `timerwheel` slot. Integers are big-endian, as Java's `ByteBuffer` writes them. The
+//! `timercheck` record already has Java's layout in
+//! [`TimerCheckpointRecord`](crate::timer::checkpoint::TimerCheckpointRecord).
 
 use thiserror::Error;
 
@@ -32,9 +33,6 @@ pub const JAVA_TIMER_LOG_BLANK_MAGIC: i32 = (0xBBCC_DDEE_u32 as i32) ^ (1_880_68
 
 /// Bytes of one TimerWheel slot (`Slot.SIZE`).
 pub const JAVA_TIMER_WHEEL_SLOT_SIZE: usize = 32;
-
-/// Bytes of the timer checkpoint record (`TimerCheckpoint.encode`).
-pub const JAVA_TIMER_CHECKPOINT_SIZE: usize = 56;
 
 /// Bytes Java maps for the `timercheck` file, one OS page.
 pub const JAVA_TIMER_CHECKPOINT_FILE_SIZE: usize = 4_096;
@@ -257,66 +255,6 @@ pub fn decode_java_timer_wheel_slot(
     )))
 }
 
-/// The `timercheck` record (`TimerCheckpoint`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct JavaTimerCheckpoint {
-    pub last_read_time_ms: i64,
-    pub last_timer_log_flush_pos: i64,
-    pub last_timer_queue_offset: i64,
-    pub master_timer_queue_offset: i64,
-    pub data_version_state: i64,
-    pub data_version_timestamp: i64,
-    pub data_version_counter: i64,
-}
-
-impl JavaTimerCheckpoint {
-    /// Encodes the 56-byte record that starts the `timercheck` page.
-    pub fn encode(&self) -> [u8; JAVA_TIMER_CHECKPOINT_SIZE] {
-        let mut bytes = [0u8; JAVA_TIMER_CHECKPOINT_SIZE];
-        for (index, value) in [
-            self.last_read_time_ms,
-            self.last_timer_log_flush_pos,
-            self.last_timer_queue_offset,
-            self.master_timer_queue_offset,
-            self.data_version_state,
-            self.data_version_timestamp,
-            self.data_version_counter,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            bytes[index * 8..index * 8 + 8].copy_from_slice(&value.to_be_bytes());
-        }
-        bytes
-    }
-
-    /// Decodes the record at the start of `bytes`. Like Java, a record of only the four offsets
-    /// leaves the data version at zero.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`JavaTimerFormatError::Truncated`] when `bytes` cannot hold the four offsets.
-    pub fn decode(bytes: &[u8]) -> Result<Self, JavaTimerFormatError> {
-        if bytes.len() < 32 {
-            return Err(JavaTimerFormatError::Truncated {
-                record: "timer checkpoint",
-                needed: 32,
-                actual: bytes.len(),
-            });
-        }
-        let version = |offset: usize| bytes.get(offset..offset + 8).map_or(0, |value| read_i64(value, 0));
-        Ok(Self {
-            last_read_time_ms: read_i64(bytes, 0),
-            last_timer_log_flush_pos: read_i64(bytes, 8),
-            last_timer_queue_offset: read_i64(bytes, 16),
-            master_timer_queue_offset: read_i64(bytes, 24),
-            data_version_state: version(32),
-            data_version_timestamp: version(40),
-            data_version_counter: version(48),
-        })
-    }
-}
-
 fn read_i32(bytes: &[u8], offset: usize) -> i32 {
     i32::from_be_bytes(bytes[offset..offset + 4].try_into().expect("fixed i32 field"))
 }
@@ -448,30 +386,5 @@ mod tests {
             java_timer_wheel_slot_index(1_700_000_000_000, precision_ms, slots_total),
             (1_700_000_000 % (slots_total as i64 * 2)) as usize
         );
-    }
-
-    #[test]
-    fn checkpoint_record_is_seven_longs_and_tolerates_a_missing_version() {
-        let checkpoint = JavaTimerCheckpoint {
-            last_read_time_ms: 1,
-            last_timer_log_flush_pos: 2,
-            last_timer_queue_offset: 3,
-            master_timer_queue_offset: 4,
-            data_version_state: 5,
-            data_version_timestamp: 6,
-            data_version_counter: 7,
-        };
-        let encoded = checkpoint.encode();
-        for (index, value) in (1..=7i64).enumerate() {
-            assert_eq!(&encoded[index * 8..index * 8 + 8], &value.to_be_bytes());
-        }
-        let mut page = [0u8; JAVA_TIMER_CHECKPOINT_FILE_SIZE];
-        page[..JAVA_TIMER_CHECKPOINT_SIZE].copy_from_slice(&encoded);
-        assert_eq!(JavaTimerCheckpoint::decode(&page), Ok(checkpoint));
-
-        let offsets_only = JavaTimerCheckpoint::decode(&encoded[..32]).unwrap();
-        assert_eq!(offsets_only.master_timer_queue_offset, 4);
-        assert_eq!(offsets_only.data_version_counter, 0);
-        assert!(JavaTimerCheckpoint::decode(&encoded[..31]).is_err());
     }
 }
