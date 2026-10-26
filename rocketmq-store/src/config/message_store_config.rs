@@ -22,6 +22,7 @@ use cheetah_string::CheetahString;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::mix_all;
 use rocketmq_store_api::TimerAdmissionRoute;
+use rocketmq_store_api::TimerFileFormat;
 use rocketmq_store_api::TimerStoreMode;
 use rocketmq_store_local::config::local_store::LocalCleanupConfig;
 use rocketmq_store_local::config::local_store::LocalQueryConfig;
@@ -751,6 +752,11 @@ pub struct MessageStoreConfig {
     #[serde(default = "defaults::timer_store_mode")]
     pub timer_store_mode: TimerStoreMode,
 
+    /// On-disk format of the Java-compatible timer store. `java` reads and writes the files of
+    /// an Apache RocketMQ 5.x Broker.
+    #[serde(default)]
+    pub timer_file_format: TimerFileFormat,
+
     /// Enables the non-delivering Extended Timeline shadow pipeline.
     #[serde(default)]
     pub timer_extended_shadow_enable: bool,
@@ -1467,6 +1473,7 @@ impl Default for MessageStoreConfig {
             timer_get_message_thread_num: 3,
             timer_put_message_thread_num: 3,
             timer_store_mode: TimerStoreMode::JavaCompat,
+            timer_file_format: TimerFileFormat::default(),
             timer_extended_shadow_enable: false,
             timer_extended_admission_enable: false,
             timer_extended_activation_epoch: 0,
@@ -1987,6 +1994,10 @@ impl MessageStoreConfig {
             self.timer_put_message_thread_num.to_string(),
         );
         properties.insert("timerStoreMode".to_string(), self.timer_store_mode.as_str().to_owned());
+        properties.insert(
+            "timerFileFormat".to_string(),
+            self.timer_file_format.as_str().to_owned(),
+        );
         properties.insert(
             "timerExtendedShadowEnable".to_string(),
             self.timer_extended_shadow_enable.to_string(),

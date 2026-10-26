@@ -45,11 +45,18 @@ use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_store_api::TimerEngineId;
+use rocketmq_store_api::TimerFileFormat;
 use rocketmq_store_api::TimerId;
 use rocketmq_store_api::TimerStoreMode;
 use rocketmq_store_api::JAVA_COMPAT_TIMER_FORMAT_VERSION;
+use rocketmq_store_local::timer::java_format::java_topic_hash;
+use rocketmq_store_local::timer::java_timer_log::JavaTimerLog;
+use rocketmq_store_local::timer::java_timer_log::JavaTimerLogScan;
+use rocketmq_store_local::timer::java_timer_wheel::JavaTimerWheel;
 use rocketmq_store_local::timer::metrics::TimerStorageMetrics;
 use rocketmq_store_local::timer::metrics::TimerStorageMetricsSnapshot;
+use rocketmq_store_local::timer::migration::detect_timer_log_layout;
+use rocketmq_store_local::timer::migration::TimerMigrationLayout;
 use rocketmq_store_local::timer::segmented_timer_log::TIMER_LOG_V2_PHYSICAL_RECORD_SIZE;
 use rocketmq_store_local::timer::service::clamp_queue_offset;
 use rocketmq_store_local::timer::service::is_due_not_before;
@@ -97,7 +104,9 @@ use crate::timer::slot_drain::DEFAULT_IN_MEMORY_DRAIN_ENTRIES;
 use crate::timer::source::read_timer_source_frames;
 use crate::timer::source::TimerSourceRead;
 use crate::timer::source_wake::TimerSourceWake;
-use crate::timer::storage::TimerRecordLayout;
+use crate::timer::storage::holds_java_timer_log;
+use crate::timer::storage::TimerLayout;
+use crate::timer::storage::TimerLogAppend;
 use crate::timer::storage::TimerStorage;
 use crate::timer::timer_checkpoint::TimerCheckpoint;
 use crate::timer::timer_checkpoint::TimerCheckpointSnapshot;
@@ -127,6 +136,8 @@ pub const MAGIC_DEFAULT: i32 = 1;
 pub const MAGIC_ROLL: i32 = 1 << 1;
 pub const MAGIC_DELETE: i32 = 1 << 2;
 const EMPTY_TIMER_LOG_POS: i64 = -1;
+/// The single file of a Rust V1 timer log, which is also the name of Java's first TimerLog file.
+const LEGACY_TIMER_LOG_FILE: &str = "00000000000000000000";
 const MIN_SCHEDULER_INTERVAL_MS: u64 = 100;
 const MAX_FUTURE_CURSOR_SKEW_SLOTS: i64 = 2;
 /// Writes one slot drain keeps in flight. Java runs three put threads; more concurrent puts let
@@ -166,6 +177,13 @@ struct RecoveredTimerState {
     queue_offset: i64,
 }
 
+/// Timer files of one format, loaded and recovered.
+struct LoadedTimerStorage {
+    checkpoint: TimerCheckpoint,
+    storage: TimerStorage,
+    recovered: RecoveredTimerState,
+}
+
 /// The read slot and drain cursor of the checkpoint a store loads from.
 #[derive(Clone, Copy, Debug)]
 struct CommittedDrain {
@@ -189,10 +207,10 @@ struct SourceVisibilitySnapshot {
 /// A record links to the previous record of its slot, which can be an earlier record of the same
 /// batch, so record positions are assigned from the timer log end before the batch is appended.
 struct TimerIndexPlan {
-    layout: TimerRecordLayout,
+    layout: TimerLayout,
     /// Timer log end once the planned records are written.
     log_end: i64,
-    records: Vec<(TimerLogRecord, u64)>,
+    records: Vec<TimerLogAppend>,
     /// Position of each planned record.
     positions: Vec<i64>,
     /// Every touched slot as it stands after the batch.
@@ -201,7 +219,7 @@ struct TimerIndexPlan {
 }
 
 impl TimerIndexPlan {
-    fn new(log_end: i64, layout: TimerRecordLayout) -> Self {
+    fn new(log_end: i64, layout: TimerLayout) -> Self {
         Self {
             layout,
             log_end,
@@ -212,11 +230,11 @@ impl TimerIndexPlan {
         }
     }
 
-    /// Plans `record` after the records planned so far and returns its position.
-    fn push_record(&mut self, record: TimerLogRecord, generation: u64) -> i64 {
+    /// Plans `append` after the records planned so far and returns its position.
+    fn push_record(&mut self, append: TimerLogAppend) -> i64 {
         let position = self.layout.place(self.log_end);
         self.log_end = self.layout.end_after(position);
-        self.records.push((record, generation));
+        self.records.push(append);
         self.positions.push(position);
         position
     }
@@ -401,24 +419,88 @@ impl TimerMessageStore {
             error!(source_present = true, "load timer role epoch failed");
             return false;
         }
+        let loaded = match self.message_store_config.timer_file_format {
+            TimerFileFormat::RustV2 => self.load_rust_v2_storage(root_dir),
+            TimerFileFormat::Java => self.load_java_storage(root_dir),
+        };
+        let Some(LoadedTimerStorage {
+            checkpoint: timer_checkpoint,
+            storage,
+            recovered: recovered_state,
+        }) = loaded
+        else {
+            return false;
+        };
+        // Recovery keeps the drain cursor with the read slot it names.
+        let committed_drain = CommittedDrain {
+            slot_time_ms: recovered_state.read_time_ms,
+            cursor: timer_checkpoint.drain_cursor(),
+        };
+
+        self.curr_read_time_ms
+            .store(recovered_state.read_time_ms, Ordering::Relaxed);
+        self.curr_queue_offset
+            .store(recovered_state.queue_offset, Ordering::Relaxed);
+        *self.timer_checkpoint.lock() = Some(timer_checkpoint);
+        *self.timer_storage.lock() = Some(Arc::new(storage));
+        if let Err(_error) = self.restore_partial_slot_drain(committed_drain) {
+            error!(source_present = true, "restore the partially drained timer slot failed");
+            return false;
+        }
+        let _ = self.timer_metrics.load();
+        self.refresh_timer_backlog_distribution();
+        if self.should_check_and_revise_metrics() {
+            self.check_and_revise_metrics();
+            if self.timer_metrics.persist().is_err() {
+                error!(source_present = true, "persist revised timer metrics failed");
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Loads the Rust V2 files and recovers them to their last committed checkpoint.
+    fn load_rust_v2_storage(&self, root_dir: &str) -> Option<LoadedTimerStorage> {
+        let timer_log_dir = PathBuf::from(get_timer_log_path(root_dir));
+        let file_size = self.message_store_config.mapped_file_size_timer_log as u64;
+        match detect_timer_log_layout(&timer_log_dir, LEGACY_TIMER_LOG_FILE, "v2", "MIGRATION_COMMITTED")
+            .and_then(|layout| Ok((layout, holds_java_timer_log(&timer_log_dir, file_size)?)))
+        {
+            // Without a committed V2 log, the legacy migration would read a Java log as V1 records.
+            Ok((TimerMigrationLayout::V1Only | TimerMigrationLayout::Empty, true)) => {
+                error!(
+                    "the timer log directory holds Apache RocketMQ timer files; set timerFileFormat to java \
+                     to take them over"
+                );
+                return None;
+            }
+            Ok((_, true)) => {
+                warn!("Apache RocketMQ timer files beside the Rust V2 timer log are not read in the rust_v2 format");
+            }
+            Ok((_, false)) => {}
+            Err(_error) => {
+                error!(source_present = true, "inspect the timer log directory failed");
+                return None;
+            }
+        }
         let fingerprint = match self.timer_storage_fingerprint() {
             Some(fingerprint) => fingerprint,
             None => {
                 error!("load timer storage format rejected the configured policy");
-                return false;
+                return None;
             }
         };
         let format_path = PathBuf::from(root_dir).join("timer-v2").join("FORMAT");
         if fingerprint.load_or_create(&format_path).is_err() {
             error!(source_present = true, "load timer storage fingerprint failed");
-            return false;
+            return None;
         }
         let timer_checkpoint =
             match TimerCheckpoint::new_with_policy(get_timer_check_path(root_dir), fingerprint.policy_hash()) {
                 Ok(timer_checkpoint) => timer_checkpoint,
                 Err(_error) => {
                     error!(source_present = true, "load timer checkpoint failed");
-                    return false;
+                    return None;
                 }
             };
 
@@ -429,7 +511,7 @@ impl TimerMessageStore {
         );
         if timer_log.load().is_err() {
             error!(source_present = true, "load timer log failed");
-            return false;
+            return None;
         }
         let timer_log_len = match timer_log.durable_length() {
             Ok(length) => length as i64,
@@ -438,7 +520,7 @@ impl TimerMessageStore {
                     source_present = true,
                     "read timer log length during checkpoint selection failed"
                 );
-                return false;
+                return None;
             }
         };
         if timer_checkpoint.local_generation() > 0 {
@@ -446,14 +528,14 @@ impl TimerMessageStore {
                 Ok(true) => {}
                 Ok(false) => {
                     error!("no V2 timer checkpoint references available durable log data");
-                    return false;
+                    return None;
                 }
                 Err(_error) => {
                     error!(
                         source_present = true,
                         "select timer checkpoint against durable log failed"
                     );
-                    return false;
+                    return None;
                 }
             }
         }
@@ -483,14 +565,14 @@ impl TimerMessageStore {
                             source_present = true,
                             "rebuilding the timer wheel from committed data failed"
                         );
-                        return false;
+                        return None;
                     }
                 };
                 if let Err(_rebuild_error) =
                     timer_wheel.load_rebuilt(timer_checkpoint.wheel_generation(), &rebuilt_slots)
                 {
                     error!(source_present = true, "installing rebuilt timer wheel pages failed");
-                    return false;
+                    return None;
                 }
                 warn!("rebuilt timer wheel pages from committed timer data");
             } else {
@@ -498,42 +580,151 @@ impl TimerMessageStore {
             }
         }
 
-        let recovered_state = match self.recover_and_revise(&timer_checkpoint, &timer_log, &timer_wheel) {
-            Ok(recovered_state) => recovered_state,
+        let recovered = match self.recover_and_revise(&timer_checkpoint, &timer_log, &timer_wheel) {
+            Ok(recovered) => recovered,
             Err(_error) => {
                 error!(source_present = true, "recover timer state failed");
-                return false;
+                return None;
             }
         };
-        // Recovery keeps the drain cursor with the read slot it names.
-        let committed_drain = CommittedDrain {
-            slot_time_ms: recovered_state.read_time_ms,
-            cursor: timer_checkpoint.drain_cursor(),
-        };
+        Some(LoadedTimerStorage {
+            checkpoint: timer_checkpoint,
+            storage: TimerStorage::RustV2 {
+                log: timer_log,
+                wheel: timer_wheel,
+            },
+            recovered,
+        })
+    }
 
-        self.curr_read_time_ms
-            .store(recovered_state.read_time_ms, Ordering::Relaxed);
-        self.curr_queue_offset
-            .store(recovered_state.queue_offset, Ordering::Relaxed);
-        *self.timer_checkpoint.lock() = Some(timer_checkpoint);
-        *self.timer_storage.lock() = Some(Arc::new(TimerStorage::RustV2 {
-            log: timer_log,
-            wheel: timer_wheel,
-        }));
-        if let Err(_error) = self.restore_partial_slot_drain(committed_drain) {
-            error!(source_present = true, "restore the partially drained timer slot failed");
-            return false;
-        }
-        let _ = self.timer_metrics.load();
-        self.refresh_timer_backlog_distribution();
-        if self.should_check_and_revise_metrics() {
-            self.check_and_revise_metrics();
-            if self.timer_metrics.persist().is_err() {
-                error!(source_present = true, "persist revised timer metrics failed");
-                return false;
+    /// Loads the Apache RocketMQ 5.x `timerlog`, `timerwheel` and `config/timercheck`, and
+    /// recovers them with Java's rules.
+    fn load_java_storage(&self, root_dir: &str) -> Option<LoadedTimerStorage> {
+        match rust_v2_timer_records_present(root_dir) {
+            Ok(false) => {}
+            Ok(true) => {
+                error!(
+                    "timerFileFormat is java, but the store holds Rust V2 timer records that the Java format \
+                     would not deliver; deliver them with timerFileFormat rust_v2, then move the Rust V2 timer \
+                     files (timer-v2, timerlog/v2, timerwheel.v2, config/timercheck.a and .b) aside"
+                );
+                return None;
+            }
+            Err(_error) => {
+                error!(source_present = true, "inspect the Rust V2 timer files failed");
+                return None;
             }
         }
-        true
+        // A Java unit stores the distance from its write time to its slot as an int.
+        if i32::try_from(self.timer_roll_window_ms()).is_err() {
+            error!("timerRollWindowSlot is too long for the Java timer format, which keeps delays within an int");
+            return None;
+        }
+        let checkpoint = match TimerCheckpoint::new_java(get_timer_check_path(root_dir)) {
+            Ok(checkpoint) => checkpoint,
+            Err(_error) => {
+                error!(source_present = true, "load the Java timer checkpoint failed");
+                return None;
+            }
+        };
+        let log = match JavaTimerLog::new(
+            get_timer_log_path(root_dir),
+            self.message_store_config.mapped_file_size_timer_log as u64,
+        ) {
+            Ok(log) => log,
+            Err(_error) => {
+                error!(source_present = true, "the Java timer log file size is invalid");
+                return None;
+            }
+        };
+        if log.load().is_err() {
+            error!(source_present = true, "load the Java timer log failed");
+            return None;
+        }
+        let precision_ms = i64::try_from(self.message_store_config.timer_precision_ms).unwrap_or(i64::MAX);
+        let wheel = match JavaTimerWheel::open(
+            get_timer_wheel_path(root_dir),
+            TIMER_WHEEL_TTL_DAY as usize * DAY_SECS as usize,
+            precision_ms,
+        ) {
+            Ok(wheel) => wheel,
+            Err(_error) => {
+                error!(source_present = true, "load the Java timer wheel failed");
+                return None;
+            }
+        };
+        let recovered = match self.recover_java_storage(&checkpoint, &log, &wheel) {
+            Ok(recovered) => recovered,
+            Err(_error) => {
+                error!(source_present = true, "recover the Java timer files failed");
+                return None;
+            }
+        };
+        Some(LoadedTimerStorage {
+            checkpoint,
+            storage: TimerStorage::Java { log, wheel },
+            recovered,
+        })
+    }
+
+    /// Recovers Java-format files as Java's `TimerMessageStore.recover` does. The TimerLog is
+    /// checked from one file before the last flush position, every valid unit is linked back
+    /// into its wheel slot, and the log is cut at the first invalid unit. Slots that still point
+    /// past the log end are rescanned from their first unit and then dropped. The Timer CQ
+    /// cursor follows the last unit's source message, but never passes the master's.
+    ///
+    /// Units written after the last checkpoint stay, and their Timer CQ entries are indexed
+    /// again when the master offset lags them, as in Java; delivery is at least once.
+    fn recover_java_storage(
+        &self,
+        checkpoint: &TimerCheckpoint,
+        log: &JavaTimerLog,
+        wheel: &JavaTimerWheel,
+    ) -> std::io::Result<RecoveredTimerState> {
+        let begin = u64::try_from(checkpoint.last_timer_log_flush_pos())
+            .unwrap_or_default()
+            .saturating_sub(log.file_size());
+        let mut last_unit = None;
+        let log_end = log
+            .recover(begin, JavaTimerLogScan::Repair, |offset, unit| {
+                wheel.revise_last_pos(unit.slot_time_ms(), offset as i64);
+                last_unit = Some(*unit);
+            })
+            .map_err(std::io::Error::other)?;
+        let log_end = i64::try_from(log_end).map_err(std::io::Error::other)?;
+
+        let read_time_ms = self.recover_read_time_ms(checkpoint.last_read_time_ms());
+        let min_first = wheel.check_phy_pos(read_time_ms, log_end);
+        if min_first < log_end {
+            warn!("recheck the timer log because the timer wheel points past its end");
+            log.recover(
+                u64::try_from(min_first).unwrap_or_default(),
+                JavaTimerLogScan::Revise,
+                |offset, unit| wheel.revise_last_pos(unit.slot_time_ms(), offset as i64),
+            )
+            .map_err(std::io::Error::other)?;
+        }
+        if wheel.clear_slots_beyond(log_end) > 0 {
+            warn!("dropped timer wheel slots whose units are past the recovered timer log end");
+        }
+
+        let resumed_offset = last_unit
+            .and_then(|unit| self.look_store_message(unit.commit_log_offset, unit.size))
+            .map(|message| message.queue_offset().saturating_add(1))
+            .unwrap_or_else(|| checkpoint.last_timer_queue_offset());
+        let queue_offset = self.recover_queue_offset(resumed_offset.min(checkpoint.master_timer_queue_offset().max(0)));
+
+        checkpoint.set_last_read_time_ms(read_time_ms);
+        checkpoint.set_last_timer_queue_offset(queue_offset);
+        checkpoint.set_master_timer_queue_offset(queue_offset);
+        checkpoint.set_last_timer_log_flush_pos(log_end);
+        log.flush().map_err(std::io::Error::other)?;
+        wheel.flush().map_err(std::io::Error::other)?;
+        checkpoint.flush()?;
+        Ok(RecoveredTimerState {
+            read_time_ms,
+            queue_offset,
+        })
     }
 
     pub fn start(self: &Arc<Self>) {
@@ -1084,6 +1275,10 @@ impl TimerMessageStore {
 
     pub fn get_timer_wheel_slot(&self, time_ms: i64) -> Option<Slot> {
         self.timer_storage()?.get_slot(time_ms)
+    }
+
+    fn slot_with_records(&self, time_ms: i64) -> Option<Slot> {
+        self.timer_storage()?.slot_with_records(time_ms)
     }
 
     fn timer_storage(&self) -> Option<Arc<TimerStorage>> {
@@ -1648,7 +1843,7 @@ impl TimerMessageStore {
         };
         let locators: Vec<_> = batch.iter().map(|unit| (unit.pos, unit.size)).collect();
         let frames = self.read_source_frames(&locators, self.message_store_config.timer_pipeline_queue_bytes);
-        let mut plan = TimerIndexPlan::new(log_end, storage.record_layout());
+        let mut plan = TimerIndexPlan::new(log_end, storage.layout());
         let mut owned_elsewhere = 0usize;
         let mut next_queue_offset = None;
 
@@ -1699,6 +1894,7 @@ impl TimerMessageStore {
                 slot_time_ms,
                 magic,
                 timer_generation(&message),
+                enqueue_reference_time_ms,
                 &cq_unit,
                 IndexedTimerSource {
                     real_topic: message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC)),
@@ -1762,14 +1958,11 @@ impl TimerMessageStore {
         let mut delivered = 0usize;
 
         while cursor < drain_bound_ms && remaining_budget > 0 {
-            if let Some(slot) = self.get_timer_wheel_slot(cursor).filter(|slot| slot.num > 0) {
+            if let Some(slot) = self.slot_with_records(cursor) {
                 let delivered_now = self.deliver_slot(cursor, slot, remaining_budget, delivery_epoch).await;
                 delivered += delivered_now;
                 remaining_budget = remaining_budget.saturating_sub(delivered_now);
-                if self
-                    .get_timer_wheel_slot(cursor)
-                    .is_some_and(|remaining| remaining.num > 0)
-                {
+                if self.slot_with_records(cursor).is_some() {
                     self.curr_read_time_ms.store(cursor, Ordering::Relaxed);
                     break;
                 }
@@ -1837,6 +2030,7 @@ impl TimerMessageStore {
         slot_time_ms: i64,
         magic: i32,
         generation: u64,
+        write_time_ms: i64,
         cq_unit: &CqUnit,
         source: IndexedTimerSource,
     ) {
@@ -1845,9 +2039,10 @@ impl TimerMessageStore {
             .get(&slot_time_ms)
             .copied()
             .or_else(|| self.get_timer_wheel_slot(slot_time_ms));
-        let linked_slot = current_slot.filter(|slot| slot.num > 0);
-        let record_pos = plan.push_record(
-            TimerLogRecord {
+        let layout = plan.layout;
+        let linked_slot = current_slot.filter(|slot| layout.has_records(slot));
+        let record_pos = plan.push_record(TimerLogAppend {
+            record: TimerLogRecord {
                 deliver_time_ms: slot_time_ms,
                 commit_log_offset: cq_unit.pos,
                 size: cq_unit.size,
@@ -1856,14 +2051,19 @@ impl TimerMessageStore {
                 magic,
             },
             generation,
-        );
+            write_time_ms,
+            topic_hash: source
+                .real_topic
+                .as_ref()
+                .map_or(0, |topic| java_topic_hash(topic.as_str())),
+        });
         plan.slots.insert(
             slot_time_ms,
             Slot::new_with_num_magic(
                 slot_time_ms,
                 linked_slot.map(|slot| slot.first_pos).unwrap_or(record_pos),
                 record_pos,
-                current_slot.map(|slot| slot.num + 1).unwrap_or(1),
+                layout.count_after(current_slot.map(|slot| slot.num), source.is_delete),
                 current_slot.map(|slot| slot.magic | magic).unwrap_or(magic),
             ),
         );
@@ -1960,11 +2160,16 @@ impl TimerMessageStore {
     ) -> Vec<SlotEntryAction> {
         let mut actions = Vec::with_capacity(entries.len());
         for entry in entries {
-            let source_offset = entry.record.queue_offset;
             let Some(message) = self.look_store_message(entry.record.commit_log_offset, entry.record.size) else {
-                self.quarantine_source(source_offset, CorruptionReason::MissingPayload);
+                self.quarantine_source(entry.record.queue_offset, CorruptionReason::MissingPayload);
                 warn!("timer delivery is blocked by a missing persisted payload");
                 break;
+            };
+            // A Java timer log unit does not keep the Timer CQ offset; the source message does.
+            let source_offset = if entry.record.queue_offset >= 0 {
+                entry.record.queue_offset
+            } else {
+                message.queue_offset()
             };
             if need_roll(entry.record.magic) {
                 let now_ms = self.floor_time_ms(self.clock.read().wall_time_ms());
@@ -2224,18 +2429,12 @@ impl TimerMessageStore {
         )?;
         let storage = self.loaded_timer_storage()?;
         let mut delete_keys = HashSet::new();
-        let mut current_pos = chain.last_pos;
-        for _ in 0..chain.num {
-            if current_pos < 0 {
-                break;
-            }
-            let (record, generation) = storage.read_record(current_pos as u64)?;
-            let entry = TimerLogEntry {
-                position: current_pos,
+        let processed = storage.walk_slot(slot, processed, |position, record, generation| {
+            builder.push_reverse(TimerLogEntry {
+                position,
                 record,
                 generation,
-            };
-            builder.push_reverse(entry)?;
+            })?;
             if record.magic & MAGIC_DELETE != 0 {
                 let message = self
                     .look_store_message(record.commit_log_offset, record.size)
@@ -2244,7 +2443,7 @@ impl TimerMessageStore {
                             std::io::ErrorKind::NotFound,
                             format!(
                                 "recall scan cannot read commitlog {}:{} at timer log {}",
-                                record.commit_log_offset, record.size, current_pos
+                                record.commit_log_offset, record.size, position
                             ),
                         )
                     })?;
@@ -2252,42 +2451,40 @@ impl TimerMessageStore {
                     delete_keys.insert(identity);
                 }
             }
-            current_pos = record.prev_pos;
-        }
+            Ok(())
+        })?;
         let mut plan = builder.finish()?;
-        if plan.remaining() != chain.num as usize {
-            let declared = chain.num;
-            let found = plan.remaining();
-            plan.remove()?;
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "timer slot {} declares {declared} records but its chain contains {found}",
-                    slot.time_ms
-                ),
-            ));
+        if let Some(declared) = storage.exact_chain_len(slot, processed) {
+            if plan.remaining() != declared {
+                let found = plan.remaining();
+                plan.remove()?;
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "timer slot {} declares {declared} records but its chain contains {found}",
+                        slot.time_ms
+                    ),
+                ));
+            }
         }
         plan.skip(processed)?;
         Ok(ActiveSlotDrain { plan, delete_keys })
     }
 
+    /// Pending entries of `slot`, oldest first.
     fn load_slot_entries(&self, slot: Slot) -> std::io::Result<Vec<TimerLogEntry>> {
         let storage = self.loaded_timer_storage()?;
         let mut entries = Vec::with_capacity(slot.num.max(0) as usize);
-        let mut current_pos = slot.last_pos;
-        for _ in 0..slot.num.max(0) {
-            if current_pos < 0 {
-                break;
-            }
-            let (record, generation) = storage.read_record(current_pos as u64)?;
+        let processed = storage.walk_slot(slot, 0, |position, record, generation| {
             entries.push(TimerLogEntry {
-                position: current_pos,
+                position,
                 record,
                 generation,
             });
-            current_pos = record.prev_pos;
-        }
+            Ok(())
+        })?;
         entries.reverse();
+        entries.drain(..processed.min(entries.len()));
         Ok(entries)
     }
 
@@ -2488,6 +2685,31 @@ impl TimerMessageStore {
     fn dequeue_batch_limit(&self) -> usize {
         self.message_store_config.timer_due_batch_messages.max(1)
     }
+}
+
+/// Whether the Rust V2 timer log holds records, or is migrating into V2. V2 creates its
+/// directories on its first load, so only records show that V2 timers may still be pending.
+fn rust_v2_timer_records_present(root_dir: &str) -> std::io::Result<bool> {
+    let timer_log_dir = PathBuf::from(get_timer_log_path(root_dir));
+    if timer_log_dir.join("v2.migrating").exists() {
+        return Ok(true);
+    }
+    let entries = match std::fs::read_dir(timer_log_dir.join("v2").join("log")) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let is_segment = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.len() == 20 && name.bytes().all(|byte| byte.is_ascii_digit()));
+        if is_segment && entry.file_type()?.is_file() && entry.metadata()?.len() > 0 {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 pub fn build_delete_key(real_topic: &str, unique_key: &str) -> CheetahString {

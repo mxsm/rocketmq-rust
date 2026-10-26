@@ -74,6 +74,28 @@ impl TimerStoreMode {
     }
 }
 
+/// On-disk format of the Java-compatible engine's TimerLog, TimerWheel and checkpoint.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimerFileFormat {
+    /// Segmented, checksummed Rust files with A/B wheel pages.
+    #[default]
+    RustV2,
+    /// The Apache RocketMQ 5.x `timerlog`, `timerwheel` and `timercheck` files, so the store can
+    /// take over a Java Broker's pending timers and hand them back.
+    Java,
+}
+
+impl TimerFileFormat {
+    /// Returns the stable configuration value.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::RustV2 => "rust_v2",
+            Self::Java => "java",
+        }
+    }
+}
+
 /// How new timer messages are admitted under one [`TimerStoreMode`]: the engine that owns them
 /// and the limits that engine applies. Admission, recall handles and recall read this instead of
 /// deciding per mode.
