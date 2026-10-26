@@ -27,6 +27,7 @@ pub mod slot;
 pub(crate) mod slot_drain;
 pub(crate) mod source;
 pub(crate) mod source_wake;
+pub(crate) mod storage;
 #[cfg(feature = "extended_timeline")]
 pub(crate) mod timeline;
 pub mod timer_checkpoint;

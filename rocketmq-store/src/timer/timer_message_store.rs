@@ -97,6 +97,8 @@ use crate::timer::slot_drain::DEFAULT_IN_MEMORY_DRAIN_ENTRIES;
 use crate::timer::source::read_timer_source_frames;
 use crate::timer::source::TimerSourceRead;
 use crate::timer::source_wake::TimerSourceWake;
+use crate::timer::storage::TimerRecordLayout;
+use crate::timer::storage::TimerStorage;
 use crate::timer::timer_checkpoint::TimerCheckpoint;
 use crate::timer::timer_checkpoint::TimerCheckpointSnapshot;
 use crate::timer::timer_log::TimerLog;
@@ -187,29 +189,36 @@ struct SourceVisibilitySnapshot {
 /// A record links to the previous record of its slot, which can be an earlier record of the same
 /// batch, so record positions are assigned from the timer log end before the batch is appended.
 struct TimerIndexPlan {
+    layout: TimerRecordLayout,
+    /// Timer log end once the planned records are written.
     log_end: i64,
     records: Vec<(TimerLogRecord, u64)>,
+    /// Position of each planned record.
+    positions: Vec<i64>,
     /// Every touched slot as it stands after the batch.
     slots: BTreeMap<i64, Slot>,
     sources: Vec<IndexedTimerSource>,
 }
 
 impl TimerIndexPlan {
-    fn new(log_end: i64) -> Self {
+    fn new(log_end: i64, layout: TimerRecordLayout) -> Self {
         Self {
+            layout,
             log_end,
             records: Vec::new(),
+            positions: Vec::new(),
             slots: BTreeMap::new(),
             sources: Vec::new(),
         }
     }
 
-    fn position_of(&self, record_index: usize) -> i64 {
-        self.log_end + record_index as i64 * TimerLogRecord::SIZE as i64
-    }
-
-    fn next_position(&self) -> i64 {
-        self.position_of(self.records.len())
+    /// Plans `record` after the records planned so far and returns its position.
+    fn push_record(&mut self, record: TimerLogRecord, generation: u64) -> i64 {
+        let position = self.layout.place(self.log_end);
+        self.log_end = self.layout.end_after(position);
+        self.records.push((record, generation));
+        self.positions.push(position);
+        position
     }
 }
 
@@ -336,8 +345,9 @@ pub struct TimerMessageStore {
     store_context: Option<TimerStoreContext>,
     message_store_config: Arc<MessageStoreConfig>,
     timer_checkpoint: Mutex<Option<TimerCheckpoint>>,
-    timer_log: Mutex<Option<TimerLog>>,
-    timer_wheel: Mutex<Option<TimerWheel>>,
+    /// The loaded TimerLog and TimerWheel. Callers clone the handle out of the lock, so file I/O
+    /// never runs under it.
+    timer_storage: Mutex<Option<Arc<TimerStorage>>>,
     storage_metrics: Arc<TimerStorageMetrics>,
     slot_drains: Mutex<HashMap<i64, ActiveSlotDrain>>,
     clock: RwLock<Arc<dyn TimerClock>>,
@@ -506,8 +516,10 @@ impl TimerMessageStore {
         self.curr_queue_offset
             .store(recovered_state.queue_offset, Ordering::Relaxed);
         *self.timer_checkpoint.lock() = Some(timer_checkpoint);
-        *self.timer_log.lock() = Some(timer_log);
-        *self.timer_wheel.lock() = Some(timer_wheel);
+        *self.timer_storage.lock() = Some(Arc::new(TimerStorage::RustV2 {
+            log: timer_log,
+            wheel: timer_wheel,
+        }));
         if let Err(_error) = self.restore_partial_slot_drain(committed_drain) {
             error!(source_present = true, "restore the partially drained timer slot failed");
             return false;
@@ -624,10 +636,8 @@ impl TimerMessageStore {
     }
 
     pub fn get_all_congest_num(&self) -> i64 {
-        self.timer_wheel
-            .lock()
-            .as_ref()
-            .map(|timer_wheel| timer_wheel.get_all_num(self.curr_read_time_ms.load(Ordering::Relaxed)))
+        self.timer_storage()
+            .map(|storage| storage.all_num(self.curr_read_time_ms.load(Ordering::Relaxed)))
             .unwrap_or_default()
     }
 
@@ -769,8 +779,7 @@ impl TimerMessageStore {
             store_context: None,
             message_store_config,
             timer_checkpoint: Mutex::new(None),
-            timer_log: Mutex::new(None),
-            timer_wheel: Mutex::new(None),
+            timer_storage: Mutex::new(None),
             storage_metrics: Arc::new(TimerStorageMetrics::default()),
             slot_drains: Mutex::new(HashMap::new()),
             clock: RwLock::new(Arc::new(SystemTimerClock::default())),
@@ -922,11 +931,8 @@ impl TimerMessageStore {
         if self.timer_metrics.persist().is_err() {
             error!(source_present = true, "persist timer metrics during shutdown failed");
         }
-        if let Some(timer_log) = self.timer_log.lock().take() {
-            let _ = timer_log.shutdown();
-        }
-        if let Some(timer_wheel) = self.timer_wheel.lock().take() {
-            let _ = timer_wheel.shutdown(true);
+        if let Some(storage) = self.timer_storage.lock().take() {
+            storage.shutdown();
         }
         if let Some(timer_checkpoint) = self.timer_checkpoint.lock().take() {
             let _ = timer_checkpoint.shutdown();
@@ -951,20 +957,15 @@ impl TimerMessageStore {
         // The checkpoint is a commit record, never a write-ahead declaration. Advancing it before
         // either data file is durable can permanently skip Timer CQ entries after a crash.
         self.observe_persistence_stage(PersistenceStage::BeforeTimerLog)?;
-        let durable_timer_log_len = {
-            let timer_log_guard = self.timer_log.lock();
-            match timer_log_guard.as_ref() {
-                Some(timer_log) => {
-                    timer_log.flush()?;
-                    timer_log.len()? as i64
-                }
-                None => 0,
-            }
+        let storage = self.timer_storage();
+        let durable_timer_log_len = match storage.as_deref() {
+            Some(storage) => storage.flush_log()?,
+            None => 0,
         };
         self.observe_persistence_stage(PersistenceStage::AfterTimerLog)?;
 
-        let wheel_generation = match self.timer_wheel.lock().as_ref() {
-            Some(timer_wheel) => timer_wheel.flush_generation()?,
+        let wheel_generation = match storage.as_deref() {
+            Some(storage) => storage.flush_wheel()?,
             None => 0,
         };
         self.observe_persistence_stage(PersistenceStage::AfterTimerWheel)?;
@@ -997,13 +998,8 @@ impl TimerMessageStore {
         } else {
             0
         };
-        if let Some(timer_wheel) = self.timer_wheel.lock().as_ref() {
-            timer_wheel.commit_generation(wheel_generation)?;
-        }
-        if checkpoint_generation > 0 {
-            if let Some(timer_log) = self.timer_log.lock().as_ref() {
-                timer_log.mark_clean_checkpoint(checkpoint_generation)?;
-            }
+        if let Some(storage) = storage.as_deref() {
+            storage.commit_checkpoint(wheel_generation, checkpoint_generation)?;
         }
         self.observe_persistence_stage(PersistenceStage::AfterCheckpoint)?;
         self.pending_progress.store(false, Ordering::Release);
@@ -1067,19 +1063,11 @@ impl TimerMessageStore {
     }
 
     pub fn append_timer_log(&self, payload: &[u8]) -> std::io::Result<u64> {
-        self.timer_log
-            .lock()
-            .as_ref()
-            .ok_or_else(|| std::io::Error::other("timer log is not loaded"))?
-            .append(payload)
+        self.loaded_timer_storage()?.append_raw(payload)
     }
 
     pub fn read_timer_log(&self, offset: u64, length: usize) -> std::io::Result<Vec<u8>> {
-        self.timer_log
-            .lock()
-            .as_ref()
-            .ok_or_else(|| std::io::Error::other("timer log is not loaded"))?
-            .read_at(offset, length)
+        self.loaded_timer_storage()?.read_raw(offset, length)
     }
 
     pub fn put_timer_wheel_slot(
@@ -1090,18 +1078,21 @@ impl TimerMessageStore {
         num: i32,
         magic: i32,
     ) -> std::io::Result<()> {
-        self.timer_wheel
-            .lock()
-            .as_ref()
-            .ok_or_else(|| std::io::Error::other("timer wheel is not loaded"))?
-            .put_slot(time_ms, first_pos, last_pos, num, magic)
+        self.loaded_timer_storage()?
+            .put_slot(Slot::new_with_num_magic(time_ms, first_pos, last_pos, num, magic))
     }
 
     pub fn get_timer_wheel_slot(&self, time_ms: i64) -> Option<Slot> {
-        self.timer_wheel
-            .lock()
-            .as_ref()
-            .and_then(|timer_wheel| timer_wheel.get_slot(time_ms))
+        self.timer_storage()?.get_slot(time_ms)
+    }
+
+    fn timer_storage(&self) -> Option<Arc<TimerStorage>> {
+        self.timer_storage.lock().clone()
+    }
+
+    fn loaded_timer_storage(&self) -> std::io::Result<Arc<TimerStorage>> {
+        self.timer_storage()
+            .ok_or_else(|| std::io::Error::other("timer storage is not loaded"))
     }
 
     fn restore_progress_on_dequeue_resume(&self) {
@@ -1143,8 +1134,8 @@ impl TimerMessageStore {
         let now_ms = self.floor_time_ms(current_millis() as i64);
         let read_cursor = self.curr_read_time_ms.load(Ordering::Relaxed);
         let mut backlog_metrics = TimerBacklogMetrics::new(self.timer_metrics.timer_dist_list());
-        if let Some(timer_wheel) = self.timer_wheel.lock().as_ref() {
-            timer_wheel.visit_occupied_slots(|_, slot| {
+        if let Some(storage) = self.timer_storage() {
+            storage.visit_occupied_slots(|slot| {
                 if slot.time_ms > 0 && slot.time_ms >= read_cursor {
                     backlog_metrics.observe_due(slot.time_ms, now_ms, i64::from(slot.num));
                 }
@@ -1199,8 +1190,8 @@ impl TimerMessageStore {
         let now_ms = self.floor_time_ms(current_millis() as i64);
         let read_cursor = self.curr_read_time_ms.load(Ordering::Relaxed);
         let mut slots = Vec::new();
-        if let Some(timer_wheel) = self.timer_wheel.lock().as_ref() {
-            timer_wheel.visit_occupied_slots(|_, slot| {
+        if let Some(storage) = self.timer_storage() {
+            storage.visit_occupied_slots(|slot| {
                 if slot.time_ms > 0 && slot.time_ms >= read_cursor {
                     slots.push(slot);
                 }
@@ -1602,7 +1593,7 @@ impl TimerMessageStore {
     }
 
     pub(crate) fn is_storage_loaded(&self) -> bool {
-        self.timer_checkpoint.lock().is_some() && self.timer_log.lock().is_some() && self.timer_wheel.lock().is_some()
+        self.timer_checkpoint.lock().is_some() && self.timer_storage.lock().is_some()
     }
 
     pub(crate) fn is_current_delivery_epoch(&self, epoch: u64) -> bool {
@@ -1649,12 +1640,15 @@ impl TimerMessageStore {
             queue_offset = cq_unit.queue_offset + 1;
             batch.push(cq_unit);
         }
-        let Some(log_end) = self.timer_log_len() else {
+        let Some(storage) = self.timer_storage() else {
+            return 0;
+        };
+        let Some(log_end) = storage.log_end().ok().and_then(|end| i64::try_from(end).ok()) else {
             return 0;
         };
         let locators: Vec<_> = batch.iter().map(|unit| (unit.pos, unit.size)).collect();
         let frames = self.read_source_frames(&locators, self.message_store_config.timer_pipeline_queue_bytes);
-        let mut plan = TimerIndexPlan::new(log_end);
+        let mut plan = TimerIndexPlan::new(log_end, storage.record_layout());
         let mut owned_elsewhere = 0usize;
         let mut next_queue_offset = None;
 
@@ -1718,7 +1712,7 @@ impl TimerMessageStore {
 
         // Nothing of the batch is visible before this commit; a failed commit keeps the cursor so
         // the whole batch is planned again.
-        if let Err(_error) = self.commit_timer_index_plan(&plan) {
+        if let Err(_error) = Self::commit_timer_index_plan(&storage, &plan) {
             error!(
                 source_present = true,
                 "index a timer payload batch into the wheel failed"
@@ -1835,11 +1829,6 @@ impl TimerMessageStore {
         self.source_visible_through_ms.store(0, Ordering::Release);
     }
 
-    fn timer_log_len(&self) -> Option<i64> {
-        let length = self.timer_log.lock().as_ref()?.len().ok()?;
-        i64::try_from(length).ok()
-    }
-
     /// Adds one source to `plan`, linked after the last record of its slot as the wheel will hold
     /// it once the earlier records of the batch are committed.
     fn plan_timer_index(
@@ -1857,8 +1846,7 @@ impl TimerMessageStore {
             .copied()
             .or_else(|| self.get_timer_wheel_slot(slot_time_ms));
         let linked_slot = current_slot.filter(|slot| slot.num > 0);
-        let record_pos = plan.next_position();
-        plan.records.push((
+        let record_pos = plan.push_record(
             TimerLogRecord {
                 deliver_time_ms: slot_time_ms,
                 commit_log_offset: cq_unit.pos,
@@ -1868,7 +1856,7 @@ impl TimerMessageStore {
                 magic,
             },
             generation,
-        ));
+        );
         plan.slots.insert(
             slot_time_ms,
             Slot::new_with_num_magic(
@@ -1883,33 +1871,25 @@ impl TimerMessageStore {
     }
 
     /// Appends the planned records in one timer log write, then updates every touched slot.
-    fn commit_timer_index_plan(&self, plan: &TimerIndexPlan) -> std::io::Result<()> {
+    fn commit_timer_index_plan(storage: &TimerStorage, plan: &TimerIndexPlan) -> std::io::Result<()> {
         if plan.records.is_empty() {
             return Ok(());
         }
-        let positions = self
-            .timer_log
-            .lock()
-            .as_ref()
-            .ok_or_else(|| std::io::Error::other("timer log is not loaded"))?
-            .append_batch(&plan.records)?;
+        let positions = storage.append_records(&plan.records)?;
         // The records link to the positions the plan assigned. Records placed anywhere else
         // would break their slot chains, so the wheel is left untouched.
-        let placed_as_planned = positions.len() == plan.records.len()
-            && positions.iter().enumerate().all(|(index, position)| {
-                i64::try_from(*position).is_ok_and(|position| position == plan.position_of(index))
-            });
+        let placed_as_planned = positions.len() == plan.positions.len()
+            && positions
+                .iter()
+                .zip(&plan.positions)
+                .all(|(placed, planned)| i64::try_from(*placed).is_ok_and(|placed| placed == *planned));
         if !placed_as_planned {
             return Err(std::io::Error::other(
                 "timer log placed an index batch away from its planned positions",
             ));
         }
         let slots: Vec<_> = plan.slots.values().copied().collect();
-        self.timer_wheel
-            .lock()
-            .as_ref()
-            .ok_or_else(|| std::io::Error::other("timer wheel is not loaded"))?
-            .put_slots(&slots)
+        storage.put_slots(&slots)
     }
 
     async fn deliver_slot(&self, slot_time_ms: i64, slot: Slot, limit: usize, delivery_epoch: u64) -> usize {
@@ -1949,7 +1929,9 @@ impl TimerMessageStore {
                 remaining.num,
                 remaining.magic,
             ),
-            None => self.put_timer_wheel_slot(slot_time_ms, 0, 0, 0, 0),
+            None => self
+                .loaded_timer_storage()
+                .and_then(|storage| storage.clear_slot(slot_time_ms)),
         };
         if let Err(_error) = rewrite_result {
             error!(source_present = true, "rewrite a timer slot continuation failed");
@@ -2240,18 +2222,14 @@ impl TimerMessageStore {
             DEFAULT_IN_MEMORY_DRAIN_ENTRIES,
             Arc::clone(&self.storage_metrics),
         )?;
+        let storage = self.loaded_timer_storage()?;
         let mut delete_keys = HashSet::new();
         let mut current_pos = chain.last_pos;
         for _ in 0..chain.num {
             if current_pos < 0 {
                 break;
             }
-            let (record, generation) = self
-                .timer_log
-                .lock()
-                .as_ref()
-                .ok_or_else(|| std::io::Error::other("timer log is not loaded"))?
-                .read_record(current_pos as u64)?;
+            let (record, generation) = storage.read_record(current_pos as u64)?;
             let entry = TimerLogEntry {
                 position: current_pos,
                 record,
@@ -2294,18 +2272,14 @@ impl TimerMessageStore {
     }
 
     fn load_slot_entries(&self, slot: Slot) -> std::io::Result<Vec<TimerLogEntry>> {
+        let storage = self.loaded_timer_storage()?;
         let mut entries = Vec::with_capacity(slot.num.max(0) as usize);
         let mut current_pos = slot.last_pos;
         for _ in 0..slot.num.max(0) {
             if current_pos < 0 {
                 break;
             }
-            let (record, generation) = self
-                .timer_log
-                .lock()
-                .as_ref()
-                .ok_or_else(|| std::io::Error::other("timer log is not loaded"))?
-                .read_record(current_pos as u64)?;
+            let (record, generation) = storage.read_record(current_pos as u64)?;
             entries.push(TimerLogEntry {
                 position: current_pos,
                 record,
@@ -2696,6 +2670,7 @@ mod tests {
     use super::MessageStoreConfig;
     use super::PersistenceStage;
     use super::PutMessageStatus;
+    use super::Slot;
     use super::TimerCheckpoint;
     use super::TimerCheckpointSnapshot;
     use super::TimerClock;
@@ -2784,6 +2759,14 @@ mod tests {
             config,
             crate::runtime::test_service_context("timer-message-store-test"),
         )
+    }
+
+    fn occupied_slots(timer_message_store: &TimerMessageStore) -> Vec<Slot> {
+        let mut slots = Vec::new();
+        if let Some(storage) = timer_message_store.timer_storage() {
+            storage.visit_occupied_slots(|slot| slots.push(slot));
+        }
+        slots
     }
 
     fn config_with_root_and_limits(
@@ -3161,7 +3144,7 @@ mod tests {
         let reloaded_store = standalone_timer_store(config);
         assert!(reloaded_store.load());
         assert_eq!(
-            reloaded_store.timer_log.lock().as_ref().unwrap().len().unwrap(),
+            reloaded_store.timer_storage().unwrap().log_end().unwrap(),
             (TimerLogRecord::SIZE * 2) as u64
         );
         assert_eq!(reloaded_store.get_timer_wheel_slot(valid_time_ms).unwrap().num, 2);
@@ -4225,12 +4208,7 @@ mod tests {
 
         assert_eq!(first_delivery_tick, 1);
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
-        let remaining_timer_messages = timer_message_store
-            .timer_wheel
-            .lock()
-            .as_ref()
-            .map(TimerWheel::slots_snapshot)
-            .unwrap_or_default()
+        let remaining_timer_messages = occupied_slots(&timer_message_store)
             .into_iter()
             .map(|slot| slot.num.max(0))
             .sum::<i32>();
@@ -4265,12 +4243,7 @@ mod tests {
         assert_eq!(timer_message_store.process_once().await, 1);
 
         let original_slot_time = timer_message_store.ceil_time_ms(deliver_ms as i64);
-        let active_slots = timer_message_store
-            .timer_wheel
-            .lock()
-            .as_ref()
-            .map(TimerWheel::slots_snapshot)
-            .unwrap_or_default()
+        let active_slots = occupied_slots(&timer_message_store)
             .into_iter()
             .filter(|slot| slot.num > 0)
             .collect::<Vec<_>>();
@@ -4351,7 +4324,7 @@ mod tests {
         assert_eq!(processed, 1);
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 0);
         assert_eq!(
-            timer_message_store.timer_log.lock().as_ref().unwrap().len().unwrap(),
+            timer_message_store.timer_storage().unwrap().log_end().unwrap(),
             TimerLogRecord::SIZE as u64
         );
         assert_eq!(
