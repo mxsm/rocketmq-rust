@@ -150,7 +150,7 @@ num_cpus           = "1.17"
 
 config = "0.15.23"
 
-parking_lot   = "0.12"
+parking_lot   = "0.13"
 dirs          = "7.0"
 trait-variant = "0.1.2"
 
