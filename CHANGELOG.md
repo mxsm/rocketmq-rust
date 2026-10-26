@@ -70,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(broker):** Remove 17 unused mutable accessors from the internal `BrokerRuntimeState` ([#11882](https://github.com/mxsm/rocketmq-rust/issues/11882)).
 - **refactor(store):** Remove the unused internal `TopicQueueLock`; CommitLog append sequencing and configuration fields are unchanged ([#11850](https://github.com/mxsm/rocketmq-rust/issues/11850)).
 - **refactor(store):** Remove the unused internal `ByteBuffer` and commented message-buffer list scaffolding ([#11856](https://github.com/mxsm/rocketmq-rust/issues/11856)).
 - **refactor(broker):** Remove the unused internal `PollingHeader`; protocol headers and deferred polling behavior are unchanged ([#11759](https://github.com/mxsm/rocketmq-rust/issues/11759)).

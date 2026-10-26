@@ -414,98 +414,13 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
     }
 
     #[inline]
-    pub fn store_host_mut(&mut self) -> &mut SocketAddr {
-        &mut self.store_host
-    }
-
-    #[inline]
-    pub fn topic_queue_mapping_manager_mut(&mut self) -> &mut TopicQueueMappingManager {
-        Arc::get_mut(&mut self.topic_queue_mapping_manager)
-            .expect("topic queue mapping manager mutation requires an unpublished owner")
-    }
-
-    #[inline]
     pub fn subscription_group_manager_mut(&mut self) -> &mut SubscriptionGroupManager {
         self.subscription_group_manager.as_mut().unwrap()
     }
 
     #[inline]
-    pub fn consumer_filter_manager_mut(&mut self) -> &mut ConsumerFilterManager {
-        self.consumer_filter_manager.as_mut().unwrap()
-    }
-
-    #[inline]
     pub fn message_store_mut(&mut self) -> Option<&mut MS> {
         self.message_store.as_mut().and_then(Arc::get_mut)
-    }
-
-    #[inline]
-    pub fn broker_stats_mut(&mut self) -> &mut Option<Arc<BrokerStats<MS>>> {
-        &mut self.broker_stats
-    }
-
-    #[inline]
-    pub fn timer_message_store_mut(&mut self) -> &mut Option<Arc<TimerMessageStore>> {
-        &mut self.timer_message_store
-    }
-
-    #[inline]
-    pub fn broker_outer_api_mut(&mut self) -> &mut BrokerOuterAPI {
-        &mut self.broker_outer_api
-    }
-
-    #[inline]
-    pub fn producer_manager_mut(&mut self) -> &mut ProducerManager {
-        &mut self.producer_manager
-    }
-
-    #[inline]
-    pub fn consumer_manager_mut(&mut self) -> &mut ConsumerManager {
-        &mut self.consumer_manager
-    }
-
-    #[inline]
-    pub fn broadcast_offset_manager_mut(&mut self) -> &mut BroadcastOffsetManager {
-        &mut self.broadcast_offset_manager
-    }
-
-    #[inline]
-    pub fn topic_queue_mapping_clean_service_mut(&mut self) -> Option<&mut TopicQueueMappingCleanService> {
-        self.topic_queue_mapping_clean_service.as_mut()
-    }
-
-    #[inline]
-    pub fn update_master_haserver_addr_periodically_mut(&mut self) -> &mut bool {
-        &mut self.update_master_haserver_addr_periodically
-    }
-
-    #[inline]
-    pub fn rebalance_lock_manager_mut(&mut self) -> &mut RebalanceLockManager {
-        &mut self.rebalance_lock_manager
-    }
-
-    #[inline]
-    pub fn broker_member_group_mut(&mut self) -> impl std::ops::DerefMut<Target = BrokerMemberGroup> + '_ {
-        self.broker_member_group.write()
-    }
-
-    #[inline]
-    pub fn transactional_message_check_listener_mut(
-        &mut self,
-    ) -> &mut Option<DefaultTransactionalMessageCheckListener> {
-        &mut self.transactional_message_check_listener
-    }
-
-    #[inline]
-    pub fn transactional_message_check_service_mut(
-        &mut self,
-    ) -> Option<&mut Arc<TransactionalMessageCheckService<MS>>> {
-        self.transactional_message_check_service.as_mut()
-    }
-
-    #[inline]
-    pub fn pop_inflight_message_counter_mut(&mut self) -> &mut PopInflightMessageCounter {
-        &mut self.pop_inflight_message_counter
     }
 
     #[inline]
@@ -781,11 +696,6 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
 
     #[inline]
     pub fn slave_synchronize(&self) -> Option<&SlaveSynchronize<MS>> {
-        self.slave_synchronize.as_deref()
-    }
-
-    #[inline]
-    pub fn slave_synchronize_mut(&mut self) -> Option<&SlaveSynchronize<MS>> {
         self.slave_synchronize.as_deref()
     }
 
