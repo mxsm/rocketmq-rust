@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Deterministic safe-DTO fake for Delivery 03 product-path tests.
+//! Deterministic safe-DTO fake for Dashboard/Broker product-path tests.
 
 use std::{collections::VecDeque, sync::Mutex};
 
@@ -21,14 +21,14 @@ use rocketmq_dashboard_common::{
     DashboardOverview, HistoryMetricKind, HistoryPoint, RuntimeEntry, TopicCurrentMetric,
 };
 
-use super::{Delivery03Backend, ServiceFuture};
+use super::{DashboardBrokerOperations, ServiceFuture};
 use crate::{
     services::{brokers::BrokerConfigMutationResult, dashboard::DashboardOverviewLoad},
     state::{UiError, UiErrorCode},
 };
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Delivery03Calls {
+pub(crate) struct DashboardBrokerCalls {
     pub overview_revisions: Vec<u64>,
     pub topic_current_revisions: Vec<u64>,
     pub broker_current_revisions: Vec<u64>,
@@ -54,16 +54,16 @@ struct Queues {
 
 /// Test fake that cannot accept or expose any raw admin-core response type.
 #[derive(Default)]
-pub(crate) struct FakeDelivery03Backend {
+pub(crate) struct FakeDashboardBrokerOperations {
     queues: Mutex<Queues>,
-    calls: Mutex<Delivery03Calls>,
+    calls: Mutex<DashboardBrokerCalls>,
 }
 
-impl FakeDelivery03Backend {
+impl FakeDashboardBrokerOperations {
     pub fn queue_topic_current(&self, result: Result<Vec<TopicCurrentMetric>, UiError>) {
         self.queues
             .lock()
-            .expect("delivery03 queues")
+            .expect("dashboard_broker queues")
             .topic_current
             .push_back(result);
     }
@@ -71,7 +71,7 @@ impl FakeDelivery03Backend {
     pub fn queue_topic_history(&self, result: Result<Vec<HistoryPoint>, UiError>) {
         self.queues
             .lock()
-            .expect("delivery03 queues")
+            .expect("dashboard_broker queues")
             .topic_history
             .push_back(result);
     }
@@ -79,7 +79,7 @@ impl FakeDelivery03Backend {
     pub fn queue_broker_current(&self, result: Result<Vec<BrokerCurrentMetric>, UiError>) {
         self.queues
             .lock()
-            .expect("delivery03 queues")
+            .expect("dashboard_broker queues")
             .broker_current
             .push_back(result);
     }
@@ -87,7 +87,7 @@ impl FakeDelivery03Backend {
     pub fn queue_broker_history(&self, result: Result<Vec<HistoryPoint>, UiError>) {
         self.queues
             .lock()
-            .expect("delivery03 queues")
+            .expect("dashboard_broker queues")
             .broker_history
             .push_back(result);
     }
@@ -95,33 +95,45 @@ impl FakeDelivery03Backend {
     pub fn queue_inventory(&self, result: Result<Vec<BrokerInventoryItem>, UiError>) {
         self.queues
             .lock()
-            .expect("delivery03 queues")
+            .expect("dashboard_broker queues")
             .inventory
             .push_back(result);
     }
 
     pub fn queue_runtime(&self, result: Result<Vec<RuntimeEntry>, UiError>) {
-        self.queues.lock().expect("delivery03 queues").runtime.push_back(result);
+        self.queues
+            .lock()
+            .expect("dashboard_broker queues")
+            .runtime
+            .push_back(result);
     }
 
     pub fn queue_config(&self, result: Result<BrokerConfigSnapshot, UiError>) {
-        self.queues.lock().expect("delivery03 queues").config.push_back(result);
+        self.queues
+            .lock()
+            .expect("dashboard_broker queues")
+            .config
+            .push_back(result);
     }
 
     pub fn queue_patch(&self, result: Result<BrokerConfigMutationResult, UiError>) {
-        self.queues.lock().expect("delivery03 queues").patches.push_back(result);
+        self.queues
+            .lock()
+            .expect("dashboard_broker queues")
+            .patches
+            .push_back(result);
     }
 
-    pub fn calls(&self) -> Delivery03Calls {
-        self.calls.lock().expect("delivery03 calls").clone()
+    pub fn calls(&self) -> DashboardBrokerCalls {
+        self.calls.lock().expect("dashboard_broker calls").clone()
     }
 }
 
-impl Delivery03Backend for FakeDelivery03Backend {
+impl DashboardBrokerOperations for FakeDashboardBrokerOperations {
     fn dashboard_overview(&self, revision: u64) -> ServiceFuture<'_, Result<DashboardOverviewLoad, UiError>> {
         self.calls
             .lock()
-            .expect("delivery03 calls")
+            .expect("dashboard_broker calls")
             .overview_revisions
             .push(revision);
         Box::pin(std::future::ready(Ok(DashboardOverviewLoad {
@@ -133,13 +145,13 @@ impl Delivery03Backend for FakeDelivery03Backend {
     fn dashboard_topic_current(&self, revision: u64) -> ServiceFuture<'_, Result<Vec<TopicCurrentMetric>, UiError>> {
         self.calls
             .lock()
-            .expect("delivery03 calls")
+            .expect("dashboard_broker calls")
             .topic_current_revisions
             .push(revision);
         let result = self
             .queues
             .lock()
-            .expect("delivery03 queues")
+            .expect("dashboard_broker queues")
             .topic_current
             .pop_front()
             .unwrap_or_else(|| Ok(Vec::new()));
@@ -149,13 +161,13 @@ impl Delivery03Backend for FakeDelivery03Backend {
     fn dashboard_broker_current(&self, revision: u64) -> ServiceFuture<'_, Result<Vec<BrokerCurrentMetric>, UiError>> {
         self.calls
             .lock()
-            .expect("delivery03 calls")
+            .expect("dashboard_broker calls")
             .broker_current_revisions
             .push(revision);
         let result = self
             .queues
             .lock()
-            .expect("delivery03 queues")
+            .expect("dashboard_broker queues")
             .broker_current
             .pop_front()
             .unwrap_or_else(|| Ok(Vec::new()));
@@ -170,13 +182,13 @@ impl Delivery03Backend for FakeDelivery03Backend {
     ) -> ServiceFuture<'_, Result<Vec<HistoryPoint>, UiError>> {
         self.calls
             .lock()
-            .expect("delivery03 calls")
+            .expect("dashboard_broker calls")
             .topic_history
             .push((topic, start_epoch_ms, end_epoch_ms));
         let result = self
             .queues
             .lock()
-            .expect("delivery03 queues")
+            .expect("dashboard_broker queues")
             .topic_history
             .pop_front()
             .unwrap_or_else(|| Ok(Vec::new()));
@@ -190,7 +202,7 @@ impl Delivery03Backend for FakeDelivery03Backend {
         start_epoch_ms: u64,
         end_epoch_ms: u64,
     ) -> ServiceFuture<'_, Result<Vec<HistoryPoint>, UiError>> {
-        self.calls.lock().expect("delivery03 calls").broker_history.push((
+        self.calls.lock().expect("dashboard_broker calls").broker_history.push((
             metric,
             identity,
             start_epoch_ms,
@@ -199,7 +211,7 @@ impl Delivery03Backend for FakeDelivery03Backend {
         let result = self
             .queues
             .lock()
-            .expect("delivery03 queues")
+            .expect("dashboard_broker queues")
             .broker_history
             .pop_front()
             .unwrap_or_else(|| Ok(Vec::new()));
@@ -209,13 +221,13 @@ impl Delivery03Backend for FakeDelivery03Backend {
     fn broker_inventory(&self, revision: u64) -> ServiceFuture<'_, Result<Vec<BrokerInventoryItem>, UiError>> {
         self.calls
             .lock()
-            .expect("delivery03 calls")
+            .expect("dashboard_broker calls")
             .inventory_revisions
             .push(revision);
         let result = self
             .queues
             .lock()
-            .expect("delivery03 queues")
+            .expect("dashboard_broker queues")
             .inventory
             .pop_front()
             .unwrap_or_else(|| Ok(Vec::new()));
@@ -229,13 +241,13 @@ impl Delivery03Backend for FakeDelivery03Backend {
     ) -> ServiceFuture<'_, Result<Vec<RuntimeEntry>, UiError>> {
         self.calls
             .lock()
-            .expect("delivery03 calls")
+            .expect("dashboard_broker calls")
             .runtime
             .push((revision, identity));
         let result = self
             .queues
             .lock()
-            .expect("delivery03 queues")
+            .expect("dashboard_broker queues")
             .runtime
             .pop_front()
             .unwrap_or_else(|| Ok(Vec::new()));
@@ -249,13 +261,13 @@ impl Delivery03Backend for FakeDelivery03Backend {
     ) -> ServiceFuture<'_, Result<BrokerConfigSnapshot, UiError>> {
         self.calls
             .lock()
-            .expect("delivery03 calls")
+            .expect("dashboard_broker calls")
             .config
             .push((revision, identity));
         let result = self
             .queues
             .lock()
-            .expect("delivery03 queues")
+            .expect("dashboard_broker queues")
             .config
             .pop_front()
             .unwrap_or_else(|| Err(unexpected_call("Broker config")));
@@ -269,13 +281,13 @@ impl Delivery03Backend for FakeDelivery03Backend {
     ) -> ServiceFuture<'_, Result<BrokerConfigMutationResult, UiError>> {
         self.calls
             .lock()
-            .expect("delivery03 calls")
+            .expect("dashboard_broker calls")
             .patches
             .push((revision, patch));
         let result = self
             .queues
             .lock()
-            .expect("delivery03 queues")
+            .expect("dashboard_broker queues")
             .patches
             .pop_front()
             .unwrap_or_else(|| Err(unexpected_call("Broker config mutation")));

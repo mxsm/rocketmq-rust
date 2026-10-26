@@ -28,7 +28,7 @@ use crate::{
     route::{AppRoute, BrokerTab, RouteKey, TopicTab},
     services::{
         AppServices, ConfigRouteTransition, ConfigUpdatePhase, ConfigUpdated, FakeAuthService, FakeStartupService,
-        StartupSnapshot, UnavailableTestConfig, delivery03::test_support::FakeDelivery03Backend,
+        StartupSnapshot, UnavailableTestConfig, dashboard_broker::test_support::FakeDashboardBrokerOperations,
     },
     state::{RequestEpoch, UiError, UiErrorCode},
 };
@@ -1088,7 +1088,7 @@ fn legacy_cache_maps_only_delivery_one_compatible_routes() {
 #[gpui::test]
 fn broker_deep_route_back_forward_and_tab_replace_control_the_same_sheet(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
-    let fake = Arc::new(FakeDelivery03Backend::default());
+    let fake = Arc::new(FakeDashboardBrokerOperations::default());
     let item = broker_item("127.0.0.1:10911");
     for _ in 0..4 {
         fake.queue_inventory(Ok(vec![item.clone()]));
@@ -1106,7 +1106,7 @@ fn broker_deep_route_back_forward_and_tab_replace_control_the_same_sheet(cx: &mu
         },
         FakeAuthService::authenticated(),
     )
-    .with_delivery03_backend(fake.clone());
+    .with_dashboard_broker_operations(fake.clone());
     let dashboard_handle = Rc::new(RefCell::new(None));
     let capture = dashboard_handle.clone();
     let (_root, cx) = cx.add_window_view(move |window, cx| {
