@@ -48,7 +48,7 @@ use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreOperation;
-use rocketmq_store_api::TimerStoreMode;
+use rocketmq_store_api::TimerAdmissionRoute;
 use tracing::debug;
 use tracing::info;
 
@@ -99,10 +99,8 @@ pub(crate) struct SendMessagePolicy {
     pub(crate) reput_lag_reject_bytes: i64,
     pub(crate) broker_role: BrokerRole,
     pub(crate) max_message_size: i32,
-    pub(crate) timer_max_delay_sec: u64,
     pub(crate) timer_precision_ms: u64,
-    pub(crate) timer_store_mode: TimerStoreMode,
-    pub(crate) timer_maximum_horizon_days: u16,
+    pub(crate) timer_route: TimerAdmissionRoute,
     pub(crate) timer_extended_capability_version: u16,
     pub(crate) timer_extended_admission_enable: bool,
     pub(crate) auto_create_topic_enable: bool,
@@ -145,10 +143,8 @@ impl SendMessagePolicy {
             reput_lag_reject_bytes: 0,
             broker_role: message_store_config.broker_role,
             max_message_size: message_store_config.max_message_size,
-            timer_max_delay_sec: message_store_config.timer_max_delay_sec,
             timer_precision_ms: message_store_config.timer_precision_ms,
-            timer_store_mode: message_store_config.timer_store_mode,
-            timer_maximum_horizon_days: message_store_config.timer_extended_admission_horizon_days,
+            timer_route: message_store_config.timer_admission_route(),
             timer_extended_capability_version: u16::from(cfg!(feature = "extended_timeline")),
             timer_extended_admission_enable: message_store_config.timer_extended_admission_enable,
             auto_create_topic_enable: false,
@@ -195,10 +191,8 @@ impl SendMessagePolicy {
     fn apply_message_store_config(&mut self, config: &MessageStoreConfig) {
         self.broker_role = config.broker_role;
         self.max_message_size = config.max_message_size;
-        self.timer_max_delay_sec = config.timer_max_delay_sec;
         self.timer_precision_ms = config.timer_precision_ms;
-        self.timer_store_mode = config.timer_store_mode;
-        self.timer_maximum_horizon_days = config.timer_extended_admission_horizon_days;
+        self.timer_route = config.timer_admission_route();
         self.timer_extended_capability_version = u16::from(cfg!(feature = "extended_timeline"));
         self.timer_extended_admission_enable = config.timer_extended_admission_enable;
     }
@@ -755,6 +749,7 @@ mod tests {
     use cheetah_string::CheetahString;
     use rocketmq_model::common::broker::broker_role::BrokerRole;
     use rocketmq_store::MessageStoreConfig;
+    use rocketmq_store_api::TimerEngineId;
     use rocketmq_store_api::TimerStoreMode;
 
     use super::SendMessagePolicyState;
@@ -814,8 +809,9 @@ mod tests {
         );
 
         let snapshot = state.snapshot();
-        assert_eq!(snapshot.timer_store_mode, TimerStoreMode::ExtendedTimeline);
-        assert_eq!(snapshot.timer_maximum_horizon_days, 366);
+        assert_eq!(snapshot.timer_route.engine, TimerEngineId::ExtendedTimeline);
+        assert_eq!(snapshot.timer_route.max_delay_sec, 366 * 86_400);
+        assert!(snapshot.timer_route.admission_open);
         assert_eq!(
             snapshot.timer_extended_capability_version,
             u16::from(cfg!(feature = "extended_timeline"))

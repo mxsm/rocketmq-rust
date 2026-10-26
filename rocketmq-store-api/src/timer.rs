@@ -74,6 +74,57 @@ impl TimerStoreMode {
     }
 }
 
+/// How new timer messages are admitted under one [`TimerStoreMode`]: the engine that owns them
+/// and the limits that engine applies. Admission, recall handles and recall read this instead of
+/// deciding per mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TimerAdmissionRoute {
+    /// Engine that owns the timer messages admitted now.
+    pub engine: TimerEngineId,
+    /// Format version stamped on each admitted message.
+    pub format_version: u16,
+    /// Longest delay the engine admits, in seconds.
+    pub max_delay_sec: u64,
+    /// Whether the engine admits new timer messages at all.
+    pub admission_open: bool,
+    /// Whether admission rejects a message whose wheel slot is congested.
+    pub rejects_congested_slots: bool,
+}
+
+impl TimerAdmissionRoute {
+    /// Returns the route of `mode`. The Java-compatible engine admits up to
+    /// `java_compat_max_delay_sec` and checks wheel slot congestion; the Extended Timeline admits
+    /// up to `extended_horizon_days` while `extended_admission_enable` is set.
+    pub const fn for_mode(
+        mode: TimerStoreMode,
+        java_compat_max_delay_sec: u64,
+        extended_horizon_days: u16,
+        extended_admission_enable: bool,
+    ) -> Self {
+        match mode {
+            TimerStoreMode::JavaCompat => Self {
+                engine: TimerEngineId::JavaCompat,
+                format_version: JAVA_COMPAT_TIMER_FORMAT_VERSION,
+                max_delay_sec: java_compat_max_delay_sec,
+                admission_open: true,
+                rejects_congested_slots: true,
+            },
+            TimerStoreMode::ExtendedTimeline => Self {
+                engine: TimerEngineId::ExtendedTimeline,
+                format_version: EXTENDED_TIMELINE_FORMAT_VERSION,
+                max_delay_sec: (extended_horizon_days as u64).saturating_mul(86_400),
+                admission_open: extended_admission_enable,
+                rejects_congested_slots: false,
+            },
+        }
+    }
+
+    /// Longest admitted delay in milliseconds, or `None` when it does not fit in `u64`.
+    pub const fn max_delay_ms(&self) -> Option<u64> {
+        self.max_delay_sec.checked_mul(1_000)
+    }
+}
+
 /// Stable identifier of the engine that owns one accepted timer record.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
 pub enum TimerEngineId {

@@ -80,6 +80,7 @@ pub use progress::LegacyDerivedCursorV0;
 pub use progress::DERIVED_CHECKPOINT_ENCODED_LEN;
 pub use progress::DERIVED_CHECKPOINT_FORMAT_VERSION;
 pub use timer::PersistedTimerRoute;
+pub use timer::TimerAdmissionRoute;
 pub use timer::TimerEngineEpoch;
 pub use timer::TimerEngineId;
 pub use timer::TimerGeneration;

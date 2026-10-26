@@ -21,6 +21,7 @@ use std::sync::LazyLock;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::mix_all;
+use rocketmq_store_api::TimerAdmissionRoute;
 use rocketmq_store_api::TimerStoreMode;
 use rocketmq_store_local::config::local_store::LocalCleanupConfig;
 use rocketmq_store_local::config::local_store::LocalQueryConfig;
@@ -1722,6 +1723,16 @@ impl MessageStoreConfig {
     /// Returns the same validation errors as [`Self::timer_policy_snapshot`].
     pub fn timer_policy_fingerprint(&self) -> Result<u64, rocketmq_model::ModelContractViolation> {
         self.timer_policy_snapshot().map(|policy| policy.fingerprint())
+    }
+
+    /// Route of new timer messages under the configured `timerStoreMode`.
+    pub fn timer_admission_route(&self) -> TimerAdmissionRoute {
+        TimerAdmissionRoute::for_mode(
+            self.timer_store_mode,
+            self.timer_max_delay_sec,
+            self.timer_extended_admission_horizon_days,
+            self.timer_extended_admission_enable,
+        )
     }
 
     /// Projects the legacy Serde-compatible envelope into normalized local-store configuration.

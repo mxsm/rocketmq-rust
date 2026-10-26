@@ -1268,13 +1268,8 @@ where
         policy: &SendMessagePolicy,
         message: &MessageExtBrokerInner,
     ) -> Option<CheetahString> {
-        let max_delay_sec = if policy.timer_store_mode == rocketmq_store_api::TimerStoreMode::ExtendedTimeline {
-            u64::from(policy.timer_maximum_horizon_days).saturating_mul(86_400)
-        } else {
-            policy.timer_max_delay_sec
-        };
         let (real_topic, timestamp) =
-            recall_handle_topic_and_timestamp(message, max_delay_sec, policy.timer_precision_ms)?;
+            recall_handle_topic_and_timestamp(message, policy.timer_route.max_delay_sec, policy.timer_precision_ms)?;
         if real_topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
             return None;
         }
