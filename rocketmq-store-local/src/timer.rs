@@ -14,7 +14,9 @@
 
 pub mod checkpoint;
 pub mod java_format;
+pub mod java_timer_checkpoint;
 pub mod java_timer_log;
+pub mod java_timer_wheel;
 pub mod metrics;
 pub mod migration;
 pub mod paged_timer_wheel;
