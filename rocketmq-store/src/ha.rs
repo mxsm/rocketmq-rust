@@ -30,7 +30,6 @@ mod ha_connection_state_notification_service;
 pub mod ha_service;
 pub mod transfer_engine;
 pub mod transfer_metrics;
-pub(crate) mod wait_notify_object;
 pub(crate) mod write_lease;
 
 use std::error::Error as StdError;

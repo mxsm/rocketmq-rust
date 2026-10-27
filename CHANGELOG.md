@@ -70,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(store):** Remove the unused internal `WaitNotifyObject` placeholder module ([#11884](https://github.com/mxsm/rocketmq-rust/issues/11884)).
 - **refactor(client):** Remove two unused consume-service submission stubs and an unused weak-reference getter ([#11883](https://github.com/mxsm/rocketmq-rust/issues/11883)).
 - **refactor(broker):** Remove 17 unused mutable accessors from the internal `BrokerRuntimeState` ([#11882](https://github.com/mxsm/rocketmq-rust/issues/11882)).
 - **refactor(store):** Remove the unused internal `TopicQueueLock`; CommitLog append sequencing and configuration fields are unchanged ([#11850](https://github.com/mxsm/rocketmq-rust/issues/11850)).
