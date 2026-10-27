@@ -27,6 +27,11 @@ wire responses into canonical Evidence.
   real read source are omitted and the snapshot is marked partial; unsupported
   resources remain explicitly `not_production_verified`.
 
+During discovery, [`probe_observability_source`](src/mcp.rs) uses bounded Prometheus query and
+Loki/Tempo readiness checks to report source availability. Its successful `freshness_ms: Some(0)`
+does not describe collected Evidence freshness or guarantee that all queries or instrumentation
+are available; Evidence is collected separately.
+
 ## Read-only boundary
 
 - Both MCP and Admin reads cross the private [ReadGateway](src/read_gateway.rs),
