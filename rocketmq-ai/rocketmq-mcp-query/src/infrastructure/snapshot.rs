@@ -2197,7 +2197,7 @@ mod tests {
     #[test]
     fn coalesced_backend_failure_preserves_the_typed_source() {
         use std::error::Error;
-        let error = super::ToolFailure::backend(std::io::Error::other("private-backend-sentinel"));
+        let error = super::ToolFailure::source_unavailable(std::io::Error::other("private-backend-sentinel"));
         let shared = error.clone();
         let replayed = shared.clone();
         assert!(!format!("{replayed:?} {replayed}").contains("private-backend-sentinel"));
@@ -3067,7 +3067,7 @@ mod tests {
                             calls.fetch_add(1, Ordering::SeqCst);
                             release_loader.notified().await;
                             Err(ToolFailure::Operational(
-                                crate::tools::executor::ToolExecutionError::Backend(None),
+                                crate::tools::executor::ToolExecutionError::SourceUnavailable(None),
                             ))
                         },
                     )
@@ -3424,7 +3424,7 @@ mod tests {
                 &cancellation,
                 || async {
                     Err(ToolFailure::Operational(
-                        crate::tools::executor::ToolExecutionError::Backend(None),
+                        crate::tools::executor::ToolExecutionError::SourceUnavailable(None),
                     ))
                 },
             )
@@ -3519,7 +3519,7 @@ mod tests {
         assert!(coalesced);
         store.finish_failure(
             &leader,
-            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(None)),
+            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::SourceUnavailable(None)),
         );
         let old_cohort = leader.id;
         drop(leader);
@@ -3551,7 +3551,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(
             old_error,
-            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(_))
+            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::SourceUnavailable(_))
         ));
         drop(old_waiter);
         assert!(store.lock_state().flights.records.is_empty());
@@ -3572,7 +3572,7 @@ mod tests {
         let (waiter, _) = global.flight_lock(&key).await.unwrap();
         global.finish_failure(
             &leader,
-            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(None)),
+            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::SourceUnavailable(None)),
         );
         drop(leader);
         assert_eq!(
@@ -3590,7 +3590,7 @@ mod tests {
         let (waiter, _) = scope.flight_lock(&key).await.unwrap();
         scope.finish_failure(
             &leader,
-            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(None)),
+            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::SourceUnavailable(None)),
         );
         drop(leader);
         assert_eq!(
@@ -3613,7 +3613,7 @@ mod tests {
         let (waiter, _) = bytes.flight_lock(&key).await.unwrap();
         bytes.finish_failure(
             &leader,
-            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(None)),
+            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::SourceUnavailable(None)),
         );
         drop(leader);
         assert_eq!(

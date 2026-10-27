@@ -26,7 +26,7 @@ pub(super) fn trace(
     args: message_tools::QueryMessageTraceArgs,
 ) -> Result<QueryResult<message_tools::QueryMessageTraceOutput>, ToolFailure> {
     if adapter.fail {
-        return Err(ToolFailure::Operational(ToolExecutionError::Backend(None)));
+        return Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None)));
     }
     let mut result = QueryResult::bypass(message_tools::QueryMessageTraceOutput {
         cluster: args.cluster,
@@ -69,7 +69,7 @@ pub(super) fn matches(
     args: message_tools::FindMessagesByKeyArgs,
 ) -> Result<QueryResult<message_tools::FindMessagesByKeyOutput>, ToolFailure> {
     if adapter.fail {
-        return Err(ToolFailure::Operational(ToolExecutionError::Backend(None)));
+        return Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None)));
     }
     Ok(QueryResult::bypass(message_tools::FindMessagesByKeyOutput {
         cluster: args.cluster,

@@ -143,7 +143,7 @@ mod tests {
     }
 
     fn unavailable() -> ToolFailure {
-        ToolFailure::Operational(ToolExecutionError::Backend(None))
+        ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))
     }
 
     #[tokio::test(start_paused = true)]
