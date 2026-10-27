@@ -83,6 +83,7 @@ pub use timer::PersistedTimerRoute;
 pub use timer::TimerAdmissionRoute;
 pub use timer::TimerEngineEpoch;
 pub use timer::TimerEngineId;
+pub use timer::TimerFileFormat;
 pub use timer::TimerGeneration;
 pub use timer::TimerId;
 pub use timer::TimerPayloadLocator;

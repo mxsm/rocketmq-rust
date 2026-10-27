@@ -63,6 +63,57 @@ pub struct JavaTimerWheel {
 struct JavaTimerWheelState {
     bytes: Vec<u8>,
     dirty_pages: BTreeSet<usize>,
+    /// Non-empty slots on each page, so scans skip the empty part of the wheel.
+    occupied: Vec<u16>,
+}
+
+impl JavaTimerWheelState {
+    fn new(bytes: Vec<u8>) -> Self {
+        let mut occupied = vec![0u16; bytes.len().div_ceil(PAGE_SIZE)];
+        for (index, slot) in bytes.chunks_exact(JAVA_TIMER_WHEEL_SLOT_SIZE).enumerate() {
+            if !is_empty_slot(slot) {
+                occupied[index * JAVA_TIMER_WHEEL_SLOT_SIZE / PAGE_SIZE] += 1;
+            }
+        }
+        Self {
+            bytes,
+            dirty_pages: BTreeSet::new(),
+            occupied,
+        }
+    }
+
+    /// Replaces the bytes of slot `index` and keeps the page counts.
+    fn write(&mut self, index: usize, slot: &[u8; JAVA_TIMER_WHEEL_SLOT_SIZE]) {
+        let start = index * JAVA_TIMER_WHEEL_SLOT_SIZE;
+        let page = start / PAGE_SIZE;
+        let target = &mut self.bytes[start..start + JAVA_TIMER_WHEEL_SLOT_SIZE];
+        match (is_empty_slot(target), is_empty_slot(slot)) {
+            (true, false) => self.occupied[page] += 1,
+            (false, true) => self.occupied[page] -= 1,
+            _ => {}
+        }
+        target.copy_from_slice(slot);
+        self.dirty_pages.insert(page);
+    }
+
+    /// Indexes of the non-empty slots, in index order.
+    fn occupied_indexes(&self) -> impl Iterator<Item = usize> + '_ {
+        let slots_per_page = PAGE_SIZE / JAVA_TIMER_WHEEL_SLOT_SIZE;
+        let slot_count = self.bytes.len() / JAVA_TIMER_WHEEL_SLOT_SIZE;
+        self.occupied
+            .iter()
+            .enumerate()
+            .filter(|(_, count)| **count > 0)
+            .flat_map(move |(page, _)| page * slots_per_page..((page + 1) * slots_per_page).min(slot_count))
+            .filter(|index| {
+                let start = index * JAVA_TIMER_WHEEL_SLOT_SIZE;
+                !is_empty_slot(&self.bytes[start..start + JAVA_TIMER_WHEEL_SLOT_SIZE])
+            })
+    }
+}
+
+fn is_empty_slot(bytes: &[u8]) -> bool {
+    bytes.iter().all(|byte| *byte == 0)
 }
 
 impl JavaTimerWheel {
@@ -111,10 +162,7 @@ impl JavaTimerWheel {
             slots_total,
             precision_ms,
             file,
-            state: Mutex::new(JavaTimerWheelState {
-                bytes,
-                dirty_pages: BTreeSet::new(),
-            }),
+            state: Mutex::new(JavaTimerWheelState::new(bytes)),
             flush_lock: Mutex::new(()),
         })
     }
@@ -153,6 +201,39 @@ impl JavaTimerWheel {
             _ => Slot::new(time_ms, last_pos, last_pos),
         };
         self.write_slot(&mut state, index, slot);
+    }
+
+    /// Empties the slot for `time_ms`, so it reads as absent in every round. Java leaves a
+    /// drained slot in place and moves its read time past it; an engine that rewrites a slot
+    /// while draining it needs a slot that reads as gone.
+    pub fn clear_slot(&self, time_ms: i64) {
+        let index = self.slot_index(time_ms);
+        self.state.lock().write(index, &[0; JAVA_TIMER_WHEEL_SLOT_SIZE]);
+    }
+
+    /// Calls `visit` with every non-empty slot, whatever its round, with its stored time.
+    pub fn visit_occupied_slots(&self, mut visit: impl FnMut(Slot)) {
+        let state = self.state.lock();
+        for index in state.occupied_indexes() {
+            visit(self.decode_stored(&state.bytes, index));
+        }
+    }
+
+    /// Empties every slot whose first or last unit is at or after `log_end`, which recovery
+    /// found to be the end of the TimerLog, and returns how many it emptied.
+    pub fn clear_slots_beyond(&self, log_end: i64) -> usize {
+        let mut state = self.state.lock();
+        let beyond: Vec<usize> = state
+            .occupied_indexes()
+            .filter(|index| {
+                let slot = self.decode_stored(&state.bytes, *index);
+                slot.first_pos >= log_end || slot.last_pos >= log_end
+            })
+            .collect();
+        for index in &beyond {
+            state.write(*index, &[0; JAVA_TIMER_WHEEL_SLOT_SIZE]);
+        }
+        beyond.len()
     }
 
     /// The smallest first position among the slots of this round, from `time_start_ms` on,
@@ -229,14 +310,14 @@ impl JavaTimerWheel {
         java_timer_wheel_slot_index(time_ms, self.precision_ms, self.slots_total)
     }
 
-    /// Visits the slots that belong to the round starting at `time_start_ms`, in time order
-    /// over both halves of the wheel.
+    /// Visits the slots that belong to the round starting at `time_start_ms`: the slot at each
+    /// index whose stored time is the time that index stands for in that round.
     fn visit_round(&self, time_start_ms: i64, mut visit: impl FnMut(Slot)) {
         let state = self.state.lock();
         let first_index = self.slot_index(time_start_ms);
         let wheel_slots = self.slots_total * 2;
-        for step in 0..wheel_slots {
-            let index = (first_index + step) % wheel_slots;
+        for index in state.occupied_indexes() {
+            let step = (index + wheel_slots - first_index) % wheel_slots;
             let time_ms = time_start_ms.saturating_add(step as i64 * self.precision_ms);
             if let Ok(Some(slot)) =
                 decode_java_timer_wheel_slot(Self::slot_bytes(&state.bytes, index), time_ms, self.precision_ms)
@@ -246,11 +327,20 @@ impl JavaTimerWheel {
         }
     }
 
+    /// The slot at `index` with the time it stores, whichever round that is.
+    fn decode_stored(&self, bytes: &[u8], index: usize) -> Slot {
+        let slot_bytes = Self::slot_bytes(bytes, index);
+        let mut stored = [0u8; 8];
+        stored.copy_from_slice(&slot_bytes[..8]);
+        let time_ms = i64::from_be_bytes(stored).saturating_mul(self.precision_ms);
+        decode_java_timer_wheel_slot(slot_bytes, time_ms, self.precision_ms)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| Slot::new(time_ms, -1, -1))
+    }
+
     fn write_slot(&self, state: &mut JavaTimerWheelState, index: usize, slot: Slot) {
-        let start = index * JAVA_TIMER_WHEEL_SLOT_SIZE;
-        state.bytes[start..start + JAVA_TIMER_WHEEL_SLOT_SIZE]
-            .copy_from_slice(&encode_java_timer_wheel_slot(slot, self.precision_ms));
-        state.dirty_pages.insert(start / PAGE_SIZE);
+        state.write(index, &encode_java_timer_wheel_slot(slot, self.precision_ms));
     }
 
     fn slot_bytes(bytes: &[u8], index: usize) -> &[u8] {
@@ -350,6 +440,37 @@ mod tests {
         assert_eq!(wheel.check_phy_pos(BASE_MS, 400), i64::MAX);
         assert_eq!(wheel.all_num(BASE_MS - PRECISION_MS), 10);
         assert_eq!(wheel.check_phy_pos(BASE_MS - PRECISION_MS, 400), 7);
+    }
+
+    #[test]
+    fn cleared_and_stale_slots_are_tracked_for_scans_and_recovery() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("timerwheel");
+        let wheel = opened(&path);
+        wheel.put_slot(BASE_MS, 0, 52, 2, 1);
+        wheel.put_slot(BASE_MS + PRECISION_MS, 104, 156, 1, 0);
+        wheel.put_slot(BASE_MS + 2 * PRECISION_MS, 208, 260, 3, 0);
+
+        wheel.clear_slot(BASE_MS);
+        assert_eq!(wheel.get_slot(BASE_MS), None);
+        let mut visited = Vec::new();
+        wheel.visit_occupied_slots(|slot| visited.push(slot.time_ms));
+        assert_eq!(visited, vec![BASE_MS + PRECISION_MS, BASE_MS + 2 * PRECISION_MS]);
+
+        // Recovery found the log ending at 200: the slot whose units start at 208 goes.
+        assert_eq!(wheel.clear_slots_beyond(200), 1);
+        assert_eq!(wheel.get_slot(BASE_MS + 2 * PRECISION_MS), None);
+        assert_eq!(wheel.all_num(BASE_MS), 1);
+        wheel.flush().unwrap();
+        drop(wheel);
+
+        let reopened = opened(&path);
+        let mut visited = Vec::new();
+        reopened.visit_occupied_slots(|slot| visited.push(slot));
+        assert_eq!(
+            visited,
+            vec![Slot::new_with_num_magic(BASE_MS + PRECISION_MS, 104, 156, 1, 0)]
+        );
     }
 
     #[test]

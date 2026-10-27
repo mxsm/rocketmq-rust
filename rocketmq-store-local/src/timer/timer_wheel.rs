@@ -38,6 +38,8 @@ pub struct TimerWheel {
     precision_ms: u64,
     page_size: usize,
     metrics: Arc<TimerStorageMetrics>,
+    /// Whether a legacy `timerwheel` file is imported into the first V2 generation.
+    import_legacy: bool,
     inner: Mutex<Option<PagedTimerWheel>>,
 }
 
@@ -65,8 +67,16 @@ impl TimerWheel {
             precision_ms: precision_ms.max(1),
             page_size,
             metrics,
+            import_legacy: true,
             inner: Mutex::new(None),
         }
+    }
+
+    /// Leaves a `timerwheel` file at the legacy path alone instead of importing it: it belongs
+    /// to another format, such as an Apache RocketMQ 5.x wheel that shares the name.
+    pub fn ignoring_legacy_file(mut self) -> Self {
+        self.import_legacy = false;
+        self
     }
 
     pub fn load(&self) -> std::io::Result<()> {
@@ -255,7 +265,10 @@ impl TimerWheel {
     }
 
     fn should_import_legacy(&self) -> std::io::Result<bool> {
-        Ok(self.file_name.exists() && self.file_name.metadata()?.len() > 0 && !self.migration_marker().exists())
+        Ok(self.import_legacy
+            && self.file_name.exists()
+            && self.file_name.metadata()?.len() > 0
+            && !self.migration_marker().exists())
     }
 
     fn read_legacy_slots(&self) -> std::io::Result<Vec<Slot>> {
