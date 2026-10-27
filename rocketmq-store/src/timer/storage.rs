@@ -237,7 +237,8 @@ impl TimerStorage {
     ///
     /// A V2 slot counts its records, so the walk reads `slot.num` of them and `processed` more.
     /// A Java slot cannot be counted, since Java subtracts tombstones, so the walk follows the
-    /// chain to its start and counts what lies before the first record itself.
+    /// chain to its start, or to the oldest file left, and counts what lies before the first
+    /// record itself.
     pub(crate) fn walk_slot(
         &self,
         slot: Slot,
@@ -267,7 +268,10 @@ impl TimerStorage {
                 let mut position = slot.last_pos;
                 let mut before_first = None::<usize>;
                 let mut steps = 0u64;
-                while position >= 0 {
+                // Cleanup deletes only files without live units, so a link below the oldest
+                // file left reaches units that were already delivered.
+                let oldest = i64::try_from(log.min_offset()).unwrap_or(i64::MAX);
+                while position >= oldest {
                     if steps == limit {
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
@@ -296,6 +300,24 @@ impl TimerStorage {
                 .ok()
                 .map(|count| count.saturating_add(processed)),
             Self::Java { .. } => None,
+        }
+    }
+
+    /// Deletes the log files that lie entirely before `oldest_live`, the oldest position a
+    /// pending record can still be read from, or before the log end when nothing is pending.
+    /// V2 removes sealed segments below its durable length too; Java keeps its last file.
+    /// Returns how many files were deleted.
+    pub(crate) fn collect_garbage(&self, oldest_live: Option<i64>) -> std::io::Result<usize> {
+        let live = match oldest_live {
+            Some(position) => u64::try_from(position).unwrap_or_default(),
+            None => self.log_end()?,
+        };
+        match self {
+            Self::RustV2 { log, .. } => {
+                let durable = log.durable_length()?;
+                log.gc(live, durable, durable)
+            }
+            Self::Java { log, .. } => log.delete_files_below(live).map_err(std::io::Error::other),
         }
     }
 
@@ -518,6 +540,31 @@ mod tests {
             })
             .unwrap();
         assert_eq!((walked, processed), (vec![tombstone, b, a], 1));
+    }
+
+    #[test]
+    fn java_walk_ends_at_the_oldest_file_left_after_cleanup() {
+        let directory = tempdir().unwrap();
+        let storage = java_storage(directory.path());
+        let slot_time_ms = 1_700_000_005_000;
+        // Three units fill the first file; the fourth opens the file at 200.
+        let mut previous = -1;
+        for _ in 0..4 {
+            previous = append(&storage, slot_time_ms, previous, MAGIC_DEFAULT);
+        }
+        assert_eq!(previous, 200);
+        // The first file holds only delivered units, so cleanup removes it.
+        assert_eq!(storage.collect_garbage(Some(200)).unwrap(), 1);
+
+        let drained = Slot::new_with_num_magic(slot_time_ms, 200, 200, 1, 0);
+        let mut walked = Vec::new();
+        let processed = storage
+            .walk_slot(drained, 0, |position, _, _| {
+                walked.push(position);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!((walked, processed), (vec![200], 0));
     }
 
     #[test]

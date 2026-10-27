@@ -450,3 +450,113 @@ async fn a_recall_after_the_switch_cancels_a_timer_the_draining_format_holds() {
     assert_eq!(delivered(&store), 1);
     close_store(store, timer_store).await;
 }
+
+/// Runs `process_once` until a pass does no work, and returns the work done.
+async fn process_until_idle(timer_store: &TimerMessageStore) -> usize {
+    let mut total = 0;
+    loop {
+        let done = timer_store.process_once().await;
+        if done == 0 {
+            return total;
+        }
+        total += done;
+    }
+}
+
+#[tokio::test]
+async fn java_timer_log_files_go_once_no_pending_timer_reads_them() {
+    let root = tempdir().unwrap();
+    let start_ms = (current_millis() as i64 / 1_000) * 1_000;
+    let clock = Arc::new(ManualClock(AtomicI64::new(start_ms)));
+    let (mut store, timer_store) = open_store(config(root.path(), TimerFileFormat::Java, 64))
+        .await
+        .expect("open a Java-format store");
+    timer_store.set_clock(clock.clone());
+    let deliver_ms = (start_ms - 2_000) as u64;
+    put_all(
+        &mut store,
+        (0..7)
+            .map(|index| timer_message(deliver_ms, &format!("m{index}")))
+            .collect(),
+    )
+    .await;
+    // Seven units fill the files at 0 and 200 and open the one at 400.
+    assert_eq!(timer_store.process_once().await, 7);
+    let files = |root: &Path| [0, 200, 400].map(|start| timer_log_file(root, start).exists());
+    assert_eq!(files(root.path()), [true, true, true]);
+
+    // Pending timers keep every file through a cleanup.
+    clock.0.store(start_ms + 31_000, Ordering::Release);
+    timer_store.sync_last_read_time_ms();
+    assert_eq!(files(root.path()), [true, true, true]);
+
+    timer_store.set_should_running_dequeue(true);
+    assert_eq!(process_until_idle(&timer_store).await, 7);
+    store.reput_once().await;
+    assert_eq!(delivered(&store), 7);
+    // Within the interval nothing is deleted; after it, every file but the last goes.
+    timer_store.sync_last_read_time_ms();
+    assert_eq!(files(root.path()), [true, true, true]);
+    clock.0.store(start_ms + 62_000, Ordering::Release);
+    timer_store.sync_last_read_time_ms();
+    assert_eq!(files(root.path()), [false, false, true]);
+    close_store(store, timer_store).await;
+
+    // The log recovers from its remaining file and delivers nothing again.
+    let (mut store, timer_store) = open_store(config(root.path(), TimerFileFormat::Java, 64))
+        .await
+        .expect("reopen the store");
+    timer_store.set_should_running_dequeue(true);
+    assert_eq!(timer_store.process_once().await, 0);
+    store.reput_once().await;
+    assert_eq!(delivered(&store), 7);
+    close_store(store, timer_store).await;
+}
+
+#[tokio::test]
+async fn rust_v2_timer_log_segments_go_once_no_pending_timer_reads_them() {
+    let root = tempdir().unwrap();
+    let start_ms = (current_millis() as i64 / 1_000) * 1_000;
+    let clock = Arc::new(ManualClock(AtomicI64::new(start_ms)));
+    let (mut store, timer_store) = open_store(config(root.path(), TimerFileFormat::RustV2, 64))
+        .await
+        .expect("open a Rust V2 store");
+    timer_store.set_clock(clock.clone());
+    let deliver_ms = (start_ms - 2_000) as u64;
+    // A 20 KiB segment holds 255 records and a blank, so 300 timers seal the first one.
+    put_all(
+        &mut store,
+        (0..300)
+            .map(|index| timer_message(deliver_ms, &format!("m{index}")))
+            .collect(),
+    )
+    .await;
+    assert_eq!(process_until_idle(&timer_store).await, 300);
+    let first_segment = PathBuf::from(get_timer_log_path(&root.path().to_string_lossy()))
+        .join("v2")
+        .join("log")
+        .join("00000000000000000000");
+    assert!(first_segment.exists());
+
+    clock.0.store(start_ms + 31_000, Ordering::Release);
+    timer_store.sync_last_read_time_ms();
+    assert!(first_segment.exists());
+
+    timer_store.set_should_running_dequeue(true);
+    assert_eq!(process_until_idle(&timer_store).await, 300);
+    store.reput_once().await;
+    assert_eq!(delivered(&store), 300);
+    clock.0.store(start_ms + 62_000, Ordering::Release);
+    timer_store.sync_last_read_time_ms();
+    assert!(!first_segment.exists());
+    close_store(store, timer_store).await;
+
+    let (mut store, timer_store) = open_store(config(root.path(), TimerFileFormat::RustV2, 64))
+        .await
+        .expect("reopen the store");
+    timer_store.set_should_running_dequeue(true);
+    assert_eq!(timer_store.process_once().await, 0);
+    store.reput_once().await;
+    assert_eq!(delivered(&store), 300);
+    close_store(store, timer_store).await;
+}

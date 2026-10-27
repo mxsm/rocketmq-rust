@@ -390,6 +390,32 @@ impl JavaTimerLog {
         Ok(deleted)
     }
 
+    /// Deletes leading files that end at or before `live_offset`, the oldest offset a caller
+    /// still reads. Never deletes the last file. Returns how many files were deleted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`JavaTimerLogError::Io`] when a file cannot be deleted; the files before it are
+    /// gone.
+    pub fn delete_files_below(&self, live_offset: u64) -> Result<usize, JavaTimerLogError> {
+        let mut state = self.state.lock();
+        let older = state.files.len().saturating_sub(1);
+        let candidates: Vec<u64> = state
+            .files
+            .iter()
+            .take(older)
+            .copied()
+            .take_while(|start| start + self.file_size <= live_offset)
+            .collect();
+        for start in &candidates {
+            self.close(&mut state, *start);
+            std::fs::remove_file(self.file_path(*start))?;
+            state.files.remove(start);
+            state.dirty.remove(start);
+        }
+        Ok(candidates.len())
+    }
+
     /// Bytes of each file.
     pub fn file_size(&self) -> u64 {
         self.file_size
@@ -706,6 +732,24 @@ mod tests {
         assert!(!directory.path().join("00000000000000000000").exists());
         assert!(!directory.path().join("00000000000000000200").exists());
         assert_eq!(log.read_unit(400).unwrap(), unit(600));
+    }
+
+    #[test]
+    fn files_below_the_oldest_live_offset_go_and_the_last_file_stays() {
+        let directory = tempdir().unwrap();
+        let log = opened(directory.path());
+        log.append_batch(&(0..7).map(|index| unit(index * 100)).collect::<Vec<_>>())
+            .unwrap();
+        // A live unit at 104 keeps its file, and every file after it.
+        assert_eq!(log.delete_files_below(104).unwrap(), 0);
+        assert_eq!(log.delete_files_below(252).unwrap(), 1);
+        assert_eq!(log.min_offset(), 200);
+        assert_eq!(log.read_unit(252).unwrap(), unit(400));
+        // Nothing live: every file but the last goes.
+        assert_eq!(log.delete_files_below(u64::MAX).unwrap(), 1);
+        assert_eq!(log.min_offset(), 400);
+        assert!(!directory.path().join("00000000000000000200").exists());
+        assert_eq!(log.append(&unit(700)).unwrap(), 452);
     }
 
     #[test]
