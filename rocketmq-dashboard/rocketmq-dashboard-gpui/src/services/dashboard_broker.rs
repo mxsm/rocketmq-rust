@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Private Delivery 03 application seam and Dashboard/Broker use-case forwarding.
+//! Private Dashboard/Broker operations and use-case forwarding.
 
 #[cfg(test)]
-#[path = "delivery03_test_support.rs"]
+#[path = "dashboard_broker_test_support.rs"]
 pub(crate) mod test_support;
 
 use std::sync::Arc;
@@ -37,8 +37,8 @@ use crate::state::UiError;
 /// Keeping this contract here intentionally avoids enabling the generic `admin` feature in
 /// `rocketmq-dashboard-common`: every value crossing the seam is already a protocol-independent
 /// common DTO or a redacted GPUI result. Raw `rocketmq-admin-core` responses remain inside
-/// `infrastructure` and the concrete Delivery 03 services.
-pub(crate) trait Delivery03Backend: Send + Sync {
+/// `infrastructure` and the concrete Dashboard/Broker services.
+pub(crate) trait DashboardBrokerOperations: Send + Sync {
     fn dashboard_overview(&self, revision: u64) -> ServiceFuture<'_, Result<DashboardOverviewLoad, UiError>>;
 
     fn dashboard_topic_current(&self, revision: u64) -> ServiceFuture<'_, Result<Vec<TopicCurrentMetric>, UiError>>;
@@ -81,18 +81,18 @@ pub(crate) trait Delivery03Backend: Send + Sync {
     ) -> ServiceFuture<'_, Result<BrokerConfigMutationResult, UiError>>;
 }
 
-pub(super) struct RealDelivery03Backend {
+pub(super) struct RealDashboardBrokerOperations {
     dashboard: Arc<DashboardService>,
     brokers: Arc<BrokerService>,
 }
 
-impl RealDelivery03Backend {
+impl RealDashboardBrokerOperations {
     pub(super) fn new(dashboard: Arc<DashboardService>, brokers: Arc<BrokerService>) -> Arc<Self> {
         Arc::new(Self { dashboard, brokers })
     }
 }
 
-impl Delivery03Backend for RealDelivery03Backend {
+impl DashboardBrokerOperations for RealDashboardBrokerOperations {
     fn dashboard_overview(&self, revision: u64) -> ServiceFuture<'_, Result<DashboardOverviewLoad, UiError>> {
         Box::pin(self.dashboard.overview(revision))
     }
@@ -159,17 +159,17 @@ impl Delivery03Backend for RealDelivery03Backend {
 impl AppServices {
     /// Loads the independently evidenced Dashboard overview.
     pub async fn dashboard_overview(&self, revision: u64) -> Result<DashboardOverviewLoad, UiError> {
-        self.delivery03.dashboard_overview(revision).await
+        self.dashboard_broker.dashboard_overview(revision).await
     }
 
     /// Loads current Topic metrics without inferred rates.
     pub async fn dashboard_topic_current(&self, revision: u64) -> Result<Vec<TopicCurrentMetric>, UiError> {
-        self.delivery03.dashboard_topic_current(revision).await
+        self.dashboard_broker.dashboard_topic_current(revision).await
     }
 
     /// Loads current Broker metrics without converting missing runtime fields to zero.
     pub async fn dashboard_broker_current(&self, revision: u64) -> Result<Vec<BrokerCurrentMetric>, UiError> {
-        self.delivery03.dashboard_broker_current(revision).await
+        self.dashboard_broker.dashboard_broker_current(revision).await
     }
 
     /// Loads actual Topic History points in the requested range.
@@ -179,7 +179,7 @@ impl AppServices {
         start_epoch_ms: u64,
         end_epoch_ms: u64,
     ) -> Result<Vec<HistoryPoint>, UiError> {
-        self.delivery03
+        self.dashboard_broker
             .dashboard_topic_history(topic, start_epoch_ms, end_epoch_ms)
             .await
     }
@@ -192,19 +192,19 @@ impl AppServices {
         start_epoch_ms: u64,
         end_epoch_ms: u64,
     ) -> Result<Vec<HistoryPoint>, UiError> {
-        self.delivery03
+        self.dashboard_broker
             .dashboard_broker_history(metric, identity, start_epoch_ms, end_epoch_ms)
             .await
     }
 
     /// Loads the complete Broker inventory.
     pub async fn broker_inventory(&self, revision: u64) -> Result<Vec<BrokerInventoryItem>, UiError> {
-        self.delivery03.broker_inventory(revision).await
+        self.dashboard_broker.broker_inventory(revision).await
     }
 
     /// Loads redaction-aware runtime entries for one Broker.
     pub async fn broker_runtime(&self, revision: u64, identity: BrokerIdentity) -> Result<Vec<RuntimeEntry>, UiError> {
-        self.delivery03.broker_runtime(revision, identity).await
+        self.dashboard_broker.broker_runtime(revision, identity).await
     }
 
     /// Loads Broker config paired with its generation CAS token.
@@ -213,7 +213,7 @@ impl AppServices {
         revision: u64,
         identity: BrokerIdentity,
     ) -> Result<BrokerConfigSnapshot, UiError> {
-        self.delivery03.broker_config(revision, identity).await
+        self.dashboard_broker.broker_config(revision, identity).await
     }
 
     /// Applies one reviewed Broker config patch with generation CAS and no replay.
@@ -222,12 +222,12 @@ impl AppServices {
         revision: u64,
         patch: BrokerConfigPatch,
     ) -> Result<BrokerConfigMutationResult, UiError> {
-        self.delivery03.patch_broker_config(revision, patch).await
+        self.dashboard_broker.patch_broker_config(revision, patch).await
     }
 
     #[cfg(test)]
-    pub(crate) fn with_delivery03_backend(mut self, backend: Arc<dyn Delivery03Backend>) -> Self {
-        self.delivery03 = backend;
+    pub(crate) fn with_dashboard_broker_operations(mut self, backend: Arc<dyn DashboardBrokerOperations>) -> Self {
+        self.dashboard_broker = backend;
         self
     }
 }

@@ -16,20 +16,20 @@ use std::sync::Arc;
 
 use super::BrokersView;
 use crate::{
-    services::{AppServices, delivery03::test_support::FakeDelivery03Backend},
+    services::{AppServices, dashboard_broker::test_support::FakeDashboardBrokerOperations},
     state::{Loadable, UiError, UiErrorCode},
 };
 
 #[gpui::test]
 fn initial_inventory_failure_remains_error_instead_of_becoming_empty(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
-    let fake = Arc::new(FakeDelivery03Backend::default());
+    let fake = Arc::new(FakeDashboardBrokerOperations::default());
     fake.queue_inventory(Err(UiError::new(
         "Broker inventory unavailable",
         UiErrorCode::Connection,
         true,
     )));
-    let services = AppServices::default().with_delivery03_backend(fake.clone());
+    let services = AppServices::default().with_dashboard_broker_operations(fake.clone());
     let (view, cx) = cx.add_window_view(move |window, cx| BrokersView::new(window, services, 4, cx));
     cx.run_until_parked();
 
