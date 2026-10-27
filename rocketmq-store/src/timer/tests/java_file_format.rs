@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The JavaCompat engine on Apache RocketMQ 5.x timer files (`timerFileFormat = java`).
+//! The JavaCompat engine on Apache RocketMQ 5.x timer files (`timerFileFormat = java`), and
+//! switching a store between its file formats.
 
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -38,6 +40,7 @@ use crate::base::backend_ops::BackendOps;
 use crate::base::message_store_reader::MessageStoreReader;
 use crate::store_path_config_helper::get_timer_log_path;
 use crate::store_path_config_helper::get_timer_wheel_path;
+use crate::timer::clock::TimerClock;
 use crate::timer::timer_message_store::build_delete_key;
 use crate::timer::timer_message_store::TimerMessageStore;
 use crate::timer::timer_message_store::DAY_SECS;
@@ -50,13 +53,28 @@ use crate::StoreRuntimeConfig;
 const REAL_TOPIC: &str = "java_format_topic";
 /// Three units fit in a file, so a handful of messages crosses a file boundary.
 const TIMER_LOG_FILE_SIZE: usize = 200;
+/// A file size both formats accept: V2 segments hold whole 80-byte records and 4 KiB pages.
+const SHARED_TIMER_LOG_FILE_SIZE: usize = 20_480;
 
 fn config(root_dir: &Path, format: TimerFileFormat, batch_messages: usize) -> Arc<MessageStoreConfig> {
     let mapped_file_size_timer_log = match format {
         TimerFileFormat::Java => TIMER_LOG_FILE_SIZE,
-        // V2 segments must hold whole records and pages.
-        TimerFileFormat::RustV2 => MessageStoreConfig::default().mapped_file_size_timer_log,
+        TimerFileFormat::RustV2 => SHARED_TIMER_LOG_FILE_SIZE,
     };
+    config_with_file_size(root_dir, format, batch_messages, mapped_file_size_timer_log)
+}
+
+/// A store that switches formats keeps one TimerLog file size.
+fn switching_config(root_dir: &Path, format: TimerFileFormat) -> Arc<MessageStoreConfig> {
+    config_with_file_size(root_dir, format, 64, SHARED_TIMER_LOG_FILE_SIZE)
+}
+
+fn config_with_file_size(
+    root_dir: &Path,
+    format: TimerFileFormat,
+    batch_messages: usize,
+    mapped_file_size_timer_log: usize,
+) -> Arc<MessageStoreConfig> {
     Arc::new(MessageStoreConfig {
         store_path_root_dir: CheetahString::from_string(root_dir.to_string_lossy().into_owned()),
         read_uncommitted: true,
@@ -287,43 +305,148 @@ async fn java_format_restart_mid_slot_keeps_the_tombstone_it_processed() {
     close_store(store, timer_store).await;
 }
 
-#[tokio::test]
-async fn formats_refuse_each_others_pending_timer_files() {
-    let deliver_ms = current_millis() + 3_600_000;
+fn registry_text(root_dir: &Path) -> String {
+    std::fs::read_to_string(root_dir.join("timer").join("formats.json")).unwrap()
+}
 
-    // Rust V2 records keep the Java format from starting.
-    let v2_root = tempdir().unwrap();
-    let (mut store, timer_store) = open_store(config(v2_root.path(), TimerFileFormat::RustV2, 64))
+/// Whether any Rust V2 timer log segment holds a record.
+fn rust_v2_log_has_records(root_dir: &Path) -> bool {
+    let log_dir = PathBuf::from(get_timer_log_path(&root_dir.to_string_lossy()))
+        .join("v2")
+        .join("log");
+    std::fs::read_dir(log_dir).is_ok_and(|entries| {
+        entries.flatten().any(|entry| {
+            entry.file_name().to_string_lossy().len() == 20 && entry.metadata().is_ok_and(|metadata| metadata.len() > 0)
+        })
+    })
+}
+
+struct ManualClock(AtomicI64);
+
+impl TimerClock for ManualClock {
+    fn wall_time_ms(&self) -> i64 {
+        self.0.load(Ordering::Acquire)
+    }
+
+    fn monotonic_elapsed_ms(&self) -> u64 {
+        self.wall_time_ms().max(0) as u64
+    }
+}
+
+#[tokio::test]
+async fn switching_to_java_drains_rust_v2_and_indexes_each_source_once() {
+    let root = tempdir().unwrap();
+    let deliver_ms = current_millis().saturating_sub(2_000);
+    let (mut store, timer_store) = open_store(switching_config(root.path(), TimerFileFormat::RustV2))
         .await
         .expect("open a Rust V2 store");
-    put_all(&mut store, vec![timer_message(deliver_ms, "v2")]).await;
-    assert_eq!(timer_store.process_once().await, 1);
+    put_all(
+        &mut store,
+        vec![timer_message(deliver_ms, "v2-a"), timer_message(deliver_ms, "v2-b")],
+    )
+    .await;
+    assert_eq!(timer_store.process_once().await, 2);
     close_store(store, timer_store).await;
-    assert!(open_store(config(v2_root.path(), TimerFileFormat::Java, 64))
-        .await
-        .is_none());
 
-    // A Java timer log is not migrated as a Rust V1 log.
-    let java_root = tempdir().unwrap();
-    let (mut store, timer_store) = open_store(config(java_root.path(), TimerFileFormat::Java, 64))
+    let (mut store, timer_store) = open_store(switching_config(root.path(), TimerFileFormat::Java))
+        .await
+        .expect("switch the store to the Java format");
+    assert_eq!(timer_store.draining_file_format(), Some(TimerFileFormat::RustV2));
+    // The Java format starts where Rust V2 stopped: only the new source is indexed.
+    assert_eq!(timer_store.curr_queue_offset.load(Ordering::Relaxed), 2);
+    assert_eq!(registry_text(root.path()), r#"{"active":"java","draining":"rust_v2"}"#);
+    put_all(&mut store, vec![timer_message(deliver_ms, "java-c")]).await;
+    assert_eq!(timer_store.process_once().await, 1);
+    let first_java_file = std::fs::read(timer_log_file(root.path(), 0)).unwrap();
+    assert!(matches!(
+        JavaTimerLogRecord::decode(&first_java_file),
+        Ok(JavaTimerLogRecord::Unit(_))
+    ));
+
+    timer_store.set_should_running_dequeue(true);
+    assert_eq!(timer_store.process_once().await, 3);
+    store.reput_once().await;
+    assert_eq!(delivered(&store), 3);
+    // The commit after the delivery retires the drained format.
+    assert_eq!(timer_store.draining_file_format(), None);
+    assert_eq!(registry_text(root.path()), r#"{"active":"java"}"#);
+    close_store(store, timer_store).await;
+
+    let (mut store, timer_store) = open_store(switching_config(root.path(), TimerFileFormat::Java))
+        .await
+        .expect("reopen the store");
+    assert_eq!(timer_store.draining_file_format(), None);
+    timer_store.set_should_running_dequeue(true);
+    assert_eq!(timer_store.process_once().await, 0);
+    store.reput_once().await;
+    assert_eq!(delivered(&store), 3);
+    close_store(store, timer_store).await;
+}
+
+#[tokio::test]
+async fn a_java_store_switches_to_rust_v2_without_reading_its_files_as_v1() {
+    let root = tempdir().unwrap();
+    let deliver_ms = current_millis().saturating_sub(2_000);
+    let (mut store, timer_store) = open_store(switching_config(root.path(), TimerFileFormat::Java))
         .await
         .expect("open a Java-format store");
-    put_all(&mut store, vec![timer_message(deliver_ms, "java")]).await;
-    assert_eq!(timer_store.process_once().await, 1);
+    put_all(
+        &mut store,
+        vec![timer_message(deliver_ms, "java-a"), timer_message(deliver_ms, "java-b")],
+    )
+    .await;
+    assert_eq!(timer_store.process_once().await, 2);
     close_store(store, timer_store).await;
-    assert!(open_store(config(java_root.path(), TimerFileFormat::RustV2, 64))
-        .await
-        .is_none());
-    assert!(timer_log_file(java_root.path(), 0).exists());
 
-    // A Rust V2 store that never indexed a timer can switch.
-    let empty_root = tempdir().unwrap();
-    let (store, timer_store) = open_store(config(empty_root.path(), TimerFileFormat::RustV2, 64))
+    // A store without a registry, as a Java Broker leaves it, switches the same way.
+    std::fs::remove_file(root.path().join("timer").join("formats.json")).unwrap();
+    let (mut store, timer_store) = open_store(switching_config(root.path(), TimerFileFormat::RustV2))
         .await
-        .expect("open an empty Rust V2 store");
+        .expect("switch the store to Rust V2");
+    assert_eq!(timer_store.draining_file_format(), Some(TimerFileFormat::Java));
+    assert_eq!(timer_store.curr_queue_offset.load(Ordering::Relaxed), 2);
+    // Java's first TimerLog file has the legacy V1 name; it was not migrated into V2.
+    assert!(!rust_v2_log_has_records(root.path()));
+
+    timer_store.set_should_running_dequeue(true);
+    assert_eq!(timer_store.process_once().await, 2);
+    store.reput_once().await;
+    assert_eq!(delivered(&store), 2);
+    assert_eq!(timer_store.draining_file_format(), None);
+    assert_eq!(registry_text(root.path()), r#"{"active":"rust_v2"}"#);
     close_store(store, timer_store).await;
-    let (store, timer_store) = open_store(config(empty_root.path(), TimerFileFormat::Java, 64))
+}
+
+#[tokio::test]
+async fn a_recall_after_the_switch_cancels_a_timer_the_draining_format_holds() {
+    let root = tempdir().unwrap();
+    let start_ms = (current_millis() as i64 / 1_000) * 1_000;
+    let clock = Arc::new(ManualClock(AtomicI64::new(start_ms)));
+    let deliver_ms = (start_ms + 10_000) as u64;
+    let (mut store, timer_store) = open_store(switching_config(root.path(), TimerFileFormat::RustV2))
         .await
-        .expect("switch an empty store to the Java format");
+        .expect("open a Rust V2 store");
+    timer_store.set_clock(clock.clone());
+    put_all(
+        &mut store,
+        vec![timer_message(deliver_ms, "target"), timer_message(deliver_ms, "kept")],
+    )
+    .await;
+    assert_eq!(timer_store.process_once().await, 2);
+    close_store(store, timer_store).await;
+
+    let (mut store, timer_store) = open_store(switching_config(root.path(), TimerFileFormat::Java))
+        .await
+        .expect("switch the store to the Java format");
+    timer_store.set_clock(clock.clone());
+    assert_eq!(timer_store.draining_file_format(), Some(TimerFileFormat::RustV2));
+    put_all(&mut store, vec![tombstone(deliver_ms, "target")]).await;
+    assert_eq!(timer_store.process_once().await, 1);
+
+    clock.0.store(start_ms + 20_000, Ordering::Release);
+    timer_store.set_should_running_dequeue(true);
+    timer_store.process_once().await;
+    store.reput_once().await;
+    assert_eq!(delivered(&store), 1);
     close_store(store, timer_store).await;
 }

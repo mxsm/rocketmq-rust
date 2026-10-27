@@ -164,6 +164,18 @@ impl TimerStorage {
         }
     }
 
+    /// Time of the latest slot at or after `from_ms` that holds records to deliver.
+    pub(crate) fn latest_slot_with_records(&self, from_ms: i64) -> Option<i64> {
+        let layout = self.layout();
+        let mut latest = None;
+        self.visit_occupied_slots(|slot| {
+            if slot.time_ms >= from_ms && layout.has_records(&slot) {
+                latest = latest.max(Some(slot.time_ms));
+            }
+        });
+        latest
+    }
+
     /// Calls `visit` with every slot that holds records.
     pub(crate) fn visit_occupied_slots(&self, mut visit: impl FnMut(Slot)) {
         match self {
