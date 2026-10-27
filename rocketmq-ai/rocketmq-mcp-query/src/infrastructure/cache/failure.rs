@@ -47,13 +47,14 @@ impl CachedFailure for ToolFailure {
     /// An unavailable source fails fast, so without this every call would reach it again. A
     /// timeout is not kept: the caller that loaded may have had only the rest of its budget.
     fn is_kept(&self) -> bool {
-        matches!(self, Self::Operational(ToolExecutionError::Backend(_)))
+        matches!(self, Self::Operational(ToolExecutionError::SourceUnavailable(_)))
     }
 
     fn allows_stale(&self) -> bool {
         matches!(
             self,
-            Self::Operational(ToolExecutionError::Backend(_)) | Self::Rejected(ToolRejection::TimedOut { .. })
+            Self::Operational(ToolExecutionError::SourceUnavailable(_))
+                | Self::Rejected(ToolRejection::TimedOut { .. })
         )
     }
 }
@@ -111,7 +112,7 @@ mod tests {
         let policy = |failure: ToolFailure| (failure.is_shared(), failure.is_kept(), failure.allows_stale());
 
         assert_eq!(
-            policy(ToolFailure::Operational(ToolExecutionError::Backend(None))),
+            policy(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))),
             (true, true, true)
         );
         assert_eq!(
@@ -142,7 +143,7 @@ mod tests {
             None
         );
 
-        flight.fail(&ToolFailure::Operational(ToolExecutionError::Backend(None)));
+        flight.fail(&ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None)));
         let late = flight.failed_loads();
 
         assert_eq!(

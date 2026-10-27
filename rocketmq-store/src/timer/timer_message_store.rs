@@ -15,6 +15,8 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
@@ -24,9 +26,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use futures_util::stream::FuturesOrdered;
+use futures_util::StreamExt;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
-use rocketmq_model::common::message::message_accessor::MessageAccessor;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::message_single;
@@ -37,15 +40,21 @@ use rocketmq_observability::metrics::timer::TimerMetricsRecorder;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::common::time_utils::is_it_time_to_do;
+use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_store_api::TimerEngineId;
+use rocketmq_store_api::TimerFileFormat;
 use rocketmq_store_api::TimerId;
 use rocketmq_store_api::TimerStoreMode;
 use rocketmq_store_api::JAVA_COMPAT_TIMER_FORMAT_VERSION;
+use rocketmq_store_local::timer::java_format::java_topic_hash;
+use rocketmq_store_local::timer::java_timer_log::JavaTimerLog;
+use rocketmq_store_local::timer::java_timer_log::JavaTimerLogScan;
+use rocketmq_store_local::timer::java_timer_wheel::JavaTimerWheel;
 use rocketmq_store_local::timer::metrics::TimerStorageMetrics;
 use rocketmq_store_local::timer::metrics::TimerStorageMetricsSnapshot;
 use rocketmq_store_local::timer::segmented_timer_log::TIMER_LOG_V2_PHYSICAL_RECORD_SIZE;
@@ -82,6 +91,9 @@ use crate::timer::error::CorruptionReason;
 use crate::timer::error::QuarantineManifest;
 use crate::timer::error::QuarantineRecord;
 use crate::timer::error::TimerWorkResult;
+use crate::timer::format_registry::other_format;
+use crate::timer::format_registry::plan_formats;
+use crate::timer::format_registry::TimerFormatRegistry;
 use crate::timer::java_compat::JavaCompatEngine;
 use crate::timer::pipeline::TimerPipeline;
 use crate::timer::pipeline::TimerPipelineDiagnostics;
@@ -95,6 +107,10 @@ use crate::timer::slot_drain::DEFAULT_IN_MEMORY_DRAIN_ENTRIES;
 use crate::timer::source::read_timer_source_frames;
 use crate::timer::source::TimerSourceRead;
 use crate::timer::source_wake::TimerSourceWake;
+use crate::timer::storage::holds_java_timer_log;
+use crate::timer::storage::TimerLayout;
+use crate::timer::storage::TimerLogAppend;
+use crate::timer::storage::TimerStorage;
 use crate::timer::timer_checkpoint::TimerCheckpoint;
 use crate::timer::timer_checkpoint::TimerCheckpointSnapshot;
 use crate::timer::timer_log::TimerLog;
@@ -125,11 +141,93 @@ pub const MAGIC_DELETE: i32 = 1 << 2;
 const EMPTY_TIMER_LOG_POS: i64 = -1;
 const MIN_SCHEDULER_INTERVAL_MS: u64 = 100;
 const MAX_FUTURE_CURSOR_SKEW_SLOTS: i64 = 2;
+/// Writes one slot drain keeps in flight. Java runs three put threads; more concurrent puts let
+/// the CommitLog append path merge them, which matters most when each put waits for a flush or
+/// a replica.
+const SLOT_DELIVERY_PIPELINE_DEPTH: usize = 32;
+/// Drain entries read and converted together on one storage I/O thread. A chunk is a few
+/// hundred microseconds of work, enough to cover the hand-off, and small enough that its writes
+/// start while later chunks are still prepared. A batch no larger than one chunk is prepared on
+/// the delivering task.
+const PREPARE_CHUNK_ENTRIES: usize = 16;
+/// How often a checkpoint deletes TimerLog files no pending timer reads; Java runs its TimerLog
+/// cleanup every 30 seconds too.
+const TIMER_LOG_CLEANUP_INTERVAL_MS: i64 = 30_000;
+
+/// What one slot entry needs before the slot can move past it.
+enum SlotEntryAction {
+    /// Nothing to write: a recall tombstone, or a message a tombstone of the slot cancels.
+    Skip { cancelled_topic: Option<CheetahString> },
+    /// Writes a message that is not due yet back to the Timer topic for its next round.
+    Roll {
+        source_offset: i64,
+        message: MessageExtBrokerInner,
+        real_topic: Option<CheetahString>,
+    },
+    /// Delivers a due message to its real topic.
+    Deliver {
+        source_offset: i64,
+        message: MessageExtBrokerInner,
+        original_deliver_ms: i64,
+    },
+}
+
+/// One drain entry with its payload read and converted, before the in-order pass decides
+/// whether the slot can move past it. Preparing has no side effects, so a batch is prepared on
+/// several threads.
+enum PreparedSlotEntry {
+    /// The CommitLog no longer holds the payload.
+    MissingPayload { queue_offset: i64 },
+    /// Not due yet; `message` is `None` when it cannot be written back.
+    Roll {
+        source_offset: i64,
+        message: Option<MessageExtBrokerInner>,
+        real_topic: Option<CheetahString>,
+    },
+    /// Needs no write.
+    Skip { cancelled_topic: Option<CheetahString> },
+    /// The message carries no valid original deadline.
+    InvalidDeadline { source_offset: i64 },
+    /// The slot is not due for this message yet.
+    NotDue,
+    /// Due, but it cannot be converted for its real topic.
+    Unsupported { source_offset: i64 },
+    /// Due and ready for its real topic.
+    Deliver {
+        source_offset: i64,
+        message: MessageExtBrokerInner,
+        original_deliver_ms: i64,
+    },
+}
+
+/// The wall time a drain batch is prepared against. The write of each delivery checks the
+/// clock again.
+#[derive(Clone, Copy)]
+struct PrepareClock {
+    now_ms: i64,
+    floor_now_ms: i64,
+    precision_ms: i64,
+}
+
+/// What a completed slot entry adds to the timer metrics.
+struct SlotEntryDone {
+    /// Real topic whose timing count drops by one.
+    counted_topic: Option<CheetahString>,
+    /// Whether the entry left the timer through a write.
+    dequeued: bool,
+}
 
 #[derive(Clone, Copy, Debug)]
 struct RecoveredTimerState {
     read_time_ms: i64,
     queue_offset: i64,
+}
+
+/// Timer files of one format, loaded and recovered.
+struct LoadedTimerStorage {
+    checkpoint: TimerCheckpoint,
+    storage: TimerStorage,
+    recovered: RecoveredTimerState,
 }
 
 /// The read slot and drain cursor of the checkpoint a store loads from.
@@ -155,29 +253,36 @@ struct SourceVisibilitySnapshot {
 /// A record links to the previous record of its slot, which can be an earlier record of the same
 /// batch, so record positions are assigned from the timer log end before the batch is appended.
 struct TimerIndexPlan {
+    layout: TimerLayout,
+    /// Timer log end once the planned records are written.
     log_end: i64,
-    records: Vec<(TimerLogRecord, u64)>,
+    records: Vec<TimerLogAppend>,
+    /// Position of each planned record.
+    positions: Vec<i64>,
     /// Every touched slot as it stands after the batch.
     slots: BTreeMap<i64, Slot>,
     sources: Vec<IndexedTimerSource>,
 }
 
 impl TimerIndexPlan {
-    fn new(log_end: i64) -> Self {
+    fn new(log_end: i64, layout: TimerLayout) -> Self {
         Self {
+            layout,
             log_end,
             records: Vec::new(),
+            positions: Vec::new(),
             slots: BTreeMap::new(),
             sources: Vec::new(),
         }
     }
 
-    fn position_of(&self, record_index: usize) -> i64 {
-        self.log_end + record_index as i64 * TimerLogRecord::SIZE as i64
-    }
-
-    fn next_position(&self) -> i64 {
-        self.position_of(self.records.len())
+    /// Plans `append` after the records planned so far and returns its position.
+    fn push_record(&mut self, append: TimerLogAppend) -> i64 {
+        let position = self.layout.place(self.log_end);
+        self.log_end = self.layout.end_after(position);
+        self.records.push(append);
+        self.positions.push(position);
+        position
     }
 }
 
@@ -219,7 +324,66 @@ pub enum TimerPayloadReadResult {
 
 struct ActiveSlotDrain {
     plan: SlotDrainPlan,
-    delete_keys: HashSet<TimerDeleteIdentity>,
+    delete_keys: Arc<HashSet<TimerDeleteIdentity>>,
+}
+
+/// One storage the due stage delivers from, with its read cursor and slot drains.
+struct DeliveryTrack<'a> {
+    storage: &'a TimerStorage,
+    read_time_ms: &'a AtomicI64,
+    slot_drains: &'a Mutex<HashMap<i64, ActiveSlotDrain>>,
+    /// Root under which slot drains spill.
+    drain_root: &'a str,
+}
+
+/// The file format that was active before `timerFileFormat` changed. It no longer indexes new
+/// timers; it delivers the ones it holds, and receives recalls that may target them, until it is
+/// empty.
+struct DrainingTimerStorage {
+    format: TimerFileFormat,
+    storage: TimerStorage,
+    checkpoint: TimerCheckpoint,
+    read_time_ms: AtomicI64,
+    slot_drains: Mutex<HashMap<i64, ActiveSlotDrain>>,
+    drain_root: String,
+    /// Latest slot that held records when draining started. Nothing new reaches the storage, so
+    /// a recall for a later slot cannot target it.
+    horizon_ms: i64,
+}
+
+/// A loaded storage of either role.
+enum LoadedStorage {
+    Active(Arc<TimerStorage>),
+    Draining(Arc<DrainingTimerStorage>),
+}
+
+impl LoadedStorage {
+    fn get(&self) -> &TimerStorage {
+        match self {
+            Self::Active(storage) => storage,
+            Self::Draining(draining) => &draining.storage,
+        }
+    }
+}
+
+impl DrainingTimerStorage {
+    fn track(&self) -> DeliveryTrack<'_> {
+        DeliveryTrack {
+            storage: &self.storage,
+            read_time_ms: &self.read_time_ms,
+            slot_drains: &self.slot_drains,
+            drain_root: &self.drain_root,
+        }
+    }
+
+    /// Whether every timer it held is delivered or rolled into the active format.
+    fn is_empty(&self) -> bool {
+        self.slot_drains.lock().is_empty()
+            && self
+                .storage
+                .latest_slot_with_records(self.read_time_ms.load(Ordering::Acquire))
+                .is_none()
+    }
 }
 
 struct AtomicActivityGuard<'a> {
@@ -304,8 +468,11 @@ pub struct TimerMessageStore {
     store_context: Option<TimerStoreContext>,
     message_store_config: Arc<MessageStoreConfig>,
     timer_checkpoint: Mutex<Option<TimerCheckpoint>>,
-    timer_log: Mutex<Option<TimerLog>>,
-    timer_wheel: Mutex<Option<TimerWheel>>,
+    /// The loaded TimerLog and TimerWheel. Callers clone the handle out of the lock, so file I/O
+    /// never runs under it.
+    timer_storage: Mutex<Option<Arc<TimerStorage>>>,
+    /// The previously active file format while it still holds timers.
+    draining: Mutex<Option<Arc<DrainingTimerStorage>>>,
     storage_metrics: Arc<TimerStorageMetrics>,
     slot_drains: Mutex<HashMap<i64, ActiveSlotDrain>>,
     clock: RwLock<Arc<dyn TimerClock>>,
@@ -320,6 +487,8 @@ pub struct TimerMessageStore {
     active_source_mutations: AtomicUsize,
     active_due_mutations: AtomicUsize,
     pending_progress: AtomicBool,
+    /// Wall time of the last TimerLog cleanup; `0` before the first.
+    last_timer_log_cleanup_ms: AtomicI64,
     /// Latest wall-clock time at which every visible Timer CQ entry was indexed; `0` until the
     /// first snapshot resolves. Due delivery drains only slots that end at or before it.
     source_visible_through_ms: AtomicI64,
@@ -359,35 +528,207 @@ impl TimerMessageStore {
             error!(source_present = true, "load timer role epoch failed");
             return false;
         }
+        let Some((loaded, draining)) = self.load_timer_formats(root_dir) else {
+            return false;
+        };
+        let LoadedTimerStorage {
+            checkpoint: timer_checkpoint,
+            storage,
+            recovered: recovered_state,
+        } = loaded;
+        // Recovery keeps the drain cursor with the read slot it names.
+        let committed_drain = CommittedDrain {
+            slot_time_ms: recovered_state.read_time_ms,
+            cursor: timer_checkpoint.drain_cursor(),
+        };
+
+        self.curr_read_time_ms
+            .store(recovered_state.read_time_ms, Ordering::Relaxed);
+        self.curr_queue_offset
+            .store(recovered_state.queue_offset, Ordering::Relaxed);
+        let storage = Arc::new(storage);
+        *self.timer_checkpoint.lock() = Some(timer_checkpoint);
+        *self.timer_storage.lock() = Some(Arc::clone(&storage));
+        if let Err(_error) = self.restore_partial_slot_drain(&self.active_track(&storage), committed_drain) {
+            error!(source_present = true, "restore the partially drained timer slot failed");
+            return false;
+        }
+        if let Some(draining) = draining {
+            let committed_drain = CommittedDrain {
+                slot_time_ms: draining.read_time_ms.load(Ordering::Acquire),
+                cursor: draining.checkpoint.drain_cursor(),
+            };
+            if let Err(_error) = self.restore_partial_slot_drain(&draining.track(), committed_drain) {
+                error!(
+                    source_present = true,
+                    "restore the partially drained slot of the draining timer format failed"
+                );
+                return false;
+            }
+            *self.draining.lock() = Some(Arc::new(draining));
+        }
+        let _ = self.timer_metrics.load();
+        self.refresh_timer_backlog_distribution();
+        if self.should_check_and_revise_metrics() {
+            self.check_and_revise_metrics();
+            if self.timer_metrics.persist().is_err() {
+                error!(source_present = true, "persist revised timer metrics failed");
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Loads the configured file format and, after a switch, the previously active one for
+    /// draining. The previous format loads first: the Timer CQ offset it committed is where the
+    /// configured format starts indexing, so no Timer CQ entry is indexed twice.
+    fn load_timer_formats(&self, root_dir: &str) -> Option<(LoadedTimerStorage, Option<DrainingTimerStorage>)> {
+        let configured = self.message_store_config.timer_file_format;
+        let registry = match TimerFormatRegistry::load(root_dir) {
+            Ok(registry) => registry,
+            Err(_error) => {
+                error!(source_present = true, "load the timer file format registry failed");
+                return None;
+            }
+        };
+        let other_has_records = match self.format_has_records(other_format(configured), root_dir) {
+            Ok(present) => present,
+            Err(_error) => {
+                error!(
+                    source_present = true,
+                    "inspect the timer files of the other format failed"
+                );
+                return None;
+            }
+        };
+        let plan = plan_formats(configured, registry, other_has_records);
+        let previous = match plan.draining {
+            Some(format) => Some((format, self.load_format(format, root_dir)?)),
+            None => None,
+        };
+        let mut active = self.load_format(configured, root_dir)?;
+        if let Some((format, previous)) = previous.as_ref() {
+            if plan.handover_from == Some(*format) {
+                let queue_offset = previous.recovered.queue_offset;
+                active.recovered.queue_offset = queue_offset;
+                active.checkpoint.set_last_timer_queue_offset(queue_offset);
+                active.checkpoint.set_master_timer_queue_offset(queue_offset);
+                if active.checkpoint.flush().is_err() {
+                    error!(
+                        source_present = true,
+                        "hand the timer queue cursor to the new file format failed"
+                    );
+                    return None;
+                }
+                warn!(
+                    from = format.as_str(),
+                    to = configured.as_str(),
+                    "timerFileFormat changed; the new format indexes from where the previous one stopped"
+                );
+            }
+        }
+        let draining = previous.and_then(|(format, previous)| Self::start_draining(format, previous, root_dir));
+        let settled = TimerFormatRegistry {
+            active: configured,
+            draining: draining.as_ref().map(|draining| draining.format),
+        };
+        if registry != Some(settled) && settled.persist(root_dir).is_err() {
+            error!(source_present = true, "persist the timer file format registry failed");
+            return None;
+        }
+        Some((active, draining))
+    }
+
+    fn load_format(&self, format: TimerFileFormat, root_dir: &str) -> Option<LoadedTimerStorage> {
+        match format {
+            TimerFileFormat::RustV2 => self.load_rust_v2_storage(root_dir),
+            TimerFileFormat::Java => self.load_java_storage(root_dir),
+        }
+    }
+
+    /// Whether `format` has indexed timers in the store at `root_dir`.
+    fn format_has_records(&self, format: TimerFileFormat, root_dir: &str) -> std::io::Result<bool> {
+        match format {
+            TimerFileFormat::RustV2 => rust_v2_timer_records_present(root_dir),
+            TimerFileFormat::Java => holds_java_timer_log(
+                Path::new(&get_timer_log_path(root_dir)),
+                self.message_store_config.mapped_file_size_timer_log as u64,
+            ),
+        }
+    }
+
+    /// Keeps a previously active format while it still holds timers to deliver.
+    fn start_draining(
+        format: TimerFileFormat,
+        previous: LoadedTimerStorage,
+        root_dir: &str,
+    ) -> Option<DrainingTimerStorage> {
+        let read_time_ms = previous.recovered.read_time_ms;
+        let Some(horizon_ms) = previous.storage.latest_slot_with_records(read_time_ms) else {
+            previous.storage.shutdown();
+            return None;
+        };
+        warn!(
+            format = format.as_str(),
+            "the previous timer file format delivers the timers it holds until it is empty"
+        );
+        Some(DrainingTimerStorage {
+            format,
+            storage: previous.storage,
+            checkpoint: previous.checkpoint,
+            read_time_ms: AtomicI64::new(read_time_ms),
+            slot_drains: Mutex::new(HashMap::new()),
+            drain_root: Path::new(root_dir)
+                .join("timer")
+                .join("draining")
+                .to_string_lossy()
+                .into_owned(),
+            horizon_ms,
+        })
+    }
+
+    /// Loads the Rust V2 files and recovers them to their last committed checkpoint.
+    fn load_rust_v2_storage(&self, root_dir: &str) -> Option<LoadedTimerStorage> {
+        // A Java log or wheel at the legacy names belongs to the Java format, not to a V1 store.
+        let java_files = match self.format_has_records(TimerFileFormat::Java, root_dir) {
+            Ok(java_files) => java_files,
+            Err(_error) => {
+                error!(source_present = true, "inspect the timer log directory failed");
+                return None;
+            }
+        };
         let fingerprint = match self.timer_storage_fingerprint() {
             Some(fingerprint) => fingerprint,
             None => {
                 error!("load timer storage format rejected the configured policy");
-                return false;
+                return None;
             }
         };
         let format_path = PathBuf::from(root_dir).join("timer-v2").join("FORMAT");
         if fingerprint.load_or_create(&format_path).is_err() {
             error!(source_present = true, "load timer storage fingerprint failed");
-            return false;
+            return None;
         }
         let timer_checkpoint =
             match TimerCheckpoint::new_with_policy(get_timer_check_path(root_dir), fingerprint.policy_hash()) {
                 Ok(timer_checkpoint) => timer_checkpoint,
                 Err(_error) => {
                     error!(source_present = true, "load timer checkpoint failed");
-                    return false;
+                    return None;
                 }
             };
 
-        let timer_log = TimerLog::with_metrics(
+        let mut timer_log = TimerLog::with_metrics(
             get_timer_log_path(root_dir),
             self.message_store_config.mapped_file_size_timer_log,
             Arc::clone(&self.storage_metrics),
         );
+        if java_files {
+            timer_log = timer_log.ignoring_legacy_file();
+        }
         if timer_log.load().is_err() {
             error!(source_present = true, "load timer log failed");
-            return false;
+            return None;
         }
         let timer_log_len = match timer_log.durable_length() {
             Ok(length) => length as i64,
@@ -396,7 +737,7 @@ impl TimerMessageStore {
                     source_present = true,
                     "read timer log length during checkpoint selection failed"
                 );
-                return false;
+                return None;
             }
         };
         if timer_checkpoint.local_generation() > 0 {
@@ -404,25 +745,28 @@ impl TimerMessageStore {
                 Ok(true) => {}
                 Ok(false) => {
                     error!("no V2 timer checkpoint references available durable log data");
-                    return false;
+                    return None;
                 }
                 Err(_error) => {
                     error!(
                         source_present = true,
                         "select timer checkpoint against durable log failed"
                     );
-                    return false;
+                    return None;
                 }
             }
         }
 
-        let timer_wheel = TimerWheel::with_page_size_and_metrics(
+        let mut timer_wheel = TimerWheel::with_page_size_and_metrics(
             get_timer_wheel_path(root_dir),
             TIMER_WHEEL_TTL_DAY as usize * DAY_SECS as usize,
             self.message_store_config.timer_precision_ms,
             4_096,
             Arc::clone(&self.storage_metrics),
         );
+        if java_files {
+            timer_wheel = timer_wheel.ignoring_legacy_file();
+        }
         if let Err(_first_error) = timer_wheel.load_at_generation(timer_checkpoint.wheel_generation()) {
             let rejected_generation = timer_checkpoint.local_generation();
             let fallback_loaded = rejected_generation > 0
@@ -441,14 +785,14 @@ impl TimerMessageStore {
                             source_present = true,
                             "rebuilding the timer wheel from committed data failed"
                         );
-                        return false;
+                        return None;
                     }
                 };
                 if let Err(_rebuild_error) =
                     timer_wheel.load_rebuilt(timer_checkpoint.wheel_generation(), &rebuilt_slots)
                 {
                     error!(source_present = true, "installing rebuilt timer wheel pages failed");
-                    return false;
+                    return None;
                 }
                 warn!("rebuilt timer wheel pages from committed timer data");
             } else {
@@ -456,40 +800,136 @@ impl TimerMessageStore {
             }
         }
 
-        let recovered_state = match self.recover_and_revise(&timer_checkpoint, &timer_log, &timer_wheel) {
-            Ok(recovered_state) => recovered_state,
+        let recovered = match self.recover_and_revise(&timer_checkpoint, &timer_log, &timer_wheel) {
+            Ok(recovered) => recovered,
             Err(_error) => {
                 error!(source_present = true, "recover timer state failed");
-                return false;
+                return None;
             }
         };
-        // Recovery keeps the drain cursor with the read slot it names.
-        let committed_drain = CommittedDrain {
-            slot_time_ms: recovered_state.read_time_ms,
-            cursor: timer_checkpoint.drain_cursor(),
-        };
+        Some(LoadedTimerStorage {
+            checkpoint: timer_checkpoint,
+            storage: TimerStorage::RustV2 {
+                log: timer_log,
+                wheel: timer_wheel,
+            },
+            recovered,
+        })
+    }
 
-        self.curr_read_time_ms
-            .store(recovered_state.read_time_ms, Ordering::Relaxed);
-        self.curr_queue_offset
-            .store(recovered_state.queue_offset, Ordering::Relaxed);
-        *self.timer_checkpoint.lock() = Some(timer_checkpoint);
-        *self.timer_log.lock() = Some(timer_log);
-        *self.timer_wheel.lock() = Some(timer_wheel);
-        if let Err(_error) = self.restore_partial_slot_drain(committed_drain) {
-            error!(source_present = true, "restore the partially drained timer slot failed");
-            return false;
+    /// Loads the Apache RocketMQ 5.x `timerlog`, `timerwheel` and `config/timercheck`, and
+    /// recovers them with Java's rules.
+    fn load_java_storage(&self, root_dir: &str) -> Option<LoadedTimerStorage> {
+        // A Java unit stores the distance from its write time to its slot as an int.
+        if i32::try_from(self.timer_roll_window_ms()).is_err() {
+            error!("timerRollWindowSlot is too long for the Java timer format, which keeps delays within an int");
+            return None;
         }
-        let _ = self.timer_metrics.load();
-        self.refresh_timer_backlog_distribution();
-        if self.should_check_and_revise_metrics() {
-            self.check_and_revise_metrics();
-            if self.timer_metrics.persist().is_err() {
-                error!(source_present = true, "persist revised timer metrics failed");
-                return false;
+        let checkpoint = match TimerCheckpoint::new_java(get_timer_check_path(root_dir)) {
+            Ok(checkpoint) => checkpoint,
+            Err(_error) => {
+                error!(source_present = true, "load the Java timer checkpoint failed");
+                return None;
             }
+        };
+        let log = match JavaTimerLog::new(
+            get_timer_log_path(root_dir),
+            self.message_store_config.mapped_file_size_timer_log as u64,
+        ) {
+            Ok(log) => log,
+            Err(_error) => {
+                error!(source_present = true, "the Java timer log file size is invalid");
+                return None;
+            }
+        };
+        if log.load().is_err() {
+            error!(source_present = true, "load the Java timer log failed");
+            return None;
         }
-        true
+        let precision_ms = i64::try_from(self.message_store_config.timer_precision_ms).unwrap_or(i64::MAX);
+        let wheel = match JavaTimerWheel::open(
+            get_timer_wheel_path(root_dir),
+            TIMER_WHEEL_TTL_DAY as usize * DAY_SECS as usize,
+            precision_ms,
+        ) {
+            Ok(wheel) => wheel,
+            Err(_error) => {
+                error!(source_present = true, "load the Java timer wheel failed");
+                return None;
+            }
+        };
+        let recovered = match self.recover_java_storage(&checkpoint, &log, &wheel) {
+            Ok(recovered) => recovered,
+            Err(_error) => {
+                error!(source_present = true, "recover the Java timer files failed");
+                return None;
+            }
+        };
+        Some(LoadedTimerStorage {
+            checkpoint,
+            storage: TimerStorage::Java { log, wheel },
+            recovered,
+        })
+    }
+
+    /// Recovers Java-format files as Java's `TimerMessageStore.recover` does. The TimerLog is
+    /// checked from one file before the last flush position, every valid unit is linked back
+    /// into its wheel slot, and the log is cut at the first invalid unit. Slots that still point
+    /// past the log end are rescanned from their first unit and then dropped. The Timer CQ
+    /// cursor follows the last unit's source message, but never passes the master's.
+    ///
+    /// Units written after the last checkpoint stay, and their Timer CQ entries are indexed
+    /// again when the master offset lags them, as in Java; delivery is at least once.
+    fn recover_java_storage(
+        &self,
+        checkpoint: &TimerCheckpoint,
+        log: &JavaTimerLog,
+        wheel: &JavaTimerWheel,
+    ) -> std::io::Result<RecoveredTimerState> {
+        let begin = u64::try_from(checkpoint.last_timer_log_flush_pos())
+            .unwrap_or_default()
+            .saturating_sub(log.file_size());
+        let mut last_unit = None;
+        let log_end = log
+            .recover(begin, JavaTimerLogScan::Repair, |offset, unit| {
+                wheel.revise_last_pos(unit.slot_time_ms(), offset as i64);
+                last_unit = Some(*unit);
+            })
+            .map_err(std::io::Error::other)?;
+        let log_end = i64::try_from(log_end).map_err(std::io::Error::other)?;
+
+        let read_time_ms = self.recover_read_time_ms(checkpoint.last_read_time_ms());
+        let min_first = wheel.check_phy_pos(read_time_ms, log_end);
+        if min_first < log_end {
+            warn!("recheck the timer log because the timer wheel points past its end");
+            log.recover(
+                u64::try_from(min_first).unwrap_or_default(),
+                JavaTimerLogScan::Revise,
+                |offset, unit| wheel.revise_last_pos(unit.slot_time_ms(), offset as i64),
+            )
+            .map_err(std::io::Error::other)?;
+        }
+        if wheel.clear_slots_beyond(log_end) > 0 {
+            warn!("dropped timer wheel slots whose units are past the recovered timer log end");
+        }
+
+        let resumed_offset = last_unit
+            .and_then(|unit| self.look_store_message(unit.commit_log_offset, unit.size))
+            .map(|message| message.queue_offset().saturating_add(1))
+            .unwrap_or_else(|| checkpoint.last_timer_queue_offset());
+        let queue_offset = self.recover_queue_offset(resumed_offset.min(checkpoint.master_timer_queue_offset().max(0)));
+
+        checkpoint.set_last_read_time_ms(read_time_ms);
+        checkpoint.set_last_timer_queue_offset(queue_offset);
+        checkpoint.set_master_timer_queue_offset(queue_offset);
+        checkpoint.set_last_timer_log_flush_pos(log_end);
+        log.flush().map_err(std::io::Error::other)?;
+        wheel.flush().map_err(std::io::Error::other)?;
+        checkpoint.flush()?;
+        Ok(RecoveredTimerState {
+            read_time_ms,
+            queue_offset,
+        })
     }
 
     pub fn start(self: &Arc<Self>) {
@@ -592,11 +1032,43 @@ impl TimerMessageStore {
     }
 
     pub fn get_all_congest_num(&self) -> i64 {
-        self.timer_wheel
-            .lock()
-            .as_ref()
-            .map(|timer_wheel| timer_wheel.get_all_num(self.curr_read_time_ms.load(Ordering::Relaxed)))
-            .unwrap_or_default()
+        let active = self
+            .timer_storage()
+            .map(|storage| storage.all_num(self.curr_read_time_ms.load(Ordering::Relaxed)))
+            .unwrap_or_default();
+        let draining = self
+            .draining_storage()
+            .map(|draining| draining.storage.all_num(draining.read_time_ms.load(Ordering::Relaxed)))
+            .unwrap_or_default();
+        active.saturating_add(draining)
+    }
+
+    /// The occupied slots of each loaded storage from its read cursor on: the active format's,
+    /// then the draining one's. The wheels are read first, so no log is read under a wheel lock.
+    fn pending_slots(&self) -> Vec<(LoadedStorage, Vec<Slot>)> {
+        let mut storages = Vec::with_capacity(2);
+        if let Some(storage) = self.timer_storage() {
+            storages.push((
+                LoadedStorage::Active(storage),
+                self.curr_read_time_ms.load(Ordering::Relaxed),
+            ));
+        }
+        if let Some(draining) = self.draining_storage() {
+            let read_time_ms = draining.read_time_ms.load(Ordering::Relaxed);
+            storages.push((LoadedStorage::Draining(draining), read_time_ms));
+        }
+        storages
+            .into_iter()
+            .map(|(storage, read_time_ms)| {
+                let mut slots = Vec::new();
+                storage.get().visit_occupied_slots(|slot| {
+                    if slot.time_ms > 0 && slot.time_ms >= read_time_ms {
+                        slots.push(slot);
+                    }
+                });
+                (storage, slots)
+            })
+            .collect()
     }
 
     /// Indexed timer messages per real topic, and the wheel's records over `timerDist` by their
@@ -737,8 +1209,8 @@ impl TimerMessageStore {
             store_context: None,
             message_store_config,
             timer_checkpoint: Mutex::new(None),
-            timer_log: Mutex::new(None),
-            timer_wheel: Mutex::new(None),
+            timer_storage: Mutex::new(None),
+            draining: Mutex::new(None),
             storage_metrics: Arc::new(TimerStorageMetrics::default()),
             slot_drains: Mutex::new(HashMap::new()),
             clock: RwLock::new(Arc::new(SystemTimerClock::default())),
@@ -753,6 +1225,7 @@ impl TimerMessageStore {
             active_source_mutations: AtomicUsize::new(0),
             active_due_mutations: AtomicUsize::new(0),
             pending_progress: AtomicBool::new(false),
+            last_timer_log_cleanup_ms: AtomicI64::new(0),
             source_visible_through_ms: AtomicI64::new(0),
             pending_source_visibility: Mutex::new(None),
             scheduler_group: Mutex::new(None),
@@ -767,7 +1240,7 @@ impl TimerMessageStore {
     }
 
     #[cfg(test)]
-    fn set_clock(&self, clock: Arc<dyn TimerClock>) {
+    pub(crate) fn set_clock(&self, clock: Arc<dyn TimerClock>) {
         *self.clock.write() = clock;
     }
 
@@ -890,14 +1363,15 @@ impl TimerMessageStore {
         if self.timer_metrics.persist().is_err() {
             error!(source_present = true, "persist timer metrics during shutdown failed");
         }
-        if let Some(timer_log) = self.timer_log.lock().take() {
-            let _ = timer_log.shutdown();
-        }
-        if let Some(timer_wheel) = self.timer_wheel.lock().take() {
-            let _ = timer_wheel.shutdown(true);
+        if let Some(storage) = self.timer_storage.lock().take() {
+            storage.shutdown();
         }
         if let Some(timer_checkpoint) = self.timer_checkpoint.lock().take() {
             let _ = timer_checkpoint.shutdown();
+        }
+        if let Some(draining) = self.draining.lock().take() {
+            draining.storage.shutdown();
+            let _ = draining.checkpoint.shutdown();
         }
     }
 
@@ -919,20 +1393,15 @@ impl TimerMessageStore {
         // The checkpoint is a commit record, never a write-ahead declaration. Advancing it before
         // either data file is durable can permanently skip Timer CQ entries after a crash.
         self.observe_persistence_stage(PersistenceStage::BeforeTimerLog)?;
-        let durable_timer_log_len = {
-            let timer_log_guard = self.timer_log.lock();
-            match timer_log_guard.as_ref() {
-                Some(timer_log) => {
-                    timer_log.flush()?;
-                    timer_log.len()? as i64
-                }
-                None => 0,
-            }
+        let storage = self.timer_storage();
+        let durable_timer_log_len = match storage.as_deref() {
+            Some(storage) => storage.flush_log()?,
+            None => 0,
         };
         self.observe_persistence_stage(PersistenceStage::AfterTimerLog)?;
 
-        let wheel_generation = match self.timer_wheel.lock().as_ref() {
-            Some(timer_wheel) => timer_wheel.flush_generation()?,
+        let wheel_generation = match storage.as_deref() {
+            Some(storage) => storage.flush_wheel()?,
             None => 0,
         };
         self.observe_persistence_stage(PersistenceStage::AfterTimerWheel)?;
@@ -965,17 +1434,93 @@ impl TimerMessageStore {
         } else {
             0
         };
-        if let Some(timer_wheel) = self.timer_wheel.lock().as_ref() {
-            timer_wheel.commit_generation(wheel_generation)?;
+        if let Some(storage) = storage.as_deref() {
+            storage.commit_checkpoint(wheel_generation, checkpoint_generation)?;
         }
-        if checkpoint_generation > 0 {
-            if let Some(timer_log) = self.timer_log.lock().as_ref() {
-                timer_log.mark_clean_checkpoint(checkpoint_generation)?;
-            }
-        }
+        self.commit_draining_progress()?;
+        self.clean_timer_logs_if_due();
         self.observe_persistence_stage(PersistenceStage::AfterCheckpoint)?;
         self.pending_progress.store(false, Ordering::Release);
         Ok(true)
+    }
+
+    /// Commits what the draining format delivered, like the active format's commit, and retires
+    /// the format from the registry once it holds nothing more. A drain it cannot describe keeps
+    /// its previous checkpoint authoritative.
+    /// Deletes the TimerLog files of each loaded format that no pending timer can read, at most
+    /// once per [`TIMER_LOG_CLEANUP_INTERVAL_MS`]. It runs inside a checkpoint, so no stage
+    /// changes a slot meanwhile; a failure is logged and retried at the next interval.
+    fn clean_timer_logs_if_due(&self) {
+        let now_ms = self.clock.read().wall_time_ms();
+        if now_ms.saturating_sub(self.last_timer_log_cleanup_ms.load(Ordering::Acquire)) < TIMER_LOG_CLEANUP_INTERVAL_MS
+        {
+            return;
+        }
+        self.last_timer_log_cleanup_ms.store(now_ms, Ordering::Release);
+        let mut tracks = Vec::with_capacity(2);
+        let active = self.timer_storage();
+        if let Some(storage) = active.as_deref() {
+            tracks.push(self.active_track(storage));
+        }
+        let draining = self.draining_storage();
+        if let Some(draining) = draining.as_deref() {
+            tracks.push(draining.track());
+        }
+        for track in tracks {
+            if oldest_live_position(&track)
+                .and_then(|oldest| track.storage.collect_garbage(oldest))
+                .is_err()
+            {
+                warn!(
+                    source_present = true,
+                    "delete timer log files that no pending timer reads failed"
+                );
+            }
+        }
+    }
+
+    fn commit_draining_progress(&self) -> std::io::Result<()> {
+        let Some(draining) = self.draining_storage() else {
+            return Ok(());
+        };
+        let read_time_ms = draining.read_time_ms.load(Ordering::Acquire);
+        if !slot_drains_fit(&draining.slot_drains, read_time_ms) {
+            return Ok(());
+        }
+        let log_len = draining.storage.flush_log()?;
+        let wheel_generation = draining.storage.flush_wheel()?;
+        let processed = draining
+            .slot_drains
+            .lock()
+            .get(&read_time_ms)
+            .map_or(0, |active| active.plan.cursor());
+        let (drain_generation, drain_page, drain_record) =
+            drain_cursor_of(draining.storage.get_slot(read_time_ms), processed);
+        draining.checkpoint.set_last_read_time_ms(read_time_ms);
+        draining.checkpoint.set_last_timer_log_flush_pos(log_len);
+        draining.checkpoint.set_wheel_generation(wheel_generation);
+        draining.checkpoint.set_role_epoch(self.role_state.epoch());
+        draining
+            .checkpoint
+            .set_drain_cursor(drain_generation, drain_page, drain_record);
+        draining.checkpoint.flush()?;
+        draining
+            .storage
+            .commit_checkpoint(wheel_generation, draining.checkpoint.local_generation())?;
+        if draining.is_empty() {
+            TimerFormatRegistry {
+                active: self.message_store_config.timer_file_format,
+                draining: None,
+            }
+            .persist(self.message_store_config.store_path_root_dir.as_str())?;
+            *self.draining.lock() = None;
+            draining.storage.shutdown();
+            warn!(
+                format = draining.format.as_str(),
+                "the previous timer file format delivered every timer it held and is retired"
+            );
+        }
+        Ok(())
     }
 
     /// A partially drained slot is committed with its drain cursor: the generation of its
@@ -984,12 +1529,7 @@ impl TimerMessageStore {
     /// cancels entries that are pending. The cursor describes one slot, the one at the read
     /// cursor; any other drain keeps the previous checkpoint authoritative.
     fn slot_drains_fit_checkpoint(&self) -> bool {
-        let slot_drains = self.slot_drains.lock();
-        match slot_drains.len() {
-            0 => true,
-            1 => slot_drains.contains_key(&self.curr_read_time_ms.load(Ordering::Acquire)),
-            _ => false,
-        }
+        slot_drains_fit(&self.slot_drains, self.curr_read_time_ms.load(Ordering::Acquire))
     }
 
     fn observe_persistence_stage(&self, stage: PersistenceStage) -> std::io::Result<()> {
@@ -1035,19 +1575,11 @@ impl TimerMessageStore {
     }
 
     pub fn append_timer_log(&self, payload: &[u8]) -> std::io::Result<u64> {
-        self.timer_log
-            .lock()
-            .as_ref()
-            .ok_or_else(|| std::io::Error::other("timer log is not loaded"))?
-            .append(payload)
+        self.loaded_timer_storage()?.append_raw(payload)
     }
 
     pub fn read_timer_log(&self, offset: u64, length: usize) -> std::io::Result<Vec<u8>> {
-        self.timer_log
-            .lock()
-            .as_ref()
-            .ok_or_else(|| std::io::Error::other("timer log is not loaded"))?
-            .read_at(offset, length)
+        self.loaded_timer_storage()?.read_raw(offset, length)
     }
 
     pub fn put_timer_wheel_slot(
@@ -1058,18 +1590,25 @@ impl TimerMessageStore {
         num: i32,
         magic: i32,
     ) -> std::io::Result<()> {
-        self.timer_wheel
-            .lock()
-            .as_ref()
-            .ok_or_else(|| std::io::Error::other("timer wheel is not loaded"))?
-            .put_slot(time_ms, first_pos, last_pos, num, magic)
+        self.loaded_timer_storage()?
+            .put_slot(Slot::new_with_num_magic(time_ms, first_pos, last_pos, num, magic))
     }
 
     pub fn get_timer_wheel_slot(&self, time_ms: i64) -> Option<Slot> {
-        self.timer_wheel
-            .lock()
-            .as_ref()
-            .and_then(|timer_wheel| timer_wheel.get_slot(time_ms))
+        self.timer_storage()?.get_slot(time_ms)
+    }
+
+    fn slot_with_records(&self, time_ms: i64) -> Option<Slot> {
+        self.timer_storage()?.slot_with_records(time_ms)
+    }
+
+    fn timer_storage(&self) -> Option<Arc<TimerStorage>> {
+        self.timer_storage.lock().clone()
+    }
+
+    fn loaded_timer_storage(&self) -> std::io::Result<Arc<TimerStorage>> {
+        self.timer_storage()
+            .ok_or_else(|| std::io::Error::other("timer storage is not loaded"))
     }
 
     fn restore_progress_on_dequeue_resume(&self) {
@@ -1109,14 +1648,11 @@ impl TimerMessageStore {
     /// of their slot. Slot counts include recall tombstones.
     fn wheel_backlog_distribution(&self) -> HashMap<i32, i64> {
         let now_ms = self.floor_time_ms(current_millis() as i64);
-        let read_cursor = self.curr_read_time_ms.load(Ordering::Relaxed);
         let mut backlog_metrics = TimerBacklogMetrics::new(self.timer_metrics.timer_dist_list());
-        if let Some(timer_wheel) = self.timer_wheel.lock().as_ref() {
-            timer_wheel.visit_occupied_slots(|_, slot| {
-                if slot.time_ms > 0 && slot.time_ms >= read_cursor {
-                    backlog_metrics.observe_due(slot.time_ms, now_ms, i64::from(slot.num));
-                }
-            });
+        for (_, slots) in self.pending_slots() {
+            for slot in slots {
+                backlog_metrics.observe_due(slot.time_ms, now_ms, i64::from(slot.num));
+            }
         }
         backlog_metrics.distribution_snapshot()
     }
@@ -1165,19 +1701,20 @@ impl TimerMessageStore {
     /// corrects, it leaves out Timer CQ entries that are not indexed yet: indexing counts them.
     fn collect_indexed_topic_backlog(&self) -> HashMap<String, i64> {
         let now_ms = self.floor_time_ms(current_millis() as i64);
-        let read_cursor = self.curr_read_time_ms.load(Ordering::Relaxed);
-        let mut slots = Vec::new();
-        if let Some(timer_wheel) = self.timer_wheel.lock().as_ref() {
-            timer_wheel.visit_occupied_slots(|_, slot| {
-                if slot.time_ms > 0 && slot.time_ms >= read_cursor {
-                    slots.push(slot);
-                }
-            });
-        }
+        let slot_entries: Vec<_> = self
+            .pending_slots()
+            .into_iter()
+            .flat_map(|(storage, slots)| {
+                slots
+                    .into_iter()
+                    .map(move |slot| Self::load_slot_entries(storage.get(), slot))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
 
         let mut backlog_metrics = TimerBacklogMetrics::new(self.timer_metrics.timer_dist_list());
-        for slot in slots {
-            let entries = match self.load_slot_entries(slot) {
+        for entries in slot_entries {
+            let entries = match entries {
                 Ok(entries) => entries,
                 Err(_error) => {
                     warn!(
@@ -1570,7 +2107,7 @@ impl TimerMessageStore {
     }
 
     pub(crate) fn is_storage_loaded(&self) -> bool {
-        self.timer_checkpoint.lock().is_some() && self.timer_log.lock().is_some() && self.timer_wheel.lock().is_some()
+        self.timer_checkpoint.lock().is_some() && self.timer_storage.lock().is_some()
     }
 
     pub(crate) fn is_current_delivery_epoch(&self, epoch: u64) -> bool {
@@ -1617,12 +2154,26 @@ impl TimerMessageStore {
             queue_offset = cq_unit.queue_offset + 1;
             batch.push(cq_unit);
         }
-        let Some(log_end) = self.timer_log_len() else {
+        let Some(storage) = self.timer_storage() else {
+            return 0;
+        };
+        let Some(log_end) = storage.log_end().ok().and_then(|end| i64::try_from(end).ok()) else {
             return 0;
         };
         let locators: Vec<_> = batch.iter().map(|unit| (unit.pos, unit.size)).collect();
         let frames = self.read_source_frames(&locators, self.message_store_config.timer_pipeline_queue_bytes);
-        let mut plan = TimerIndexPlan::new(log_end);
+        let mut plan = TimerIndexPlan::new(log_end, storage.layout());
+        // Recalls also reach the draining format, which may hold their targets.
+        let draining = self.draining_storage();
+        let mut draining_plan = match draining.as_deref() {
+            Some(draining) => {
+                let Some(end) = draining.storage.log_end().ok().and_then(|end| i64::try_from(end).ok()) else {
+                    return 0;
+                };
+                Some(TimerIndexPlan::new(end, draining.storage.layout()))
+            }
+            None => None,
+        };
         let mut owned_elsewhere = 0usize;
         let mut next_queue_offset = None;
 
@@ -1668,25 +2219,63 @@ impl TimerMessageStore {
             let is_delete = is_delete_timer_message(&message);
             let (slot_time_ms, magic) =
                 self.plan_timer_slot(deliver_time_ms, enqueue_reference_time_ms, dequeue_cursor, is_delete);
-            self.plan_timer_index(
+            let real_topic = message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC));
+            let topic_hash = real_topic.as_ref().map_or(0, |topic| java_topic_hash(topic.as_str()));
+            let generation = timer_generation(&message);
+            Self::plan_timer_index(
+                &storage,
                 &mut plan,
                 slot_time_ms,
                 magic,
-                timer_generation(&message),
+                generation,
+                enqueue_reference_time_ms,
                 &cq_unit,
-                IndexedTimerSource {
-                    real_topic: message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC)),
-                    deliver_time_ms,
-                    born_timestamp: message.born_timestamp(),
-                    is_delete,
-                },
+                topic_hash,
+                is_delete,
             );
+            if let (true, Some(draining), Some(draining_plan)) =
+                (is_delete, draining.as_deref(), draining_plan.as_mut())
+            {
+                // A slot the draining format has passed, or one later than any it holds, cannot
+                // hold the target.
+                if slot_time_ms >= draining.read_time_ms.load(Ordering::Acquire) && slot_time_ms <= draining.horizon_ms
+                {
+                    Self::plan_timer_index(
+                        &draining.storage,
+                        draining_plan,
+                        slot_time_ms,
+                        magic,
+                        generation,
+                        enqueue_reference_time_ms,
+                        &cq_unit,
+                        topic_hash,
+                        is_delete,
+                    );
+                }
+            }
+            plan.sources.push(IndexedTimerSource {
+                real_topic,
+                deliver_time_ms,
+                born_timestamp: message.born_timestamp(),
+                is_delete,
+            });
             next_queue_offset = Some(cq_unit.queue_offset + 1);
         }
 
+        // The draining format takes its recalls first: a failed commit of either keeps the cursor,
+        // and the batch is planned again, at worst repeating a tombstone there.
+        if let (Some(draining), Some(draining_plan)) = (draining.as_deref(), draining_plan.as_ref()) {
+            if let Err(_error) = Self::commit_timer_index_plan(&draining.storage, draining_plan) {
+                error!(
+                    source_present = true,
+                    "index a recall into the draining timer file format failed"
+                );
+                return 0;
+            }
+        }
         // Nothing of the batch is visible before this commit; a failed commit keeps the cursor so
         // the whole batch is planned again.
-        if let Err(_error) = self.commit_timer_index_plan(&plan) {
+        if let Err(_error) = Self::commit_timer_index_plan(&storage, &plan) {
             error!(
                 source_present = true,
                 "index a timer payload batch into the wheel failed"
@@ -1727,37 +2316,81 @@ impl TimerMessageStore {
         }
     }
 
+    /// Delivers due slots of the active format, then of the draining one with what is left of
+    /// `limit`.
     async fn dequeue_due_messages(&self, limit: usize, delivery_epoch: u64, visible_through_ms: i64) -> usize {
+        let Some(storage) = self.timer_storage() else {
+            return 0;
+        };
+        let mut delivered = self
+            .deliver_due_slots(&self.active_track(&storage), limit, delivery_epoch, visible_through_ms)
+            .await;
+        if let Some(draining) = self.draining_storage() {
+            let remaining = limit.saturating_sub(delivered);
+            if remaining > 0 {
+                delivered += self
+                    .deliver_due_slots(&draining.track(), remaining, delivery_epoch, visible_through_ms)
+                    .await;
+            }
+        }
+        delivered
+    }
+
+    async fn deliver_due_slots(
+        &self,
+        track: &DeliveryTrack<'_>,
+        limit: usize,
+        delivery_epoch: u64,
+        visible_through_ms: i64,
+    ) -> usize {
         let now_ms = self.clock.read().wall_time_ms();
         let current_tick_ms = self.floor_time_ms(now_ms);
-        let mut cursor = self.ensure_dequeue_cursor(current_tick_ms);
+        let mut cursor = self.ensure_read_cursor(track.read_time_ms, current_tick_ms);
         let drain_bound_ms = current_tick_ms.min(self.floor_time_ms(visible_through_ms));
         let mut remaining_budget = limit;
         let mut delivered = 0usize;
 
         while cursor < drain_bound_ms && remaining_budget > 0 {
-            if let Some(slot) = self.get_timer_wheel_slot(cursor).filter(|slot| slot.num > 0) {
-                let delivered_now = self.deliver_slot(cursor, slot, remaining_budget, delivery_epoch).await;
+            if let Some(slot) = track.storage.slot_with_records(cursor) {
+                let delivered_now = self
+                    .deliver_slot(track, cursor, slot, remaining_budget, delivery_epoch)
+                    .await;
                 delivered += delivered_now;
                 remaining_budget = remaining_budget.saturating_sub(delivered_now);
-                if self
-                    .get_timer_wheel_slot(cursor)
-                    .is_some_and(|remaining| remaining.num > 0)
-                {
-                    self.curr_read_time_ms.store(cursor, Ordering::Relaxed);
+                if track.storage.slot_with_records(cursor).is_some() {
+                    track.read_time_ms.store(cursor, Ordering::Relaxed);
                     break;
                 }
                 if remaining_budget == 0 {
                     cursor += self.precision_ms();
-                    self.curr_read_time_ms.store(cursor, Ordering::Relaxed);
+                    track.read_time_ms.store(cursor, Ordering::Relaxed);
                     break;
                 }
             }
             cursor += self.precision_ms();
-            self.curr_read_time_ms.store(cursor, Ordering::Relaxed);
+            track.read_time_ms.store(cursor, Ordering::Relaxed);
         }
 
         delivered
+    }
+
+    /// The active format's storage with its read cursor and slot drains.
+    fn active_track<'a>(&'a self, storage: &'a TimerStorage) -> DeliveryTrack<'a> {
+        DeliveryTrack {
+            storage,
+            read_time_ms: &self.curr_read_time_ms,
+            slot_drains: &self.slot_drains,
+            drain_root: self.message_store_config.store_path_root_dir.as_str(),
+        }
+    }
+
+    fn draining_storage(&self) -> Option<Arc<DrainingTimerStorage>> {
+        self.draining.lock().clone()
+    }
+
+    /// The format still delivering timers it indexed before `timerFileFormat` changed.
+    pub fn draining_file_format(&self) -> Option<TimerFileFormat> {
+        self.draining_storage().map(|draining| draining.format)
     }
 
     fn timer_queue_high_watermark(&self) -> Option<i64> {
@@ -1803,31 +2436,32 @@ impl TimerMessageStore {
         self.source_visible_through_ms.store(0, Ordering::Release);
     }
 
-    fn timer_log_len(&self) -> Option<i64> {
-        let length = self.timer_log.lock().as_ref()?.len().ok()?;
-        i64::try_from(length).ok()
-    }
-
-    /// Adds one source to `plan`, linked after the last record of its slot as the wheel will hold
-    /// it once the earlier records of the batch are committed.
+    /// Adds one source to `plan` for `storage`, linked after the last record of its slot as the
+    /// wheel will hold it once the earlier records of the batch are committed.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each argument is one field of the timer log record the source becomes"
+    )]
     fn plan_timer_index(
-        &self,
+        storage: &TimerStorage,
         plan: &mut TimerIndexPlan,
         slot_time_ms: i64,
         magic: i32,
         generation: u64,
+        write_time_ms: i64,
         cq_unit: &CqUnit,
-        source: IndexedTimerSource,
+        topic_hash: i32,
+        is_delete: bool,
     ) {
         let current_slot = plan
             .slots
             .get(&slot_time_ms)
             .copied()
-            .or_else(|| self.get_timer_wheel_slot(slot_time_ms));
-        let linked_slot = current_slot.filter(|slot| slot.num > 0);
-        let record_pos = plan.next_position();
-        plan.records.push((
-            TimerLogRecord {
+            .or_else(|| storage.get_slot(slot_time_ms));
+        let layout = plan.layout;
+        let linked_slot = current_slot.filter(|slot| layout.has_records(slot));
+        let record_pos = plan.push_record(TimerLogAppend {
+            record: TimerLogRecord {
                 deliver_time_ms: slot_time_ms,
                 commit_log_offset: cq_unit.pos,
                 size: cq_unit.size,
@@ -1836,52 +2470,52 @@ impl TimerMessageStore {
                 magic,
             },
             generation,
-        ));
+            write_time_ms,
+            topic_hash,
+        });
         plan.slots.insert(
             slot_time_ms,
             Slot::new_with_num_magic(
                 slot_time_ms,
                 linked_slot.map(|slot| slot.first_pos).unwrap_or(record_pos),
                 record_pos,
-                current_slot.map(|slot| slot.num + 1).unwrap_or(1),
+                layout.count_after(current_slot.map(|slot| slot.num), is_delete),
                 current_slot.map(|slot| slot.magic | magic).unwrap_or(magic),
             ),
         );
-        plan.sources.push(source);
     }
 
     /// Appends the planned records in one timer log write, then updates every touched slot.
-    fn commit_timer_index_plan(&self, plan: &TimerIndexPlan) -> std::io::Result<()> {
+    fn commit_timer_index_plan(storage: &TimerStorage, plan: &TimerIndexPlan) -> std::io::Result<()> {
         if plan.records.is_empty() {
             return Ok(());
         }
-        let positions = self
-            .timer_log
-            .lock()
-            .as_ref()
-            .ok_or_else(|| std::io::Error::other("timer log is not loaded"))?
-            .append_batch(&plan.records)?;
+        let positions = storage.append_records(&plan.records)?;
         // The records link to the positions the plan assigned. Records placed anywhere else
         // would break their slot chains, so the wheel is left untouched.
-        let placed_as_planned = positions.len() == plan.records.len()
-            && positions.iter().enumerate().all(|(index, position)| {
-                i64::try_from(*position).is_ok_and(|position| position == plan.position_of(index))
-            });
+        let placed_as_planned = positions.len() == plan.positions.len()
+            && positions
+                .iter()
+                .zip(&plan.positions)
+                .all(|(placed, planned)| i64::try_from(*placed).is_ok_and(|placed| placed == *planned));
         if !placed_as_planned {
             return Err(std::io::Error::other(
                 "timer log placed an index batch away from its planned positions",
             ));
         }
         let slots: Vec<_> = plan.slots.values().copied().collect();
-        self.timer_wheel
-            .lock()
-            .as_ref()
-            .ok_or_else(|| std::io::Error::other("timer wheel is not loaded"))?
-            .put_slots(&slots)
+        storage.put_slots(&slots)
     }
 
-    async fn deliver_slot(&self, slot_time_ms: i64, slot: Slot, limit: usize, delivery_epoch: u64) -> usize {
-        let mut active_drain = match self.take_or_build_slot_drain(slot) {
+    async fn deliver_slot(
+        &self,
+        track: &DeliveryTrack<'_>,
+        slot_time_ms: i64,
+        slot: Slot,
+        limit: usize,
+        delivery_epoch: u64,
+    ) -> usize {
+        let mut active_drain = match self.take_or_build_slot_drain(track, slot) {
             Ok(active_drain) => active_drain,
             Err(_error) => {
                 error!(source_present = true, "prepare a timer slot drain plan failed");
@@ -1892,141 +2526,31 @@ impl TimerMessageStore {
             Ok(entries) => entries,
             Err(_error) => {
                 error!(source_present = true, "read a timer slot continuation failed");
-                self.slot_drains.lock().insert(slot_time_ms, active_drain);
+                track.slot_drains.lock().insert(slot_time_ms, active_drain);
                 return 0;
             }
         };
 
-        let mut processed = 0usize;
-        for entry in &entries {
-            let Some(message) = self.look_store_message(entry.record.commit_log_offset, entry.record.size) else {
-                self.quarantine_source(entry.record.queue_offset, CorruptionReason::MissingPayload);
-                warn!("timer delivery is blocked by a missing persisted payload");
-                break;
-            };
-            if need_roll(entry.record.magic) {
-                let now_ms = self.floor_time_ms(self.clock.read().wall_time_ms());
-                if parse_deliver_time_ms(&message).is_some_and(|deliver_time_ms| deliver_time_ms > now_ms) {
-                    if !self.role_state.is_current_delivery_epoch(delivery_epoch) {
-                        warn!("reject a stale timer roll batch");
-                        break;
-                    }
-                    let rolled_topic =
-                        message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC));
-                    let Some(rolled_message) = self.convert_timer_message(message, true) else {
-                        self.quarantine_source(entry.record.queue_offset, CorruptionReason::UnsupportedRecord);
-                        break;
-                    };
-                    let put_result = self.put_store_message(rolled_message).await;
-                    if !self.accept_delivery_result(entry.record.queue_offset, "roll", &put_result) {
-                        break;
-                    }
-                    if let Some(real_topic) = rolled_topic {
-                        self.timer_metrics.add_timing_count(&real_topic, -1);
-                        self.otel_timer_metrics.record_dequeue_total(real_topic.as_str());
-                    }
-                    self.dequeue_tps_counter.record(1, current_millis() as i64);
-                    processed += 1;
-                    continue;
-                }
-            }
-            if is_delete_timer_message(&message) {
-                processed += 1;
-                continue;
-            }
-            if delete_identities_for_message(&message)
-                .iter()
-                .any(|identity| active_drain.delete_keys.contains(identity))
-            {
-                if let Some(real_topic) =
-                    message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
-                {
-                    self.timer_metrics.add_timing_count(&real_topic, -1);
-                    self.otel_timer_metrics.record_dequeue_total(real_topic.as_str());
-                }
-                processed += 1;
-                continue;
-            }
-
-            let Some(original_deliver_ms) = original_deliver_time_ms(&message, self.precision_ms()) else {
-                self.quarantine_source(entry.record.queue_offset, CorruptionReason::UnsupportedRecord);
-                warn!("delay delivery blocked because the original timer deadline is invalid");
-                break;
-            };
-            let now_ms = self.clock.read().wall_time_ms();
-            if !is_due_not_before(original_deliver_ms, slot_time_ms, self.floor_time_ms(now_ms), now_ms) {
-                break;
-            }
-            let generation = timer_generation(&message);
-            let Some(mut deliver_message) = self.convert_timer_message(message, false) else {
-                self.quarantine_source(entry.record.queue_offset, CorruptionReason::UnsupportedRecord);
-                break;
-            };
-            if deliver_message
-                .property(&CheetahString::from_static_str(
-                    MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
-                ))
-                .is_none()
-            {
-                // V1 records predate admission-time tokens. The fallback is deterministic for
-                // replay; new records always persist the token before entering the timer topic.
-                MessageAccessor::put_property(
-                    &mut deliver_message,
-                    CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN),
-                    stable_delivery_token(entry.record.queue_offset, generation),
-                );
-            }
-            deliver_message.properties_string =
-                MessageDecoder::message_properties_to_string(deliver_message.get_properties());
-            let delivered_topic = deliver_message.get_topic().clone();
-
-            // Recheck both time and ownership immediately before the externally visible write.
-            // A backward wall-clock jump may delay delivery, but it must never make it early.
-            let final_now_ms = self.clock.read().wall_time_ms();
-            if !is_due_not_before(
-                original_deliver_ms,
-                slot_time_ms,
-                self.floor_time_ms(final_now_ms),
-                final_now_ms,
-            ) {
-                break;
-            }
-            if !self.role_state.is_current_delivery_epoch(delivery_epoch) {
-                warn!("reject a stale timer delivery batch");
-                break;
-            }
-            let put_result = self.put_store_message(deliver_message).await;
-            if !self.accept_delivery_result(entry.record.queue_offset, "deliver", &put_result) {
-                break;
-            }
-            self.timer_metrics.add_timing_count(&delivered_topic, -1);
-            self.otel_timer_metrics.record_dequeue_total(delivered_topic.as_str());
-            self.dequeue_tps_counter.record(1, current_millis() as i64);
-            processed += 1;
-        }
+        let processed = self
+            .drain_slot_batch(&entries, &active_drain.delete_keys, slot_time_ms, delivery_epoch)
+            .await;
 
         active_drain.plan.advance(&entries[..processed]);
         let remaining_slot = match active_drain.plan.remaining_slot() {
             Ok(remaining_slot) => remaining_slot,
             Err(_error) => {
                 error!(source_present = true, "read a remaining timer slot plan failed");
-                self.slot_drains.lock().insert(slot_time_ms, active_drain);
+                track.slot_drains.lock().insert(slot_time_ms, active_drain);
                 return 0;
             }
         };
         let rewrite_result = match remaining_slot {
-            Some(remaining) => self.put_timer_wheel_slot(
-                remaining.time_ms,
-                remaining.first_pos,
-                remaining.last_pos,
-                remaining.num,
-                remaining.magic,
-            ),
-            None => self.put_timer_wheel_slot(slot_time_ms, 0, 0, 0, 0),
+            Some(remaining) => track.storage.put_slot(remaining),
+            None => track.storage.clear_slot(slot_time_ms),
         };
         if let Err(_error) = rewrite_result {
             error!(source_present = true, "rewrite a timer slot continuation failed");
-            self.slot_drains.lock().insert(slot_time_ms, active_drain);
+            track.slot_drains.lock().insert(slot_time_ms, active_drain);
             return 0;
         }
         if active_drain.plan.remaining() == 0 {
@@ -2034,9 +2558,325 @@ impl TimerMessageStore {
                 warn!(source_present = true, "remove a completed timer slot drain plan failed");
             }
         } else {
-            self.slot_drains.lock().insert(slot_time_ms, active_drain);
+            track.slot_drains.lock().insert(slot_time_ms, active_drain);
         }
         processed
+    }
+
+    /// Delivers a drain batch and returns how many leading entries are done.
+    ///
+    /// Entries are read and converted in chunks of `PREPARE_CHUNK_ENTRIES`, up to
+    /// `timerGetMessageThreadNum` chunks at a time on the storage I/O executor, as Java spreads
+    /// this work over its get-message threads. Chunks come back in slot order, and the writes of
+    /// one chunk start while later chunks are still being prepared. Up to
+    /// `SLOT_DELIVERY_PIPELINE_DEPTH` writes stay in flight so the CommitLog can merge them.
+    ///
+    /// Planning stops at the first entry that cannot go now (see `plan_prepared_chunk`). Write
+    /// outcomes are taken in slot order: the first rejected write ends the prefix and no further
+    /// write starts. Writes already in flight behind it may still land; their entries are
+    /// delivered again with the same token when the slot resumes, which at-least-once delivery
+    /// allows. Every chunk is awaited or dropped before this returns; a dropped chunk only reads.
+    async fn drain_slot_batch(
+        &self,
+        entries: &[TimerLogEntry],
+        delete_keys: &Arc<HashSet<TimerDeleteIdentity>>,
+        slot_time_ms: i64,
+        delivery_epoch: u64,
+    ) -> usize {
+        let now_ms = self.clock.read().wall_time_ms();
+        let clock = PrepareClock {
+            now_ms,
+            floor_now_ms: self.floor_time_ms(now_ms),
+            precision_ms: self.precision_ms(),
+        };
+        let offload = entries.len() > PREPARE_CHUNK_ENTRIES;
+        let storage_io = self.runtime_scope.storage_io();
+        let prepare_threads = self.message_store_config.timer_get_message_thread_num.max(1);
+        let mut chunks = entries.chunks(PREPARE_CHUNK_ENTRIES);
+        let mut preparing = FuturesOrdered::new();
+
+        let mut actions = VecDeque::new();
+        let mut in_flight = FuturesOrdered::new();
+        let mut planning = true;
+        let mut rejected = false;
+        let mut processed = 0usize;
+        loop {
+            while !rejected && in_flight.len() < SLOT_DELIVERY_PIPELINE_DEPTH {
+                let Some(action) = actions.pop_front() else {
+                    break;
+                };
+                in_flight.push_back(self.run_slot_entry(action, slot_time_ms, delivery_epoch));
+            }
+            if planning && !rejected {
+                while preparing.len() < prepare_threads {
+                    let Some(chunk) = chunks.next() else {
+                        break;
+                    };
+                    preparing.push_back(self.prepare_chunk(
+                        &storage_io,
+                        offload,
+                        chunk,
+                        delete_keys,
+                        slot_time_ms,
+                        clock,
+                    ));
+                }
+                planning = !preparing.is_empty();
+            }
+            let planning_open = planning && !rejected;
+            if in_flight.is_empty() && !planning_open {
+                break;
+            }
+            tokio::select! {
+                biased;
+                Some(outcome) = in_flight.next(), if !in_flight.is_empty() => {
+                    if rejected {
+                        continue;
+                    }
+                    let Some(done) = outcome else {
+                        rejected = true;
+                        continue;
+                    };
+                    if let Some(topic) = done.counted_topic {
+                        self.timer_metrics.add_timing_count(&topic, -1);
+                        self.otel_timer_metrics.record_dequeue_total(topic.as_str());
+                    }
+                    if done.dequeued {
+                        self.dequeue_tps_counter.record(1, current_millis() as i64);
+                    }
+                    processed += 1;
+                }
+                Some(chunk) = preparing.next(), if planning_open => {
+                    planning = self.plan_prepared_chunk(chunk, &mut actions, delivery_epoch);
+                }
+            }
+        }
+        processed
+    }
+
+    /// Reads and converts one chunk of a drain batch, on the storage I/O executor when
+    /// `offload` is set. Preparing only reads, so a chunk the executor refuses is prepared here.
+    async fn prepare_chunk(
+        &self,
+        storage_io: &BlockingExecutor,
+        offload: bool,
+        chunk: &[TimerLogEntry],
+        delete_keys: &Arc<HashSet<TimerDeleteIdentity>>,
+        slot_time_ms: i64,
+        clock: PrepareClock,
+    ) -> Vec<PreparedSlotEntry> {
+        if offload {
+            let entries = chunk.to_vec();
+            let context = self.store_context.clone();
+            let shared_delete_keys = Arc::clone(delete_keys);
+            let prepared = storage_io
+                .spawn_io("timer-slot-prepare", move || {
+                    entries
+                        .iter()
+                        .map(|entry| {
+                            Self::prepare_slot_entry(context.as_ref(), entry, &shared_delete_keys, slot_time_ms, clock)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            if let Ok(prepared) = prepared {
+                return prepared;
+            }
+        }
+        chunk
+            .iter()
+            .map(|entry| Self::prepare_slot_entry(self.store_context.as_ref(), entry, delete_keys, slot_time_ms, clock))
+            .collect()
+    }
+
+    /// Turns a prepared chunk into actions, in slot order, and returns whether planning goes on.
+    /// It stops at the first entry that cannot go now: a missing or unsupported payload
+    /// (quarantined here), a message that is not due yet, or a roll after the delivery epoch
+    /// moved on.
+    fn plan_prepared_chunk(
+        &self,
+        chunk: Vec<PreparedSlotEntry>,
+        actions: &mut VecDeque<SlotEntryAction>,
+        delivery_epoch: u64,
+    ) -> bool {
+        for entry in chunk {
+            match entry {
+                PreparedSlotEntry::MissingPayload { queue_offset } => {
+                    self.quarantine_source(queue_offset, CorruptionReason::MissingPayload);
+                    warn!("timer delivery is blocked by a missing persisted payload");
+                    return false;
+                }
+                PreparedSlotEntry::Roll {
+                    source_offset,
+                    message,
+                    real_topic,
+                } => {
+                    if !self.role_state.is_current_delivery_epoch(delivery_epoch) {
+                        warn!("reject a stale timer roll batch");
+                        return false;
+                    }
+                    let Some(message) = message else {
+                        self.quarantine_source(source_offset, CorruptionReason::UnsupportedRecord);
+                        return false;
+                    };
+                    actions.push_back(SlotEntryAction::Roll {
+                        source_offset,
+                        message,
+                        real_topic,
+                    });
+                }
+                PreparedSlotEntry::Skip { cancelled_topic } => {
+                    actions.push_back(SlotEntryAction::Skip { cancelled_topic });
+                }
+                PreparedSlotEntry::InvalidDeadline { source_offset } => {
+                    self.quarantine_source(source_offset, CorruptionReason::UnsupportedRecord);
+                    warn!("delay delivery blocked because the original timer deadline is invalid");
+                    return false;
+                }
+                PreparedSlotEntry::NotDue => return false,
+                PreparedSlotEntry::Unsupported { source_offset } => {
+                    self.quarantine_source(source_offset, CorruptionReason::UnsupportedRecord);
+                    return false;
+                }
+                PreparedSlotEntry::Deliver {
+                    source_offset,
+                    message,
+                    original_deliver_ms,
+                } => actions.push_back(SlotEntryAction::Deliver {
+                    source_offset,
+                    message,
+                    original_deliver_ms,
+                }),
+            }
+        }
+        true
+    }
+
+    /// Reads one drain entry's payload and works out what it needs, without side effects.
+    fn prepare_slot_entry(
+        context: Option<&TimerStoreContext>,
+        entry: &TimerLogEntry,
+        delete_keys: &HashSet<TimerDeleteIdentity>,
+        slot_time_ms: i64,
+        clock: PrepareClock,
+    ) -> PreparedSlotEntry {
+        let Some(message) = context.and_then(|context| {
+            context.look_message_by_offset_with_size(entry.record.commit_log_offset, entry.record.size)
+        }) else {
+            return PreparedSlotEntry::MissingPayload {
+                queue_offset: entry.record.queue_offset,
+            };
+        };
+        // A Java timer log unit does not keep the Timer CQ offset; the source message does.
+        let source_offset = if entry.record.queue_offset >= 0 {
+            entry.record.queue_offset
+        } else {
+            message.queue_offset()
+        };
+        if need_roll(entry.record.magic)
+            && parse_deliver_time_ms(&message).is_some_and(|deliver_time_ms| deliver_time_ms > clock.floor_now_ms)
+        {
+            let real_topic = message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC));
+            return PreparedSlotEntry::Roll {
+                source_offset,
+                message: Self::convert_timer_message(message, true),
+                real_topic,
+            };
+        }
+        if is_delete_timer_message(&message) {
+            return PreparedSlotEntry::Skip { cancelled_topic: None };
+        }
+        if delete_identities_for_message(&message)
+            .iter()
+            .any(|identity| delete_keys.contains(identity))
+        {
+            return PreparedSlotEntry::Skip {
+                cancelled_topic: message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC)),
+            };
+        }
+
+        let Some(original_deliver_ms) = original_deliver_time_ms(&message, clock.precision_ms) else {
+            return PreparedSlotEntry::InvalidDeadline { source_offset };
+        };
+        if !is_due_not_before(original_deliver_ms, slot_time_ms, clock.floor_now_ms, clock.now_ms) {
+            return PreparedSlotEntry::NotDue;
+        }
+        let generation = timer_generation(&message);
+        let Some(mut message) = Self::convert_timer_message(message, false) else {
+            return PreparedSlotEntry::Unsupported { source_offset };
+        };
+        let properties = message.message_ext_inner.message.properties_mut().as_map_mut();
+        if !properties.contains_key(MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN) {
+            // V1 records predate admission-time tokens. The fallback is deterministic for
+            // replay; new records always persist the token before entering the timer topic.
+            properties.insert(
+                CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN),
+                stable_delivery_token(source_offset, generation),
+            );
+            message.properties_string = MessageDecoder::message_properties_to_string(message.get_properties());
+        }
+        PreparedSlotEntry::Deliver {
+            source_offset,
+            message,
+            original_deliver_ms,
+        }
+    }
+
+    /// Performs one planned entry and returns what to count for it, or `None` when the entry
+    /// must stay in the slot.
+    async fn run_slot_entry(
+        &self,
+        action: SlotEntryAction,
+        slot_time_ms: i64,
+        delivery_epoch: u64,
+    ) -> Option<SlotEntryDone> {
+        match action {
+            SlotEntryAction::Skip { cancelled_topic } => Some(SlotEntryDone {
+                counted_topic: cancelled_topic,
+                dequeued: false,
+            }),
+            SlotEntryAction::Roll {
+                source_offset,
+                message,
+                real_topic,
+            } => {
+                let put_result = self.put_store_message(message).await;
+                self.accept_delivery_result(source_offset, "roll", &put_result)
+                    .then_some(SlotEntryDone {
+                        counted_topic: real_topic,
+                        dequeued: true,
+                    })
+            }
+            SlotEntryAction::Deliver {
+                source_offset,
+                message,
+                original_deliver_ms,
+            } => {
+                // Recheck both time and ownership immediately before the externally visible
+                // write. A backward wall-clock jump may delay delivery, but it must never make it
+                // early.
+                let final_now_ms = self.clock.read().wall_time_ms();
+                if !is_due_not_before(
+                    original_deliver_ms,
+                    slot_time_ms,
+                    self.floor_time_ms(final_now_ms),
+                    final_now_ms,
+                ) {
+                    return None;
+                }
+                if !self.role_state.is_current_delivery_epoch(delivery_epoch) {
+                    warn!("reject a stale timer delivery batch");
+                    return None;
+                }
+                let delivered_topic = message.get_topic().clone();
+                let put_result = self.put_store_message(message).await;
+                self.accept_delivery_result(source_offset, "deliver", &put_result)
+                    .then_some(SlotEntryDone {
+                        counted_topic: Some(delivered_topic),
+                        dequeued: true,
+                    })
+            }
+        }
     }
 
     fn accept_delivery_result(&self, source_offset: i64, _operation: &'static str, result: &PutMessageResult) -> bool {
@@ -2056,9 +2896,9 @@ impl TimerMessageStore {
         }
     }
 
-    fn take_or_build_slot_drain(&self, slot: Slot) -> std::io::Result<ActiveSlotDrain> {
-        let Some(active) = self.slot_drains.lock().remove(&slot.time_ms) else {
-            return self.build_slot_drain(slot, 0);
+    fn take_or_build_slot_drain(&self, track: &DeliveryTrack<'_>, slot: Slot) -> std::io::Result<ActiveSlotDrain> {
+        let Some(active) = track.slot_drains.lock().remove(&slot.time_ms) else {
+            return self.build_slot_drain(track, slot, 0);
         };
         if active.plan.matches_slot(slot)? {
             return Ok(active);
@@ -2069,20 +2909,20 @@ impl TimerMessageStore {
         let first_position = active.plan.first_position()?;
         active.plan.remove()?;
         if processed > 0 {
-            match self.build_slot_drain(slot, processed) {
+            match self.build_slot_drain(track, slot, processed) {
                 Ok(rebuilt) if rebuilt.plan.first_position()? == first_position => return Ok(rebuilt),
                 Ok(rebuilt) => rebuilt.plan.remove()?,
                 Err(_error) => {}
             }
             warn!("a timer slot no longer extends its drain plan; rebuilding it from its remaining entries");
         }
-        self.build_slot_drain(slot, 0)
+        self.build_slot_drain(track, slot, 0)
     }
 
     /// Rebuilds the drain plan of a slot committed in the middle of its drain. It runs during
     /// load, before any new record can reach the slot, so the remaining wheel slot is still the
     /// committed one.
-    fn restore_partial_slot_drain(&self, committed: CommittedDrain) -> std::io::Result<()> {
+    fn restore_partial_slot_drain(&self, track: &DeliveryTrack<'_>, committed: CommittedDrain) -> std::io::Result<()> {
         let (generation, page, record) = committed.cursor;
         let processed = (page as usize)
             .checked_mul(DEFAULT_IN_MEMORY_DRAIN_ENTRIES)
@@ -2091,9 +2931,10 @@ impl TimerMessageStore {
         if processed == 0 {
             return Ok(());
         }
-        let slot = self
-            .get_timer_wheel_slot(committed.slot_time_ms)
-            .filter(|slot| slot.num > 0 && slot_drain_generation(*slot) == generation)
+        let slot = track
+            .storage
+            .slot_with_records(committed.slot_time_ms)
+            .filter(|slot| slot_drain_generation(*slot) == generation)
             .ok_or_else(|| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -2103,14 +2944,19 @@ impl TimerMessageStore {
                     ),
                 )
             })?;
-        let drain = self.build_slot_drain(slot, processed)?;
-        self.slot_drains.lock().insert(committed.slot_time_ms, drain);
+        let drain = self.build_slot_drain(track, slot, processed)?;
+        track.slot_drains.lock().insert(committed.slot_time_ms, drain);
         Ok(())
     }
 
     /// Builds the drain plan of `slot` when `processed` entries in front of it were drained
     /// already. The plan covers those entries too, for their tombstones, and starts after them.
-    fn build_slot_drain(&self, slot: Slot, processed: usize) -> std::io::Result<ActiveSlotDrain> {
+    fn build_slot_drain(
+        &self,
+        track: &DeliveryTrack<'_>,
+        slot: Slot,
+        processed: usize,
+    ) -> std::io::Result<ActiveSlotDrain> {
         let total = usize::try_from(slot.num.max(0))
             .ok()
             .and_then(|remaining| remaining.checked_add(processed))
@@ -2120,29 +2966,19 @@ impl TimerMessageStore {
         // remaining wheel state.
         let chain = Slot::new_with_num_magic(slot.time_ms, slot.first_pos, slot.last_pos, total, slot.magic);
         let mut builder = SlotDrainPlanBuilder::new(
-            self.message_store_config.store_path_root_dir.as_str(),
+            track.drain_root,
             chain,
             DEFAULT_IN_MEMORY_DRAIN_ENTRIES,
             Arc::clone(&self.storage_metrics),
         )?;
+        let storage = track.storage;
         let mut delete_keys = HashSet::new();
-        let mut current_pos = chain.last_pos;
-        for _ in 0..chain.num {
-            if current_pos < 0 {
-                break;
-            }
-            let (record, generation) = self
-                .timer_log
-                .lock()
-                .as_ref()
-                .ok_or_else(|| std::io::Error::other("timer log is not loaded"))?
-                .read_record(current_pos as u64)?;
-            let entry = TimerLogEntry {
-                position: current_pos,
+        let processed = storage.walk_slot(slot, processed, |position, record, generation| {
+            builder.push_reverse(TimerLogEntry {
+                position,
                 record,
                 generation,
-            };
-            builder.push_reverse(entry)?;
+            })?;
             if record.magic & MAGIC_DELETE != 0 {
                 let message = self
                     .look_store_message(record.commit_log_offset, record.size)
@@ -2151,7 +2987,7 @@ impl TimerMessageStore {
                             std::io::ErrorKind::NotFound,
                             format!(
                                 "recall scan cannot read commitlog {}:{} at timer log {}",
-                                record.commit_log_offset, record.size, current_pos
+                                record.commit_log_offset, record.size, position
                             ),
                         )
                     })?;
@@ -2159,50 +2995,52 @@ impl TimerMessageStore {
                     delete_keys.insert(identity);
                 }
             }
-            current_pos = record.prev_pos;
-        }
+            Ok(())
+        })?;
         let mut plan = builder.finish()?;
-        if plan.remaining() != chain.num as usize {
-            let declared = chain.num;
-            let found = plan.remaining();
-            plan.remove()?;
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "timer slot {} declares {declared} records but its chain contains {found}",
-                    slot.time_ms
-                ),
-            ));
+        if let Some(declared) = storage.exact_chain_len(slot, processed) {
+            if plan.remaining() != declared {
+                let found = plan.remaining();
+                plan.remove()?;
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "timer slot {} declares {declared} records but its chain contains {found}",
+                        slot.time_ms
+                    ),
+                ));
+            }
         }
         plan.skip(processed)?;
-        Ok(ActiveSlotDrain { plan, delete_keys })
+        Ok(ActiveSlotDrain {
+            plan,
+            delete_keys: Arc::new(delete_keys),
+        })
     }
 
-    fn load_slot_entries(&self, slot: Slot) -> std::io::Result<Vec<TimerLogEntry>> {
+    /// Pending entries of `slot` in `storage`, oldest first.
+    fn load_slot_entries(storage: &TimerStorage, slot: Slot) -> std::io::Result<Vec<TimerLogEntry>> {
         let mut entries = Vec::with_capacity(slot.num.max(0) as usize);
-        let mut current_pos = slot.last_pos;
-        for _ in 0..slot.num.max(0) {
-            if current_pos < 0 {
-                break;
-            }
-            let (record, generation) = self
-                .timer_log
-                .lock()
-                .as_ref()
-                .ok_or_else(|| std::io::Error::other("timer log is not loaded"))?
-                .read_record(current_pos as u64)?;
+        let processed = storage.walk_slot(slot, 0, |position, record, generation| {
             entries.push(TimerLogEntry {
-                position: current_pos,
+                position,
                 record,
                 generation,
             });
-            current_pos = record.prev_pos;
-        }
+            Ok(())
+        })?;
         entries.reverse();
+        entries.drain(..processed.min(entries.len()));
         Ok(entries)
     }
 
-    fn convert_timer_message(&self, message: MessageExt, need_roll: bool) -> Option<MessageExtBrokerInner> {
+    /// Builds the write for one slot entry: the timer message again for its next round when
+    /// `need_roll`, otherwise the original message for its real topic.
+    ///
+    /// Properties are edited in the map and encoded once at the end. The property setters of
+    /// `MessageExtBrokerInner` re-encode the whole properties string on every call, which made
+    /// this conversion the largest per-message cost of a slot drain.
+    fn convert_timer_message(message: MessageExt, need_roll: bool) -> Option<MessageExtBrokerInner> {
         let mut inner = MessageExtBrokerInner::default();
         let sys_flag = message.sys_flag();
         let born_timestamp = message.born_timestamp();
@@ -2212,38 +3050,36 @@ impl TimerMessageStore {
         let store_timestamp = message.store_timestamp();
         let timer_topic = message.topic().clone();
         let timer_queue_id = message.queue_id();
-        let message_inner = message.message;
-        let message_properties = message_inner.properties().as_map().clone();
+        let mut message_inner = message.message;
+        let mut properties = std::mem::take(message_inner.properties_mut().as_map_mut());
 
         if let Some(body) = message_inner.get_body() {
             inner.set_body(body.clone());
         }
         inner.set_flag(message_inner.flag());
-        MessageAccessor::set_properties(&mut inner, message_properties);
+        // A delivered message drops these again below; only a roll carries them on.
         if store_timestamp > 0 {
-            MessageAccessor::put_property(
-                &mut inner,
+            properties.insert(
                 CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ENQUEUE_MS),
                 CheetahString::from_string(store_timestamp.to_string()),
             );
         }
-        MessageAccessor::put_property(
-            &mut inner,
+        properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DEQUEUE_MS),
             CheetahString::from_string(current_millis().to_string()),
         );
         if need_roll {
-            let next_roll_times = inner
-                .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ROLL_TIMES))
+            let next_roll_times = properties
+                .get(MessageConst::PROPERTY_TIMER_ROLL_TIMES)
                 .and_then(|times| times.parse::<i32>().ok())
                 .unwrap_or_default()
                 + 1;
-            MessageAccessor::put_property(
-                &mut inner,
+            properties.insert(
                 CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ROLL_TIMES),
                 CheetahString::from_string(next_roll_times.to_string()),
             );
         }
+        inner.message_ext_inner.set_properties(properties);
         let topic_filter_type = message_single::parse_topic_filter_type(inner.sys_flag());
         inner.tags_code = MessageExtBrokerInner::tags_string2tags_code(
             &topic_filter_type,
@@ -2277,9 +3113,10 @@ impl TimerMessageStore {
                     }
                 }
             }
-            MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_REAL_TOPIC);
-            MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_REAL_QUEUE_ID);
+            let properties = inner.message_ext_inner.message.properties_mut().as_map_mut();
             for property in [
+                MessageConst::PROPERTY_REAL_TOPIC,
+                MessageConst::PROPERTY_REAL_QUEUE_ID,
                 MessageConst::PROPERTY_TIMER_OUT_MS,
                 MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS,
                 MessageConst::PROPERTY_TIMER_DELAY_SEC,
@@ -2295,7 +3132,7 @@ impl TimerMessageStore {
                 MessageConst::PROPERTY_TIMER_FORMAT_VERSION,
                 MessageConst::PROPERTY_TIMER_POLICY_FINGERPRINT,
             ] {
-                MessageAccessor::clear_property(&mut inner, property);
+                properties.remove(property);
             }
         }
         inner.properties_string = MessageDecoder::message_properties_to_string(inner.get_properties());
@@ -2303,22 +3140,23 @@ impl TimerMessageStore {
     }
 
     fn ensure_dequeue_cursor(&self, fallback_time_ms: i64) -> i64 {
-        let current = self.curr_read_time_ms.load(Ordering::Relaxed);
+        self.ensure_read_cursor(&self.curr_read_time_ms, fallback_time_ms)
+    }
+
+    fn ensure_read_cursor(&self, read_time_ms: &AtomicI64, fallback_time_ms: i64) -> i64 {
+        let current = read_time_ms.load(Ordering::Relaxed);
         let aligned = self.floor_time_ms(fallback_time_ms);
         let max_allowed_cursor = aligned.saturating_add(self.precision_ms() * MAX_FUTURE_CURSOR_SKEW_SLOTS);
         if current > max_allowed_cursor {
             warn!("rewind the timer read cursor because it exceeds the allowed clock skew");
-            self.curr_read_time_ms.store(aligned, Ordering::Relaxed);
+            read_time_ms.store(aligned, Ordering::Relaxed);
             return aligned;
         }
         if current > 0 {
             return self.floor_time_ms(current);
         }
 
-        match self
-            .curr_read_time_ms
-            .compare_exchange(0, aligned, Ordering::AcqRel, Ordering::Relaxed)
-        {
+        match read_time_ms.compare_exchange(0, aligned, Ordering::AcqRel, Ordering::Relaxed) {
             Ok(_) => aligned,
             Err(existing) if existing > 0 => self.floor_time_ms(existing),
             Err(_) => aligned,
@@ -2399,6 +3237,68 @@ impl TimerMessageStore {
     fn dequeue_batch_limit(&self) -> usize {
         self.message_store_config.timer_due_batch_messages.max(1)
     }
+}
+
+/// The oldest position a pending timer of `track` can still be read from, or `None` when none
+/// is pending. It covers the first record of each slot holding records from the read cursor on,
+/// the oldest entry of each slot drain, and the chain of the read slot, whose processed entries
+/// a restart walks again for their tombstones.
+fn oldest_live_position(track: &DeliveryTrack<'_>) -> std::io::Result<Option<i64>> {
+    let read_time_ms = track.read_time_ms.load(Ordering::Acquire);
+    let layout = track.storage.layout();
+    let mut oldest = i64::MAX;
+    track.storage.visit_occupied_slots(|slot| {
+        if slot.time_ms >= read_time_ms && layout.has_records(&slot) {
+            oldest = oldest.min(slot.first_pos);
+        }
+    });
+    for drain in track.slot_drains.lock().values() {
+        if let Some(position) = drain.plan.first_position()? {
+            oldest = oldest.min(position);
+        }
+    }
+    if let Some(slot) = track.storage.slot_with_records(read_time_ms) {
+        track.storage.walk_slot(slot, 0, |position, _, _| {
+            oldest = oldest.min(position);
+            Ok(())
+        })?;
+    }
+    Ok((oldest != i64::MAX).then_some(oldest))
+}
+
+/// Whether a checkpoint can describe `slot_drains`: at most one, at the read slot.
+fn slot_drains_fit(slot_drains: &Mutex<HashMap<i64, ActiveSlotDrain>>, read_slot_time_ms: i64) -> bool {
+    let slot_drains = slot_drains.lock();
+    match slot_drains.len() {
+        0 => true,
+        1 => slot_drains.contains_key(&read_slot_time_ms),
+        _ => false,
+    }
+}
+
+/// Whether the Rust V2 timer log holds records, or is migrating into V2. V2 creates its
+/// directories on its first load, so only records show that V2 timers may still be pending.
+fn rust_v2_timer_records_present(root_dir: &str) -> std::io::Result<bool> {
+    let timer_log_dir = PathBuf::from(get_timer_log_path(root_dir));
+    if timer_log_dir.join("v2.migrating").exists() {
+        return Ok(true);
+    }
+    let entries = match std::fs::read_dir(timer_log_dir.join("v2").join("log")) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let is_segment = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.len() == 20 && name.bytes().all(|byte| byte.is_ascii_digit()));
+        if is_segment && entry.file_type()?.is_file() && entry.metadata()?.len() > 0 {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 pub fn build_delete_key(real_topic: &str, unique_key: &str) -> CheetahString {
@@ -2547,6 +3447,7 @@ mod tests {
     use std::fs::OpenOptions;
     use std::path::Path;
     use std::path::PathBuf;
+    use std::sync::atomic::AtomicBool;
     use std::sync::atomic::AtomicI64;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
@@ -2580,6 +3481,7 @@ mod tests {
     use super::MessageStoreConfig;
     use super::PersistenceStage;
     use super::PutMessageStatus;
+    use super::Slot;
     use super::TimerCheckpoint;
     use super::TimerCheckpointSnapshot;
     use super::TimerClock;
@@ -2595,7 +3497,9 @@ mod tests {
     use super::TIMER_TOPIC;
     use super::TIMER_WHEEL_TTL_DAY;
     use crate::base::backend_ops::BackendOps;
+    use crate::base::message_result::PutMessageResult;
     use crate::base::message_store_reader::MessageStoreReader;
+    use crate::hook::put_message_hook::PutMessageHook;
     use crate::message_store::local_file_message_store::LocalFileMessageStore;
     struct ManualTimerClock {
         wall_time_ms: AtomicI64,
@@ -2666,6 +3570,14 @@ mod tests {
             config,
             crate::runtime::test_service_context("timer-message-store-test"),
         )
+    }
+
+    fn occupied_slots(timer_message_store: &TimerMessageStore) -> Vec<Slot> {
+        let mut slots = Vec::new();
+        if let Some(storage) = timer_message_store.timer_storage() {
+            storage.visit_occupied_slots(|slot| slots.push(slot));
+        }
+        slots
     }
 
     fn config_with_root_and_limits(
@@ -3043,7 +3955,7 @@ mod tests {
         let reloaded_store = standalone_timer_store(config);
         assert!(reloaded_store.load());
         assert_eq!(
-            reloaded_store.timer_log.lock().as_ref().unwrap().len().unwrap(),
+            reloaded_store.timer_storage().unwrap().log_end().unwrap(),
             (TimerLogRecord::SIZE * 2) as u64
         );
         assert_eq!(reloaded_store.get_timer_wheel_slot(valid_time_ms).unwrap().num, 2);
@@ -4068,7 +4980,8 @@ mod tests {
             (other_slot.num, other_slot.first_pos, other_slot.last_pos),
             (1, record_size, record_size)
         );
-        let hot_chain = timer_message_store.load_slot_entries(hot_slot).unwrap();
+        let hot_chain =
+            TimerMessageStore::load_slot_entries(&timer_message_store.timer_storage().unwrap(), hot_slot).unwrap();
         assert_eq!(
             hot_chain.iter().map(|entry| entry.position).collect::<Vec<_>>(),
             vec![0, 2 * record_size, 3 * record_size]
@@ -4107,12 +5020,7 @@ mod tests {
 
         assert_eq!(first_delivery_tick, 1);
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
-        let remaining_timer_messages = timer_message_store
-            .timer_wheel
-            .lock()
-            .as_ref()
-            .map(TimerWheel::slots_snapshot)
-            .unwrap_or_default()
+        let remaining_timer_messages = occupied_slots(&timer_message_store)
             .into_iter()
             .map(|slot| slot.num.max(0))
             .sum::<i32>();
@@ -4147,12 +5055,7 @@ mod tests {
         assert_eq!(timer_message_store.process_once().await, 1);
 
         let original_slot_time = timer_message_store.ceil_time_ms(deliver_ms as i64);
-        let active_slots = timer_message_store
-            .timer_wheel
-            .lock()
-            .as_ref()
-            .map(TimerWheel::slots_snapshot)
-            .unwrap_or_default()
+        let active_slots = occupied_slots(&timer_message_store)
             .into_iter()
             .filter(|slot| slot.num > 0)
             .collect::<Vec<_>>();
@@ -4160,7 +5063,8 @@ mod tests {
 
         let slot = active_slots[0];
         let rolled_slot_time = slot.time_ms;
-        let entries = timer_message_store.load_slot_entries(slot).unwrap();
+        let entries =
+            TimerMessageStore::load_slot_entries(&timer_message_store.timer_storage().unwrap(), slot).unwrap();
         let now_after_process = timer_message_store.floor_time_ms(current_millis() as i64);
 
         assert!(timer_message_store.get_timer_wheel_slot(original_slot_time).is_none());
@@ -4198,7 +5102,8 @@ mod tests {
         let slot = timer_message_store
             .get_timer_wheel_slot(timer_message_store.ceil_time_ms(deliver_ms as i64))
             .unwrap();
-        let entries = timer_message_store.load_slot_entries(slot).unwrap();
+        let entries =
+            TimerMessageStore::load_slot_entries(&timer_message_store.timer_storage().unwrap(), slot).unwrap();
 
         assert_eq!(
             entries[0].record.deliver_time_ms,
@@ -4233,7 +5138,7 @@ mod tests {
         assert_eq!(processed, 1);
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 0);
         assert_eq!(
-            timer_message_store.timer_log.lock().as_ref().unwrap().len().unwrap(),
+            timer_message_store.timer_storage().unwrap().log_end().unwrap(),
             TimerLogRecord::SIZE as u64
         );
         assert_eq!(
@@ -4410,6 +5315,60 @@ mod tests {
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
     }
 
+    /// Rejects the writes of messages whose body is `busy` while `busy` is set, as a full page
+    /// cache would.
+    struct RejectBusyBodies {
+        busy: Arc<AtomicBool>,
+    }
+
+    impl PutMessageHook for RejectBusyBodies {
+        fn hook_name(&self) -> &'static str {
+            "reject-busy-bodies"
+        }
+
+        fn execute_before_put_message(&self, msg: &mut dyn MessageTrait) -> Option<PutMessageResult> {
+            (self.busy.load(Ordering::Acquire) && msg.get_body().is_some_and(|body| body.as_ref() == b"busy"))
+                .then(|| PutMessageResult::new_default(PutMessageStatus::OsPageCacheBusy))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_rejected_delivery_ends_the_slot_prefix_while_later_writes_land() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        assert!(initialize_and_load(&mut store).await);
+        let deliver_ms = current_millis().saturating_sub(2_000);
+        for body in [&b"first"[..], b"busy", b"last"] {
+            let mut message = build_timer_message(&real_topic, deliver_ms);
+            message.set_body(Bytes::copy_from_slice(body));
+            assert!(store.put_message(message).await.is_ok());
+        }
+        store.reput_once().await;
+        let busy = Arc::new(AtomicBool::new(true));
+        store.set_put_message_hook(Box::new(RejectBusyBodies {
+            busy: Arc::clone(&busy),
+        }));
+        timer_message_store.set_should_running_dequeue(true);
+
+        // The three sources are indexed and their writes start together. Only the first one
+        // counts: the slot stops at the rejected write, although the write behind it lands.
+        assert_eq!(timer_message_store.process_once().await, 3 + 1);
+        store.reput_once().await;
+        assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 2);
+        let read_slot_ms = timer_message_store.curr_read_time_ms.load(Ordering::Acquire);
+        assert_eq!(timer_message_store.get_timer_wheel_slot(read_slot_ms).unwrap().num, 2);
+
+        // The next pass resumes at the rejected entry and delivers the last one again.
+        busy.store(false, Ordering::Release);
+        assert_eq!(timer_message_store.process_once().await, 2);
+        store.reput_once().await;
+        assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 4);
+        assert!(timer_message_store
+            .get_timer_wheel_slot(read_slot_ms)
+            .is_none_or(|slot| slot.num == 0));
+    }
+
     #[tokio::test]
     async fn source_frames_are_read_together_and_decoded_without_body() {
         let temp_dir = tempdir().unwrap();
@@ -4487,5 +5446,104 @@ mod tests {
         assert!(source_wake.notified().now_or_never().is_some());
         // Reput woke the stage after the record reached the Timer consume queue.
         assert_eq!(timer_message_store.process_once().await, 1);
+    }
+
+    fn stored_timer_message() -> MessageExt {
+        let mut message = MessageExt::default();
+        message.message.set_topic(CheetahString::from_static_str(TIMER_TOPIC));
+        message.set_queue_id(3);
+        message.set_store_timestamp(1_234);
+        message.message.set_body(Some(Bytes::from_static(b"converted-body")));
+        message.message.set_properties(HashMap::from(
+            [
+                (MessageConst::PROPERTY_REAL_TOPIC, "real_topic"),
+                (MessageConst::PROPERTY_REAL_QUEUE_ID, "2"),
+                (MessageConst::PROPERTY_TIMER_OUT_MS, "5000"),
+                (MessageConst::PROPERTY_TIMER_ROLL_TIMES, "2"),
+                (MessageConst::PROPERTY_TIMER_GENERATION, "7"),
+                (MessageConst::PROPERTY_TAGS, "tag-a"),
+                (MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX, "unique-a"),
+            ]
+            .map(|(key, value)| {
+                (
+                    CheetahString::from_static_str(key),
+                    CheetahString::from_static_str(value),
+                )
+            }),
+        ));
+        message
+    }
+
+    fn assert_properties_string_matches(message: &MessageExtBrokerInner) {
+        assert_eq!(
+            &super::MessageDecoder::string_to_message_properties(Some(&message.properties_string)),
+            message.get_properties()
+        );
+    }
+
+    #[test]
+    fn converting_a_due_timer_message_routes_it_and_drops_the_timer_properties() {
+        let message = TimerMessageStore::convert_timer_message(stored_timer_message(), false).expect("convertible");
+
+        assert_eq!(message.get_topic().as_str(), "real_topic");
+        assert_eq!(message.message_ext_inner.queue_id, 2);
+        assert_eq!(
+            message.get_body().map(|body| body.as_ref()),
+            Some(&b"converted-body"[..])
+        );
+        let mut keys = message
+            .get_properties()
+            .keys()
+            .map(|key| key.as_str().to_owned())
+            .collect::<Vec<_>>();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                MessageConst::PROPERTY_TAGS,
+                MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+                MessageConst::PROPERTY_WAIT_STORE_MSG_OK,
+            ]
+        );
+        assert_eq!(
+            message.tags_code,
+            MessageExtBrokerInner::tags_string2tags_code(
+                &super::message_single::parse_topic_filter_type(0),
+                &CheetahString::from_static_str("tag-a"),
+            )
+        );
+        assert_properties_string_matches(&message);
+    }
+
+    #[test]
+    fn converting_a_roll_keeps_the_timer_route_and_counts_the_round() {
+        let message = TimerMessageStore::convert_timer_message(stored_timer_message(), true).expect("convertible");
+
+        assert_eq!(message.get_topic().as_str(), TIMER_TOPIC);
+        assert_eq!(message.message_ext_inner.queue_id, 3);
+        assert_eq!(
+            message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ROLL_TIMES)),
+            Some(CheetahString::from_static_str("3"))
+        );
+        assert_eq!(
+            message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ENQUEUE_MS)),
+            Some(CheetahString::from_static_str("1234"))
+        );
+        assert!(message
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DEQUEUE_MS))
+            .is_some());
+        assert_eq!(
+            message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC)),
+            Some(CheetahString::from_static_str("real_topic"))
+        );
+        assert_properties_string_matches(&message);
+    }
+
+    #[test]
+    fn converting_without_a_real_topic_refuses_the_message() {
+        let mut stored = stored_timer_message();
+        stored.message.clear_property(MessageConst::PROPERTY_REAL_TOPIC);
+
+        assert!(TimerMessageStore::convert_timer_message(stored, false).is_none());
     }
 }

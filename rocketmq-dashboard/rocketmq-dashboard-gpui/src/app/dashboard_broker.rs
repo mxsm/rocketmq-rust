@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Delivery 03 page wiring and typed Dashboard/Broker route synchronization.
+//! Dashboard/Broker page wiring and typed route synchronization.
 
 use gpui::{Context, Subscription, Window};
 
@@ -23,7 +23,7 @@ use crate::{
 };
 
 impl RocketmqDashboard {
-    pub(super) fn delivery03_subscriptions(
+    pub(super) fn dashboard_broker_subscriptions(
         pages: &LegacyPageCache,
         window: &mut Window,
         cx: &mut Context<Self>,

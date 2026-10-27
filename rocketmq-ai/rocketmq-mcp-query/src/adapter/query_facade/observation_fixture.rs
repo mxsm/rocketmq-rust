@@ -101,7 +101,7 @@ impl StubSession {
         self.0.reads.fetch_add(1, Ordering::SeqCst);
         stored
             .clone()
-            .ok_or(ToolFailure::Operational(ToolExecutionError::Backend(None)))
+            .ok_or(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None)))
     }
 
     /// Like [`answer`](Self::answer) for a read whose stored answer may itself be a failure.

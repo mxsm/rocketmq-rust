@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use memmap2::MmapMut;
-use parking_lot::RwLock;
+use parking_lot::RecursiveRwLock;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreOperation;
 
@@ -58,8 +58,8 @@ use super::MappedFileFailure;
 /// ```
 #[derive(Debug, Clone)]
 pub struct MappedBuffer {
-    /// Shared reference to the memory-mapped file
-    mmap: Arc<RwLock<MmapMut>>,
+    /// Reader preference permits nested read callbacks even when a writer is waiting.
+    mmap: Arc<RecursiveRwLock<MmapMut>>,
 
     /// Starting offset of this buffer within the mmap
     offset: usize,
@@ -88,10 +88,14 @@ impl MappedBuffer {
     /// Returns [`MappedFileFailure::OutOfBounds`] when `offset..offset + len` is not fully contained
     /// in the mapping.
     fn from_mmap_checked(mmap: MmapMut, offset: usize, len: usize) -> Result<Self, MappedFileViolation> {
-        Self::from_shared_mmap(Arc::new(RwLock::new(mmap)), offset, len)
+        Self::from_shared_mmap(Arc::new(RecursiveRwLock::new(mmap)), offset, len)
     }
 
-    fn from_shared_mmap(mmap: Arc<RwLock<MmapMut>>, offset: usize, len: usize) -> Result<Self, MappedFileViolation> {
+    fn from_shared_mmap(
+        mmap: Arc<RecursiveRwLock<MmapMut>>,
+        offset: usize,
+        len: usize,
+    ) -> Result<Self, MappedFileViolation> {
         // Validate bounds
         let mmap_guard = mmap.read();
         let mmap_len = mmap_guard.len();
@@ -141,7 +145,7 @@ impl MappedBuffer {
         read: impl FnOnce(&[u8]) -> T,
     ) -> Result<T, MappedFileViolation> {
         let absolute = self.checked_range(range)?;
-        let mmap = self.mmap.read_recursive();
+        let mmap = self.mmap.read();
         Ok(read(&mmap[absolute]))
     }
 
@@ -355,7 +359,7 @@ impl MappedBuffer {
         if self.len == 0 {
             return Ok(());
         }
-        let mmap = self.mmap.read_recursive();
+        let mmap = self.mmap.read();
         mmap.flush_range(self.offset, self.len)
             .map_err(MappedFileFailure::FlushFailed)
     }
@@ -388,7 +392,7 @@ impl MappedBuffer {
         if absolute.is_empty() {
             return Ok(());
         }
-        let mmap = self.mmap.read_recursive();
+        let mmap = self.mmap.read();
 
         mmap.flush_range(absolute.start, absolute.len())
             .map_err(MappedFileFailure::FlushFailed)
@@ -547,5 +551,41 @@ mod tests {
         assert_eq!(&nested[..], b"nested-read");
         buffer.flush_range(0..0).unwrap();
         buffer.region(16..16).unwrap().flush().unwrap();
+    }
+
+    #[test]
+    fn read_callbacks_can_reenter_while_a_writer_is_waiting() {
+        let buffer = MappedBuffer::from_mmap(create_test_mmap(1024), 128, 256).unwrap();
+        assert!(buffer.write(0, b"nested-read"));
+        let region = buffer.region(0..11).unwrap();
+
+        std::thread::scope(|scope| {
+            buffer
+                .with_read_range(0..11, |outer| {
+                    let writer = scope.spawn(|| assert!(buffer.write(0, b"after-write")));
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                    // An upgradable reader is refused once the writer has reserved the lock.
+                    while buffer.mmap.try_upgradable_read().is_some() {
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "writer did not wait for the reader"
+                        );
+                        std::thread::yield_now();
+                    }
+
+                    // Fail before a blocking recursive read if writer preference is introduced.
+                    assert!(buffer.mmap.try_read().is_some());
+                    assert_eq!(&buffer.read_copy(0..11).unwrap()[..], outer);
+                    assert_eq!(region.with_read_range(0..11, |nested| nested == outer), Some(true));
+                    buffer.flush().unwrap();
+                    assert_eq!(region.flush_range(0..11).unwrap(), Some(()));
+                    writer
+                })
+                .unwrap()
+                .join()
+                .unwrap();
+        });
+
+        assert_eq!(&buffer.read_copy(0..11).unwrap()[..], b"after-write");
     }
 }

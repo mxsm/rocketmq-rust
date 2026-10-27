@@ -71,6 +71,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - **refactor(store):** Remove the unused internal `WaitNotifyObject` placeholder module ([#11884](https://github.com/mxsm/rocketmq-rust/issues/11884)).
+- **refactor(client):** Remove two unused consume-service submission stubs and an unused weak-reference getter ([#11883](https://github.com/mxsm/rocketmq-rust/issues/11883)).
+- **refactor(broker):** Remove 17 unused mutable accessors from the internal `BrokerRuntimeState` ([#11882](https://github.com/mxsm/rocketmq-rust/issues/11882)).
 - **refactor(store):** Remove the unused internal `TopicQueueLock`; CommitLog append sequencing and configuration fields are unchanged ([#11850](https://github.com/mxsm/rocketmq-rust/issues/11850)).
 - **refactor(store):** Remove the unused internal `ByteBuffer` and commented message-buffer list scaffolding ([#11856](https://github.com/mxsm/rocketmq-rust/issues/11856)).
 - **refactor(broker):** Remove the unused internal `PollingHeader`; protocol headers and deferred polling behavior are unchanged ([#11759](https://github.com/mxsm/rocketmq-rust/issues/11759)).
@@ -108,6 +110,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(mcp):** Synchronize the standalone query lockfile with `jsonschema 0.60.1` and its related dependencies to restore locked query and control CI boundary checks after the manifest upgrade ([#11929](https://github.com/mxsm/rocketmq-rust/issues/11929)).
 - **fix(namesrv):** Make the metrics-collection abort cleanup test deterministic by preventing the unregistration worker from gracefully draining between cancellation and abort, while retaining concurrent SDK collection and broker registration checks ([#11824](https://github.com/mxsm/rocketmq-rust/issues/11824)).
 - **fix(mcp):** Synchronize the standalone query lockfile with `jsonschema 0.59.0` to restore locked query and control CI boundary checks ([#11807](https://github.com/mxsm/rocketmq-rust/issues/11807)).
 - **fix(proxy-cluster):** Make cancellation lifecycle tests deterministic and assert the canonical transport descriptor across shutdown-notification and dropped-reply paths while retaining client and producer cleanup checks ([#11775](https://github.com/mxsm/rocketmq-rust/issues/11775)).

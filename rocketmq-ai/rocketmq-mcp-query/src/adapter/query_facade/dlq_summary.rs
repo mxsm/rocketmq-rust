@@ -331,7 +331,9 @@ mod tests {
         // When the group could not be looked up, the answer says so instead of claiming it.
         let unreadable = StubFactory {
             topic_stats: Some(Err(topic_not_found())),
-            consumer_group_details: Some(Err(ToolFailure::Operational(ToolExecutionError::Backend(None)))),
+            consumer_group_details: Some(Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(
+                None,
+            )))),
             ..Default::default()
         };
         let result = QueryFacade::with_factory(config(), unreadable)

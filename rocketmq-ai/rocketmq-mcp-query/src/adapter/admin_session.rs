@@ -198,7 +198,7 @@ pub(crate) trait AdminSession: Send {
         &mut self,
         _topic: &str,
     ) -> impl Future<Output = Result<QueryPayload<SessionTopicStats>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn topic_config(
@@ -206,7 +206,7 @@ pub(crate) trait AdminSession: Send {
         _topic: &str,
     ) -> impl Future<Output = Result<QueryPayload<crate::tools::config_tools::GetTopicConfigOutput>, ToolFailure>> + Send
     {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns the Consumer Groups that consume `topic`, joined over the Brokers that host it.
@@ -214,7 +214,7 @@ pub(crate) trait AdminSession: Send {
         &mut self,
         _topic: &str,
     ) -> impl Future<Output = Result<QueryPayload<SessionTopicConsumers>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn consumer_groups(
@@ -262,14 +262,14 @@ pub(crate) trait AdminSession: Send {
         &mut self,
         _consumer_group: &str,
     ) -> impl Future<Output = Result<QueryPayload<GetConsumerGroupDetailsOutput>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn consumer_progress(
         &mut self,
         _consumer_group: &str,
     ) -> impl Future<Output = Result<QueryPayload<SessionConsumerProgress>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn probe_broker_runtime_target(
@@ -281,14 +281,14 @@ pub(crate) trait AdminSession: Send {
         &mut self,
         _broker_name: &str,
     ) -> impl Future<Output = Result<QueryPayload<BrokerDiagnosticsOutput>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn broker_config_summary(
         &mut self,
         _broker_name: &str,
     ) -> impl Future<Output = Result<QueryPayload<BrokerConfigSummaryOutput>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn broker_log_filter_state(
@@ -296,7 +296,7 @@ pub(crate) trait AdminSession: Send {
         _broker_name: &str,
         _logger: &str,
     ) -> impl Future<Output = Result<QueryPayload<BrokerLogFilterStateOutput>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn proxy_drain_state(
@@ -304,14 +304,14 @@ pub(crate) trait AdminSession: Send {
         _proxy_name: &str,
         _proxy_endpoint: &str,
     ) -> impl Future<Output = Result<QueryPayload<ProxyDrainStateOutput>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn consumer_connections(
         &mut self,
         _consumer_group: &str,
     ) -> impl Future<Output = Result<QueryPayload<SessionConnections>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Asks one connected client of a Consumer Group for its running state, through the Broker
@@ -322,7 +322,7 @@ pub(crate) trait AdminSession: Send {
         _broker_name: &str,
         _client_id: &str,
     ) -> impl Future<Output = Result<SessionConsumerClientRuntime, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn producer_connections(
@@ -330,14 +330,14 @@ pub(crate) trait AdminSession: Send {
         _topic: &str,
         _producer_group: &str,
     ) -> impl Future<Output = Result<QueryPayload<SessionConnections>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn message_metadata(
         &mut self,
         _message_id: &str,
     ) -> impl Future<Output = Result<SessionMessageMetadata, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns the ACL users the masters of the cluster hold, without a password.
@@ -345,7 +345,7 @@ pub(crate) trait AdminSession: Send {
     fn acl_users(
         &mut self,
     ) -> impl Future<Output = Result<crate::tools::security_tools::ListAclUsersOutput, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns what the master of one Broker holds for Lite Topics.
@@ -353,7 +353,7 @@ pub(crate) trait AdminSession: Send {
         &mut self,
         _broker_name: &str,
     ) -> impl Future<Output = Result<crate::tools::broker_tools::GetLiteBrokerInfoOutput, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns the trace records clients wrote about one message, read from `trace_topic` or
@@ -363,7 +363,7 @@ pub(crate) trait AdminSession: Send {
         _message_id: &str,
         _trace_topic: Option<&str>,
     ) -> impl Future<Output = Result<SessionMessageTrace, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     /// Returns the messages of `topic` that carry `key` and were stored between the two times,
@@ -375,7 +375,7 @@ pub(crate) trait AdminSession: Send {
         _begin_millis: i64,
         _end_millis: i64,
     ) -> impl Future<Output = Result<SessionMessageKeyMatches, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn topic_config_state(
@@ -383,7 +383,7 @@ pub(crate) trait AdminSession: Send {
         _topic: &str,
         _broker_names: &[String],
     ) -> impl Future<Output = Result<QueryPayload<TopicConfigStateOutput>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn consumer_group_config_state(
@@ -391,7 +391,7 @@ pub(crate) trait AdminSession: Send {
         _group: &str,
         _broker_names: &[String],
     ) -> impl Future<Output = Result<QueryPayload<ConsumerGroupConfigStateOutput>, ToolFailure>> + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn ha_status(
@@ -401,7 +401,7 @@ pub(crate) trait AdminSession: Send {
         _controller_names: &[String],
     ) -> impl Future<Output = Result<QueryPayload<crate::tools::infrastructure_tools::GetHaStatusOutput>, ToolFailure>> + Send
     {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn controller_metadata(
@@ -410,7 +410,7 @@ pub(crate) trait AdminSession: Send {
     ) -> impl Future<
         Output = Result<QueryPayload<crate::tools::infrastructure_tools::GetControllerMetadataOutput>, ToolFailure>,
     > + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn nameserver_config_summary(
@@ -421,7 +421,7 @@ pub(crate) trait AdminSession: Send {
             ToolFailure,
         >,
     > + Send {
-        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
+        async { Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))) }
     }
 
     fn shutdown(self) -> impl Future<Output = Result<(), ToolFailure>> + Send;
@@ -476,13 +476,13 @@ impl AdminCoreSessionFactory {
             self.blocking
                 .spawn_io("rocketmq-mcp-credential-file-read", move || reference.resolve(&name))
                 .await
-                .map_err(ToolFailure::backend)?
+                .map_err(ToolFailure::source_unavailable)?
         } else {
             reference.resolve(&name)
         };
         resolved
             .map(Some)
-            .map_err(|error| ToolFailure::Operational(ToolExecutionError::Backend(Some(Arc::new(error)))))
+            .map_err(|error| ToolFailure::Operational(ToolExecutionError::SourceUnavailable(Some(Arc::new(error)))))
     }
 
     #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
@@ -512,7 +512,10 @@ impl AdminSessionFactory for AdminCoreSessionFactory {
         if let Some(credentials) = credentials {
             builder = builder.credentials(credentials);
         }
-        let admin = builder.build_with_guard().await.map_err(ToolFailure::backend)?;
+        let admin = builder
+            .build_with_guard()
+            .await
+            .map_err(ToolFailure::source_unavailable)?;
         Ok(AdminCoreSession {
             cluster,
             admin: Some(admin),
@@ -543,8 +546,8 @@ impl AdminSession for AdminCoreSession {
         if let Some(session) = &mut self.test_session {
             return session.broker_rows().await;
         }
-        let request =
-            ListBrokersRequest::try_new(self.cluster.rocketmq_cluster_name.clone()).map_err(ToolFailure::backend)?;
+        let request = ListBrokersRequest::try_new(self.cluster.rocketmq_cluster_name.clone())
+            .map_err(ToolFailure::source_unavailable)?;
         let result = self
             .admin_mut()?
             .list_brokers_with_evidence(&request)
@@ -723,8 +726,8 @@ impl AdminSession for AdminCoreSession {
         if let Some(session) = &mut self.test_session {
             return session.consumer_groups_exact(groups).await;
         }
-        let request =
-            ExactConsumerGroupEnrichmentRequest::try_new(groups.iter().cloned()).map_err(ToolFailure::backend)?;
+        let request = ExactConsumerGroupEnrichmentRequest::try_new(groups.iter().cloned())
+            .map_err(ToolFailure::source_unavailable)?;
         let result = self
             .admin_mut()?
             .enrich_consumer_groups_exact_with_evidence(&request)
@@ -1526,7 +1529,7 @@ fn map_admin_error(selected: NotFoundEntity) -> impl FnOnce(AdminError) -> ToolF
     move |error| match error.failure() {
         AdminFailure::InvalidArgument => ToolFailure::invalid_arguments(error),
         AdminFailure::NotFound => ToolFailure::not_found(named_entity(&error).unwrap_or(selected)),
-        AdminFailure::OperationFailed | AdminFailure::SessionClosed => ToolFailure::backend(error),
+        AdminFailure::OperationFailed | AdminFailure::SessionClosed => ToolFailure::source_unavailable(error),
     }
 }
 

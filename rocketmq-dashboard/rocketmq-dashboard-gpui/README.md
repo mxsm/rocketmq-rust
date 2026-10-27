@@ -48,6 +48,11 @@ monitor persistence remain local to this application. See
 [src/services](src/services) and [src/infrastructure](src/infrastructure) for
 the implemented operations and their lifecycle owners.
 
+The private [DashboardBrokerOperations](src/services/dashboard_broker.rs) boundary forwards
+Dashboard overview/current/history and Broker inventory/runtime/config reads, plus guarded
+Broker config patches. Its [Admin provider](src/infrastructure/admin_provider/dashboard_broker.rs)
+keeps raw Admin responses inside infrastructure and returns allowlisted DTOs to the services.
+
 Configuration defaults to `rocketmq-dashboard/gpui/config.json` beneath the OS
 user configuration directory. Set `ROCKETMQ_DASHBOARD_GPUI_CONFIG_PATH` to
 override the complete file path. NameServer selection and connection settings

@@ -35,12 +35,12 @@ use super::{
 
 #[path = "admin_provider/consumers.rs"]
 mod consumers;
-#[path = "admin_provider/delivery03.rs"]
-mod delivery03;
+#[path = "admin_provider/dashboard_broker.rs"]
+mod dashboard_broker;
 #[path = "admin_provider/topics.rs"]
 mod topics;
 
-pub(crate) use delivery03::{
+pub(crate) use dashboard_broker::{
     SafeBrokerInfo, SafeBrokerList, SafeBrokerTarget, SafeConfigPatchOutcome, SafeConfigPatchRequest,
 };
 pub(crate) use topics::{

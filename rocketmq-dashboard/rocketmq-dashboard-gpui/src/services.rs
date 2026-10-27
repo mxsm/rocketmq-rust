@@ -19,8 +19,8 @@ pub mod brokers;
 pub(crate) mod consumers;
 #[path = "services/dashboard.rs"]
 pub mod dashboard;
-#[path = "services/delivery03.rs"]
-pub(crate) mod delivery03;
+#[path = "services/dashboard_broker.rs"]
+pub(crate) mod dashboard_broker;
 #[path = "services/topics.rs"]
 pub(crate) mod topics;
 
@@ -511,7 +511,7 @@ trait ApplicationBackend: Send + Sync {
 pub struct AppServices {
     backend: Arc<dyn ApplicationBackend>,
     runtime_bridge: Option<RuntimeBridge>,
-    delivery03: Arc<dyn delivery03::Delivery03Backend>,
+    dashboard_broker: Arc<dyn dashboard_broker::DashboardBrokerOperations>,
     consumers: Arc<dyn consumers::ConsumerBackend>,
     topics: Arc<dyn topics::TopicBackend>,
 }
@@ -527,7 +527,7 @@ impl AppServices {
         Self {
             backend: Arc::new(InjectedBackend { startup, config, auth }),
             runtime_bridge: None,
-            delivery03: delivery03::RealDelivery03Backend::new(
+            dashboard_broker: dashboard_broker::RealDashboardBrokerOperations::new(
                 dashboard::DashboardService::unavailable(),
                 brokers::BrokerService::unavailable(),
             ),
@@ -584,7 +584,7 @@ impl AppServices {
             .map(topics::RealTopicBackend::new)
             .unwrap_or_else(topics::RealTopicBackend::unavailable);
         let history_sampler: Arc<dyn HistorySampler> = dashboard.clone();
-        let delivery03 = delivery03::RealDelivery03Backend::new(dashboard, brokers);
+        let dashboard_broker = dashboard_broker::RealDashboardBrokerOperations::new(dashboard, brokers);
         Self {
             backend: Arc::new(DesktopBackend {
                 store,
@@ -606,7 +606,7 @@ impl AppServices {
                 #[cfg(test)]
                 completion: None,
             }),
-            delivery03,
+            dashboard_broker,
             consumers,
             topics,
         }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Delivery 03 Admin queries and the private, allowlisted DTOs returned to GPUI services.
+//! Dashboard/Broker Admin operations and the private, allowlisted DTOs returned to GPUI services.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
