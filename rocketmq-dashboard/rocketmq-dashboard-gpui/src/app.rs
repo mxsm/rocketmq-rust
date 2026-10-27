@@ -16,8 +16,8 @@
 
 #[path = "app/consumers.rs"]
 mod consumers;
-#[path = "app/delivery03.rs"]
-mod delivery03;
+#[path = "app/dashboard_broker.rs"]
+mod dashboard_broker;
 #[path = "app/topics.rs"]
 mod topics;
 
@@ -283,7 +283,7 @@ impl RocketmqDashboard {
                 }
             }),
         ];
-        subscriptions.extend(Self::delivery03_subscriptions(&legacy_pages, window, cx));
+        subscriptions.extend(Self::dashboard_broker_subscriptions(&legacy_pages, window, cx));
         subscriptions.extend(Self::topic_subscriptions(&legacy_pages, window, cx));
         subscriptions.extend(Self::consumer_subscriptions(&legacy_pages, window, cx));
         let mut dashboard = Self {
@@ -748,7 +748,7 @@ impl RocketmqDashboard {
                 }
             }),
         ];
-        subscriptions.extend(Self::delivery03_subscriptions(&pages, window, cx));
+        subscriptions.extend(Self::dashboard_broker_subscriptions(&pages, window, cx));
         subscriptions.extend(Self::topic_subscriptions(&pages, window, cx));
         subscriptions.extend(Self::consumer_subscriptions(&pages, window, cx));
         self.subscriptions = subscriptions;

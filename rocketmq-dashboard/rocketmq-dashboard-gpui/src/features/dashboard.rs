@@ -812,7 +812,9 @@ mod tests {
     };
 
     use super::*;
-    use crate::services::{dashboard::DashboardOverviewLoad, delivery03::test_support::FakeDelivery03Backend};
+    use crate::services::{
+        dashboard::DashboardOverviewLoad, dashboard_broker::test_support::FakeDashboardBrokerOperations,
+    };
 
     fn error() -> UiError {
         UiError::new("History unavailable", UiErrorCode::Connection, true)
@@ -848,7 +850,8 @@ mod tests {
     #[gpui::test]
     fn retained_dashboard_resources_render_refresh_and_inline_error_retry_states(cx: &mut gpui::TestAppContext) {
         cx.update(gpui_component::init);
-        let services = AppServices::default().with_delivery03_backend(Arc::new(FakeDelivery03Backend::default()));
+        let services =
+            AppServices::default().with_dashboard_broker_operations(Arc::new(FakeDashboardBrokerOperations::default()));
         let capture = Rc::new(RefCell::new(None));
         let capture_view = capture.clone();
         let (root, cx) = cx.add_window_view(move |window, cx| {
@@ -966,7 +969,7 @@ mod tests {
     #[gpui::test]
     fn history_failure_and_topic_range_filters_stay_on_the_history_product_path(cx: &mut gpui::TestAppContext) {
         cx.update(gpui_component::init);
-        let fake = Arc::new(FakeDelivery03Backend::default());
+        let fake = Arc::new(FakeDashboardBrokerOperations::default());
         fake.queue_topic_current(Ok(vec![
             TopicCurrentMetric {
                 topic: "orders-a".into(),
@@ -1011,7 +1014,7 @@ mod tests {
                 source_revision: 9,
             }]));
         }
-        let services = AppServices::default().with_delivery03_backend(fake.clone());
+        let services = AppServices::default().with_dashboard_broker_operations(fake.clone());
         let (view, cx) = cx.add_window_view(move |_, cx| DashboardView::new(services, 9, cx));
         cx.run_until_parked();
 

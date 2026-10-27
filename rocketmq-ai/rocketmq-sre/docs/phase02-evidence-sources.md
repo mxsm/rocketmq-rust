@@ -61,6 +61,11 @@ excluded.
 
 ## Configuration and failure behavior
 
+Discovery probes Prometheus with `/api/v1/query?query=up` and Loki/Tempo with `/ready`.
+These bounded checks report availability, not canonical Evidence. A successful availability
+record's `freshness_ms: Some(0)` does not establish Evidence freshness or validate every query
+and its instrumentation; missing configuration or failed probes leave the source unavailable.
+
 Optional backends are configured with:
 
 - `ROCKETMQ_SRE_PROMETHEUS_URL`

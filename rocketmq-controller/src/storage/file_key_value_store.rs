@@ -130,7 +130,7 @@ impl FileManifest {
 }
 
 #[derive(Debug, Clone)]
-struct BackendState {
+struct CommittedFileIndex {
     generation: u64,
     index: BTreeMap<String, RecordPointer>,
 }
@@ -147,7 +147,7 @@ enum Mutation {
 /// are checksummed before use.
 pub struct FileKeyValueStore {
     path: PathBuf,
-    state: Arc<RwLock<BackendState>>,
+    committed_index: Arc<RwLock<CommittedFileIndex>>,
     commit_lock: Mutex<()>,
 }
 
@@ -184,7 +184,7 @@ impl FileKeyValueStore {
         );
         Ok(Self {
             path,
-            state: Arc::new(RwLock::new(BackendState {
+            committed_index: Arc::new(RwLock::new(CommittedFileIndex {
                 generation: manifest.generation,
                 index: manifest.entries,
             })),
@@ -343,7 +343,7 @@ impl FileKeyValueStore {
             return Ok(());
         }
         let _commit_guard = self.commit_lock.lock().await;
-        let current = self.state.read().clone();
+        let current = self.committed_index.read().clone();
         let generation = current
             .generation
             .checked_add(1)
@@ -370,7 +370,7 @@ impl FileKeyValueStore {
 
         let manifest = FileManifest::new(generation, next_index.clone())?;
         Self::write_manifest(&self.manifest_dir(), &manifest).await?;
-        *self.state.write() = BackendState {
+        *self.committed_index.write() = CommittedFileIndex {
             generation,
             index: next_index,
         };
@@ -386,7 +386,7 @@ impl KeyValueStore for FileKeyValueStore {
     }
 
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
-        let pointer = match self.state.read().index.get(key) {
+        let pointer = match self.committed_index.read().index.get(key) {
             Some(pointer) => pointer.clone(),
             None => return Ok(None),
         };
@@ -406,7 +406,7 @@ impl KeyValueStore for FileKeyValueStore {
 
     async fn list_keys(&self, prefix: &str) -> Result<Vec<String>> {
         Ok(self
-            .state
+            .committed_index
             .read()
             .index
             .keys()
@@ -437,17 +437,17 @@ impl KeyValueStore for FileKeyValueStore {
     }
 
     async fn exists(&self, key: &str) -> Result<bool> {
-        Ok(self.state.read().index.contains_key(key))
+        Ok(self.committed_index.read().index.contains_key(key))
     }
 
     async fn clear(&self) -> Result<()> {
-        let keys = self.state.read().index.keys().cloned().collect::<Vec<_>>();
+        let keys = self.committed_index.read().index.keys().cloned().collect::<Vec<_>>();
         self.commit(keys.into_iter().map(Mutation::Delete).collect()).await
     }
 
     async fn sync(&self) -> Result<()> {
         let _commit_guard = self.commit_lock.lock().await;
-        let generation = self.state.read().generation;
+        let generation = self.committed_index.read().generation;
         let path = self.manifest_dir().join(format!("{generation:020}.manifest"));
         let file = fs::OpenOptions::new()
             .write(true)
@@ -460,7 +460,7 @@ impl KeyValueStore for FileKeyValueStore {
     }
 
     async fn stats(&self) -> Result<StorageStats> {
-        let pointers = self.state.read().index.values().cloned().collect::<Vec<_>>();
+        let pointers = self.committed_index.read().index.values().cloned().collect::<Vec<_>>();
         let mut total_size = 0_u64;
         for pointer in &pointers {
             total_size += fs::metadata(self.data_dir().join(&pointer.file_name))
@@ -527,13 +527,13 @@ mod tests {
                 ])
                 .await
                 .expect("batch put");
-            assert_eq!(backend.state.read().generation, 1);
+            assert_eq!(backend.committed_index.read().generation, 1);
         }
 
         let backend = FileKeyValueStore::new(storage_path).await.expect("reopen");
         assert_eq!(backend.get("alpha").await.expect("get alpha"), Some(b"one".to_vec()));
         assert_eq!(backend.get("beta").await.expect("get beta"), Some(b"two".to_vec()));
-        assert_eq!(backend.state.read().generation, 1);
+        assert_eq!(backend.committed_index.read().generation, 1);
     }
 
     #[tokio::test]
@@ -559,7 +559,7 @@ mod tests {
         let backend = FileKeyValueStore::new(storage_path).await.expect("open");
         backend.put("alpha", b"one").await.expect("put");
         let pointer = backend
-            .state
+            .committed_index
             .read()
             .index
             .get("alpha")

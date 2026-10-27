@@ -342,6 +342,21 @@ const BROKER_OUTER_API_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const BROKER_BASIC_SERVICE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(35);
 const REMOTING_SERVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Builds a large lifecycle future directly in a heap allocation.
+///
+/// Unoptimized builds give every temporary its own stack slot, so an `async fn` that builds a
+/// large future keeps a copy of it in its poll frame while the future runs, even when it boxes
+/// the result itself. Calling `make` here leaves only the box pointer in the caller's frame.
+/// Broker startup, rollback and shutdown are polled on the process main thread, whose 1 MiB
+/// stack on Windows the runtime cannot size, and each of those frames is live at once.
+fn heap_future<F, Fut>(make: F) -> std::pin::Pin<Box<Fut>>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future,
+{
+    Box::pin(make())
+}
+
 async fn await_shutdown_deadline<T, F>(deadline: ShutdownDeadline, future: F) -> Result<T, Duration>
 where
     F: Future<Output = T>,

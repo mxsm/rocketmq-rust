@@ -12,5 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod java_file_format;
+mod slot_drain_batches;
 mod timer_engine_conformance;
 mod timer_index_conformance;

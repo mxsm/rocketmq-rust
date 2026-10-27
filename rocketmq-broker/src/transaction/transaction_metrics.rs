@@ -47,6 +47,29 @@ struct TransactionMetricsCheckpoint {
     topics: BTreeMap<String, TopicMetric>,
 }
 
+/// Layout written by the Java broker's `TransactionMetrics#persist`. Its
+/// `dataVersion` is ignored because `generation` only orders local writes.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JavaTransactionMetricsCheckpoint {
+    transaction_count: BTreeMap<String, JavaTopicMetric>,
+}
+
+/// Java `TransactionMetrics.Metric`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JavaTopicMetric {
+    count: i64,
+    time_stamp: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum StoredCheckpoint {
+    Native(TransactionMetricsCheckpoint),
+    Java(JavaTransactionMetricsCheckpoint),
+}
+
 #[derive(Debug)]
 struct TransactionMetricsInner {
     checkpoint_path: PathBuf,
@@ -172,12 +195,33 @@ fn read_checkpoint(path: &Path) -> Result<Option<TransactionMetricsCheckpoint>> 
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(crate::broker_error::io(error)),
     };
-    let checkpoint: TransactionMetricsCheckpoint = serde_json::from_slice(&body)
+    let stored: StoredCheckpoint = serde_json::from_slice(&body)
         .map_err(|error| crate::broker_error::serialization_failed("deserialize", "JSON", error))?;
-    if checkpoint.version != CHECKPOINT_VERSION {
-        return Err(crate::broker_error::configuration_invalid("transactionMetrics.version"));
+    match stored {
+        StoredCheckpoint::Native(checkpoint) => {
+            if checkpoint.version != CHECKPOINT_VERSION {
+                return Err(crate::broker_error::configuration_invalid("transactionMetrics.version"));
+            }
+            Ok(Some(checkpoint))
+        }
+        StoredCheckpoint::Java(checkpoint) => Ok(Some(TransactionMetricsCheckpoint {
+            version: CHECKPOINT_VERSION,
+            generation: 0,
+            topics: checkpoint
+                .transaction_count
+                .into_iter()
+                .map(|(topic, metric)| {
+                    (
+                        topic,
+                        TopicMetric {
+                            count: metric.count,
+                            timestamp: metric.time_stamp,
+                        },
+                    )
+                })
+                .collect(),
+        })),
     }
-    Ok(Some(checkpoint))
 }
 
 fn write_checkpoint(path: &Path, body: &[u8]) -> Result<()> {

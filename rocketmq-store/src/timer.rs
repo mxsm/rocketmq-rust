@@ -17,6 +17,7 @@ pub(crate) mod completion;
 pub(crate) mod delivery;
 pub(crate) mod engine;
 pub(crate) mod error;
+pub(crate) mod format_registry;
 pub(crate) mod index;
 pub(crate) mod java_compat;
 pub(crate) mod payload_cursor;
@@ -27,6 +28,7 @@ pub mod slot;
 pub(crate) mod slot_drain;
 pub(crate) mod source;
 pub(crate) mod source_wake;
+pub(crate) mod storage;
 #[cfg(feature = "extended_timeline")]
 pub(crate) mod timeline;
 pub mod timer_checkpoint;

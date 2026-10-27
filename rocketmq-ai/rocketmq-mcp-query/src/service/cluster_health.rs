@@ -621,7 +621,7 @@ mod tests {
         let inventory = BrokerInventory::from_rows("local-dev", rows, NOW.to_string());
         let replication = match ha {
             Some(ha) => Ok(ReplicationSummary::from_ha(ha, Some(&inventory), NOW.to_string())),
-            None => Err(ToolFailure::Operational(ToolExecutionError::Backend(None))),
+            None => Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))),
         };
         evaluate(
             &args(),
@@ -821,8 +821,8 @@ mod tests {
         let report = evaluate(
             &args(),
             ClusterHealthEvidence {
-                inventory: Err(ToolFailure::Operational(ToolExecutionError::Backend(None))),
-                replication: Err(ToolFailure::Operational(ToolExecutionError::Backend(None))),
+                inventory: Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))),
+                replication: Err(ToolFailure::Operational(ToolExecutionError::SourceUnavailable(None))),
             },
             "production-default",
         );

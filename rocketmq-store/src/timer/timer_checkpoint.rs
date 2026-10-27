@@ -29,6 +29,7 @@ use rocketmq_store_local::timer::checkpoint::TimerCheckpointV2Record;
 use rocketmq_store_local::timer::checkpoint::TimerCheckpointVersion;
 use rocketmq_store_local::timer::checkpoint::VersionedTimerCheckpointStore;
 use rocketmq_store_local::timer::checkpoint::TIMER_CHECKPOINT_SIZE;
+use rocketmq_store_local::timer::java_timer_checkpoint::JavaTimerCheckpointFile;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TimerCheckpointSnapshot {
@@ -43,7 +44,7 @@ pub struct TimerCheckpoint {
     _legacy_path: PathBuf,
     state: TimerCheckpointState,
     data_version: Mutex<DataVersion>,
-    versioned: VersionedTimerCheckpointStore,
+    store: CheckpointStore,
     wheel_generation: AtomicU64,
     role_epoch: AtomicU64,
     policy_hash: u64,
@@ -51,6 +52,16 @@ pub struct TimerCheckpoint {
     drain_page: AtomicU64,
     drain_record: AtomicU64,
     recovery_report: Mutex<TimerCheckpointRecoveryReport>,
+}
+
+/// Where a checkpoint is persisted.
+enum CheckpointStore {
+    /// Versioned A/B records next to the legacy page; they also carry the wheel generation,
+    /// role epoch and drain cursor.
+    RustV2(VersionedTimerCheckpointStore),
+    /// The Java `timercheck` page, which holds the 56-byte record only. Wheel generation, role
+    /// epoch and drain cursor stay in memory.
+    Java(JavaTimerCheckpointFile),
 }
 
 impl TimerCheckpoint {
@@ -117,7 +128,7 @@ impl TimerCheckpoint {
             _legacy_path: path,
             state: TimerCheckpointState::from_record(state_record),
             data_version: Mutex::new(data_version_from_record(state_record.version)),
-            versioned,
+            store: CheckpointStore::RustV2(versioned),
             wheel_generation: AtomicU64::new(wheel_generation),
             role_epoch: AtomicU64::new(role_epoch),
             policy_hash: effective_policy_hash,
@@ -128,9 +139,45 @@ impl TimerCheckpoint {
         })
     }
 
+    /// Opens the Apache RocketMQ 5.x `timercheck` page at `path`, creating it when missing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when the page cannot be created or read.
+    pub fn new_java<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        let file = JavaTimerCheckpointFile::open(&path)?;
+        let record = file.record();
+        Ok(Self {
+            _legacy_path: path,
+            state: TimerCheckpointState::from_record(record),
+            data_version: Mutex::new(data_version_from_record(record.version)),
+            store: CheckpointStore::Java(file),
+            wheel_generation: AtomicU64::new(0),
+            role_epoch: AtomicU64::new(0),
+            policy_hash: 0,
+            drain_generation: AtomicU64::new(0),
+            drain_page: AtomicU64::new(0),
+            drain_record: AtomicU64::new(0),
+            recovery_report: Mutex::new(TimerCheckpointRecoveryReport::default()),
+        })
+    }
+
     pub fn flush(&self) -> std::io::Result<()> {
         let data_version = self.data_version();
-        self.versioned.commit(TimerCheckpointV2Record {
+        let versioned = match &self.store {
+            CheckpointStore::RustV2(versioned) => versioned,
+            CheckpointStore::Java(file) => {
+                return file.flush(TimerCheckpointRecord {
+                    last_read_time_ms: self.last_read_time_ms(),
+                    last_timer_log_flush_pos: self.last_timer_log_flush_pos(),
+                    last_timer_queue_offset: self.last_timer_queue_offset(),
+                    master_timer_queue_offset: self.master_timer_queue_offset(),
+                    version: version_record(&data_version),
+                });
+            }
+        };
+        versioned.commit(TimerCheckpointV2Record {
             generation: 0,
             durable_queue_offset: self.last_timer_queue_offset(),
             timer_log_durable_length: self.last_timer_log_flush_pos(),
@@ -219,15 +266,24 @@ impl TimerCheckpoint {
         self.recovery_report.lock().clone()
     }
 
+    /// Generation of the last committed V2 record; a Java checkpoint has none and returns `0`.
     pub fn local_generation(&self) -> u64 {
-        self.versioned
-            .current()
-            .map(|record| record.generation)
-            .unwrap_or_default()
+        match &self.store {
+            CheckpointStore::RustV2(versioned) => {
+                versioned.current().map(|record| record.generation).unwrap_or_default()
+            }
+            CheckpointStore::Java(_) => 0,
+        }
     }
 
+    /// Selects the newest V2 record that fits the durable log. A Java checkpoint is a single
+    /// record, so it is always the selection.
     pub fn select_for_storage(&self, max_log_length: i64, before_generation: Option<u64>) -> std::io::Result<bool> {
-        let (selected, report) = self.versioned.load_best(|record| {
+        let versioned = match &self.store {
+            CheckpointStore::RustV2(versioned) => versioned,
+            CheckpointStore::Java(_) => return Ok(true),
+        };
+        let (selected, report) = versioned.load_best(|record| {
             if self.policy_hash != 0 && record.policy_hash != self.policy_hash {
                 return Err("policy fingerprint does not match".into());
             }
