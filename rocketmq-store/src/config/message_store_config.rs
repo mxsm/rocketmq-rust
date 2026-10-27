@@ -454,7 +454,7 @@ mod defaults {
     }
 
     pub const fn commit_log_micro_batch_max_wait_micros() -> u64 {
-        50
+        0
     }
 
     pub const fn max_ha_transfer_byte_in_second() -> usize {
@@ -1415,6 +1415,10 @@ pub struct MessageStoreConfig {
     #[serde(default = "defaults::commit_log_micro_batch_max_bytes")]
     pub commit_log_micro_batch_max_bytes: usize,
 
+    /// How long the CommitLog append worker waits for more requests before writing a partial
+    /// micro-batch. The default, 0, writes whatever is already queued: requests that arrive while
+    /// a batch is being written form the next batch, so load still batches without delaying
+    /// every send.
     #[serde(default = "defaults::commit_log_micro_batch_max_wait_micros")]
     pub commit_log_micro_batch_max_wait_micros: u64,
 
@@ -2740,7 +2744,7 @@ mod tests {
         assert!(config.commit_log_micro_batch_enabled);
         assert_eq!(config.commit_log_micro_batch_max_items, 32);
         assert_eq!(config.commit_log_micro_batch_max_bytes, 1024 * 1024);
-        assert_eq!(config.commit_log_micro_batch_max_wait_micros, 50);
+        assert_eq!(config.commit_log_micro_batch_max_wait_micros, 0);
 
         let properties = config.get_properties();
         assert_eq!(properties["commitLogAppendQueueCapacity"], "1024");
@@ -2748,7 +2752,7 @@ mod tests {
         assert_eq!(properties["commitLogMicroBatchEnabled"], "true");
         assert_eq!(properties["commitLogMicroBatchMaxItems"], "32");
         assert_eq!(properties["commitLogMicroBatchMaxBytes"], (1024 * 1024).to_string());
-        assert_eq!(properties["commitLogMicroBatchMaxWaitMicros"], "50");
+        assert_eq!(properties["commitLogMicroBatchMaxWaitMicros"], "0");
     }
 
     #[test]
