@@ -144,6 +144,9 @@ const MAX_FUTURE_CURSOR_SKEW_SLOTS: i64 = 2;
 /// the CommitLog append path merge them, which matters most when each put waits for a flush or
 /// a replica.
 const SLOT_DELIVERY_PIPELINE_DEPTH: usize = 32;
+/// How often a checkpoint deletes TimerLog files no pending timer reads; Java runs its TimerLog
+/// cleanup every 30 seconds too.
+const TIMER_LOG_CLEANUP_INTERVAL_MS: i64 = 30_000;
 
 /// What one slot entry needs before the slot can move past it.
 enum SlotEntryAction {
@@ -441,6 +444,8 @@ pub struct TimerMessageStore {
     active_source_mutations: AtomicUsize,
     active_due_mutations: AtomicUsize,
     pending_progress: AtomicBool,
+    /// Wall time of the last TimerLog cleanup; `0` before the first.
+    last_timer_log_cleanup_ms: AtomicI64,
     /// Latest wall-clock time at which every visible Timer CQ entry was indexed; `0` until the
     /// first snapshot resolves. Due delivery drains only slots that end at or before it.
     source_visible_through_ms: AtomicI64,
@@ -1177,6 +1182,7 @@ impl TimerMessageStore {
             active_source_mutations: AtomicUsize::new(0),
             active_due_mutations: AtomicUsize::new(0),
             pending_progress: AtomicBool::new(false),
+            last_timer_log_cleanup_ms: AtomicI64::new(0),
             source_visible_through_ms: AtomicI64::new(0),
             pending_source_visibility: Mutex::new(None),
             scheduler_group: Mutex::new(None),
@@ -1389,6 +1395,7 @@ impl TimerMessageStore {
             storage.commit_checkpoint(wheel_generation, checkpoint_generation)?;
         }
         self.commit_draining_progress()?;
+        self.clean_timer_logs_if_due();
         self.observe_persistence_stage(PersistenceStage::AfterCheckpoint)?;
         self.pending_progress.store(false, Ordering::Release);
         Ok(true)
@@ -1397,6 +1404,38 @@ impl TimerMessageStore {
     /// Commits what the draining format delivered, like the active format's commit, and retires
     /// the format from the registry once it holds nothing more. A drain it cannot describe keeps
     /// its previous checkpoint authoritative.
+    /// Deletes the TimerLog files of each loaded format that no pending timer can read, at most
+    /// once per [`TIMER_LOG_CLEANUP_INTERVAL_MS`]. It runs inside a checkpoint, so no stage
+    /// changes a slot meanwhile; a failure is logged and retried at the next interval.
+    fn clean_timer_logs_if_due(&self) {
+        let now_ms = self.clock.read().wall_time_ms();
+        if now_ms.saturating_sub(self.last_timer_log_cleanup_ms.load(Ordering::Acquire)) < TIMER_LOG_CLEANUP_INTERVAL_MS
+        {
+            return;
+        }
+        self.last_timer_log_cleanup_ms.store(now_ms, Ordering::Release);
+        let mut tracks = Vec::with_capacity(2);
+        let active = self.timer_storage();
+        if let Some(storage) = active.as_deref() {
+            tracks.push(self.active_track(storage));
+        }
+        let draining = self.draining_storage();
+        if let Some(draining) = draining.as_deref() {
+            tracks.push(draining.track());
+        }
+        for track in tracks {
+            if oldest_live_position(&track)
+                .and_then(|oldest| track.storage.collect_garbage(oldest))
+                .is_err()
+            {
+                warn!(
+                    source_present = true,
+                    "delete timer log files that no pending timer reads failed"
+                );
+            }
+        }
+    }
+
     fn commit_draining_progress(&self) -> std::io::Result<()> {
         let Some(draining) = self.draining_storage() else {
             return Ok(());
@@ -3023,6 +3062,33 @@ impl TimerMessageStore {
     fn dequeue_batch_limit(&self) -> usize {
         self.message_store_config.timer_due_batch_messages.max(1)
     }
+}
+
+/// The oldest position a pending timer of `track` can still be read from, or `None` when none
+/// is pending. It covers the first record of each slot holding records from the read cursor on,
+/// the oldest entry of each slot drain, and the chain of the read slot, whose processed entries
+/// a restart walks again for their tombstones.
+fn oldest_live_position(track: &DeliveryTrack<'_>) -> std::io::Result<Option<i64>> {
+    let read_time_ms = track.read_time_ms.load(Ordering::Acquire);
+    let layout = track.storage.layout();
+    let mut oldest = i64::MAX;
+    track.storage.visit_occupied_slots(|slot| {
+        if slot.time_ms >= read_time_ms && layout.has_records(&slot) {
+            oldest = oldest.min(slot.first_pos);
+        }
+    });
+    for drain in track.slot_drains.lock().values() {
+        if let Some(position) = drain.plan.first_position()? {
+            oldest = oldest.min(position);
+        }
+    }
+    if let Some(slot) = track.storage.slot_with_records(read_time_ms) {
+        track.storage.walk_slot(slot, 0, |position, _, _| {
+            oldest = oldest.min(position);
+            Ok(())
+        })?;
+    }
+    Ok((oldest != i64::MAX).then_some(oldest))
 }
 
 /// Whether a checkpoint can describe `slot_drains`: at most one, at the read slot.
