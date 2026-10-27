@@ -15,6 +15,12 @@
 
 [workspace]
 # This is a standalone project, not part of the parent workspace
+members = ["compat/xattr"]
+
+[patch.crates-io]
+# GPUI's zed-async-tar still requires xattr 0.2, which uses libc::ENOATTR on Linux.
+# Remove the adapter once that dependency accepts the maintained xattr API.
+xattr = { path = "compat/xattr" }
 
 [package]
 name         = "rocketmq-dashboard-gpui"
