@@ -17,6 +17,7 @@ pub(crate) mod completion;
 pub(crate) mod delivery;
 pub(crate) mod engine;
 pub(crate) mod error;
+pub(crate) mod format_registry;
 pub(crate) mod index;
 pub(crate) mod java_compat;
 pub(crate) mod payload_cursor;

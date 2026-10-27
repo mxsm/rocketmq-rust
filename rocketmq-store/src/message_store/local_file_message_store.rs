@@ -1502,6 +1502,9 @@ impl BackendOps for LocalFileMessageStore {
                     result.insert("timerPipelineMetrics".to_string(), pipeline_metrics);
                 }
             }
+            if let Some(draining) = timer_message_store.draining_file_format() {
+                result.insert("timerDrainingFileFormat".to_string(), draining.as_str().to_string());
+            }
         } else {
             result.insert("timerReadBehind".to_string(), "0".to_string());
             result.insert("timerOffsetBehind".to_string(), "0".to_string());
@@ -1516,6 +1519,10 @@ impl BackendOps for LocalFileMessageStore {
         result.insert(
             "timerStoreMode".to_string(),
             self.message_store_config.timer_store_mode.as_str().to_string(),
+        );
+        result.insert(
+            "timerFileFormat".to_string(),
+            self.message_store_config.timer_file_format.as_str().to_string(),
         );
         result.insert(
             "timerMaximumHorizonDays".to_string(),
