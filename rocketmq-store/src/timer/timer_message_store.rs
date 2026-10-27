@@ -15,6 +15,7 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -29,7 +30,6 @@ use futures_util::stream::FuturesOrdered;
 use futures_util::StreamExt;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
-use rocketmq_model::common::message::message_accessor::MessageAccessor;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::message_single;
@@ -40,6 +40,7 @@ use rocketmq_observability::metrics::timer::TimerMetricsRecorder;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::common::time_utils::is_it_time_to_do;
+use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
@@ -144,6 +145,11 @@ const MAX_FUTURE_CURSOR_SKEW_SLOTS: i64 = 2;
 /// the CommitLog append path merge them, which matters most when each put waits for a flush or
 /// a replica.
 const SLOT_DELIVERY_PIPELINE_DEPTH: usize = 32;
+/// Drain entries read and converted together on one storage I/O thread. A chunk is a few
+/// hundred microseconds of work, enough to cover the hand-off, and small enough that its writes
+/// start while later chunks are still prepared. A batch no larger than one chunk is prepared on
+/// the delivering task.
+const PREPARE_CHUNK_ENTRIES: usize = 16;
 /// How often a checkpoint deletes TimerLog files no pending timer reads; Java runs its TimerLog
 /// cleanup every 30 seconds too.
 const TIMER_LOG_CLEANUP_INTERVAL_MS: i64 = 30_000;
@@ -164,6 +170,43 @@ enum SlotEntryAction {
         message: MessageExtBrokerInner,
         original_deliver_ms: i64,
     },
+}
+
+/// One drain entry with its payload read and converted, before the in-order pass decides
+/// whether the slot can move past it. Preparing has no side effects, so a batch is prepared on
+/// several threads.
+enum PreparedSlotEntry {
+    /// The CommitLog no longer holds the payload.
+    MissingPayload { queue_offset: i64 },
+    /// Not due yet; `message` is `None` when it cannot be written back.
+    Roll {
+        source_offset: i64,
+        message: Option<MessageExtBrokerInner>,
+        real_topic: Option<CheetahString>,
+    },
+    /// Needs no write.
+    Skip { cancelled_topic: Option<CheetahString> },
+    /// The message carries no valid original deadline.
+    InvalidDeadline { source_offset: i64 },
+    /// The slot is not due for this message yet.
+    NotDue,
+    /// Due, but it cannot be converted for its real topic.
+    Unsupported { source_offset: i64 },
+    /// Due and ready for its real topic.
+    Deliver {
+        source_offset: i64,
+        message: MessageExtBrokerInner,
+        original_deliver_ms: i64,
+    },
+}
+
+/// The wall time a drain batch is prepared against. The write of each delivery checks the
+/// clock again.
+#[derive(Clone, Copy)]
+struct PrepareClock {
+    now_ms: i64,
+    floor_now_ms: i64,
+    precision_ms: i64,
 }
 
 /// What a completed slot entry adds to the timer metrics.
@@ -281,7 +324,7 @@ pub enum TimerPayloadReadResult {
 
 struct ActiveSlotDrain {
     plan: SlotDrainPlan,
-    delete_keys: HashSet<TimerDeleteIdentity>,
+    delete_keys: Arc<HashSet<TimerDeleteIdentity>>,
 }
 
 /// One storage the due stage delivers from, with its read cursor and slot drains.
@@ -2488,8 +2531,9 @@ impl TimerMessageStore {
             }
         };
 
-        let actions = self.plan_slot_entries(&entries, &active_drain.delete_keys, slot_time_ms, delivery_epoch);
-        let processed = self.run_slot_entries(actions, slot_time_ms, delivery_epoch).await;
+        let processed = self
+            .drain_slot_batch(&entries, &active_drain.delete_keys, slot_time_ms, delivery_epoch)
+            .await;
 
         active_drain.plan.advance(&entries[..processed]);
         let remaining_slot = match active_drain.plan.remaining_slot() {
@@ -2519,140 +2563,263 @@ impl TimerMessageStore {
         processed
     }
 
-    /// Decides, in slot order, what each entry of a drain batch needs. Planning stops at the
-    /// first entry that cannot go now: a missing or unsupported payload (quarantined here), a
-    /// message that is not due yet, or a roll after the delivery epoch moved on.
-    fn plan_slot_entries(
+    /// Delivers a drain batch and returns how many leading entries are done.
+    ///
+    /// Entries are read and converted in chunks of `PREPARE_CHUNK_ENTRIES`, up to
+    /// `timerGetMessageThreadNum` chunks at a time on the storage I/O executor, as Java spreads
+    /// this work over its get-message threads. Chunks come back in slot order, and the writes of
+    /// one chunk start while later chunks are still being prepared. Up to
+    /// `SLOT_DELIVERY_PIPELINE_DEPTH` writes stay in flight so the CommitLog can merge them.
+    ///
+    /// Planning stops at the first entry that cannot go now (see `plan_prepared_chunk`). Write
+    /// outcomes are taken in slot order: the first rejected write ends the prefix and no further
+    /// write starts. Writes already in flight behind it may still land; their entries are
+    /// delivered again with the same token when the slot resumes, which at-least-once delivery
+    /// allows. Every chunk is awaited or dropped before this returns; a dropped chunk only reads.
+    async fn drain_slot_batch(
         &self,
         entries: &[TimerLogEntry],
-        delete_keys: &HashSet<TimerDeleteIdentity>,
+        delete_keys: &Arc<HashSet<TimerDeleteIdentity>>,
         slot_time_ms: i64,
         delivery_epoch: u64,
-    ) -> Vec<SlotEntryAction> {
-        let mut actions = Vec::with_capacity(entries.len());
-        for entry in entries {
-            let Some(message) = self.look_store_message(entry.record.commit_log_offset, entry.record.size) else {
-                self.quarantine_source(entry.record.queue_offset, CorruptionReason::MissingPayload);
-                warn!("timer delivery is blocked by a missing persisted payload");
-                break;
-            };
-            // A Java timer log unit does not keep the Timer CQ offset; the source message does.
-            let source_offset = if entry.record.queue_offset >= 0 {
-                entry.record.queue_offset
-            } else {
-                message.queue_offset()
-            };
-            if need_roll(entry.record.magic) {
-                let now_ms = self.floor_time_ms(self.clock.read().wall_time_ms());
-                if parse_deliver_time_ms(&message).is_some_and(|deliver_time_ms| deliver_time_ms > now_ms) {
-                    if !self.role_state.is_current_delivery_epoch(delivery_epoch) {
-                        warn!("reject a stale timer roll batch");
-                        break;
-                    }
-                    let real_topic =
-                        message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC));
-                    let Some(message) = self.convert_timer_message(message, true) else {
-                        self.quarantine_source(source_offset, CorruptionReason::UnsupportedRecord);
-                        break;
-                    };
-                    actions.push(SlotEntryAction::Roll {
-                        source_offset,
-                        message,
-                        real_topic,
-                    });
-                    continue;
-                }
-            }
-            if is_delete_timer_message(&message) {
-                actions.push(SlotEntryAction::Skip { cancelled_topic: None });
-                continue;
-            }
-            if delete_identities_for_message(&message)
-                .iter()
-                .any(|identity| delete_keys.contains(identity))
-            {
-                actions.push(SlotEntryAction::Skip {
-                    cancelled_topic: message
-                        .property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC)),
-                });
-                continue;
-            }
+    ) -> usize {
+        let now_ms = self.clock.read().wall_time_ms();
+        let clock = PrepareClock {
+            now_ms,
+            floor_now_ms: self.floor_time_ms(now_ms),
+            precision_ms: self.precision_ms(),
+        };
+        let offload = entries.len() > PREPARE_CHUNK_ENTRIES;
+        let storage_io = self.runtime_scope.storage_io();
+        let prepare_threads = self.message_store_config.timer_get_message_thread_num.max(1);
+        let mut chunks = entries.chunks(PREPARE_CHUNK_ENTRIES);
+        let mut preparing = FuturesOrdered::new();
 
-            let Some(original_deliver_ms) = original_deliver_time_ms(&message, self.precision_ms()) else {
-                self.quarantine_source(source_offset, CorruptionReason::UnsupportedRecord);
-                warn!("delay delivery blocked because the original timer deadline is invalid");
-                break;
-            };
-            let now_ms = self.clock.read().wall_time_ms();
-            if !is_due_not_before(original_deliver_ms, slot_time_ms, self.floor_time_ms(now_ms), now_ms) {
-                break;
-            }
-            let generation = timer_generation(&message);
-            let Some(mut message) = self.convert_timer_message(message, false) else {
-                self.quarantine_source(source_offset, CorruptionReason::UnsupportedRecord);
-                break;
-            };
-            if message
-                .property(&CheetahString::from_static_str(
-                    MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
-                ))
-                .is_none()
-            {
-                // V1 records predate admission-time tokens. The fallback is deterministic for
-                // replay; new records always persist the token before entering the timer topic.
-                MessageAccessor::put_property(
-                    &mut message,
-                    CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN),
-                    stable_delivery_token(source_offset, generation),
-                );
-            }
-            message.properties_string = MessageDecoder::message_properties_to_string(message.get_properties());
-            actions.push(SlotEntryAction::Deliver {
-                source_offset,
-                message,
-                original_deliver_ms,
-            });
-        }
-        actions
-    }
-
-    /// Runs the planned entries with up to `SLOT_DELIVERY_PIPELINE_DEPTH` writes in flight, so
-    /// the CommitLog can merge them, and returns how many leading entries are done. Outcomes are
-    /// taken in slot order: the first rejected write ends the prefix and no further write starts.
-    /// Writes already in flight behind it may still land; their entries are delivered again
-    /// with the same token when the slot resumes, which at-least-once delivery allows.
-    async fn run_slot_entries(&self, actions: Vec<SlotEntryAction>, slot_time_ms: i64, delivery_epoch: u64) -> usize {
-        let mut actions = actions.into_iter();
+        let mut actions = VecDeque::new();
         let mut in_flight = FuturesOrdered::new();
-        let mut processed = 0usize;
+        let mut planning = true;
         let mut rejected = false;
+        let mut processed = 0usize;
         loop {
             while !rejected && in_flight.len() < SLOT_DELIVERY_PIPELINE_DEPTH {
-                let Some(action) = actions.next() else {
+                let Some(action) = actions.pop_front() else {
                     break;
                 };
                 in_flight.push_back(self.run_slot_entry(action, slot_time_ms, delivery_epoch));
             }
-            let Some(outcome) = in_flight.next().await else {
+            if planning && !rejected {
+                while preparing.len() < prepare_threads {
+                    let Some(chunk) = chunks.next() else {
+                        break;
+                    };
+                    preparing.push_back(self.prepare_chunk(
+                        &storage_io,
+                        offload,
+                        chunk,
+                        delete_keys,
+                        slot_time_ms,
+                        clock,
+                    ));
+                }
+                planning = !preparing.is_empty();
+            }
+            let planning_open = planning && !rejected;
+            if in_flight.is_empty() && !planning_open {
                 break;
-            };
-            if rejected {
-                continue;
             }
-            let Some(done) = outcome else {
-                rejected = true;
-                continue;
-            };
-            if let Some(topic) = done.counted_topic {
-                self.timer_metrics.add_timing_count(&topic, -1);
-                self.otel_timer_metrics.record_dequeue_total(topic.as_str());
+            tokio::select! {
+                biased;
+                Some(outcome) = in_flight.next(), if !in_flight.is_empty() => {
+                    if rejected {
+                        continue;
+                    }
+                    let Some(done) = outcome else {
+                        rejected = true;
+                        continue;
+                    };
+                    if let Some(topic) = done.counted_topic {
+                        self.timer_metrics.add_timing_count(&topic, -1);
+                        self.otel_timer_metrics.record_dequeue_total(topic.as_str());
+                    }
+                    if done.dequeued {
+                        self.dequeue_tps_counter.record(1, current_millis() as i64);
+                    }
+                    processed += 1;
+                }
+                Some(chunk) = preparing.next(), if planning_open => {
+                    planning = self.plan_prepared_chunk(chunk, &mut actions, delivery_epoch);
+                }
             }
-            if done.dequeued {
-                self.dequeue_tps_counter.record(1, current_millis() as i64);
-            }
-            processed += 1;
         }
         processed
+    }
+
+    /// Reads and converts one chunk of a drain batch, on the storage I/O executor when
+    /// `offload` is set. Preparing only reads, so a chunk the executor refuses is prepared here.
+    async fn prepare_chunk(
+        &self,
+        storage_io: &BlockingExecutor,
+        offload: bool,
+        chunk: &[TimerLogEntry],
+        delete_keys: &Arc<HashSet<TimerDeleteIdentity>>,
+        slot_time_ms: i64,
+        clock: PrepareClock,
+    ) -> Vec<PreparedSlotEntry> {
+        if offload {
+            let entries = chunk.to_vec();
+            let context = self.store_context.clone();
+            let shared_delete_keys = Arc::clone(delete_keys);
+            let prepared = storage_io
+                .spawn_io("timer-slot-prepare", move || {
+                    entries
+                        .iter()
+                        .map(|entry| {
+                            Self::prepare_slot_entry(context.as_ref(), entry, &shared_delete_keys, slot_time_ms, clock)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            if let Ok(prepared) = prepared {
+                return prepared;
+            }
+        }
+        chunk
+            .iter()
+            .map(|entry| Self::prepare_slot_entry(self.store_context.as_ref(), entry, delete_keys, slot_time_ms, clock))
+            .collect()
+    }
+
+    /// Turns a prepared chunk into actions, in slot order, and returns whether planning goes on.
+    /// It stops at the first entry that cannot go now: a missing or unsupported payload
+    /// (quarantined here), a message that is not due yet, or a roll after the delivery epoch
+    /// moved on.
+    fn plan_prepared_chunk(
+        &self,
+        chunk: Vec<PreparedSlotEntry>,
+        actions: &mut VecDeque<SlotEntryAction>,
+        delivery_epoch: u64,
+    ) -> bool {
+        for entry in chunk {
+            match entry {
+                PreparedSlotEntry::MissingPayload { queue_offset } => {
+                    self.quarantine_source(queue_offset, CorruptionReason::MissingPayload);
+                    warn!("timer delivery is blocked by a missing persisted payload");
+                    return false;
+                }
+                PreparedSlotEntry::Roll {
+                    source_offset,
+                    message,
+                    real_topic,
+                } => {
+                    if !self.role_state.is_current_delivery_epoch(delivery_epoch) {
+                        warn!("reject a stale timer roll batch");
+                        return false;
+                    }
+                    let Some(message) = message else {
+                        self.quarantine_source(source_offset, CorruptionReason::UnsupportedRecord);
+                        return false;
+                    };
+                    actions.push_back(SlotEntryAction::Roll {
+                        source_offset,
+                        message,
+                        real_topic,
+                    });
+                }
+                PreparedSlotEntry::Skip { cancelled_topic } => {
+                    actions.push_back(SlotEntryAction::Skip { cancelled_topic });
+                }
+                PreparedSlotEntry::InvalidDeadline { source_offset } => {
+                    self.quarantine_source(source_offset, CorruptionReason::UnsupportedRecord);
+                    warn!("delay delivery blocked because the original timer deadline is invalid");
+                    return false;
+                }
+                PreparedSlotEntry::NotDue => return false,
+                PreparedSlotEntry::Unsupported { source_offset } => {
+                    self.quarantine_source(source_offset, CorruptionReason::UnsupportedRecord);
+                    return false;
+                }
+                PreparedSlotEntry::Deliver {
+                    source_offset,
+                    message,
+                    original_deliver_ms,
+                } => actions.push_back(SlotEntryAction::Deliver {
+                    source_offset,
+                    message,
+                    original_deliver_ms,
+                }),
+            }
+        }
+        true
+    }
+
+    /// Reads one drain entry's payload and works out what it needs, without side effects.
+    fn prepare_slot_entry(
+        context: Option<&TimerStoreContext>,
+        entry: &TimerLogEntry,
+        delete_keys: &HashSet<TimerDeleteIdentity>,
+        slot_time_ms: i64,
+        clock: PrepareClock,
+    ) -> PreparedSlotEntry {
+        let Some(message) = context.and_then(|context| {
+            context.look_message_by_offset_with_size(entry.record.commit_log_offset, entry.record.size)
+        }) else {
+            return PreparedSlotEntry::MissingPayload {
+                queue_offset: entry.record.queue_offset,
+            };
+        };
+        // A Java timer log unit does not keep the Timer CQ offset; the source message does.
+        let source_offset = if entry.record.queue_offset >= 0 {
+            entry.record.queue_offset
+        } else {
+            message.queue_offset()
+        };
+        if need_roll(entry.record.magic)
+            && parse_deliver_time_ms(&message).is_some_and(|deliver_time_ms| deliver_time_ms > clock.floor_now_ms)
+        {
+            let real_topic = message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC));
+            return PreparedSlotEntry::Roll {
+                source_offset,
+                message: Self::convert_timer_message(message, true),
+                real_topic,
+            };
+        }
+        if is_delete_timer_message(&message) {
+            return PreparedSlotEntry::Skip { cancelled_topic: None };
+        }
+        if delete_identities_for_message(&message)
+            .iter()
+            .any(|identity| delete_keys.contains(identity))
+        {
+            return PreparedSlotEntry::Skip {
+                cancelled_topic: message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC)),
+            };
+        }
+
+        let Some(original_deliver_ms) = original_deliver_time_ms(&message, clock.precision_ms) else {
+            return PreparedSlotEntry::InvalidDeadline { source_offset };
+        };
+        if !is_due_not_before(original_deliver_ms, slot_time_ms, clock.floor_now_ms, clock.now_ms) {
+            return PreparedSlotEntry::NotDue;
+        }
+        let generation = timer_generation(&message);
+        let Some(mut message) = Self::convert_timer_message(message, false) else {
+            return PreparedSlotEntry::Unsupported { source_offset };
+        };
+        let properties = message.message_ext_inner.message.properties_mut().as_map_mut();
+        if !properties.contains_key(MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN) {
+            // V1 records predate admission-time tokens. The fallback is deterministic for
+            // replay; new records always persist the token before entering the timer topic.
+            properties.insert(
+                CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN),
+                stable_delivery_token(source_offset, generation),
+            );
+            message.properties_string = MessageDecoder::message_properties_to_string(message.get_properties());
+        }
+        PreparedSlotEntry::Deliver {
+            source_offset,
+            message,
+            original_deliver_ms,
+        }
     }
 
     /// Performs one planned entry and returns what to count for it, or `None` when the entry
@@ -2845,7 +3012,10 @@ impl TimerMessageStore {
             }
         }
         plan.skip(processed)?;
-        Ok(ActiveSlotDrain { plan, delete_keys })
+        Ok(ActiveSlotDrain {
+            plan,
+            delete_keys: Arc::new(delete_keys),
+        })
     }
 
     /// Pending entries of `slot` in `storage`, oldest first.
@@ -2864,7 +3034,13 @@ impl TimerMessageStore {
         Ok(entries)
     }
 
-    fn convert_timer_message(&self, message: MessageExt, need_roll: bool) -> Option<MessageExtBrokerInner> {
+    /// Builds the write for one slot entry: the timer message again for its next round when
+    /// `need_roll`, otherwise the original message for its real topic.
+    ///
+    /// Properties are edited in the map and encoded once at the end. The property setters of
+    /// `MessageExtBrokerInner` re-encode the whole properties string on every call, which made
+    /// this conversion the largest per-message cost of a slot drain.
+    fn convert_timer_message(message: MessageExt, need_roll: bool) -> Option<MessageExtBrokerInner> {
         let mut inner = MessageExtBrokerInner::default();
         let sys_flag = message.sys_flag();
         let born_timestamp = message.born_timestamp();
@@ -2874,38 +3050,36 @@ impl TimerMessageStore {
         let store_timestamp = message.store_timestamp();
         let timer_topic = message.topic().clone();
         let timer_queue_id = message.queue_id();
-        let message_inner = message.message;
-        let message_properties = message_inner.properties().as_map().clone();
+        let mut message_inner = message.message;
+        let mut properties = std::mem::take(message_inner.properties_mut().as_map_mut());
 
         if let Some(body) = message_inner.get_body() {
             inner.set_body(body.clone());
         }
         inner.set_flag(message_inner.flag());
-        MessageAccessor::set_properties(&mut inner, message_properties);
+        // A delivered message drops these again below; only a roll carries them on.
         if store_timestamp > 0 {
-            MessageAccessor::put_property(
-                &mut inner,
+            properties.insert(
                 CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ENQUEUE_MS),
                 CheetahString::from_string(store_timestamp.to_string()),
             );
         }
-        MessageAccessor::put_property(
-            &mut inner,
+        properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DEQUEUE_MS),
             CheetahString::from_string(current_millis().to_string()),
         );
         if need_roll {
-            let next_roll_times = inner
-                .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ROLL_TIMES))
+            let next_roll_times = properties
+                .get(MessageConst::PROPERTY_TIMER_ROLL_TIMES)
                 .and_then(|times| times.parse::<i32>().ok())
                 .unwrap_or_default()
                 + 1;
-            MessageAccessor::put_property(
-                &mut inner,
+            properties.insert(
                 CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ROLL_TIMES),
                 CheetahString::from_string(next_roll_times.to_string()),
             );
         }
+        inner.message_ext_inner.set_properties(properties);
         let topic_filter_type = message_single::parse_topic_filter_type(inner.sys_flag());
         inner.tags_code = MessageExtBrokerInner::tags_string2tags_code(
             &topic_filter_type,
@@ -2939,9 +3113,10 @@ impl TimerMessageStore {
                     }
                 }
             }
-            MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_REAL_TOPIC);
-            MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_REAL_QUEUE_ID);
+            let properties = inner.message_ext_inner.message.properties_mut().as_map_mut();
             for property in [
+                MessageConst::PROPERTY_REAL_TOPIC,
+                MessageConst::PROPERTY_REAL_QUEUE_ID,
                 MessageConst::PROPERTY_TIMER_OUT_MS,
                 MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS,
                 MessageConst::PROPERTY_TIMER_DELAY_SEC,
@@ -2957,7 +3132,7 @@ impl TimerMessageStore {
                 MessageConst::PROPERTY_TIMER_FORMAT_VERSION,
                 MessageConst::PROPERTY_TIMER_POLICY_FINGERPRINT,
             ] {
-                MessageAccessor::clear_property(&mut inner, property);
+                properties.remove(property);
             }
         }
         inner.properties_string = MessageDecoder::message_properties_to_string(inner.get_properties());
@@ -5271,5 +5446,104 @@ mod tests {
         assert!(source_wake.notified().now_or_never().is_some());
         // Reput woke the stage after the record reached the Timer consume queue.
         assert_eq!(timer_message_store.process_once().await, 1);
+    }
+
+    fn stored_timer_message() -> MessageExt {
+        let mut message = MessageExt::default();
+        message.message.set_topic(CheetahString::from_static_str(TIMER_TOPIC));
+        message.set_queue_id(3);
+        message.set_store_timestamp(1_234);
+        message.message.set_body(Some(Bytes::from_static(b"converted-body")));
+        message.message.set_properties(HashMap::from(
+            [
+                (MessageConst::PROPERTY_REAL_TOPIC, "real_topic"),
+                (MessageConst::PROPERTY_REAL_QUEUE_ID, "2"),
+                (MessageConst::PROPERTY_TIMER_OUT_MS, "5000"),
+                (MessageConst::PROPERTY_TIMER_ROLL_TIMES, "2"),
+                (MessageConst::PROPERTY_TIMER_GENERATION, "7"),
+                (MessageConst::PROPERTY_TAGS, "tag-a"),
+                (MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX, "unique-a"),
+            ]
+            .map(|(key, value)| {
+                (
+                    CheetahString::from_static_str(key),
+                    CheetahString::from_static_str(value),
+                )
+            }),
+        ));
+        message
+    }
+
+    fn assert_properties_string_matches(message: &MessageExtBrokerInner) {
+        assert_eq!(
+            &super::MessageDecoder::string_to_message_properties(Some(&message.properties_string)),
+            message.get_properties()
+        );
+    }
+
+    #[test]
+    fn converting_a_due_timer_message_routes_it_and_drops_the_timer_properties() {
+        let message = TimerMessageStore::convert_timer_message(stored_timer_message(), false).expect("convertible");
+
+        assert_eq!(message.get_topic().as_str(), "real_topic");
+        assert_eq!(message.message_ext_inner.queue_id, 2);
+        assert_eq!(
+            message.get_body().map(|body| body.as_ref()),
+            Some(&b"converted-body"[..])
+        );
+        let mut keys = message
+            .get_properties()
+            .keys()
+            .map(|key| key.as_str().to_owned())
+            .collect::<Vec<_>>();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                MessageConst::PROPERTY_TAGS,
+                MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+                MessageConst::PROPERTY_WAIT_STORE_MSG_OK,
+            ]
+        );
+        assert_eq!(
+            message.tags_code,
+            MessageExtBrokerInner::tags_string2tags_code(
+                &super::message_single::parse_topic_filter_type(0),
+                &CheetahString::from_static_str("tag-a"),
+            )
+        );
+        assert_properties_string_matches(&message);
+    }
+
+    #[test]
+    fn converting_a_roll_keeps_the_timer_route_and_counts_the_round() {
+        let message = TimerMessageStore::convert_timer_message(stored_timer_message(), true).expect("convertible");
+
+        assert_eq!(message.get_topic().as_str(), TIMER_TOPIC);
+        assert_eq!(message.message_ext_inner.queue_id, 3);
+        assert_eq!(
+            message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ROLL_TIMES)),
+            Some(CheetahString::from_static_str("3"))
+        );
+        assert_eq!(
+            message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ENQUEUE_MS)),
+            Some(CheetahString::from_static_str("1234"))
+        );
+        assert!(message
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DEQUEUE_MS))
+            .is_some());
+        assert_eq!(
+            message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC)),
+            Some(CheetahString::from_static_str("real_topic"))
+        );
+        assert_properties_string_matches(&message);
+    }
+
+    #[test]
+    fn converting_without_a_real_topic_refuses_the_message() {
+        let mut stored = stored_timer_message();
+        stored.message.clear_property(MessageConst::PROPERTY_REAL_TOPIC);
+
+        assert!(TimerMessageStore::convert_timer_message(stored, false).is_none());
     }
 }
