@@ -93,7 +93,8 @@ impl BrokerRuntime {
     ) -> BrokerBasicServiceShutdownReport {
         let started = Instant::now();
         let progress = BrokerShutdownProgress::new();
-        match await_shutdown_deadline(deadline, self.shutdown_basic_service_inner(deadline, progress.clone())).await {
+        let shutdown = heap_future(|| self.shutdown_basic_service_inner(deadline, progress.clone()));
+        match await_shutdown_deadline(deadline, shutdown).await {
             Ok(mut report) => {
                 // An inner deadline can resolve before the outer timer is polled. Preserve
                 // the component reports, but still account for the exhausted total budget.
@@ -1057,7 +1058,9 @@ impl BrokerRuntime {
     }
 
     pub async fn start(&mut self) -> Result<BrokerReadiness, BrokerStartupError> {
-        match self.start_inner().await {
+        // A failed start rolls back while this frame is still live, so keep the startup body
+        // out of it; the rollback below is small once the shutdown body is on the heap.
+        match heap_future(|| self.start_inner()).await {
             Ok(readiness) => Ok(readiness),
             Err(cause) => Err(self.rollback_startup(cause).await),
         }
