@@ -70,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **refactor(client):** Remove the unused internal `pull_kernel_impl_default_size` wrapper ([#11942](https://github.com/mxsm/rocketmq-rust/issues/11942)).
 - **refactor(client):** Remove the unused internal `prepare_retry` helper ([#11943](https://github.com/mxsm/rocketmq-rust/issues/11943)).
 - **refactor(client):** Remove the unused lock flag and accessors from the internal `PopRequest` ([#11941](https://github.com/mxsm/rocketmq-rust/issues/11941)).
 - **refactor(store):** Remove the unused internal `WaitNotifyObject` placeholder module ([#11884](https://github.com/mxsm/rocketmq-rust/issues/11884)).

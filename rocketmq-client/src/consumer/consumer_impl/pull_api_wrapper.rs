@@ -490,50 +490,6 @@ impl PullAPIWrapper {
         }
     }
 
-    /// Overload of [`pull_kernel_impl`] without `max_size_in_bytes`; defaults to [`i32::MAX`],
-    /// matching Java's second `pullKernelImpl` overload.
-    ///
-    /// [`pull_kernel_impl`]: PullAPIWrapper::pull_kernel_impl
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "existing pull convenience signature is tracked by the lint debt registry"
-    )]
-    pub async fn pull_kernel_impl_default_size<PCB>(
-        &self,
-        mq: &MessageQueue,
-        sub_expression: CheetahString,
-        expression_type: CheetahString,
-        sub_version: i64,
-        offset: i64,
-        max_nums: i32,
-        sys_flag: i32,
-        commit_offset: i64,
-        broker_suspend_max_time_millis: u64,
-        timeout_millis: u64,
-        communication_mode: CommunicationMode,
-        pull_callback: PCB,
-    ) -> crate::ClientResult<Option<PullResultExt>>
-    where
-        PCB: PullCallback + 'static,
-    {
-        self.pull_kernel_impl(
-            mq,
-            sub_expression,
-            expression_type,
-            sub_version,
-            offset,
-            max_nums,
-            i32::MAX,
-            sys_flag,
-            commit_offset,
-            broker_suspend_max_time_millis,
-            timeout_millis,
-            communication_mode,
-            pull_callback,
-        )
-        .await
-    }
-
     /// Returns whether broker selection is driven by the user-configured
     /// [`default_broker_id`][PullAPIWrapper::default_broker_id] rather than the recommendation
     /// table.
