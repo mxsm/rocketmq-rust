@@ -75,14 +75,18 @@ impl TimerStoreMode {
 }
 
 /// On-disk format of the Java-compatible engine's TimerLog, TimerWheel and checkpoint.
+///
+/// The default is [`Java`](Self::Java), so a Rust Broker can replace a Java Broker in place
+/// without losing its pending timers. A store that still holds `rust_v2` timers delivers them
+/// from those files while new timers go to the configured format.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TimerFileFormat {
     /// Segmented, checksummed Rust files with A/B wheel pages.
-    #[default]
     RustV2,
     /// The Apache RocketMQ 5.x `timerlog`, `timerwheel` and `timercheck` files, so the store can
     /// take over a Java Broker's pending timers and hand them back.
+    #[default]
     Java,
 }
 
