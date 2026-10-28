@@ -3565,6 +3565,18 @@ mod tests {
         })
     }
 
+    /// For tests that read or damage the Rust V2 TimerLog, wheel and checkpoint files directly.
+    fn rust_v2_config_with_root(root_dir: &str) -> Arc<MessageStoreConfig> {
+        in_rust_v2(config_with_root(root_dir))
+    }
+
+    fn in_rust_v2(config: Arc<MessageStoreConfig>) -> Arc<MessageStoreConfig> {
+        Arc::new(MessageStoreConfig {
+            timer_file_format: rocketmq_store_api::TimerFileFormat::RustV2,
+            ..(*config).clone()
+        })
+    }
+
     fn standalone_timer_store(config: Arc<MessageStoreConfig>) -> TimerMessageStore {
         TimerMessageStore::new_with_message_store_config(
             config,
@@ -3761,7 +3773,7 @@ mod tests {
     fn load_creates_durable_timer_artifacts_and_restores_checkpoint() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let config = config_with_root(root_dir.as_str());
+        let config = rust_v2_config_with_root(root_dir.as_str());
 
         let timer_message_store = standalone_timer_store(config.clone());
         assert!(timer_message_store.load());
@@ -3863,7 +3875,7 @@ mod tests {
     fn load_restores_timer_log_and_wheel_state() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let config = config_with_root(root_dir.as_str());
+        let config = rust_v2_config_with_root(root_dir.as_str());
         let deliver_time_ms = 30_000;
 
         let timer_message_store = standalone_timer_store(config.clone());
@@ -3896,7 +3908,7 @@ mod tests {
     fn load_truncates_timer_log_tail_and_clears_invalid_wheel_slot() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let config = config_with_root(root_dir.as_str());
+        let config = rust_v2_config_with_root(root_dir.as_str());
         let valid_time_ms = 10_000;
         let invalid_time_ms = 20_000;
 
@@ -4808,7 +4820,8 @@ mod tests {
     async fn restart_allows_duplicate_delivery_when_checkpoint_lags_after_delivery() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        let (mut store, timer_message_store, real_topic) =
+            build_store_with_timer_and_config(rust_v2_config_with_root(root_dir.as_str()));
 
         assert!(initialize_and_load(&mut store).await);
         timer_message_store.set_should_running_dequeue(true);
@@ -4829,7 +4842,7 @@ mod tests {
         checkpoint.flush().unwrap();
 
         let (mut reloaded_store, reloaded_timer_message_store, reloaded_topic) =
-            build_store_with_timer(root_dir.as_str());
+            build_store_with_timer_and_config(rust_v2_config_with_root(root_dir.as_str()));
         assert_eq!(reloaded_topic, real_topic);
         assert!(initialize_and_load(&mut reloaded_store).await);
         reloaded_timer_message_store.set_should_running_dequeue(true);
@@ -4850,7 +4863,8 @@ mod tests {
     async fn restart_rebuilds_committed_timer_wheel_from_segmented_log() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        let (mut store, timer_message_store, real_topic) =
+            build_store_with_timer_and_config(rust_v2_config_with_root(root_dir.as_str()));
 
         assert!(initialize_and_load(&mut store).await);
         let deliver_ms = current_millis() + 60_000;
@@ -4876,7 +4890,8 @@ mod tests {
                 .unwrap();
         }
 
-        let (mut reloaded_store, reloaded_timer_message_store, _) = build_store_with_timer(root_dir.as_str());
+        let (mut reloaded_store, reloaded_timer_message_store, _) =
+            build_store_with_timer_and_config(rust_v2_config_with_root(root_dir.as_str()));
         assert!(initialize_and_load(&mut reloaded_store).await);
         let metrics = reloaded_timer_message_store.storage_metrics_snapshot();
         let rebuilt_slot = reloaded_timer_message_store
@@ -4946,7 +4961,8 @@ mod tests {
     async fn enqueue_batches_link_slot_chains_within_and_across_batches() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+        let (mut store, timer_message_store, real_topic) =
+            build_store_with_timer_and_config(rust_v2_config_with_root(root_dir.as_str()));
 
         assert!(initialize_and_load(&mut store).await);
         // Whole seconds, so the slot time (the deadline rounded up to the precision) is the
@@ -5115,7 +5131,7 @@ mod tests {
     async fn process_once_rolls_due_message_back_to_timer_topic_with_tracking_properties() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let config = config_with_root_precision_and_roll_window(root_dir.as_str(), 100, 4);
+        let config = in_rust_v2(config_with_root_precision_and_roll_window(root_dir.as_str(), 100, 4));
         let (mut store, timer_message_store, real_topic) = build_store_with_timer_and_config(config);
 
         let clock = Arc::new(ManualTimerClock::new(1_700_000_000_000));

@@ -752,8 +752,9 @@ pub struct MessageStoreConfig {
     #[serde(default = "defaults::timer_store_mode")]
     pub timer_store_mode: TimerStoreMode,
 
-    /// On-disk format of the Java-compatible timer store. `java` reads and writes the files of
-    /// an Apache RocketMQ 5.x Broker.
+    /// On-disk format of the Java-compatible timer store. `java`, the default, reads and writes
+    /// the files of an Apache RocketMQ 5.x Broker; `rust_v2` keeps the segmented Rust files.
+    /// After a change, timers still held in the other format are delivered from it first.
     #[serde(default)]
     pub timer_file_format: TimerFileFormat,
 

@@ -34,6 +34,7 @@ use rocketmq_store_api::TimerFileFormat;
 use rocketmq_store_local::timer::java_format::java_timer_wheel_len;
 use rocketmq_store_local::timer::java_format::java_topic_hash;
 use rocketmq_store_local::timer::java_format::JavaTimerLogRecord;
+use rocketmq_store_local::timer::java_format::JAVA_TIMER_LOG_UNIT_SIZE;
 use tempfile::tempdir;
 
 use crate::base::backend_ops::BackendOps;
@@ -214,6 +215,30 @@ async fn java_format_writes_apache_timer_files_and_delivers_from_them() {
     assert_eq!(timer_store.process_once().await, 4);
     store.reput_once().await;
     assert_eq!(delivered(&store), 4);
+    close_store(store, timer_store).await;
+}
+
+#[tokio::test]
+async fn the_default_configuration_keeps_timers_in_java_files() {
+    let root = tempdir().unwrap();
+    let config = Arc::new(MessageStoreConfig {
+        store_path_root_dir: CheetahString::from_string(root.path().to_string_lossy().into_owned()),
+        read_uncommitted: true,
+        ..MessageStoreConfig::default()
+    });
+    let (mut store, timer_store) = open_store(config).await.expect("open a store with default settings");
+    put_all(&mut store, vec![timer_message(current_millis() + 60_000, "default")]).await;
+    assert_eq!(timer_store.process_once().await, 1);
+
+    let mut unit = [0u8; JAVA_TIMER_LOG_UNIT_SIZE];
+    std::fs::File::open(timer_log_file(root.path(), 0))
+        .and_then(|mut file| std::io::Read::read_exact(&mut file, &mut unit))
+        .expect("read the first TimerLog unit");
+    assert!(matches!(
+        JavaTimerLogRecord::decode(&unit),
+        Ok(JavaTimerLogRecord::Unit(_))
+    ));
+    assert!(!root.path().join("timer-v2").exists());
     close_store(store, timer_store).await;
 }
 
