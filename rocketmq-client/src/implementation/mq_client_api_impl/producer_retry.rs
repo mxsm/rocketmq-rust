@@ -432,38 +432,4 @@ impl MQClientAPIImpl {
             ..Default::default()
         })
     }
-
-    pub(super) async fn prepare_retry<T: MessageTrait>(
-        &self,
-        broker_name: &CheetahString,
-        msg: &T,
-        _request: &mut RemotingCommand,
-        topic_publish_info: Option<&TopicPublishInfo>,
-        instance: Option<&Arc<MQClientInstance>>,
-        producer: &DefaultMQProducerImpl,
-    ) -> Option<(CheetahString, CheetahString)> {
-        let mut retry_broker_name = broker_name.clone();
-
-        if let Some(topic_publish_info) = topic_publish_info {
-            let mq_chosen = producer.select_one_message_queue(topic_publish_info, Some(&retry_broker_name), false);
-            let Some(mq_chosen) = mq_chosen.as_ref() else {
-                warn!(
-                    "prepare async retry failed: no message queue selected for topic={}",
-                    msg.topic()
-                );
-                return None;
-            };
-            if let Some(instance) = instance {
-                retry_broker_name = instance.get_broker_name_from_message_queue(mq_chosen).await;
-            }
-        }
-
-        if let Some(instance) = instance {
-            if let Some(addr) = instance.find_broker_address_in_publish(retry_broker_name.as_ref()) {
-                return Some((addr, retry_broker_name));
-            }
-        }
-
-        None
-    }
 }
