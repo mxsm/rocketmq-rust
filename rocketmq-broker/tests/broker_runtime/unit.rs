@@ -172,6 +172,9 @@ use super::*;
 mod pop_lite_core_causality_tests;
 mod pop_lite_deferred_wire_tests;
 
+// Keep full-runtime fixtures within CI disk quotas when their stores coexist.
+const TEST_COMMIT_LOG_FILE_SIZE: usize = 50 * 1024 * 1024;
+
 impl BrokerRuntime {
     pub(crate) fn pull_message_context_for_test(&self) -> Arc<PullMessageProcessorContext<BrokerMessageStore>> {
         self.composition.state.build_pull_message_context()
@@ -1799,6 +1802,7 @@ async fn new_lite_test_runtime(label: &str) -> BrokerRuntime {
         enable_multi_dispatch: true,
         max_lmq_consume_queue_num: 32,
         read_uncommitted: true,
+        mapped_file_size_commit_log: TEST_COMMIT_LOG_FILE_SIZE,
         ..MessageStoreConfig::default()
     });
     let mut runtime = BrokerRuntime::new_with_service_context(
@@ -1821,6 +1825,7 @@ async fn new_phase3_test_runtime(label: &str) -> BrokerRuntime {
         store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
         flush_disk_type: FlushDiskType::AsyncFlush,
         ha_listen_port: allocate_broker_runtime_test_port() as usize,
+        mapped_file_size_commit_log: TEST_COMMIT_LOG_FILE_SIZE,
         ..MessageStoreConfig::default()
     });
     let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
@@ -1847,6 +1852,7 @@ async fn new_phase3_lifecycle_test_runtime(label: &str) -> BrokerRuntime {
         store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
         flush_disk_type: FlushDiskType::AsyncFlush,
         ha_listen_port: allocate_broker_runtime_test_port() as usize,
+        mapped_file_size_commit_log: TEST_COMMIT_LOG_FILE_SIZE,
         ..MessageStoreConfig::default()
     });
     let mut runtime = BrokerRuntime::new_with_service_context(
@@ -1947,6 +1953,7 @@ fn allocate_broker_runtime_test_port() -> u16 {
 fn tieredstore_message_store_config(root: &Path) -> MessageStoreConfig {
     serde_json::from_value(serde_json::json!({
         "storePathRootDir": root.to_string_lossy(),
+        "mappedFileSizeCommitLog": TEST_COMMIT_LOG_FILE_SIZE,
         "duplicationEnable": true,
         "flushDiskType": "ASYNC_FLUSH",
         "readUncommitted": true,
@@ -2782,6 +2789,7 @@ fn new_controller_mode_runtime_with_store_key(
         min_in_sync_replicas: 1,
         all_ack_in_sync_state_set: true,
         enable_controller_mode: true,
+        mapped_file_size_commit_log: TEST_COMMIT_LOG_FILE_SIZE,
         ..MessageStoreConfig::default()
     });
 
