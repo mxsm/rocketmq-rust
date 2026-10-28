@@ -89,6 +89,10 @@ mod defaults {
         1000 // 1 second
     }
 
+    pub const fn timer_enable_retry_until_success() -> bool {
+        true
+    }
+
     pub fn timer_get_message_thread_num() -> usize {
         3
     }
@@ -870,8 +874,25 @@ pub struct MessageStoreConfig {
     #[serde(default = "defaults::timer_check_metrics_when")]
     pub timer_check_metrics_when: String,
 
+    /// Whether a JavaCompat timer that cannot be handled is skipped instead of stopping the
+    /// timers behind it, as Apache RocketMQ's switch of the same name does. That covers an
+    /// unreadable or misrouted Timer-topic record, a payload no longer in the CommitLog, a
+    /// message that cannot be converted for delivery, and a write the store rejects as invalid.
+    /// A skipped timer is recorded in the timer quarantine manifest and is not delivered.
+    ///
+    /// Defaults to `false`: such a timer is quarantined and its slot waits for an operator. Java
+    /// also defaults to `false`, but it still drops a missing payload or a rejected message.
     #[serde(default)]
     pub timer_skip_unknown_error: bool,
+
+    /// Whether a JavaCompat delivery whose write keeps failing for a transient reason is retried
+    /// until it succeeds. With `false`, a timer whose write has failed three times is dropped and
+    /// logged, as Apache RocketMQ does by default.
+    ///
+    /// Defaults to `true`, unlike Java's `false`, so that no timer is lost without an operator
+    /// choosing it.
+    #[serde(default = "defaults::timer_enable_retry_until_success")]
+    pub timer_enable_retry_until_success: bool,
 
     #[serde(default)]
     pub timer_warm_enable: bool,
@@ -1515,6 +1536,7 @@ impl Default for MessageStoreConfig {
             timer_stop_enqueue: false,
             timer_check_metrics_when: "".to_string(),
             timer_skip_unknown_error: false,
+            timer_enable_retry_until_success: defaults::timer_enable_retry_until_success(),
             timer_warm_enable: false,
             timer_stop_dequeue: false,
             timer_congest_num_each_slot: 0,
@@ -2127,6 +2149,10 @@ impl MessageStoreConfig {
         properties.insert(
             "timerSkipUnknownError".to_string(),
             self.timer_skip_unknown_error.to_string(),
+        );
+        properties.insert(
+            "timerEnableRetryUntilSuccess".to_string(),
+            self.timer_enable_retry_until_success.to_string(),
         );
         properties.insert("timerWarmEnable".to_string(), self.timer_warm_enable.to_string());
         properties.insert("timerStopDequeue".to_string(), self.timer_stop_dequeue.to_string());
