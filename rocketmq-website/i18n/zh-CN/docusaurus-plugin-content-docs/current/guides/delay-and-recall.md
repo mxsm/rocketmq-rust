@@ -87,6 +87,19 @@ ExtendedTimeline 模式中，当前处理器使用类型化取消操作。`Cance
 
 批次校验和事务生产者在各自路径拒绝延迟或定时组合。延迟发送也不会与后来发往同一业务主题的普通消息建立顺序关系。
 
+## 定时文件与无法投递的定时消息
+
+标准定时引擎默认把索引保存在 Apache RocketMQ 5.x 的 `timerlog`、`timerwheel` 和 `config/timercheck` 文件中（`timerFileFormat = "java"`）。因此 Rust Broker 与 Java 5.x Broker 可以接管同一个存储目录，而不丢失待投递的定时消息。设置 `timerFileFormat = "rust_v2"` 则改用分段的 Rust 文件。修改该设置后，仍保存在原格式中的定时消息会继续从原格式投递。
+
+`[store]` 中的两个键决定无法投递的定时消息如何处理。它们沿用 Apache RocketMQ 中的同名开关，但 Rust 的默认值不会丢弃任何定时消息：
+
+| 键 | Rust 默认值 | Java 默认值 | 作用 |
+| --- | --- | --- | --- |
+| `timerSkipUnknownError` | `false` | `false` | 设为 `true` 时，隔离并跳过这类定时消息：记录无法读取或路由、消息体已不在 CommitLog 中，或写入被 Store 拒绝。为 `false` 时，该消息被隔离，排在它之后的定时消息等待运维处理。 |
+| `timerEnableRetryUntilSuccess` | `true` | `false` | 设为 `false` 时，因临时原因写入失败三次的投递会被丢弃并记录日志，与 Java 的默认行为一致。为 `true` 时，写入会一直重试直到成功。 |
+
+即使 `timerSkipUnknownError = false`，Java 仍会丢弃消息体缺失或被拒绝的消息，而 Rust 会保留它们。被隔离的定时消息记录在存储根目录下的 `timer-v2/quarantine.jsonl` 中。
+
 ## 示例与验证范围
 
 在 `rocketmq-example/` 中执行：

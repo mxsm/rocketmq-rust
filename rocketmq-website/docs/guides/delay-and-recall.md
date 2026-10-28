@@ -87,6 +87,19 @@ In either mode, recall does not undo a consumer's completed external side effect
 
 Batch validation and the transaction producer reject delayed/timer combinations in their respective paths. A delayed send also does not impose ordering relative to ordinary messages sent later to the same business topic.
 
+## Timer files and undeliverable timers
+
+The standard timer keeps its index in the Apache RocketMQ 5.x `timerlog`, `timerwheel` and `config/timercheck` files by default (`timerFileFormat = "java"`). A Rust Broker and a Java 5.x Broker can therefore take over the same store directory without losing pending timers. `timerFileFormat = "rust_v2"` selects the segmented Rust files instead. After the setting changes, timers still held in the previous format are delivered from it.
+
+Two `[store]` keys decide what happens to a timer that cannot be delivered. They keep the names of their Apache RocketMQ counterparts, but the Rust defaults never drop a timer:
+
+| Key | Rust default | Java default | Effect |
+| --- | --- | --- | --- |
+| `timerSkipUnknownError` | `false` | `false` | `true` quarantines and skips such a timer: one whose record cannot be read or routed, whose payload has left the CommitLog, or whose write the Store rejects. With `false` it is quarantined and the timers behind it wait for an operator. |
+| `timerEnableRetryUntilSuccess` | `true` | `false` | `false` drops and logs a delivery whose write has failed three times for a transient reason, as Java does by default. With `true` the write is retried until it succeeds. |
+
+With `timerSkipUnknownError = false`, Java still drops a missing payload or a rejected message; Rust keeps it. Quarantined timers are recorded in `timer-v2/quarantine.jsonl` under the store root.
+
 ## Example and validation scope
 
 From `rocketmq-example/`:

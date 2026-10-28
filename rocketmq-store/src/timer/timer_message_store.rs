@@ -150,6 +150,8 @@ const SLOT_DELIVERY_PIPELINE_DEPTH: usize = 32;
 /// start while later chunks are still prepared. A batch no larger than one chunk is prepared on
 /// the delivering task.
 const PREPARE_CHUNK_ENTRIES: usize = 16;
+/// Writes one delivery gets while `timerEnableRetryUntilSuccess` is off, as in Java.
+const TIMER_WRITE_ATTEMPTS: u32 = 3;
 /// How often a checkpoint deletes TimerLog files no pending timer reads; Java runs its TimerLog
 /// cleanup every 30 seconds too.
 const TIMER_LOG_CLEANUP_INTERVAL_MS: i64 = 30_000;
@@ -187,7 +189,10 @@ enum PreparedSlotEntry {
     /// Needs no write.
     Skip { cancelled_topic: Option<CheetahString> },
     /// The message carries no valid original deadline.
-    InvalidDeadline { source_offset: i64 },
+    InvalidDeadline {
+        source_offset: i64,
+        real_topic: Option<CheetahString>,
+    },
     /// The slot is not due for this message yet.
     NotDue,
     /// Due, but it cannot be converted for its real topic.
@@ -207,6 +212,33 @@ struct PrepareClock {
     now_ms: i64,
     floor_now_ms: i64,
     precision_ms: i64,
+}
+
+/// What a delivery write means for its slot entry.
+enum WriteOutcome {
+    /// The message reached its topic.
+    Written,
+    /// The timer leaves the slot without a write, as `timerSkipUnknownError` or
+    /// `timerEnableRetryUntilSuccess = false` allows.
+    Dropped,
+    /// The entry stays in the slot for a later attempt or an operator.
+    Stays,
+}
+
+impl WriteOutcome {
+    fn slot_entry_done(self, counted_topic: Option<CheetahString>) -> Option<SlotEntryDone> {
+        match self {
+            Self::Written => Some(SlotEntryDone {
+                counted_topic,
+                dequeued: true,
+            }),
+            Self::Dropped => Some(SlotEntryDone {
+                counted_topic,
+                dequeued: false,
+            }),
+            Self::Stays => None,
+        }
+    }
 }
 
 /// What a completed slot entry adds to the timer metrics.
@@ -499,6 +531,9 @@ pub struct TimerMessageStore {
     scheduler_tasks: Mutex<Option<ScheduledTaskGroup>>,
     pipeline: Mutex<Option<Arc<TimerPipeline>>>,
     quarantine_manifest: QuarantineManifest,
+    /// Failed write attempts per Timer CQ offset, kept only while `timerEnableRetryUntilSuccess`
+    /// is off.
+    write_failures: Mutex<HashMap<i64, u32>>,
     enqueue_tps_counter: TimerTpsCounter,
     dequeue_tps_counter: TimerTpsCounter,
     #[cfg(test)]
@@ -509,10 +544,6 @@ impl TimerMessageStore {
     pub fn load(&self) -> bool {
         if self.message_store_config.timer_store_mode != TimerStoreMode::JavaCompat {
             error!("extended timer timeline is configured but its storage capability is not installed");
-            return false;
-        }
-        if self.message_store_config.timer_skip_unknown_error {
-            error!("timerSkipUnknownError is unsupported because timer corruption must fail closed");
             return false;
         }
         let root_dir = self.message_store_config.store_path_root_dir.as_str();
@@ -1232,6 +1263,7 @@ impl TimerMessageStore {
             scheduler_tasks: Mutex::new(None),
             pipeline: Mutex::new(None),
             quarantine_manifest,
+            write_failures: Mutex::new(HashMap::new()),
             enqueue_tps_counter: TimerTpsCounter::default(),
             dequeue_tps_counter: TimerTpsCounter::default(),
             #[cfg(test)]
@@ -2190,6 +2222,11 @@ impl TimerMessageStore {
                         TimerSourceRead::Frame { .. } => continue,
                     };
                     self.quarantine_source(cq_unit.queue_offset, corruption);
+                    if self.message_store_config.timer_skip_unknown_error {
+                        warn!("skip an unreadable timer source; timerSkipUnknownError is on");
+                        next_queue_offset = Some(cq_unit.queue_offset.saturating_add(1));
+                        continue;
+                    }
                     warn!("timer materialization is blocked by an unreadable persisted payload");
                     break;
                 }
@@ -2207,6 +2244,11 @@ impl TimerMessageStore {
             }
             if let Err(reason) = validate_timer_source_route(&message) {
                 self.quarantine_source(cq_unit.queue_offset, reason);
+                if self.message_store_config.timer_skip_unknown_error {
+                    warn!("skip a timer source with invalid routing data; timerSkipUnknownError is on");
+                    next_queue_offset = Some(cq_unit.queue_offset.saturating_add(1));
+                    continue;
+                }
                 warn!("timer materialization is blocked by invalid persisted routing data");
                 break;
             }
@@ -2690,9 +2732,10 @@ impl TimerMessageStore {
     }
 
     /// Turns a prepared chunk into actions, in slot order, and returns whether planning goes on.
-    /// It stops at the first entry that cannot go now: a missing or unsupported payload
-    /// (quarantined here), a message that is not due yet, or a roll after the delivery epoch
-    /// moved on.
+    /// It stops at a message that is not due yet and at a roll after the delivery epoch moved
+    /// on. A timer that cannot be handled (a missing or unsupported payload, an invalid
+    /// deadline) is quarantined here; it stops the slot too unless `timerSkipUnknownError` lets
+    /// planning go past it.
     fn plan_prepared_chunk(
         &self,
         chunk: Vec<PreparedSlotEntry>,
@@ -2702,9 +2745,10 @@ impl TimerMessageStore {
         for entry in chunk {
             match entry {
                 PreparedSlotEntry::MissingPayload { queue_offset } => {
-                    self.quarantine_source(queue_offset, CorruptionReason::MissingPayload);
-                    warn!("timer delivery is blocked by a missing persisted payload");
-                    return false;
+                    if !self.quarantine_slot_entry(queue_offset, CorruptionReason::MissingPayload, None, actions) {
+                        warn!("timer delivery is blocked by a missing persisted payload");
+                        return false;
+                    }
                 }
                 PreparedSlotEntry::Roll {
                     source_offset,
@@ -2716,8 +2760,15 @@ impl TimerMessageStore {
                         return false;
                     }
                     let Some(message) = message else {
-                        self.quarantine_source(source_offset, CorruptionReason::UnsupportedRecord);
-                        return false;
+                        if !self.quarantine_slot_entry(
+                            source_offset,
+                            CorruptionReason::UnsupportedRecord,
+                            real_topic,
+                            actions,
+                        ) {
+                            return false;
+                        }
+                        continue;
                     };
                     actions.push_back(SlotEntryAction::Roll {
                         source_offset,
@@ -2728,15 +2779,25 @@ impl TimerMessageStore {
                 PreparedSlotEntry::Skip { cancelled_topic } => {
                     actions.push_back(SlotEntryAction::Skip { cancelled_topic });
                 }
-                PreparedSlotEntry::InvalidDeadline { source_offset } => {
-                    self.quarantine_source(source_offset, CorruptionReason::UnsupportedRecord);
-                    warn!("delay delivery blocked because the original timer deadline is invalid");
-                    return false;
+                PreparedSlotEntry::InvalidDeadline {
+                    source_offset,
+                    real_topic,
+                } => {
+                    if !self.quarantine_slot_entry(
+                        source_offset,
+                        CorruptionReason::UnsupportedRecord,
+                        real_topic,
+                        actions,
+                    ) {
+                        warn!("delay delivery blocked because the original timer deadline is invalid");
+                        return false;
+                    }
                 }
                 PreparedSlotEntry::NotDue => return false,
                 PreparedSlotEntry::Unsupported { source_offset } => {
-                    self.quarantine_source(source_offset, CorruptionReason::UnsupportedRecord);
-                    return false;
+                    if !self.quarantine_slot_entry(source_offset, CorruptionReason::UnsupportedRecord, None, actions) {
+                        return false;
+                    }
                 }
                 PreparedSlotEntry::Deliver {
                     source_offset,
@@ -2749,6 +2810,27 @@ impl TimerMessageStore {
                 }),
             }
         }
+        true
+    }
+
+    /// Quarantines a slot entry that cannot be handled and returns whether the slot can move
+    /// past it, which `timerSkipUnknownError` allows: the entry then leaves like a cancelled
+    /// timer, without a write.
+    fn quarantine_slot_entry(
+        &self,
+        source_offset: i64,
+        reason: CorruptionReason,
+        real_topic: Option<CheetahString>,
+        actions: &mut VecDeque<SlotEntryAction>,
+    ) -> bool {
+        self.quarantine_source(source_offset, reason);
+        if !self.message_store_config.timer_skip_unknown_error {
+            return false;
+        }
+        warn!("skip a timer that cannot be delivered; timerSkipUnknownError is on");
+        actions.push_back(SlotEntryAction::Skip {
+            cancelled_topic: real_topic,
+        });
         true
     }
 
@@ -2796,7 +2878,10 @@ impl TimerMessageStore {
         }
 
         let Some(original_deliver_ms) = original_deliver_time_ms(&message, clock.precision_ms) else {
-            return PreparedSlotEntry::InvalidDeadline { source_offset };
+            return PreparedSlotEntry::InvalidDeadline {
+                source_offset,
+                real_topic: message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC)),
+            };
         };
         if !is_due_not_before(original_deliver_ms, slot_time_ms, clock.floor_now_ms, clock.now_ms) {
             return PreparedSlotEntry::NotDue;
@@ -2841,11 +2926,8 @@ impl TimerMessageStore {
                 real_topic,
             } => {
                 let put_result = self.put_store_message(message).await;
-                self.accept_delivery_result(source_offset, "roll", &put_result)
-                    .then_some(SlotEntryDone {
-                        counted_topic: real_topic,
-                        dequeued: true,
-                    })
+                self.accept_delivery_result(source_offset, &put_result)
+                    .slot_entry_done(real_topic)
             }
             SlotEntryAction::Deliver {
                 source_offset,
@@ -2870,29 +2952,58 @@ impl TimerMessageStore {
                 }
                 let delivered_topic = message.get_topic().clone();
                 let put_result = self.put_store_message(message).await;
-                self.accept_delivery_result(source_offset, "deliver", &put_result)
-                    .then_some(SlotEntryDone {
-                        counted_topic: Some(delivered_topic),
-                        dequeued: true,
-                    })
+                self.accept_delivery_result(source_offset, &put_result)
+                    .slot_entry_done(Some(delivered_topic))
             }
         }
     }
 
-    fn accept_delivery_result(&self, source_offset: i64, _operation: &'static str, result: &PutMessageResult) -> bool {
+    /// Decides what a write result means for its slot entry, applying `timerSkipUnknownError` to
+    /// terminal Store responses and `timerEnableRetryUntilSuccess` to transient ones.
+    fn accept_delivery_result(&self, source_offset: i64, result: &PutMessageResult) -> WriteOutcome {
         let status = result.put_message_status();
         match classify_delivery_status(status) {
-            TimerWorkResult::Complete if result.is_ok() => true,
+            TimerWorkResult::Complete if result.is_ok() => {
+                if !self.message_store_config.timer_enable_retry_until_success {
+                    self.write_failures.lock().remove(&source_offset);
+                }
+                WriteOutcome::Written
+            }
             TimerWorkResult::Complete | TimerWorkResult::Retry(_) => {
-                warn!("timer delivery will retry after a transient Store response");
-                false
+                if self.message_store_config.timer_enable_retry_until_success {
+                    warn!("timer delivery will retry after a transient Store response");
+                    return WriteOutcome::Stays;
+                }
+                let attempts = {
+                    let mut failures = self.write_failures.lock();
+                    let attempts = failures.entry(source_offset).or_insert(0);
+                    *attempts += 1;
+                    let attempts = *attempts;
+                    if attempts >= TIMER_WRITE_ATTEMPTS {
+                        failures.remove(&source_offset);
+                    }
+                    attempts
+                };
+                if attempts < TIMER_WRITE_ATTEMPTS {
+                    warn!(attempts, "timer delivery will retry after a transient Store response");
+                    return WriteOutcome::Stays;
+                }
+                error!(
+                    source_offset,
+                    attempts, "drop a timer whose delivery write kept failing; timerEnableRetryUntilSuccess is off"
+                );
+                WriteOutcome::Dropped
             }
             TimerWorkResult::Quarantine(reason) => {
                 self.quarantine_source(source_offset, reason);
+                if self.message_store_config.timer_skip_unknown_error {
+                    warn!("skip a timer whose delivery the Store rejected; timerSkipUnknownError is on");
+                    return WriteOutcome::Dropped;
+                }
                 warn!("timer delivery is quarantined after a terminal Store response");
-                false
+                WriteOutcome::Stays
             }
-            TimerWorkResult::Cancelled | TimerWorkResult::StaleGeneration => false,
+            TimerWorkResult::Cancelled | TimerWorkResult::StaleGeneration => WriteOutcome::Stays,
         }
     }
 
@@ -3490,6 +3601,7 @@ mod tests {
     use super::TimerMessageStore;
     use super::TimerSourceRead;
     use super::TimerWheel;
+    use super::WriteOutcome;
     use super::DAY_SECS;
     use super::EMPTY_TIMER_LOG_POS;
     use super::MAGIC_DEFAULT;
@@ -5553,6 +5665,58 @@ mod tests {
             Some(CheetahString::from_static_str("real_topic"))
         );
         assert_properties_string_matches(&message);
+    }
+
+    #[test]
+    fn write_results_follow_the_skip_and_retry_switches() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let store_with = |skip_unknown_error, retry_until_success| {
+            standalone_timer_store(Arc::new(MessageStoreConfig {
+                timer_skip_unknown_error: skip_unknown_error,
+                timer_enable_retry_until_success: retry_until_success,
+                ..(*config_with_root(root_dir.as_str())).clone()
+            }))
+        };
+        let rejected = PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
+        let busy = PutMessageResult::new_default(PutMessageStatus::OsPageCacheBusy);
+        let written = PutMessageResult::new(PutMessageStatus::PutOk, None, true);
+
+        // The defaults keep every timer: a rejected write is quarantined, a busy Store retried.
+        let fail_closed = store_with(false, true);
+        assert!(matches!(
+            fail_closed.accept_delivery_result(1, &rejected),
+            WriteOutcome::Stays
+        ));
+        for _ in 0..5 {
+            assert!(matches!(
+                fail_closed.accept_delivery_result(2, &busy),
+                WriteOutcome::Stays
+            ));
+        }
+        assert_eq!(fail_closed.quarantine_count(), 1);
+
+        let skipping = store_with(true, true);
+        assert!(matches!(
+            skipping.accept_delivery_result(1, &rejected),
+            WriteOutcome::Dropped
+        ));
+
+        // Java's default: the third failed write drops the timer.
+        let bounded = store_with(false, false);
+        for expected_drop in [false, false, true] {
+            let outcome = bounded.accept_delivery_result(2, &busy);
+            assert_eq!(matches!(outcome, WriteOutcome::Dropped), expected_drop);
+        }
+        // A write that lands starts the count again.
+        assert!(matches!(bounded.accept_delivery_result(3, &busy), WriteOutcome::Stays));
+        assert!(matches!(
+            bounded.accept_delivery_result(3, &written),
+            WriteOutcome::Written
+        ));
+        for _ in 0..2 {
+            assert!(matches!(bounded.accept_delivery_result(3, &busy), WriteOutcome::Stays));
+        }
     }
 
     #[test]

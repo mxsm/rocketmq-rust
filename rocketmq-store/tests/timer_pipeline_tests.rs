@@ -147,8 +147,8 @@ fn unsupported_extended_mode_fails_closed_during_load() {
 }
 
 #[test]
-fn unsupported_skip_unknown_policy_fails_closed_during_load() {
-    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("timer-skip-unknown-closed-test"))
+fn skip_unknown_policy_loads() {
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("timer-skip-unknown-load-test"))
         .expect("test runtime configuration is valid")
         .build()
         .expect("runtime");
@@ -160,9 +160,10 @@ fn unsupported_skip_unknown_policy_fails_closed_during_load() {
     });
     let store = TimerMessageStore::new_with_message_store_config(
         config,
-        owner.root_context().component("timer-skip-unknown-closed-test"),
+        owner.root_context().component("timer-skip-unknown-load-test"),
     );
-    assert!(!store.load());
+    assert!(store.load());
+    store.shutdown();
     let report = owner.shutdown_runtime_blocking().expect("runtime shutdown");
     assert!(report.is_healthy(), "{}", report.to_json());
 }
