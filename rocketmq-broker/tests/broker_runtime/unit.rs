@@ -3179,6 +3179,7 @@ async fn shared_append_port_preserves_single_and_batch_receipts_without_retainin
     let broker_config = Arc::new(BrokerConfig::default());
     let message_store_config = Arc::new(MessageStoreConfig {
         store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+        mapped_file_size_commit_log: TEST_COMMIT_LOG_FILE_SIZE,
         ..MessageStoreConfig::default()
     });
     let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
