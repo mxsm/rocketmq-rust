@@ -109,11 +109,6 @@ impl DeferredGenerationHandoff {
     }
 
     #[must_use]
-    pub(crate) fn arrival_adapter(&self) -> DeferredGenerationArrivalAdapter<'_> {
-        DeferredGenerationArrivalAdapter { handoff: self }
-    }
-
-    #[must_use]
     pub(crate) fn snapshot(&self) -> DeferredGenerationHandoffSnapshot {
         self.write_gate.lock().snapshot()
     }
