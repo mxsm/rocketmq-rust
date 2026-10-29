@@ -1,0 +1,90 @@
+name: rocketmq-gpui-parity
+
+x-runtime: &runtime
+  image: rocketmq-rust/gpui-parity:local
+  init: true
+  stop_grace_period: 60s
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+  healthcheck:
+    test: [CMD-SHELL, 'curl --fail --silent --max-time 2 "http://127.0.0.1:$${ROCKETMQ_HEALTH_BIND_ADDR##*:}/readyz" > /dev/null']
+    interval: 5s
+    timeout: 3s
+    start_period: 10s
+    retries: 24
+
+services:
+  namesrv:
+    <<: *runtime
+    build:
+      context: ../../../..
+      dockerfile: rocketmq-dashboard/rocketmq-dashboard-gpui/deploy/dev/Dockerfile
+    command: [rocketmq-namesrv-rust, -c, /etc/rocketmq/namesrv.toml]
+    environment:
+      ROCKETMQ_HOME: /var/lib/rocketmq/namesrv
+      ROCKETMQ_HEALTH_BIND_ADDR: 0.0.0.0:38082
+    volumes:
+      - ./namesrv.toml:/etc/rocketmq/namesrv.toml:ro
+      - namesrv-data:/var/lib/rocketmq
+    networks: [parity]
+    # All services share this namespace. Advertised loopback Broker routes work
+    # inside the namespace and from Windows through matching published ports.
+    ports:
+      - "127.0.0.1:39876:39876"
+      - "127.0.0.1:30911:30911"
+      - "127.0.0.1:30909:30909"
+      - "127.0.0.1:38080:38080"
+      - "127.0.0.1:38081:38081"
+      - "127.0.0.1:38082:38082"
+      - "127.0.0.1:38083:38083"
+      - "127.0.0.1:38084:38084"
+
+  broker:
+    <<: *runtime
+    network_mode: service:namesrv
+    depends_on:
+      namesrv:
+        condition: service_healthy
+    command: [rocketmq-broker-rust, -c, /etc/rocketmq/broker.toml]
+    environment:
+      ROCKETMQ_HOME: /var/lib/rocketmq/broker
+      ROCKETMQ_HEALTH_BIND_ADDR: 0.0.0.0:38083
+    volumes:
+      - ./broker.toml:/etc/rocketmq/broker.toml:ro
+      - broker-data:/var/lib/rocketmq
+
+  proxy:
+    <<: *runtime
+    network_mode: service:namesrv
+    depends_on:
+      broker:
+        condition: service_healthy
+    command: [rocketmq-proxy-rust, -c, /etc/rocketmq/proxy.toml]
+    environment:
+      ROCKETMQ_HOME: /var/lib/rocketmq/proxy
+      ROCKETMQ_HEALTH_BIND_ADDR: 0.0.0.0:38084
+    volumes:
+      - ./proxy.toml:/etc/rocketmq/proxy.toml:ro
+      - proxy-data:/var/lib/rocketmq
+
+  admin:
+    image: rocketmq-rust/gpui-parity:local
+    profiles: [tools]
+    network_mode: service:namesrv
+    depends_on:
+      broker:
+        condition: service_healthy
+    environment:
+      NAMESRV_ADDR: 127.0.0.1:39876
+    entrypoint: [rocketmq-admin-cli]
+
+networks:
+  parity:
+
+volumes:
+  namesrv-data:
+  broker-data:
+  proxy-data:
