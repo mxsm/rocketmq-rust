@@ -87,6 +87,8 @@ pub use crate::admin::MessageMetadataRead;
 pub use crate::admin::MessageRequestModeCasReport;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::MessageTraceRead;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::MessageTraceRecordsRead;
 #[cfg(feature = "admin-mutation")]
 pub use crate::admin::MetadataCasReport;
 #[cfg(feature = "admin-mutation")]

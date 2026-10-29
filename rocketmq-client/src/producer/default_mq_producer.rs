@@ -2975,6 +2975,17 @@ mod tests {
     }
 
     #[test]
+    fn disabled_trace_configuration_installs_no_dispatcher_or_send_trace_hooks() {
+        let producer = DefaultMQProducer::builder(test_runtime())
+            .client_config(ClientConfig::default())
+            .producer_group("producer_trace_disabled_group")
+            .build();
+        let implementation = producer.default_mqproducer_impl.as_ref().unwrap();
+        assert!(producer.prepare_trace_dispatcher(implementation).is_none());
+        assert!(producer.trace_dispatcher().is_none());
+    }
+
+    #[test]
     fn producer_use_tls_facade_updates_impl_and_trace_dispatcher_like_java_client_config() {
         let mut producer = DefaultMQProducer::builder(test_runtime())
             .producer_group("producer_tls_group")

@@ -21,7 +21,7 @@ use crate::{
 };
 use rocketmq_dashboard_common::{
     MessageConsumeCommand, MessageConsumeReceipt, MessageIdentity, MessagePayload, MessageSearchPage,
-    MessageSearchQuery,
+    MessageSearchQuery, MessageTrace, MessageTraceQuery,
 };
 use std::{collections::VecDeque, sync::Mutex};
 
@@ -33,12 +33,15 @@ type Gate = (
 );
 #[derive(Clone, Debug, Default)]
 pub(crate) struct MessageCalls {
+    pub trace: Vec<(MessageRequestScope, MessageTraceQuery)>,
     pub query: Vec<(MessageRequestScope, MessageSearchQuery)>,
     pub payload: Vec<(MessageRequestScope, MessageIdentity)>,
     pub consume: Vec<(MessageRequestScope, MessageConsumeCommand)>,
 }
 #[derive(Default)]
 pub(crate) struct FakeMessageBackend {
+    traces: ResultQueue<MessageTrace>,
+    trace_gate: Mutex<Option<Gate>>,
     calls: Mutex<MessageCalls>,
     queries: ResultQueue<MessageSearchPage>,
     payloads: ResultQueue<MessagePayload>,
@@ -47,6 +50,18 @@ pub(crate) struct FakeMessageBackend {
     consume_gate: Mutex<Option<Gate>>,
 }
 impl FakeMessageBackend {
+    pub fn queue_trace(&self, result: Result<MessageTrace, UiError>) {
+        self.traces.lock().unwrap().push_back(result);
+    }
+    pub fn hold_next_trace(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+        tokio::sync::oneshot::Receiver<()>,
+    ) {
+        hold(&self.trace_gate)
+    }
     pub fn calls(&self) -> MessageCalls {
         self.calls.lock().unwrap().clone()
     }
@@ -116,6 +131,19 @@ fn pop<T>(queue: &ResultQueue<T>) -> Result<T, UiError> {
     })
 }
 impl MessageBackend for FakeMessageBackend {
+    fn trace(
+        &self,
+        scope: MessageRequestScope,
+        query: MessageTraceQuery,
+    ) -> ServiceFuture<'_, Result<MessageTrace, UiError>> {
+        self.calls.lock().unwrap().trace.push((scope, query));
+        let gate = self.trace_gate.lock().unwrap().take();
+        let result = pop(&self.traces);
+        Box::pin(async move {
+            wait(gate).await;
+            result
+        })
+    }
     fn query(
         &self,
         scope: MessageRequestScope,
@@ -177,5 +205,28 @@ pub(crate) fn page() -> MessageSearchPage {
     MessageSearchPage {
         rows: vec![row()],
         extent: rocketmq_dashboard_common::MessagePageExtent::MoreMayExist,
+    }
+}
+
+pub(crate) fn trace(identity: MessageIdentity) -> MessageTrace {
+    MessageTrace {
+        identity,
+        producer_message_id: Some(rocketmq_dashboard_common::MessageTextPreview::bounded("producer-id")),
+        trace_topic: rocketmq_dashboard_common::DEFAULT_TRACE_TOPIC.into(),
+        trace_topic_found: true,
+        nodes: vec![rocketmq_dashboard_common::MessageTraceNode {
+            step: rocketmq_dashboard_common::MessageTraceStep::Publish,
+            timestamp: Some(100),
+            group: Some(rocketmq_dashboard_common::MessageTextPreview::bounded("producers")),
+            success: Some(true),
+            cost_time_ms: Some(8),
+            client_host: None,
+            store_host: None,
+            offset_message_id: None,
+            retry_times: None,
+            transaction_state: None,
+        }],
+        limit_reached: false,
+        unanswered_brokers: Vec::new(),
     }
 }

@@ -39,7 +39,7 @@ use rocketmq_dashboard_common::EnvironmentId;
 use crate::{
     components::{
         app_shell::uses_fixed_sidebar,
-        data_table, dialog, page_header, query_toolbar,
+        dialog, page_header,
         sidebar::{SidebarGroup, SidebarItem, is_active, navigation_groups},
         states, status_badge, toast,
         topbar::{ConnectionSummary, TOPBAR_HEIGHT},
@@ -50,6 +50,7 @@ use crate::{
         dashboard::DashboardView,
         dlq::DlqView,
         login::LoginForm,
+        message_trace::MessageTraceView,
         messages::MessagesView,
         ops::{OpsIntent, OpsView},
         producers::ProducersView,
@@ -150,9 +151,9 @@ struct LegacyPageCache {
     producers: Entity<ProducersView>,
     messages: Entity<MessagesView>,
     dlq: Entity<DlqView>,
+    message_trace: Entity<MessageTraceView>,
     ops: Entity<OpsView>,
     proxy: Entity<ProxyView>,
-    unavailable_table: Entity<gpui_component::table::TableState<data_table::UnavailableTable>>,
 }
 
 impl LegacyPageCache {
@@ -167,13 +168,9 @@ impl LegacyPageCache {
             producers: cx.new(|cx| ProducersView::new(window, services.clone(), 0, cx)),
             messages: cx.new(|cx| MessagesView::new(window, services.clone(), 0, cx)),
             dlq: cx.new(|cx| DlqView::new(window, services.clone(), 0, cx)),
+            message_trace: cx.new(|cx| MessageTraceView::new(window, services.clone(), 0, cx)),
             ops: cx.new(|cx| OpsView::new(window, services.clone(), cx)),
             proxy: cx.new(|cx| ProxyView::new(window, services.clone(), cx)),
-            unavailable_table: data_table::unavailable_state(
-                "No data is available because this feature is not yet supported.",
-                window,
-                cx,
-            ),
         }
     }
 
@@ -189,9 +186,9 @@ impl LegacyPageCache {
             self.producers.entity_id(),
             self.messages.entity_id(),
             self.dlq.entity_id(),
+            self.message_trace.entity_id(),
             self.ops.entity_id(),
             self.proxy.entity_id(),
-            self.unavailable_table.entity_id(),
         ]
     }
 }
@@ -399,6 +396,9 @@ impl RocketmqDashboard {
                     .producers
                     .update(cx, |view, cx| view.set_revision(snapshot.configuration_revision, cx));
                 self.legacy_pages.messages.update(cx, |view, cx| {
+                    view.set_revision(snapshot.configuration_revision, window, cx)
+                });
+                self.legacy_pages.message_trace.update(cx, |view, cx| {
                     view.set_revision(snapshot.configuration_revision, window, cx)
                 });
                 self.legacy_pages
@@ -686,6 +686,9 @@ impl RocketmqDashboard {
                 .messages
                 .update(cx, |view, cx| view.set_revision(event.revision, window, cx));
             self.legacy_pages
+                .message_trace
+                .update(cx, |view, cx| view.set_revision(event.revision, window, cx));
+            self.legacy_pages
                 .monitors
                 .update(cx, |view, cx| view.set_revision(event.revision, cx));
             self.legacy_pages
@@ -749,6 +752,13 @@ impl RocketmqDashboard {
                 view.leave(window, cx);
             }
         });
+        self.legacy_pages.message_trace.update(cx, |view, cx| {
+            if matches!(self.history.current(), AppRoute::MessageTrace) {
+                view.ensure_topics(window, cx);
+            } else {
+                view.leave(window, cx);
+            }
+        });
     }
 
     fn clear_environment_state(&mut self, revision: u64, window: &mut Window, cx: &mut Context<Self>) {
@@ -774,6 +784,9 @@ impl RocketmqDashboard {
             .update(cx, |view, cx| view.clear_for_environment(revision, window, cx));
         self.legacy_pages
             .messages
+            .update(cx, |view, cx| view.set_revision(revision, window, cx));
+        self.legacy_pages
+            .message_trace
             .update(cx, |view, cx| view.set_revision(revision, window, cx));
         self.legacy_pages
             .monitors
@@ -838,6 +851,9 @@ impl RocketmqDashboard {
         self.legacy_pages.acl.update(cx, |view, cx| view.leave(window, cx));
         self.legacy_pages.messages.update(cx, |view, cx| view.leave(window, cx));
         self.legacy_pages.dlq.update(cx, |view, cx| view.leave(window, cx));
+        self.legacy_pages
+            .message_trace
+            .update(cx, |view, cx| view.leave(window, cx));
         self.session.clear();
         self.login.clear_sensitive(window, cx);
         self.sensitive_feature_cache.clear();
@@ -1398,6 +1414,10 @@ impl RocketmqDashboard {
                 "Search real messages, inspect bounded details, and confirm a direct-consume attempt.",
                 div().size_full().child(self.legacy_pages.messages.clone()),
             ),
+            PageCapability::MessageTrace => (
+                "Read real client-reported Trace records for a selected message.",
+                div().size_full().child(self.legacy_pages.message_trace.clone()),
+            ),
             PageCapability::Monitors => (
                 "Configure persisted consumer-group thresholds. Evaluation and notifications are not implemented.",
                 div().size_full().child(self.legacy_pages.monitors.clone()),
@@ -1419,33 +1439,6 @@ impl RocketmqDashboard {
                 div().size_full().child(self.legacy_pages.proxy.clone()),
             ),
             PageCapability::Login => ("Sign in to continue.", div()),
-            PageCapability::Unavailable { reason } => (
-                "This feature is not yet available.",
-                div()
-                    .debug_selector(|| "unavailable-page".to_owned())
-                    .size_full()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .p_6()
-                    .child(query_toolbar::unavailable(
-                        "Queries and operations are unavailable for this feature.",
-                        theme.muted,
-                        theme.muted_foreground,
-                    ))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_h_0()
-                            .child(data_table::render(&self.legacy_pages.unavailable_table)),
-                    )
-                    .child(states::empty_state(
-                        route.title(),
-                        reason,
-                        theme.foreground,
-                        theme.muted_foreground,
-                    )),
-            ),
         };
 
         div()

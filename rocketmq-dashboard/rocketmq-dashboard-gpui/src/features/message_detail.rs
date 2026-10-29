@@ -14,22 +14,25 @@
 
 //! Four-tab Message inspector with one lazy, bounded sensitive payload.
 
+pub(super) use crate::components::trace_timeline::format_time;
 use crate::{
     features::dashboard_store::ResourceSlot,
+    features::message_trace_store::SelectedTrace,
     services::{AppServices, messages::MessageRequestScope},
     state::Loadable,
 };
 use gpui::{
-    Context, EventEmitter, InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Task, Window,
-    div,
+    AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _, IntoElement, ParentElement as _, Render,
+    Styled as _, Subscription, Task, Window, div,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _,
     button::Button,
+    input::{Input, InputEvent, InputState},
     scroll::ScrollableElement as _,
     tab::{Tab, TabBar},
 };
-use rocketmq_dashboard_common::{MESSAGE_BODY_MAX_BYTES, MessageMetadataRow, MessagePayload};
+use rocketmq_dashboard_common::{DEFAULT_TRACE_TOPIC, MESSAGE_BODY_MAX_BYTES, MessageMetadataRow, MessagePayload};
 
 pub enum MessageDetailIntent {
     Consume,
@@ -54,6 +57,10 @@ pub struct MessageDetail {
     json: bool,
     copied: bool,
     consume_disabled_reason: Option<&'static str>,
+    trace: SelectedTrace,
+    trace_task: Option<Task<()>>,
+    trace_topic: Option<Entity<InputState>>,
+    trace_subscription: Option<Subscription>,
 }
 impl EventEmitter<MessageDetailIntent> for MessageDetail {}
 impl MessageDetail {
@@ -69,6 +76,10 @@ impl MessageDetail {
             json: false,
             copied: false,
             consume_disabled_reason: None,
+            trace: SelectedTrace::default(),
+            trace_task: None,
+            trace_topic: None,
+            trace_subscription: None,
         }
     }
     pub fn read_only(services: AppServices, revision: u64, row: MessageMetadataRow, reason: &'static str) -> Self {
@@ -103,18 +114,62 @@ impl MessageDetail {
         self.payload.clear();
         self.preview = None;
         self.json = false;
+        self.trace_task = None;
+        self.trace.clear();
+        self.trace_topic = None;
+        self.trace_subscription = None;
         cx.notify();
     }
-    fn select_tab(&mut self, tab: MessageTab, cx: &mut Context<Self>) {
+    fn select_tab(&mut self, tab: MessageTab, window: &mut Window, cx: &mut Context<Self>) {
         self.tab = tab;
         if matches!(tab, MessageTab::Body | MessageTab::Properties) && matches!(self.payload.state, Loadable::Idle) {
             self.load_payload(cx);
         }
+        if tab == MessageTab::Trace {
+            if self.trace_topic.is_none() {
+                let topic = cx.new(|cx| InputState::new(window, cx).default_value(DEFAULT_TRACE_TOPIC));
+                self.trace_subscription = Some(cx.subscribe(&topic, |detail, _, event, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        detail.trace_task = None;
+                        detail.trace.clear();
+                        cx.notify();
+                    }
+                }));
+                self.trace_topic = Some(topic);
+            }
+            if matches!(self.trace.state, Loadable::Idle) {
+                self.load_trace(cx);
+            }
+        }
+        cx.notify();
+    }
+    fn load_trace(&mut self, cx: &mut Context<Self>) {
+        let trace_topic = self.trace_topic.as_ref().map_or_else(
+            || DEFAULT_TRACE_TOPIC.to_owned(),
+            |input| input.read(cx).value().trim().to_owned(),
+        );
+        let Some(request) = self.trace.begin(self.row.identity.clone(), trace_topic, self.revision) else {
+            return;
+        };
+        let services = self.services.clone();
+        self.trace_task = Some(cx.spawn(async move |this, cx| {
+            let result = services.message_trace(request.scope, request.query.clone()).await;
+            let _ = this.update(cx, |detail, cx| {
+                if detail.trace.finish(&request, detail.revision, result) {
+                    detail.trace_task = None;
+                    cx.notify();
+                }
+            });
+        }));
         cx.notify();
     }
     #[cfg(test)]
     pub(crate) fn has_payload(&self) -> bool {
         self.payload.state.value().is_some() || self.preview.is_some()
+    }
+    #[cfg(test)]
+    pub(crate) fn trace_for_test(&self) -> Option<&rocketmq_dashboard_common::MessageTrace> {
+        self.trace.state.value()
     }
 
     fn content(&self, cx: &Context<Self>) -> gpui::Div {
@@ -180,8 +235,31 @@ impl MessageDetail {
                         .debug_selector(|| "message-consume".into())
                         .on_click(cx.listener(|_, _, _, cx| cx.emit(MessageDetailIntent::Consume))),
                 )
-                .children(self.consume_disabled_reason.map(|reason| div().text_sm().child(reason))),
-            MessageTab::Trace => div().child("Message Trace lookup is currently unavailable."),
+                .children(self.consume_disabled_reason.map(|reason| {
+                    div()
+                        .text_sm()
+                        .debug_selector(|| "message-consume-unavailable-reason".into())
+                        .child(reason)
+                })),
+            MessageTab::Trace => div()
+                .w_full()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .children(
+                    self.trace_topic
+                        .as_ref()
+                        .map(|topic| div().w_full().child("Trace Topic").child(Input::new(topic))),
+                )
+                .child(
+                    Button::new("message-trace-reload")
+                        .label("Reload Trace")
+                        .outline()
+                        .debug_selector(|| "message-trace-reload".into())
+                        .on_click(cx.listener(|detail, _, _, cx| detail.load_trace(cx))),
+                )
+                .child(crate::components::trace_timeline::render(&self.trace.state, cx)),
             MessageTab::Body | MessageTab::Properties => {
                 let Some(payload) = self.payload.state.value() else {
                     return match &self.payload.state {
@@ -296,7 +374,7 @@ impl Render for MessageDetail {
                         .into_iter()
                         .map(|(label, id)| Tab::new().label(label).debug_selector(move || id.into())),
                     )
-                    .on_click(cx.listener(|detail, index, _, cx| {
+                    .on_click(cx.listener(|detail, index, window, cx| {
                         detail.select_tab(
                             match *index {
                                 0 => MessageTab::Overview,
@@ -304,17 +382,13 @@ impl Render for MessageDetail {
                                 2 => MessageTab::Body,
                                 _ => MessageTab::Trace,
                             },
+                            window,
                             cx,
                         )
                     })),
             )
             .child(div().flex_1().min_h_0().overflow_y_scrollbar().child(self.content(cx)))
     }
-}
-
-pub(super) fn format_time(value: i64) -> String {
-    chrono::DateTime::from_timestamp_millis(value)
-        .map_or_else(|| "Unknown".into(), |time| time.format("%Y-%m-%d %H:%M:%S").to_string())
 }
 
 struct BodyPreview {

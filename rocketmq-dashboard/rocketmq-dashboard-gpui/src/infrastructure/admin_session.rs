@@ -49,6 +49,7 @@ use rocketmq_admin_core::{
             DirectConsumeRequest, DirectConsumeResult, MessageLookupReadAdmin, MessageLookupRequest, MessageRecord,
             MessageScopedMutationAdmin,
         },
+        message_trace::{MessageTraceLookupRequest, MessageTraceReadAdmin, MessageTraceReadResult},
         security::AdminCredentials,
         topic::{
             DeleteTopicsInBrokerRequest, DetailedTopicCatalog, DetailedTopicConfig, DetailedTopicConsumers,
@@ -177,6 +178,12 @@ pub(crate) trait DashboardQuerySession: Send + Sync {
         &'a self,
         _request: &'a MessageLookupRequest,
     ) -> SessionFuture<'a, AdminResult<MessageRecord>> {
+        Box::pin(async { Err(unsupported_message_session()) })
+    }
+    fn message_trace<'a>(
+        &'a self,
+        _request: &'a MessageTraceLookupRequest,
+    ) -> SessionFuture<'a, AdminResult<MessageTraceReadResult>> {
         Box::pin(async { Err(unsupported_message_session()) })
     }
     fn shutdown(self: Box<Self>) -> SessionFuture<'static, ()>;
@@ -552,6 +559,12 @@ impl DashboardQuerySession for RealQuerySession {
         request: &'a MessageLookupRequest,
     ) -> SessionFuture<'a, AdminResult<MessageRecord>> {
         MessageLookupReadAdmin::lookup_message(&self.inner, request)
+    }
+    fn message_trace<'a>(
+        &'a self,
+        request: &'a MessageTraceLookupRequest,
+    ) -> SessionFuture<'a, AdminResult<MessageTraceReadResult>> {
+        MessageTraceReadAdmin::message_trace(&self.inner, request)
     }
     fn shutdown(mut self: Box<Self>) -> SessionFuture<'static, ()> {
         Box::pin(async move { self.inner.shutdown().await })

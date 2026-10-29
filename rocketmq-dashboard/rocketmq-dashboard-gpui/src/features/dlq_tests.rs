@@ -237,8 +237,40 @@ fn dlq_discovered_group_and_bounded_inspector_clear_on_context_change(cx: &mut g
     draw(&root, cx);
     click(cx, "dlq-open-0");
     draw(&root, cx);
+    let detail = cx.read(|app| view.read(app).detail.clone().unwrap());
+    let consume_intents = Rc::new(RefCell::new(0usize));
+    let observed_intents = consume_intents.clone();
+    let _intent_observer = cx.update(|_, app| {
+        view.update(app, |_, cx| {
+            cx.subscribe(
+                &detail,
+                move |_, _, _: &crate::features::message_detail::MessageDetailIntent, _| {
+                    *observed_intents.borrow_mut() += 1;
+                },
+            )
+        })
+    });
     assert!(cx.debug_bounds("message-consume").is_some());
+    assert!(cx.debug_bounds("message-consume-unavailable-reason").is_some());
     click(cx, "message-consume");
+    assert_eq!(
+        *consume_intents.borrow(),
+        0,
+        "the read-only Inspector must not emit a consume intent"
+    );
+    assert!(messages.calls().consume.is_empty() && backend.calls().consumes.is_empty());
+    assert!(
+        messages.calls().trace.is_empty(),
+        "Trace remains lazy in the DLQ Inspector"
+    );
+    let identity = row(1).metadata.identity;
+    messages.queue_trace(Ok(crate::services::messages::test_support::trace(identity.clone())));
+    click(cx, "message-tab-trace");
+    draw(&root, cx);
+    assert_eq!(messages.calls().trace[0].1.identity, identity);
+    assert!(cx.read(|app| detail.read(app).trace_for_test().is_some()));
+    assert!(messages.calls().payload.is_empty());
+    assert_eq!(*consume_intents.borrow(), 0);
     assert!(messages.calls().consume.is_empty() && backend.calls().consumes.is_empty());
     messages.queue_payload(Ok(MessagePayload::bounded(
         row(1).metadata.identity,
@@ -247,11 +279,11 @@ fn dlq_discovered_group_and_bounded_inspector_clear_on_context_change(cx: &mut g
     )));
     click(cx, "message-tab-body");
     draw(&root, cx);
-    let detail = cx.read(|app| view.read(app).detail.clone().unwrap());
     assert!(cx.read(|app| detail.read(app).has_payload()));
     cx.update(|window, app| view.update(app, |view, cx| view.set_revision(1, window, cx)));
     cx.run_until_parked();
     assert!(!cx.read(|app| detail.read(app).has_payload()));
+    assert!(cx.read(|app| detail.read(app).trace_for_test().is_none()));
     assert!(cx.read(|app| view.read(app).group.read(app).value().is_empty()));
     assert!(cx.read(|app| view.read(app).store.applied.is_none()));
 }

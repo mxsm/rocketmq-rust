@@ -40,6 +40,7 @@ pub mod infrastructure_observation;
 pub mod lite;
 pub mod message;
 pub mod message_index;
+pub mod message_trace;
 pub mod proxy;
 pub mod query;
 pub mod queue;

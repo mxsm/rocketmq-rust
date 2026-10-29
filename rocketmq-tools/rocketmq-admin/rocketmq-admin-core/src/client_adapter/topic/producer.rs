@@ -79,6 +79,17 @@ pub(crate) fn build_send_message(request: &TopicSendRequest) -> Message {
     builder.build_unchecked()
 }
 
+fn configure_topic_producer(
+    config: &mut rocketmq_client_rust::ClientConfig,
+    producer_group: &str,
+    request: &TopicSendRequest,
+) {
+    config.set_instance_name(producer_group.into());
+    // The per-message switch alone does not install/start the SDK-owned trace dispatcher.
+    // The ephemeral producer owns that dispatcher and flushes it in the existing shutdown path.
+    config.set_enable_trace(request.trace_enabled);
+}
+
 pub(crate) async fn send_normal_message(
     client_runtime: Arc<ClientRuntime>,
     mut client_config: rocketmq_client_rust::ClientConfig,
@@ -86,7 +97,7 @@ pub(crate) async fn send_normal_message(
     request: &TopicSendRequest,
     signing_hook: Option<Arc<dyn rocketmq_transport::api::RPCHook>>,
 ) -> Result<TopicSendResult, AdminError> {
-    client_config.set_instance_name(producer_group.clone().into());
+    configure_topic_producer(&mut client_config, &producer_group, request);
     let mut builder = DefaultMQProducer::builder(client_runtime)
         .producer_group(producer_group)
         .client_config(client_config)
@@ -123,7 +134,7 @@ pub(crate) async fn send_transaction_message(
     request: &TopicSendRequest,
     signing_hook: Option<Arc<dyn rocketmq_transport::api::RPCHook>>,
 ) -> Result<TopicSendResult, AdminError> {
-    client_config.set_instance_name(producer_group.clone().into());
+    configure_topic_producer(&mut client_config, &producer_group, request);
     let mut builder = TransactionMQProducer::builder(client_runtime)
         .producer_group(producer_group)
         .client_config(client_config)
@@ -191,4 +202,34 @@ pub(crate) fn map_transaction_send_result(
 /// The operation name labels the Admin error without replacing canonical context.
 fn promote_to_admin_error(operation_name: &'static str, source: impl crate::IntoCanonicalError) -> AdminError {
     AdminError::from_error(operation_name, source.into_canonical_error())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn topic_send_trace_config_and_message_switch_follow_both_reviewed_checkbox_values() {
+        let mut config = rocketmq_client_rust::ClientConfig::default();
+        let mut request = TopicSendRequest {
+            topic: "orders".into(),
+            key: "order-42".into(),
+            tag: "paid".into(),
+            message_body: "private body".into(),
+            trace_enabled: true,
+        };
+        configure_topic_producer(&mut config, "unique-sender", &request);
+        assert!(config.is_enable_trace());
+        let enabled = build_send_message(&request);
+        assert_eq!(enabled.get_property(&"TRACE_ON".into()).as_deref(), Some("true"));
+        request.trace_enabled = false;
+        configure_topic_producer(&mut config, "transaction-sender", &request);
+        assert!(
+            !config.is_enable_trace(),
+            "an inherited enabled config must not override the unchecked form"
+        );
+        let disabled = build_send_message(&request);
+        assert_eq!(disabled.get_property(&"TRACE_ON".into()).as_deref(), Some("false"));
+        assert_eq!(disabled.keys(), enabled.keys());
+        assert_eq!(disabled.body(), enabled.body());
+    }
 }
