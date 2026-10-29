@@ -71,6 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - **refactor(broker):** Remove the unused deferred-generation arrival adapter; canonical route admission and shutdown accounting are unchanged ([#11975](https://github.com/mxsm/rocketmq-rust/issues/11975)).
+- **refactor(store):** Remove the unused HA read buffer and manual offset parser; acknowledgement decoding continues through `OffsetDecoder` ([#11974](https://github.com/mxsm/rocketmq-rust/issues/11974)).
 - **refactor(client):** Remove the unused internal `pull_kernel_impl_default_size` wrapper ([#11942](https://github.com/mxsm/rocketmq-rust/issues/11942)).
 - **refactor(client):** Remove the unused internal `prepare_retry` helper ([#11943](https://github.com/mxsm/rocketmq-rust/issues/11943)).
 - **refactor(client):** Remove the unused lock flag and accessors from the internal `PopRequest` ([#11941](https://github.com/mxsm/rocketmq-rust/issues/11941)).

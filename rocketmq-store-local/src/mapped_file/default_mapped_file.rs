@@ -194,6 +194,9 @@ pub struct DefaultMappedFile<M: MappedMemory = NativeMappedMemory> {
     mapped_byte_buffer_access_count_since_last_swap: AtomicI64,
     metrics: Option<Arc<MappedFileMetrics>>,
     seal_lock: Mutex<()>,
+    /// Serializes flushes so the durable position only moves forward. The sync itself runs
+    /// outside `write_state`, so appends continue while earlier pages are written back.
+    flush_lock: Mutex<()>,
     flush_strategy: FlushStrategy,
     #[cfg(feature = "observability")]
     store_metrics: rocketmq_observability::metrics::store::StoreMetricsRecorder,
@@ -898,6 +901,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
             transient_store_pool,
             metrics: Some(metrics),
             seal_lock: Mutex::new(()),
+            flush_lock: Mutex::new(()),
             flush_strategy: FlushStrategy::Async,
             #[cfg(feature = "observability")]
             store_metrics: rocketmq_observability::metrics::store::StoreMetricsRecorder::noop(),
@@ -1438,12 +1442,16 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
             MappedFileAdmissionResult::Acquired(admission) => admission,
             MappedFileAdmissionResult::Rejected(_) => return Ok(self.get_flushed_position()),
         };
-        let _writer = self.write_state.lock();
-        if !self.is_able_to_flush(flush_least_pages) {
-            return Ok(self.get_flushed_position());
-        }
-
-        let value = self.get_read_position();
+        let _flusher = self.flush_lock.lock();
+        // Every byte below the read position is already in the mapping, so the sync below makes
+        // `value` durable without excluding appends that land after the snapshot.
+        let value = {
+            let _writer = self.write_state.lock();
+            if !self.is_able_to_flush(flush_least_pages) {
+                return Ok(self.get_flushed_position());
+            }
+            self.get_read_position()
+        };
         self.mapped_byte_buffer_access_count_since_last_swap
             .fetch_add(1, Ordering::AcqRel);
         let should_flush = !matches!(self.flush_strategy, FlushStrategy::Never);
@@ -1627,7 +1635,9 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
             let Some(generation) =
                 mapped_file.try_get_writable_generation(admission, MappedFileOperation::Maintenance)?
             else {
-                return Ok(false);
+                // A seal can publish the read-only generation after the check above; it flushes
+                // the whole mapping first.
+                return Ok(mapped_file.physical_owners.mapping.load_read_only().is_some());
             };
             let flush_size = value - flushed_position;
             if flush_size > 0 && flush_size < (mapped_file.raw_core.file_size() as i32) / 2 {
@@ -3247,6 +3257,28 @@ mod tests {
         assert!(matches!(error, MappedFileFailure::FlushFailed(source) if source.raw_os_error() == Some(5)));
         assert_eq!(mapped_file.get_flushed_position(), durable_before);
         assert!(mapped_file.get_wrote_position() > durable_before);
+    }
+
+    #[test]
+    fn appends_proceed_while_a_flush_syncs_and_stay_above_its_durable_position() {
+        let (_temp_dir, mapped_file) = create_test_file();
+        assert!(mapped_file.append_message_bytes(b"durable"));
+        let snapshot = mapped_file.get_wrote_position();
+
+        let flushed = mapped_file
+            .try_flush_with(0, |mapped_file, _, _, _| {
+                assert!(
+                    mapped_file.write_state.try_lock().is_some(),
+                    "the sync must not hold the writer lock"
+                );
+                assert!(mapped_file.append_message_bytes(b"appended during the sync"));
+                Ok(true)
+            })
+            .expect("flush succeeds");
+
+        assert_eq!(flushed, snapshot);
+        assert_eq!(mapped_file.get_flushed_position(), snapshot);
+        assert!(mapped_file.get_wrote_position() > snapshot);
     }
 
     #[test]
