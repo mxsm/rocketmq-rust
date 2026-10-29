@@ -253,7 +253,10 @@ impl SlaveMasterAddress {
         self.current.load_full()
     }
 
+    /// An empty address, which name server registration returns while the group has no master
+    /// (Java's `null`), is stored as absent.
     pub(crate) fn store(&self, addr: Option<&CheetahString>) {
+        let addr = addr.filter(|addr| !addr.is_empty());
         let current = self.load();
         if current.as_deref() == addr {
             return;
@@ -698,6 +701,20 @@ mod tests {
         assert_eq!(first_generation.as_str(), first.as_str());
         assert_eq!(address.load().as_deref(), Some(&second));
         address.store(None);
+        assert!(address.load().is_none());
+    }
+
+    #[test]
+    fn slave_master_address_treats_empty_address_as_absent() {
+        let address = SlaveMasterAddress::default();
+        let empty = CheetahString::from_static_str("");
+
+        // A slave registering before its master gets an empty master address.
+        address.store(Some(&empty));
+        assert!(address.load().is_none());
+
+        address.store(Some(&CheetahString::from_static_str("127.0.0.1:10911")));
+        address.store(Some(&empty));
         assert!(address.load().is_none());
     }
 
