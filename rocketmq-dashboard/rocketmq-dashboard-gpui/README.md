@@ -35,6 +35,31 @@ $env:RUST_LOG = "info,rocketmq_dashboard_gpui=debug"
 cargo run
 ```
 
+## Topic fields and mutation support
+
+Topic forms resolve cluster shortcuts to exact Brokers before submission. Editing
+starts with one Broker and can select other Brokers from the same authoritative
+configuration snapshot. Every selected Broker retains its reviewed version; only
+changed fields are applied, preserving each Broker's other settings and attributes.
+
+| Field | Create | Read | Update / restriction |
+| --- | --- | --- | --- |
+| Topic name | Yes | Yes | Immutable; editing cannot rename or create a missing Topic |
+| Broker placement | Exact inventory targets | Per Broker | Select existing configuration targets; cluster shortcuts select their exact Brokers |
+| Read / write queues | 1–128 each | Yes | Version-checked changed fields |
+| Permission | Read, write, inheritance bits | Yes | Version-checked; at least read or write is required |
+| Ordering | Ordered / unordered | Yes | Broker state uses CAS; NameServer order entries use a preflight comparison and can fail separately |
+| Message type | Normal, FIFO, Delay, Transaction | Yes | The same types and Unspecified use supervised state CAS; unknown and internal contracts are unavailable |
+| Send Trace | Defaults to off | Active Send form | The actual checkbox value is sent with the message |
+
+Full-field editing requires Brokers implementing the supervised Topic state
+protocol. Older Brokers reject it; the desktop does not fall back to an unchecked
+upsert. Broker and NameServer outcomes remain visible individually after partial
+success. A version conflict preserves changed draft fields and requires an explicit
+choice to keep or adopt authoritative values. Only conflicted Brokers remain
+selected after rebasing, so an already applied or unknown write is not replayed.
+Message bodies are omitted from summaries and cleared when the Send dialog closes.
+
 ## Architecture and configuration
 
 [src/main.rs](src/main.rs) initializes the GPUI component library and application
@@ -99,7 +124,10 @@ and are never automatically replayed. Local login and logout also record safe ou
 
 Audit events contain trusted local actor and environment metadata, controlled resource
 identities, and bounded result facts. They exclude message bodies, diagnostics,
-credentials, and configuration values. A failed terminal audit write preserves the
+credentials, and configuration values. Topic field edits retain only the requested
+field names with their accepted operation, including pending and failed requests.
+Partial effects, unconfirmed writes, and authoritative refresh failures remain
+separate result facts. A failed terminal audit write preserves the
 business result and displays an application warning; **Retry audit write** only retries
 persistence. The journal retains at most 10,000 terminal events within 31 days and
 128 pending requests. Service queries support bounded filtering and stable cursors;

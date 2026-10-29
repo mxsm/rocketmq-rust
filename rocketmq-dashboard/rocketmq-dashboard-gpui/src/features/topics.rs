@@ -382,24 +382,12 @@ impl TopicsView {
                 }
                 TopicDetailIntent::ReplaceRoute(route) => cx.emit(TopicsIntent::ReplaceRoute(route.clone())),
                 TopicDetailIntent::NavigateConsumer(route) => cx.emit(TopicsIntent::Navigate(route.clone())),
-                TopicDetailIntent::EditTarget {
-                    target,
-                    expected_version,
-                    read_queue_count,
-                    write_queue_count,
-                } => {
+                TopicDetailIntent::EditTarget { target, targets } => {
                     let topic = detail_topic.clone();
-                    view.open_topic_dialog(
-                        TopicDialogKind::Edit(TopicEditDraft {
-                            topic,
-                            target: target.clone(),
-                            expected_version: *expected_version,
-                            read_queue_count: *read_queue_count,
-                            write_queue_count: *write_queue_count,
-                        }),
-                        window,
-                        cx,
-                    );
+                    let Some(draft) = TopicEditDraft::new(topic, target, targets.clone()) else {
+                        return;
+                    };
+                    view.open_topic_dialog(TopicDialogKind::Edit(draft), window, cx);
                 }
                 TopicDetailIntent::Send(topic) => {
                     view.open_topic_dialog(TopicDialogKind::Send(TopicSendDraft::new(topic.clone())), window, cx)
@@ -840,5 +828,6 @@ fn topic_failure_code_label(code: TopicFailureCode) -> &'static str {
         TopicFailureCode::InvalidData => "invalid_data",
         TopicFailureCode::Unavailable => "unavailable",
         TopicFailureCode::Conflict => "conflict",
+        TopicFailureCode::Unconfirmed => "outcome unknown; refresh before retrying",
     }
 }

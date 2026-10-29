@@ -129,6 +129,7 @@ impl AuditService {
                 .map_err(super::config_ui_error)?,
             action,
             accepted_at_epoch_ms: now_epoch_ms()?,
+            topic_fields: Default::default(),
         };
         operation.validate().map_err(|source| {
             UiError::caused_by(

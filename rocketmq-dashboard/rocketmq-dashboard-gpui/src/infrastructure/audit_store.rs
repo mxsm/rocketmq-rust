@@ -83,6 +83,7 @@ impl AuditJournal {
             context,
             action,
             accepted_at_epoch_ms: timestamp_epoch_ms,
+            topic_fields: Default::default(),
         });
         self.finish(
             operation,

@@ -32,6 +32,7 @@ fn operation(index: usize) -> AuditAcceptedOperation {
         },
         action: AuditAction::TopicCreated,
         accepted_at_epoch_ms: 100,
+        topic_fields: Default::default(),
     }
 }
 

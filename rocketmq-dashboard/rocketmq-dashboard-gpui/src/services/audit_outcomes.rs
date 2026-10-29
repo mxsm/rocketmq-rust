@@ -15,14 +15,15 @@
 //! Explicit business-result projections; authoritative reload failures remain separate facts.
 
 use rocketmq_dashboard_common::{
-    AuditFacts, AuditOutcome, ConsumerFailureCode, ConsumerFailureStage, TopicFailureCode, TopicFailureStage,
+    AuditFacts, AuditFailureCode, AuditOutcome, ConsumerFailureCode, ConsumerFailureStage, TopicFailureCode,
+    TopicFailureStage,
 };
 
 use super::{
     audit::{MutationAudit, rejected_conflict, target_outcome},
     brokers::BrokerConfigMutationResult,
     consumers::{ConsumerConfigMutationResult, ConsumerMutationResult},
-    topics::{TopicMutationResult, TopicQueuePatchResult},
+    topics::{TopicFieldsPatchResult, TopicMutationResult},
 };
 
 impl MutationAudit for TopicMutationResult {
@@ -70,13 +71,62 @@ impl MutationAudit for ConsumerMutationResult {
     }
 }
 
-impl MutationAudit for TopicQueuePatchResult {
+impl MutationAudit for TopicFieldsPatchResult {
     fn audit(&self) -> (AuditOutcome, AuditFacts) {
-        match self {
-            Self::VersionConflict { .. } => rejected_conflict(),
-            Self::Applied { .. } => target_outcome(1, 0, false),
-            Self::AppliedReloadFailed { .. } => target_outcome(1, 0, true),
-        }
+        let outcome = &self.edit.outcome;
+        let applied = outcome.applied_count();
+        let unconfirmed = outcome
+            .targets
+            .iter()
+            .filter(|target| {
+                target.failure == Some(TopicFailureCode::Unconfirmed)
+                    || (!target.applied && target.stage == TopicFailureStage::Mutation && target.failure.is_none())
+            })
+            .count();
+        // A known persistence failure may retain applied in-memory effects; only the explicit
+        // Unconfirmed result represents uncertainty about execution or durability.
+        let known_failure = outcome.targets.iter().any(|target| {
+            target.stage == TopicFailureStage::Mutation && target.failure == Some(TopicFailureCode::Unavailable)
+        });
+        let result = if applied > 0 {
+            if outcome.failed_count() > 0 {
+                AuditOutcome::Partial
+            } else {
+                AuditOutcome::Succeeded
+            }
+        } else if unconfirmed > 0 {
+            AuditOutcome::Unknown
+        } else if known_failure {
+            AuditOutcome::Failed
+        } else {
+            AuditOutcome::Rejected
+        };
+        let (_, mut facts) = target_outcome(applied, unconfirmed, outcome.reload_failed);
+        facts.failure_code = if unconfirmed > 0 {
+            Some(AuditFailureCode::Unknown)
+        } else if outcome
+            .targets
+            .iter()
+            .any(|target| target.failure == Some(TopicFailureCode::Unavailable))
+        {
+            Some(AuditFailureCode::Connection)
+        } else if outcome
+            .targets
+            .iter()
+            .any(|target| target.failure == Some(TopicFailureCode::Conflict))
+        {
+            Some(AuditFailureCode::Conflict)
+        } else if outcome.targets.iter().any(|target| {
+            matches!(
+                target.failure,
+                Some(TopicFailureCode::InvalidData | TopicFailureCode::NotFound)
+            )
+        }) {
+            Some(AuditFailureCode::Validation)
+        } else {
+            None
+        };
+        (result, facts)
     }
 }
 

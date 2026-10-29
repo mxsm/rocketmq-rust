@@ -15,22 +15,26 @@
 //! Bounded Topic dialog/form state. UI code owns at most one of these states
 //! and never stores message bodies outside the active Send draft.
 
+#[path = "topic_edit_dialog.rs"]
+mod edit;
 #[path = "topic_dialog_render.rs"]
 mod render;
+pub use edit::TopicEditDraft;
+use edit::TopicEditInputs;
 
 use std::fmt;
 
 use gpui::{AppContext as _, Context, Entity, InteractiveElement as _, ParentElement as _, Styled as _, Window, div};
 use gpui_component::{input::InputState, radio::Radio};
 use rocketmq_dashboard_common::{
-    TopicFailureCode, TopicFailureStage, TopicIdentity, TopicMessageType, TopicPartialOutcome, TopicPermission,
-    TopicTargetIdentity,
+    TopicConfigFieldsPatch, TopicFailureCode, TopicFailureStage, TopicIdentity, TopicMessageType, TopicPartialOutcome,
+    TopicPermission, TopicTargetIdentity,
 };
 
 use crate::{
     services::topics::{
-        TopicCreateCommand, TopicDeleteBrokerCommand, TopicDeleteCommand, TopicMutationResult, TopicOffsetCommand,
-        TopicQueuePatchCommand, TopicSendCommand,
+        TopicCreateCommand, TopicDeleteBrokerCommand, TopicDeleteCommand, TopicFieldsPatchCommand,
+        TopicFieldsPatchResult, TopicMutationResult, TopicOffsetCommand, TopicSendCommand,
     },
     state::{UiError, UiErrorCode},
 };
@@ -59,25 +63,6 @@ impl fmt::Debug for TopicCreateDraft {
             .field("message_type", &self.message_type)
             .field("catalog_epoch", &self.catalog_epoch)
             .finish()
-    }
-}
-
-pub struct TopicEditDraft {
-    pub topic: TopicIdentity,
-    pub target: TopicTargetIdentity,
-    pub expected_version: u64,
-    pub read_queue_count: u32,
-    pub write_queue_count: u32,
-}
-
-impl fmt::Debug for TopicEditDraft {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("TopicEditDraft")
-            .field("expected_version", &self.expected_version)
-            .field("read_queue_count", &self.read_queue_count)
-            .field("write_queue_count", &self.write_queue_count)
-            .finish_non_exhaustive()
     }
 }
 
@@ -193,18 +178,10 @@ pub enum TopicSubmissionState {
     Succeeded,
     PartiallySucceeded(TopicMutationResult),
     AppliedReloadFailed(TopicMutationResult),
-    PatchAppliedReloadFailed {
-        previous_version: u64,
-        version: u64,
-        error: UiError,
-    },
     Rejected(TopicMutationResult),
-    Conflict {
-        actual_version: u64,
-        submitted_read_queue_count: u32,
-        submitted_write_queue_count: u32,
-        authoritative_read_queue_count: u32,
-        authoritative_write_queue_count: u32,
+    FieldsCompleted {
+        result: TopicFieldsPatchResult,
+        submitted_patch: TopicConfigFieldsPatch,
     },
     Failed(UiError),
 }
@@ -261,7 +238,7 @@ impl TopicDialogState {
 
 pub enum PreparedTopicCommand {
     Create(TopicCreateCommand),
-    Edit(TopicQueuePatchCommand),
+    Edit(TopicFieldsPatchCommand),
     DeleteTopic(TopicDeleteCommand),
     DeleteBroker(TopicDeleteBrokerCommand),
     Send(TopicSendCommand),
@@ -279,10 +256,7 @@ enum TopicDialogInputs {
         message_type: Option<TopicMessageType>,
         ordered: Option<bool>,
     },
-    Edit {
-        read_queues: Entity<InputState>,
-        write_queues: Entity<InputState>,
-    },
+    Edit(TopicEditInputs),
     Send {
         key: Entity<InputState>,
         tag: Entity<InputState>,
@@ -319,10 +293,7 @@ impl TopicDialogForm {
                 message_type: draft.message_type,
                 ordered: draft.ordered,
             },
-            TopicDialogKind::Edit(draft) => TopicDialogInputs::Edit {
-                read_queues: number_input(draft.read_queue_count, "Read queues", window, cx),
-                write_queues: number_input(draft.write_queue_count, "Write queues", window, cx),
-            },
+            TopicDialogKind::Edit(draft) => TopicDialogInputs::Edit(TopicEditInputs::new(draft, window, cx)),
             TopicDialogKind::Send(_) => TopicDialogInputs::Send {
                 key: cx.new(|cx| InputState::new(window, cx).placeholder("Optional key")),
                 tag: cx.new(|cx| InputState::new(window, cx).placeholder("Optional tag")),
@@ -352,7 +323,7 @@ impl TopicDialogForm {
     pub fn title(&self) -> &'static str {
         match self.state.kind {
             TopicDialogKind::Create(_) => "Create Topic",
-            TopicDialogKind::Edit(_) => "Edit queue counts",
+            TopicDialogKind::Edit(_) => "Edit Topic",
             TopicDialogKind::DeleteTopic { .. } => "Delete Topic",
             TopicDialogKind::DeleteBroker { .. } => "Delete Topic from Broker",
             TopicDialogKind::Send(_) => "Send message",
@@ -418,19 +389,9 @@ impl TopicDialogForm {
                     message_type: message_type.ok_or_else(|| validation("select a message type"))?,
                 }))
             }
-            (
-                TopicDialogKind::Edit(draft),
-                TopicDialogInputs::Edit {
-                    read_queues,
-                    write_queues,
-                },
-            ) => Ok(PreparedTopicCommand::Edit(TopicQueuePatchCommand {
-                topic: draft.topic.clone(),
-                target: draft.target.clone(),
-                expected_version: draft.expected_version,
-                read_queue_count: Some(queue_count(read_queues, cx)?),
-                write_queue_count: Some(queue_count(write_queues, cx)?),
-            })),
+            (TopicDialogKind::Edit(draft), TopicDialogInputs::Edit(inputs)) => {
+                edit::prepare(draft, inputs, cx).map(PreparedTopicCommand::Edit)
+            }
             (TopicDialogKind::DeleteTopic { topic, clusters }, TopicDialogInputs::DeleteTopic { confirmation }) => {
                 if value(confirmation, cx) != topic.as_str() {
                     return Err(validation("type the complete Topic name to confirm deletion"));
@@ -497,93 +458,15 @@ impl TopicDialogForm {
         cx.notify();
     }
 
-    pub fn reconcile_conflict(
-        &mut self,
-        actual_version: u64,
-        submitted_read_queue_count: u32,
-        submitted_write_queue_count: u32,
-        authoritative_read_queue_count: u32,
-        authoritative_write_queue_count: u32,
-        cx: &mut Context<Self>,
-    ) {
-        self.state.submission = TopicSubmissionState::Conflict {
-            actual_version,
-            submitted_read_queue_count,
-            submitted_write_queue_count,
-            authoritative_read_queue_count,
-            authoritative_write_queue_count,
-        };
-        self.status = Some(format!(
-            "Configuration changed to version {actual_version}. Your submitted values are preserved; explicitly keep them or adopt the authoritative snapshot before confirming again."
-        ));
-        cx.notify();
-    }
-
-    fn resolve_conflict(&mut self, adopt_authoritative: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let (
-            actual_version,
-            submitted_read_queue_count,
-            submitted_write_queue_count,
-            authoritative_read_queue_count,
-            authoritative_write_queue_count,
-        ) = match &self.state.submission {
-            TopicSubmissionState::Conflict {
-                actual_version,
-                submitted_read_queue_count,
-                submitted_write_queue_count,
-                authoritative_read_queue_count,
-                authoritative_write_queue_count,
-            } => (
-                *actual_version,
-                *submitted_read_queue_count,
-                *submitted_write_queue_count,
-                *authoritative_read_queue_count,
-                *authoritative_write_queue_count,
-            ),
-            _ => return,
-        };
-        let (read, write, resolution) = if adopt_authoritative {
-            (
-                authoritative_read_queue_count,
-                authoritative_write_queue_count,
-                "Adopted the authoritative queue counts",
-            )
-        } else {
-            (
-                submitted_read_queue_count,
-                submitted_write_queue_count,
-                "Kept the submitted queue counts on the new version",
-            )
-        };
-        if let TopicDialogKind::Edit(draft) = &mut self.state.kind {
-            draft.expected_version = actual_version;
-            draft.read_queue_count = read;
-            draft.write_queue_count = write;
-        }
-        if let TopicDialogInputs::Edit {
-            read_queues,
-            write_queues,
-        } = &self.inputs
-        {
-            read_queues.update(cx, |input, cx| input.set_value(read.to_string(), window, cx));
-            write_queues.update(cx, |input, cx| input.set_value(write.to_string(), window, cx));
-        }
-        self.state.submission = TopicSubmissionState::Idle;
-        self.status = Some(format!(
-            "{resolution}; review and confirm against version {actual_version}."
-        ));
-        cx.notify();
-    }
-
-    #[cfg(test)]
-    pub(crate) fn keep_submitted_after_conflict(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.resolve_conflict(false, window, cx);
-    }
-
     pub fn clear_sensitive(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let TopicDialogInputs::Send { body, .. } = &self.inputs {
             body.update(cx, |input, cx| input.set_value(String::new(), window, cx));
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn send_body_is_empty(&self, cx: &gpui::App) -> bool {
+        matches!(&self.inputs, TopicDialogInputs::Send { body, .. } if value(body, cx).is_empty())
     }
 
     #[cfg(test)]
@@ -641,10 +524,11 @@ impl TopicDialogForm {
 
     #[cfg(test)]
     pub(crate) fn set_edit_queue_counts(&mut self, read: u32, write: u32, window: &mut Window, cx: &mut Context<Self>) {
-        if let TopicDialogInputs::Edit {
+        if let TopicDialogInputs::Edit(TopicEditInputs {
             read_queues,
             write_queues,
-        } = &self.inputs
+            ..
+        }) = &self.inputs
         {
             read_queues.update(cx, |input, cx| input.set_value(read.to_string(), window, cx));
             write_queues.update(cx, |input, cx| input.set_value(write.to_string(), window, cx));
@@ -672,6 +556,7 @@ impl TopicDialogForm {
             key: key_input,
             tag: tag_input,
             body: body_input,
+            ..
         } = &self.inputs
         {
             let key = key.to_owned();
@@ -759,25 +644,20 @@ impl TopicDialogForm {
                 render::format_outcome("Applied outcome", outcome),
                 error.summary()
             )),
-            TopicSubmissionState::PatchAppliedReloadFailed {
-                previous_version,
-                version,
-                error,
-            } => Some(format!(
-                "Applied version {previous_version} → {version}, then reload failed: {}",
-                error.summary()
-            )),
             TopicSubmissionState::Rejected(TopicMutationResult::Rejected(outcome)) => {
                 Some(render::format_outcome("Rejected", outcome))
             }
-            TopicSubmissionState::Conflict {
-                actual_version,
-                submitted_read_queue_count,
-                submitted_write_queue_count,
-                authoritative_read_queue_count,
-                authoritative_write_queue_count,
+            TopicSubmissionState::FieldsCompleted {
+                result,
+                submitted_patch,
             } => Some(format!(
-                "Version conflict at {actual_version}: submitted read/write {submitted_read_queue_count}/{submitted_write_queue_count}; authoritative read/write {authoritative_read_queue_count}/{authoritative_write_queue_count}."
+                "{}{} {}",
+                render::format_outcome("Edit outcome", &result.edit.outcome),
+                result
+                    .reload_error
+                    .as_ref()
+                    .map_or(String::new(), |error| format!("; reload failed: {}", error.summary())),
+                edit::conflict_comparison(&result.edit.conflicts, *submitted_patch),
             )),
             TopicSubmissionState::Failed(error) => Some(error.summary().to_owned()),
             TopicSubmissionState::PartiallySucceeded(_)
@@ -794,16 +674,11 @@ impl TopicDialogForm {
 fn topic_dialog_description(kind: &TopicDialogKind) -> String {
     match kind {
         TopicDialogKind::Create(draft) => format!(
-            "{} exact Broker target(s) selected from catalog generation {}. This is preflight + best effort; the protocol has no create-if-absent CAS.",
+            "{} exact Broker target(s) available from catalog generation {}. This is preflight + best effort; the protocol has no create-if-absent CAS.",
             draft.targets.len(),
             draft.catalog_epoch
         ),
-        TopicDialogKind::Edit(draft) => format!(
-            "Only read/write queue counts on {} / {} are writable. Permission, message type, and order remain read-only. Expected version {}.",
-            draft.target.cluster_name(),
-            draft.target.broker_name(),
-            draft.expected_version
-        ),
+        TopicDialogKind::Edit(_) => "Change queue counts, permissions, ordering, and message type on selected exact Brokers. Only changed fields are written, with each Broker's reviewed version. Requires the supervised state protocol; older Brokers reject the request. NameServer ordering uses a preflight comparison and can fail separately.".into(),
         TopicDialogKind::DeleteTopic { topic, clusters } => format!(
             "Delete {} from exact cluster set: {}. This is preflight + best effort, not CAS.",
             topic.as_str(),
@@ -1029,20 +904,55 @@ mod tests {
     }
 
     #[gpui::test]
-    fn edit_conflict_preserves_submitted_draft_until_explicit_resolution(cx: &mut gpui::TestAppContext) {
+    fn edit_conflict_keeps_field_intent_across_divergent_authoritative_targets(cx: &mut gpui::TestAppContext) {
+        use rocketmq_dashboard_common::{
+            TopicConfigEditOutcome, TopicConfigTargetView, TopicConfigValues, TopicMutationGuarantee, TopicMutationKind,
+        };
         cx.update(gpui_component::init);
+        let initial = TopicConfigTargetView {
+            target: TopicTargetIdentity::parse("cluster-a", "broker-a", "127.0.0.1:10911").unwrap(),
+            version: 7,
+            read_queue_count: 8,
+            write_queue_count: 8,
+            permission: TopicPermission::parse(6).ok(),
+            ordered: false,
+            message_type: TopicMessageType::Normal,
+        };
+        let latest = TopicConfigTargetView {
+            version: 9,
+            read_queue_count: 12,
+            write_queue_count: 13,
+            permission: TopicPermission::parse(7).ok(),
+            ordered: true,
+            message_type: TopicMessageType::Transaction,
+            ..initial.clone()
+        };
+        let second = TopicConfigTargetView {
+            target: TopicTargetIdentity::parse("cluster-a", "broker-b", "127.0.0.2:10911").unwrap(),
+            version: 8,
+            ..initial.clone()
+        };
+        let second_latest = TopicConfigTargetView {
+            version: 11,
+            read_queue_count: 20,
+            write_queue_count: 21,
+            permission: TopicPermission::parse(4).ok(),
+            message_type: TopicMessageType::Delay,
+            ..second.clone()
+        };
         let captured = Rc::new(RefCell::new(None));
         let capture = captured.clone();
         let (_root, cx) = cx.add_window_view(move |window, cx| {
             let form = cx.new(|cx| {
                 TopicDialogForm::new(
-                    TopicDialogKind::Edit(TopicEditDraft {
-                        topic: TopicIdentity::parse("orders").expect("topic"),
-                        target: TopicTargetIdentity::parse("cluster-a", "broker-a", "127.0.0.1:10911").expect("target"),
-                        expected_version: 7,
-                        read_queue_count: 8,
-                        write_queue_count: 8,
-                    }),
+                    TopicDialogKind::Edit(
+                        TopicEditDraft::new(
+                            TopicIdentity::parse("orders").unwrap(),
+                            &initial,
+                            vec![initial.clone(), second],
+                        )
+                        .unwrap(),
+                    ),
                     window,
                     cx,
                 )
@@ -1050,34 +960,71 @@ mod tests {
             capture.replace(Some(form.clone()));
             Root::new(form, window, cx)
         });
-        let form = captured.borrow_mut().take().expect("form");
-
+        let form = captured.borrow_mut().take().unwrap();
         cx.update(|window, app| {
             form.update(app, |form, cx| {
-                let (read_queues, write_queues) = match &form.inputs {
-                    TopicDialogInputs::Edit {
-                        read_queues,
-                        write_queues,
-                    } => (read_queues.clone(), write_queues.clone()),
-                    _ => panic!("edit inputs"),
+                form.set_edit_queue_counts(12, 13, window, cx);
+                let TopicDialogInputs::Edit(inputs) = &mut form.inputs else {
+                    panic!("edit inputs")
                 };
-                read_queues.update(cx, |input, cx| input.set_value("12", window, cx));
-                write_queues.update(cx, |input, cx| input.set_value("13", window, cx));
-                form.reconcile_conflict(9, 12, 13, 20, 21, cx);
+                inputs.permission = TopicPermission::parse(7).unwrap();
+                inputs.ordered = true;
+                inputs.message_type = TopicMessageType::Transaction;
+                inputs.selected_targets.fill(true);
+                let PreparedTopicCommand::Edit(command) = form.prepare(cx).unwrap() else {
+                    panic!("edit command")
+                };
+                let submitted_patch = command.patch;
+                form.state.submission = TopicSubmissionState::FieldsCompleted {
+                    submitted_patch: command.patch,
+                    result: TopicFieldsPatchResult {
+                        edit: TopicConfigEditOutcome {
+                            outcome: TopicPartialOutcome {
+                                topic: command.topic,
+                                kind: TopicMutationKind::Edit,
+                                guarantee: TopicMutationGuarantee::VersionCas,
+                                targets: Vec::new(),
+                                reload_failed: false,
+                            },
+                            conflicts: vec![latest, second_latest],
+                        },
+                        configuration: None,
+                        inventory: None,
+                        reload_error: None,
+                        invalidations: Vec::new(),
+                    },
+                };
                 assert!(form.state.begin_submit(7).is_none());
-                assert_eq!(value(&read_queues, cx), "12");
-                assert_eq!(value(&write_queues, cx), "13");
-            });
-        });
-
-        cx.update(|window, app| {
-            form.update(app, |form, cx| form.resolve_conflict(false, window, cx));
-            let PreparedTopicCommand::Edit(command) = form.read(app).prepare(app).expect("resolved command") else {
-                panic!("edit command");
-            };
-            assert_eq!(command.expected_version, 9);
-            assert_eq!(command.read_queue_count, Some(12));
-            assert_eq!(command.write_queue_count, Some(13));
+                form.resolve_conflict(false, window, cx);
+                let PreparedTopicCommand::Edit(command) = form.prepare(cx).unwrap() else {
+                    panic!("edit command")
+                };
+                assert_eq!(command.targets[0].version, 9);
+                assert_eq!(command.targets[1].version, 11);
+                assert_eq!(
+                    command.patch, submitted_patch,
+                    "the first Broker already has every desired value, but the second still needs the original patch"
+                );
+                let desired = command.targets[0].editable_values().unwrap().with_patch(command.patch);
+                assert_eq!(
+                    desired,
+                    TopicConfigValues {
+                        read_queue_count: 12,
+                        write_queue_count: 13,
+                        permission: TopicPermission::parse(7).unwrap(),
+                        ordered: true,
+                        message_type: TopicMessageType::Transaction
+                    }
+                );
+                let second_desired = command.targets[1].editable_values().unwrap().with_patch(command.patch);
+                assert_eq!(second_desired, desired);
+                form.set_edit_queue_counts(14, 13, window, cx);
+                let PreparedTopicCommand::Edit(command) = form.prepare(cx).unwrap() else {
+                    panic!("edit command")
+                };
+                assert_eq!(command.patch.read_queue_count, Some(14));
+                assert_eq!(command.patch.permission, submitted_patch.permission);
+            })
         });
     }
 

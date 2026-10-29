@@ -64,6 +64,9 @@ struct FakeControls {
     mutation_shutdowns: AtomicUsize,
     query_creates: AtomicUsize,
     mutation_creates: AtomicUsize,
+    topic_sends: std::sync::Mutex<Vec<(bool, usize)>>,
+    topic_field_requests: std::sync::Mutex<Vec<rocketmq_admin_core::core::topic::TopicConfigFieldsPatchRequest>>,
+    topic_field_report: std::sync::Mutex<Option<rocketmq_admin_core::core::topic::TopicConfigFieldsPatchReport>>,
 }
 
 struct FakeFactory {
@@ -123,6 +126,33 @@ impl FakeQuerySession {
 }
 
 impl DashboardQuerySession for FakeQuerySession {
+    fn topic_catalog(&self) -> SessionFuture<'_, AdminResult<rocketmq_admin_core::core::topic::DetailedTopicCatalog>> {
+        use rocketmq_admin_core::core::topic::{
+            DetailedTopicCatalog, DetailedTopicCatalogItem, TopicBrokerTarget, TopicInspectionCompleteness,
+        };
+        Box::pin(std::future::ready(Ok(DetailedTopicCatalog {
+            items: vec![DetailedTopicCatalogItem {
+                topic: "orders".into(),
+                category: "APPLICATION".into(),
+                message_type: Some("NORMAL".into()),
+                clusters: vec!["cluster-a".into()],
+                brokers: vec!["broker-a".into()],
+                read_queue_count: Some(8),
+                write_queue_count: Some(8),
+                perm: Some(6),
+                order: Some(false),
+                system_topic: false,
+            }],
+            targets: Vec::new(),
+            broker_targets: vec![TopicBrokerTarget {
+                cluster_name: "cluster-a".into(),
+                broker_name: "broker-a".into(),
+                broker_addr: "broker-a:10911".into(),
+            }],
+            completeness: TopicInspectionCompleteness::Complete,
+            failures: Vec::new(),
+        })))
+    }
     fn health(&self) -> SessionFuture<'_, AdminResult<()>> {
         Box::pin(async move {
             self.enter_query();
@@ -329,6 +359,57 @@ impl FakeMutationSession {
 }
 
 impl DashboardMutationSession for FakeMutationSession {
+    fn send_topic_message<'a>(
+        &'a mut self,
+        request: &'a rocketmq_admin_core::core::topic::TopicSendRequest,
+    ) -> SessionFuture<'a, AdminResult<rocketmq_admin_core::core::topic::TopicSendResult>> {
+        Box::pin(async move {
+            self.controls
+                .topic_sends
+                .lock()
+                .unwrap()
+                .push((request.trace_enabled, request.message_body.len()));
+            Ok(rocketmq_admin_core::core::topic::TopicSendResult {
+                topic: request.topic.clone(),
+                send_status: "SEND_OK".into(),
+                message_id: None,
+                broker_name: None,
+                queue_id: None,
+                queue_offset: 0,
+                transaction_id: None,
+                region_id: None,
+                local_transaction_state: None,
+            })
+        })
+    }
+
+    fn patch_topic_fields<'a>(
+        &'a mut self,
+        request: &'a rocketmq_admin_core::core::topic::TopicConfigFieldsPatchRequest,
+    ) -> SessionFuture<'a, AdminResult<rocketmq_admin_core::core::topic::TopicConfigFieldsPatchReport>> {
+        use rocketmq_admin_core::core::topic::{TopicConfigFieldsPatchReport, TopicConfigFieldsTargetOutcome};
+        Box::pin(async move {
+            self.controls.topic_field_requests.lock().unwrap().push(request.clone());
+            if let Some(report) = self.controls.topic_field_report.lock().unwrap().take() {
+                return Ok(report);
+            }
+            Ok(TopicConfigFieldsPatchReport {
+                targets: request
+                    .targets()
+                    .iter()
+                    .map(|target| TopicConfigFieldsTargetOutcome {
+                        target: target.clone(),
+                        applied: true,
+                        failure: None,
+                        retryable: false,
+                        outcome_unknown: false,
+                        latest: None,
+                    })
+                    .collect(),
+                order_reconciled: Some(true),
+            })
+        })
+    }
     fn query_config_generation<'a>(
         &'a mut self,
         _request: &'a QueryBrokerConfigGenerationRequest,
@@ -406,6 +487,164 @@ fn safe_applied() -> SafeConfigPatchOutcome {
         previous_generation: 7,
         generation: 8,
     }
+}
+
+#[test]
+fn topic_trace_and_changed_fields_reach_the_mutation_session() {
+    use rocketmq_dashboard_common::{
+        TopicConfigFieldsPatch, TopicConfigTargetView, TopicIdentity, TopicMessageType, TopicPermission,
+        TopicTargetIdentity,
+    };
+    let runtime = runtime();
+    let controls = Arc::new(FakeControls::default());
+    let provider = provider(&runtime, controls.clone(), Ok(()), None, applied());
+    runtime.block_on(async {
+        provider.switch(snapshot(1, ConnectionScope::NameServer)).await.unwrap();
+        for trace_enabled in [false, true] {
+            let receipt = provider
+                .send_topic_message(
+                    1,
+                    SafeTopicSendRequest {
+                        topic: TopicIdentity::parse("orders").unwrap(),
+                        key: String::new(),
+                        tag: String::new(),
+                        body: "ephemeral body".into(),
+                        trace_enabled,
+                    },
+                )
+                .await
+                .unwrap();
+            assert!(receipt.delivered);
+        }
+        let result = provider
+            .patch_topic_fields(
+                1,
+                SafeTopicFieldsPatchRequest {
+                    topic: TopicIdentity::parse("orders").unwrap(),
+                    targets: vec![TopicConfigTargetView {
+                        target: TopicTargetIdentity::parse("cluster-a", "broker-a", "broker-a:10911").unwrap(),
+                        version: 7,
+                        read_queue_count: 8,
+                        write_queue_count: 8,
+                        permission: TopicPermission::parse(6).ok(),
+                        ordered: false,
+                        message_type: TopicMessageType::Normal,
+                    }],
+                    patch: TopicConfigFieldsPatch {
+                        permission: TopicPermission::parse(7).ok(),
+                        ordered: Some(true),
+                        message_type: Some(TopicMessageType::Transaction),
+                        ..Default::default()
+                    },
+                },
+            )
+            .await
+            .unwrap();
+        assert!(result.outcome.is_complete_success());
+        assert_eq!(*controls.topic_sends.lock().unwrap(), [(false, 14), (true, 14)]);
+        {
+            let requests = controls.topic_field_requests.lock().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].targets()[0].expected_version, 7);
+            let patch = requests[0].patch();
+            assert_eq!((patch.read_queue_nums, patch.write_queue_nums), (None, None));
+            assert_eq!(patch.perm, Some(7));
+            assert_eq!(patch.order, Some(true));
+            assert_eq!(
+                patch.message_type,
+                Some(rocketmq_admin_core::core::supervised_mutation::TopicMessageType::Transaction)
+            );
+        }
+        provider.shutdown().await;
+    });
+    runtime.shutdown_runtime_blocking().unwrap();
+}
+
+#[test]
+fn topic_persistence_failures_do_not_become_rebase_candidates() {
+    use rocketmq_admin_core::core::{
+        supervised_mutation::{MutationFailureCode, TopicMessageType as AdminMessageType, TopicReplacement},
+        topic::{
+            TopicConfigFieldsPatchReport, TopicConfigFieldsState, TopicConfigFieldsTarget,
+            TopicConfigFieldsTargetOutcome,
+        },
+    };
+    use rocketmq_dashboard_common::{
+        TopicConfigFieldsPatch, TopicConfigTargetView, TopicFailureCode, TopicIdentity, TopicMessageType,
+        TopicPermission, TopicTargetIdentity,
+    };
+    let runtime = runtime();
+    let controls = Arc::new(FakeControls::default());
+    let provider = provider(&runtime, controls.clone(), Ok(()), None, applied());
+    runtime.block_on(async {
+        provider.switch(snapshot(1, ConnectionScope::NameServer)).await.unwrap();
+        for unknown in [false, true] {
+            *controls.topic_field_report.lock().unwrap() = Some(TopicConfigFieldsPatchReport {
+                targets: vec![TopicConfigFieldsTargetOutcome {
+                    target: TopicConfigFieldsTarget {
+                        cluster_name: "cluster-a".into(),
+                        broker_name: "broker-a".into(),
+                        broker_address: "broker-a:10911".into(),
+                        expected_version: 7,
+                    },
+                    applied: false,
+                    failure: Some(MutationFailureCode::PersistenceFailed),
+                    retryable: false,
+                    outcome_unknown: unknown,
+                    latest: Some(TopicConfigFieldsState {
+                        version: Some(7),
+                        configuration: Some(TopicReplacement {
+                            read_queue_nums: 8,
+                            write_queue_nums: 8,
+                            perm: 6,
+                            order: false,
+                            message_type: AdminMessageType::Normal,
+                        }),
+                    }),
+                }],
+                order_reconciled: None,
+            });
+            let result = provider
+                .patch_topic_fields(
+                    1,
+                    SafeTopicFieldsPatchRequest {
+                        topic: TopicIdentity::parse("orders").unwrap(),
+                        targets: vec![TopicConfigTargetView {
+                            target: TopicTargetIdentity::parse("cluster-a", "broker-a", "broker-a:10911").unwrap(),
+                            version: 7,
+                            read_queue_count: 8,
+                            write_queue_count: 8,
+                            permission: TopicPermission::parse(6).ok(),
+                            ordered: false,
+                            message_type: TopicMessageType::Normal,
+                        }],
+                        patch: TopicConfigFieldsPatch {
+                            read_queue_count: Some(12),
+                            ..Default::default()
+                        },
+                    },
+                )
+                .await
+                .unwrap();
+            assert!(
+                result.conflicts.is_empty(),
+                "dirty or uncertain persistence cannot enable Keep/Adopt version rebase actions"
+            );
+            assert_eq!(result.outcome.applied_count(), 0);
+            assert_eq!(result.outcome.failed_count(), 1);
+            assert_eq!(
+                result.outcome.targets[0].failure,
+                Some(if unknown {
+                    TopicFailureCode::Unconfirmed
+                } else {
+                    TopicFailureCode::Unavailable
+                })
+            );
+            assert!(!result.outcome.targets[0].retryable);
+        }
+        provider.shutdown().await;
+    });
+    runtime.shutdown_runtime_blocking().unwrap();
 }
 
 fn patch_request() -> SafeConfigPatchRequest {
