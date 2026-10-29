@@ -21,6 +21,13 @@ MSVC C++ toolchain and Windows SDK on Windows, or the Linux GUI development
 libraries described in [AGENTS.md](AGENTS.md). Build timings and memory usage
 depend on the platform and workload.
 
+The application starts in native fullscreen. Use the **Exit fullscreen** / **Enter fullscreen**
+button to switch between fullscreen and the normal window. The button is keyboard accessible;
+**Escape** continues to close dialogs and navigation drawers.
+
+The Windows executable embeds its application icon from [assets/app-icon.ico](assets/app-icon.ico).
+The original artwork and generation prompts are kept in [assets/](assets/app-icon.md).
+
 Logging uses `RUST_LOG`. For example, in PowerShell from this directory:
 
 ```powershell

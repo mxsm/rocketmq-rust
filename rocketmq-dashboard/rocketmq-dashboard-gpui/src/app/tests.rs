@@ -565,6 +565,12 @@ fn real_product_app_path_uses_store_fake_provider_enter_login_security_sign_out_
     let config_path = directory.path().join("config.json");
     let config = DesktopConfig {
         schema_version: 1,
+        nameservers: vec![
+            "cluster-a-nameserver-primary.production.message-platform.eu-central-1.internal.example:9876".into(),
+        ],
+        current_nameserver: Some(
+            "cluster-a-nameserver-primary.production.message-platform.eu-central-1.internal.example:9876".into(),
+        ),
         auth: AuthConfig {
             enabled: true,
             credential_source: Default::default(),
@@ -656,6 +662,23 @@ fn real_product_app_path_uses_store_fake_provider_enter_login_security_sign_out_
         );
         assert!(dashboard.session.is_authenticated());
     });
+
+    cx.simulate_resize(size(px(1024.), px(720.)));
+    cx.draw(point(px(0.), px(0.)), size(px(1024.), px(720.)), |_, _| root.clone());
+    assert_topbar_layout(cx, false);
+    let topbar = cx.debug_bounds("topbar").unwrap();
+    let fullscreen = cx.debug_bounds("toggle-fullscreen").unwrap();
+    assert!(fullscreen.size.width > px(0.));
+    assert!(fullscreen.origin.x >= topbar.origin.x);
+    assert!(
+        fullscreen.right() <= topbar.right(),
+        "The fullscreen control must remain visible beside a fixed sidebar"
+    );
+    assert!(fullscreen.origin.y >= topbar.origin.y && fullscreen.bottom() <= topbar.bottom());
+    cx.simulate_click(fullscreen.center(), gpui::Modifiers::default());
+    cx.update(|window, _| assert!(window.is_fullscreen()));
+    cx.simulate_click(fullscreen.center(), gpui::Modifiers::default());
+    cx.update(|window, _| assert!(!window.is_fullscreen()));
 
     cx.update(|window, app| {
         dashboard.update(app, |dashboard, cx| {
@@ -1333,6 +1356,75 @@ fn ops_and_proxy_product_pages_render_at_the_960_drawer_breakpoint(cx: &mut gpui
     });
     cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
     cx.update(|_, app| assert_eq!(dashboard.read(app).current_page_capability(), PageCapability::Proxy));
+}
+
+#[gpui::test]
+fn fullscreen_button_supports_keyboard_startup_and_shell_without_changing_overlay_escape(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let capture = Rc::new(RefCell::new(None));
+    let capture_dashboard = capture.clone();
+    let (root, cx) = cx.add_window_view(move |window, cx| {
+        let dashboard = cx.new(|cx| super::RocketmqDashboard::new(window, cx));
+        capture_dashboard.replace(Some(dashboard.clone()));
+        Root::new(dashboard, window, cx)
+    });
+    let dashboard = capture.borrow_mut().take().unwrap();
+    cx.run_until_parked();
+    cx.simulate_resize(size(px(960.), px(640.)));
+    cx.update(|window, app| {
+        dashboard.update(app, |dashboard, cx| {
+            dashboard.startup_state = StartupState::Booting;
+            cx.notify();
+        });
+        window.activate_window();
+        window.blur();
+        window.toggle_fullscreen();
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    // Commit the startup frame before traversing its tab stops in the in-memory window.
+    cx.simulate_keystrokes("tab");
+    cx.update(|window, _| window.focus_next());
+    cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    cx.simulate_keystrokes("enter");
+    cx.simulate_event(KeyUpEvent {
+        keystroke: Keystroke::parse("enter").unwrap(),
+    });
+    cx.update(|window, app| {
+        assert!(
+            !window.is_fullscreen(),
+            "The startup button accepts Enter after keyboard focus traversal"
+        );
+        dashboard.update(app, |dashboard, cx| {
+            dashboard.startup_state = StartupState::Ready(ReadyScreen::MainShell);
+            cx.notify();
+        });
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    let toggle = cx.debug_bounds("toggle-fullscreen").unwrap();
+    cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+    cx.update(|window, app| {
+        assert!(window.is_fullscreen());
+        window.open_dialog(app, |dialog: Dialog, _, _| dialog.title("Fullscreen dialog").alert());
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    cx.simulate_keystrokes("escape");
+    cx.update(|window, app| {
+        assert!(!window.has_active_dialog(app));
+        assert!(window.is_fullscreen());
+        window.open_sheet(app, |sheet, _, _| sheet.title("Fullscreen sheet"));
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    cx.simulate_keystrokes("escape");
+    cx.update(|window, app| {
+        assert!(!window.has_active_sheet(app));
+        assert!(window.is_fullscreen());
+    });
+    cx.draw(point(px(0.), px(0.)), size(px(960.), px(640.)), |_, _| root.clone());
+    let toggle = cx.debug_bounds("toggle-fullscreen").unwrap();
+    cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+    cx.update(|window, _| assert!(!window.is_fullscreen()));
 }
 
 #[gpui::test]

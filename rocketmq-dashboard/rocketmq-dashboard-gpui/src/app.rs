@@ -1055,7 +1055,7 @@ impl RocketmqDashboard {
                 .h_full()
                 .flex()
                 .flex_col()
-                .child(self.render_topbar(!fixed_sidebar, fixed_sidebar, cx))
+                .child(self.render_topbar(!fixed_sidebar, window.viewport_size().width >= px(1440.), window, cx))
                 .child(self.render_page_content(cx)),
         )
     }
@@ -1102,14 +1102,38 @@ impl RocketmqDashboard {
             }))
     }
 
-    fn render_topbar(&self, show_menu: bool, show_full_status: bool, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_fullscreen_button(&self, window: &Window, cx: &Context<Self>) -> Button {
+        let (label, icon) = if window.is_fullscreen() {
+            ("Exit fullscreen", IconName::Minimize)
+        } else {
+            ("Enter fullscreen", IconName::Maximize)
+        };
+        Button::new("toggle-fullscreen")
+            .debug_selector(|| "toggle-fullscreen".to_owned())
+            .icon(icon)
+            .label(label)
+            .tooltip(label)
+            .ghost()
+            .on_click(cx.listener(|_, _, window, cx| {
+                window.toggle_fullscreen();
+                cx.notify();
+            }))
+    }
+
+    fn render_topbar(
+        &self,
+        show_menu: bool,
+        show_full_status: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let theme = cx.theme();
         let current = self.history.current();
         let global_connection = self.services.connection_state();
         let connection = ConnectionSummary::from_state(&global_connection, &self.session);
         let revision_label = format!("Rev {}", connection.revision);
         let compact_label = connection.compact_label();
-        let mut topbar = div()
+        let topbar = div()
             .debug_selector(|| "topbar".to_owned())
             .h(TOPBAR_HEIGHT)
             .min_h(TOPBAR_HEIGHT)
@@ -1154,8 +1178,15 @@ impl RocketmqDashboard {
                     .child(current.title()),
             );
 
+        let mut status = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .min_w_0()
+            .flex_shrink()
+            .overflow_hidden();
         if show_full_status {
-            topbar = topbar
+            status = status
                 .child(
                     status_badge::render(&connection.nameserver, theme.muted, theme.muted_foreground)
                         .debug_selector(|| "topbar-nameserver".to_owned()),
@@ -1185,13 +1216,14 @@ impl RocketmqDashboard {
                         .debug_selector(|| "topbar-health".to_owned()),
                 );
         } else {
-            topbar = topbar.child(
+            status = status.child(
                 status_badge::render(&compact_label, theme.muted, theme.muted_foreground)
                     .debug_selector(|| "topbar-compact-status".to_owned()),
             );
         }
 
         topbar
+            .child(status)
             .child(
                 Button::new("go-back")
                     .debug_selector(|| "go-back".to_owned())
@@ -1233,6 +1265,7 @@ impl RocketmqDashboard {
                         .on_click(cx.listener(|this, _, window, cx| this.request_sign_out(window, cx))),
                 )
             })
+            .child(self.render_fullscreen_button(window, cx))
     }
 
     fn render_page_content(&self, cx: &mut Context<Self>) -> gpui::Div {
@@ -1344,6 +1377,18 @@ impl Render for RocketmqDashboard {
                     .child(Button::new("dirty-confirmation-reopen").tab_stop(false).ghost()),
             )
             .child(content)
+            .when(
+                !matches!(self.startup_state, StartupState::Ready(ReadyScreen::MainShell)),
+                |root| {
+                    root.child(
+                        div()
+                            .absolute()
+                            .top_3()
+                            .right_3()
+                            .child(self.render_fullscreen_button(window, cx)),
+                    )
+                },
+            )
             .children(sheet_layer)
             .children(notification_layer)
             .children(dialog_layer)

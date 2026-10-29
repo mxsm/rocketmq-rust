@@ -5785,6 +5785,7 @@ dependencies = [
  "cfg-if",
  "config",
  "dirs 7.0.0",
+ "embed-resource",
  "gpui",
  "gpui-component",
  "gpui-component-assets",
