@@ -140,6 +140,7 @@ impl SensitiveFeatureCache {
 
 /// Legacy content entities constructed once and reused on route changes.
 struct LegacyPageCache {
+    acl: Entity<crate::features::acl::AclView>,
     monitors: Entity<crate::features::monitors::MonitorsView>,
     dashboard: Entity<DashboardView>,
     brokers: Entity<BrokersView>,
@@ -155,6 +156,7 @@ struct LegacyPageCache {
 impl LegacyPageCache {
     fn new(window: &mut Window, services: &AppServices, cx: &mut Context<RocketmqDashboard>) -> Self {
         Self {
+            acl: cx.new(|cx| crate::features::acl::AclView::new(window, services.clone(), 0, cx)),
             monitors: cx.new(|cx| crate::features::monitors::MonitorsView::new(window, services.clone(), 0, cx)),
             dashboard: cx.new(|cx| DashboardView::new(window, services.clone(), 0, cx)),
             brokers: cx.new(|cx| BrokersView::new(window, services.clone(), 0, cx)),
@@ -173,8 +175,9 @@ impl LegacyPageCache {
     }
 
     #[cfg(test)]
-    fn entity_ids(&self) -> [gpui::EntityId; 10] {
+    fn entity_ids(&self) -> [gpui::EntityId; 11] {
         [
+            self.acl.entity_id(),
             self.monitors.entity_id(),
             self.dashboard.entity_id(),
             self.brokers.entity_id(),
@@ -397,6 +400,9 @@ impl RocketmqDashboard {
                 self.legacy_pages
                     .monitors
                     .update(cx, |view, cx| view.set_revision(snapshot.configuration_revision, cx));
+                self.legacy_pages.acl.update(cx, |view, cx| {
+                    view.set_revision(snapshot.configuration_revision, window, cx)
+                });
                 self.session = if snapshot.has_valid_session {
                     SessionState::restored()
                 } else {
@@ -675,6 +681,9 @@ impl RocketmqDashboard {
             self.legacy_pages
                 .monitors
                 .update(cx, |view, cx| view.set_revision(event.revision, cx));
+            self.legacy_pages
+                .acl
+                .update(cx, |view, cx| view.set_revision(event.revision, window, cx));
             window.close_all_dialogs(cx);
             window.clear_notifications(cx);
         }
@@ -753,6 +762,9 @@ impl RocketmqDashboard {
             .monitors
             .update(cx, |view, cx| view.clear_for_environment(revision, window, cx));
         self.legacy_pages
+            .acl
+            .update(cx, |view, cx| view.set_revision(revision, window, cx));
+        self.legacy_pages
             .ops
             .update(cx, |view, cx| view.clear_environment_drafts(window, cx));
         let route = match self.history.current() {
@@ -803,6 +815,7 @@ impl RocketmqDashboard {
     }
 
     fn finish_sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.legacy_pages.acl.update(cx, |view, cx| view.leave(window, cx));
         self.legacy_pages.messages.update(cx, |view, cx| view.leave(window, cx));
         self.session.clear();
         self.login.clear_sensitive(window, cx);
@@ -1322,9 +1335,17 @@ impl RocketmqDashboard {
     }
 
     fn sync_monitor_route(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_acl_route(window, cx);
         let active = matches!(self.history.current(), AppRoute::Monitors);
         self.legacy_pages
             .monitors
+            .update(cx, |view, cx| view.set_active(active, window, cx));
+    }
+
+    fn sync_acl_route(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let active = matches!(self.history.current(), AppRoute::Acl);
+        self.legacy_pages
+            .acl
             .update(cx, |view, cx| view.set_active(active, window, cx));
     }
 
@@ -1359,6 +1380,10 @@ impl RocketmqDashboard {
             PageCapability::Monitors => (
                 "Configure persisted consumer-group thresholds. Evaluation and notifications are not implemented.",
                 div().size_full().child(self.legacy_pages.monitors.clone()),
+            ),
+            PageCapability::Acl => (
+                "Confirm a Broker scope before reading or managing ACL users and structured policy entries.",
+                div().size_full().child(self.legacy_pages.acl.clone()),
             ),
             PageCapability::OpsSettings => (
                 "Manage NameServers, transport security, sessions, and local storage.",

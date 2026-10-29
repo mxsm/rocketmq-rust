@@ -313,6 +313,34 @@ fn error_outcome(error: &UiError) -> (AuditOutcome, AuditFacts) {
 }
 
 impl AppServices {
+    pub(super) fn require_acl_access(&self, revision: u64) -> Result<(), UiError> {
+        let state = self.connection_state();
+        if state.config.scope != rocketmq_dashboard_common::ConnectionScope::NameServer {
+            return Err(UiError::new(
+                "ACL management requires NameServer Direct scope.",
+                UiErrorCode::CapabilityUnavailable,
+                false,
+            ));
+        }
+        if state.config.revision != revision {
+            return Err(UiError::new(
+                "The connection changed. Confirm the ACL scope again.",
+                UiErrorCode::Validation,
+                false,
+            ));
+        }
+        if let Some(audit) = &self.audit
+            && audit.config.authentication_enabled().map_err(super::config_ui_error)?
+            && !audit.auth.session().is_authenticated()
+        {
+            return Err(UiError::new(
+                "Sign in before accessing ACL data.",
+                UiErrorCode::Authentication,
+                false,
+            ));
+        }
+        Ok(())
+    }
     pub(super) fn accept_operation(
         &self,
         revision: u64,

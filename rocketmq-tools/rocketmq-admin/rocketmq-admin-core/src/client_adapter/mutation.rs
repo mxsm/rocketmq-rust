@@ -13,6 +13,8 @@
 
 //! Mutation-only public adapter over the explicit client mutation capability.
 
+#[path = "mutation/acl_workspace.rs"]
+mod acl_workspace;
 #[path = "mutation/consumer_configuration.rs"]
 mod consumer_configuration;
 

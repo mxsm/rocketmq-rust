@@ -33,6 +33,8 @@ use super::{
     auth_state::{AuthRejection, DesktopAuthState},
 };
 
+#[path = "admin_provider/acl.rs"]
+mod acl;
 #[path = "admin_provider/consumers.rs"]
 mod consumers;
 #[path = "admin_provider/dashboard_broker.rs"]

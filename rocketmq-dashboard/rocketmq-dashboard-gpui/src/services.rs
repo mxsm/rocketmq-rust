@@ -16,6 +16,8 @@
 pub(crate) mod audit;
 mod audit_outcomes;
 
+#[path = "services/acl.rs"]
+pub(crate) mod acl;
 #[path = "services/brokers.rs"]
 pub mod brokers;
 #[path = "services/consumers.rs"]
@@ -560,6 +562,7 @@ pub struct AppServices {
     consumers: Arc<dyn consumers::ConsumerBackend>,
     topics: Arc<dyn topics::TopicBackend>,
     messages: Arc<dyn messages::MessageBackend>,
+    acl: Arc<dyn acl::AclBackend>,
 }
 
 impl AppServices {
@@ -582,6 +585,7 @@ impl AppServices {
             consumers: consumers::RealConsumerBackend::unavailable(),
             topics: topics::RealTopicBackend::unavailable(),
             messages: messages::RealMessageBackend::unavailable(),
+            acl: acl::RealAclBackend::unavailable(),
         }
     }
 
@@ -644,8 +648,13 @@ impl AppServices {
             .map(|provider| messages::RealMessageBackend::new(Arc::clone(provider)))
             .unwrap_or_else(messages::RealMessageBackend::unavailable);
         let topics = admin_provider
+            .as_ref()
+            .cloned()
             .map(topics::RealTopicBackend::new)
             .unwrap_or_else(topics::RealTopicBackend::unavailable);
+        let acl = admin_provider
+            .map(acl::RealAclBackend::new)
+            .unwrap_or_else(acl::RealAclBackend::unavailable);
         let history_sampler: Arc<dyn HistorySampler> = dashboard.clone();
         let dashboard_broker = dashboard_broker::RealDashboardBrokerOperations::new(dashboard, brokers);
         let audit = audit::AuditService::new(Arc::clone(&store), Arc::clone(&auth));
@@ -676,6 +685,7 @@ impl AppServices {
             consumers,
             topics,
             messages,
+            acl,
         }
     }
 

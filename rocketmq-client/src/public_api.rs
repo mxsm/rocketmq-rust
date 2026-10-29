@@ -15,6 +15,11 @@
 //! Deliberate stable Client entry points.
 
 #[cfg(feature = "admin-read")]
+pub use crate::admin::{AclWorkspaceDocuments, AclWorkspaceReadKind, MQAdminAclWorkspaceReadExt};
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::{AclWorkspaceWrite, MQAdminAclWorkspaceMutationExt};
+
+#[cfg(feature = "admin-read")]
 pub use crate::admin::AclUserRead;
 #[cfg(feature = "admin-full")]
 pub use crate::admin::AuthAdmin;

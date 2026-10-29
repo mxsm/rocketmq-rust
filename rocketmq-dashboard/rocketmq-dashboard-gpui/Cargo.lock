@@ -5796,6 +5796,7 @@ dependencies = [
  "rand 0.9.5",
  "rocketmq-admin-core",
  "rocketmq-dashboard-common",
+ "rocketmq-error",
  "rocketmq-observability",
  "rocketmq-runtime",
  "serde",

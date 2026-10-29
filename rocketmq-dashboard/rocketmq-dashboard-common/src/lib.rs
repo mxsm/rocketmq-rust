@@ -17,9 +17,11 @@
 //! This crate provides shared functionality, data models, and business logic
 //! that can be reused across different dashboard implementations (GPUI, Tauri, etc.)
 
+mod acl_workspace;
 #[cfg(feature = "admin")]
 pub mod admin;
 pub mod api;
+pub use acl_workspace::*;
 pub mod audit;
 pub mod cluster;
 pub mod connection;

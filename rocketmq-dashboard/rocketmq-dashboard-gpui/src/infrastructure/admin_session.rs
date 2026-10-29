@@ -67,6 +67,18 @@ pub(crate) type SessionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + '
 
 /// Concurrent query capability of one started Admin session.
 pub(crate) trait DashboardQuerySession: Send + Sync {
+    fn acl_documents<'a>(
+        &'a self,
+        _address: &'a str,
+        _kind: rocketmq_admin_core::core::acl_workspace::AclReadKind,
+    ) -> SessionFuture<'a, AdminResult<rocketmq_admin_core::core::acl_workspace::AclDocuments>> {
+        Box::pin(async {
+            Err(rocketmq_admin_core::core::AdminError::operation_failed(
+                "acl",
+                "ACL capability unavailable",
+            ))
+        })
+    }
     fn health(&self) -> SessionFuture<'_, AdminResult<()>>;
     fn list_topics(&self) -> SessionFuture<'_, AdminResult<DashboardTopicList>>;
     #[cfg(test)]
@@ -172,6 +184,18 @@ pub(crate) trait DashboardQuerySession: Send + Sync {
 
 /// Serialized generation-aware Broker mutation capability.
 pub(crate) trait DashboardMutationSession: Send {
+    fn apply_acl<'a>(
+        &'a mut self,
+        _address: &'a str,
+        _request: &'a rocketmq_admin_core::core::acl_workspace::AclExactWrite,
+    ) -> SessionFuture<'a, AdminResult<()>> {
+        Box::pin(async {
+            Err(rocketmq_admin_core::core::AdminError::operation_failed(
+                "acl",
+                "ACL capability unavailable",
+            ))
+        })
+    }
     fn patch_topic_fields<'a>(
         &'a mut self,
         _request: &'a TopicConfigFieldsPatchRequest,
@@ -349,6 +373,13 @@ struct RealQuerySession {
 }
 
 impl DashboardQuerySession for RealQuerySession {
+    fn acl_documents<'a>(
+        &'a self,
+        address: &'a str,
+        kind: rocketmq_admin_core::core::acl_workspace::AclReadKind,
+    ) -> SessionFuture<'a, AdminResult<rocketmq_admin_core::core::acl_workspace::AclDocuments>> {
+        Box::pin(async move { self.inner.acl_documents_at(address, kind).await })
+    }
     fn health(&self) -> SessionFuture<'_, AdminResult<()>> {
         Box::pin(async {
             DashboardMetricsAdmin::dashboard_topic_names(&self.inner)
@@ -532,6 +563,13 @@ struct RealMutationSession {
 }
 
 impl DashboardMutationSession for RealMutationSession {
+    fn apply_acl<'a>(
+        &'a mut self,
+        address: &'a str,
+        request: &'a rocketmq_admin_core::core::acl_workspace::AclExactWrite,
+    ) -> SessionFuture<'a, AdminResult<()>> {
+        Box::pin(async move { self.inner.apply_acl_at(address, request).await })
+    }
     fn query_config_generation<'a>(
         &'a mut self,
         request: &'a QueryBrokerConfigGenerationRequest,

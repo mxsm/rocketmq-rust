@@ -21,6 +21,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
+pub mod acl_workspace;
 pub mod admin;
 pub mod broker;
 pub mod client_connection;

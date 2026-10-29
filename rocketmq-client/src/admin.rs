@@ -12,12 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(any(feature = "admin-read", feature = "admin-mutation"))]
+mod acl_workspace;
 #[cfg(feature = "admin-full")]
 mod capability;
 pub mod default_mq_admin_ext;
 pub mod default_mq_admin_ext_impl;
 #[cfg(feature = "admin-read")]
 mod mq_admin_acl_read_ext;
+#[cfg(feature = "admin-read")]
+pub use acl_workspace::{AclWorkspaceDocuments, AclWorkspaceReadKind, MQAdminAclWorkspaceReadExt};
+#[cfg(feature = "admin-mutation")]
+pub use acl_workspace::{AclWorkspaceWrite, MQAdminAclWorkspaceMutationExt};
 #[cfg(feature = "admin-read")]
 mod mq_admin_consumer_observation_read_ext;
 #[cfg(feature = "admin-read")]
